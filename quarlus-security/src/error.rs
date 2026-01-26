@@ -1,0 +1,57 @@
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+
+/// Security-related errors for JWT validation and authentication.
+#[derive(Debug)]
+pub enum SecurityError {
+    /// The Authorization header is missing from the request.
+    MissingAuthHeader,
+
+    /// The authorization scheme is not "Bearer".
+    InvalidAuthScheme,
+
+    /// The JWT token is invalid (malformed, bad signature, etc.).
+    InvalidToken(String),
+
+    /// The JWT token has expired.
+    TokenExpired,
+
+    /// The key ID (kid) from the JWT header is not found in the JWKS.
+    UnknownKeyId(String),
+
+    /// Failed to fetch the JWKS from the remote endpoint.
+    JwksFetchError(String),
+
+    /// Token validation failed (issuer, audience, or other claim mismatch).
+    ValidationFailed(String),
+}
+
+impl std::fmt::Display for SecurityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecurityError::MissingAuthHeader => write!(f, "Missing Authorization header"),
+            SecurityError::InvalidAuthScheme => write!(f, "Invalid authorization scheme"),
+            SecurityError::InvalidToken(msg) => write!(f, "Invalid token: {msg}"),
+            SecurityError::TokenExpired => write!(f, "Token expired"),
+            SecurityError::UnknownKeyId(kid) => write!(f, "Unknown signing key: {kid}"),
+            SecurityError::JwksFetchError(msg) => write!(f, "JWKS fetch error: {msg}"),
+            SecurityError::ValidationFailed(msg) => write!(f, "Token validation failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SecurityError {}
+
+impl IntoResponse for SecurityError {
+    fn into_response(self) -> Response {
+        let message = self.to_string();
+        let body = serde_json::json!({ "error": message });
+        (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+    }
+}
+
+impl From<SecurityError> for quarlus_core::AppError {
+    fn from(err: SecurityError) -> Self {
+        quarlus_core::AppError::Unauthorized(err.to_string())
+    }
+}
