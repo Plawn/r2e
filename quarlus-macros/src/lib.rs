@@ -154,6 +154,33 @@ pub fn rate_limited(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Invalidate a named cache group after a method executes.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[post("/users")]
+/// #[cache_invalidate("users")]
+/// async fn create(&self, ...) -> ... { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn cache_invalidate(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Apply a user-defined interceptor to a route method.
+/// The interceptor type must implement `quarlus_core::Interceptor<R>`.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[get("/users")]
+/// #[intercept(AuditLog)]
+/// async fn list(&self) -> Json<Vec<User>> { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Apply a custom middleware function to a route.
 /// No-op attribute — read by `controller!`.
 ///

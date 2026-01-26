@@ -61,6 +61,57 @@ Key struct: `ControllerDef` in `parsing.rs` holds all parsed fields, identity fi
 
 Handler generation pattern: each `#[get("/path")]` method becomes a standalone async function that extracts `State(state)`, any identity extractors, and method parameters, constructs the controller struct, then calls the method.
 
+**No-op attribute macros:** `lib.rs` declares attributes like `#[get]`, `#[logged]`, `#[cached]`, etc. as no-op `#[proc_macro_attribute]` that return their input unchanged. These are **not** consumed at the attribute-macro level — they are parsed from the raw token stream inside the `controller!` function-like macro by `parsing.rs`. The no-op declarations exist for three reasons: (1) they prevent "cannot find attribute" compiler errors if someone uses them outside `controller!`, (2) they appear in `cargo doc` with their documentation, making the API discoverable, and (3) they give IDEs like rust-analyzer autocomplete and hover support. The `controller!` macro would compile fine without them.
+
+### Interceptors
+
+Cross-cutting concerns (logging, timing, caching) are implemented via a generic `Interceptor<R>` trait with an `around` pattern (`quarlus-core/src/interceptors.rs`). All calls are monomorphized (no `dyn`) for zero overhead.
+
+**Built-in interceptors:**
+- `Logged` — logs entry/exit at a configurable `LogLevel`.
+- `Timed` — measures execution time, with an optional threshold (only logs if exceeded).
+- `Cached` — caches `Json<T>` responses in a `TtlCache<String, String>`. Requires `T: Serialize + DeserializeOwned`. Only works with `Json<T>` return types (not `Result<Json<T>, AppError>`).
+
+**Interceptor wrapping order** (outermost → innermost):
+
+Handler level (before the controller, in `generate_single_handler`):
+1. `rate_limited` — short-circuits with 429
+2. `roles` — short-circuits with 403
+
+Method body level (trait-based, via `Interceptor::around`, in `generate_wrapped_method`):
+3. `logged`
+4. `timed`
+5. User-defined interceptors (`#[intercept(...)]`)
+6. `cached`
+
+Inline codegen (no trait):
+7. `cache_invalidate` (after body)
+8. `transactional` (wraps body in tx begin/commit)
+9. Original method body
+
+**Configurable syntax:**
+```rust
+#[logged]                                    // default: Info
+#[logged(level = "debug")]                   // custom level
+#[timed]                                     // default: Info, no threshold
+#[timed(level = "warn", threshold = 100)]    // only log if > 100ms
+#[cached(ttl = 30)]                          // anonymous static cache
+#[cached(ttl = 30, group = "users")]         // named cache group (for invalidation)
+#[cached(ttl = 30, key = "params")]          // key by method params (requires Debug)
+#[cached(ttl = 30, key = "user")]            // key by identity.sub (requires #[identity])
+#[cache_invalidate("users")]                 // clears a named cache group after method runs
+#[transactional]                             // uses self.pool
+#[transactional(pool = "read_db")]           // custom pool field
+#[rate_limited(max = 5, window = 60)]                  // global key
+#[rate_limited(max = 5, window = 60, key = "user")]    // per-user (requires #[identity])
+#[rate_limited(max = 5, window = 60, key = "ip")]      // per-IP (X-Forwarded-For)
+#[intercept(MyInterceptor)]                  // user-defined (must be a unit struct/constant)
+```
+
+**User-defined interceptors** implement `Interceptor<R>` and are applied via `#[intercept(TypeName)]`. The type must be constructable as a bare path expression (unit struct or constant).
+
+**Cache infrastructure:** `CacheRegistry` (`quarlus-core/src/cache.rs`) is a global static registry of named `TtlCache` instances. `#[cached(group = "x")]` stores in the registry; `#[cache_invalidate("x")]` clears it. TTL is set by whichever method first creates the group.
+
 ### Security (quarlus-security)
 
 - `AuthenticatedUser` implements `FromRequestParts` — extracts Bearer token, validates via `JwtValidator`, returns user with sub/email/roles/claims.

@@ -50,14 +50,16 @@ fn generate_struct(def: &ControllerDef) -> TokenStream {
 
 /// Generate `impl Name { ... }` with all original methods.
 /// Route methods may get their body wrapped with interceptors.
-/// Wrapping order (outermost first): logged → timed → rate_limited → cached → transactional → body.
+///
+/// Wrapping order (outermost first):
+///   logged → timed → user-defined interceptors → cached → cache_invalidate → transactional → body.
 fn generate_impl(def: &ControllerDef) -> TokenStream {
     let name = &def.name;
 
     let route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .map(|rm| generate_wrapped_method(rm))
+        .map(|rm| generate_wrapped_method(rm, def))
         .collect();
 
     let other_fns: Vec<_> = def.other_methods.iter().collect();
@@ -74,10 +76,126 @@ fn generate_impl(def: &ControllerDef) -> TokenStream {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Helper: convert parsing::LogLevel to runtime token stream
+// ---------------------------------------------------------------------------
+
+fn log_level_tokens(level: LogLevel) -> TokenStream {
+    match level {
+        LogLevel::Trace => quote! { quarlus_core::interceptors::LogLevel::Trace },
+        LogLevel::Debug => quote! { quarlus_core::interceptors::LogLevel::Debug },
+        LogLevel::Info => quote! { quarlus_core::interceptors::LogLevel::Info },
+        LogLevel::Warn => quote! { quarlus_core::interceptors::LogLevel::Warn },
+        LogLevel::Error => quote! { quarlus_core::interceptors::LogLevel::Error },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract first identifier from a pattern (for cache key generation)
+// ---------------------------------------------------------------------------
+
+fn extract_first_ident(pat: &syn::Pat) -> Option<syn::Ident> {
+    match pat {
+        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+        syn::Pat::TupleStruct(ts) => ts.elems.first().and_then(extract_first_ident),
+        syn::Pat::Tuple(t) => t.elems.first().and_then(extract_first_ident),
+        syn::Pat::Reference(r) => extract_first_ident(&r.pat),
+        _ => None,
+    }
+}
+
+fn extract_param_bindings(rm: &RouteMethod) -> Vec<syn::Ident> {
+    rm.fn_item
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pt) => extract_first_ident(&pt.pat),
+            _ => None,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Helper: generate cache key expression
+// ---------------------------------------------------------------------------
+
+fn identity_field_name(def: &ControllerDef) -> &syn::Ident {
+    assert!(
+        !def.identity_fields.is_empty(),
+        "cached(key = \"user\") or cached(key = \"user_params\") requires an #[identity] field on the controller"
+    );
+    &def.identity_fields[0].name
+}
+
+fn generate_cache_key_expr(
+    fn_name: &str,
+    cache_key: &CacheKey,
+    rm: &RouteMethod,
+    def: &ControllerDef,
+) -> TokenStream {
+    match cache_key {
+        CacheKey::Default => {
+            quote! { format!("{}:default", #fn_name) }
+        }
+        CacheKey::Params => {
+            let bindings = extract_param_bindings(rm);
+            if bindings.is_empty() {
+                quote! { format!("{}:default", #fn_name) }
+            } else {
+                quote! {
+                    {
+                        let mut __key = format!("{}", #fn_name);
+                        #(
+                            __key.push(':');
+                            __key.push_str(&format!("{:?}", #bindings));
+                        )*
+                        __key
+                    }
+                }
+            }
+        }
+        CacheKey::User => {
+            let identity_name = identity_field_name(def);
+            quote! { format!("{}:user:{}", #fn_name, self.#identity_name.sub) }
+        }
+        CacheKey::UserParams => {
+            let identity_name = identity_field_name(def);
+            let bindings = extract_param_bindings(rm);
+            if bindings.is_empty() {
+                quote! { format!("{}:user:{}", #fn_name, self.#identity_name.sub) }
+            } else {
+                quote! {
+                    {
+                        let mut __key = format!("{}:user:{}", #fn_name, self.#identity_name.sub);
+                        #(
+                            __key.push(':');
+                            __key.push_str(&format!("{:?}", #bindings));
+                        )*
+                        __key
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Method wrapping with interceptors
+// ---------------------------------------------------------------------------
+
 /// Generate a method with the full interceptor chain applied.
-fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
-    let has_interceptors = rm.transactional || rm.logged || rm.timed
-        || rm.cached.is_some() || rm.rate_limited.is_some();
+///
+/// Inline wrappers (innermost): transactional, cache_invalidate
+/// Trait-based interceptors (via Interceptor::around): cached, user-defined, timed, logged
+/// Rate limiting is handled at the handler level (generate_single_handler).
+fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream {
+    let has_interceptors = rm.transactional.is_some()
+        || rm.logged.is_some()
+        || rm.timed.is_some()
+        || rm.cached.is_some()
+        || !rm.intercept_fns.is_empty()
+        || !rm.cache_invalidate.is_empty();
 
     if !has_interceptors {
         let f = &rm.fn_item;
@@ -89,16 +207,20 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
     let vis = &fn_item.vis;
     let sig = &fn_item.sig;
     let fn_name_str = sig.ident.to_string();
+    let controller_name_str = def.name.to_string();
     let original_body = &fn_item.block;
 
     // Start with the innermost body (the original code)
-    let mut body = quote! { #original_body };
+    let mut body: TokenStream = quote! { #original_body };
 
-    // Layer 5 (innermost): transactional
-    if rm.transactional {
+    // -----------------------------------------------------------------------
+    // Inline wrapper (innermost): transactional
+    // -----------------------------------------------------------------------
+    if let Some(ref tx_config) = rm.transactional {
+        let pool_field = format_ident!("{}", tx_config.pool_field);
         body = quote! {
             {
-                let mut tx = self.pool.begin().await
+                let mut tx = self.#pool_field.begin().await
                     .map_err(|__e| quarlus_core::AppError::Internal(__e.to_string()))?;
                 let __tx_result = #body;
                 match __tx_result {
@@ -113,75 +235,121 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
         };
     }
 
-    // Layer 4: cached — wraps the body to check/store in a static TtlCache
-    if let Some(ttl) = rm.cached {
+    // -----------------------------------------------------------------------
+    // Inline wrapper: cache_invalidate (after body)
+    // -----------------------------------------------------------------------
+    for group in &rm.cache_invalidate {
         body = quote! {
             {
+                let __result = #body;
+                quarlus_core::CacheRegistry::invalidate(#group);
+                __result
+            }
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Trait-based interceptors (via Interceptor::around)
+    // Build from innermost to outermost.
+    // -----------------------------------------------------------------------
+
+    let has_trait_interceptors = rm.logged.is_some()
+        || rm.timed.is_some()
+        || rm.cached.is_some()
+        || !rm.intercept_fns.is_empty();
+
+    // Layer: cached (innermost trait-based interceptor)
+    if let Some(ref cached_config) = rm.cached {
+        let ttl = cached_config.ttl;
+        let key_expr = generate_cache_key_expr(&fn_name_str, &cached_config.key, rm, def);
+
+        let cache_init = if let Some(ref group) = cached_config.group {
+            quote! {
+                let __cache = quarlus_core::CacheRegistry::get_or_create(
+                    #group,
+                    std::time::Duration::from_secs(#ttl),
+                );
+            }
+        } else {
+            quote! {
                 use std::sync::OnceLock;
                 static __CACHE: OnceLock<quarlus_core::TtlCache<String, String>> = OnceLock::new();
                 let __cache = __CACHE.get_or_init(|| {
                     quarlus_core::TtlCache::new(std::time::Duration::from_secs(#ttl))
-                });
-                let __cache_key = format!("{}:{}", #fn_name_str, "default");
-                if let Some(__cached) = __cache.get(&__cache_key) {
-                    let __val: serde_json::Value = serde_json::from_str(&__cached)
-                        .unwrap_or(serde_json::Value::String(__cached));
-                    axum::Json(__val)
-                } else {
-                    let __result = #body;
-                    if let Ok(__serialized) = serde_json::to_string(&__result.0) {
-                        __cache.insert(__cache_key, __serialized);
-                    }
-                    __result
-                }
+                }).clone();
+            }
+        };
+
+        body = quote! {
+            {
+                #cache_init
+                let __cached = quarlus_core::interceptors::Cached {
+                    cache: __cache,
+                    key: #key_expr,
+                };
+                quarlus_core::Interceptor::around(&__cached, __ctx, move || async move {
+                    #body
+                }).await
             }
         };
     }
 
-    // Layer 3: rate_limited — checks a static RateLimiter, returns 429 if exceeded
-    if let Some(ref rl) = rm.rate_limited {
-        let max = rl.max;
-        let window = rl.window;
+    // Layer: user-defined interceptors (in reverse order so first declared is outermost)
+    for intercept_fn in rm.intercept_fns.iter().rev() {
         body = quote! {
             {
-                use std::sync::OnceLock;
-                static __LIMITER: OnceLock<quarlus_core::RateLimiter<String>> = OnceLock::new();
-                let __limiter = __LIMITER.get_or_init(|| {
-                    quarlus_core::RateLimiter::new(#max, std::time::Duration::from_secs(#window))
-                });
-                let __key = format!("{}:global", #fn_name_str);
-                if !__limiter.try_acquire(&__key) {
-                    return Err(quarlus_core::AppError::Custom {
-                        status: axum::http::StatusCode::TOO_MANY_REQUESTS,
-                        body: serde_json::json!({ "error": "Rate limit exceeded" }),
-                    });
-                }
+                let __interceptor = #intercept_fn;
+                quarlus_core::Interceptor::around(&__interceptor, __ctx, move || async move {
+                    #body
+                }).await
+            }
+        };
+    }
+
+    // Layer: timed
+    if let Some(ref timed_config) = rm.timed {
+        let level = log_level_tokens(timed_config.level);
+        let threshold = match timed_config.threshold_ms {
+            Some(ms) => quote! { Some(#ms) },
+            None => quote! { None },
+        };
+        body = quote! {
+            {
+                let __timed = quarlus_core::interceptors::Timed {
+                    level: #level,
+                    threshold_ms: #threshold,
+                };
+                quarlus_core::Interceptor::around(&__timed, __ctx, move || async move {
+                    #body
+                }).await
+            }
+        };
+    }
+
+    // Layer: logged (outermost trait-based interceptor)
+    if let Some(ref logged_config) = rm.logged {
+        let level = log_level_tokens(logged_config.level);
+        body = quote! {
+            {
+                let __logged = quarlus_core::interceptors::Logged {
+                    level: #level,
+                };
+                quarlus_core::Interceptor::around(&__logged, __ctx, move || async move {
+                    #body
+                }).await
+            }
+        };
+    }
+
+    // Wrap with InterceptorContext creation if any trait-based interceptors used
+    if has_trait_interceptors {
+        body = quote! {
+            {
+                let __ctx = quarlus_core::InterceptorContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                };
                 #body
-            }
-        };
-    }
-
-    // Layer 2: timed
-    if rm.timed {
-        body = quote! {
-            {
-                let __start = std::time::Instant::now();
-                let __result = #body;
-                let __elapsed = __start.elapsed();
-                tracing::info!(method = #fn_name_str, elapsed_ms = __elapsed.as_millis() as u64, "method execution time");
-                __result
-            }
-        };
-    }
-
-    // Layer 1 (outermost): logged
-    if rm.logged {
-        body = quote! {
-            {
-                tracing::info!(method = #fn_name_str, "entering");
-                let __result = #body;
-                tracing::info!(method = #fn_name_str, "exiting");
-                __result
             }
         };
     }
@@ -193,6 +361,10 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Handler generation
+// ---------------------------------------------------------------------------
 
 /// Generate free handler functions for every route method.
 fn generate_handlers(def: &ControllerDef) -> TokenStream {
@@ -211,6 +383,7 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
     let fn_name = &rm.fn_item.sig.ident;
     let handler_name = format_ident!("__quarlus_{}_{}", controller_name, fn_name);
     let return_type = &rm.fn_item.sig.output;
+    let fn_name_str = fn_name.to_string();
 
     // Identity parameters for the handler signature
     let identity_params: Vec<_> = def
@@ -300,7 +473,11 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
         quote! { __ctrl.#fn_name(#(#call_args),*) }
     };
 
-    if rm.roles.is_empty() {
+    // Determine if handler needs to return Response (for guard/rate-limit short-circuit)
+    let needs_response = !rm.roles.is_empty() || rm.rate_limited.is_some();
+
+    if !needs_response {
+        // Simple handler: returns the method's own type
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
@@ -315,22 +492,99 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
             }
         }
     } else {
-        // Role-guarded handler: returns Response so the guard can short-circuit.
-        let role_strs = &rm.roles;
-        let identity_name = &def.identity_fields[0].name;
+        // Guarded handler: returns Response to allow short-circuit
+        let identity_name = if !def.identity_fields.is_empty() {
+            Some(&def.identity_fields[0].name)
+        } else {
+            None
+        };
+
+        // --- Rate limit guard ---
+        let rate_limit_guard = if let Some(ref rl) = rm.rate_limited {
+            let max = rl.max;
+            let window = rl.window;
+
+            let key_expr = match rl.key {
+                RateLimitKey::Global => {
+                    quote! { format!("{}:global", #fn_name_str) }
+                }
+                RateLimitKey::User => {
+                    let id_name = identity_name
+                        .expect("rate_limited(key = \"user\") requires an #[identity] field");
+                    quote! { format!("{}:user:{}", #fn_name_str, #id_name.sub) }
+                }
+                RateLimitKey::Ip => {
+                    quote! {
+                        {
+                            let __ip = __headers
+                                .get("x-forwarded-for")
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|v| v.split(',').next())
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            format!("{}:ip:{}", #fn_name_str, __ip)
+                        }
+                    }
+                }
+            };
+
+            quote! {
+                {
+                    use std::sync::OnceLock;
+                    static __LIMITER: OnceLock<quarlus_core::RateLimiter<String>> = OnceLock::new();
+                    let __limiter = __LIMITER.get_or_init(|| {
+                        quarlus_core::RateLimiter::new(#max, std::time::Duration::from_secs(#window))
+                    });
+                    let __rl_key = #key_expr;
+                    if !__limiter.try_acquire(&__rl_key) {
+                        return axum::response::IntoResponse::into_response((
+                            axum::http::StatusCode::TOO_MANY_REQUESTS,
+                            axum::Json(serde_json::json!({ "error": "Rate limit exceeded" })),
+                        ));
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        // --- Roles guard ---
+        let roles_guard = if !rm.roles.is_empty() {
+            let role_strs = &rm.roles;
+            let id_name = identity_name
+                .expect("#[roles] requires an #[identity] field");
+            quote! {
+                if !#id_name.has_any_role(&[#(#role_strs),*]) {
+                    return axum::response::IntoResponse::into_response(
+                        quarlus_core::AppError::Forbidden("Insufficient roles".into()),
+                    );
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        // Extra parameter: HeaderMap (needed for IP-based rate limiting)
+        let needs_headers = matches!(
+            rm.rate_limited.as_ref().map(|rl| &rl.key),
+            Some(RateLimitKey::Ip)
+        );
+        let headers_param = if needs_headers {
+            quote! { __headers: axum::http::HeaderMap, }
+        } else {
+            quote! {}
+        };
 
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
                 axum::extract::State(state): axum::extract::State<#state_type>,
                 #(#identity_params,)*
+                #headers_param
                 #(#handler_extra_params,)*
             ) -> axum::response::Response {
-                if !#identity_name.has_any_role(&[#(#role_strs),*]) {
-                    return axum::response::IntoResponse::into_response(
-                        quarlus_core::AppError::Forbidden("Insufficient roles".into()),
-                    );
-                }
+                #rate_limit_guard
+                #roles_guard
                 let __ctrl = #controller_name {
                     #(#all_inits,)*
                 };
