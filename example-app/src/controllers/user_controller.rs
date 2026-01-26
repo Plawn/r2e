@@ -2,8 +2,8 @@ use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use crate::state::Services;
 use axum::extract::Path;
+use quarlus_core::validation::Validated;
 use quarlus_security::AuthenticatedUser;
-use tracing::info;
 
 quarlus_macros::controller! {
     impl UserController for Services {
@@ -16,7 +16,12 @@ quarlus_macros::controller! {
         #[identity]
         user: AuthenticatedUser,
 
+        #[config("app.greeting")]
+        greeting: String,
+
         #[get("/users")]
+        #[logged]
+        #[timed]
         async fn list(&self) -> axum::Json<Vec<User>> {
             let users = self.user_service.list().await;
             axum::Json(users)
@@ -36,7 +41,7 @@ quarlus_macros::controller! {
         #[post("/users")]
         async fn create(
             &self,
-            axum::Json(body): axum::Json<CreateUserRequest>,
+            Validated(body): Validated<CreateUserRequest>,
         ) -> axum::Json<User> {
             let user = self.user_service.create(body.name, body.email).await;
             axum::Json(user)
@@ -62,13 +67,42 @@ quarlus_macros::controller! {
             .await
             .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
 
-            let r = Ok(axum::Json(User {
+            Ok(axum::Json(User {
                 id: row.0 as u64,
                 name: row.1,
                 email: row.2,
-            }));
-            tracing::info!("users are {:?}", &r);
-            r
+            }))
+        }
+
+        #[get("/greeting")]
+        async fn greeting(&self) -> axum::Json<serde_json::Value> {
+            axum::Json(serde_json::json!({ "greeting": self.greeting }))
+        }
+
+        #[get("/error/custom")]
+        async fn custom_error(&self) -> Result<axum::Json<()>, quarlus_core::AppError> {
+            Err(quarlus_core::AppError::Custom {
+                status: axum::http::StatusCode::from_u16(418).unwrap(),
+                body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
+            })
+        }
+
+        #[get("/users/cached")]
+        #[cached(ttl = 30)]
+        #[timed]
+        async fn cached_list(&self) -> axum::Json<serde_json::Value> {
+            let users = self.user_service.list().await;
+            axum::Json(serde_json::to_value(users).unwrap())
+        }
+
+        #[post("/users/rate-limited")]
+        #[rate_limited(max = 5, window = 60)]
+        async fn create_rate_limited(
+            &self,
+            Validated(body): Validated<CreateUserRequest>,
+        ) -> Result<axum::Json<User>, quarlus_core::AppError> {
+            let user = self.user_service.create(body.name, body.email).await;
+            Ok(axum::Json(user))
         }
 
         #[get("/me")]

@@ -21,6 +21,7 @@ pub struct ControllerDef {
     pub state_type: syn::Path,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
+    pub config_fields: Vec<ConfigField>,
     pub route_methods: Vec<RouteMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
@@ -35,12 +36,28 @@ pub struct IdentityField {
     pub ty: syn::Type,
 }
 
+pub struct ConfigField {
+    pub name: syn::Ident,
+    pub ty: syn::Type,
+    pub key: String,
+}
+
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
     pub roles: Vec<String>,
     pub transactional: bool,
+    pub logged: bool,
+    pub timed: bool,
+    pub cached: Option<u64>,
+    pub rate_limited: Option<RateLimitConfig>,
+    pub middleware_fns: Vec<syn::Path>,
     pub fn_item: syn::ImplItemFn,
+}
+
+pub struct RateLimitConfig {
+    pub max: u64,
+    pub window: u64,
 }
 
 impl Parse for ControllerDef {
@@ -56,6 +73,7 @@ impl Parse for ControllerDef {
 
         let mut injected_fields = Vec::new();
         let mut identity_fields = Vec::new();
+        let mut config_fields = Vec::new();
         let mut route_methods = Vec::new();
         let mut other_methods = Vec::new();
 
@@ -73,12 +91,22 @@ impl Parse for ControllerDef {
                     Some((http_method, path)) => {
                         let roles = extract_roles(&all_attrs)?;
                         let transactional = all_attrs.iter().any(|a| a.path().is_ident("transactional"));
+                        let logged = all_attrs.iter().any(|a| a.path().is_ident("logged"));
+                        let timed = all_attrs.iter().any(|a| a.path().is_ident("timed"));
+                        let cached = extract_cached_ttl(&all_attrs)?;
+                        let rate_limited = extract_rate_limit(&all_attrs)?;
+                        let middleware_fns = extract_middleware_fns(&all_attrs)?;
                         method.attrs = strip_route_attrs(all_attrs);
                         route_methods.push(RouteMethod {
                             method: http_method,
                             path,
                             roles,
                             transactional,
+                            logged,
+                            timed,
+                            cached,
+                            rate_limited,
+                            middleware_fns,
                             fn_item: method,
                         });
                     }
@@ -98,6 +126,7 @@ impl Parse for ControllerDef {
 
                 let is_inject = attrs.iter().any(|a| a.path().is_ident("inject"));
                 let is_identity = attrs.iter().any(|a| a.path().is_ident("identity"));
+                let config_attr = attrs.iter().find(|a| a.path().is_ident("config"));
 
                 if is_inject {
                     injected_fields.push(InjectedField {
@@ -109,10 +138,17 @@ impl Parse for ControllerDef {
                         name: field_name,
                         ty: field_type,
                     });
+                } else if let Some(attr) = config_attr {
+                    let key: syn::LitStr = attr.parse_args()?;
+                    config_fields.push(ConfigField {
+                        name: field_name,
+                        ty: field_type,
+                        key: key.value(),
+                    });
                 } else {
                     return Err(syn::Error::new(
                         field_name.span(),
-                        "field in controller must have #[inject] or #[identity]",
+                        "field in controller must have #[inject], #[identity], or #[config(\"key\")]",
                     ));
                 }
             }
@@ -123,6 +159,7 @@ impl Parse for ControllerDef {
             state_type,
             injected_fields,
             identity_fields,
+            config_fields,
             route_methods,
             other_methods,
         })
@@ -147,7 +184,16 @@ fn is_route_attr(attr: &syn::Attribute) -> bool {
 fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs
         .into_iter()
-        .filter(|a| !is_route_attr(a) && !a.path().is_ident("roles") && !a.path().is_ident("transactional"))
+        .filter(|a| {
+            !is_route_attr(a)
+                && !a.path().is_ident("roles")
+                && !a.path().is_ident("transactional")
+                && !a.path().is_ident("logged")
+                && !a.path().is_ident("timed")
+                && !a.path().is_ident("cached")
+                && !a.path().is_ident("rate_limited")
+                && !a.path().is_ident("middleware")
+        })
         .collect()
 }
 
@@ -160,6 +206,63 @@ fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
         }
     }
     Ok(Vec::new())
+}
+
+fn extract_cached_ttl(attrs: &[syn::Attribute]) -> syn::Result<Option<u64>> {
+    for attr in attrs {
+        if attr.path().is_ident("cached") {
+            let mut ttl = 60u64;
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("ttl") {
+                    let value = meta.value()?;
+                    let lit: syn::LitInt = value.parse()?;
+                    ttl = lit.base10_parse()?;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `ttl`"))
+                }
+            })?;
+            return Ok(Some(ttl));
+        }
+    }
+    Ok(None)
+}
+
+fn extract_rate_limit(attrs: &[syn::Attribute]) -> syn::Result<Option<RateLimitConfig>> {
+    for attr in attrs {
+        if attr.path().is_ident("rate_limited") {
+            let mut max = 100u64;
+            let mut window = 60u64;
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("max") {
+                    let value = meta.value()?;
+                    let lit: syn::LitInt = value.parse()?;
+                    max = lit.base10_parse()?;
+                    Ok(())
+                } else if meta.path.is_ident("window") {
+                    let value = meta.value()?;
+                    let lit: syn::LitInt = value.parse()?;
+                    window = lit.base10_parse()?;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `max` or `window`"))
+                }
+            })?;
+            return Ok(Some(RateLimitConfig { max, window }));
+        }
+    }
+    Ok(None)
+}
+
+fn extract_middleware_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Path>> {
+    let mut fns = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("middleware") {
+            let path: syn::Path = attr.parse_args()?;
+            fns.push(path);
+        }
+    }
+    Ok(fns)
 }
 
 fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpMethod, String)>> {

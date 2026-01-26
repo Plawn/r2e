@@ -103,3 +103,66 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn transactional(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
+
+/// Inject a configuration value into a controller field.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[config("app.greeting")]
+/// greeting: String,
+/// ```
+#[proc_macro_attribute]
+pub fn config(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Log entry and exit of a route method.
+/// No-op attribute — read by `controller!`.
+#[proc_macro_attribute]
+pub fn logged(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Measure and log the execution time of a route method.
+/// No-op attribute — read by `controller!`.
+#[proc_macro_attribute]
+pub fn timed(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Cache the response of a route method with a TTL in seconds.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[cached(ttl = 60)]
+/// async fn list(&self) -> Json<Vec<User>> { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn cached(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Rate-limit a route method by IP or a static key.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[rate_limited(max = 100, window = 60)]
+/// async fn create(&self, ...) -> ... { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn rate_limited(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Apply a custom middleware function to a route.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[middleware(my_middleware_fn)]
+/// #[get("/protected")]
+/// async fn protected(&self) -> ... { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}

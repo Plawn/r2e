@@ -1,16 +1,26 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
+use quarlus_core::config::{ConfigValue, QuarlusConfig};
+use quarlus_core::Controller;
 use quarlus_core::AppBuilder;
+use quarlus_events::EventBus;
+use quarlus_openapi::{openapi_routes, OpenApiConfig};
+use quarlus_scheduler::{Schedule, ScheduledTask, Scheduler};
 use quarlus_security::{JwtValidator, SecurityConfig};
 use sqlx::SqlitePool;
+use tokio_util::sync::CancellationToken;
 
 mod controllers;
 mod models;
 mod services;
 mod state;
 
+use controllers::config_controller::ConfigController;
+use controllers::data_controller::DataController;
 use controllers::user_controller::UserController;
+use models::UserCreatedEvent;
 use services::UserService;
 use state::Services;
 
@@ -46,9 +56,37 @@ async fn main() {
     println!("{token}");
     println!();
 
+    // --- Configuration (#1) ---
+    // load() succeeds even when application.yaml is absent (env vars still overlay),
+    // so we always ensure the required keys exist with sensible defaults.
+    let mut config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
+    if config.get::<String>("app.name").is_err() {
+        config.set("app.name", ConfigValue::String("Quarlus Example App".into()));
+    }
+    if config.get::<String>("app.greeting").is_err() {
+        config.set("app.greeting", ConfigValue::String("Welcome to Quarlus!".into()));
+    }
+    if config.get::<String>("app.version").is_err() {
+        config.set("app.version", ConfigValue::String("0.1.0".into()));
+    }
+
+    // --- Events (#7) ---
+    let event_bus = EventBus::new();
+    event_bus
+        .subscribe(|event: Arc<UserCreatedEvent>| async move {
+            tracing::info!(
+                user_id = event.user_id,
+                name = %event.name,
+                email = %event.email,
+                "User created event received"
+            );
+        })
+        .await;
+
     // Build the JWT validator with a static HMAC key (no JWKS needed for the demo)
-    let config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
-    let validator = JwtValidator::new_with_static_key(DecodingKey::from_secret(secret), config);
+    let sec_config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
+    let validator =
+        JwtValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
     // Create an in-memory SQLite pool and initialise the schema
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -63,19 +101,85 @@ async fn main() {
     .await
     .unwrap();
 
+    // Seed database with sample users for data controller (#6)
+    for (name, email) in [
+        ("Alice", "alice@example.com"),
+        ("Bob", "bob@example.com"),
+        ("Charlie", "charlie@example.com"),
+    ] {
+        sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
+            .bind(name)
+            .bind(email)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // --- Scheduling (#8) ---
+    let cancel = CancellationToken::new();
+    let mut scheduler = Scheduler::new();
+    scheduler.add_task(ScheduledTask {
+        name: "user-count".to_string(),
+        schedule: Schedule::Every(Duration::from_secs(30)),
+        task: Box::new(|state: Services| {
+            Box::pin(async move {
+                let count = state.user_service.count().await;
+                tracing::info!(count, "Scheduled user count");
+            })
+        }),
+    });
+
     let services = Services {
-        user_service: UserService::new(),
+        user_service: UserService::new(event_bus.clone()),
         jwt_validator: Arc::new(validator),
         pool,
+        event_bus,
+        config: config.clone(),
+        cancel: cancel.clone(),
     };
 
+    // Start the scheduler in the background
+    scheduler.start(services.clone(), cancel.clone());
+
+    // --- OpenAPI (#5) ---
+    let openapi_config = OpenApiConfig::new("Quarlus Example API", "0.1.0")
+        .with_description("Demo application showcasing all Quarlus features")
+        .with_swagger_ui(true);
+    let openapi = openapi_routes::<Services>(
+        openapi_config,
+        vec![
+            UserController::route_metadata(),
+            ConfigController::route_metadata(),
+            DataController::route_metadata(),
+        ],
+    );
+
+    // --- App assembly ---
     AppBuilder::new()
         .with_state(services)
+        .with_config(config)
         .with_health()
         .with_cors()
         .with_tracing()
+        .with_error_handling() // Error handling (#3)
+        .with_dev_reload() // Dev mode (#9)
+        .on_start(|_state| async move {
+            // Lifecycle hook (#10)
+            tracing::info!("Quarlus example-app startup hook executed");
+            Ok(())
+        })
+        .on_stop(|| async {
+            // Lifecycle hook (#10)
+            tracing::info!("Quarlus example-app shutdown hook executed");
+        })
         .register_controller::<UserController>()
+        .register_controller::<ConfigController>()
+        .register_controller::<DataController>()
+        .register_routes(openapi)
         .serve("0.0.0.0:3000")
         .await
         .unwrap();
+
+    // Cancel the scheduler on exit
+    cancel.cancel();
 }

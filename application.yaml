@@ -1,0 +1,4 @@
+app:
+  name: "Quarlus Example App"
+  greeting: "Welcome to Quarlus!"
+  version: "0.1.0"

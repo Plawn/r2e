@@ -3,6 +3,12 @@ members = [
     "quarlus-core",
     "quarlus-macros",
     "quarlus-security",
+    "quarlus-data",
+    "quarlus-openapi",
+    "quarlus-events",
+    "quarlus-scheduler",
+    "quarlus-cli",
+    "quarlus-test",
     "example-app",
 ]
 resolver = "2"
