@@ -175,6 +175,21 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Mark a method as a scheduled background task.
+/// No-op attribute — read by `controller!`.
+///
+/// # Variants
+/// ```ignore
+/// #[scheduled(every = 30)]
+/// #[scheduled(every = 60, initial_delay = 5)]
+/// #[scheduled(cron = "0 */5 * * * *")]
+/// #[scheduled(every = 30, name = "user-count")]
+/// ```
+#[proc_macro_attribute]
+pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Set a base path prefix for all routes in this controller.
 /// Uses `axum::Router::nest()` under the hood.
 /// No-op attribute — read by `controller!`.

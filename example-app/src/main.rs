@@ -1,12 +1,11 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
 use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
 use quarlus_openapi::{AppBuilderOpenApiExt, OpenApiConfig};
-use quarlus_scheduler::{Schedule, ScheduledTask, Scheduler};
+use quarlus_scheduler::AppBuilderSchedulerExt;
 use quarlus_security::{JwtValidator, SecurityConfig};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +19,7 @@ use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
 use controllers::data_controller::DataController;
 use controllers::event_controller::UserEventConsumer;
+use controllers::scheduled_controller::ScheduledJobs;
 use controllers::user_controller::UserController;
 use services::UserService;
 use state::Services;
@@ -105,19 +105,8 @@ async fn main() {
             .unwrap();
     }
 
-    // --- Scheduling (#8) ---
+    // --- Scheduling (#8) is now declarative via #[scheduled] in ScheduledJobs ---
     let cancel = CancellationToken::new();
-    let mut scheduler = Scheduler::new();
-    scheduler.add_task(ScheduledTask {
-        name: "user-count".to_string(),
-        schedule: Schedule::Every(Duration::from_secs(30)),
-        task: Box::new(|state: Services| {
-            Box::pin(async move {
-                let count = state.user_service.count().await;
-                tracing::info!(count, "Scheduled user count");
-            })
-        }),
-    });
 
     let services = Services {
         user_service: UserService::new(event_bus.clone()),
@@ -129,9 +118,6 @@ async fn main() {
         rate_limiter: quarlus_rate_limit::RateLimitRegistry::default(),
     };
 
-    // Start the scheduler in the background
-    scheduler.start(services.clone(), cancel.clone());
-
     // --- App assembly ---
     AppBuilder::new()
         .with_state(services)
@@ -141,6 +127,9 @@ async fn main() {
         .with_tracing()
         .with_error_handling() // Error handling (#3)
         .with_dev_reload() // Dev mode (#9)
+        .with_scheduler(|s| {
+            s.register::<ScheduledJobs>(); // Scheduling (#8)
+        })
         .with_openapi(
             OpenApiConfig::new("Quarlus Example API", "0.1.0")
                 .with_description("Demo application showcasing all Quarlus features")
@@ -163,7 +152,4 @@ async fn main() {
         .serve("0.0.0.0:3000")
         .await
         .unwrap();
-
-    // Cancel the scheduler on exit
-    cancel.cancel();
 }

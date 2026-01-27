@@ -26,6 +26,7 @@ pub struct ControllerDef {
     pub config_fields: Vec<ConfigField>,
     pub route_methods: Vec<RouteMethod>,
     pub consumer_methods: Vec<ConsumerMethod>,
+    pub scheduled_methods: Vec<ScheduledMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -48,6 +49,19 @@ pub struct ConfigField {
 pub struct ConsumerMethod {
     pub bus_field: String,
     pub event_type: syn::Type,
+    pub fn_item: syn::ImplItemFn,
+}
+
+pub struct ScheduledConfig {
+    pub every: Option<u64>,
+    pub cron: Option<String>,
+    pub initial_delay: Option<u64>,
+    pub name: Option<String>,
+}
+
+pub struct ScheduledMethod {
+    pub config: ScheduledConfig,
+    pub intercept_fns: Vec<syn::Expr>,
     pub fn_item: syn::ImplItemFn,
 }
 
@@ -95,6 +109,7 @@ impl Parse for ControllerDef {
         let mut config_fields = Vec::new();
         let mut route_methods = Vec::new();
         let mut consumer_methods = Vec::new();
+        let mut scheduled_methods = Vec::new();
         let mut other_methods = Vec::new();
 
         while !content.is_empty() {
@@ -127,6 +142,24 @@ impl Parse for ControllerDef {
                     consumer_methods.push(ConsumerMethod {
                         bus_field,
                         event_type,
+                        fn_item: method,
+                    });
+                } else if let Some(config) = extract_scheduled(&all_attrs)? {
+                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    // Validate: no parameters other than &self
+                    let has_extra_params = method.sig.inputs.iter().any(|arg| {
+                        matches!(arg, syn::FnArg::Typed(_))
+                    });
+                    if has_extra_params {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "scheduled methods cannot have parameters other than &self",
+                        ));
+                    }
+                    method.attrs = strip_scheduled_attrs(all_attrs);
+                    scheduled_methods.push(ScheduledMethod {
+                        config,
+                        intercept_fns,
                         fn_item: method,
                     });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
@@ -207,6 +240,14 @@ impl Parse for ControllerDef {
             ));
         }
 
+        if !scheduled_methods.is_empty() && !identity_fields.is_empty() {
+            return Err(syn::Error::new(
+                name.span(),
+                "controllers with #[scheduled] methods cannot have #[identity] fields \
+                 (no HTTP request context available for scheduled tasks)",
+            ));
+        }
+
         Ok(ControllerDef {
             name,
             state_type,
@@ -217,6 +258,7 @@ impl Parse for ControllerDef {
             config_fields,
             route_methods,
             consumer_methods,
+            scheduled_methods,
             other_methods,
         })
     }
@@ -461,6 +503,83 @@ fn strip_consumer_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs
         .into_iter()
         .filter(|a| !a.path().is_ident("consumer"))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled attribute extraction
+// ---------------------------------------------------------------------------
+
+fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<ScheduledConfig>> {
+    for attr in attrs {
+        if attr.path().is_ident("scheduled") {
+            let mut every: Option<u64> = None;
+            let mut cron: Option<String> = None;
+            let mut initial_delay: Option<u64> = None;
+            let mut name: Option<String> = None;
+
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("every") {
+                    let value = meta.value()?;
+                    let lit: syn::LitInt = value.parse()?;
+                    every = Some(lit.base10_parse()?);
+                    Ok(())
+                } else if meta.path.is_ident("cron") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    cron = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("initial_delay") {
+                    let value = meta.value()?;
+                    let lit: syn::LitInt = value.parse()?;
+                    initial_delay = Some(lit.base10_parse()?);
+                    Ok(())
+                } else if meta.path.is_ident("name") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    name = Some(lit.value());
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `every`, `cron`, `initial_delay`, or `name`"))
+                }
+            })?;
+
+            // Validate: exactly one of every/cron required
+            if every.is_none() && cron.is_none() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[scheduled] requires either `every` or `cron`",
+                ));
+            }
+            if every.is_some() && cron.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[scheduled] cannot have both `every` and `cron`",
+                ));
+            }
+            // Validate: initial_delay only with every
+            if initial_delay.is_some() && cron.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "`initial_delay` is not compatible with `cron`",
+                ));
+            }
+
+            return Ok(Some(ScheduledConfig {
+                every,
+                cron,
+                initial_delay,
+                name,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn strip_scheduled_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
+    attrs
+        .into_iter()
+        .filter(|a| !a.path().is_ident("scheduled") && !a.path().is_ident("intercept"))
         .collect()
 }
 

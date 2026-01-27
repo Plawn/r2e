@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+quarlus-core = { path = "../quarlus-core" }
 tokio = { version = "1", features = ["time", "rt", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 cron = "0.13"

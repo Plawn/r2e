@@ -1698,6 +1698,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cron",
+ "quarlus-core",
  "tokio",
  "tokio-util",
  "tracing",

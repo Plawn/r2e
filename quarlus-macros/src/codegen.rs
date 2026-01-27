@@ -8,12 +8,14 @@ pub fn generate(def: &ControllerDef) -> TokenStream {
     let impl_block = generate_impl(def);
     let handlers = generate_handlers(def);
     let controller_impl = generate_controller_impl(def);
+    let scheduled_impl = generate_scheduled_impl(def);
 
     quote! {
         #struct_def
         #impl_block
         #handlers
         #controller_impl
+        #scheduled_impl
     }
 }
 
@@ -72,15 +74,22 @@ fn generate_impl(def: &ControllerDef) -> TokenStream {
         })
         .collect();
 
+    let scheduled_fns: Vec<TokenStream> = def
+        .scheduled_methods
+        .iter()
+        .map(|sm| generate_wrapped_scheduled_method(sm, def))
+        .collect();
+
     let other_fns: Vec<_> = def.other_methods.iter().collect();
 
-    if route_fns.is_empty() && consumer_fns.is_empty() && other_fns.is_empty() {
+    if route_fns.is_empty() && consumer_fns.is_empty() && scheduled_fns.is_empty() && other_fns.is_empty() {
         quote! {}
     } else {
         quote! {
             impl #name {
                 #(#route_fns)*
                 #(#consumer_fns)*
+                #(#scheduled_fns)*
                 #(#other_fns)*
             }
         }
@@ -174,6 +183,179 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream
         #(#attrs)*
         #vis #sig {
             #body
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled method wrapping
+// ---------------------------------------------------------------------------
+
+/// Generate a scheduled method with interceptor chain applied (no transactional/guard).
+fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &ControllerDef) -> TokenStream {
+    let has_interceptors = !sm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
+
+    if !has_interceptors {
+        let f = &sm.fn_item;
+        return quote! { #f };
+    }
+
+    let fn_item = &sm.fn_item;
+    let attrs = &fn_item.attrs;
+    let vis = &fn_item.vis;
+    let sig = &fn_item.sig;
+    let fn_name_str = sig.ident.to_string();
+    let controller_name_str = def.name.to_string();
+    let original_body = &fn_item.block;
+
+    let mut body: TokenStream = quote! { #original_body };
+
+    let all_intercepts: Vec<&syn::Expr> = def
+        .controller_intercepts
+        .iter()
+        .chain(sm.intercept_fns.iter())
+        .collect();
+
+    for intercept_expr in all_intercepts.iter().rev() {
+        body = quote! {
+            {
+                let __interceptor = #intercept_expr;
+                quarlus_core::Interceptor::around(&__interceptor, __ctx, move || async move {
+                    #body
+                }).await
+            }
+        };
+    }
+
+    body = quote! {
+        {
+            let __ctx = quarlus_core::InterceptorContext {
+                method_name: #fn_name_str,
+                controller_name: #controller_name_str,
+            };
+            #body
+        }
+    };
+
+    quote! {
+        #(#attrs)*
+        #vis #sig {
+            #body
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled controller impl generation
+// ---------------------------------------------------------------------------
+
+/// Generate `impl ScheduledController<T> for Name` if any `#[scheduled]` methods exist.
+fn generate_scheduled_impl(def: &ControllerDef) -> TokenStream {
+    if def.scheduled_methods.is_empty() {
+        return quote! {};
+    }
+
+    let name = &def.name;
+    let state_type = &def.state_type;
+    let controller_name_str = name.to_string();
+
+    let task_registrations: Vec<TokenStream> = def
+        .scheduled_methods
+        .iter()
+        .map(|sm| {
+            let fn_name = &sm.fn_item.sig.ident;
+            let fn_name_str = fn_name.to_string();
+            let task_name = match &sm.config.name {
+                Some(n) => n.clone(),
+                None => format!("{}_{}", controller_name_str, fn_name_str),
+            };
+
+            let schedule_expr = if let Some(every) = sm.config.every {
+                if let Some(delay) = sm.config.initial_delay {
+                    quote! {
+                        quarlus_scheduler::Schedule::EveryDelay {
+                            interval: std::time::Duration::from_secs(#every),
+                            initial_delay: std::time::Duration::from_secs(#delay),
+                        }
+                    }
+                } else {
+                    quote! {
+                        quarlus_scheduler::Schedule::Every(
+                            std::time::Duration::from_secs(#every)
+                        )
+                    }
+                }
+            } else {
+                let cron_expr = sm.config.cron.as_ref().unwrap();
+                quote! {
+                    quarlus_scheduler::Schedule::Cron(#cron_expr.to_string())
+                }
+            };
+
+            // Build controller field initialisers (inject + config only, no identity)
+            let inject_inits: Vec<TokenStream> = def
+                .injected_fields
+                .iter()
+                .map(|f| {
+                    let n = &f.name;
+                    quote! { #n: __state.#n.clone() }
+                })
+                .collect();
+
+            let config_inits: Vec<TokenStream> = def
+                .config_fields
+                .iter()
+                .map(|f| {
+                    let n = &f.name;
+                    let key = &f.key;
+                    quote! {
+                        #n: {
+                            let __cfg = <quarlus_core::QuarlusConfig as axum::extract::FromRef<#state_type>>::from_ref(&__state);
+                            __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
+                        }
+                    }
+                })
+                .collect();
+
+            let all_inits: Vec<&TokenStream> = inject_inits
+                .iter()
+                .chain(config_inits.iter())
+                .collect();
+
+            let is_async = sm.fn_item.sig.asyncness.is_some();
+            let call_expr = if is_async {
+                quote! { __ctrl.#fn_name().await }
+            } else {
+                quote! { __ctrl.#fn_name() }
+            };
+
+            quote! {
+                __scheduler.add_task(quarlus_scheduler::ScheduledTask {
+                    name: #task_name.to_string(),
+                    schedule: #schedule_expr,
+                    task: Box::new(move |__state: #state_type| {
+                        Box::pin(async move {
+                            let __ctrl = #name {
+                                #(#all_inits,)*
+                            };
+                            quarlus_scheduler::ScheduledResult::log_if_err(
+                                #call_expr,
+                                #task_name,
+                            );
+                        })
+                    }),
+                });
+            }
+        })
+        .collect();
+
+    quote! {
+        impl quarlus_scheduler::ScheduledController<#state_type> for #name {
+            fn register_scheduled_tasks(
+                __scheduler: &mut quarlus_scheduler::Scheduler<#state_type>,
+            ) {
+                #(#task_registrations)*
+            }
         }
     }
 }
