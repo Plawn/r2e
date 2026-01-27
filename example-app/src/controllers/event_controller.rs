@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use crate::models::UserCreatedEvent;
 use crate::state::Services;
+use quarlus_core::prelude::*;
 use quarlus_events::EventBus;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserEventConsumer {
     #[inject]
     event_bus: EventBus,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl UserEventConsumer {
     #[consumer(bus = "event_bus")]
     async fn on_user_created(&self, event: Arc<UserCreatedEvent>) {

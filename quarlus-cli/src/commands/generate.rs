@@ -16,19 +16,20 @@ pub fn controller(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let content = format!(
         r#"use axum::Json;
+use quarlus_core::prelude::*;
 use serde::{{Deserialize, Serialize}};
 
 // TODO: import your state type
 // use crate::state::AppState;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct {name} {{
     // #[inject]
     // your_service: YourService,
 }}
 
-#[quarlus_macros::routes]
+#[routes]
 impl {name} {{
     #[get("/your-path")]
     async fn list(&self) -> Json<String> {{

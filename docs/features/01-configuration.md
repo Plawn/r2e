@@ -82,7 +82,9 @@ let timeout: i64 = config.get_or("app.timeout", 30);
 Le champ `#[config("cle")]` dans un controller injecte automatiquement la valeur depuis la configuration au moment de la requete :
 
 ```rust
-#[derive(quarlus_macros::Controller)]
+use quarlus_core::prelude::*;
+
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct MyController {
     #[config("app.greeting")]
@@ -92,7 +94,7 @@ pub struct MyController {
     app_name: String,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl MyController {
     #[get("/greeting")]
     async fn greeting(&self) -> axum::Json<serde_json::Value> {

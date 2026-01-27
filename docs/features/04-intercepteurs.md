@@ -307,12 +307,13 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 
 ```rust
 use std::future::Future;
+use quarlus_core::prelude::*;
 
 /// Intercepteur custom
 pub struct AuditLog;
 
-impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
-    fn around<F, Fut>(&self, ctx: quarlus_core::InterceptorContext, next: F)
+impl<R: Send> Interceptor<R> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F)
         -> impl Future<Output = R> + Send
     where F: FnOnce() -> Fut + Send, Fut: Future<Output = R> + Send,
     {
@@ -325,7 +326,7 @@ impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
     }
 }
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(path = "/users", state = Services)]
 pub struct UserController {
     #[inject]
@@ -338,7 +339,7 @@ pub struct UserController {
     user: AuthenticatedUser,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl UserController {
     // Logged debug + timed avec seuil
     #[get("/")]

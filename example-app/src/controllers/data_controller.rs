@@ -1,5 +1,6 @@
 use crate::models::UserEntity;
 use crate::state::Services;
+use quarlus_core::prelude::*;
 use quarlus_data::{Entity, Page, Pageable, QueryBuilder};
 use serde::Deserialize;
 
@@ -9,14 +10,14 @@ pub struct SearchParams {
     pub email: Option<String>,
 }
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(path = "/data/users", state = Services)]
 pub struct DataController {
     #[inject]
     pool: sqlx::SqlitePool,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl DataController {
     #[get("/")]
     async fn list_paged(

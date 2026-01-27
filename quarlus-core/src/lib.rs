@@ -8,6 +8,7 @@ pub mod interceptors;
 pub mod layers;
 pub mod lifecycle;
 pub mod openapi;
+pub mod prelude;
 pub mod state;
 #[cfg(feature = "validation")]
 pub mod validation;

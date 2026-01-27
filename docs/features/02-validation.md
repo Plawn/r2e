@@ -48,16 +48,16 @@ pub struct CreateUserRequest {
 Remplacer `axum::Json<T>` par `quarlus_core::validation::Validated<T>` :
 
 ```rust
-use quarlus_core::validation::Validated;
+use quarlus_core::prelude::*;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserController {
     #[inject]
     user_service: UserService,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl UserController {
     #[post("/users")]
     async fn create(

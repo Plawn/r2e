@@ -257,6 +257,7 @@ Pour les tests d'integration, il est courant de redefinir le controller dans le 
 
 ```rust
 // tests/user_controller_test.rs
+use quarlus_core::prelude::*;
 
 // Redefinir les types necessaires
 mod common {
@@ -266,14 +267,14 @@ mod common {
 }
 
 // Redefinir le controller de test
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = TestServices)]
 pub struct TestUserController {
     #[inject] user_service: UserService,
     #[identity] user: AuthenticatedUser,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl TestUserController {
     // ... memes routes que le vrai controller
 }

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
-use quarlus_core::{AppBuilder, Controller};
+use quarlus_core::prelude::*;
+use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
 use quarlus_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
@@ -131,7 +132,7 @@ impl axum::extract::FromRef<TestServices> for quarlus_rate_limit::RateLimitRegis
     }
 }
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = TestServices)]
 pub struct TestUserController {
     #[inject]
@@ -147,7 +148,7 @@ pub struct TestUserController {
     greeting: String,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl TestUserController {
     #[get("/users")]
     #[intercept(Logged::info())]

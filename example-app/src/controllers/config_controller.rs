@@ -1,6 +1,7 @@
 use crate::state::Services;
+use quarlus_core::prelude::*;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
     #[config("app.name")]
@@ -10,7 +11,7 @@ pub struct ConfigController {
     app_version: String,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl ConfigController {
     #[get("/config")]
     async fn config_info(&self) -> axum::Json<serde_json::Value> {

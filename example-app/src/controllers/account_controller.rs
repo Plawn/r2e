@@ -1,9 +1,10 @@
 use crate::models::User;
 use crate::services::UserService;
 use crate::state::Services;
+use quarlus_core::prelude::*;
 use quarlus_security::AuthenticatedUser;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct AccountController {
     #[inject]
@@ -16,7 +17,7 @@ pub struct AccountController {
     greeting: String,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl AccountController {
     #[get("/greeting")]
     async fn greeting(&self) -> axum::Json<serde_json::Value> {

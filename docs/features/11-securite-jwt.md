@@ -78,16 +78,17 @@ impl axum::extract::FromRef<Services> for Arc<JwtValidator> {
 ### 3. Utiliser `#[identity]` dans un controller
 
 ```rust
+use quarlus_core::prelude::*;
 use quarlus_security::AuthenticatedUser;
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserController {
     #[identity]
     user: AuthenticatedUser,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 impl UserController {
     #[get("/me")]
     async fn me(&self) -> axum::Json<AuthenticatedUser> {

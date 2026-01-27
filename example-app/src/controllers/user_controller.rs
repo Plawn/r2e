@@ -2,7 +2,7 @@ use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use crate::state::Services;
 use axum::extract::Path;
-use quarlus_core::validation::Validated;
+use quarlus_core::prelude::*;
 use quarlus_utils::interceptors::{Cache, CacheInvalidate, Logged, Timed};
 use quarlus_security::AuthenticatedUser;
 use std::future::Future;
@@ -10,10 +10,10 @@ use std::future::Future;
 /// A custom user-defined interceptor for audit logging.
 pub struct AuditLog;
 
-impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
+impl<R: Send> Interceptor<R> for AuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: quarlus_core::InterceptorContext,
+        ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -37,7 +37,7 @@ impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
     }
 }
 
-#[derive(quarlus_macros::Controller)]
+#[derive(Controller)]
 #[controller(path = "/users", state = Services)]
 pub struct UserController {
     #[inject]
@@ -53,7 +53,7 @@ pub struct UserController {
     greeting: String,
 }
 
-#[quarlus_macros::routes]
+#[routes]
 #[intercept(Logged::info())]
 impl UserController {
     // Demo: logged with custom level + timed with threshold
