@@ -100,7 +100,7 @@ Generer une spec OpenAPI 3.x a partir des controllers annotes.
 
 - Extraire les routes, methodes HTTP, types de requete/reponse
 - Generer un `openapi.json` ou le servir sur `/openapi.json`
-- Integrer Swagger UI sur `/swagger-ui`
+- Integrer une interface de documentation API sur `/docs`
 
 ### Complexite
 

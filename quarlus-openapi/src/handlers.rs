@@ -6,11 +6,14 @@ use std::sync::Arc;
 
 use crate::builder::{build_spec, OpenApiConfig};
 
+const WTI_CSS: &str = include_str!("../assets/wti-element.css");
+const WTI_JS: &str = include_str!("../assets/wti-element.iife.js");
+
 struct OpenApiState {
     spec_json: String,
 }
 
-/// Build an `axum::Router` that serves `/openapi.json` and optionally `/swagger-ui`.
+/// Build an `axum::Router` that serves `/openapi.json` and optionally `/docs`.
 ///
 /// The returned router can be passed to `AppBuilder::register_routes()`.
 pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
@@ -20,7 +23,7 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     let all_routes: Vec<RouteInfo> = route_metadata.into_iter().flatten().collect();
     let spec = build_spec(&config, &all_routes);
     let spec_json = serde_json::to_string_pretty(&spec).unwrap_or_else(|_| "{}".to_string());
-    let swagger_ui = config.swagger_ui;
+    let docs_ui = config.docs_ui;
 
     let state = Arc::new(OpenApiState {
         spec_json,
@@ -41,37 +44,57 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
         }),
     );
 
-    if swagger_ui {
+    if docs_ui {
         let state_for_ui = state.clone();
-        router = router.route(
-            "/swagger-ui",
-            get(move || {
-                let _ = &state_for_ui;
-                async move {
-                    Html(SWAGGER_UI_HTML).into_response()
-                }
-            }),
-        );
+        router = router
+            .route(
+                "/docs",
+                get(move || {
+                    let _ = &state_for_ui;
+                    async move {
+                        Html(WTI_HTML).into_response()
+                    }
+                }),
+            )
+            .route(
+                "/docs/wti-element.css",
+                get(|| async {
+                    (
+                        [("content-type", "text/css")],
+                        WTI_CSS,
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/docs/wti-element.js",
+                get(|| async {
+                    (
+                        [("content-type", "application/javascript")],
+                        WTI_JS,
+                    )
+                        .into_response()
+                }),
+            );
     }
 
     router
 }
 
-const SWAGGER_UI_HTML: &str = r#"<!DOCTYPE html>
+const WTI_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Swagger UI</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation</title>
+    <link rel="stylesheet" href="/docs/wti-element.css">
 </head>
 <body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-        SwaggerUIBundle({
-            url: '/openapi.json',
-            dom_id: '#swagger-ui',
-        });
-    </script>
+    <wti-element
+        spec-url="/openapi.json"
+        theme="dark"
+        locale="en"
+    ></wti-element>
+    <script src="/docs/wti-element.js"></script>
 </body>
 </html>"#;

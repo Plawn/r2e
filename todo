@@ -2,8 +2,6 @@
 
 - macro de service vs uniquement controller
 - merge route controller et route methode -> WIP
-- appliquer un intercepteur sur tout un controller
-- passer de swagger a wti
 - audit la partie data pour faire plus de reuse et du clean
 - audit de performance
 - audit de responsabilities boundaries 

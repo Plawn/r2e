@@ -20,6 +20,7 @@ pub struct ControllerDef {
     pub name: syn::Ident,
     pub state_type: syn::Path,
     pub prefix: Option<String>,
+    pub controller_intercepts: Vec<syn::Expr>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub config_fields: Vec<ConfigField>,
@@ -55,8 +56,8 @@ pub struct RouteMethod {
     pub path: String,
     pub roles: Vec<String>,
     pub transactional: Option<TransactionalConfig>,
-    pub rate_limited: Option<RateLimitConfig>,
     pub intercept_fns: Vec<syn::Expr>,
+    pub guard_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
     pub fn_item: syn::ImplItemFn,
 }
@@ -69,19 +70,6 @@ pub struct TransactionalConfig {
     pub pool_field: String,
 }
 
-pub struct RateLimitConfig {
-    pub max: u64,
-    pub window: u64,
-    pub key: RateLimitKey,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RateLimitKey {
-    Global,
-    User,
-    Ip,
-}
-
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -91,6 +79,7 @@ impl Parse for ControllerDef {
         // Parse optional outer attributes (before `impl`), e.g. #[path("/users")]
         let outer_attrs = input.call(syn::Attribute::parse_outer)?;
         let prefix = extract_path_prefix(&outer_attrs)?;
+        let controller_intercepts = extract_intercept_fns(&outer_attrs)?;
 
         // impl Name for StatePath { ... }
         let _: Token![impl] = input.parse()?;
@@ -143,17 +132,27 @@ impl Parse for ControllerDef {
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
                     let roles = extract_roles(&all_attrs)?;
                     let transactional = extract_transactional(&all_attrs)?;
-                    let rate_limited = extract_rate_limit(&all_attrs)?;
                     let intercept_fns = extract_intercept_fns(&all_attrs)?;
                     let middleware_fns = extract_middleware_fns(&all_attrs)?;
+
+                    // Build guard_fns: rate_limited -> roles -> custom guards
+                    let mut guard_fns = Vec::new();
+                    if let Some(rl_guard) = extract_rate_limited_guard(&all_attrs)? {
+                        guard_fns.push(rl_guard);
+                    }
+                    if let Some(roles_guard) = roles_guard_expr(&roles) {
+                        guard_fns.push(roles_guard);
+                    }
+                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
+
                     method.attrs = strip_route_attrs(all_attrs);
                     route_methods.push(RouteMethod {
                         method: http_method,
                         path,
                         roles,
                         transactional,
-                        rate_limited,
                         intercept_fns,
+                        guard_fns,
                         middleware_fns,
                         fn_item: method,
                     });
@@ -212,6 +211,7 @@ impl Parse for ControllerDef {
             name,
             state_type,
             prefix,
+            controller_intercepts,
             injected_fields,
             identity_fields,
             config_fields,
@@ -246,6 +246,7 @@ fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
                 && !a.path().is_ident("transactional")
                 && !a.path().is_ident("rate_limited")
                 && !a.path().is_ident("intercept")
+                && !a.path().is_ident("guard")
                 && !a.path().is_ident("middleware")
         })
         .collect()
@@ -290,12 +291,12 @@ fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<Transac
     Ok(None)
 }
 
-fn extract_rate_limit(attrs: &[syn::Attribute]) -> syn::Result<Option<RateLimitConfig>> {
+fn extract_rate_limited_guard(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>> {
     for attr in attrs {
         if attr.path().is_ident("rate_limited") {
-            let mut max = 100u64;
-            let mut window = 60u64;
-            let mut key = RateLimitKey::Global;
+            let mut max: u64 = 100;
+            let mut window: u64 = 60;
+            let mut key_str = String::from("global");
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("max") {
                     let value = meta.value()?;
@@ -310,27 +311,62 @@ fn extract_rate_limit(attrs: &[syn::Attribute]) -> syn::Result<Option<RateLimitC
                 } else if meta.path.is_ident("key") {
                     let value = meta.value()?;
                     let lit: syn::LitStr = value.parse()?;
-                    key = match lit.value().as_str() {
-                        "global" => RateLimitKey::Global,
-                        "user" => RateLimitKey::User,
-                        "ip" => RateLimitKey::Ip,
-                        _ => return Err(meta.error("expected one of: global, user, ip")),
-                    };
+                    key_str = lit.value();
                     Ok(())
                 } else {
                     Err(meta.error("expected `max`, `window`, or `key`"))
                 }
             })?;
-            return Ok(Some(RateLimitConfig { max, window, key }));
+            let key_kind: syn::Expr = match key_str.as_str() {
+                "global" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::Global },
+                "user" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::User },
+                "ip" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::Ip },
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "expected one of: global, user, ip",
+                    ))
+                }
+            };
+            let expr: syn::Expr = syn::parse_quote! {
+                quarlus_rate_limit::RateLimitGuard {
+                    max: #max,
+                    window_secs: #window,
+                    key: #key_kind,
+                }
+            };
+            return Ok(Some(expr));
         }
     }
     Ok(None)
+}
+
+fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {
+    if roles.is_empty() {
+        return None;
+    }
+    Some(syn::parse_quote! {
+        quarlus_core::RolesGuard {
+            required_roles: &[#(#roles),*],
+        }
+    })
 }
 
 fn extract_intercept_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
     let mut fns = Vec::new();
     for attr in attrs {
         if attr.path().is_ident("intercept") {
+            let expr: syn::Expr = attr.parse_args()?;
+            fns.push(expr);
+        }
+    }
+    Ok(fns)
+}
+
+fn extract_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
+    let mut fns = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("guard") {
             let expr: syn::Expr = attr.parse_args()?;
             fns.push(expr);
         }

@@ -126,6 +126,7 @@ async fn main() {
         event_bus,
         config: config.clone(),
         cancel: cancel.clone(),
+        rate_limiter: quarlus_rate_limit::RateLimitRegistry::default(),
     };
 
     // Start the scheduler in the background
@@ -143,7 +144,7 @@ async fn main() {
         .with_openapi(
             OpenApiConfig::new("Quarlus Example API", "0.1.0")
                 .with_description("Demo application showcasing all Quarlus features")
-                .with_swagger_ui(true),
+                .with_docs_ui(true),
         ) // OpenAPI (#5)
         .on_start(|_state| async move {
             // Lifecycle hook (#10)

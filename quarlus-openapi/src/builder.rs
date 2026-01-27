@@ -6,7 +6,7 @@ pub struct OpenApiConfig {
     pub title: String,
     pub version: String,
     pub description: Option<String>,
-    pub swagger_ui: bool,
+    pub docs_ui: bool,
 }
 
 impl OpenApiConfig {
@@ -15,7 +15,7 @@ impl OpenApiConfig {
             title: title.to_string(),
             version: version.to_string(),
             description: None,
-            swagger_ui: false,
+            docs_ui: false,
         }
     }
 
@@ -24,8 +24,8 @@ impl OpenApiConfig {
         self
     }
 
-    pub fn with_swagger_ui(mut self, enabled: bool) -> Self {
-        self.swagger_ui = enabled;
+    pub fn with_docs_ui(mut self, enabled: bool) -> Self {
+        self.docs_ui = enabled;
         self
     }
 }
@@ -40,6 +40,10 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
 
         let mut operation: Map<String, Value> = Map::new();
         operation.insert("operationId".into(), json!(route.operation_id));
+
+        if let Some(ref tag) = route.tag {
+            operation.insert("tags".into(), json!([tag]));
+        }
 
         if let Some(ref summary) = route.summary {
             operation.insert("summary".into(), json!(summary));
@@ -123,18 +127,50 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         info.insert("description".into(), json!(desc));
     }
 
+    // Collect all referenced body types into components/schemas.
+    // If the route carries a schemars-generated schema, use it;
+    // otherwise fall back to a generic object.
+    let mut schemas: Map<String, Value> = Map::new();
+    for route in routes {
+        if let Some(ref body_type) = route.request_body_type {
+            schemas.entry(body_type.clone()).or_insert_with(|| {
+                if let Some(ref root_schema) = route.request_body_schema {
+                    // schemars RootSchema — strip meta keys that are invalid in OpenAPI
+                    let mut schema = root_schema.clone();
+                    if let Some(obj) = schema.as_object_mut() {
+                        obj.remove("$schema");
+                        obj.remove("definitions");
+                    }
+                    schema
+                } else {
+                    json!({
+                        "type": "object",
+                        "additionalProperties": true
+                    })
+                }
+            });
+        }
+    }
+
+    let mut components: Map<String, Value> = Map::new();
+    components.insert(
+        "securitySchemes".into(),
+        json!({
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
+            }
+        }),
+    );
+    if !schemas.is_empty() {
+        components.insert("schemas".into(), Value::Object(schemas));
+    }
+
     json!({
         "openapi": "3.0.3",
         "info": info,
         "paths": paths,
-        "components": {
-            "securitySchemes": {
-                "bearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "bearerFormat": "JWT"
-                }
-            }
-        }
+        "components": components
     })
 }

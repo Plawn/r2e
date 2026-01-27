@@ -42,5 +42,5 @@ cargo run -p example-app
 # Dans un autre terminal
 curl http://localhost:3000/health           # → "OK"
 curl http://localhost:3000/openapi.json     # → spec OpenAPI
-curl http://localhost:3000/swagger-ui       # → interface Swagger
+curl http://localhost:3000/docs             # → interface de documentation API
 ```

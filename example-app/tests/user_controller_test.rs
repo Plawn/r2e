@@ -21,7 +21,7 @@ mod common {
         pub email: String,
     }
 
-    #[derive(serde::Deserialize, serde::Serialize, validator::Validate)]
+    #[derive(serde::Deserialize, serde::Serialize, validator::Validate, schemars::JsonSchema)]
     pub struct CreateUserRequest {
         #[validate(length(min = 1, max = 100))]
         pub name: String,
@@ -100,6 +100,7 @@ struct TestServices {
     config: QuarlusConfig,
     #[allow(dead_code)]
     cancel: CancellationToken,
+    rate_limiter: quarlus_rate_limit::RateLimitRegistry,
 }
 
 impl axum::extract::FromRef<TestServices> for Arc<JwtValidator> {
@@ -123,6 +124,12 @@ impl axum::extract::FromRef<TestServices> for QuarlusConfig {
 impl axum::extract::FromRef<TestServices> for EventBus {
     fn from_ref(state: &TestServices) -> Self {
         state.event_bus.clone()
+    }
+}
+
+impl axum::extract::FromRef<TestServices> for quarlus_rate_limit::RateLimitRegistry {
+    fn from_ref(state: &TestServices) -> Self {
+        state.rate_limiter.clone()
     }
 }
 
@@ -239,10 +246,11 @@ async fn setup() -> (TestApp, TestJwt) {
         event_bus,
         config: config.clone(),
         cancel: CancellationToken::new(),
+        rate_limiter: quarlus_rate_limit::RateLimitRegistry::default(),
     };
 
     let openapi_config =
-        quarlus_openapi::OpenApiConfig::new("Test API", "0.1.0").with_swagger_ui(true);
+        quarlus_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
     let openapi = quarlus_openapi::openapi_routes::<TestServices>(
         openapi_config,
         vec![TestUserController::route_metadata()],
@@ -460,12 +468,12 @@ async fn test_openapi_json_endpoint() {
 }
 
 #[tokio::test]
-async fn test_swagger_ui_endpoint() {
+async fn test_docs_ui_endpoint() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/swagger-ui").await.assert_ok();
+    let resp = app.get("/docs").await.assert_ok();
     let html = resp.text();
-    assert!(html.contains("swagger-ui"));
-    assert!(html.contains("SwaggerUIBundle"));
+    assert!(html.contains("wti-element"));
+    assert!(html.contains("spec-url"));
 }
 
 // ─── New tests: Dev mode (#9) ───

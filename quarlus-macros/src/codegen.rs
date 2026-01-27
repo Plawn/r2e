@@ -96,7 +96,9 @@ fn generate_impl(def: &ControllerDef) -> TokenStream {
 /// Inline wrappers (innermost): transactional
 /// Trait-based interceptors (via Interceptor::around): all `#[intercept(...)]` entries
 fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream {
-    let has_interceptors = rm.transactional.is_some() || !rm.intercept_fns.is_empty();
+    let has_interceptors = rm.transactional.is_some()
+        || !rm.intercept_fns.is_empty()
+        || !def.controller_intercepts.is_empty();
 
     if !has_interceptors {
         let f = &rm.fn_item;
@@ -140,8 +142,12 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream
     // Trait-based interceptors (via Interceptor::around)
     // Build from innermost to outermost (reverse order so first declared = outermost).
     // -----------------------------------------------------------------------
-    if !rm.intercept_fns.is_empty() {
-        for intercept_expr in rm.intercept_fns.iter().rev() {
+    let all_intercepts: Vec<&syn::Expr> = def.controller_intercepts.iter()
+        .chain(rm.intercept_fns.iter())
+        .collect();
+
+    if !all_intercepts.is_empty() {
+        for intercept_expr in all_intercepts.iter().rev() {
             body = quote! {
                 {
                     let __interceptor = #intercept_expr;
@@ -283,8 +289,8 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
         quote! { __ctrl.#fn_name(#(#call_args),*) }
     };
 
-    // Determine if handler needs to return Response (for guard/rate-limit short-circuit)
-    let needs_response = !rm.roles.is_empty() || rm.rate_limited.is_some();
+    // Determine if handler needs to return Response (for guard short-circuit)
+    let needs_response = !rm.guard_fns.is_empty();
 
     if !needs_response {
         // Simple handler: returns the method's own type
@@ -303,98 +309,55 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
         }
     } else {
         // Guarded handler: returns Response to allow short-circuit
+        let controller_name_str = controller_name.to_string();
+
         let identity_name = if !def.identity_fields.is_empty() {
             Some(&def.identity_fields[0].name)
         } else {
             None
         };
 
-        // --- Rate limit guard ---
-        let rate_limit_guard = if let Some(ref rl) = rm.rate_limited {
-            let max = rl.max;
-            let window = rl.window;
+        let (identity_sub_expr, identity_roles_expr) = if let Some(id_name) = identity_name {
+            (
+                quote! { Some(&#id_name.sub) },
+                quote! { Some(&#id_name.roles) },
+            )
+        } else {
+            (quote! { None }, quote! { None })
+        };
 
-            let key_expr = match rl.key {
-                RateLimitKey::Global => {
-                    quote! { format!("{}:global", #fn_name_str) }
-                }
-                RateLimitKey::User => {
-                    let id_name = identity_name
-                        .expect("rate_limited(key = \"user\") requires an #[identity] field");
-                    quote! { format!("{}:user:{}", #fn_name_str, #id_name.sub) }
-                }
-                RateLimitKey::Ip => {
-                    quote! {
-                        {
-                            let __ip = __headers
-                                .get("x-forwarded-for")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|v| v.split(',').next())
-                                .map(|s| s.trim().to_string())
-                                .unwrap_or_else(|| "unknown".to_string());
-                            format!("{}:ip:{}", #fn_name_str, __ip)
-                        }
+        let guard_checks: Vec<TokenStream> = rm
+            .guard_fns
+            .iter()
+            .map(|guard_expr| {
+                quote! {
+                    if let Err(__resp) = quarlus_core::Guard::check(
+                        &#guard_expr,
+                        &state,
+                        &__guard_ctx,
+                    ) {
+                        return __resp;
                     }
                 }
-            };
-
-            quote! {
-                {
-                    use std::sync::OnceLock;
-                    static __LIMITER: OnceLock<quarlus_rate_limit::RateLimiter<String>> = OnceLock::new();
-                    let __limiter = __LIMITER.get_or_init(|| {
-                        quarlus_rate_limit::RateLimiter::new(#max, std::time::Duration::from_secs(#window))
-                    });
-                    let __rl_key = #key_expr;
-                    if !__limiter.try_acquire(&__rl_key) {
-                        return axum::response::IntoResponse::into_response((
-                            axum::http::StatusCode::TOO_MANY_REQUESTS,
-                            axum::Json(serde_json::json!({ "error": "Rate limit exceeded" })),
-                        ));
-                    }
-                }
-            }
-        } else {
-            quote! {}
-        };
-
-        // --- Roles guard ---
-        let roles_guard = if !rm.roles.is_empty() {
-            let role_strs = &rm.roles;
-            let id_name = identity_name
-                .expect("#[roles] requires an #[identity] field");
-            quote! {
-                if !#id_name.has_any_role(&[#(#role_strs),*]) {
-                    return axum::response::IntoResponse::into_response(
-                        quarlus_core::AppError::Forbidden("Insufficient roles".into()),
-                    );
-                }
-            }
-        } else {
-            quote! {}
-        };
-
-        // Extra parameter: HeaderMap (needed for IP-based rate limiting)
-        let needs_headers = matches!(
-            rm.rate_limited.as_ref().map(|rl| &rl.key),
-            Some(RateLimitKey::Ip)
-        );
-        let headers_param = if needs_headers {
-            quote! { __headers: axum::http::HeaderMap, }
-        } else {
-            quote! {}
-        };
+            })
+            .collect();
 
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
                 axum::extract::State(state): axum::extract::State<#state_type>,
                 #(#identity_params,)*
-                #headers_param
+                __headers: axum::http::HeaderMap,
                 #(#handler_extra_params,)*
             ) -> axum::response::Response {
-                #rate_limit_guard
-                #roles_guard
+                let __guard_ctx = quarlus_core::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    identity_sub: #identity_sub_expr,
+                    identity_roles: #identity_roles_expr,
+                };
+                #(#guard_checks)*
                 let __ctrl = #controller_name {
                     #(#all_inits,)*
                 };
@@ -437,6 +400,7 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
         })
         .collect();
 
+    let tag_name = name.to_string();
     let route_metadata_items: Vec<_> = def
         .route_methods
         .iter()
@@ -450,6 +414,7 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
             let method = rm.method.as_axum_method_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
             let roles: Vec<_> = rm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let tag = &tag_name;
 
             // Extract parameter info from the method signature
             let params: Vec<_> = rm.fn_item.sig.inputs.iter().filter_map(|arg| {
@@ -477,16 +442,42 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
                 }
             }).collect();
 
+            // Detect request body type from Json<T> or Validated<T> extractors
+            let body_info: Option<(String, syn::Type)> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
+                if let syn::FnArg::Typed(pt) = arg {
+                    extract_body_type_info(&pt.ty)
+                } else {
+                    None
+                }
+            });
+            let (body_type_token, body_schema_token) = match &body_info {
+                Some((name, inner_ty)) => (
+                    quote! { Some(#name.to_string()) },
+                    quote! {
+                        Some({
+                            let __schema = schemars::schema_for!(#inner_ty);
+                            serde_json::to_value(__schema).unwrap()
+                        })
+                    },
+                ),
+                None => (
+                    quote! { None },
+                    quote! { None },
+                ),
+            };
+
             quote! {
                 quarlus_core::openapi::RouteInfo {
                     path: #path.to_string(),
                     method: #method.to_string(),
                     operation_id: #op_id.to_string(),
                     summary: None,
-                    request_body_type: None,
+                    request_body_type: #body_type_token,
+                    request_body_schema: #body_schema_token,
                     response_type: None,
                     params: vec![#(#params),*],
                     roles: vec![#(#roles),*],
+                    tag: Some(#tag.to_string()),
                 }
             }
         })
@@ -589,4 +580,27 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
             #register_consumers_fn
         }
     }
+}
+
+/// Extract the request body type name and inner type from a method parameter.
+/// Detects `Json<T>` and `Validated<T>` extractors (possibly path-qualified like `axum::Json<T>`).
+/// Returns `(type_name, inner_syn_type)` for schema generation.
+fn extract_body_type_info(ty: &syn::Type) -> Option<(String, syn::Type)> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            if ident == "Json" || ident == "Validated" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        if let syn::Type::Path(inner_path) = inner_ty {
+                            if let Some(inner_seg) = inner_path.path.segments.last() {
+                                return Some((inner_seg.ident.to_string(), inner_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }

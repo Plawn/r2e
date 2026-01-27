@@ -144,6 +144,21 @@ pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Apply a guard to a route method.
+/// The expression must implement `quarlus_core::Guard<S>`.
+/// Guards run BEFORE controller construction and can short-circuit.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// #[guard(MyCustomGuard)]
+/// #[get("/protected")]
+/// async fn protected(&self) -> ... { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn guard(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Mark a method as an event consumer.
 /// No-op attribute — read by `controller!`.
 ///

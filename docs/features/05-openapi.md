@@ -2,7 +2,7 @@
 
 ## Objectif
 
-Generer automatiquement une specification OpenAPI 3.0.3 a partir des metadonnees de route des controllers, et servir une interface Swagger UI integree.
+Generer automatiquement une specification OpenAPI 3.0.3 a partir des metadonnees de route des controllers, et servir une interface de documentation API integree (WTI).
 
 ## Concepts cles
 
@@ -12,11 +12,11 @@ Chaque controller genere par la macro `controller!` implemente `Controller::rout
 
 ### OpenApiConfig
 
-Configuration de la specification : titre, version, description, activation de Swagger UI.
+Configuration de la specification : titre, version, description, activation de l'interface de documentation.
 
 ### openapi_routes()
 
-Fonction qui prend un `OpenApiConfig` et les metadonnees de tous les controllers, et retourne un `Router` avec les endpoints `/openapi.json` et `/swagger-ui`.
+Fonction qui prend un `OpenApiConfig` et les metadonnees de tous les controllers, et retourne un `Router` avec les endpoints `/openapi.json` et `/docs`.
 
 ## Utilisation
 
@@ -35,7 +35,7 @@ use quarlus_openapi::{openapi_routes, OpenApiConfig};
 
 let openapi_config = OpenApiConfig::new("Mon API", "0.1.0")
     .with_description("Description de mon API")
-    .with_swagger_ui(true);
+    .with_docs_ui(true);
 
 let openapi = openapi_routes::<Services>(
     openapi_config,
@@ -51,7 +51,7 @@ AppBuilder::new()
     .register_controller::<UserController>()
     .register_controller::<ConfigController>()
     .register_controller::<DataController>()
-    .register_routes(openapi)  // Ajoute /openapi.json et /swagger-ui
+    .register_routes(openapi)  // Ajoute /openapi.json et /docs
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
@@ -62,7 +62,9 @@ AppBuilder::new()
 | Endpoint | Description |
 |----------|-------------|
 | `GET /openapi.json` | Specification OpenAPI 3.0.3 en JSON |
-| `GET /swagger-ui` | Interface Swagger UI (HTML) |
+| `GET /docs` | Interface de documentation API (WTI) |
+| `GET /docs/wti-element.css` | Stylesheet WTI (embarque) |
+| `GET /docs/wti-element.js` | Script WTI (embarque) |
 
 ### 4. Exemple de spec generee
 
@@ -128,19 +130,19 @@ pub struct RouteInfo {
 
 Les parametres de chemin (ex: `Path(id): Path<u64>`) sont automatiquement detectes et inclus dans la spec.
 
-Les roles declares via `#[roles("admin")]` apparaissent dans les metadonnees, permettant a l'interface Swagger de les afficher.
+Les roles declares via `#[roles("admin")]` apparaissent dans les metadonnees, permettant a l'interface de documentation de les afficher.
 
 ## OpenApiConfig
 
 ```rust
 let config = OpenApiConfig::new("Titre", "1.0.0")
     .with_description("Description optionnelle")
-    .with_swagger_ui(true);   // Active /swagger-ui (defaut: false)
+    .with_docs_ui(true);   // Active /docs (defaut: false)
 ```
 
-## Swagger UI
+## Interface de documentation (WTI)
 
-Quand `.with_swagger_ui(true)` est active, l'endpoint `/swagger-ui` sert une page HTML contenant l'interface Swagger UI, configuree pour charger `/openapi.json`.
+Quand `.with_docs_ui(true)` est active, l'endpoint `/docs` sert une page HTML contenant l'interface WTI, configuree pour charger `/openapi.json`. Les assets CSS et JS sont embarques dans le binaire via `include_str!` et servis sur `/docs/wti-element.css` et `/docs/wti-element.js`.
 
 L'interface permet de :
 - Parcourir tous les endpoints
@@ -154,7 +156,7 @@ L'interface permet de :
 curl http://localhost:3000/openapi.json | jq .info.title
 # → "Mon API"
 
-# Swagger UI
-curl http://localhost:3000/swagger-ui | grep "SwaggerUIBundle"
-# → HTML contenant SwaggerUIBundle
+# Documentation UI
+curl http://localhost:3000/docs | grep "wti-element"
+# → HTML contenant wti-element
 ```

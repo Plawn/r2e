@@ -39,6 +39,7 @@ impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
 
 quarlus_macros::controller! {
     #[path("/users")]
+    #[intercept(Logged::info())]
     impl UserController for Services {
         #[inject]
         user_service: UserService,
