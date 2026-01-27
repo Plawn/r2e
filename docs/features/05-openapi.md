@@ -8,7 +8,7 @@ Generer automatiquement une specification OpenAPI 3.0.3 a partir des metadonnees
 
 ### Route metadata
 
-Chaque controller genere par la macro `controller!` implemente `Controller::route_metadata()` qui retourne la liste des `RouteInfo` — chemin, methode HTTP, parametres, roles requis.
+Chaque controller annote avec `#[derive(Controller)]` + `#[routes]` implemente `Controller::route_metadata()` qui retourne la liste des `RouteInfo` — chemin, methode HTTP, parametres, roles requis.
 
 ### OpenApiConfig
 
@@ -113,7 +113,7 @@ AppBuilder::new()
 
 ## Metadonnees collectees
 
-La macro `controller!` genere automatiquement un `RouteInfo` pour chaque methode de route :
+La macro `#[routes]` genere automatiquement un `RouteInfo` pour chaque methode de route :
 
 ```rust
 pub struct RouteInfo {

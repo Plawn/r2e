@@ -20,7 +20,7 @@ Configuration de la validation : URL JWKS, issuer attendu, audience attendue.
 
 ### #[identity]
 
-Attribut du bloc `controller!` qui marque un champ comme extrait de la requete (scope requete). Le champ est automatiquement peuple par l'extracteur `FromRequestParts` correspondant.
+Attribut du `#[derive(Controller)]` qui marque un champ comme extrait de la requete (scope requete). Le champ est automatiquement peuple par l'extracteur `FromRequestParts` correspondant.
 
 ### #[roles("...")]
 
@@ -80,15 +80,18 @@ impl axum::extract::FromRef<Services> for Arc<JwtValidator> {
 ```rust
 use quarlus_security::AuthenticatedUser;
 
-quarlus_macros::controller! {
-    impl UserController for Services {
-        #[identity]
-        user: AuthenticatedUser,
+#[derive(quarlus_macros::Controller)]
+#[controller(state = Services)]
+pub struct UserController {
+    #[identity]
+    user: AuthenticatedUser,
+}
 
-        #[get("/me")]
-        async fn me(&self) -> axum::Json<AuthenticatedUser> {
-            axum::Json(self.user.clone())
-        }
+#[quarlus_macros::routes]
+impl UserController {
+    #[get("/me")]
+    async fn me(&self) -> axum::Json<AuthenticatedUser> {
+        axum::Json(self.user.clone())
     }
 }
 ```
@@ -180,18 +183,14 @@ user.has_any_role(&["admin", "manager"]);  // → bool
 
 ## Code genere par la macro
 
-Pour un controller avec `#[identity] user: AuthenticatedUser`, la macro genere un handler qui recoit `AuthenticatedUser` comme parametre extracteur :
+Pour un controller avec `#[identity] user: AuthenticatedUser`, les macros generent un extractor `__QuarlusExtract_UserController` qui implemente `FromRequestParts` et construit le controller automatiquement :
 
 ```rust
 // Genere (simplifie)
 async fn __quarlus_UserController_me(
-    axum::extract::State(state): axum::extract::State<Services>,
-    user: AuthenticatedUser,  // Extrait automatiquement de la requete
+    __ctrl_ext: __QuarlusExtract_UserController,  // FromRequestParts — extrait identity + inject + config
 ) -> axum::Json<AuthenticatedUser> {
-    let ctrl = UserController {
-        user_service: state.user_service.clone(),
-        user: user,  // Injecte dans le controller
-    };
+    let ctrl = __ctrl_ext.0;
     ctrl.me().await
 }
 ```

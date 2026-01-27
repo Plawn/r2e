@@ -17,11 +17,11 @@ Les intercepteurs user-defined implementent le meme trait et s'appliquent via `#
 
 ### Pourquoi des attributs no-op ?
 
-Tous les attributs d'intercepteur (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[transactional]`, `#[cache_invalidate]`, `#[intercept]`) sont declares dans `quarlus-macros/src/lib.rs` comme des `#[proc_macro_attribute]` no-op — ils retournent leur input sans transformation. La vraie logique est dans la macro `controller!`, qui parse ces attributs depuis le flux de tokens brut.
+Tous les attributs d'intercepteur (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[transactional]`, `#[cache_invalidate]`, `#[intercept]`) sont declares dans `quarlus-macros/src/lib.rs` comme des `#[proc_macro_attribute]` no-op — ils retournent leur input sans transformation. La vraie logique est dans l'attribut `#[routes]`, qui parse ces attributs depuis le flux de tokens brut du bloc `impl`.
 
-Ces declarations ne sont **pas strictement necessaires** au fonctionnement de `controller!` (une macro function-like recoit des tokens bruts sans resolution d'attributs). Elles existent pour trois raisons :
+Ces declarations no-op existent pour trois raisons :
 
-1. **Eviter les erreurs compilateur** — sans declaration, `#[logged]` utilise hors de `controller!` (par erreur ou lors d'un refactoring) provoquerait `cannot find attribute "logged"`.
+1. **Eviter les erreurs compilateur** — sans declaration, `#[logged]` utilise hors de `#[routes]` (par erreur ou lors d'un refactoring) provoquerait `cannot find attribute "logged"`.
 2. **Decouvrabilite** — les attributs apparaissent dans `cargo doc` avec leur documentation, rendant l'API explicite.
 3. **Support IDE** — rust-analyzer et les autres outils offrent l'autocompletion et la documentation au survol pour les attributs enregistres.
 
@@ -325,66 +325,69 @@ impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
     }
 }
 
-quarlus_macros::controller! {
-    impl UserController for Services {
-        #[inject]
-        user_service: UserService,
+#[derive(quarlus_macros::Controller)]
+#[controller(path = "/users", state = Services)]
+pub struct UserController {
+    #[inject]
+    user_service: UserService,
 
-        #[inject]
-        pool: sqlx::SqlitePool,
+    #[inject]
+    pool: sqlx::SqlitePool,
 
-        #[identity]
-        user: AuthenticatedUser,
+    #[identity]
+    user: AuthenticatedUser,
+}
 
-        // Logged debug + timed avec seuil
-        #[get("/users")]
-        #[logged(level = "debug")]
-        #[timed(threshold = 50)]
-        async fn list(&self) -> axum::Json<Vec<User>> {
-            axum::Json(self.user_service.list().await)
-        }
+#[quarlus_macros::routes]
+impl UserController {
+    // Logged debug + timed avec seuil
+    #[get("/")]
+    #[logged(level = "debug")]
+    #[timed(threshold = 50)]
+    async fn list(&self) -> axum::Json<Vec<User>> {
+        axum::Json(self.user_service.list().await)
+    }
 
-        // Cache groupe + invalidation
-        #[get("/users/cached")]
-        #[cached(ttl = 30, group = "users")]
-        #[timed]
-        async fn cached_list(&self) -> axum::Json<serde_json::Value> {
-            let users = self.user_service.list().await;
-            axum::Json(serde_json::to_value(users).unwrap())
-        }
+    // Cache groupe + invalidation
+    #[get("/cached")]
+    #[cached(ttl = 30, group = "users")]
+    #[timed]
+    async fn cached_list(&self) -> axum::Json<serde_json::Value> {
+        let users = self.user_service.list().await;
+        axum::Json(serde_json::to_value(users).unwrap())
+    }
 
-        #[post("/users")]
-        #[cache_invalidate("users")]
-        async fn create(&self, body: Validated<CreateUserRequest>) -> axum::Json<User> {
-            axum::Json(self.user_service.create(body.0.name, body.0.email).await)
-        }
+    #[post("/")]
+    #[cache_invalidate("users")]
+    async fn create(&self, body: Validated<CreateUserRequest>) -> axum::Json<User> {
+        axum::Json(self.user_service.create(body.0.name, body.0.email).await)
+    }
 
-        // Rate limit par user
-        #[post("/users/rate-limited")]
-        #[rate_limited(max = 5, window = 60, key = "user")]
-        async fn create_rate_limited(&self, body: Validated<CreateUserRequest>)
-            -> axum::Json<User>
-        {
-            axum::Json(self.user_service.create(body.0.name, body.0.email).await)
-        }
+    // Rate limit par user
+    #[post("/rate-limited")]
+    #[rate_limited(max = 5, window = 60, key = "user")]
+    async fn create_rate_limited(&self, body: Validated<CreateUserRequest>)
+        -> axum::Json<User>
+    {
+        axum::Json(self.user_service.create(body.0.name, body.0.email).await)
+    }
 
-        // Transaction
-        #[post("/users/db")]
-        #[transactional]
-        async fn create_in_db(&self, axum::Json(body): axum::Json<CreateUserRequest>)
-            -> Result<axum::Json<User>, quarlus_core::AppError>
-        {
-            sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
-            Ok(axum::Json(user))
-        }
+    // Transaction
+    #[post("/db")]
+    #[transactional]
+    async fn create_in_db(&self, axum::Json(body): axum::Json<CreateUserRequest>)
+        -> Result<axum::Json<User>, quarlus_core::AppError>
+    {
+        sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
+        Ok(axum::Json(user))
+    }
 
-        // Intercepteur custom
-        #[get("/users/audited")]
-        #[logged]
-        #[intercept(AuditLog)]
-        async fn audited_list(&self) -> axum::Json<Vec<User>> {
-            axum::Json(self.user_service.list().await)
-        }
+    // Intercepteur custom
+    #[get("/audited")]
+    #[logged]
+    #[intercept(AuditLog)]
+    async fn audited_list(&self) -> axum::Json<Vec<User>> {
+        axum::Json(self.user_service.list().await)
     }
 }
 ```

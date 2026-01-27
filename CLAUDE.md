@@ -33,8 +33,8 @@ Quarlus is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides de
 ### Workspace Crates
 
 ```
-quarlus-macros     → Proc-macro crate (no runtime deps). Parses #[controller] blocks and generates Axum handlers.
-quarlus-core       → Runtime foundation. AppBuilder, Controller trait, AppError, Tower layers. Depends on quarlus-macros.
+quarlus-macros     → Proc-macro crate (no runtime deps). #[derive(Controller)] + #[routes] generate Axum handlers.
+quarlus-core       → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct trait, AppError, Tower layers. Depends on quarlus-macros.
 quarlus-security   → JWT validation, JWKS cache, AuthenticatedUser extractor. Depends on quarlus-core.
 example-app        → Demo binary using all three crates.
 ```
@@ -47,21 +47,55 @@ Dependency flow: `quarlus-macros` ← `quarlus-core` ← `quarlus-security` ← 
 - `#[inject]` — App-scoped. Field is cloned from the Axum state (services, repos, pools). Type must be `Clone + Send + Sync`.
 - `#[identity]` — Request-scoped. Field is extracted via Axum's `FromRequestParts` (e.g., `AuthenticatedUser` from JWT).
 
-**Controller macro (`#[controller]`)** takes an `impl ControllerName for StateType` block and generates:
-1. A struct with `#[inject]` and `#[identity]` fields
-2. An impl block with the original methods
-3. Free-standing Axum handler functions (named `__quarlus_ControllerName_method_name`)
-4. A `Controller<T>` trait impl that wires routes into an `axum::Router<T>`
+**Controller declaration uses two macros working together:**
+
+1. `#[derive(Controller)]` on the struct — generates metadata module, Axum extractor, and `StatefulConstruct` impl (when no identity fields).
+2. `#[routes]` on the impl block — generates Axum handler functions, `Controller<T>` trait impl, and `ScheduledController<T>` impl.
+
+```rust
+#[derive(Controller)]
+#[controller(path = "/users", state = Services)]
+pub struct UserController {
+    #[inject]  user_service: UserService,
+    #[identity] user: AuthenticatedUser,
+    #[config("app.greeting")] greeting: String,
+}
+
+#[routes]
+#[intercept(Logged::info())]
+impl UserController {
+    #[get("/")]
+    async fn list(&self) -> Json<Vec<User>> {
+        Json(self.user_service.list().await)
+    }
+}
+```
+
+**Generated items (hidden):**
+- `mod __quarlus_meta_<Name>` — contains `type State`, `const PATH_PREFIX`, `fn guard_identity()`
+- `struct __QuarlusExtract_<Name>` — `FromRequestParts` extractor that constructs the controller from state + request parts
+- `impl StatefulConstruct<State> for Name` — only when no `#[identity]` fields; used by consumers and scheduled tasks
+- Free-standing Axum handler functions (named `__quarlus_<Name>_<method>`)
+- `impl Controller<State> for Name` — wires routes into `axum::Router<State>`
 
 ### Macro Crate Internals (quarlus-macros)
 
-The proc-macro pipeline is: `lib.rs` (entry) → `parsing.rs` (AST → `ControllerDef`) → `codegen.rs` (generate struct, impl, handlers, routes) with `route.rs` defining route/method types.
+The proc-macro pipeline has two entry points:
 
-Key struct: `ControllerDef` in `parsing.rs` holds all parsed fields, identity fields, route methods, and helper methods.
+**Derive path:** `lib.rs` → `derive_controller.rs` → `derive_parsing.rs` (DeriveInput → `ControllerStructDef`) → `derive_codegen.rs` (generate meta module, extractor, StatefulConstruct)
 
-Handler generation pattern: each `#[get("/path")]` method becomes a standalone async function that extracts `State(state)`, any identity extractors, and method parameters, constructs the controller struct, then calls the method.
+**Routes path:** `lib.rs` → `routes_attr.rs` → `routes_parsing.rs` (ItemImpl → `RoutesImplDef`) → `routes_codegen.rs` (generate impl block, handlers, Controller trait impl, ScheduledController impl)
 
-**No-op attribute macros:** `lib.rs` declares attributes like `#[get]`, `#[logged]`, `#[cached]`, etc. as no-op `#[proc_macro_attribute]` that return their input unchanged. These are **not** consumed at the attribute-macro level — they are parsed from the raw token stream inside the `controller!` function-like macro by `parsing.rs`. The no-op declarations exist for three reasons: (1) they prevent "cannot find attribute" compiler errors if someone uses them outside `controller!`, (2) they appear in `cargo doc` with their documentation, making the API discoverable, and (3) they give IDEs like rust-analyzer autocomplete and hover support. The `controller!` macro would compile fine without them.
+**Shared modules:**
+- `types.rs` — shared types (`InjectedField`, `IdentityField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.)
+- `attr_extract.rs` — attribute extraction functions (`extract_route_attr`, `extract_roles`, `extract_transactional`, `extract_intercept_fns`, etc.)
+- `route.rs` — `HttpMethod` enum and `RoutePath` parser
+
+**Inter-macro liaison:** The derive generates a hidden module `__quarlus_meta_<Name>` and an extractor struct `__QuarlusExtract_<Name>`. The `#[routes]` macro references these by naming convention.
+
+Handler generation pattern: each `#[get("/path")]` method becomes a standalone async function that takes `__QuarlusExtract_<Name>` (which implements `FromRequestParts`) and method parameters. The extractor constructs the controller from state + request parts. For guarded handlers, `State(state)` and `HeaderMap` are also extracted.
+
+**No-op attribute macros:** `lib.rs` declares attributes like `#[get]`, `#[roles]`, `#[intercept]`, etc. as no-op `#[proc_macro_attribute]` that return their input unchanged. These are parsed from the token stream by `#[routes]`. The no-op declarations exist for: (1) preventing "cannot find attribute" errors outside `#[routes]`, (2) `cargo doc` visibility, (3) IDE autocomplete support. The `#[inject]`, `#[identity]`, and `#[config]` attributes are derive helper attributes (consumed by `#[derive(Controller)]`).
 
 ### Interceptors
 
@@ -91,21 +125,15 @@ Inline codegen (no trait):
 
 **Configurable syntax:**
 ```rust
-#[logged]                                    // default: Info
-#[logged(level = "debug")]                   // custom level
-#[timed]                                     // default: Info, no threshold
-#[timed(level = "warn", threshold = 100)]    // only log if > 100ms
-#[cached(ttl = 30)]                          // anonymous static cache
-#[cached(ttl = 30, group = "users")]         // named cache group (for invalidation)
-#[cached(ttl = 30, key = "params")]          // key by method params (requires Debug)
-#[cached(ttl = 30, key = "user")]            // key by identity.sub (requires #[identity])
-#[cache_invalidate("users")]                 // clears a named cache group after method runs
 #[transactional]                             // uses self.pool
 #[transactional(pool = "read_db")]           // custom pool field
 #[rate_limited(max = 5, window = 60)]                  // global key
 #[rate_limited(max = 5, window = 60, key = "user")]    // per-user (requires #[identity])
 #[rate_limited(max = 5, window = 60, key = "ip")]      // per-IP (X-Forwarded-For)
 #[intercept(MyInterceptor)]                  // user-defined (must be a unit struct/constant)
+#[intercept(Logged::info())]                 // built-in interceptor with config
+#[intercept(Cache::ttl(30).group("users"))]  // cache with named group
+#[intercept(CacheInvalidate::group("users"))] // invalidate cache group
 ```
 
 **User-defined interceptors** implement `Interceptor<R>` and are applied via `#[intercept(TypeName)]`. The type must be constructable as a bare path expression (unit struct or constant).
@@ -118,6 +146,14 @@ Inline codegen (no trait):
 - `JwtValidator` supports both static keys (testing) and JWKS endpoint (production) via `JwksCache`.
 - `#[roles("admin")]` attribute generates a guard that checks `AuthenticatedUser::has_role()` and returns 403 if missing.
 - Role extraction is trait-based (`RoleExtractor`) to support multiple OIDC providers; default checks top-level `roles` and Keycloak's `realm_access.roles`.
+
+### StatefulConstruct (quarlus-core)
+
+`StatefulConstruct<S>` trait allows constructing a controller from state alone (no HTTP context). Auto-generated by `#[derive(Controller)]` when the struct has no `#[identity]` fields. Used by:
+- Consumer methods (`#[consumer]`) — event handlers that run outside HTTP requests
+- Scheduled methods (`#[scheduled]`) — background tasks
+
+Controllers with `#[identity]` fields do NOT get this impl. Attempting to use them in consumer/scheduled context produces a compile error with a diagnostic message via `#[diagnostic::on_unimplemented]`.
 
 ### AppBuilder (quarlus-core)
 

@@ -266,12 +266,16 @@ mod common {
 }
 
 // Redefinir le controller de test
-quarlus_macros::controller! {
-    impl TestUserController for TestServices {
-        #[inject] user_service: UserService,
-        #[identity] user: AuthenticatedUser,
-        // ... memes routes que le vrai controller
-    }
+#[derive(quarlus_macros::Controller)]
+#[controller(state = TestServices)]
+pub struct TestUserController {
+    #[inject] user_service: UserService,
+    #[identity] user: AuthenticatedUser,
+}
+
+#[quarlus_macros::routes]
+impl TestUserController {
+    // ... memes routes que le vrai controller
 }
 ```
 

@@ -79,24 +79,27 @@ let timeout: i64 = config.get_or("app.timeout", 30);
 
 ### 4. Injection dans un controller via `#[config]`
 
-Le champ `#[config("cle")]` dans un bloc `controller!` injecte automatiquement la valeur depuis la configuration au moment de la requete :
+Le champ `#[config("cle")]` dans un controller injecte automatiquement la valeur depuis la configuration au moment de la requete :
 
 ```rust
-quarlus_macros::controller! {
-    impl MyController for Services {
-        #[config("app.greeting")]
-        greeting: String,
+#[derive(quarlus_macros::Controller)]
+#[controller(state = Services)]
+pub struct MyController {
+    #[config("app.greeting")]
+    greeting: String,
 
-        #[config("app.name")]
-        app_name: String,
+    #[config("app.name")]
+    app_name: String,
+}
 
-        #[get("/greeting")]
-        async fn greeting(&self) -> axum::Json<serde_json::Value> {
-            axum::Json(serde_json::json!({
-                "greeting": self.greeting,
-                "app": self.app_name,
-            }))
-        }
+#[quarlus_macros::routes]
+impl MyController {
+    #[get("/greeting")]
+    async fn greeting(&self) -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({
+            "greeting": self.greeting,
+            "app": self.app_name,
+        }))
     }
 }
 ```

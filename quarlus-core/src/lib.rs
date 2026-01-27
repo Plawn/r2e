@@ -14,7 +14,7 @@ pub mod validation;
 
 pub use builder::AppBuilder;
 pub use config::QuarlusConfig;
-pub use controller::Controller;
+pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
 pub use guards::{Guard, GuardContext, RolesGuard};
 pub use interceptors::{Interceptor, InterceptorContext};

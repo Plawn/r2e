@@ -1,15 +1,18 @@
 use crate::services::UserService;
 use crate::state::Services;
 
-quarlus_macros::controller! {
-    impl ScheduledJobs for Services {
-        #[inject]
-        user_service: UserService,
+#[derive(quarlus_macros::Controller)]
+#[controller(state = Services)]
+pub struct ScheduledJobs {
+    #[inject]
+    user_service: UserService,
+}
 
-        #[scheduled(every = 30)]
-        async fn count_users(&self) {
-            let count = self.user_service.count().await;
-            tracing::info!(count, "Scheduled user count");
-        }
+#[quarlus_macros::routes]
+impl ScheduledJobs {
+    #[scheduled(every = 30)]
+    async fn count_users(&self) {
+        let count = self.user_service.count().await;
+        tracing::info!(count, "Scheduled user count");
     }
 }

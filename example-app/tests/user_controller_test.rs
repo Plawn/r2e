@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
-use quarlus_core::Controller;
-use quarlus_core::AppBuilder;
+use quarlus_core::{AppBuilder, Controller};
 use quarlus_events::EventBus;
 use quarlus_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
@@ -86,7 +85,6 @@ mod common {
     }
 }
 
-use axum::extract::Path;
 use common::*;
 use quarlus_utils::interceptors::{Cache, Logged, Timed};
 use quarlus_security::{AuthenticatedUser, JwtValidator};
@@ -133,90 +131,93 @@ impl axum::extract::FromRef<TestServices> for quarlus_rate_limit::RateLimitRegis
     }
 }
 
-quarlus_macros::controller! {
-    impl TestUserController for TestServices {
-        #[inject]
-        user_service: UserService,
+#[derive(quarlus_macros::Controller)]
+#[controller(state = TestServices)]
+pub struct TestUserController {
+    #[inject]
+    user_service: UserService,
 
-        #[inject]
-        pool: sqlx::SqlitePool,
+    #[inject]
+    pool: sqlx::SqlitePool,
 
-        #[identity]
-        user: AuthenticatedUser,
+    #[identity]
+    user: AuthenticatedUser,
 
-        #[config("app.greeting")]
-        greeting: String,
+    #[config("app.greeting")]
+    greeting: String,
+}
 
-        #[get("/users")]
-        #[intercept(Logged::info())]
-        #[intercept(Timed::info())]
-        async fn list(&self) -> axum::Json<Vec<User>> {
-            let users = self.user_service.list().await;
-            axum::Json(users)
+#[quarlus_macros::routes]
+impl TestUserController {
+    #[get("/users")]
+    #[intercept(Logged::info())]
+    #[intercept(Timed::info())]
+    async fn list(&self) -> axum::Json<Vec<User>> {
+        let users = self.user_service.list().await;
+        axum::Json(users)
+    }
+
+    #[get("/users/{id}")]
+    async fn get_by_id(
+        &self,
+        axum::extract::Path(id): axum::extract::Path<u64>,
+    ) -> Result<axum::Json<User>, quarlus_core::AppError> {
+        match self.user_service.get_by_id(id).await {
+            Some(user) => Ok(axum::Json(user)),
+            None => Err(quarlus_core::AppError::NotFound("User not found".into())),
         }
+    }
 
-        #[get("/users/{id}")]
-        async fn get_by_id(
-            &self,
-            Path(id): Path<u64>,
-        ) -> Result<axum::Json<User>, quarlus_core::AppError> {
-            match self.user_service.get_by_id(id).await {
-                Some(user) => Ok(axum::Json(user)),
-                None => Err(quarlus_core::AppError::NotFound("User not found".into())),
-            }
-        }
+    #[post("/users")]
+    async fn create(
+        &self,
+        quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
+    ) -> axum::Json<User> {
+        let user = self.user_service.create(body.name, body.email).await;
+        axum::Json(user)
+    }
 
-        #[post("/users")]
-        async fn create(
-            &self,
-            quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
-        ) -> axum::Json<User> {
-            let user = self.user_service.create(body.name, body.email).await;
-            axum::Json(user)
-        }
+    #[get("/greeting")]
+    async fn greeting(&self) -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({ "greeting": self.greeting }))
+    }
 
-        #[get("/greeting")]
-        async fn greeting(&self) -> axum::Json<serde_json::Value> {
-            axum::Json(serde_json::json!({ "greeting": self.greeting }))
-        }
+    #[get("/error/custom")]
+    async fn custom_error(&self) -> Result<axum::Json<()>, quarlus_core::AppError> {
+        Err(quarlus_core::AppError::Custom {
+            status: axum::http::StatusCode::from_u16(418).unwrap(),
+            body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
+        })
+    }
 
-        #[get("/error/custom")]
-        async fn custom_error(&self) -> Result<axum::Json<()>, quarlus_core::AppError> {
-            Err(quarlus_core::AppError::Custom {
-                status: axum::http::StatusCode::from_u16(418).unwrap(),
-                body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
-            })
-        }
+    #[get("/users/cached")]
+    #[intercept(Cache::ttl(30))]
+    #[intercept(Timed::info())]
+    async fn cached_list(&self) -> axum::Json<serde_json::Value> {
+        let users = self.user_service.list().await;
+        axum::Json(serde_json::to_value(users).unwrap())
+    }
 
-        #[get("/users/cached")]
-        #[intercept(Cache::ttl(30))]
-        #[intercept(Timed::info())]
-        async fn cached_list(&self) -> axum::Json<serde_json::Value> {
-            let users = self.user_service.list().await;
-            axum::Json(serde_json::to_value(users).unwrap())
-        }
+    #[post("/users/rate-limited")]
+    #[rate_limited(max = 3, window = 60)]
+    async fn create_rate_limited(
+        &self,
+        quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
+    ) -> Result<axum::Json<User>, quarlus_core::AppError> {
+        let user = self.user_service.create(body.name, body.email).await;
+        Ok(axum::Json(user))
+    }
 
-        #[post("/users/rate-limited")]
-        #[rate_limited(max = 3, window = 60)]
-        async fn create_rate_limited(
-            &self,
-            quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
-        ) -> Result<axum::Json<User>, quarlus_core::AppError> {
-            let user = self.user_service.create(body.name, body.email).await;
-            Ok(axum::Json(user))
-        }
+    #[get("/me")]
+    async fn me(&self) -> axum::Json<AuthenticatedUser> {
+        axum::Json(self.user.clone())
+    }
 
-        #[get("/me")]
-        async fn me(&self) -> axum::Json<AuthenticatedUser> {
-            axum::Json(self.user.clone())
-        }
-
-        #[get("/admin/users")]
-        #[roles("admin")]
-        async fn admin_list(&self) -> axum::Json<Vec<User>> {
-            let users = self.user_service.list().await;
-            axum::Json(users)
-        }
+    #[get("/admin/users")]
+    #[roles("admin")]
+    async fn admin_list(&self) -> axum::Json<Vec<User>> {
+        let users = self.user_service.list().await;
+        axum::Json(users)
     }
 }
 

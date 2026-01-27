@@ -22,7 +22,7 @@ Quarlus fournit 12 fonctionnalites principales, chacune documentee dans un fichi
 ## Architecture des crates
 
 ```
-quarlus-macros       Proc-macro. Parse les blocs controller! {} et genere le code Axum.
+quarlus-macros       Proc-macro. #[derive(Controller)] + #[routes] generent le code Axum.
 quarlus-core         Runtime. AppBuilder, Controller, AppError, config, validation, cache, rate limiter.
 quarlus-security     JWT/JWKS, AuthenticatedUser, #[roles].
 quarlus-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.

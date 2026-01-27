@@ -1,44 +1,64 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
-pub(crate) mod codegen;
-pub(crate) mod controller;
-pub(crate) mod parsing;
+pub(crate) mod attr_extract;
+pub(crate) mod derive_codegen;
+pub(crate) mod derive_controller;
+pub(crate) mod derive_parsing;
 pub(crate) mod route;
+pub(crate) mod routes_attr;
+pub(crate) mod routes_codegen;
+pub(crate) mod routes_parsing;
+pub(crate) mod types;
 
-/// Declare a controller with automatic Axum handler generation.
+/// Derive macro that generates the controller struct metadata, an Axum
+/// extractor, and (when applicable) a `StatefulConstruct` impl.
 ///
 /// ```ignore
-/// quarlus_macros::controller! {
-///     state = Services;
-///
-///     impl UserResource {
-///         #[inject]
-///         user_service: UserService,
-///
-///         #[identity]
-///         user: AuthenticatedUser,
-///
-///         #[get("/users")]
-///         async fn list(&self) -> Json<Vec<User>> {
-///             Json(self.user_service.list().await)
-///         }
-///     }
+/// #[derive(Controller)]
+/// #[controller(path = "/users", state = Services)]
+/// pub struct UserController {
+///     #[inject]  user_service: UserService,
+///     #[identity] user: AuthenticatedUser,
+///     #[config("app.greeting")] greeting: String,
 /// }
 /// ```
 ///
-/// Generates:
-/// - The struct definition with inject + identity fields
-/// - An impl block with the original methods
-/// - Free handler functions for Axum
-/// - `impl Controller<T>` with `fn routes()`
-#[proc_macro]
-pub fn controller(input: TokenStream) -> TokenStream {
-    controller::expand(input)
+/// Generates (hidden):
+/// - `mod __quarlus_meta_<Name>` — type alias for State, PATH_PREFIX, guard_identity
+/// - `struct __QuarlusExtract_<Name>` — `FromRequestParts` extractor
+/// - `impl StatefulConstruct<State> for Name` — only when no `#[identity]` fields
+#[proc_macro_derive(Controller, attributes(controller, inject, identity, config))]
+pub fn derive_controller(input: TokenStream) -> TokenStream {
+    derive_controller::expand(input)
 }
 
+/// Attribute macro on an `impl` block that generates Axum handlers, route
+/// registration, and trait impls (`Controller`, `ScheduledController`).
+///
+/// Must be paired with a struct that derives `Controller`.
+///
+/// ```ignore
+/// #[routes]
+/// #[intercept(Logged::info())]
+/// impl UserController {
+///     #[get("/")]
+///     async fn list(&self) -> Json<Vec<User>> { ... }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
+    routes_attr::expand(input)
+}
+
+// ---------------------------------------------------------------------------
+// No-op attributes — consumed by #[routes] from the token stream.
+// Declared here for IDE support (rust-analyzer), cargo doc, and to prevent
+// "cannot find attribute" errors when used outside #[routes].
+// ---------------------------------------------------------------------------
+
 /// Mark a method as a GET route handler.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 #[proc_macro_attribute]
 pub fn get(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
@@ -68,22 +88,8 @@ pub fn patch(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Mark a field as app-scoped (injected from AppState).
-/// No-op attribute — read by `controller!`.
-#[proc_macro_attribute]
-pub fn inject(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Mark a field as request-scoped (extracted from the HTTP request).
-/// No-op attribute — read by `controller!`.
-#[proc_macro_attribute]
-pub fn identity(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
 /// Restrict a route to users that have at least one of the specified roles.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[get("/admin/users")]
@@ -96,28 +102,14 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Wrap a route method body in an automatic SQL transaction.
-/// The macro injects a `tx` variable (begun from `self.pool`) and
-/// commits on `Ok`, rolls back on `Err` (via drop).
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 #[proc_macro_attribute]
 pub fn transactional(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Inject a configuration value into a controller field.
-/// No-op attribute — read by `controller!`.
-///
-/// ```ignore
-/// #[config("app.greeting")]
-/// greeting: String,
-/// ```
-#[proc_macro_attribute]
-pub fn config(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
 /// Rate-limit a route method by IP or a static key.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[rate_limited(max = 100, window = 60)]
@@ -128,11 +120,8 @@ pub fn rate_limited(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Apply an interceptor to a route method.
-/// The expression must evaluate to a type implementing `quarlus_core::Interceptor<R>`.
-/// No-op attribute — read by `controller!`.
-///
-/// Accepts any expression: unit structs, method calls, chained builders.
+/// Apply an interceptor to a method or impl block.
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[intercept(AuditLog)]
@@ -145,9 +134,7 @@ pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Apply a guard to a route method.
-/// The expression must implement `quarlus_core::Guard<S>`.
-/// Guards run BEFORE controller construction and can short-circuit.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[guard(MyCustomGuard)]
@@ -160,11 +147,7 @@ pub fn guard(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Mark a method as an event consumer.
-/// No-op attribute — read by `controller!`.
-///
-/// The method's parameter must be `Arc<EventType>`. The event type is inferred
-/// from the parameter. Controllers with `#[consumer]` methods **cannot** have
-/// `#[identity]` fields (no HTTP request context is available for consumers).
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[consumer(bus = "event_bus")]
@@ -176,43 +159,19 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Mark a method as a scheduled background task.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 ///
-/// # Variants
 /// ```ignore
 /// #[scheduled(every = 30)]
-/// #[scheduled(every = 60, initial_delay = 5)]
 /// #[scheduled(cron = "0 */5 * * * *")]
-/// #[scheduled(every = 30, name = "user-count")]
 /// ```
 #[proc_macro_attribute]
 pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Set a base path prefix for all routes in this controller.
-/// Uses `axum::Router::nest()` under the hood.
-/// No-op attribute — read by `controller!`.
-///
-/// ```ignore
-/// controller! {
-///     #[path("/users")]
-///     impl UserController for Services {
-///         #[get("/")]
-///         async fn list(&self) -> Json<Vec<User>> { ... }
-///
-///         #[get("/{id}")]
-///         async fn get_by_id(&self, Path(id): Path<u64>) -> ... { ... }
-///     }
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn path(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
 /// Apply a custom middleware function to a route.
-/// No-op attribute — read by `controller!`.
+/// No-op attribute — read by `#[routes]`.
 ///
 /// ```ignore
 /// #[middleware(my_middleware_fn)]

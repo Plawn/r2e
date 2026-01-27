@@ -18,18 +18,23 @@ pub fn controller(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         r#"use axum::Json;
 use serde::{{Deserialize, Serialize}};
 
-// TODO: import your state type and adjust the impl block
-// quarlus_macros::controller! {{
-//     impl {name} for AppState {{
-//         #[inject]
-//         // your_service: YourService,
-//
-//         #[get("/your-path")]
-//         async fn list(&self) -> Json<String> {{
-//             Json("Hello from {name}".into())
-//         }}
-//     }}
-// }}
+// TODO: import your state type
+// use crate::state::AppState;
+
+#[derive(quarlus_macros::Controller)]
+#[controller(state = AppState)]
+pub struct {name} {{
+    // #[inject]
+    // your_service: YourService,
+}}
+
+#[quarlus_macros::routes]
+impl {name} {{
+    #[get("/your-path")]
+    async fn list(&self) -> Json<String> {{
+        Json("Hello from {name}".into())
+    }}
+}}
 "#
     );
 

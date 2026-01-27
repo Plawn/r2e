@@ -50,17 +50,23 @@ Remplacer `axum::Json<T>` par `quarlus_core::validation::Validated<T>` :
 ```rust
 use quarlus_core::validation::Validated;
 
-quarlus_macros::controller! {
-    impl UserController for Services {
-        #[post("/users")]
-        async fn create(
-            &self,
-            Validated(body): Validated<CreateUserRequest>,
-        ) -> axum::Json<User> {
-            // `body` est garanti valide ici
-            let user = self.user_service.create(body.name, body.email).await;
-            axum::Json(user)
-        }
+#[derive(quarlus_macros::Controller)]
+#[controller(state = Services)]
+pub struct UserController {
+    #[inject]
+    user_service: UserService,
+}
+
+#[quarlus_macros::routes]
+impl UserController {
+    #[post("/users")]
+    async fn create(
+        &self,
+        Validated(body): Validated<CreateUserRequest>,
+    ) -> axum::Json<User> {
+        // `body` est garanti valide ici
+        let user = self.user_service.create(body.name, body.email).await;
+        axum::Json(user)
     }
 }
 ```
