@@ -1,0 +1,10 @@
+[package]
+name = "quarlus-cache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dashmap = "6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

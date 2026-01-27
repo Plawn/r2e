@@ -88,6 +88,7 @@ mod common {
 
 use axum::extract::Path;
 use common::*;
+use quarlus_utils::interceptors::{Cache, Logged, Timed};
 use quarlus_security::{AuthenticatedUser, JwtValidator};
 
 #[derive(Clone)]
@@ -140,8 +141,8 @@ quarlus_macros::controller! {
         greeting: String,
 
         #[get("/users")]
-        #[logged]
-        #[timed]
+        #[intercept(Logged::info())]
+        #[intercept(Timed::info())]
         async fn list(&self) -> axum::Json<Vec<User>> {
             let users = self.user_service.list().await;
             axum::Json(users)
@@ -181,8 +182,8 @@ quarlus_macros::controller! {
         }
 
         #[get("/users/cached")]
-        #[cached(ttl = 30)]
-        #[timed]
+        #[intercept(Cache::ttl(30))]
+        #[intercept(Timed::info())]
         async fn cached_list(&self) -> axum::Json<serde_json::Value> {
             let users = self.user_service.list().await;
             axum::Json(serde_json::to_value(users).unwrap())

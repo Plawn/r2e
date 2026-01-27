@@ -116,32 +116,6 @@ pub fn config(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Log entry and exit of a route method.
-/// No-op attribute — read by `controller!`.
-#[proc_macro_attribute]
-pub fn logged(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Measure and log the execution time of a route method.
-/// No-op attribute — read by `controller!`.
-#[proc_macro_attribute]
-pub fn timed(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Cache the response of a route method with a TTL in seconds.
-/// No-op attribute — read by `controller!`.
-///
-/// ```ignore
-/// #[cached(ttl = 60)]
-/// async fn list(&self) -> Json<Vec<User>> { ... }
-/// ```
-#[proc_macro_attribute]
-pub fn cached(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
 /// Rate-limit a route method by IP or a static key.
 /// No-op attribute — read by `controller!`.
 ///
@@ -154,30 +128,56 @@ pub fn rate_limited(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Invalidate a named cache group after a method executes.
+/// Apply an interceptor to a route method.
+/// The expression must evaluate to a type implementing `quarlus_core::Interceptor<R>`.
 /// No-op attribute — read by `controller!`.
 ///
-/// ```ignore
-/// #[post("/users")]
-/// #[cache_invalidate("users")]
-/// async fn create(&self, ...) -> ... { ... }
-/// ```
-#[proc_macro_attribute]
-pub fn cache_invalidate(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Apply a user-defined interceptor to a route method.
-/// The interceptor type must implement `quarlus_core::Interceptor<R>`.
-/// No-op attribute — read by `controller!`.
+/// Accepts any expression: unit structs, method calls, chained builders.
 ///
 /// ```ignore
-/// #[get("/users")]
 /// #[intercept(AuditLog)]
-/// async fn list(&self) -> Json<Vec<User>> { ... }
+/// #[intercept(Logged::debug())]
+/// #[intercept(Cache::ttl(30).group("users"))]
 /// ```
 #[proc_macro_attribute]
 pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Mark a method as an event consumer.
+/// No-op attribute — read by `controller!`.
+///
+/// The method's parameter must be `Arc<EventType>`. The event type is inferred
+/// from the parameter. Controllers with `#[consumer]` methods **cannot** have
+/// `#[identity]` fields (no HTTP request context is available for consumers).
+///
+/// ```ignore
+/// #[consumer(bus = "event_bus")]
+/// async fn on_user_created(&self, event: Arc<UserCreatedEvent>) { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Set a base path prefix for all routes in this controller.
+/// Uses `axum::Router::nest()` under the hood.
+/// No-op attribute — read by `controller!`.
+///
+/// ```ignore
+/// controller! {
+///     #[path("/users")]
+///     impl UserController for Services {
+///         #[get("/")]
+///         async fn list(&self) -> Json<Vec<User>> { ... }
+///
+///         #[get("/{id}")]
+///         async fn get_by_id(&self, Path(id): Path<u64>) -> ... { ... }
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn path(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 

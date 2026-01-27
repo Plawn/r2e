@@ -544,14 +544,17 @@ dependencies = [
  "axum",
  "http",
  "jsonwebtoken",
+ "quarlus-cache",
  "quarlus-core",
  "quarlus-data",
  "quarlus-events",
  "quarlus-macros",
  "quarlus-openapi",
+ "quarlus-rate-limit",
  "quarlus-scheduler",
  "quarlus-security",
  "quarlus-test",
+ "quarlus-utils",
  "serde",
  "serde_json",
  "sqlx",
@@ -1599,6 +1602,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "quarlus-cache"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "tokio",
+]
+
+[[package]]
 name = "quarlus-cli"
 version = "0.1.0"
 dependencies = [
@@ -1613,7 +1624,6 @@ name = "quarlus-core"
 version = "0.1.0"
 dependencies = [
  "axum",
- "dashmap",
  "quarlus-macros",
  "serde",
  "serde_json",
@@ -1665,6 +1675,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "quarlus-rate-limit"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+]
+
+[[package]]
 name = "quarlus-scheduler"
 version = "0.1.0"
 dependencies = [
@@ -1704,6 +1721,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "quarlus-utils"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "quarlus-cache",
+ "quarlus-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

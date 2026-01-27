@@ -10,11 +10,12 @@ pub struct SearchParams {
 }
 
 quarlus_macros::controller! {
+    #[path("/data/users")]
     impl DataController for Services {
         #[inject]
         pool: sqlx::SqlitePool,
 
-        #[get("/data/users")]
+        #[get("/")]
         async fn list_paged(
             &self,
             axum::extract::Query(pageable): axum::extract::Query<Pageable>,
@@ -54,7 +55,7 @@ quarlus_macros::controller! {
             Ok(axum::Json(Page::new(entities, &pageable, total)))
         }
 
-        #[get("/data/users/search")]
+        #[get("/search")]
         async fn search(
             &self,
             axum::extract::Query(params): axum::extract::Query<SearchParams>,

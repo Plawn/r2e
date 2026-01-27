@@ -42,6 +42,7 @@ fn generate_struct(def: &ControllerDef) -> TokenStream {
         .collect();
 
     quote! {
+        #[allow(dead_code)]
         pub struct #name {
             #(#fields),*
         }
@@ -52,7 +53,7 @@ fn generate_struct(def: &ControllerDef) -> TokenStream {
 /// Route methods may get their body wrapped with interceptors.
 ///
 /// Wrapping order (outermost first):
-///   logged → timed → user-defined interceptors → cached → cache_invalidate → transactional → body.
+///   intercept chain (first declared = outermost) → transactional → body.
 fn generate_impl(def: &ControllerDef) -> TokenStream {
     let name = &def.name;
 
@@ -62,119 +63,25 @@ fn generate_impl(def: &ControllerDef) -> TokenStream {
         .map(|rm| generate_wrapped_method(rm, def))
         .collect();
 
+    let consumer_fns: Vec<_> = def
+        .consumer_methods
+        .iter()
+        .map(|cm| {
+            let f = &cm.fn_item;
+            quote! { #f }
+        })
+        .collect();
+
     let other_fns: Vec<_> = def.other_methods.iter().collect();
 
-    if route_fns.is_empty() && other_fns.is_empty() {
+    if route_fns.is_empty() && consumer_fns.is_empty() && other_fns.is_empty() {
         quote! {}
     } else {
         quote! {
             impl #name {
                 #(#route_fns)*
+                #(#consumer_fns)*
                 #(#other_fns)*
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: convert parsing::LogLevel to runtime token stream
-// ---------------------------------------------------------------------------
-
-fn log_level_tokens(level: LogLevel) -> TokenStream {
-    match level {
-        LogLevel::Trace => quote! { quarlus_core::interceptors::LogLevel::Trace },
-        LogLevel::Debug => quote! { quarlus_core::interceptors::LogLevel::Debug },
-        LogLevel::Info => quote! { quarlus_core::interceptors::LogLevel::Info },
-        LogLevel::Warn => quote! { quarlus_core::interceptors::LogLevel::Warn },
-        LogLevel::Error => quote! { quarlus_core::interceptors::LogLevel::Error },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: extract first identifier from a pattern (for cache key generation)
-// ---------------------------------------------------------------------------
-
-fn extract_first_ident(pat: &syn::Pat) -> Option<syn::Ident> {
-    match pat {
-        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
-        syn::Pat::TupleStruct(ts) => ts.elems.first().and_then(extract_first_ident),
-        syn::Pat::Tuple(t) => t.elems.first().and_then(extract_first_ident),
-        syn::Pat::Reference(r) => extract_first_ident(&r.pat),
-        _ => None,
-    }
-}
-
-fn extract_param_bindings(rm: &RouteMethod) -> Vec<syn::Ident> {
-    rm.fn_item
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pt) => extract_first_ident(&pt.pat),
-            _ => None,
-        })
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Helper: generate cache key expression
-// ---------------------------------------------------------------------------
-
-fn identity_field_name(def: &ControllerDef) -> &syn::Ident {
-    assert!(
-        !def.identity_fields.is_empty(),
-        "cached(key = \"user\") or cached(key = \"user_params\") requires an #[identity] field on the controller"
-    );
-    &def.identity_fields[0].name
-}
-
-fn generate_cache_key_expr(
-    fn_name: &str,
-    cache_key: &CacheKey,
-    rm: &RouteMethod,
-    def: &ControllerDef,
-) -> TokenStream {
-    match cache_key {
-        CacheKey::Default => {
-            quote! { format!("{}:default", #fn_name) }
-        }
-        CacheKey::Params => {
-            let bindings = extract_param_bindings(rm);
-            if bindings.is_empty() {
-                quote! { format!("{}:default", #fn_name) }
-            } else {
-                quote! {
-                    {
-                        let mut __key = format!("{}", #fn_name);
-                        #(
-                            __key.push(':');
-                            __key.push_str(&format!("{:?}", #bindings));
-                        )*
-                        __key
-                    }
-                }
-            }
-        }
-        CacheKey::User => {
-            let identity_name = identity_field_name(def);
-            quote! { format!("{}:user:{}", #fn_name, self.#identity_name.sub) }
-        }
-        CacheKey::UserParams => {
-            let identity_name = identity_field_name(def);
-            let bindings = extract_param_bindings(rm);
-            if bindings.is_empty() {
-                quote! { format!("{}:user:{}", #fn_name, self.#identity_name.sub) }
-            } else {
-                quote! {
-                    {
-                        let mut __key = format!("{}:user:{}", #fn_name, self.#identity_name.sub);
-                        #(
-                            __key.push(':');
-                            __key.push_str(&format!("{:?}", #bindings));
-                        )*
-                        __key
-                    }
-                }
             }
         }
     }
@@ -186,16 +93,10 @@ fn generate_cache_key_expr(
 
 /// Generate a method with the full interceptor chain applied.
 ///
-/// Inline wrappers (innermost): transactional, cache_invalidate
-/// Trait-based interceptors (via Interceptor::around): cached, user-defined, timed, logged
-/// Rate limiting is handled at the handler level (generate_single_handler).
+/// Inline wrappers (innermost): transactional
+/// Trait-based interceptors (via Interceptor::around): all `#[intercept(...)]` entries
 fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream {
-    let has_interceptors = rm.transactional.is_some()
-        || rm.logged.is_some()
-        || rm.timed.is_some()
-        || rm.cached.is_some()
-        || !rm.intercept_fns.is_empty()
-        || !rm.cache_invalidate.is_empty();
+    let has_interceptors = rm.transactional.is_some() || !rm.intercept_fns.is_empty();
 
     if !has_interceptors {
         let f = &rm.fn_item;
@@ -236,113 +137,22 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &ControllerDef) -> TokenStream
     }
 
     // -----------------------------------------------------------------------
-    // Inline wrapper: cache_invalidate (after body)
-    // -----------------------------------------------------------------------
-    for group in &rm.cache_invalidate {
-        body = quote! {
-            {
-                let __result = #body;
-                quarlus_core::CacheRegistry::invalidate(#group);
-                __result
-            }
-        };
-    }
-
-    // -----------------------------------------------------------------------
     // Trait-based interceptors (via Interceptor::around)
-    // Build from innermost to outermost.
+    // Build from innermost to outermost (reverse order so first declared = outermost).
     // -----------------------------------------------------------------------
+    if !rm.intercept_fns.is_empty() {
+        for intercept_expr in rm.intercept_fns.iter().rev() {
+            body = quote! {
+                {
+                    let __interceptor = #intercept_expr;
+                    quarlus_core::Interceptor::around(&__interceptor, __ctx, move || async move {
+                        #body
+                    }).await
+                }
+            };
+        }
 
-    let has_trait_interceptors = rm.logged.is_some()
-        || rm.timed.is_some()
-        || rm.cached.is_some()
-        || !rm.intercept_fns.is_empty();
-
-    // Layer: cached (innermost trait-based interceptor)
-    if let Some(ref cached_config) = rm.cached {
-        let ttl = cached_config.ttl;
-        let key_expr = generate_cache_key_expr(&fn_name_str, &cached_config.key, rm, def);
-
-        let cache_init = if let Some(ref group) = cached_config.group {
-            quote! {
-                let __cache = quarlus_core::CacheRegistry::get_or_create(
-                    #group,
-                    std::time::Duration::from_secs(#ttl),
-                );
-            }
-        } else {
-            quote! {
-                use std::sync::OnceLock;
-                static __CACHE: OnceLock<quarlus_core::TtlCache<String, String>> = OnceLock::new();
-                let __cache = __CACHE.get_or_init(|| {
-                    quarlus_core::TtlCache::new(std::time::Duration::from_secs(#ttl))
-                }).clone();
-            }
-        };
-
-        body = quote! {
-            {
-                #cache_init
-                let __cached = quarlus_core::interceptors::Cached {
-                    cache: __cache,
-                    key: #key_expr,
-                };
-                quarlus_core::Interceptor::around(&__cached, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    // Layer: user-defined interceptors (in reverse order so first declared is outermost)
-    for intercept_fn in rm.intercept_fns.iter().rev() {
-        body = quote! {
-            {
-                let __interceptor = #intercept_fn;
-                quarlus_core::Interceptor::around(&__interceptor, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    // Layer: timed
-    if let Some(ref timed_config) = rm.timed {
-        let level = log_level_tokens(timed_config.level);
-        let threshold = match timed_config.threshold_ms {
-            Some(ms) => quote! { Some(#ms) },
-            None => quote! { None },
-        };
-        body = quote! {
-            {
-                let __timed = quarlus_core::interceptors::Timed {
-                    level: #level,
-                    threshold_ms: #threshold,
-                };
-                quarlus_core::Interceptor::around(&__timed, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    // Layer: logged (outermost trait-based interceptor)
-    if let Some(ref logged_config) = rm.logged {
-        let level = log_level_tokens(logged_config.level);
-        body = quote! {
-            {
-                let __logged = quarlus_core::interceptors::Logged {
-                    level: #level,
-                };
-                quarlus_core::Interceptor::around(&__logged, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    // Wrap with InterceptorContext creation if any trait-based interceptors used
-    if has_trait_interceptors {
+        // Wrap with InterceptorContext creation
         body = quote! {
             {
                 let __ctx = quarlus_core::InterceptorContext {
@@ -531,9 +341,9 @@ fn generate_single_handler(def: &ControllerDef, rm: &RouteMethod) -> TokenStream
             quote! {
                 {
                     use std::sync::OnceLock;
-                    static __LIMITER: OnceLock<quarlus_core::RateLimiter<String>> = OnceLock::new();
+                    static __LIMITER: OnceLock<quarlus_rate_limit::RateLimiter<String>> = OnceLock::new();
                     let __limiter = __LIMITER.get_or_init(|| {
-                        quarlus_core::RateLimiter::new(#max, std::time::Duration::from_secs(#window))
+                        quarlus_rate_limit::RateLimiter::new(#max, std::time::Duration::from_secs(#window))
                     });
                     let __rl_key = #key_expr;
                     if !__limiter.try_acquire(&__rl_key) {
@@ -631,7 +441,12 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
         .route_methods
         .iter()
         .map(|rm| {
-            let path = &rm.path;
+            let path = if let Some(ref prefix) = def.prefix {
+                format!("{}{}", prefix, rm.path)
+            } else {
+                rm.path.clone()
+            };
+            let path = &path;
             let method = rm.method.as_axum_method_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
             let roles: Vec<_> = rm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
@@ -677,16 +492,101 @@ fn generate_controller_impl(def: &ControllerDef) -> TokenStream {
         })
         .collect();
 
+    // --- Consumer registrations ---
+    let consumer_registrations: Vec<_> = def
+        .consumer_methods
+        .iter()
+        .map(|cm| {
+            let bus_field = format_ident!("{}", cm.bus_field);
+            let event_type = &cm.event_type;
+            let fn_name = &cm.fn_item.sig.ident;
+            let controller_name = &def.name;
+
+            let inject_inits: Vec<_> = def
+                .injected_fields
+                .iter()
+                .map(|f| {
+                    let n = &f.name;
+                    quote! { #n: __state.#n.clone() }
+                })
+                .collect();
+
+            let config_inits: Vec<_> = def
+                .config_fields
+                .iter()
+                .map(|f| {
+                    let n = &f.name;
+                    let key = &f.key;
+                    quote! {
+                        #n: {
+                            let __cfg = <quarlus_core::QuarlusConfig as axum::extract::FromRef<#state_type>>::from_ref(&__state);
+                            __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
+                        }
+                    }
+                })
+                .collect();
+
+            let all_inits: Vec<_> = inject_inits
+                .iter()
+                .chain(config_inits.iter())
+                .cloned()
+                .collect();
+
+            quote! {
+                {
+                    let __event_bus = state.#bus_field.clone();
+                    let __state = state.clone();
+                    __event_bus.subscribe(move |__event: std::sync::Arc<#event_type>| {
+                        let __state = __state.clone();
+                        async move {
+                            let __ctrl = #controller_name {
+                                #(#all_inits,)*
+                            };
+                            __ctrl.#fn_name(__event).await;
+                        }
+                    }).await;
+                }
+            }
+        })
+        .collect();
+
+    let register_consumers_fn = if consumer_registrations.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn register_consumers(
+                state: #state_type,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                Box::pin(async move {
+                    #(#consumer_registrations)*
+                })
+            }
+        }
+    };
+
+    let router_body = if let Some(ref prefix) = def.prefix {
+        quote! {
+            axum::Router::new()
+                .nest(#prefix, axum::Router::new() #(#route_registrations)*)
+        }
+    } else {
+        quote! {
+            axum::Router::new()
+                #(#route_registrations)*
+        }
+    };
+
     quote! {
         impl quarlus_core::Controller<#state_type> for #name {
             fn routes() -> axum::Router<#state_type> {
-                axum::Router::new()
-                    #(#route_registrations)*
+                #router_body
             }
 
             fn route_metadata() -> Vec<quarlus_core::openapi::RouteInfo> {
                 vec![#(#route_metadata_items),*]
             }
+
+            #register_consumers_fn
         }
     }
 }

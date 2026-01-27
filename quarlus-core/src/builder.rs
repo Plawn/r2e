@@ -4,6 +4,9 @@ use crate::lifecycle::{ShutdownHook, StartupHook};
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
+type ConsumerReg<T> =
+    Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
 /// Builder for assembling a Quarlus application.
 ///
 /// Collects state, controller routes, and Tower layers, then produces an
@@ -19,6 +22,9 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static> {
     config: Option<crate::config::QuarlusConfig>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook>,
+    route_metadata: Vec<Vec<crate::openapi::RouteInfo>>,
+    openapi_builder: Option<Box<dyn FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> axum::Router<T> + Send>>,
+    consumer_registrations: Vec<ConsumerReg<T>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
@@ -35,6 +41,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             config: None,
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
+            route_metadata: Vec::new(),
+            openapi_builder: None,
+            consumer_registrations: Vec::new(),
         }
     }
 
@@ -146,6 +155,22 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Register a [`Controller`] whose routes will be merged into the application.
     pub fn register_controller<C: Controller<T>>(mut self) -> Self {
         self.routes.push(C::routes());
+        self.route_metadata.push(C::route_metadata());
+        self.consumer_registrations
+            .push(Box::new(|state| C::register_consumers(state)));
+        self
+    }
+
+    /// Register a deferred OpenAPI route builder.
+    ///
+    /// The callback receives all route metadata collected from `register_controller`
+    /// calls (in order) and must return a `Router<T>` to merge into the app.
+    /// Called at `build()` time, so registration order does not matter.
+    pub fn with_openapi_builder<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> axum::Router<T> + Send + 'static,
+    {
+        self.openapi_builder = Some(Box::new(f));
         self
     }
 
@@ -158,7 +183,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.build_inner().0
     }
 
-    fn build_inner(self) -> (axum::Router, Vec<StartupHook<T>>, Vec<ShutdownHook>, T) {
+    fn build_inner(
+        self,
+    ) -> (
+        axum::Router,
+        Vec<StartupHook<T>>,
+        Vec<ShutdownHook>,
+        Vec<ConsumerReg<T>>,
+        T,
+    ) {
         let state = self
             .state
             .expect("AppBuilder: state must be set before build");
@@ -168,6 +201,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Merge all controller / manual routes.
         for r in self.routes {
             router = router.merge(r);
+        }
+
+        // Invoke the deferred OpenAPI builder, if registered.
+        if let Some(builder) = self.openapi_builder {
+            let openapi_router = builder(self.route_metadata);
+            router = router.merge(openapi_router);
         }
 
         // Optional built-in health endpoint (added before with_state so it
@@ -199,7 +238,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = app.layer(layers::default_trace());
         }
 
-        (app, self.startup_hooks, self.shutdown_hooks, state)
+        (app, self.startup_hooks, self.shutdown_hooks, self.consumer_registrations, state)
     }
 
     /// Build the application and start serving on the given address.
@@ -207,7 +246,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Runs startup hooks before listening, and shutdown hooks after
     /// graceful shutdown completes.
     pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let (app, startup_hooks, shutdown_hooks, state) = self.build_inner();
+        let (app, startup_hooks, shutdown_hooks, consumer_regs, state) = self.build_inner();
+
+        // Register event consumers
+        for reg in consumer_regs {
+            reg(state.clone()).await;
+        }
 
         // Run startup hooks
         for hook in startup_hooks {

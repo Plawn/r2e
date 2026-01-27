@@ -21,4 +21,3 @@ quarlus-macros = { path = "../quarlus-macros" }
 sqlx = { version = "0.8", optional = true }
 validator = { version = "0.18", features = ["derive"], optional = true }
 serde_yaml = "0.9"
-dashmap = "6"

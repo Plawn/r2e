@@ -3,10 +3,9 @@ use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
-use quarlus_core::Controller;
 use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
-use quarlus_openapi::{openapi_routes, OpenApiConfig};
+use quarlus_openapi::{AppBuilderOpenApiExt, OpenApiConfig};
 use quarlus_scheduler::{Schedule, ScheduledTask, Scheduler};
 use quarlus_security::{JwtValidator, SecurityConfig};
 use sqlx::SqlitePool;
@@ -17,10 +16,11 @@ mod models;
 mod services;
 mod state;
 
+use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
 use controllers::data_controller::DataController;
+use controllers::event_controller::UserEventConsumer;
 use controllers::user_controller::UserController;
-use models::UserCreatedEvent;
 use services::UserService;
 use state::Services;
 
@@ -72,16 +72,6 @@ async fn main() {
 
     // --- Events (#7) ---
     let event_bus = EventBus::new();
-    event_bus
-        .subscribe(|event: Arc<UserCreatedEvent>| async move {
-            tracing::info!(
-                user_id = event.user_id,
-                name = %event.name,
-                email = %event.email,
-                "User created event received"
-            );
-        })
-        .await;
 
     // Build the JWT validator with a static HMAC key (no JWKS needed for the demo)
     let sec_config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
@@ -141,19 +131,6 @@ async fn main() {
     // Start the scheduler in the background
     scheduler.start(services.clone(), cancel.clone());
 
-    // --- OpenAPI (#5) ---
-    let openapi_config = OpenApiConfig::new("Quarlus Example API", "0.1.0")
-        .with_description("Demo application showcasing all Quarlus features")
-        .with_swagger_ui(true);
-    let openapi = openapi_routes::<Services>(
-        openapi_config,
-        vec![
-            UserController::route_metadata(),
-            ConfigController::route_metadata(),
-            DataController::route_metadata(),
-        ],
-    );
-
     // --- App assembly ---
     AppBuilder::new()
         .with_state(services)
@@ -163,6 +140,11 @@ async fn main() {
         .with_tracing()
         .with_error_handling() // Error handling (#3)
         .with_dev_reload() // Dev mode (#9)
+        .with_openapi(
+            OpenApiConfig::new("Quarlus Example API", "0.1.0")
+                .with_description("Demo application showcasing all Quarlus features")
+                .with_swagger_ui(true),
+        ) // OpenAPI (#5)
         .on_start(|_state| async move {
             // Lifecycle hook (#10)
             tracing::info!("Quarlus example-app startup hook executed");
@@ -173,9 +155,10 @@ async fn main() {
             tracing::info!("Quarlus example-app shutdown hook executed");
         })
         .register_controller::<UserController>()
+        .register_controller::<AccountController>()
         .register_controller::<ConfigController>()
         .register_controller::<DataController>()
-        .register_routes(openapi)
+        .register_controller::<UserEventConsumer>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

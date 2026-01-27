@@ -19,10 +19,12 @@ use crate::route::{HttpMethod, RoutePath};
 pub struct ControllerDef {
     pub name: syn::Ident,
     pub state_type: syn::Path,
+    pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub config_fields: Vec<ConfigField>,
     pub route_methods: Vec<RouteMethod>,
+    pub consumer_methods: Vec<ConsumerMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -42,17 +44,19 @@ pub struct ConfigField {
     pub key: String,
 }
 
+pub struct ConsumerMethod {
+    pub bus_field: String,
+    pub event_type: syn::Type,
+    pub fn_item: syn::ImplItemFn,
+}
+
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
     pub roles: Vec<String>,
     pub transactional: Option<TransactionalConfig>,
-    pub logged: Option<LoggedConfig>,
-    pub timed: Option<TimedConfig>,
-    pub cached: Option<CachedConfig>,
     pub rate_limited: Option<RateLimitConfig>,
-    pub cache_invalidate: Vec<String>,
-    pub intercept_fns: Vec<syn::Path>,
+    pub intercept_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
     pub fn_item: syn::ImplItemFn,
 }
@@ -60,51 +64,6 @@ pub struct RouteMethod {
 // ---------------------------------------------------------------------------
 // Configuration types
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "trace" => Some(Self::Trace),
-            "debug" => Some(Self::Debug),
-            "info" => Some(Self::Info),
-            "warn" => Some(Self::Warn),
-            "error" => Some(Self::Error),
-            _ => None,
-        }
-    }
-}
-
-pub struct LoggedConfig {
-    pub level: LogLevel,
-}
-
-pub struct TimedConfig {
-    pub level: LogLevel,
-    pub threshold_ms: Option<u64>,
-}
-
-pub struct CachedConfig {
-    pub ttl: u64,
-    pub key: CacheKey,
-    pub group: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CacheKey {
-    Default,
-    Params,
-    User,
-    UserParams,
-}
 
 pub struct TransactionalConfig {
     pub pool_field: String,
@@ -129,6 +88,10 @@ pub enum RateLimitKey {
 
 impl Parse for ControllerDef {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        // Parse optional outer attributes (before `impl`), e.g. #[path("/users")]
+        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
+        let prefix = extract_path_prefix(&outer_attrs)?;
+
         // impl Name for StatePath { ... }
         let _: Token![impl] = input.parse()?;
         let name: syn::Ident = input.parse()?;
@@ -142,6 +105,7 @@ impl Parse for ControllerDef {
         let mut identity_fields = Vec::new();
         let mut config_fields = Vec::new();
         let mut route_methods = Vec::new();
+        let mut consumer_methods = Vec::new();
         let mut other_methods = Vec::new();
 
         while !content.is_empty() {
@@ -154,37 +118,48 @@ impl Parse for ControllerDef {
                 let mut all_attrs = attrs;
                 all_attrs.append(&mut method.attrs);
 
-                match extract_route_attr(&all_attrs)? {
-                    Some((http_method, path)) => {
-                        let roles = extract_roles(&all_attrs)?;
-                        let transactional = extract_transactional(&all_attrs)?;
-                        let logged = extract_logged(&all_attrs)?;
-                        let timed = extract_timed(&all_attrs)?;
-                        let cached = extract_cached(&all_attrs)?;
-                        let rate_limited = extract_rate_limit(&all_attrs)?;
-                        let cache_invalidate = extract_cache_invalidate(&all_attrs)?;
-                        let intercept_fns = extract_intercept_fns(&all_attrs)?;
-                        let middleware_fns = extract_middleware_fns(&all_attrs)?;
-                        method.attrs = strip_route_attrs(all_attrs);
-                        route_methods.push(RouteMethod {
-                            method: http_method,
-                            path,
-                            roles,
-                            transactional,
-                            logged,
-                            timed,
-                            cached,
-                            rate_limited,
-                            cache_invalidate,
-                            intercept_fns,
-                            middleware_fns,
-                            fn_item: method,
-                        });
-                    }
-                    None => {
-                        method.attrs = all_attrs;
-                        other_methods.push(method);
-                    }
+                if let Some(bus_field) = extract_consumer(&all_attrs)? {
+                    let event_param = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .find_map(|arg| match arg {
+                            syn::FnArg::Typed(pt) => Some(pt),
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            syn::Error::new(
+                                method.sig.ident.span(),
+                                "consumer method must have an event parameter",
+                            )
+                        })?;
+                    let event_type = extract_event_type_from_arc(&event_param.ty)?;
+                    method.attrs = strip_consumer_attrs(all_attrs);
+                    consumer_methods.push(ConsumerMethod {
+                        bus_field,
+                        event_type,
+                        fn_item: method,
+                    });
+                } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
+                    let roles = extract_roles(&all_attrs)?;
+                    let transactional = extract_transactional(&all_attrs)?;
+                    let rate_limited = extract_rate_limit(&all_attrs)?;
+                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
+                    method.attrs = strip_route_attrs(all_attrs);
+                    route_methods.push(RouteMethod {
+                        method: http_method,
+                        path,
+                        roles,
+                        transactional,
+                        rate_limited,
+                        intercept_fns,
+                        middleware_fns,
+                        fn_item: method,
+                    });
+                } else {
+                    method.attrs = all_attrs;
+                    other_methods.push(method);
                 }
             } else {
                 // Field declaration: name: Type,
@@ -225,13 +200,23 @@ impl Parse for ControllerDef {
             }
         }
 
+        if !consumer_methods.is_empty() && !identity_fields.is_empty() {
+            return Err(syn::Error::new(
+                name.span(),
+                "controllers with #[consumer] methods cannot have #[identity] fields \
+                 (no HTTP request context available for event consumers)",
+            ));
+        }
+
         Ok(ControllerDef {
             name,
             state_type,
+            prefix,
             injected_fields,
             identity_fields,
             config_fields,
             route_methods,
+            consumer_methods,
             other_methods,
         })
     }
@@ -259,11 +244,7 @@ fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
             !is_route_attr(a)
                 && !a.path().is_ident("roles")
                 && !a.path().is_ident("transactional")
-                && !a.path().is_ident("logged")
-                && !a.path().is_ident("timed")
-                && !a.path().is_ident("cached")
                 && !a.path().is_ident("rate_limited")
-                && !a.path().is_ident("cache_invalidate")
                 && !a.path().is_ident("intercept")
                 && !a.path().is_ident("middleware")
         })
@@ -284,105 +265,6 @@ fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
 // ---------------------------------------------------------------------------
 // Extended attribute extraction
 // ---------------------------------------------------------------------------
-
-fn extract_logged(attrs: &[syn::Attribute]) -> syn::Result<Option<LoggedConfig>> {
-    for attr in attrs {
-        if attr.path().is_ident("logged") {
-            let mut level = LogLevel::Info;
-            // Bare #[logged] → no args, use default Info
-            // #[logged(level = "debug")] → parse args
-            if matches!(attr.meta, syn::Meta::List(_)) {
-                attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("level") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        level = LogLevel::from_str(&lit.value()).ok_or_else(|| {
-                            meta.error("expected one of: trace, debug, info, warn, error")
-                        })?;
-                        Ok(())
-                    } else {
-                        Err(meta.error("expected `level`"))
-                    }
-                })?;
-            }
-            return Ok(Some(LoggedConfig { level }));
-        }
-    }
-    Ok(None)
-}
-
-fn extract_timed(attrs: &[syn::Attribute]) -> syn::Result<Option<TimedConfig>> {
-    for attr in attrs {
-        if attr.path().is_ident("timed") {
-            let mut level = LogLevel::Info;
-            let mut threshold_ms = None;
-            // Bare #[timed] → use defaults
-            // #[timed(level = "warn", threshold = 100)] → parse args
-            if matches!(attr.meta, syn::Meta::List(_)) {
-                attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("level") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        level = LogLevel::from_str(&lit.value()).ok_or_else(|| {
-                            meta.error("expected one of: trace, debug, info, warn, error")
-                        })?;
-                        Ok(())
-                    } else if meta.path.is_ident("threshold") {
-                        let value = meta.value()?;
-                        let lit: syn::LitInt = value.parse()?;
-                        threshold_ms = Some(lit.base10_parse::<u64>()?);
-                        Ok(())
-                    } else {
-                        Err(meta.error("expected `level` or `threshold`"))
-                    }
-                })?;
-            }
-            return Ok(Some(TimedConfig {
-                level,
-                threshold_ms,
-            }));
-        }
-    }
-    Ok(None)
-}
-
-fn extract_cached(attrs: &[syn::Attribute]) -> syn::Result<Option<CachedConfig>> {
-    for attr in attrs {
-        if attr.path().is_ident("cached") {
-            let mut ttl = 60u64;
-            let mut key = CacheKey::Default;
-            let mut group = None;
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("ttl") {
-                    let value = meta.value()?;
-                    let lit: syn::LitInt = value.parse()?;
-                    ttl = lit.base10_parse()?;
-                    Ok(())
-                } else if meta.path.is_ident("key") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    key = match lit.value().as_str() {
-                        "default" => CacheKey::Default,
-                        "params" => CacheKey::Params,
-                        "user" => CacheKey::User,
-                        "user_params" => CacheKey::UserParams,
-                        _ => return Err(meta.error("expected one of: default, params, user, user_params")),
-                    };
-                    Ok(())
-                } else if meta.path.is_ident("group") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    group = Some(lit.value());
-                    Ok(())
-                } else {
-                    Err(meta.error("expected `ttl`, `key`, or `group`"))
-                }
-            })?;
-            return Ok(Some(CachedConfig { ttl, key, group }));
-        }
-    }
-    Ok(None)
-}
 
 fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<TransactionalConfig>> {
     for attr in attrs {
@@ -445,23 +327,12 @@ fn extract_rate_limit(attrs: &[syn::Attribute]) -> syn::Result<Option<RateLimitC
     Ok(None)
 }
 
-fn extract_cache_invalidate(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
-    let mut groups = Vec::new();
-    for attr in attrs {
-        if attr.path().is_ident("cache_invalidate") {
-            let lit: syn::LitStr = attr.parse_args()?;
-            groups.push(lit.value());
-        }
-    }
-    Ok(groups)
-}
-
-fn extract_intercept_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Path>> {
+fn extract_intercept_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
     let mut fns = Vec::new();
     for attr in attrs {
         if attr.path().is_ident("intercept") {
-            let path: syn::Path = attr.parse_args()?;
-            fns.push(path);
+            let expr: syn::Expr = attr.parse_args()?;
+            fns.push(expr);
         }
     }
     Ok(fns)
@@ -497,6 +368,75 @@ fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpMetho
         if let Some(method) = method {
             let route_path: RoutePath = attr.parse_args()?;
             return Ok(Some((method, route_path.path)));
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// Consumer attribute extraction
+// ---------------------------------------------------------------------------
+
+fn extract_consumer(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs {
+        if attr.path().is_ident("consumer") {
+            let mut bus_field = String::new();
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("bus") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    bus_field = lit.value();
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `bus`"))
+                }
+            })?;
+            if bus_field.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[consumer] requires bus = \"field_name\"",
+                ));
+            }
+            return Ok(Some(bus_field));
+        }
+    }
+    Ok(None)
+}
+
+fn extract_event_type_from_arc(ty: &syn::Type) -> syn::Result<syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Arc" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return Ok(inner.clone());
+                    }
+                }
+            }
+        }
+    }
+    Err(syn::Error::new_spanned(
+        ty,
+        "consumer parameter must be Arc<EventType>",
+    ))
+}
+
+fn strip_consumer_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
+    attrs
+        .into_iter()
+        .filter(|a| !a.path().is_ident("consumer"))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Path prefix extraction
+// ---------------------------------------------------------------------------
+
+fn extract_path_prefix(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs {
+        if attr.path().is_ident("path") {
+            let route_path: RoutePath = attr.parse_args()?;
+            return Ok(Some(route_path.path));
         }
     }
     Ok(None)

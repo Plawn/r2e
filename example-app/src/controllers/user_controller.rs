@@ -3,6 +3,7 @@ use crate::services::UserService;
 use crate::state::Services;
 use axum::extract::Path;
 use quarlus_core::validation::Validated;
+use quarlus_utils::interceptors::{Cache, CacheInvalidate, Logged, Timed};
 use quarlus_security::AuthenticatedUser;
 use std::future::Future;
 
@@ -37,6 +38,7 @@ impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
 }
 
 quarlus_macros::controller! {
+    #[path("/users")]
     impl UserController for Services {
         #[inject]
         user_service: UserService,
@@ -51,15 +53,15 @@ quarlus_macros::controller! {
         greeting: String,
 
         // Demo: logged with custom level + timed with threshold
-        #[get("/users")]
-        #[logged(level = "debug")]
-        #[timed(threshold = 50)]
+        #[get("/")]
+        #[intercept(Logged::debug())]
+        #[intercept(Timed::threshold(50))]
         async fn list(&self) -> axum::Json<Vec<User>> {
             let users = self.user_service.list().await;
             axum::Json(users)
         }
 
-        #[get("/users/{id}")]
+        #[get("/{id}")]
         async fn get_by_id(
             &self,
             Path(id): Path<u64>,
@@ -71,8 +73,8 @@ quarlus_macros::controller! {
         }
 
         // Demo: cache_invalidate clears the "users" cache group on create
-        #[post("/users")]
-        #[cache_invalidate("users")]
+        #[post("/")]
+        #[intercept(CacheInvalidate::group("users"))]
         async fn create(
             &self,
             Validated(body): Validated<CreateUserRequest>,
@@ -81,7 +83,7 @@ quarlus_macros::controller! {
             axum::Json(user)
         }
 
-        #[post("/users/db")]
+        #[post("/db")]
         #[transactional]
         async fn create_in_db(
             &self,
@@ -108,30 +110,17 @@ quarlus_macros::controller! {
             }))
         }
 
-        #[get("/greeting")]
-        async fn greeting(&self) -> axum::Json<serde_json::Value> {
-            axum::Json(serde_json::json!({ "greeting": self.greeting }))
-        }
-
-        #[get("/error/custom")]
-        async fn custom_error(&self) -> Result<axum::Json<()>, quarlus_core::AppError> {
-            Err(quarlus_core::AppError::Custom {
-                status: axum::http::StatusCode::from_u16(418).unwrap(),
-                body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
-            })
-        }
-
         // Demo: cached with group name (shared with cache_invalidate on create)
-        #[get("/users/cached")]
-        #[cached(ttl = 30, group = "users")]
-        #[timed]
+        #[get("/cached")]
+        #[intercept(Cache::ttl(30).group("users"))]
+        #[intercept(Timed::info())]
         async fn cached_list(&self) -> axum::Json<serde_json::Value> {
             let users = self.user_service.list().await;
             axum::Json(serde_json::to_value(users).unwrap())
         }
 
         // Demo: rate_limited at handler level with per-user key
-        #[post("/users/rate-limited")]
+        #[post("/rate-limited")]
         #[rate_limited(max = 5, window = 60, key = "user")]
         async fn create_rate_limited(
             &self,
@@ -141,21 +130,9 @@ quarlus_macros::controller! {
             axum::Json(user)
         }
 
-        #[get("/me")]
-        async fn me(&self) -> axum::Json<AuthenticatedUser> {
-            axum::Json(self.user.clone())
-        }
-
-        #[get("/admin/users")]
-        #[roles("admin")]
-        async fn admin_list(&self) -> axum::Json<Vec<User>> {
-            let users = self.user_service.list().await;
-            axum::Json(users)
-        }
-
         // Demo: custom interceptor via #[intercept]
-        #[get("/users/audited")]
-        #[logged]
+        #[get("/audited")]
+        #[intercept(Logged::info())]
         #[intercept(AuditLog)]
         async fn audited_list(&self) -> axum::Json<Vec<User>> {
             let users = self.user_service.list().await;
