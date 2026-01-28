@@ -20,6 +20,7 @@ pub fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
                 && !a.path().is_ident("intercept")
                 && !a.path().is_ident("guard")
                 && !a.path().is_ident("middleware")
+                && !a.path().is_ident("layer")
         })
         .collect()
 }
@@ -231,6 +232,17 @@ pub fn extract_event_type_from_arc(ty: &syn::Type) -> syn::Result<syn::Type> {
         ty,
         "consumer parameter must be Arc<EventType>",
     ))
+}
+
+pub fn extract_layer_exprs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
+    let mut exprs = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("layer") {
+            let expr: syn::Expr = attr.parse_args()?;
+            exprs.push(expr);
+        }
+    }
+    Ok(exprs)
 }
 
 pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<ScheduledConfig>> {

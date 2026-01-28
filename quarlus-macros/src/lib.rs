@@ -410,3 +410,24 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
+
+/// Apply a Tower layer directly to a single route.
+///
+/// Unlike [`middleware`] (which wraps a function via `axum::middleware::from_fn`),
+/// `#[layer]` takes an arbitrary expression that evaluates to a Tower `Layer`
+/// and calls `.layer(expr)` on the route handler.
+///
+/// ```ignore
+/// use tower_http::timeout::TimeoutLayer;
+/// use std::time::Duration;
+///
+/// #[get("/slow")]
+/// #[layer(TimeoutLayer::new(Duration::from_secs(2)))]
+/// async fn slow_endpoint(&self) -> Json<&'static str> { ... }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn layer(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}

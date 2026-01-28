@@ -350,12 +350,14 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_axum_method_fn());
 
-            if rm.middleware_fns.is_empty() {
+            let has_layers = !rm.middleware_fns.is_empty() || !rm.layer_exprs.is_empty();
+
+            if !has_layers {
                 quote! {
                     .route(#path, axum::routing::#method_fn(#handler_name))
                 }
             } else {
-                let layers: Vec<_> = rm
+                let middleware_layers: Vec<_> = rm
                     .middleware_fns
                     .iter()
                     .map(|mw_fn| {
@@ -363,11 +365,20 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                     })
                     .collect();
 
+                let direct_layers: Vec<_> = rm
+                    .layer_exprs
+                    .iter()
+                    .map(|expr| {
+                        quote! { .layer(#expr) }
+                    })
+                    .collect();
+
                 quote! {
                     .route(
                         #path,
                         axum::routing::#method_fn(#handler_name)
-                            #(#layers)*
+                            #(#middleware_layers)*
+                            #(#direct_layers)*
                     )
                 }
             }

@@ -44,4 +44,11 @@ impl MixedController {
         let users = self.user_service.list().await;
         axum::Json(users)
     }
+
+    /// Endpoint with a per-route Tower layer (2-second timeout).
+    #[get("/slow")]
+    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, std::time::Duration::from_secs(2)))]
+    async fn slow_endpoint(&self) -> axum::Json<&'static str> {
+        axum::Json("done")
+    }
 }

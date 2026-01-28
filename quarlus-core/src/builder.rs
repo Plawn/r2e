@@ -7,6 +7,8 @@ use tracing::info;
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
+type LayerFn = Box<dyn FnOnce(axum::Router) -> axum::Router + Send>;
+
 /// Builder for assembling a Quarlus application.
 ///
 /// Collects state, controller routes, and Tower layers, then produces an
@@ -25,6 +27,7 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static> {
     route_metadata: Vec<Vec<crate::openapi::RouteInfo>>,
     openapi_builder: Option<Box<dyn FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> axum::Router<T> + Send>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
+    custom_layers: Vec<LayerFn>,
 }
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
@@ -44,6 +47,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             route_metadata: Vec::new(),
             openapi_builder: None,
             consumer_registrations: Vec::new(),
+            custom_layers: Vec::new(),
         }
     }
 
@@ -174,6 +178,87 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Apply a Tower layer to the entire application.
+    ///
+    /// The layer is applied **after** all built-in layers (CORS, tracing, etc.)
+    /// during `build()`. Multiple calls are applied in order. The layer must
+    /// satisfy the same bounds as [`axum::Router::layer`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use tower_http::timeout::TimeoutLayer;
+    /// use std::time::Duration;
+    ///
+    /// AppBuilder::new()
+    ///     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
+    /// ```
+    pub fn with_layer<L>(mut self, layer: L) -> Self
+    where
+        L: tower::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+        L::Service: Clone
+            + tower::Service<axum::http::Request<axum::body::Body>>
+            + Send
+            + Sync
+            + 'static,
+        <L::Service as tower::Service<axum::http::Request<axum::body::Body>>>::Response:
+            axum::response::IntoResponse + 'static,
+        <L::Service as tower::Service<axum::http::Request<axum::body::Body>>>::Error:
+            Into<std::convert::Infallible> + 'static,
+        <L::Service as tower::Service<axum::http::Request<axum::body::Body>>>::Future:
+            Send + 'static,
+    {
+        self.custom_layers
+            .push(Box::new(move |router| router.layer(layer)));
+        self
+    }
+
+    /// Apply a custom transformation to the router.
+    ///
+    /// This is an escape hatch for cases where `with_layer` is too
+    /// restrictive. The closure receives the `axum::Router` and must return
+    /// a new `axum::Router`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .with_layer_fn(|router| {
+    ///         router.layer(some_complex_layer)
+    ///     })
+    /// ```
+    pub fn with_layer_fn<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(axum::Router) -> axum::Router + Send + 'static,
+    {
+        self.custom_layers.push(Box::new(f));
+        self
+    }
+
+    /// Semantic alias for [`with_layer_fn`](Self::with_layer_fn) when using
+    /// `tower::ServiceBuilder`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use tower::ServiceBuilder;
+    /// use tower_http::timeout::TimeoutLayer;
+    ///
+    /// AppBuilder::new()
+    ///     .with_service_builder(|router| {
+    ///         router.layer(
+    ///             ServiceBuilder::new()
+    ///                 .layer(TimeoutLayer::new(Duration::from_secs(30)))
+    ///         )
+    ///     })
+    /// ```
+    pub fn with_service_builder<F>(self, f: F) -> Self
+    where
+        F: FnOnce(axum::Router) -> axum::Router + Send + 'static,
+    {
+        self.with_layer_fn(f)
+    }
+
     /// Assemble the final `axum::Router` from all registered routes and layers.
     ///
     /// # Panics
@@ -236,6 +321,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         if self.tracing {
             app = app.layer(layers::default_trace());
+        }
+
+        // Apply user-provided custom layers (in registration order).
+        for layer_fn in self.custom_layers {
+            app = layer_fn(app);
         }
 
         (app, self.startup_hooks, self.shutdown_hooks, self.consumer_registrations, state)

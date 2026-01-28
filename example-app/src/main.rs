@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
@@ -80,7 +81,7 @@ async fn main() {
         JwtValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
     // Create an in-memory SQLite pool and initialise the schema
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let pool: sqlx::Pool<sqlx::Sqlite> = SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,7 +106,6 @@ async fn main() {
             .await
             .unwrap();
     }
-
     // --- Scheduling (#8) is now declarative via #[scheduled] in ScheduledJobs ---
     let cancel = CancellationToken::new();
 
@@ -127,6 +127,7 @@ async fn main() {
         .with_cors()
         .with_tracing()
         .with_error_handling() // Error handling (#3)
+        .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(Duration::from_secs(30), axum::http::StatusCode::REQUEST_TIMEOUT)) // Global Tower layer
         .with_dev_reload() // Dev mode (#9)
         .with_scheduler(|s| {
             s.register::<ScheduledJobs>(); // Scheduling (#8)

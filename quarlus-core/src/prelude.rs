@@ -34,7 +34,7 @@ pub use quarlus_macros::routes;
 pub use quarlus_macros::{delete, get, patch, post, put};
 
 // Route-level attributes
-pub use quarlus_macros::{guard, intercept, middleware, rate_limited, roles, transactional};
+pub use quarlus_macros::{guard, intercept, layer, middleware, rate_limited, roles, transactional};
 
 // Event & scheduling attributes
 pub use quarlus_macros::{consumer, scheduled};

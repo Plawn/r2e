@@ -127,6 +127,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     let transactional = extract_transactional(&all_attrs)?;
                     let intercept_fns = extract_intercept_fns(&all_attrs)?;
                     let middleware_fns = extract_middleware_fns(&all_attrs)?;
+                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
 
                     let mut guard_fns = Vec::new();
                     if let Some(rl_guard) = extract_rate_limited_guard(&all_attrs)? {
@@ -150,6 +151,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         intercept_fns,
                         guard_fns,
                         middleware_fns,
+                        layer_exprs,
                         identity_param,
                         fn_item: method,
                     });

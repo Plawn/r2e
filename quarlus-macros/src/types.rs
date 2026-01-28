@@ -48,6 +48,7 @@ pub struct RouteMethod {
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
+    pub layer_exprs: Vec<syn::Expr>,
     pub identity_param: Option<IdentityParam>,
     pub fn_item: syn::ImplItemFn,
 }
