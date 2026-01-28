@@ -1,10 +1,17 @@
 [package]
 name = "quarlus-scheduler"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["scheduler", "cron", "background-tasks"]
+categories = ["asynchronous"]
+description = "Background task scheduler for Quarlus - interval, cron, and delayed task execution"
 
 [dependencies]
-quarlus-core = { path = "../quarlus-core" }
+quarlus-core = { path = "../quarlus-core", version = "0.1.0" }
 tokio = { version = "1", features = ["time", "rt", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 cron = "0.13"

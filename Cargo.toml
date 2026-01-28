@@ -15,3 +15,13 @@ members = [
     "example-app",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/plawn/quarlus"
+homepage = "https://github.com/plawn/quarlus"
+authors = ["Plawn"]
+keywords = ["web", "framework", "axum", "dependency-injection"]
+categories = ["web-programming::http-server", "asynchronous"]

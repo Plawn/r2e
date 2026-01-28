@@ -1,11 +1,18 @@
 [package]
 name = "quarlus-test"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["testing", "http-client", "jwt"]
+categories = ["development-tools::testing"]
+description = "Test utilities for Quarlus - TestApp HTTP client and TestJwt token generation"
 
 [dependencies]
-quarlus-core = { path = "../quarlus-core" }
-quarlus-security = { path = "../quarlus-security" }
+quarlus-core = { path = "../quarlus-core", version = "0.1.0" }
+quarlus-security = { path = "../quarlus-security", version = "0.1.0" }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 http-body-util = "0.1"

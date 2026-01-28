@@ -1,7 +1,14 @@
 [package]
 name = "quarlus-events"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["events", "pubsub", "async"]
+categories = ["asynchronous"]
+description = "In-process typed event bus for Quarlus - publish/subscribe with async handlers"
 
 [dependencies]
 tokio = { version = "1", features = ["sync", "rt"] }
