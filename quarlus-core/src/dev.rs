@@ -1,6 +1,6 @@
 //! Dev-mode support endpoints.
 //!
-//! When enabled via `AppBuilder::with_dev_reload()`, the server exposes:
+//! When enabled via `.with(DevReload)`, the server exposes:
 //! - `GET /__quarlus_dev/status` — Returns `"dev"` so tooling/scripts can
 //!   detect that the server is running in dev mode.
 //! - `GET /__quarlus_dev/ping` — Returns a timestamp; can be polled by a
@@ -31,8 +31,8 @@ fn boot_time() -> u64 {
 
 /// Create a router with dev-mode endpoints.
 ///
-/// Intended to be merged into the main application via
-/// `AppBuilder::with_dev_reload()`.
+/// Intended to be merged into the main application via the
+/// [`DevReload`](crate::plugins::DevReload) plugin.
 pub fn dev_routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
     Router::new()
         .route("/__quarlus_dev/status", get(status_handler))

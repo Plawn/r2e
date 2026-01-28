@@ -1,8 +1,8 @@
 use crate::beans::{Bean, BeanRegistry, BeanState};
 use crate::controller::Controller;
-use crate::layers;
 use crate::lifecycle::{ShutdownHook, StartupHook};
-use tower_http::cors::CorsLayer;
+use crate::plugin::Plugin;
+use crate::scheduling::{ScheduledTaskDef, SchedulerStartFn, SchedulerStopFn};
 use tracing::info;
 
 type ConsumerReg<T> =
@@ -20,11 +20,6 @@ pub struct NoState;
 
 /// Shared configuration that is independent of the application state type.
 struct BuilderConfig {
-    cors: Option<CorsLayer>,
-    tracing: bool,
-    health: bool,
-    error_handling: bool,
-    dev_reload: bool,
     config: Option<crate::config::QuarlusConfig>,
     custom_layers: Vec<LayerFn>,
     bean_registry: BeanRegistry,
@@ -46,7 +41,8 @@ struct BuilderConfig {
 /// - [`.build_state::<S>()`](AppBuilder::<NoState>::build_state) — resolve the bean graph and build state.
 ///
 /// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
-/// hooks, and call `.build()` or `.serve()`.
+/// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
+/// or `.serve()`.
 pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState> {
     shared: BuilderConfig,
     state: Option<T>,
@@ -57,6 +53,9 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState> {
     openapi_builder:
         Option<Box<dyn FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> crate::http::Router<T> + Send>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
+    scheduled_task_defs: Vec<ScheduledTaskDef<T>>,
+    scheduler_starter: Option<SchedulerStartFn<T>>,
+    scheduler_stopper: Option<SchedulerStopFn>,
 }
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
@@ -66,11 +65,6 @@ impl AppBuilder<NoState> {
     pub fn new() -> Self {
         Self {
             shared: BuilderConfig {
-                cors: None,
-                tracing: false,
-                health: false,
-                error_handling: false,
-                dev_reload: false,
                 config: None,
                 custom_layers: Vec::new(),
                 bean_registry: BeanRegistry::new(),
@@ -82,6 +76,9 @@ impl AppBuilder<NoState> {
             route_metadata: Vec::new(),
             openapi_builder: None,
             consumer_registrations: Vec::new(),
+            scheduled_task_defs: Vec::new(),
+            scheduler_starter: None,
+            scheduler_stopper: None,
         }
     }
 
@@ -161,52 +158,39 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             route_metadata: Vec::new(),
             openapi_builder: None,
             consumer_registrations: Vec::new(),
+            scheduled_task_defs: Vec::new(),
+            scheduler_starter: None,
+            scheduler_stopper: None,
         }
     }
 
-    // ── State-independent configuration ─────────────────────────────────
+    // ── Plugin system ───────────────────────────────────────────────────
 
-    /// Enable the default (permissive) CORS layer.
+    /// Install a [`Plugin`] into this builder.
     ///
-    /// Allows any origin, any method, and any header.
-    /// For a stricter configuration use [`with_cors_config`](Self::with_cors_config).
-    pub fn with_cors(mut self) -> Self {
-        self.shared.cors = Some(layers::default_cors());
-        self
-    }
-
-    /// Enable CORS with a custom `CorsLayer` configuration.
-    pub fn with_cors_config(mut self, cors: CorsLayer) -> Self {
-        self.shared.cors = Some(cors);
-        self
-    }
-
-    /// Enable the Tower tracing layer for HTTP request/response logging.
-    pub fn with_tracing(mut self) -> Self {
-        self.shared.tracing = true;
-        self
-    }
-
-    /// Enable a built-in `/health` endpoint that returns `"OK"` with status 200.
-    pub fn with_health(mut self) -> Self {
-        self.shared.health = true;
-        self
-    }
-
-    /// Enable structured error handling: catch panics and return JSON 500.
-    pub fn with_error_handling(mut self) -> Self {
-        self.shared.error_handling = true;
-        self
-    }
-
-    /// Enable dev-mode endpoints (`/__quarlus_dev/status` and `/__quarlus_dev/ping`).
+    /// Plugins are composable units of functionality (CORS, tracing, health
+    /// checks, etc.) that modify the builder. This replaces the old
+    /// `with_cors()`, `with_tracing()`, etc. methods with a single, uniform
+    /// entry point.
     ///
-    /// These endpoints let tooling (e.g., `quarlus dev`) and browser scripts
-    /// detect server restarts for live-reload workflows.
-    pub fn with_dev_reload(mut self) -> Self {
-        self.shared.dev_reload = true;
-        self
+    /// # Example
+    ///
+    /// ```ignore
+    /// use quarlus_core::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload};
+    ///
+    /// AppBuilder::new()
+    ///     .build_state::<Services>()
+    ///     .with(Health)
+    ///     .with(Cors::permissive())
+    ///     .with(Tracing)
+    ///     .with(ErrorHandling)
+    ///     .with(DevReload)
+    /// ```
+    pub fn with<P: Plugin<T>>(self, plugin: P) -> Self {
+        plugin.install(self)
     }
+
+    // ── Configuration ───────────────────────────────────────────────────
 
     /// Store a `QuarlusConfig` in the builder.
     ///
@@ -218,11 +202,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    // ── Layer primitives ────────────────────────────────────────────────
+
     /// Apply a Tower layer to the entire application.
     ///
-    /// The layer is applied **after** all built-in layers (CORS, tracing, etc.)
-    /// during `build()`. Multiple calls are applied in order. The layer must
-    /// satisfy the same bounds as [`axum::Router::layer`].
+    /// The layer is applied during `build()`. Multiple calls are applied in
+    /// order. The layer must satisfy the same bounds as [`axum::Router::layer`].
     ///
     /// # Example
     ///
@@ -350,11 +335,30 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     /// Register a [`Controller`] whose routes will be merged into the application.
+    ///
+    /// This also collects event consumers and scheduled task definitions
+    /// declared on the controller, so that they are started automatically
+    /// by `serve()`.
     pub fn register_controller<C: Controller<T>>(mut self) -> Self {
         self.routes.push(C::routes());
         self.route_metadata.push(C::route_metadata());
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
+        self.scheduled_task_defs.extend(C::scheduled_tasks());
+        self
+    }
+
+    /// Set the scheduler backend (starter + stopper).
+    ///
+    /// Called by the scheduler plugin to provide the runtime that actually
+    /// spawns Tokio tasks for each [`ScheduledTaskDef`].
+    pub fn set_scheduler_backend(
+        mut self,
+        starter: SchedulerStartFn<T>,
+        stopper: SchedulerStopFn,
+    ) -> Self {
+        self.scheduler_starter = Some(starter);
+        self.scheduler_stopper = Some(stopper);
         self
     }
 
@@ -377,7 +381,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Panics if [`with_state`](AppBuilder::<NoState>::with_state) or
     /// [`build_state`](AppBuilder::<NoState>::build_state) was never called.
-    pub fn build(self) -> crate::http::Router {
+    pub fn build(mut self) -> crate::http::Router {
+        if !self.scheduled_task_defs.is_empty() && self.scheduler_starter.is_none() {
+            tracing::warn!(
+                "Scheduled tasks were registered but no scheduler backend was installed. \
+                 Add `.with(Scheduler)` (from quarlus-scheduler) to start them."
+            );
+        }
+        // Discard scheduler fields — build() returns a bare Router.
+        self.scheduled_task_defs.clear();
+        self.scheduler_starter = None;
+        self.scheduler_stopper = None;
         self.build_inner().0
     }
 
@@ -388,6 +402,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         Vec<StartupHook<T>>,
         Vec<ShutdownHook>,
         Vec<ConsumerReg<T>>,
+        Vec<ScheduledTaskDef<T>>,
+        Option<SchedulerStartFn<T>>,
+        Option<SchedulerStopFn>,
         T,
     ) {
         let state = self
@@ -407,36 +424,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             router = router.merge(openapi_router);
         }
 
-        // Optional built-in health endpoint (added before with_state so it
-        // shares the same state type, though the handler ignores state).
-        if self.shared.health {
-            router = router.route("/health", crate::http::routing::get(health_handler));
-        }
-
-        // Dev-mode reload endpoints.
-        if self.shared.dev_reload {
-            router = router.merge(crate::dev::dev_routes());
-        }
-
         // Apply the application state.
         let mut app = router.with_state(state.clone());
 
-        // Apply layers. Order matters: the last layer added is the first to
-        // process an incoming request, so we add tracing first (outermost)
-        // then CORS (inner).
-        if let Some(cors) = self.shared.cors {
-            app = app.layer(cors);
-        }
-
-        if self.shared.error_handling {
-            app = app.layer(layers::catch_panic_layer());
-        }
-
-        if self.shared.tracing {
-            app = app.layer(layers::default_trace());
-        }
-
-        // Apply user-provided custom layers (in registration order).
+        // Apply layers (in registration order).
         for layer_fn in self.shared.custom_layers {
             app = layer_fn(app);
         }
@@ -446,6 +437,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             self.startup_hooks,
             self.shutdown_hooks,
             self.consumer_registrations,
+            self.scheduled_task_defs,
+            self.scheduler_starter,
+            self.scheduler_stopper,
             state,
         )
     }
@@ -455,11 +449,36 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Runs startup hooks before listening, and shutdown hooks after
     /// graceful shutdown completes.
     pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let (app, startup_hooks, shutdown_hooks, consumer_regs, state) = self.build_inner();
+        let (
+            app,
+            startup_hooks,
+            shutdown_hooks,
+            consumer_regs,
+            scheduled_task_defs,
+            scheduler_starter,
+            scheduler_stopper,
+            state,
+        ) = self.build_inner();
 
         // Register event consumers
         for reg in consumer_regs {
             reg(state.clone()).await;
+        }
+
+        // Start scheduled tasks
+        if !scheduled_task_defs.is_empty() {
+            if let Some(starter) = scheduler_starter {
+                info!(
+                    count = scheduled_task_defs.len(),
+                    "Starting scheduled tasks"
+                );
+                starter(scheduled_task_defs, state.clone());
+            } else {
+                tracing::warn!(
+                    "Scheduled tasks were registered but no scheduler backend was installed. \
+                     Add `.with(Scheduler)` (from quarlus-scheduler) to start them."
+                );
+            }
         }
 
         // Run startup hooks
@@ -475,6 +494,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 
+        // Stop scheduler
+        if let Some(stopper) = scheduler_stopper {
+            stopper();
+        }
+
         // Run shutdown hooks
         for hook in shutdown_hooks {
             hook().await;
@@ -483,11 +507,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         info!("Quarlus server stopped");
         Ok(())
     }
-}
-
-/// Built-in health-check handler.
-async fn health_handler() -> &'static str {
-    "OK"
 }
 
 /// Wait for a shutdown signal (Ctrl-C or SIGTERM on Unix).

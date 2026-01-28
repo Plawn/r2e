@@ -18,3 +18,4 @@
 - est ce qu'on peut pas leak certains singleton pour gagner des perfos ?
 - gestion de la secu plus flexible
 - gestion des extensions plus flexible -> systeme de plugin with(impl plugin) pour Cors, tracing, etc
+- routes en trop dans le openapi -> main route des controller (pas réellement de route, juste un prefix pour le reste)

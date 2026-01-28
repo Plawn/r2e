@@ -5,9 +5,7 @@ use tracing::{debug, warn};
 
 use crate::config::SecurityConfig;
 use crate::error::SecurityError;
-use crate::identity::{
-    build_authenticated_user, AuthenticatedUser, DefaultRoleExtractor, RoleExtractor,
-};
+use crate::identity::{DefaultIdentityBuilder, IdentityBuilder, RoleExtractor};
 use crate::jwks::JwksCache;
 
 /// Source of decoding keys: either a JWKS cache or a static key for testing.
@@ -20,47 +18,76 @@ enum KeySource {
 ///
 /// Validates JWT tokens by checking the signature (via JWKS or a static key),
 /// and verifying the issuer, audience, and expiration claims.
-pub struct JwtValidator {
+///
+/// The type parameter `B` controls how validated JWT claims are mapped to an
+/// identity type. The default ([`DefaultIdentityBuilder`]) produces
+/// [`AuthenticatedUser`](crate::AuthenticatedUser).
+///
+/// # Custom identity type
+///
+/// ```ignore
+/// let validator = JwtValidator::from_jwks(jwks, config, MyIdentityBuilder);
+/// // validator.validate(token) returns Result<MyUser, SecurityError>
+/// ```
+pub struct JwtValidator<B: IdentityBuilder = DefaultIdentityBuilder> {
     key_source: KeySource,
     config: SecurityConfig,
-    role_extractor: Box<dyn RoleExtractor>,
+    identity_builder: B,
 }
 
+/// Convenience constructors for the default identity type ([`AuthenticatedUser`](crate::AuthenticatedUser)).
 impl JwtValidator {
     /// Create a new JwtValidator backed by a JWKS cache.
     pub fn new(jwks: Arc<JwksCache>, config: SecurityConfig) -> Self {
-        Self {
-            key_source: KeySource::Jwks(jwks),
-            config,
-            role_extractor: Box::new(DefaultRoleExtractor),
-        }
+        Self::from_jwks(jwks, config, DefaultIdentityBuilder::new())
     }
 
     /// Create a new JwtValidator with a static decoding key (useful for testing).
     ///
     /// This bypasses the JWKS cache entirely and uses the provided key directly.
     pub fn new_with_static_key(key: DecodingKey, config: SecurityConfig) -> Self {
-        Self {
-            key_source: KeySource::Static(key),
-            config,
-            role_extractor: Box::new(DefaultRoleExtractor),
-        }
+        Self::from_static_key(key, config, DefaultIdentityBuilder::new())
     }
 
     /// Set a custom role extractor.
     pub fn with_role_extractor(mut self, extractor: Box<dyn RoleExtractor>) -> Self {
-        self.role_extractor = extractor;
+        self.identity_builder = DefaultIdentityBuilder::with_extractor(extractor);
         self
     }
+}
 
-    /// Validate a JWT token and return an `AuthenticatedUser` on success.
+/// Generic constructors and validation for any identity builder.
+impl<B: IdentityBuilder> JwtValidator<B> {
+    /// Create a JwtValidator backed by a JWKS cache with a custom identity builder.
+    pub fn from_jwks(jwks: Arc<JwksCache>, config: SecurityConfig, identity_builder: B) -> Self {
+        Self {
+            key_source: KeySource::Jwks(jwks),
+            config,
+            identity_builder,
+        }
+    }
+
+    /// Create a JwtValidator with a static decoding key and a custom identity builder.
+    pub fn from_static_key(
+        key: DecodingKey,
+        config: SecurityConfig,
+        identity_builder: B,
+    ) -> Self {
+        Self {
+            key_source: KeySource::Static(key),
+            config,
+            identity_builder,
+        }
+    }
+
+    /// Validate a JWT token and return the identity on success.
     ///
     /// Steps:
     /// 1. Decode the JWT header to extract the `kid`
     /// 2. Retrieve the decoding key (from JWKS cache or static key)
     /// 3. Validate signature + standard claims (iss, aud, exp)
-    /// 4. Build and return an `AuthenticatedUser`
-    pub async fn validate(&self, token: &str) -> Result<AuthenticatedUser, SecurityError> {
+    /// 4. Build the identity via the [`IdentityBuilder`]
+    pub async fn validate(&self, token: &str) -> Result<B::Identity, SecurityError> {
         // Step 1: Decode header to get kid and algorithm
         let header = decode_header(token)
             .map_err(|e| SecurityError::InvalidToken(format!("Failed to decode header: {e}")))?;
@@ -105,10 +132,17 @@ impl JwtValidator {
                 err
             })?;
 
-        // Step 5: Build AuthenticatedUser from validated claims
-        let user = build_authenticated_user(token_data.claims, &*self.role_extractor);
+        // Step 5: Build identity from validated claims
+        let sub = token_data
+            .claims
+            .get("sub")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_owned();
 
-        debug!(sub = %user.sub, roles = ?user.roles, "JWT validated");
-        Ok(user)
+        let identity = self.identity_builder.build(token_data.claims).await?;
+
+        debug!(sub = %sub, "JWT validated");
+        Ok(identity)
     }
 }

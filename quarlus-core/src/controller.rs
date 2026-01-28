@@ -29,4 +29,12 @@ pub trait Controller<T: Clone + Send + Sync + 'static> {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async {})
     }
+
+    /// Return scheduled task definitions declared via `#[scheduled]`.
+    ///
+    /// Called by `register_controller()` to collect tasks automatically.
+    /// The default implementation returns an empty list.
+    fn scheduled_tasks() -> Vec<crate::scheduling::ScheduledTaskDef<T>> {
+        Vec::new()
+    }
 }

@@ -7,12 +7,14 @@ use quarlus_rate_limit::RateLimitRegistry;
 use quarlus_security::JwtValidator;
 use tokio_util::sync::CancellationToken;
 
+use crate::db_identity::DbIdentityBuilder;
 use crate::services::UserService;
 
 #[derive(Clone, BeanState)]
 pub struct Services {
     pub user_service: UserService,
     pub jwt_validator: Arc<JwtValidator>,
+    pub db_jwt_validator: Arc<JwtValidator<DbIdentityBuilder>>,
     pub pool: sqlx::SqlitePool,
     pub event_bus: EventBus,
     pub config: QuarlusConfig,

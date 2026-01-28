@@ -134,9 +134,8 @@ pub fn derive_controller(input: TokenStream) -> TokenStream {
 /// - The original `impl` block with method bodies wrapped by interceptors /
 ///   transactional logic.
 /// - Free-standing Axum handler functions (`__quarlus_<Name>_<method>`).
-/// - `impl Controller<State> for Name` — route registration and metadata.
-/// - `impl ScheduledController<State> for Name` — if any `#[scheduled]`
-///   methods are present.
+/// - `impl Controller<State> for Name` — route registration, metadata,
+///   consumer registration, and scheduled task definitions.
 #[proc_macro_attribute]
 pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     routes_attr::expand(input)
@@ -381,7 +380,8 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The controller **must not** have `#[identity]` fields (scheduled tasks
 /// run outside HTTP context). Register the controller via
-/// `AppBuilder::with_scheduler(|s| s.register::<MyJobs>())`.
+/// `.register_controller::<MyJobs>()` and install the scheduler runtime
+/// with `.with(Scheduler)` (from `quarlus-scheduler`).
 ///
 /// ```ignore
 /// #[scheduled(every = 30)]                    // every 30 seconds

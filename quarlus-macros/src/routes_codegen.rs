@@ -8,13 +8,11 @@ pub fn generate(def: &RoutesImplDef) -> TokenStream {
     let impl_block = generate_impl_block(def);
     let handlers = generate_handlers(def);
     let controller_impl = generate_controller_impl(def);
-    let scheduled_impl = generate_scheduled_impl(def);
 
     quote! {
         #impl_block
         #handlers
         #controller_impl
-        #scheduled_impl
     }
 }
 
@@ -507,6 +505,76 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         }
     };
 
+    // --- Scheduled task definitions ---
+    let scheduled_tasks_fn = if def.scheduled_methods.is_empty() {
+        quote! {}
+    } else {
+        let controller_name_str = name.to_string();
+        let task_defs: Vec<TokenStream> = def
+            .scheduled_methods
+            .iter()
+            .map(|sm| {
+                let fn_name = &sm.fn_item.sig.ident;
+                let fn_name_str = fn_name.to_string();
+                let task_name = match &sm.config.name {
+                    Some(n) => n.clone(),
+                    None => format!("{}_{}", controller_name_str, fn_name_str),
+                };
+
+                let schedule_expr = if let Some(every) = sm.config.every {
+                    if let Some(delay) = sm.config.initial_delay {
+                        quote! {
+                            quarlus_core::ScheduleConfig::IntervalWithDelay {
+                                interval: std::time::Duration::from_secs(#every),
+                                initial_delay: std::time::Duration::from_secs(#delay),
+                            }
+                        }
+                    } else {
+                        quote! {
+                            quarlus_core::ScheduleConfig::Interval(
+                                std::time::Duration::from_secs(#every)
+                            )
+                        }
+                    }
+                } else {
+                    let cron_expr = sm.config.cron.as_ref().unwrap();
+                    quote! {
+                        quarlus_core::ScheduleConfig::Cron(#cron_expr.to_string())
+                    }
+                };
+
+                let is_async = sm.fn_item.sig.asyncness.is_some();
+                let call_expr = if is_async {
+                    quote! { __ctrl.#fn_name().await }
+                } else {
+                    quote! { __ctrl.#fn_name() }
+                };
+
+                quote! {
+                    quarlus_core::ScheduledTaskDef {
+                        name: #task_name.to_string(),
+                        schedule: #schedule_expr,
+                        task: Box::new(move |__state: #meta_mod::State| {
+                            Box::pin(async move {
+                                let __ctrl = <#name as quarlus_core::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                                quarlus_core::ScheduledResult::log_if_err(
+                                    #call_expr,
+                                    #task_name,
+                                );
+                            })
+                        }),
+                    }
+                }
+            })
+            .collect();
+
+        quote! {
+            fn scheduled_tasks() -> Vec<quarlus_core::ScheduledTaskDef<#meta_mod::State>> {
+                vec![#(#task_defs),*]
+            }
+        }
+    };
+
     let router_body = quote! {
         {
             let __inner = quarlus_core::http::Router::new()
@@ -529,88 +597,8 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             }
 
             #register_consumers_fn
-        }
-    }
-}
 
-// ---------------------------------------------------------------------------
-// ScheduledController impl
-// ---------------------------------------------------------------------------
-
-fn generate_scheduled_impl(def: &RoutesImplDef) -> TokenStream {
-    if def.scheduled_methods.is_empty() {
-        return quote! {};
-    }
-
-    let name = &def.controller_name;
-    let meta_mod = format_ident!("__quarlus_meta_{}", name);
-    let controller_name_str = name.to_string();
-
-    let task_registrations: Vec<TokenStream> = def
-        .scheduled_methods
-        .iter()
-        .map(|sm| {
-            let fn_name = &sm.fn_item.sig.ident;
-            let fn_name_str = fn_name.to_string();
-            let task_name = match &sm.config.name {
-                Some(n) => n.clone(),
-                None => format!("{}_{}", controller_name_str, fn_name_str),
-            };
-
-            let schedule_expr = if let Some(every) = sm.config.every {
-                if let Some(delay) = sm.config.initial_delay {
-                    quote! {
-                        quarlus_scheduler::Schedule::EveryDelay {
-                            interval: std::time::Duration::from_secs(#every),
-                            initial_delay: std::time::Duration::from_secs(#delay),
-                        }
-                    }
-                } else {
-                    quote! {
-                        quarlus_scheduler::Schedule::Every(
-                            std::time::Duration::from_secs(#every)
-                        )
-                    }
-                }
-            } else {
-                let cron_expr = sm.config.cron.as_ref().unwrap();
-                quote! {
-                    quarlus_scheduler::Schedule::Cron(#cron_expr.to_string())
-                }
-            };
-
-            let is_async = sm.fn_item.sig.asyncness.is_some();
-            let call_expr = if is_async {
-                quote! { __ctrl.#fn_name().await }
-            } else {
-                quote! { __ctrl.#fn_name() }
-            };
-
-            quote! {
-                __scheduler.add_task(quarlus_scheduler::ScheduledTask {
-                    name: #task_name.to_string(),
-                    schedule: #schedule_expr,
-                    task: Box::new(move |__state: #meta_mod::State| {
-                        Box::pin(async move {
-                            let __ctrl = <#name as quarlus_core::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            quarlus_scheduler::ScheduledResult::log_if_err(
-                                #call_expr,
-                                #task_name,
-                            );
-                        })
-                    }),
-                });
-            }
-        })
-        .collect();
-
-    quote! {
-        impl quarlus_scheduler::ScheduledController<#meta_mod::State> for #name {
-            fn register_scheduled_tasks(
-                __scheduler: &mut quarlus_scheduler::Scheduler<#meta_mod::State>,
-            ) {
-                #(#task_registrations)*
-            }
+            #scheduled_tasks_fn
         }
     }
 }

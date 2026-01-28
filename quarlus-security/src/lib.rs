@@ -8,6 +8,10 @@ pub mod jwt;
 // Re-export primary public types for convenience.
 pub use config::SecurityConfig;
 pub use error::SecurityError;
-pub use identity::{AuthenticatedUser, DefaultRoleExtractor, RoleExtractor};
+pub use extractor::extract_jwt_identity;
+pub use identity::{
+    AuthenticatedUser, DefaultIdentityBuilder, DefaultRoleExtractor, IdentityBuilder,
+    RoleExtractor,
+};
 pub use jwks::JwksCache;
 pub use jwt::JwtValidator;

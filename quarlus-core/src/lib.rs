@@ -10,7 +10,10 @@ pub mod interceptors;
 pub mod layers;
 pub mod lifecycle;
 pub mod openapi;
+pub mod plugin;
+pub mod plugins;
 pub mod prelude;
+pub mod scheduling;
 pub mod state;
 #[cfg(feature = "validation")]
 pub mod validation;
@@ -24,6 +27,8 @@ pub use guards::{Guard, GuardContext, Identity, NoIdentity, RolesGuard};
 pub use interceptors::{Interceptor, InterceptorContext};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
+pub use plugin::Plugin;
+pub use scheduling::{ScheduleConfig, ScheduledResult, ScheduledTaskDef};
 pub use state::QuarlusState;
 
 pub use schemars;

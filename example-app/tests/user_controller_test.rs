@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
+use quarlus_core::plugins::{DevReload, ErrorHandling, Health};
 use quarlus_core::prelude::*;
 use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
@@ -262,9 +263,9 @@ async fn setup() -> (TestApp, TestJwt) {
         AppBuilder::new()
             .with_state(services)
             .with_config(config)
-            .with_health()
-            .with_error_handling()
-            .with_dev_reload()
+            .with(Health)
+            .with(ErrorHandling)
+            .with(DevReload)
             .register_controller::<TestUserController>()
             .register_routes(openapi),
     );

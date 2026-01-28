@@ -1,5 +1,102 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::SecurityError;
+
+/// Trait for building an identity from validated JWT claims.
+///
+/// Implement this trait to customize how JWT claims are mapped to your
+/// identity type. The `build` method is async, allowing database lookups
+/// or other I/O during identity construction.
+///
+/// The default implementation ([`DefaultIdentityBuilder`]) produces
+/// [`AuthenticatedUser`] synchronously from the claims.
+///
+/// # Example — sync (pure claims mapping)
+///
+/// ```ignore
+/// struct MyIdentityBuilder;
+///
+/// impl IdentityBuilder for MyIdentityBuilder {
+///     type Identity = MyUser;
+///     fn build(&self, claims: serde_json::Value)
+///         -> impl Future<Output = Result<MyUser, SecurityError>> + Send
+///     {
+///         let sub = claims.get("sub").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+///         let tenant = claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+///         std::future::ready(Ok(MyUser { sub, tenant_id: tenant }))
+///     }
+/// }
+/// ```
+///
+/// # Example — async (database lookup)
+///
+/// ```ignore
+/// struct DbIdentityBuilder { pool: SqlitePool }
+///
+/// impl IdentityBuilder for DbIdentityBuilder {
+///     type Identity = DbUser;
+///     fn build(&self, claims: serde_json::Value)
+///         -> impl Future<Output = Result<DbUser, SecurityError>> + Send
+///     {
+///         let pool = self.pool.clone();
+///         async move {
+///             let sub = claims.get("sub").and_then(|v| v.as_str()).unwrap_or_default();
+///             sqlx::query_as("SELECT * FROM users WHERE sub = ?")
+///                 .bind(sub)
+///                 .fetch_one(&pool)
+///                 .await
+///                 .map_err(|e| SecurityError::ValidationFailed(e.to_string()))
+///         }
+///     }
+/// }
+/// ```
+pub trait IdentityBuilder: Send + Sync {
+    type Identity: Clone + Send + Sync;
+    fn build(
+        &self,
+        claims: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<Self::Identity, SecurityError>> + Send;
+}
+
+/// Default identity builder that produces [`AuthenticatedUser`].
+///
+/// Uses a [`RoleExtractor`] to extract roles from JWT claims.
+pub struct DefaultIdentityBuilder {
+    role_extractor: Box<dyn RoleExtractor>,
+}
+
+impl DefaultIdentityBuilder {
+    /// Create a new builder with the [`DefaultRoleExtractor`].
+    pub fn new() -> Self {
+        Self {
+            role_extractor: Box::new(DefaultRoleExtractor),
+        }
+    }
+
+    /// Create a new builder with a custom role extractor.
+    pub fn with_extractor(role_extractor: Box<dyn RoleExtractor>) -> Self {
+        Self { role_extractor }
+    }
+}
+
+impl Default for DefaultIdentityBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IdentityBuilder for DefaultIdentityBuilder {
+    type Identity = AuthenticatedUser;
+
+    fn build(
+        &self,
+        claims: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<AuthenticatedUser, SecurityError>> + Send {
+        let user = build_authenticated_user(claims, &*self.role_extractor);
+        std::future::ready(Ok(user))
+    }
+}
+
 /// Represents an authenticated user extracted from a validated JWT token.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthenticatedUser {

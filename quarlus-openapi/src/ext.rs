@@ -1,13 +1,34 @@
 use crate::{openapi_routes, OpenApiConfig};
-use quarlus_core::AppBuilder;
+use quarlus_core::Plugin;
 
-/// Extension trait to add `.with_openapi()` to `AppBuilder`.
-pub trait AppBuilderOpenApiExt<T: Clone + Send + Sync + 'static> {
-    fn with_openapi(self, config: OpenApiConfig) -> Self;
+/// Plugin that adds OpenAPI spec generation and optional documentation UI.
+///
+/// # Example
+///
+/// ```ignore
+/// use quarlus_openapi::{OpenApiPlugin, OpenApiConfig};
+///
+/// AppBuilder::new()
+///     .build_state::<Services>()
+///     .with(OpenApiPlugin::new(
+///         OpenApiConfig::new("My API", "1.0.0")
+///             .with_docs_ui(true),
+///     ))
+/// ```
+pub struct OpenApiPlugin {
+    config: OpenApiConfig,
 }
 
-impl<T: Clone + Send + Sync + 'static> AppBuilderOpenApiExt<T> for AppBuilder<T> {
-    fn with_openapi(self, config: OpenApiConfig) -> Self {
-        self.with_openapi_builder(move |metadata| openapi_routes::<T>(config, metadata))
+impl OpenApiPlugin {
+    /// Create a new OpenAPI plugin with the given configuration.
+    pub fn new(config: OpenApiConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> Plugin<T> for OpenApiPlugin {
+    fn install(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
+        let config = self.config;
+        app.with_openapi_builder(move |metadata| openapi_routes::<T>(config, metadata))
     }
 }
