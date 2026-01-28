@@ -20,10 +20,19 @@ Ce document est destiné à être **fourni tel quel à Claude Code** pour implé
 
 ```
 quarlus/
- ├─ quarlus-core/        # Runtime minimal + Axum glue
- ├─ quarlus-macros/      # Proc-macros (controller, inject, routes…)
- ├─ quarlus-security/   # JWT / Identity / OIDC
- └─ example-app/        # Exemple d’application
+ ├─ quarlus-macros/       # Proc-macros (controller, inject, routes…)
+ ├─ quarlus-core/         # Runtime minimal + Axum glue + AppBuilder + config + guards + intercepteurs
+ ├─ quarlus-security/     # JWT / Identity / OIDC / JWKS
+ ├─ quarlus-events/       # EventBus pub/sub typé
+ ├─ quarlus-scheduler/    # Tâches planifiées (interval, cron, delay)
+ ├─ quarlus-data/         # Entity, QueryBuilder, Repository, Pageable/Page
+ ├─ quarlus-cache/        # TtlCache, CacheStore trait, InMemoryStore
+ ├─ quarlus-rate-limit/   # RateLimiter token-bucket, RateLimitRegistry
+ ├─ quarlus-openapi/      # Génération OpenAPI 3.0.3 + Swagger UI
+ ├─ quarlus-utils/        # Intercepteurs built-in (Logged, Timed, Cache, CacheInvalidate)
+ ├─ quarlus-test/         # TestApp, TestJwt pour tests d'intégration
+ ├─ quarlus-cli/          # CLI : quarlus new/add/dev/generate
+ └─ example-app/          # Application démo complète
 ```
 
 ---
@@ -236,11 +245,28 @@ let app = AppBuilder::new()
 
 ## 🔮 Extensions futures (non bloquantes)
 
-* `#[roles("admin")]`
-* `#[transactional]`
-* `#[config]`
-* OpenAPI auto
-* Dev mode / hot reload
+*Toutes implémentées :*
+
+* ✅ `#[roles("admin")]` — guard de rôles (quarlus-security + quarlus-macros)
+* ✅ `#[transactional]` — wrapping SQL transaction automatique (quarlus-macros)
+* ✅ `#[config("key")]` — injection de configuration (quarlus-core + quarlus-macros)
+* ✅ OpenAPI auto — génération spec 3.0.3 + Swagger UI (quarlus-openapi)
+* ✅ Dev mode / hot reload — endpoints `/__quarlus_dev/*` (quarlus-core)
+
+*Ajouts supplémentaires réalisés :*
+
+* ✅ `#[rate_limited]` — rate limiting par token bucket (quarlus-rate-limit)
+* ✅ `#[intercept(...)]` — intercepteurs (Logged, Timed, Cache, CacheInvalidate + custom)
+* ✅ `#[guard(...)]` — guards custom (quarlus-core)
+* ✅ `#[consumer(bus = "...")]` — consommateurs d'événements (quarlus-events)
+* ✅ `#[scheduled(every/cron)]` — tâches planifiées (quarlus-scheduler)
+* ✅ `#[middleware(...)]` — middleware Tower par route
+* ✅ Data/Repository — Entity, QueryBuilder, Pageable, Page (quarlus-data)
+* ✅ Cache pluggable — CacheStore trait + InMemoryStore (quarlus-cache)
+* ✅ Test helpers — TestApp, TestJwt (quarlus-test)
+* ✅ CLI — quarlus new/add/dev/generate (quarlus-cli)
+* ✅ Lifecycle hooks — on_start / on_stop (quarlus-core)
+* ✅ Validation — Validated<T> extractor (quarlus-core, feature-gated)
 
 ---
 
@@ -275,12 +301,20 @@ proc-macro2
 
 ## 📦 Livrables attendus
 
-* `quarlus-macros` fonctionnelle
-* `quarlus-core` avec AppBuilder
-* Exemple complet :
+*Tous livrés :*
 
-  * JWT valide
-  * Controller avec `#[inject]` + `#[identity]`
-  * Route GET fonctionnelle
+* ✅ `quarlus-macros` — `#[derive(Controller)]` + `#[routes]` avec tous les attributs
+* ✅ `quarlus-core` — AppBuilder, Controller, Guard, Interceptor, config, lifecycle, dev-mode
+* ✅ `quarlus-security` — JWT/JWKS, AuthenticatedUser, RoleExtractor
+* ✅ `quarlus-events` — EventBus typé avec consumers déclaratifs
+* ✅ `quarlus-scheduler` — Tâches planifiées (interval, cron) avec shutdown gracieux
+* ✅ `quarlus-data` — Entity, QueryBuilder, Repository, pagination
+* ✅ `quarlus-cache` — TtlCache + CacheStore pluggable
+* ✅ `quarlus-rate-limit` — Rate limiting token-bucket pluggable
+* ✅ `quarlus-openapi` — Spec OpenAPI 3.0.3 + Swagger UI
+* ✅ `quarlus-utils` — Intercepteurs built-in (Logged, Timed, Cache, CacheInvalidate)
+* ✅ `quarlus-test` — TestApp + TestJwt
+* ✅ `quarlus-cli` — Scaffold et dev-mode
+* ✅ `example-app` — Démo complète avec JWT, CRUD, events, scheduling, intercepteurs, rate limiting, transactions
 
 ---

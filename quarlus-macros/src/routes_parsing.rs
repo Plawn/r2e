@@ -1,4 +1,5 @@
 use crate::attr_extract::*;
+use crate::derive_parsing::has_identity_qualifier;
 use crate::types::*;
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
@@ -9,6 +10,43 @@ pub struct RoutesImplDef {
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
+}
+
+/// Detect `#[inject(identity)]` or legacy `#[identity]` on handler parameters.
+/// Returns the parameter index (among typed params, excluding `&self`) and the
+/// parameter type if found. Strips the attribute from the parameter.
+fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {
+    let mut identity_param = None;
+    let mut param_idx = 0usize;
+
+    for arg in method.sig.inputs.iter_mut() {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            let is_identity = pat_type.attrs.iter().any(|a| {
+                (a.path().is_ident("inject") && has_identity_qualifier(a))
+                    || a.path().is_ident("identity")
+            });
+
+            if is_identity {
+                if identity_param.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        pat_type,
+                        "only one #[inject(identity)] parameter is allowed per handler",
+                    ));
+                }
+                identity_param = Some(IdentityParam {
+                    index: param_idx,
+                    ty: (*pat_type.ty).clone(),
+                });
+                // Strip the identity attribute
+                pat_type.attrs.retain(|a| {
+                    !((a.path().is_ident("inject") && has_identity_qualifier(a))
+                        || a.path().is_ident("identity"))
+                });
+            }
+            param_idx += 1;
+        }
+    }
+    Ok(identity_param)
 }
 
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
@@ -100,6 +138,10 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     guard_fns.extend(extract_guard_fns(&all_attrs)?);
 
                     method.attrs = strip_route_attrs(all_attrs);
+
+                    // Detect #[inject(identity)] on handler params
+                    let identity_param = extract_identity_param(&mut method)?;
+
                     route_methods.push(RouteMethod {
                         method: http_method,
                         path,
@@ -108,6 +150,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         intercept_fns,
                         guard_fns,
                         middleware_fns,
+                        identity_param,
                         fn_item: method,
                     });
                 } else {

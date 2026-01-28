@@ -7,7 +7,7 @@
 //! #[controller(state = MyState)]
 //! pub struct MyController {
 //!     #[inject]  my_service: MyService,
-//!     #[identity] user: AuthenticatedUser,
+//!     #[inject(identity)] user: AuthenticatedUser,
 //!     #[config("app.greeting")] greeting: String,
 //! }
 //!
@@ -23,7 +23,7 @@
 // ── Macros (from quarlus-macros) ────────────────────────────────────────────
 
 /// Derive macro — generates struct metadata, Axum extractor, and
-/// `StatefulConstruct` impl (when no `#[identity]` fields).
+/// `StatefulConstruct` impl (when no `#[inject(identity)]` fields).
 pub use quarlus_macros::Controller;
 
 /// Attribute macro on `impl` blocks — generates Axum handlers, route wiring,

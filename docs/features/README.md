@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-Quarlus fournit 12 fonctionnalites principales, chacune documentee dans un fichier dedie.
+Quarlus fournit 13 fonctionnalites principales, chacune documentee dans un fichier dedie.
 
 | # | Fonctionnalite | Fichier | Crate |
 |---|---------------|---------|-------|
@@ -18,6 +18,7 @@ Quarlus fournit 12 fonctionnalites principales, chacune documentee dans un fichi
 | 10 | Hooks de cycle de vie | [10-lifecycle-hooks.md](./10-lifecycle-hooks.md) | `quarlus-core` |
 | 11 | Securite JWT / Roles | [11-securite-jwt.md](./11-securite-jwt.md) | `quarlus-security` |
 | 12 | Testing | [12-testing.md](./12-testing.md) | `quarlus-test` |
+| 13 | Cycle de vie, DI & Performance | [13-lifecycle-injection-performance.md](./13-lifecycle-injection-performance.md) | `quarlus-core` / `quarlus-macros` |
 
 ## Architecture des crates
 

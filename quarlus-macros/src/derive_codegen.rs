@@ -15,7 +15,8 @@ pub fn generate(def: &ControllerStructDef) -> TokenStream {
     }
 }
 
-/// Generate `mod __quarlus_meta_<Name>` with State type alias, PATH_PREFIX, and guard_identity.
+/// Generate `mod __quarlus_meta_<Name>` with State type alias, PATH_PREFIX,
+/// IdentityType, and guard_identity.
 fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     let name = &def.name;
     let state_type = &def.state_type;
@@ -26,19 +27,26 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         None => quote! { None },
     };
 
-    let guard_identity_fn = if let Some(identity) = def.identity_fields.first() {
+    let (identity_type, guard_identity_fn) = if let Some(identity) = def.identity_fields.first() {
         let field_name = &identity.name;
-        quote! {
-            pub fn guard_identity(ctrl: &super::#name) -> (Option<&str>, Option<&[String]>) {
-                (Some(&ctrl.#field_name.sub), Some(&ctrl.#field_name.roles))
-            }
-        }
+        let field_type = &identity.ty;
+        (
+            quote! { pub type IdentityType = #field_type; },
+            quote! {
+                pub fn guard_identity(ctrl: &super::#name) -> Option<&super::#field_type> {
+                    Some(&ctrl.#field_name)
+                }
+            },
+        )
     } else {
-        quote! {
-            pub fn guard_identity(_ctrl: &super::#name) -> (Option<&str>, Option<&[String]>) {
-                (None, None)
-            }
-        }
+        (
+            quote! { pub type IdentityType = quarlus_core::NoIdentity; },
+            quote! {
+                pub fn guard_identity(_ctrl: &super::#name) -> Option<&quarlus_core::NoIdentity> {
+                    None
+                }
+            },
+        )
     };
 
     quote! {
@@ -48,6 +56,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             use super::*;
             pub type State = #state_type;
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
+            #identity_type
             #guard_identity_fn
         }
     }

@@ -46,7 +46,7 @@ pub struct UserController {
     #[inject]
     pool: sqlx::SqlitePool,
 
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 
     #[config("app.greeting")]

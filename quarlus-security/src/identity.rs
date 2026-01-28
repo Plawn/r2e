@@ -16,6 +16,15 @@ pub struct AuthenticatedUser {
     pub claims: serde_json::Value,
 }
 
+impl quarlus_core::Identity for AuthenticatedUser {
+    fn sub(&self) -> &str {
+        &self.sub
+    }
+    fn roles(&self) -> &[String] {
+        &self.roles
+    }
+}
+
 impl AuthenticatedUser {
     /// Check whether the user has a specific role.
     pub fn has_role(&self, role: &str) -> bool {

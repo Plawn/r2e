@@ -293,6 +293,30 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             })
             .collect();
 
+        // Build guard context based on identity source
+        let guard_context_construction = if let Some(ref id_param) = rm.identity_param {
+            // Case A: param-level identity — use the handler param as identity source
+            let arg_name = format_ident!("__arg_{}", id_param.index);
+            quote! {
+                let __guard_ctx = quarlus_core::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    identity: Some(&#arg_name),
+                };
+            }
+        } else {
+            // Case B: struct-level identity or no identity
+            quote! {
+                let __guard_ctx = quarlus_core::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    identity: #meta_mod::guard_identity(&__ctrl_ext.0),
+                };
+            }
+        };
+
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
@@ -301,14 +325,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
             ) -> axum::response::Response {
-                let (__id_sub, __id_roles) = #meta_mod::guard_identity(&__ctrl_ext.0);
-                let __guard_ctx = quarlus_core::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    headers: &__headers,
-                    identity_sub: __id_sub,
-                    identity_roles: __id_roles,
-                };
+                #guard_context_construction
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
                 axum::response::IntoResponse::into_response(#call_expr)

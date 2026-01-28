@@ -6,4 +6,10 @@
 - audit de performance
 - audit de responsabilities boundaries 
 - cli ?
-- gestion de bean ?
+- gestion de bean ? -> injection ? -> graph de dependance ? @ApplicationScoped ?
+- gestion d'un inject generique dans le body pour faire transactionnal plus clean
+- injecter l'identity dans les params handler et pas au niveau controller
+- update doc -> DONE
+- derive Service et pas que controller ?
+- ecosystem tower ? quid ? ya quoi ? ça marche comment ?
+- ecosstems de middleware ?

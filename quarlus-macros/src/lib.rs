@@ -27,34 +27,64 @@ pub(crate) mod types;
 /// | Attribute | Scope | Description |
 /// |-----------|-------|-------------|
 /// | `#[inject]` | App-scoped | Cloned from the Axum state. Type must impl `Clone + Send + Sync`. |
-/// | `#[identity]` | Request-scoped | Extracted via Axum's `FromRequestParts` (e.g. `AuthenticatedUser`). |
+/// | `#[inject(identity)]` | Request-scoped | Extracted via Axum's `FromRequestParts` (e.g. `AuthenticatedUser`). Type must impl `Identity`. |
+/// | `#[identity]` | Request-scoped | **Legacy** — equivalent to `#[inject(identity)]`. |
 /// | `#[config("key")]` | App-scoped | Resolved from `QuarlusConfig` at request time. |
+///
+/// # Handler parameter attributes
+///
+/// | Attribute | Description |
+/// |-----------|-------------|
+/// | `#[inject(identity)]` | Marks a handler parameter as the identity source for guards. Enables mixed controllers (public + protected endpoints). |
 ///
 /// # Example
 ///
 /// ```ignore
 /// use quarlus_core::prelude::*;
 ///
+/// // Struct-level identity (all endpoints require auth)
 /// #[derive(Controller)]
 /// #[controller(path = "/users", state = Services)]
 /// pub struct UserController {
 ///     #[inject]  user_service: UserService,
 ///     #[inject]  pool: sqlx::SqlitePool,
-///     #[identity] user: AuthenticatedUser,
+///     #[inject(identity)] user: AuthenticatedUser,
 ///     #[config("app.greeting")] greeting: String,
+/// }
+///
+/// // Mixed controller (param-level identity)
+/// #[derive(Controller)]
+/// #[controller(path = "/api", state = Services)]
+/// pub struct MixedController {
+///     #[inject] user_service: UserService,
+///     // No identity on struct → StatefulConstruct is generated
+/// }
+///
+/// #[routes]
+/// impl MixedController {
+///     #[get("/public")]
+///     async fn public_data(&self) -> Json<Vec<Data>> { ... }
+///
+///     #[get("/me")]
+///     async fn me(
+///         &self,
+///         #[inject(identity)] user: AuthenticatedUser,
+///     ) -> Json<AuthenticatedUser> {
+///         Json(user)
+///     }
 /// }
 /// ```
 ///
 /// # What is generated
 ///
 /// - A hidden metadata module (`__quarlus_meta_<Name>`) — state type alias,
-///   path prefix, and identity accessor for guards.
+///   path prefix, identity type alias, and identity accessor for guards.
 /// - An Axum extractor struct (`__QuarlusExtract_<Name>`) implementing
 ///   `FromRequestParts<State>` — constructs the controller from state +
 ///   request parts.
 /// - `impl StatefulConstruct<State> for Name` — **only** when there are no
-///   `#[identity]` fields. Used by event consumers and scheduled tasks that
-///   run outside HTTP context.
+///   `#[inject(identity)]` fields on the struct. Used by event consumers and
+///   scheduled tasks that run outside HTTP context.
 #[proc_macro_derive(Controller, attributes(controller, inject, identity, config))]
 pub fn derive_controller(input: TokenStream) -> TokenStream {
     derive_controller::expand(input)
@@ -188,7 +218,8 @@ pub fn patch(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Restrict a route to users that have **at least one** of the specified roles.
 ///
-/// Requires the controller to have an `#[identity]` field (e.g. `AuthenticatedUser`).
+/// Requires an identity source: either an `#[inject(identity)]` field on the
+/// controller struct, or an `#[inject(identity)]` parameter on the handler.
 /// Returns **403 Forbidden** if the user lacks every listed role.
 ///
 /// ```ignore

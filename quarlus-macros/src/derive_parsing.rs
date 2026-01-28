@@ -10,6 +10,17 @@ pub struct ControllerStructDef {
     pub config_fields: Vec<ConfigField>,
 }
 
+/// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
+pub fn has_identity_qualifier(attr: &syn::Attribute) -> bool {
+    if let syn::Meta::List(_) = &attr.meta {
+        attr.parse_args::<syn::Ident>()
+            .map(|ident| ident == "identity")
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
 pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
     let name = input.ident;
 
@@ -69,16 +80,32 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         })?;
         let field_type = field.ty.clone();
 
-        let is_inject = field.attrs.iter().any(|a| a.path().is_ident("inject"));
-        let is_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
+        let inject_attr = field.attrs.iter().find(|a| a.path().is_ident("inject"));
+        let legacy_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
 
-        if is_inject {
-            injected_fields.push(InjectedField {
-                name: field_name,
-                ty: field_type,
-            });
-        } else if is_identity {
+        if let Some(attr) = inject_attr {
+            if has_identity_qualifier(attr) {
+                // #[inject(identity)] -> request-scoped identity
+                identity_fields.push(IdentityField {
+                    name: field_name,
+                    ty: field_type,
+                });
+            } else if matches!(attr.meta, syn::Meta::List(_)) {
+                // #[inject(something_else)] -> error
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[inject(...)] only supports `identity` qualifier; use #[inject] or #[inject(identity)]",
+                ));
+            } else {
+                // #[inject] -> app-scoped (clone from state)
+                injected_fields.push(InjectedField {
+                    name: field_name,
+                    ty: field_type,
+                });
+            }
+        } else if legacy_identity {
+            // backward compat: #[identity] -> identity field
             identity_fields.push(IdentityField {
                 name: field_name,
                 ty: field_type,
@@ -93,9 +120,16 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         } else {
             return Err(syn::Error::new(
                 field_name.span(),
-                "field in controller must have #[inject], #[identity], or #[config(\"key\")]",
+                "field in controller must have #[inject], #[inject(identity)], or #[config(\"key\")]",
             ));
         }
+    }
+
+    if identity_fields.len() > 1 {
+        return Err(syn::Error::new(
+            name.span(),
+            "controller can have at most one #[inject(identity)] field",
+        ));
     }
 
     Ok(ControllerStructDef {

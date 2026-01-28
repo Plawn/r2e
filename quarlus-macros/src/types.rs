@@ -35,6 +35,11 @@ pub struct ScheduledMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
+pub struct IdentityParam {
+    pub index: usize,
+    pub ty: syn::Type,
+}
+
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
@@ -43,6 +48,7 @@ pub struct RouteMethod {
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
+    pub identity_param: Option<IdentityParam>,
     pub fn_item: syn::ImplItemFn,
 }
 

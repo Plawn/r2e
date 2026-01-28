@@ -10,7 +10,7 @@ pub struct AccountController {
     #[inject]
     user_service: UserService,
 
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 
     #[config("app.greeting")]

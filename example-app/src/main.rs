@@ -19,6 +19,7 @@ use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
 use controllers::data_controller::DataController;
 use controllers::event_controller::UserEventConsumer;
+use controllers::mixed_controller::MixedController;
 use controllers::scheduled_controller::ScheduledJobs;
 use controllers::user_controller::UserController;
 use services::UserService;
@@ -149,6 +150,7 @@ async fn main() {
         .register_controller::<ConfigController>()
         .register_controller::<DataController>()
         .register_controller::<UserEventConsumer>()
+        .register_controller::<MixedController>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

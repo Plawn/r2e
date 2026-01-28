@@ -1,6 +1,6 @@
 use axum::extract::FromRef;
 use axum::response::IntoResponse;
-use quarlus_core::guards::{Guard, GuardContext};
+use quarlus_core::guards::{Guard, GuardContext, Identity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitKeyKind {
@@ -15,21 +15,24 @@ pub struct RateLimitGuard {
     pub key: RateLimitKeyKind,
 }
 
-impl<S> Guard<S> for RateLimitGuard
+impl<S, I: Identity> Guard<S, I> for RateLimitGuard
 where
     crate::RateLimitRegistry: FromRef<S>,
 {
     fn check(
         &self,
         state: &S,
-        ctx: &GuardContext,
+        ctx: &GuardContext<'_, I>,
     ) -> Result<(), axum::response::Response> {
         let registry = <crate::RateLimitRegistry as FromRef<S>>::from_ref(state);
         let method = ctx.method_name;
         let key = match self.key {
             RateLimitKeyKind::Global => format!("{}:global", method),
             RateLimitKeyKind::User => {
-                let sub = ctx.identity_sub.unwrap_or("anonymous");
+                let sub = ctx
+                    .identity
+                    .map(|i| i.sub())
+                    .unwrap_or("anonymous");
                 format!("{}:user:{}", method, sub)
             }
             RateLimitKeyKind::Ip => {
