@@ -2,6 +2,9 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 
 pub(crate) mod attr_extract;
+pub(crate) mod bean_attr;
+pub(crate) mod bean_derive;
+pub(crate) mod bean_state_derive;
 pub(crate) mod derive_codegen;
 pub(crate) mod derive_controller;
 pub(crate) mod derive_parsing;
@@ -430,4 +433,77 @@ pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn layer(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
+}
+
+// ---------------------------------------------------------------------------
+// Bean / DI macros
+// ---------------------------------------------------------------------------
+
+/// Attribute macro on an `impl` block — marks the type as a bean and
+/// generates a [`Bean`](quarlus_core::beans::Bean) trait impl.
+///
+/// The macro finds the first associated function that returns `Self` (the
+/// constructor) and uses its parameter types as dependencies resolved from
+/// the [`BeanContext`](quarlus_core::beans::BeanContext).
+///
+/// # Example
+///
+/// ```ignore
+/// #[bean]
+/// impl UserService {
+///     pub fn new(event_bus: EventBus) -> Self {
+///         Self { event_bus, users: Default::default() }
+///     }
+/// }
+/// ```
+///
+/// The constructor must be an associated function (no `self` receiver) that
+/// returns `Self` or the concrete type name.
+#[proc_macro_attribute]
+pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
+    bean_attr::expand(input)
+}
+
+/// Derive macro for simple beans whose `#[inject]` fields are resolved
+/// from the [`BeanContext`](quarlus_core::beans::BeanContext).
+///
+/// Fields annotated with `#[inject]` are pulled from the context.
+/// Fields without `#[inject]` use `Default::default()`.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Clone, Bean)]
+/// pub struct OrderService {
+///     #[inject] user_service: UserService,
+///     #[inject] event_bus: EventBus,
+/// }
+/// ```
+#[proc_macro_derive(Bean, attributes(inject))]
+pub fn derive_bean(input: TokenStream) -> TokenStream {
+    bean_derive::expand(input)
+}
+
+/// Derive macro for state structs — generates
+/// [`BeanState::from_context()`](quarlus_core::beans::BeanState) and
+/// `FromRef` impls for each field.
+///
+/// Every field is resolved from the [`BeanContext`] by type. If two fields
+/// share the same type, `FromRef` is generated only for the first one.
+/// Use `#[bean_state(skip_from_ref)]` on a field to suppress its `FromRef`
+/// impl.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Clone, BeanState)]
+/// pub struct Services {
+///     pub user_service: UserService,
+///     pub event_bus: EventBus,
+///     pub pool: SqlitePool,
+/// }
+/// ```
+#[proc_macro_derive(BeanState, attributes(bean_state))]
+pub fn derive_bean_state(input: TokenStream) -> TokenStream {
+    bean_state_derive::expand(input)
 }

@@ -14,3 +14,7 @@
 - ecosystem tower ? quid ? ya quoi ? ça marche comment ?
 - ecosstems de middleware ?
 - register de scheduled -> avoir des bean de service et ça register auto
+- audit ce qui a besoin d'etre send + sync
+- est ce qu'on peut pas leak certains singleton pour gagner des perfos ?
+- gestion de la secu plus flexible
+- gestion des extensions plus flexible -> systeme de plugin with(impl plugin) pour Cors, tracing, etc

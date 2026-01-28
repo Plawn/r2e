@@ -1,6 +1,6 @@
-use axum::response::{Html, IntoResponse};
-use axum::routing::get;
-use axum::Router;
+use quarlus_core::http::response::{Html, IntoResponse};
+use quarlus_core::http::routing::get;
+use quarlus_core::http::Router;
 use quarlus_core::openapi::RouteInfo;
 use std::sync::Arc;
 

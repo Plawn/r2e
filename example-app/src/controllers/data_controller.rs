@@ -22,8 +22,8 @@ impl DataController {
     #[get("/")]
     async fn list_paged(
         &self,
-        axum::extract::Query(pageable): axum::extract::Query<Pageable>,
-    ) -> Result<axum::Json<Page<UserEntity>>, quarlus_core::AppError> {
+        Query(pageable): Query<Pageable>,
+    ) -> Result<Json<Page<UserEntity>>, quarlus_core::AppError> {
         let count_qb = QueryBuilder::new(UserEntity::table_name());
         let (count_sql, count_params) = count_qb.build_count();
 
@@ -56,14 +56,14 @@ impl DataController {
             .map(|(id, name, email)| UserEntity { id, name, email })
             .collect();
 
-        Ok(axum::Json(Page::new(entities, &pageable, total)))
+        Ok(Json(Page::new(entities, &pageable, total)))
     }
 
     #[get("/search")]
     async fn search(
         &self,
-        axum::extract::Query(params): axum::extract::Query<SearchParams>,
-    ) -> Result<axum::Json<Vec<UserEntity>>, quarlus_core::AppError> {
+        Query(params): Query<SearchParams>,
+    ) -> Result<Json<Vec<UserEntity>>, quarlus_core::AppError> {
         let mut qb = QueryBuilder::new(UserEntity::table_name());
         if let Some(ref name) = params.name {
             qb = qb.where_like("name", &format!("%{name}%"));
@@ -87,6 +87,6 @@ impl DataController {
             .map(|(id, name, email)| UserEntity { id, name, email })
             .collect();
 
-        Ok(axum::Json(entities))
+        Ok(Json(entities))
     }
 }

@@ -1,5 +1,5 @@
-use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
+use crate::http::response::{IntoResponse, Response};
+use crate::http::HeaderMap;
 
 /// Trait representing an authenticated identity (user, service account, etc.).
 ///

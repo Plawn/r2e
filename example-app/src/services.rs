@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use quarlus_core::prelude::*;
 use quarlus_events::EventBus;
 
 use crate::models::{User, UserCreatedEvent};
@@ -11,6 +12,7 @@ pub struct UserService {
     event_bus: EventBus,
 }
 
+#[bean]
 impl UserService {
     pub fn new(event_bus: EventBus) -> Self {
         let users = vec![

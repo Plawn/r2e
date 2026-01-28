@@ -320,15 +320,15 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
-                axum::extract::State(__state): axum::extract::State<#meta_mod::State>,
-                __headers: axum::http::HeaderMap,
+                quarlus_core::http::extract::State(__state): quarlus_core::http::extract::State<#meta_mod::State>,
+                __headers: quarlus_core::http::HeaderMap,
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> axum::response::Response {
+            ) -> quarlus_core::http::response::Response {
                 #guard_context_construction
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
-                axum::response::IntoResponse::into_response(#call_expr)
+                quarlus_core::http::response::IntoResponse::into_response(#call_expr)
             }
         }
     }
@@ -348,20 +348,20 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         .map(|rm| {
             let handler_name = format_ident!("__quarlus_{}_{}", name, rm.fn_item.sig.ident);
             let path = &rm.path;
-            let method_fn = format_ident!("{}", rm.method.as_axum_method_fn());
+            let method_fn = format_ident!("{}", rm.method.as_routing_fn());
 
             let has_layers = !rm.middleware_fns.is_empty() || !rm.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
-                    .route(#path, axum::routing::#method_fn(#handler_name))
+                    .route(#path, quarlus_core::http::routing::#method_fn(#handler_name))
                 }
             } else {
                 let middleware_layers: Vec<_> = rm
                     .middleware_fns
                     .iter()
                     .map(|mw_fn| {
-                        quote! { .layer(axum::middleware::from_fn(#mw_fn)) }
+                        quote! { .layer(quarlus_core::http::middleware::from_fn(#mw_fn)) }
                     })
                     .collect();
 
@@ -376,7 +376,7 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 quote! {
                     .route(
                         #path,
-                        axum::routing::#method_fn(#handler_name)
+                        quarlus_core::http::routing::#method_fn(#handler_name)
                             #(#middleware_layers)*
                             #(#direct_layers)*
                     )
@@ -391,7 +391,7 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         .iter()
         .map(|rm| {
             let route_path_str = &rm.path;
-            let method = rm.method.as_axum_method_fn().to_uppercase();
+            let method = rm.method.as_routing_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
             let roles: Vec<_> = rm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
@@ -509,10 +509,10 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
 
     let router_body = quote! {
         {
-            let __inner = axum::Router::new()
+            let __inner = quarlus_core::http::Router::new()
                 #(#route_registrations)*;
             match #meta_mod::PATH_PREFIX {
-                Some(__prefix) => axum::Router::new().nest(__prefix, __inner),
+                Some(__prefix) => quarlus_core::http::Router::new().nest(__prefix, __inner),
                 None => __inner,
             }
         }
@@ -520,7 +520,7 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
 
     quote! {
         impl quarlus_core::Controller<#meta_mod::State> for #name {
-            fn routes() -> axum::Router<#meta_mod::State> {
+            fn routes() -> quarlus_core::http::Router<#meta_mod::State> {
                 #router_body
             }
 

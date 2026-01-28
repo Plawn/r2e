@@ -1,7 +1,6 @@
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use crate::state::Services;
-use axum::extract::Path;
 use quarlus_core::prelude::*;
 use quarlus_utils::interceptors::{Cache, CacheInvalidate, Logged, Timed};
 use quarlus_security::AuthenticatedUser;
@@ -60,18 +59,18 @@ impl UserController {
     #[get("/")]
     #[intercept(Logged::debug())]
     #[intercept(Timed::threshold(50))]
-    async fn list(&self) -> axum::Json<Vec<User>> {
+    async fn list(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
-        axum::Json(users)
+        Json(users)
     }
 
     #[get("/{id}")]
     async fn get_by_id(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<axum::Json<User>, quarlus_core::AppError> {
+    ) -> Result<Json<User>, quarlus_core::AppError> {
         match self.user_service.get_by_id(id).await {
-            Some(user) => Ok(axum::Json(user)),
+            Some(user) => Ok(Json(user)),
             None => Err(quarlus_core::AppError::NotFound("User not found".into())),
         }
     }
@@ -82,17 +81,17 @@ impl UserController {
     async fn create(
         &self,
         Validated(body): Validated<CreateUserRequest>,
-    ) -> axum::Json<User> {
+    ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
-        axum::Json(user)
+        Json(user)
     }
 
     #[post("/db")]
     #[transactional]
     async fn create_in_db(
         &self,
-        axum::Json(body): axum::Json<CreateUserRequest>,
-    ) -> Result<axum::Json<User>, quarlus_core::AppError> {
+        Json(body): Json<CreateUserRequest>,
+    ) -> Result<Json<User>, quarlus_core::AppError> {
         sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
             .bind(&body.name)
             .bind(&body.email)
@@ -107,7 +106,7 @@ impl UserController {
         .await
         .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
 
-        Ok(axum::Json(User {
+        Ok(Json(User {
             id: row.0 as u64,
             name: row.1,
             email: row.2,
@@ -118,9 +117,9 @@ impl UserController {
     #[get("/cached")]
     #[intercept(Cache::ttl(30).group("users"))]
     #[intercept(Timed::info())]
-    async fn cached_list(&self) -> axum::Json<serde_json::Value> {
+    async fn cached_list(&self) -> Json<serde_json::Value> {
         let users = self.user_service.list().await;
-        axum::Json(serde_json::to_value(users).unwrap())
+        Json(serde_json::to_value(users).unwrap())
     }
 
     // Demo: rate_limited at handler level with per-user key
@@ -129,17 +128,17 @@ impl UserController {
     async fn create_rate_limited(
         &self,
         Validated(body): Validated<CreateUserRequest>,
-    ) -> axum::Json<User> {
+    ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
-        axum::Json(user)
+        Json(user)
     }
 
     // Demo: custom interceptor via #[intercept]
     #[get("/audited")]
     #[intercept(Logged::info())]
     #[intercept(AuditLog)]
-    async fn audited_list(&self) -> axum::Json<Vec<User>> {
+    async fn audited_list(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
-        axum::Json(users)
+        Json(users)
     }
 }

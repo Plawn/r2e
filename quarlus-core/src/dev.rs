@@ -12,9 +12,9 @@
 //! change, it kills the server and restarts it. Clients polling
 //! `/__quarlus_dev/ping` detect the restart and refresh.
 
-use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::Router;
+use crate::http::response::IntoResponse;
+use crate::http::routing::get;
+use crate::http::Router;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 

@@ -76,10 +76,10 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             let field_name = &f.name;
             let field_type = &f.ty;
             quote! {
-                let #field_name = <#field_type as axum::extract::FromRequestParts<#state_type>>
+                let #field_name = <#field_type as quarlus_core::http::extract::FromRequestParts<#state_type>>
                     ::from_request_parts(__parts, __state)
                     .await
-                    .map_err(axum::response::IntoResponse::into_response)?;
+                    .map_err(quarlus_core::http::response::IntoResponse::into_response)?;
             }
         })
         .collect();
@@ -113,7 +113,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             let key = &f.key;
             quote! {
                 #field_name: {
-                    let __cfg = <quarlus_core::QuarlusConfig as axum::extract::FromRef<#state_type>>::from_ref(__state);
+                    let __cfg = <quarlus_core::QuarlusConfig as quarlus_core::http::extract::FromRef<#state_type>>::from_ref(__state);
                     __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
                 }
             }
@@ -132,11 +132,11 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         #[allow(non_camel_case_types)]
         pub struct #extractor_name(pub #name);
 
-        impl axum::extract::FromRequestParts<#state_type> for #extractor_name {
-            type Rejection = axum::response::Response;
+        impl quarlus_core::http::extract::FromRequestParts<#state_type> for #extractor_name {
+            type Rejection = quarlus_core::http::response::Response;
 
             async fn from_request_parts(
-                __parts: &mut axum::http::request::Parts,
+                __parts: &mut quarlus_core::http::header::Parts,
                 __state: &#state_type,
             ) -> Result<Self, Self::Rejection> {
                 #(#identity_extractions)*
@@ -174,7 +174,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
             let key = &f.key;
             quote! {
                 #field_name: {
-                    let __cfg = <quarlus_core::QuarlusConfig as axum::extract::FromRef<#state_type>>::from_ref(__state);
+                    let __cfg = <quarlus_core::QuarlusConfig as quarlus_core::http::extract::FromRef<#state_type>>::from_ref(__state);
                     __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
                 }
             }

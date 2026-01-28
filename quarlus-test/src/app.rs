@@ -1,5 +1,5 @@
-use axum::body::Body;
-use axum::Router;
+use quarlus_core::http::body::Body;
+use quarlus_core::http::Router;
 use bytes::Bytes;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};

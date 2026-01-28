@@ -9,8 +9,9 @@ use std::fmt;
 /// Implement this trait (or use `#[derive(Bean)]` / `#[bean]`) to declare
 /// a type as a bean that the [`BeanRegistry`] can resolve automatically.
 pub trait Bean: Clone + Send + Sync + 'static {
-    /// Returns the [`TypeId`]s of all dependencies needed to construct this bean.
-    fn dependencies() -> Vec<TypeId>;
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to construct this bean.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Construct the bean from a fully resolved context.
     fn build(ctx: &BeanContext) -> Self;
@@ -31,7 +32,15 @@ pub trait BeanState: Clone + Send + Sync + 'static {
 ///
 /// Produced by [`BeanRegistry::resolve`]. Each entry is keyed by [`TypeId`].
 pub struct BeanContext {
-    instances: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl fmt::Debug for BeanContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BeanContext")
+            .field("entry_count", &self.entries.len())
+            .finish()
+    }
 }
 
 impl BeanContext {
@@ -41,7 +50,7 @@ impl BeanContext {
     ///
     /// Panics if the requested type was not registered or provided.
     pub fn get<T: Clone + 'static>(&self) -> T {
-        self.instances
+        self.entries
             .get(&TypeId::of::<T>())
             .and_then(|v| v.downcast_ref::<T>())
             .unwrap_or_else(|| {
@@ -55,7 +64,7 @@ impl BeanContext {
 
     /// Try to retrieve a bean by type, returning `None` if absent.
     pub fn try_get<T: Clone + 'static>(&self) -> Option<T> {
-        self.instances
+        self.entries
             .get(&TypeId::of::<T>())
             .and_then(|v| v.downcast_ref::<T>())
             .cloned()
@@ -64,23 +73,21 @@ impl BeanContext {
 
 // ── BeanRegistry ────────────────────────────────────────────────────────────
 
+type Factory = Box<dyn FnOnce(&BeanContext) -> Box<dyn Any + Send + Sync> + Send>;
+
 /// Builder that collects bean registrations and provided instances,
 /// resolves the dependency graph, and produces a [`BeanContext`].
 pub struct BeanRegistry {
     beans: Vec<BeanRegistration>,
-    provided: HashMap<TypeId, ProvidedEntry>,
+    provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 struct BeanRegistration {
     type_id: TypeId,
     type_name: &'static str,
-    dependencies: Vec<TypeId>,
-    factory: Box<dyn Fn(&BeanContext) -> Box<dyn Any + Send + Sync> + Send + Sync>,
-}
-
-struct ProvidedEntry {
-    type_name: &'static str,
-    value: Box<dyn Any + Send + Sync>,
+    /// (TypeId, human-readable name) for each dependency.
+    dependencies: Vec<(TypeId, &'static str)>,
+    factory: Factory,
 }
 
 /// Errors that can occur during bean graph resolution.
@@ -134,13 +141,7 @@ impl BeanRegistry {
     ///
     /// The instance will be available to beans that depend on type `T`.
     pub fn provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
-        self.provided.insert(
-            TypeId::of::<T>(),
-            ProvidedEntry {
-                type_name: type_name::<T>(),
-                value: Box::new(value),
-            },
-        );
+        self.provided.insert(TypeId::of::<T>(), Box::new(value));
         self
     }
 
@@ -164,57 +165,33 @@ impl BeanRegistry {
     /// [`BeanContext`] with all instances, or a [`BeanError`] if the graph
     /// is invalid (cycles, missing deps, or duplicates).
     pub fn resolve(self) -> Result<BeanContext, BeanError> {
-        let mut instances: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
+        let mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
 
         // Move provided instances into the resolved set.
-        for (tid, entry) in self.provided {
-            instances.insert(tid, entry.value);
+        for (tid, value) in self.provided {
+            entries.insert(tid, value);
         }
 
-        // Check for duplicates: a bean type registered twice, or a bean
-        // that is also provided.
+        let bean_count = self.beans.len();
+        if bean_count == 0 {
+            return Ok(BeanContext { entries });
+        }
+
+        // Check for duplicates: a bean type that is also provided, or
+        // registered twice.
         let mut seen: HashMap<TypeId, &str> = HashMap::new();
         for reg in &self.beans {
-            if instances.contains_key(&reg.type_id) {
+            if entries.contains_key(&reg.type_id) {
                 return Err(BeanError::DuplicateBean {
                     type_name: reg.type_name.to_string(),
                 });
             }
-            if let Some(prev) = seen.insert(reg.type_id, reg.type_name) {
-                let _ = prev;
+            if seen.insert(reg.type_id, reg.type_name).is_some() {
                 return Err(BeanError::DuplicateBean {
                     type_name: reg.type_name.to_string(),
                 });
             }
         }
-
-        // Build a name lookup for error messages.
-        let type_names: HashMap<TypeId, &str> = self
-            .beans
-            .iter()
-            .map(|r| (r.type_id, r.type_name))
-            .collect();
-
-        // Check for missing dependencies.
-        for reg in &self.beans {
-            for dep in &reg.dependencies {
-                if !instances.contains_key(dep)
-                    && !self.beans.iter().any(|b| b.type_id == *dep)
-                {
-                    let dep_name = type_names
-                        .get(dep)
-                        .copied()
-                        .unwrap_or("<unknown>");
-                    return Err(BeanError::MissingDependency {
-                        bean: reg.type_name.to_string(),
-                        dependency: dep_name.to_string(),
-                    });
-                }
-            }
-        }
-
-        // Kahn's algorithm: topological sort.
-        let bean_count = self.beans.len();
 
         // Map TypeId -> index for beans.
         let id_to_idx: HashMap<TypeId, usize> = self
@@ -224,28 +201,41 @@ impl BeanRegistry {
             .map(|(i, r)| (r.type_id, i))
             .collect();
 
-        // Compute in-degree (number of unresolved deps per bean).
+        // Check for missing dependencies.
+        for reg in &self.beans {
+            for (dep_id, dep_name) in &reg.dependencies {
+                if !entries.contains_key(dep_id) && !id_to_idx.contains_key(dep_id) {
+                    return Err(BeanError::MissingDependency {
+                        bean: reg.type_name.to_string(),
+                        dependency: dep_name.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Kahn's algorithm: topological sort.
+        // in_degree = number of deps that are other beans (not provided).
         let mut in_degree: Vec<usize> = Vec::with_capacity(bean_count);
         for reg in &self.beans {
             let deg = reg
                 .dependencies
                 .iter()
-                .filter(|d| id_to_idx.contains_key(d))
+                .filter(|(d, _)| id_to_idx.contains_key(d))
                 .count();
             in_degree.push(deg);
         }
 
-        // Dependents: for each bean, which other beans depend on it.
+        // Dependents: for each bean index, which other bean indices depend on it.
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
         for (i, reg) in self.beans.iter().enumerate() {
-            for dep in &reg.dependencies {
-                if let Some(&dep_idx) = id_to_idx.get(dep) {
+            for (dep_id, _) in &reg.dependencies {
+                if let Some(&dep_idx) = id_to_idx.get(dep_id) {
                     dependents[dep_idx].push(i);
                 }
             }
         }
 
-        // Queue starts with beans that have all deps already resolved (in provided).
+        // Seed queue with beans whose deps are all already provided.
         let mut queue: Vec<usize> = (0..bean_count)
             .filter(|&i| in_degree[i] == 0)
             .collect();
@@ -272,54 +262,180 @@ impl BeanRegistry {
         }
 
         // Construct beans in topological order.
-        // We need to move factories out of self.beans, so collect them.
-        let mut factories: Vec<Option<Box<dyn Fn(&BeanContext) -> Box<dyn Any + Send + Sync> + Send + Sync>>> =
-            self.beans.into_iter().map(|r| Some(r.factory)).collect();
+        // Move factories and type_ids out so we can consume them one by one.
+        let mut bean_data: Vec<Option<(TypeId, Factory)>> = self
+            .beans
+            .into_iter()
+            .map(|r| Some((r.type_id, r.factory)))
+            .collect();
 
         for idx in sorted_order {
-            let factory = factories[idx].take().unwrap();
-            let ctx = BeanContext {
-                instances: instances
-                    .iter()
-                    .map(|(k, v)| {
-                        // We need to clone the Any values, but we can't clone Box<dyn Any>.
-                        // Instead, we create a temporary context with references.
-                        // Actually, we need a different approach — pass a read-only view.
-                        (*k, v)
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .collect::<HashMap<_, _>>()
-                    .into_iter()
-                    .map(|_| unreachable!())
-                    .collect(),
-            };
-            // The above doesn't work — we need to restructure.
-            // Let's just build context from current instances directly.
-            let _ = ctx;
-            let bean_instance = {
-                // Build a temporary BeanContext that borrows from instances.
-                // Since BeanContext owns its data, we need to take a snapshot.
-                // The Bean::build() will call ctx.get::<T>() which clones.
-                // We can't easily share Box<dyn Any>, so we use a different approach:
-                // store all instances as type-erased cloneable values.
-                //
-                // Actually, the simplest approach: since every bean is Clone,
-                // we can store cloning closures. But that complicates the API.
-                //
-                // Simpler: just pass instances by reference using an internal type.
-                factory(&BeanContext { instances: HashMap::new() })
-            };
-            let _ = bean_instance;
-            todo!()
+            let (type_id, factory) = bean_data[idx].take().unwrap();
+            // Temporarily move entries into a BeanContext so the factory can
+            // call ctx.get::<T>(). After the call, move entries back.
+            let ctx = BeanContext { entries };
+            let bean_value = factory(&ctx);
+            entries = ctx.entries;
+            entries.insert(type_id, bean_value);
         }
 
-        Ok(BeanContext { instances })
+        Ok(BeanContext { entries })
     }
 }
 
 impl Default for BeanRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct Dep {
+        value: i32,
+    }
+
+    #[derive(Clone)]
+    struct ServiceA {
+        dep: Dep,
+    }
+
+    impl Bean for ServiceA {
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
+        }
+        fn build(ctx: &BeanContext) -> Self {
+            Self {
+                dep: ctx.get::<Dep>(),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct ServiceB {
+        a: ServiceA,
+        dep: Dep,
+    }
+
+    impl Bean for ServiceB {
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![
+                (TypeId::of::<ServiceA>(), type_name::<ServiceA>()),
+                (TypeId::of::<Dep>(), type_name::<Dep>()),
+            ]
+        }
+        fn build(ctx: &BeanContext) -> Self {
+            Self {
+                a: ctx.get::<ServiceA>(),
+                dep: ctx.get::<Dep>(),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_simple_graph() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 42 });
+        reg.register::<ServiceA>();
+        reg.register::<ServiceB>();
+        let ctx = reg.resolve().unwrap();
+
+        let b: ServiceB = ctx.get();
+        assert_eq!(b.dep.value, 42);
+        assert_eq!(b.a.dep.value, 42);
+    }
+
+    #[test]
+    fn missing_dependency() {
+        let mut reg = BeanRegistry::new();
+        reg.register::<ServiceA>();
+        let err = reg.resolve().unwrap_err();
+        match &err {
+            BeanError::MissingDependency { dependency, .. } => {
+                assert!(dependency.contains("Dep"), "error should name the missing type: {}", err);
+            }
+            _ => panic!("expected MissingDependency, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn duplicate_bean_registered_twice() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 1 });
+        reg.register::<ServiceA>();
+        reg.register::<ServiceA>();
+        let err = reg.resolve().unwrap_err();
+        assert!(matches!(err, BeanError::DuplicateBean { .. }));
+    }
+
+    #[test]
+    fn duplicate_provided_and_bean() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 1 });
+        reg.provide(ServiceA {
+            dep: Dep { value: 2 },
+        });
+        reg.register::<ServiceA>();
+        let err = reg.resolve().unwrap_err();
+        assert!(matches!(err, BeanError::DuplicateBean { .. }));
+    }
+
+    #[derive(Clone)]
+    struct CycleA;
+    #[derive(Clone)]
+    struct CycleB;
+
+    impl Bean for CycleA {
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![(TypeId::of::<CycleB>(), type_name::<CycleB>())]
+        }
+        fn build(ctx: &BeanContext) -> Self {
+            let _ = ctx.get::<CycleB>();
+            Self
+        }
+    }
+    impl Bean for CycleB {
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![(TypeId::of::<CycleA>(), type_name::<CycleA>())]
+        }
+        fn build(ctx: &BeanContext) -> Self {
+            let _ = ctx.get::<CycleA>();
+            Self
+        }
+    }
+
+    #[test]
+    fn cyclic_dependency() {
+        let mut reg = BeanRegistry::new();
+        reg.register::<CycleA>();
+        reg.register::<CycleB>();
+        let err = reg.resolve().unwrap_err();
+        assert!(matches!(err, BeanError::CyclicDependency { .. }));
+    }
+
+    #[test]
+    fn provided_only() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 7 });
+        let ctx = reg.resolve().unwrap();
+        let d: Dep = ctx.get();
+        assert_eq!(d.value, 7);
+    }
+
+    #[test]
+    fn try_get_none() {
+        let reg = BeanRegistry::new();
+        let ctx = reg.resolve().unwrap();
+        assert!(ctx.try_get::<Dep>().is_none());
+    }
+
+    #[test]
+    fn empty_registry() {
+        let reg = BeanRegistry::new();
+        let ctx = reg.resolve().unwrap();
+        assert!(ctx.try_get::<i32>().is_none());
     }
 }

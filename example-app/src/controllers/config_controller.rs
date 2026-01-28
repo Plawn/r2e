@@ -14,8 +14,8 @@ pub struct ConfigController {
 #[routes]
 impl ConfigController {
     #[get("/config")]
-    async fn config_info(&self) -> axum::Json<serde_json::Value> {
-        axum::Json(serde_json::json!({
+    async fn config_info(&self) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
             "app_name": self.app_name,
             "app_version": self.app_version,
         }))

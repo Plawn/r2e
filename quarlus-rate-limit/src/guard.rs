@@ -1,6 +1,6 @@
-use axum::extract::FromRef;
-use axum::response::IntoResponse;
 use quarlus_core::guards::{Guard, GuardContext, Identity};
+use quarlus_core::http::extract::FromRef;
+use quarlus_core::http::response::IntoResponse;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitKeyKind {
@@ -23,7 +23,7 @@ where
         &self,
         state: &S,
         ctx: &GuardContext<'_, I>,
-    ) -> Result<(), axum::response::Response> {
+    ) -> Result<(), quarlus_core::http::Response> {
         let registry = <crate::RateLimitRegistry as FromRef<S>>::from_ref(state);
         let method = ctx.method_name;
         let key = match self.key {
@@ -50,8 +50,8 @@ where
             Ok(())
         } else {
             Err((
-                axum::http::StatusCode::TOO_MANY_REQUESTS,
-                axum::Json(serde_json::json!({ "error": "Rate limit exceeded" })),
+                quarlus_core::http::StatusCode::TOO_MANY_REQUESTS,
+                quarlus_core::http::Json(serde_json::json!({ "error": "Rate limit exceeded" })),
             )
                 .into_response())
         }

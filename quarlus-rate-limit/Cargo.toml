@@ -6,5 +6,4 @@ edition = "2021"
 [dependencies]
 dashmap = "6"
 quarlus-core = { path = "../quarlus-core" }
-axum = "0.8"
 serde_json = "1"

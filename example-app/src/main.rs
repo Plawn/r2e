@@ -109,25 +109,22 @@ async fn main() {
     // --- Scheduling (#8) is now declarative via #[scheduled] in ScheduledJobs ---
     let cancel = CancellationToken::new();
 
-    let services = Services {
-        user_service: UserService::new(event_bus.clone()),
-        jwt_validator: Arc::new(validator),
-        pool,
-        event_bus,
-        config: config.clone(),
-        cancel: cancel.clone(),
-        rate_limiter: quarlus_rate_limit::RateLimitRegistry::default(),
-    };
-
-    // --- App assembly ---
+    // --- App assembly using bean graph ---
     AppBuilder::new()
-        .with_state(services)
+        .provide(event_bus)
+        .provide(pool)
+        .provide(config.clone())
+        .provide(Arc::new(validator))
+        .provide(cancel)
+        .provide(quarlus_rate_limit::RateLimitRegistry::default())
+        .with_bean::<UserService>()
+        .build_state::<Services>()
         .with_config(config)
         .with_health()
         .with_cors()
         .with_tracing()
         .with_error_handling() // Error handling (#3)
-        .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(Duration::from_secs(30), axum::http::StatusCode::REQUEST_TIMEOUT)) // Global Tower layer
+        .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(quarlus_core::http::StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30))) // Global Tower layer
         .with_dev_reload() // Dev mode (#9)
         .with_scheduler(|s| {
             s.register::<ScheduledJobs>(); // Scheduling (#8)

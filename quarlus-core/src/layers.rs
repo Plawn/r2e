@@ -1,5 +1,5 @@
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use crate::http::response::IntoResponse;
+use crate::http::StatusCode;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -40,11 +40,11 @@ pub fn default_trace() -> TraceLayer<tower_http::classify::SharedClassifier<towe
 }
 
 /// Returns a `CatchPanicLayer` that converts panics into JSON 500 responses.
-pub fn catch_panic_layer() -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) -> axum::response::Response> {
+pub fn catch_panic_layer() -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) -> crate::http::Response> {
     CatchPanicLayer::custom(panic_handler as fn(_) -> _)
 }
 
-fn panic_handler(_err: Box<dyn std::any::Any + Send>) -> axum::response::Response {
+fn panic_handler(_err: Box<dyn std::any::Any + Send>) -> crate::http::Response {
     let body = serde_json::json!({ "error": "Internal server error" });
-    (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(body)).into_response()
+    (StatusCode::INTERNAL_SERVER_ERROR, crate::http::Json(body)).into_response()
 }

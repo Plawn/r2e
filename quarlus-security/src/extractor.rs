@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use axum::extract::{FromRef, FromRequestParts};
-use axum::http::header::AUTHORIZATION;
-use axum::http::request::Parts;
+use quarlus_core::http::extract::{FromRef, FromRequestParts};
+use quarlus_core::http::header::{Parts, AUTHORIZATION};
 use tracing::{debug, warn};
 
 use crate::error::SecurityError;
@@ -39,7 +38,7 @@ fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
-    Arc<JwtValidator>: axum::extract::FromRef<S>,
+    Arc<JwtValidator>: quarlus_core::http::extract::FromRef<S>,
 {
     type Rejection = quarlus_core::AppError;
 

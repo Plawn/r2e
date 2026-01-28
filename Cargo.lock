@@ -547,7 +547,6 @@ dependencies = [
 name = "example-app"
 version = "0.1.0"
 dependencies = [
- "axum",
  "http",
  "jsonwebtoken",
  "quarlus-cache",
@@ -1677,7 +1676,6 @@ dependencies = [
 name = "quarlus-openapi"
 version = "0.1.0"
 dependencies = [
- "axum",
  "quarlus-core",
  "serde",
  "serde_json",
@@ -1687,7 +1685,6 @@ dependencies = [
 name = "quarlus-rate-limit"
 version = "0.1.0"
 dependencies = [
- "axum",
  "dashmap",
  "quarlus-core",
  "serde_json",
@@ -1709,7 +1706,6 @@ dependencies = [
 name = "quarlus-security"
 version = "0.1.0"
 dependencies = [
- "axum",
  "jsonwebtoken",
  "quarlus-core",
  "reqwest",
@@ -1723,7 +1719,6 @@ dependencies = [
 name = "quarlus-test"
 version = "0.1.0"
 dependencies = [
- "axum",
  "bytes",
  "http",
  "http-body-util",
@@ -1740,7 +1735,6 @@ dependencies = [
 name = "quarlus-utils"
 version = "0.1.0"
 dependencies = [
- "axum",
  "quarlus-cache",
  "quarlus-core",
  "serde",

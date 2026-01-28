@@ -11,7 +11,7 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
-    pub fn as_axum_method_fn(&self) -> &'static str {
+    pub fn as_routing_fn(&self) -> &'static str {
         match self {
             HttpMethod::Get => "get",
             HttpMethod::Post => "post",

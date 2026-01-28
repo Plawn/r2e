@@ -1,6 +1,5 @@
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request};
-use axum::response::{IntoResponse, Response};
+use crate::http::extract::{FromRequest, Request};
+use crate::http::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use validator::Validate;
@@ -43,9 +42,9 @@ where
     type Rejection = Response;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let json = axum::Json::<T>::from_request(req, state)
+        let json = crate::http::Json::<T>::from_request(req, state)
             .await
-            .map_err(|rejection: JsonRejection| {
+            .map_err(|rejection: axum::extract::rejection::JsonRejection| {
                 let err = crate::AppError::BadRequest(rejection.body_text());
                 err.into_response()
             })?;

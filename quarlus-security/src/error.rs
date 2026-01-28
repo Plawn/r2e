@@ -1,5 +1,5 @@
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use quarlus_core::http::response::{IntoResponse, Response};
+use quarlus_core::http::StatusCode;
 
 /// Security-related errors for JWT validation and authentication.
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl IntoResponse for SecurityError {
     fn into_response(self) -> Response {
         let message = self.to_string();
         let body = serde_json::json!({ "error": message });
-        (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+        (StatusCode::UNAUTHORIZED, quarlus_core::http::Json(body)).into_response()
     }
 }
 

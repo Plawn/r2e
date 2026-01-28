@@ -149,7 +149,7 @@ impl<R: Send> Interceptor<R> for Timed {
 
 /// Caches the response of a method using the global [`CacheStore`](quarlus_cache::CacheStore).
 ///
-/// Works with `axum::Json<T>` where `T: Serialize + DeserializeOwned`.
+/// Works with `quarlus_core::http::Json<T>` where `T: Serialize + DeserializeOwned`.
 ///
 /// # Usage
 /// ```ignore
@@ -199,7 +199,7 @@ impl Cache {
     }
 }
 
-impl<T> Interceptor<axum::Json<T>> for Cache
+impl<T> Interceptor<quarlus_core::http::Json<T>> for Cache
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Send,
 {
@@ -207,10 +207,10 @@ where
         &self,
         ctx: InterceptorContext,
         next: F,
-    ) -> impl Future<Output = axum::Json<T>> + Send
+    ) -> impl Future<Output = quarlus_core::http::Json<T>> + Send
     where
         F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = axum::Json<T>> + Send,
+        Fut: Future<Output = quarlus_core::http::Json<T>> + Send,
     {
         let store = quarlus_cache::cache_backend();
         let key = self.full_key(&ctx);
@@ -219,7 +219,7 @@ where
             // Cache hit
             if let Some(cached) = store.get(&key).await {
                 if let Ok(val) = serde_json::from_str::<T>(&cached) {
-                    return axum::Json(val);
+                    return quarlus_core::http::Json(val);
                 }
                 // Deserialization failed — remove stale entry
                 store.remove(&key).await;
@@ -362,19 +362,19 @@ mod tests {
 
         let cache = Cache::ttl(60);
         // First call — cache miss
-        let result: axum::Json<Vec<String>> = cache
+        let result: quarlus_core::http::Json<Vec<String>> = cache
             .around(ctx, || async {
-                axum::Json(vec!["a".to_string(), "b".to_string()])
+                quarlus_core::http::Json(vec!["a".to_string(), "b".to_string()])
             })
             .await;
         assert_eq!(result.0, vec!["a".to_string(), "b".to_string()]);
 
         // Second call — cache hit (same key)
         let cache2 = Cache::ttl(60);
-        let result2: axum::Json<Vec<String>> = cache2
+        let result2: quarlus_core::http::Json<Vec<String>> = cache2
             .around(ctx, || async {
                 // Should NOT be called because of cache hit
-                axum::Json(vec!["c".to_string()])
+                quarlus_core::http::Json(vec!["c".to_string()])
             })
             .await;
         assert_eq!(result2.0, vec!["a".to_string(), "b".to_string()]);

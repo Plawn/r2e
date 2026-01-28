@@ -1,9 +1,11 @@
+pub mod beans;
 pub mod builder;
 pub mod config;
 pub mod controller;
 pub mod dev;
 pub mod error;
 pub mod guards;
+pub mod http;
 pub mod interceptors;
 pub mod layers;
 pub mod lifecycle;
@@ -13,6 +15,7 @@ pub mod state;
 #[cfg(feature = "validation")]
 pub mod validation;
 
+pub use beans::{Bean, BeanContext, BeanError, BeanRegistry, BeanState};
 pub use builder::AppBuilder;
 pub use config::QuarlusConfig;
 pub use controller::{Controller, StatefulConstruct};

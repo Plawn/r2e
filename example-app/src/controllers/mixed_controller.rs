@@ -20,9 +20,9 @@ pub struct MixedController {
 impl MixedController {
     /// Public endpoint — no authentication required.
     #[get("/public")]
-    async fn public_data(&self) -> axum::Json<Vec<User>> {
+    async fn public_data(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
-        axum::Json(users)
+        Json(users)
     }
 
     /// Protected endpoint — identity injected as handler parameter.
@@ -30,8 +30,8 @@ impl MixedController {
     async fn me(
         &self,
         #[inject(identity)] user: AuthenticatedUser,
-    ) -> axum::Json<AuthenticatedUser> {
-        axum::Json(user)
+    ) -> Json<AuthenticatedUser> {
+        Json(user)
     }
 
     /// Protected endpoint with role check — identity from handler parameter.
@@ -40,15 +40,15 @@ impl MixedController {
     async fn admin_only(
         &self,
         #[inject(identity)] _user: AuthenticatedUser,
-    ) -> axum::Json<Vec<User>> {
+    ) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
-        axum::Json(users)
+        Json(users)
     }
 
     /// Endpoint with a per-route Tower layer (2-second timeout).
     #[get("/slow")]
-    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, std::time::Duration::from_secs(2)))]
-    async fn slow_endpoint(&self) -> axum::Json<&'static str> {
-        axum::Json("done")
+    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(quarlus_core::http::StatusCode::REQUEST_TIMEOUT, std::time::Duration::from_secs(2)))]
+    async fn slow_endpoint(&self) -> Json<&'static str> {
+        Json("done")
     }
 }

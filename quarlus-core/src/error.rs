@@ -1,5 +1,5 @@
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use crate::http::response::{IntoResponse, Response};
+use crate::http::{Json, StatusCode};
 
 pub enum AppError {
     NotFound(String),
@@ -24,10 +24,10 @@ impl IntoResponse for AppError {
                     "error": "Validation failed",
                     "details": resp.errors,
                 });
-                (StatusCode::BAD_REQUEST, axum::Json(body)).into_response()
+                (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
             AppError::Custom { status, body } => {
-                (status, axum::Json(body)).into_response()
+                (status, Json(body)).into_response()
             }
             other => {
                 let (status, message) = match other {
@@ -41,7 +41,7 @@ impl IntoResponse for AppError {
                     AppError::Custom { .. } => unreachable!(),
                 };
                 let body = serde_json::json!({ "error": message });
-                (status, axum::Json(body)).into_response()
+                (status, Json(body)).into_response()
             }
         }
     }
