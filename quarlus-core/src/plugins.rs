@@ -87,3 +87,17 @@ impl<T: Clone + Send + Sync + 'static> Plugin<T> for DevReload {
         app.register_routes(crate::dev::dev_routes())
     }
 }
+
+/// Trailing-slash normalization plugin.
+///
+/// Removes trailing slashes from request paths, so `/users/` becomes `/users`.
+/// This ensures consistent routing regardless of whether clients include
+/// a trailing slash.
+pub struct NormalizePath;
+
+impl<T: Clone + Send + Sync + 'static> Plugin<T> for NormalizePath {
+    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        use tower_http::normalize_path::NormalizePathLayer;
+        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
+    }
+}

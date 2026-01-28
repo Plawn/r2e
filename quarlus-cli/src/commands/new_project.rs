@@ -11,7 +11,6 @@ pub fn run(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} Creating new Quarlus project: {}", "→".blue(), name.green());
 
     fs::create_dir_all(project_dir.join("src/controllers"))?;
-    fs::create_dir_all(project_dir.join("src"))?;
 
     // Cargo.toml
     let cargo_toml = format!(
@@ -23,7 +22,6 @@ edition = "2021"
 [dependencies]
 quarlus-core = "0.1"
 quarlus-macros = "0.1"
-quarlus-security = "0.1"
 axum = "0.8"
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
@@ -34,33 +32,67 @@ tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
     );
     fs::write(project_dir.join("Cargo.toml"), cargo_toml)?;
 
+    // state.rs
+    let state_rs = r#"use quarlus_core::prelude::*;
+
+#[derive(Clone, BeanState)]
+pub struct AppState {}
+"#;
+    fs::write(project_dir.join("src/state.rs"), state_rs)?;
+
+    // controllers/mod.rs
+    let controllers_mod = "pub mod hello;\n";
+    fs::write(project_dir.join("src/controllers/mod.rs"), controllers_mod)?;
+
+    // controllers/hello.rs
+    let hello_controller = r#"use crate::state::AppState;
+use quarlus_core::prelude::*;
+
+#[derive(Controller)]
+#[controller(path = "/", state = AppState)]
+pub struct HelloController;
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> &'static str {
+        "Hello, World!"
+    }
+}
+"#;
+    fs::write(project_dir.join("src/controllers/hello.rs"), hello_controller)?;
+
     // main.rs
-    let main_rs = r#"use quarlus_core::AppBuilder;
+    let main_rs = r#"use quarlus_core::prelude::*;
+use quarlus_core::plugins::{Health, Tracing};
 
 mod controllers;
+mod state;
+
+use controllers::hello::HelloController;
+use state::AppState;
 
 #[tokio::main]
 async fn main() {
     quarlus_core::init_tracing();
 
-    // TODO: set up your state and controllers
-
-    tracing::info!("Starting application");
+    AppBuilder::new()
+        .build_state::<AppState, _>()
+        .with(Health)
+        .with(Tracing)
+        .register_controller::<HelloController>()
+        .serve("0.0.0.0:8080")
+        .await
+        .unwrap();
 }
 "#;
     fs::write(project_dir.join("src/main.rs"), main_rs)?;
-
-    // controllers/mod.rs
-    fs::write(
-        project_dir.join("src/controllers/mod.rs"),
-        "// Add your controllers here\n",
-    )?;
 
     // application.yaml
     let app_yaml = format!(
         r#"app:
   name: {name}
-  port: 3000
+  port: 8080
 "#
     );
     fs::write(project_dir.join("application.yaml"), app_yaml)?;
@@ -69,6 +101,8 @@ async fn main() {
     println!();
     println!("  cd {name}");
     println!("  cargo run");
+    println!();
+    println!("Then visit: {}", "http://localhost:8080".cyan());
 
     Ok(())
 }

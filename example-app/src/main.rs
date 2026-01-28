@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use quarlus_core::config::{ConfigValue, QuarlusConfig};
-use quarlus_core::plugins::{Cors, DevReload, ErrorHandling, Health, Tracing};
+use quarlus_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath, Tracing};
 use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
 use quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
@@ -160,6 +160,7 @@ async fn main() {
         .register_controller::<MixedController>()
         .register_controller::<DbIdentityController>()
         .register_controller::<ScheduledJobs>()
+        .with(NormalizePath) // Must be last to normalize paths before routing
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

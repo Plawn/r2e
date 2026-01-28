@@ -8,14 +8,14 @@
 - cli ?
 - gestion de bean ? -> injection ? -> graph de dependance ? @ApplicationScoped ?
 - gestion d'un inject generique dans le body pour faire transactionnal plus clean
-- injecter l'identity dans les params handler et pas au niveau controller
+- injecter l'identity dans les params handler et pas au niveau controller -> OK
 - update doc -> DONE
 - derive Service et pas que controller ?
-- ecosystem tower ? quid ? ya quoi ? ça marche comment ?
-- ecosstems de middleware ?
-- register de scheduled -> avoir des bean de service et ça register auto
-- audit ce qui a besoin d'etre send + sync
+- ecosystem tower ? quid ? ya quoi ? ça marche comment ? -> OK
+- ecosstems de middleware ? -> OK
+- register de scheduled -> avoir des bean de service et ça register auto -> OK
+- audit ce qui a besoin d'etre send + sync -> OK
 - est ce qu'on peut pas leak certains singleton pour gagner des perfos ?
 - gestion de la secu plus flexible
-- gestion des extensions plus flexible -> systeme de plugin with(impl plugin) pour Cors, tracing, etc
+- gestion des extensions plus flexible -> systeme de plugin with(impl plugin) pour Cors, tracing, etc -> Systeme de plugin
 - routes en trop dans le openapi -> main route des controller (pas réellement de route, juste un prefix pour le reste)
