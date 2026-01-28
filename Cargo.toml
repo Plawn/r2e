@@ -9,6 +9,7 @@ members = [
     "quarlus-openapi",
     "quarlus-events",
     "quarlus-scheduler",
+    "quarlus-prometheus",
     "quarlus-cli",
     "quarlus-test",
     "quarlus-utils",

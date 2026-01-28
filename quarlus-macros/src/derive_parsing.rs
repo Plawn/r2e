@@ -8,6 +8,7 @@ pub struct ControllerStructDef {
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub config_fields: Vec<ConfigField>,
+    pub is_unit_struct: bool,
 }
 
 /// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
@@ -52,13 +53,14 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
     })?;
 
     // Parse fields
-    let fields = match input.data {
+    let (fields, is_unit_struct) = match input.data {
         syn::Data::Struct(data) => match data.fields {
-            syn::Fields::Named(named) => named.named,
-            _ => {
+            syn::Fields::Named(named) => (named.named, false),
+            syn::Fields::Unit => (syn::punctuated::Punctuated::new(), true),
+            syn::Fields::Unnamed(_) => {
                 return Err(syn::Error::new(
                     name.span(),
-                    "Controller must have named fields",
+                    "Controller cannot have tuple fields, use named fields or unit struct",
                 ))
             }
         },
@@ -139,5 +141,6 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         injected_fields,
         identity_fields,
         config_fields,
+        is_unit_struct,
     })
 }

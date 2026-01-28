@@ -127,6 +127,12 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         .chain(config_inits.iter())
         .collect();
 
+    let struct_init = if def.is_unit_struct {
+        quote! { #name }
+    } else {
+        quote! { #name { #(#all_inits,)* } }
+    };
+
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
@@ -140,9 +146,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                 __state: &#state_type,
             ) -> Result<Self, Self::Rejection> {
                 #(#identity_extractions)*
-                Ok(Self(#name {
-                    #(#all_inits,)*
-                }))
+                Ok(Self(#struct_init))
             }
         }
     }
@@ -186,12 +190,16 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         .chain(config_inits.iter())
         .collect();
 
+    let struct_init = if def.is_unit_struct {
+        quote! { #name }
+    } else {
+        quote! { Self { #(#all_inits,)* } }
+    };
+
     quote! {
         impl quarlus_core::StatefulConstruct<#state_type> for #name {
             fn from_state(__state: &#state_type) -> Self {
-                Self {
-                    #(#all_inits,)*
-                }
+                #struct_init
             }
         }
     }

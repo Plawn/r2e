@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
-use quarlus_core::config::{ConfigValue, QuarlusConfig};
+use quarlus_core::config::QuarlusConfig;
 use quarlus_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath, Tracing};
 use quarlus_core::AppBuilder;
 use quarlus_events::EventBus;
 use quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
+use quarlus_prometheus::Prometheus;
 use quarlus_scheduler::Scheduler;
 use quarlus_security::{JwtValidator, SecurityConfig};
 use sqlx::SqlitePool;
@@ -129,6 +130,12 @@ async fn main() {
         .build_state::<Services, _>()
         .with_config(config)
         .with(Health)
+        .with(Prometheus::builder()
+            .endpoint("/metrics")
+            .namespace("quarlus")
+            .exclude_path("/health")
+            .exclude_path("/metrics")
+            .build())
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling) // Error handling (#3)

@@ -580,8 +580,8 @@ fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             let __inner = quarlus_core::http::Router::new()
                 #(#route_registrations)*;
             match #meta_mod::PATH_PREFIX {
+                Some("/") | None => __inner,
                 Some(__prefix) => quarlus_core::http::Router::new().nest(__prefix, __inner),
-                None => __inner,
             }
         }
     };

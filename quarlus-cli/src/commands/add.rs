@@ -7,6 +7,10 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("openapi", "quarlus-openapi"),
     ("events", "quarlus-events"),
     ("scheduler", "quarlus-scheduler"),
+    ("cache", "quarlus-cache"),
+    ("rate-limit", "quarlus-rate-limit"),
+    ("utils", "quarlus-utils"),
+    ("prometheus", "quarlus-prometheus"),
     ("test", "quarlus-test"),
 ];
 
