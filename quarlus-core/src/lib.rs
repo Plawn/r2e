@@ -15,6 +15,7 @@ pub mod plugins;
 pub mod prelude;
 pub mod scheduling;
 pub mod state;
+pub mod type_list;
 #[cfg(feature = "validation")]
 pub mod validation;
 
@@ -30,5 +31,6 @@ pub use lifecycle::LifecycleController;
 pub use plugin::Plugin;
 pub use scheduling::{ScheduleConfig, ScheduledResult, ScheduledTaskDef};
 pub use state::QuarlusState;
+pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};
 
 pub use schemars;

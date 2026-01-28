@@ -81,6 +81,33 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         });
     }
 
+    // Generate BuildableFrom<P, Indices> impl with index witness type params.
+    // Each unique field type gets its own __I{n} parameter bundled into a tuple
+    // so the compiler can independently resolve Contains<FieldType, __I{n}>.
+    let mut buildable_seen = HashSet::new();
+    let mut idx_params = Vec::new();
+    let mut buildable_bounds = Vec::new();
+    let mut idx_counter = 0usize;
+    for field in fields {
+        let field_type = &field.ty;
+        let type_key = type_to_string(field_type);
+        if buildable_seen.insert(type_key) {
+            let idx_ident = quote::format_ident!("__I{}", idx_counter);
+            idx_counter += 1;
+            idx_params.push(quote! { #idx_ident });
+            buildable_bounds.push(quote! {
+                __P: quarlus_core::type_list::Contains<#field_type, #idx_ident>
+            });
+        }
+    }
+
+    // Bundle index witnesses into a tuple for the Indices parameter.
+    let indices_tuple = if idx_params.is_empty() {
+        quote! { () }
+    } else {
+        quote! { (#(#idx_params,)*) }
+    };
+
     Ok(quote! {
         impl quarlus_core::beans::BeanState for #name {
             fn from_context(ctx: &quarlus_core::beans::BeanContext) -> Self {
@@ -89,6 +116,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
         }
+
+        impl<__P, #(#idx_params,)*> quarlus_core::type_list::BuildableFrom<__P, #indices_tuple> for #name
+        where
+            #(#buildable_bounds,)*
+        {}
 
         #(#from_ref_impls)*
     })

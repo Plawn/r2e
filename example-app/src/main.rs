@@ -65,22 +65,7 @@ async fn main() {
     // --- Configuration (#1) ---
     // load() succeeds even when application.yaml is absent (env vars still overlay),
     // so we always ensure the required keys exist with sensible defaults.
-    let mut config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
-    if config.get::<String>("app.name").is_err() {
-        config.set(
-            "app.name",
-            ConfigValue::String("Quarlus Example App".into()),
-        );
-    }
-    if config.get::<String>("app.greeting").is_err() {
-        config.set(
-            "app.greeting",
-            ConfigValue::String("Welcome to Quarlus!".into()),
-        );
-    }
-    if config.get::<String>("app.version").is_err() {
-        config.set("app.version", ConfigValue::String("0.1.0".into()));
-    }
+    let config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
 
     // --- Events (#7) ---
     let event_bus = EventBus::new();
@@ -141,7 +126,7 @@ async fn main() {
         .provide(cancel)
         .provide(quarlus_rate_limit::RateLimitRegistry::default())
         .with_bean::<UserService>()
-        .build_state::<Services>()
+        .build_state::<Services, _>()
         .with_config(config)
         .with(Health)
         .with(Cors::permissive())

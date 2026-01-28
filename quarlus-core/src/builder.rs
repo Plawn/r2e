@@ -3,6 +3,8 @@ use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::plugin::Plugin;
 use crate::scheduling::{ScheduledTaskDef, SchedulerStartFn, SchedulerStopFn};
+use crate::type_list::{BuildableFrom, TCons, TNil};
+use std::marker::PhantomData;
 use tracing::info;
 
 type ConsumerReg<T> =
@@ -43,7 +45,7 @@ struct BuilderConfig {
 /// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
 /// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
 /// or `.serve()`.
-pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState> {
+pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
     shared: BuilderConfig,
     state: Option<T>,
     routes: Vec<crate::http::Router<T>>,
@@ -56,11 +58,12 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState> {
     scheduled_task_defs: Vec<ScheduledTaskDef<T>>,
     scheduler_starter: Option<SchedulerStartFn<T>>,
     scheduler_stopper: Option<SchedulerStopFn>,
+    _provided: PhantomData<P>,
 }
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
-impl AppBuilder<NoState> {
+impl AppBuilder<NoState, TNil> {
     /// Create a new, empty builder in the pre-state phase.
     pub fn new() -> Self {
         Self {
@@ -79,26 +82,55 @@ impl AppBuilder<NoState> {
             scheduled_task_defs: Vec::new(),
             scheduler_starter: None,
             scheduler_stopper: None,
+            _provided: PhantomData,
         }
     }
+}
 
+impl<P> AppBuilder<NoState, P> {
     /// Provide a pre-built bean instance.
     ///
     /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
     /// for beans that depend on type `B`, and will be pulled into the state
     /// struct when [`build_state`](Self::build_state) is called.
-    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> Self {
+    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>> {
         self.shared.bean_registry.provide(bean);
-        self
+        AppBuilder {
+            shared: self.shared,
+            state: None,
+            routes: self.routes,
+            startup_hooks: self.startup_hooks,
+            shutdown_hooks: self.shutdown_hooks,
+            route_metadata: self.route_metadata,
+            openapi_builder: self.openapi_builder,
+            consumer_registrations: self.consumer_registrations,
+            scheduled_task_defs: self.scheduled_task_defs,
+            scheduler_starter: self.scheduler_starter,
+            scheduler_stopper: self.scheduler_stopper,
+            _provided: PhantomData,
+        }
     }
 
     /// Register a bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans and
     /// provided instances when [`build_state`](Self::build_state) is called.
-    pub fn with_bean<B: Bean>(mut self) -> Self {
+    pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
         self.shared.bean_registry.register::<B>();
-        self
+        AppBuilder {
+            shared: self.shared,
+            state: None,
+            routes: self.routes,
+            startup_hooks: self.startup_hooks,
+            shutdown_hooks: self.shutdown_hooks,
+            route_metadata: self.route_metadata,
+            openapi_builder: self.openapi_builder,
+            consumer_registrations: self.consumer_registrations,
+            scheduled_task_defs: self.scheduled_task_defs,
+            scheduler_starter: self.scheduler_starter,
+            scheduler_stopper: self.scheduler_stopper,
+            _provided: PhantomData,
+        }
     }
 
     /// Resolve the bean dependency graph and build the application state.
@@ -112,16 +144,22 @@ impl AppBuilder<NoState> {
     /// Panics if the bean graph has cycles, missing dependencies, or
     /// duplicate registrations. Use [`try_build_state`](Self::try_build_state)
     /// for a non-panicking alternative.
-    pub fn build_state<S: BeanState>(self) -> AppBuilder<S> {
+    pub fn build_state<S, Idx>(self) -> AppBuilder<S>
+    where
+        S: BeanState + BuildableFrom<P, Idx>,
+    {
         self.try_build_state()
             .expect("Failed to resolve bean dependency graph")
     }
 
     /// Resolve the bean dependency graph and build the application state,
     /// returning an error instead of panicking on resolution failure.
-    pub fn try_build_state<S: BeanState>(
+    pub fn try_build_state<S, Idx>(
         mut self,
-    ) -> Result<AppBuilder<S>, crate::beans::BeanError> {
+    ) -> Result<AppBuilder<S>, crate::beans::BeanError>
+    where
+        S: BeanState + BuildableFrom<P, Idx>,
+    {
         let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
         let ctx = registry.resolve()?;
         let state = S::from_context(&ctx);
@@ -131,12 +169,13 @@ impl AppBuilder<NoState> {
     /// Provide a pre-built state directly (backward-compatible path).
     ///
     /// This skips the bean graph entirely. The bean registry is discarded.
+    /// No compile-time provision checking is performed.
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
         AppBuilder::<S>::from_pre(self.shared, state)
     }
 }
 
-impl Default for AppBuilder<NoState> {
+impl Default for AppBuilder<NoState, TNil> {
     fn default() -> Self {
         Self::new()
     }
@@ -161,6 +200,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             scheduled_task_defs: Vec::new(),
             scheduler_starter: None,
             scheduler_stopper: None,
+            _provided: PhantomData,
         }
     }
 
@@ -186,7 +226,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///     .with(ErrorHandling)
     ///     .with(DevReload)
     /// ```
-    pub fn with<P: Plugin<T>>(self, plugin: P) -> Self {
+    pub fn with<Pl: Plugin<T>>(self, plugin: Pl) -> Self {
         plugin.install(self)
     }
 
