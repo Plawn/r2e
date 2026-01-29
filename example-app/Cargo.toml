@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-quarlus-core = { path = "../quarlus-core", features = ["sqlx", "validation"] }
+quarlus-core = { path = "../quarlus-core", features = ["validation"] }
 quarlus-macros = { path = "../quarlus-macros" }
 quarlus-cache = { path = "../quarlus-cache" }
 quarlus-rate-limit = { path = "../quarlus-rate-limit" }

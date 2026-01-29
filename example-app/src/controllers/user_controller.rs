@@ -1,9 +1,10 @@
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
-use crate::state::Services;
+use crate::state::{Services, Tx};
 use quarlus_core::prelude::*;
 use quarlus_utils::interceptors::{Cache, CacheInvalidate, Logged, Timed};
 use quarlus_security::AuthenticatedUser;
+use sqlx::Sqlite;
 use std::future::Future;
 
 /// A custom user-defined interceptor for audit logging.
@@ -87,22 +88,22 @@ impl UserController {
     }
 
     #[post("/db")]
-    #[transactional]
     async fn create_in_db(
         &self,
         Json(body): Json<CreateUserRequest>,
+        #[managed] tx: &mut Tx<'_, Sqlite>,
     ) -> Result<Json<User>, quarlus_core::AppError> {
         sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
             .bind(&body.name)
             .bind(&body.email)
-            .execute(&mut *tx)
+            .execute(tx.as_mut())
             .await
             .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
 
         let row = sqlx::query_as::<_, (i64, String, String)>(
             "SELECT id, name, email FROM users WHERE rowid = last_insert_rowid()",
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(tx.as_mut())
         .await
         .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
 

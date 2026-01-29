@@ -40,6 +40,12 @@ pub struct IdentityParam {
     pub ty: syn::Type,
 }
 
+/// Parameter marked with `#[managed]` for automatic lifecycle management.
+pub struct ManagedParam {
+    pub index: usize,
+    pub ty: syn::Type,
+}
+
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
@@ -50,6 +56,7 @@ pub struct RouteMethod {
     pub middleware_fns: Vec<syn::Path>,
     pub layer_exprs: Vec<syn::Expr>,
     pub identity_param: Option<IdentityParam>,
+    pub managed_params: Vec<ManagedParam>,
     pub fn_item: syn::ImplItemFn,
 }
 

@@ -329,11 +329,167 @@ AppBuilder::new()
 - `config.get_or("key", default)` — retrieve with fallback.
 - `#[config("app.key")]` field attribute on controllers — injected at request time from the config stored in state.
 
+### Managed Resources (quarlus-core)
+
+The `#[managed]` attribute enables automatic lifecycle management for resources like database transactions, connections, scoped caches, or audit contexts. Resources are acquired before handler execution and released after, with success/failure status.
+
+**Core trait:**
+```rust
+pub trait ManagedResource<S>: Sized {
+    type Error: Into<Response>;
+
+    async fn acquire(state: &S) -> Result<Self, Self::Error>;
+    async fn release(self, success: bool) -> Result<(), Self::Error>;
+}
+```
+
+**Usage with `#[managed]`:**
+```rust
+#[routes]
+impl UserController {
+    #[post("/")]
+    async fn create(
+        &self,
+        body: Json<User>,
+        #[managed] tx: &mut Tx<'_, Sqlite>,  // Acquired before, released after
+    ) -> Result<Json<User>, MyAppError> {
+        sqlx::query("INSERT INTO users ...").execute(tx.as_mut()).await?;
+        Ok(Json(user))
+    }
+}
+```
+
+**Lifecycle:**
+1. `acquire(&state)` — called before handler, resource obtained from app state
+2. Handler receives `&mut Resource`
+3. `release(self, success)` — called after handler
+   - `success = true` if handler returned `Ok` or non-Result type
+   - `success = false` if handler returned `Err`
+
+**Example: Transaction wrapper (user-defined):**
+```rust
+// Define the wrapper type
+pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
+
+// Define how to get a pool from state
+pub trait HasPool<DB: Database> {
+    fn pool(&self) -> &Pool<DB>;
+}
+
+// Implement ManagedResource
+impl<S, DB> ManagedResource<S> for Tx<'static, DB>
+where
+    DB: Database,
+    S: HasPool<DB> + Send + Sync,
+{
+    type Error = ManagedErr<MyAppError>;
+
+    async fn acquire(state: &S) -> Result<Self, Self::Error> {
+        let tx = state.pool().begin().await
+            .map_err(|e| MyAppError::Database(e.to_string()))?;
+        Ok(Tx(tx))
+    }
+
+    async fn release(self, success: bool) -> Result<(), Self::Error> {
+        if success {
+            self.0.commit().await
+                .map_err(|e| MyAppError::Database(e.to_string()))?;
+        }
+        // On failure: transaction dropped → automatic rollback
+        Ok(())
+    }
+}
+```
+
+**Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code as it's more flexible and explicit.
+
+### Error Handling (quarlus-core)
+
+Quarlus provides `AppError` as a default error type, but applications can define custom error types.
+
+**Using the built-in `AppError`:**
+```rust
+use quarlus_core::AppError;
+
+#[get("/{id}")]
+async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
+    let user = self.service.find(id).await
+        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+    Ok(Json(user))
+}
+```
+
+**Defining a custom error type:**
+```rust
+use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::Json;
+
+#[derive(Debug)]
+pub enum MyAppError {
+    NotFound(String),
+    Database(String),
+    Validation(String),
+    Internal(String),
+}
+
+// Required: convert to HTTP response
+impl IntoResponse for MyAppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            MyAppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            MyAppError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            MyAppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            MyAppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+        let body = serde_json::json!({ "error": message });
+        (status, Json(body)).into_response()
+    }
+}
+
+// Optional: automatic conversion from other error types
+impl From<sqlx::Error> for MyAppError {
+    fn from(err: sqlx::Error) -> Self {
+        MyAppError::Database(err.to_string())
+    }
+}
+```
+
+**Error wrappers for `ManagedResource`:**
+
+The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. Quarlus provides two wrappers:
+
+- `ManagedError` — wraps the built-in `AppError`
+- `ManagedErr<E>` — generic wrapper for any error type implementing `IntoResponse`
+
+```rust
+use quarlus_core::{ManagedResource, ManagedErr};
+
+impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
+    type Error = ManagedErr<MyAppError>;  // Use your custom error
+
+    async fn acquire(state: &S) -> Result<Self, Self::Error> {
+        let tx = state.pool().begin().await
+            .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+        Ok(Tx(tx))
+    }
+    // ...
+}
+```
+
+**Why `ManagedErr<E>` is needed:**
+
+Rust's orphan rules prevent implementing foreign traits (`Into`) for foreign types (`Response`). `ManagedErr<E>` is a local newtype that bridges the gap:
+
+```
+MyAppError (your type)     →  ManagedErr<MyAppError> (quarlus type)  →  Response (axum type)
+         impl IntoResponse              impl Into<Response>
+```
+
 ### Feature Flags
 
-- `quarlus-core` has an optional `sqlx` feature that enables `sqlx::Error` → `AppError` conversion.
 - `quarlus-core` has an optional `validation` feature that enables the `Validated<T>` extractor.
-- `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field.
+- `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field. Consider using `#[managed]` instead for more flexibility.
 
 ## Language & Documentation
 

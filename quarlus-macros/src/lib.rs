@@ -435,6 +435,53 @@ pub fn layer(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Mark a handler parameter as a **managed resource** with automatic lifecycle.
+///
+/// Managed resources implement [`quarlus_core::ManagedResource`] and have their
+/// lifecycle (acquire/release) handled automatically by the macro. The parameter
+/// type must be a mutable reference (`&mut T`).
+///
+/// The most common use case is database transactions via `Tx<DB>`:
+///
+/// ```ignore
+/// use quarlus_core::{Tx, HasPool};
+/// use sqlx::Sqlite;
+///
+/// #[post("/users")]
+/// async fn create(
+///     &self,
+///     body: Json<CreateUser>,
+///     #[managed] tx: &mut Tx<Sqlite>,
+/// ) -> Result<Json<User>, AppError> {
+///     sqlx::query("INSERT INTO users (name) VALUES (?)")
+///         .bind(&body.name)
+///         .execute(&mut **tx)
+///         .await?;
+///     Ok(Json(user))
+/// }
+/// ```
+///
+/// The generated handler will:
+/// 1. Call `ManagedResource::acquire()` before the method body
+/// 2. Pass `&mut resource` to the method
+/// 3. Call `ManagedResource::release(success)` after the method completes
+///    - `success = true` if the method returned `Ok` (or a non-Result type)
+///    - `success = false` if the method returned `Err`
+///
+/// For `Tx<DB>`:
+/// - `acquire()` begins a new transaction
+/// - `release(true)` commits the transaction
+/// - `release(false)` does nothing (transaction rolls back on drop)
+///
+/// **Note:** `#[managed]` and `#[transactional]` are mutually exclusive.
+/// Use `#[managed] tx: &mut Tx<...>` instead of `#[transactional]`.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn managed(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 // ---------------------------------------------------------------------------
 // Bean / DI macros
 // ---------------------------------------------------------------------------

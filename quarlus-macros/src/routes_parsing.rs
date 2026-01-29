@@ -143,6 +143,18 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     // Detect #[inject(identity)] on handler params
                     let identity_param = extract_identity_param(&mut method)?;
 
+                    // Detect #[managed] on handler params
+                    let managed_params = extract_managed_params(&mut method)?;
+
+                    // Validate: #[managed] and #[transactional] are mutually exclusive
+                    if transactional.is_some() && !managed_params.is_empty() {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[managed] and #[transactional] cannot be used together; \
+                             use #[managed] tx: &mut Tx<...> instead of #[transactional]",
+                        ));
+                    }
+
                     route_methods.push(RouteMethod {
                         method: http_method,
                         path,
@@ -153,6 +165,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         middleware_fns,
                         layer_exprs,
                         identity_param,
+                        managed_params,
                         fn_item: method,
                     });
                 } else {

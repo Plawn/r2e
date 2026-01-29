@@ -236,8 +236,17 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         .enumerate()
         .collect();
 
+    // Collect managed param indices for special handling
+    let managed_indices: std::collections::HashSet<usize> = rm
+        .managed_params
+        .iter()
+        .map(|mp| mp.index)
+        .collect();
+
+    // Handler parameters: skip managed params (they're acquired from state)
     let handler_extra_params: Vec<_> = extra_params
         .iter()
+        .filter(|(i, _)| !managed_indices.contains(i))
         .map(|(i, pt)| {
             let arg_name = format_ident!("__arg_{}", i);
             let ty = &pt.ty;
@@ -245,11 +254,17 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         })
         .collect();
 
+    // Build call args, substituting managed params with mutable refs
     let call_args: Vec<_> = extra_params
         .iter()
         .map(|(i, _)| {
             let arg_name = format_ident!("__arg_{}", i);
-            quote! { #arg_name }
+            if managed_indices.contains(i) {
+                // Pass mutable reference to the managed resource
+                quote! { &mut #arg_name }
+            } else {
+                quote! { #arg_name }
+            }
         })
         .collect();
 
@@ -259,7 +274,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         quote! { __ctrl.#fn_name(#(#call_args),*) }
     };
 
-    let needs_response = !rm.guard_fns.is_empty();
+    let has_guards = !rm.guard_fns.is_empty();
+    let has_managed = !rm.managed_params.is_empty();
+
+    // Determine if we need Response return type
+    let needs_response = has_guards || has_managed;
 
     if !needs_response {
         // Simple handler: returns the method's own type
@@ -274,7 +293,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         }
     } else {
-        // Guarded handler: returns Response to allow short-circuit
+        // Complex handler: returns Response to allow short-circuit
         let guard_checks: Vec<TokenStream> = rm
             .guard_fns
             .iter()
@@ -292,44 +311,126 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             .collect();
 
         // Build guard context based on identity source
-        let guard_context_construction = if let Some(ref id_param) = rm.identity_param {
-            // Case A: param-level identity — use the handler param as identity source
-            let arg_name = format_ident!("__arg_{}", id_param.index);
-            quote! {
-                let __guard_ctx = quarlus_core::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    headers: &__headers,
-                    identity: Some(&#arg_name),
-                };
+        let guard_context_construction = if has_guards {
+            if let Some(ref id_param) = rm.identity_param {
+                // Case A: param-level identity — use the handler param as identity source
+                let arg_name = format_ident!("__arg_{}", id_param.index);
+                quote! {
+                    let __guard_ctx = quarlus_core::GuardContext {
+                        method_name: #fn_name_str,
+                        controller_name: #controller_name_str,
+                        headers: &__headers,
+                        identity: Some(&#arg_name),
+                    };
+                }
+            } else {
+                // Case B: struct-level identity or no identity
+                quote! {
+                    let __guard_ctx = quarlus_core::GuardContext {
+                        method_name: #fn_name_str,
+                        controller_name: #controller_name_str,
+                        headers: &__headers,
+                        identity: #meta_mod::guard_identity(&__ctrl_ext.0),
+                    };
+                }
             }
         } else {
-            // Case B: struct-level identity or no identity
-            quote! {
-                let __guard_ctx = quarlus_core::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    headers: &__headers,
-                    identity: #meta_mod::guard_identity(&__ctrl_ext.0),
-                };
+            quote! {}
+        };
+
+        // Generate managed resource acquisition
+        let managed_acquire: Vec<TokenStream> = rm
+            .managed_params
+            .iter()
+            .map(|mp| {
+                let arg_name = format_ident!("__arg_{}", mp.index);
+                let ty = &mp.ty;
+                quote! {
+                    let mut #arg_name = match <#ty as quarlus_core::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
+                        Ok(__r) => __r,
+                        Err(__e) => return __e.into(),
+                    };
+                }
+            })
+            .collect();
+
+        // Generate managed resource release (in reverse order)
+        let managed_release: Vec<TokenStream> = rm
+            .managed_params
+            .iter()
+            .rev()
+            .map(|mp| {
+                let arg_name = format_ident!("__arg_{}", mp.index);
+                let ty = &mp.ty;
+                quote! {
+                    if let Err(__e) = <#ty as quarlus_core::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
+                        return __e.into();
+                    }
+                }
+            })
+            .collect();
+
+        // Determine if the return type is a Result (for success detection)
+        let is_result = is_result_type(return_type);
+
+        let body_and_release = if has_managed {
+            if is_result {
+                quote! {
+                    let __result = #call_expr;
+                    let __success = __result.is_ok();
+                    #(#managed_release)*
+                    quarlus_core::http::response::IntoResponse::into_response(__result)
+                }
+            } else {
+                // Non-Result type: always success
+                quote! {
+                    let __result = #call_expr;
+                    let __success = true;
+                    #(#managed_release)*
+                    quarlus_core::http::response::IntoResponse::into_response(__result)
+                }
             }
+        } else {
+            quote! {
+                quarlus_core::http::response::IntoResponse::into_response(#call_expr)
+            }
+        };
+
+        // Determine if we need headers (for guards)
+        let headers_param = if has_guards {
+            quote! { __headers: quarlus_core::http::HeaderMap, }
+        } else {
+            quote! {}
         };
 
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
                 quarlus_core::http::extract::State(__state): quarlus_core::http::extract::State<#meta_mod::State>,
-                __headers: quarlus_core::http::HeaderMap,
+                #headers_param
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
             ) -> quarlus_core::http::response::Response {
                 #guard_context_construction
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
-                quarlus_core::http::response::IntoResponse::into_response(#call_expr)
+                #(#managed_acquire)*
+                #body_and_release
             }
         }
     }
+}
+
+/// Checks if a return type annotation is a Result type.
+fn is_result_type(return_type: &syn::ReturnType) -> bool {
+    if let syn::ReturnType::Type(_, ty) = return_type {
+        if let syn::Type::Path(type_path) = ty.as_ref() {
+            if let Some(segment) = type_path.path.segments.last() {
+                return segment.ident == "Result";
+            }
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------

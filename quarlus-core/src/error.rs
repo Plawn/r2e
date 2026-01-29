@@ -74,13 +74,6 @@ impl From<std::io::Error> for AppError {
     }
 }
 
-#[cfg(feature = "sqlx")]
-impl From<sqlx::Error> for AppError {
-    fn from(err: sqlx::Error) -> Self {
-        AppError::Internal(err.to_string())
-    }
-}
-
 /// Generate `From<E> for AppError` implementations that map error types to
 /// a specific `AppError` variant.
 ///
