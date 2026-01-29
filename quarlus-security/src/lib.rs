@@ -4,14 +4,19 @@ pub mod extractor;
 pub mod identity;
 pub mod jwks;
 pub mod jwt;
+pub mod keycloak;
+pub mod openid;
 
 // Re-export primary public types for convenience.
 pub use config::SecurityConfig;
 pub use error::SecurityError;
-pub use extractor::extract_jwt_identity;
+pub use extractor::{extract_jwt_claims, extract_jwt_identity};
 pub use identity::{
     AuthenticatedUser, DefaultIdentityBuilder, DefaultRoleExtractor, IdentityBuilder,
-    RoleExtractor,
+    IdentityBuilderWith,
 };
 pub use jwks::JwksCache;
-pub use jwt::JwtValidator;
+pub use jwt::{JwtClaimsValidator, JwtValidator};
+
+// Re-export the base RoleExtractor trait at crate root for convenience.
+pub use openid::RoleExtractor;

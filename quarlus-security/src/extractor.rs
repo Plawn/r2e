@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use crate::error::SecurityError;
 use crate::identity::{AuthenticatedUser, IdentityBuilder};
-use crate::jwt::JwtValidator;
+use crate::jwt::{JwtClaimsValidator, JwtValidator};
 
 /// Extract a Bearer token from the Authorization header value.
 fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
@@ -20,40 +20,10 @@ fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
     Ok(parts[1])
 }
 
-/// Extract and validate a JWT identity from request parts.
+/// Extract the Bearer token from request headers.
 ///
-/// This is the shared extraction logic used by [`AuthenticatedUser`]'s
-/// `FromRequestParts` implementation. Use it to implement `FromRequestParts`
-/// for your own identity type backed by a custom [`IdentityBuilder`].
-///
-/// # Example
-///
-/// ```ignore
-/// impl<S> FromRequestParts<S> for DbUser
-/// where
-///     S: Send + Sync,
-///     Arc<JwtValidator<DbIdentityBuilder>>: FromRef<S>,
-/// {
-///     type Rejection = quarlus_core::AppError;
-///
-///     async fn from_request_parts(
-///         parts: &mut Parts,
-///         state: &S,
-///     ) -> Result<Self, Self::Rejection> {
-///         quarlus_security::extract_jwt_identity::<S, DbIdentityBuilder>(parts, state).await
-///     }
-/// }
-/// ```
-pub async fn extract_jwt_identity<S, B>(
-    parts: &mut Parts,
-    state: &S,
-) -> Result<B::Identity, quarlus_core::AppError>
-where
-    S: Send + Sync,
-    B: IdentityBuilder + 'static,
-    Arc<JwtValidator<B>>: FromRef<S>,
-{
-    // 1. Extract the Authorization header
+/// Returns the raw token string without validation.
+pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityError> {
     let auth_header = parts.headers.get(AUTHORIZATION).ok_or_else(|| {
         warn!(uri = %parts.uri, "Missing Authorization header");
         SecurityError::MissingAuthHeader
@@ -63,13 +33,130 @@ where
         .to_str()
         .map_err(|_| SecurityError::InvalidAuthScheme)?;
 
-    // 2. Extract the Bearer token
-    let token = extract_bearer_token(auth_value)?;
+    extract_bearer_token(auth_value)
+}
 
-    // 3. Get the JwtValidator from state
+/// Extract and validate JWT claims from request parts.
+///
+/// This is the low-level extraction function that validates the JWT and returns
+/// raw claims. Use this when implementing custom identity types that need
+/// additional processing (e.g., database lookup).
+///
+/// # Example: Custom identity with database lookup
+///
+/// ```ignore
+/// use quarlus_security::{extract_jwt_claims, JwtClaimsValidator, AuthenticatedUser};
+/// use quarlus_core::http::extract::{FromRef, FromRequestParts};
+///
+/// pub struct DbUser {
+///     pub claims: AuthenticatedUser,
+///     pub profile: UserProfile,
+/// }
+///
+/// impl<S> FromRequestParts<S> for DbUser
+/// where
+///     S: Send + Sync,
+///     Arc<JwtClaimsValidator>: FromRef<S>,
+///     SqlitePool: FromRef<S>,
+/// {
+///     type Rejection = quarlus_core::AppError;
+///
+///     async fn from_request_parts(
+///         parts: &mut Parts,
+///         state: &S,
+///     ) -> Result<Self, Self::Rejection> {
+///         // 1. Validate JWT and get claims
+///         let claims = extract_jwt_claims(parts, state).await?;
+///         let sub = claims["sub"].as_str().unwrap_or_default();
+///
+///         // 2. Build light identity from claims
+///         let authenticated = AuthenticatedUser::from_claims(claims);
+///
+///         // 3. Database lookup (only for this identity type)
+///         let pool = SqlitePool::from_ref(state);
+///         let profile = sqlx::query_as!(UserProfile, "SELECT * FROM users WHERE sub = ?", sub)
+///             .fetch_one(&pool)
+///             .await
+///             .map_err(|e| quarlus_core::AppError::internal(e.to_string()))?;
+///
+///         Ok(DbUser { claims: authenticated, profile })
+///     }
+/// }
+/// ```
+///
+/// Now you can use both identity types in your controllers:
+///
+/// ```ignore
+/// #[get("/light")]
+/// async fn light(&self, user: AuthenticatedUser) -> Json<...> {
+///     // No database round-trip
+/// }
+///
+/// #[get("/full")]
+/// async fn full(&self, user: DbUser) -> Json<...> {
+///     // With database lookup
+/// }
+/// ```
+pub async fn extract_jwt_claims<S>(
+    parts: &Parts,
+    state: &S,
+) -> Result<serde_json::Value, quarlus_core::AppError>
+where
+    S: Send + Sync,
+    Arc<JwtClaimsValidator>: FromRef<S>,
+{
+    let token = extract_bearer_token_from_parts(parts)?;
+    let validator: Arc<JwtClaimsValidator> = Arc::from_ref(state);
+
+    let claims = validator.validate(token).await.map_err(|e| {
+        warn!(uri = %parts.uri, error = %e, "JWT validation failed");
+        quarlus_core::AppError::from(e)
+    })?;
+
+    debug!(uri = %parts.uri, "JWT claims extracted");
+    Ok(claims)
+}
+
+/// Extract and validate a JWT identity from request parts.
+///
+/// This is the shared extraction logic used by [`AuthenticatedUser`]'s
+/// `FromRequestParts` implementation. Use it to implement `FromRequestParts`
+/// for your own identity type backed by a custom [`IdentityBuilder`].
+///
+/// For custom identities that need additional processing (like database lookups),
+/// prefer using [`extract_jwt_claims`] instead, which gives you access to raw
+/// claims for custom handling.
+///
+/// # Example
+///
+/// ```ignore
+/// impl<S> FromRequestParts<S> for MyUser
+/// where
+///     S: Send + Sync,
+///     Arc<JwtValidator<MyIdentityBuilder>>: FromRef<S>,
+/// {
+///     type Rejection = quarlus_core::AppError;
+///
+///     async fn from_request_parts(
+///         parts: &mut Parts,
+///         state: &S,
+///     ) -> Result<Self, Self::Rejection> {
+///         extract_jwt_identity::<S, MyIdentityBuilder>(parts, state).await
+///     }
+/// }
+/// ```
+pub async fn extract_jwt_identity<S, B>(
+    parts: &Parts,
+    state: &S,
+) -> Result<B::Identity, quarlus_core::AppError>
+where
+    S: Send + Sync,
+    B: IdentityBuilder + 'static,
+    Arc<JwtValidator<B>>: FromRef<S>,
+{
+    let token = extract_bearer_token_from_parts(parts)?;
     let validator: Arc<JwtValidator<B>> = Arc::from_ref(state);
 
-    // 4. Validate the token and build the identity
     let identity = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
         quarlus_core::AppError::from(e)
@@ -85,10 +172,9 @@ where
 /// validates it using the `JwtValidator` from the application state,
 /// and returns an `AuthenticatedUser` on success.
 ///
-/// The application state must implement `FromRef<S>` for `Arc<JwtValidator>`.
-///
-/// For custom identity types, use [`extract_jwt_identity`] to implement
-/// `FromRequestParts` with minimal boilerplate.
+/// The application state must provide either:
+/// - `Arc<JwtValidator>` via `FromRef` (recommended for simple cases)
+/// - `Arc<JwtClaimsValidator>` via `FromRef` (for multiple identity types)
 ///
 /// # Example
 ///
@@ -100,7 +186,7 @@ where
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
-    Arc<JwtValidator>: quarlus_core::http::extract::FromRef<S>,
+    Arc<JwtClaimsValidator>: FromRef<S>,
 {
     type Rejection = quarlus_core::AppError;
 
@@ -108,6 +194,7 @@ where
         parts: &mut Parts,
         state: &S,
     ) -> Result<Self, Self::Rejection> {
-        extract_jwt_identity::<S, crate::identity::DefaultIdentityBuilder>(parts, state).await
+        let claims = extract_jwt_claims(parts, state).await?;
+        Ok(AuthenticatedUser::from_claims(claims))
     }
 }

@@ -17,6 +17,5 @@
 - audit ce qui a besoin d'etre send + sync -> OK
 - est ce qu'on peut pas leak certains singleton pour gagner des perfos ?
 - gestion de la secu plus flexible
-- gestion des extensions plus flexible -> systeme de plugin with(impl plugin) pour Cors, tracing, etc -> Systeme de plugin
-- routes en trop dans le openapi -> main route des controller (pas réellement de route, juste un prefix pour le reste)
 - faire en sorte de pouvoir expandre les erreurs du framework facilement avec un impl from et une response
+- xicta web ? -> zero copy ?

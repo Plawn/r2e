@@ -4,19 +4,17 @@ use quarlus_core::prelude::*;
 use quarlus_core::{AppError, ManagedError, ManagedResource, QuarlusConfig};
 use quarlus_events::EventBus;
 use quarlus_rate_limit::RateLimitRegistry;
-use quarlus_security::JwtValidator;
+use quarlus_security::JwtClaimsValidator;
 use sqlx::{Database, Pool, Sqlite, Transaction};
 use std::ops::{Deref, DerefMut};
 use tokio_util::sync::CancellationToken;
 
-use crate::db_identity::DbIdentityBuilder;
 use crate::services::UserService;
 
 #[derive(Clone, BeanState)]
 pub struct Services {
     pub user_service: UserService,
-    pub jwt_validator: Arc<JwtValidator>,
-    pub db_jwt_validator: Arc<JwtValidator<DbIdentityBuilder>>,
+    pub claims_validator: Arc<JwtClaimsValidator>,
     pub pool: sqlx::SqlitePool,
     pub event_bus: EventBus,
     pub config: QuarlusConfig,

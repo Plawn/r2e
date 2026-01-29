@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::SecurityError;
+use crate::keycloak;
+use crate::openid::{Composite, RoleExtractor, StandardRoleExtractor};
 
 /// Trait for building an identity from validated JWT claims.
 ///
@@ -58,42 +60,70 @@ pub trait IdentityBuilder: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Self::Identity, SecurityError>> + Send;
 }
 
-/// Default identity builder that produces [`AuthenticatedUser`].
+/// Identity builder that produces [`AuthenticatedUser`] using a configurable role extractor.
 ///
-/// Uses a [`RoleExtractor`] to extract roles from JWT claims.
-pub struct DefaultIdentityBuilder {
-    role_extractor: Box<dyn RoleExtractor>,
+/// The type parameter `R` determines how roles are extracted from JWT claims.
+/// Use [`DefaultIdentityBuilder`] for the common case with automatic Keycloak support.
+///
+/// # Example
+///
+/// ```ignore
+/// use quarlus_security::{IdentityBuilderWith, keycloak};
+///
+/// // Use Keycloak-specific extractor
+/// let extractor = keycloak::RoleExtractor::new()
+///     .with_realm_roles()
+///     .with_client("my-api");
+///
+/// let builder = IdentityBuilderWith::new(extractor);
+/// ```
+#[derive(Debug)]
+pub struct IdentityBuilderWith<R> {
+    role_extractor: R,
 }
 
-impl DefaultIdentityBuilder {
-    /// Create a new builder with the [`DefaultRoleExtractor`].
-    pub fn new() -> Self {
-        Self {
-            role_extractor: Box::new(DefaultRoleExtractor),
-        }
-    }
-
-    /// Create a new builder with a custom role extractor.
-    pub fn with_extractor(role_extractor: Box<dyn RoleExtractor>) -> Self {
+impl<R> IdentityBuilderWith<R> {
+    /// Create a new identity builder with the given role extractor.
+    pub fn new(role_extractor: R) -> Self {
         Self { role_extractor }
     }
-}
 
-impl Default for DefaultIdentityBuilder {
-    fn default() -> Self {
-        Self::new()
+    /// Returns a reference to the role extractor.
+    pub fn role_extractor(&self) -> &R {
+        &self.role_extractor
     }
 }
 
-impl IdentityBuilder for DefaultIdentityBuilder {
+impl<R: RoleExtractor> IdentityBuilder for IdentityBuilderWith<R> {
     type Identity = AuthenticatedUser;
 
     fn build(
         &self,
         claims: serde_json::Value,
     ) -> impl std::future::Future<Output = Result<AuthenticatedUser, SecurityError>> + Send {
-        let user = build_authenticated_user(claims, &*self.role_extractor);
+        let user = build_authenticated_user(claims, &self.role_extractor);
         std::future::ready(Ok(user))
+    }
+}
+
+/// Default role extractor: tries standard OIDC `roles` claim, then Keycloak `realm_access.roles`.
+pub type DefaultRoleExtractor = Composite<StandardRoleExtractor, keycloak::RealmRoleExtractor>;
+
+/// Default identity builder with automatic support for standard OIDC and Keycloak tokens.
+///
+/// This is the recommended builder for most use cases. It tries:
+/// 1. Standard OIDC `roles` claim
+/// 2. Keycloak `realm_access.roles`
+///
+/// For more control, use [`IdentityBuilderWith`] with a custom extractor.
+pub type DefaultIdentityBuilder = IdentityBuilderWith<DefaultRoleExtractor>;
+
+impl Default for DefaultIdentityBuilder {
+    fn default() -> Self {
+        Self::new(Composite(
+            StandardRoleExtractor,
+            keycloak::RealmRoleExtractor,
+        ))
     }
 }
 
@@ -123,6 +153,37 @@ impl quarlus_core::Identity for AuthenticatedUser {
 }
 
 impl AuthenticatedUser {
+    /// Build an `AuthenticatedUser` from validated JWT claims.
+    ///
+    /// Uses the default role extractor (standard OIDC + Keycloak realm).
+    /// For custom role extraction, use [`build_authenticated_user`] instead.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let claims = validator.validate_claims(token).await?;
+    /// let user = AuthenticatedUser::from_claims(claims);
+    /// ```
+    pub fn from_claims(claims: serde_json::Value) -> Self {
+        let extractor = Composite(StandardRoleExtractor, keycloak::RealmRoleExtractor);
+        build_authenticated_user(claims, &extractor)
+    }
+
+    /// Build an `AuthenticatedUser` from claims with a custom role extractor.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let extractor = keycloak::RoleExtractor::new()
+    ///     .with_realm_roles()
+    ///     .with_client("my-api");
+    ///
+    /// let user = AuthenticatedUser::from_claims_with(claims, &extractor);
+    /// ```
+    pub fn from_claims_with(claims: serde_json::Value, extractor: &impl RoleExtractor) -> Self {
+        build_authenticated_user(claims, extractor)
+    }
+
     /// Check whether the user has a specific role.
     pub fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
@@ -134,55 +195,10 @@ impl AuthenticatedUser {
     }
 }
 
-/// Trait for extracting roles from JWT claims.
-///
-/// Different OIDC providers store roles in different claim locations.
-/// Implement this trait to customize role extraction for your provider.
-pub trait RoleExtractor: Send + Sync {
-    fn extract_roles(&self, claims: &serde_json::Value) -> Vec<String>;
-}
-
-/// Default role extractor that checks common locations:
-/// - `roles` (top-level array)
-/// - `realm_access.roles` (Keycloak)
-pub struct DefaultRoleExtractor;
-
-impl RoleExtractor for DefaultRoleExtractor {
-    fn extract_roles(&self, claims: &serde_json::Value) -> Vec<String> {
-        // Try top-level "roles" claim
-        if let Some(roles) = claims.get("roles").and_then(|v| v.as_array()) {
-            let extracted: Vec<String> = roles
-                .iter()
-                .filter_map(|r| r.as_str().map(String::from))
-                .collect();
-            if !extracted.is_empty() {
-                return extracted;
-            }
-        }
-
-        // Try Keycloak "realm_access.roles"
-        if let Some(roles) = claims
-            .get("realm_access")
-            .and_then(|v| v.get("roles"))
-            .and_then(|v| v.as_array())
-        {
-            let extracted: Vec<String> = roles
-                .iter()
-                .filter_map(|r| r.as_str().map(String::from))
-                .collect();
-            if !extracted.is_empty() {
-                return extracted;
-            }
-        }
-
-        Vec::new()
-    }
-}
-
 /// Build an `AuthenticatedUser` from validated JWT claims using the given role extractor.
 pub fn build_authenticated_user(
     claims: serde_json::Value,
-    role_extractor: &dyn RoleExtractor,
+    role_extractor: &impl RoleExtractor,
 ) -> AuthenticatedUser {
     let sub = claims
         .get("sub")

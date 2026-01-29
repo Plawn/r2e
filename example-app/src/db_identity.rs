@@ -1,103 +1,77 @@
-//! Demonstrates a database-backed identity using `IdentityBuilder`.
+//! Demonstrates multiple identity types from the same JWT validator.
 //!
-//! Instead of using `AuthenticatedUser` (which only contains JWT claims),
-//! this module fetches the full user entity from the database during
-//! JWT validation, making it directly available in controllers.
+//! This module shows two patterns:
+//!
+//! 1. **Light identity** (`AuthenticatedUser`) — just JWT claims, no DB round-trip
+//! 2. **Full identity** (`DbUser`) — JWT claims + database lookup
+//!
+//! Both use the same `JwtClaimsValidator`, so the JWT is validated only once.
 
 use std::sync::Arc;
 
 use quarlus_core::http::extract::{FromRef, FromRequestParts};
 use quarlus_core::http::header::Parts;
 use quarlus_core::Identity;
-use quarlus_security::{extract_jwt_identity, IdentityBuilder, JwtValidator, SecurityError};
+use quarlus_security::{extract_jwt_claims, AuthenticatedUser, JwtClaimsValidator};
 use serde::{Deserialize, Serialize};
 
 /// A database-backed user identity.
 ///
-/// Unlike [`AuthenticatedUser`](quarlus_security::AuthenticatedUser) which only
-/// contains raw JWT claims, `DbUser` is the full user entity fetched from the
-/// database using the JWT `sub` claim.
+/// Unlike [`AuthenticatedUser`] which only contains raw JWT claims,
+/// `DbUser` includes the full user profile fetched from the database.
+///
+/// Use this when you need user data that isn't in the JWT (e.g., preferences,
+/// profile picture, subscription status).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbUser {
+    /// The light identity (JWT claims only)
+    pub auth: AuthenticatedUser,
+    /// Database profile data
+    pub profile: UserProfile,
+}
+
+/// User profile data from the database.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserProfile {
     pub id: i64,
     pub name: String,
     pub email: String,
-    pub sub: String,
-    pub roles: Vec<String>,
 }
 
 impl Identity for DbUser {
     fn sub(&self) -> &str {
-        &self.sub
+        self.auth.sub()
     }
     fn roles(&self) -> &[String] {
-        &self.roles
+        self.auth.roles()
     }
 }
 
-/// Identity builder that fetches the user from the database by JWT `sub` claim.
-pub struct DbIdentityBuilder {
-    pool: sqlx::SqlitePool,
-}
+impl DbUser {
+    /// Access the underlying authenticated user (JWT claims).
+    pub fn auth(&self) -> &AuthenticatedUser {
+        &self.auth
+    }
 
-impl DbIdentityBuilder {
-    pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+    /// Access the database profile.
+    pub fn profile(&self) -> &UserProfile {
+        &self.profile
     }
 }
 
-impl IdentityBuilder for DbIdentityBuilder {
-    type Identity = DbUser;
-
-    fn build(
-        &self,
-        claims: serde_json::Value,
-    ) -> impl std::future::Future<Output = Result<DbUser, SecurityError>> + Send {
-        let pool = self.pool.clone();
-        async move {
-            let sub = claims
-                .get("sub")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-
-            let roles: Vec<String> = claims
-                .get("roles")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|r| r.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let row: (i64, String, String) =
-                sqlx::query_as("SELECT id, name, email FROM users WHERE sub = ?")
-                    .bind(sub)
-                    .fetch_optional(&pool)
-                    .await
-                    .map_err(|e| SecurityError::ValidationFailed(format!("DB error: {e}")))?
-                    .ok_or_else(|| {
-                        SecurityError::ValidationFailed(format!(
-                            "No user found for sub '{sub}'"
-                        ))
-                    })?;
-
-            Ok(DbUser {
-                id: row.0,
-                name: row.1,
-                email: row.2,
-                sub: sub.to_owned(),
-                roles,
-            })
-        }
-    }
-}
-
-/// Axum extractor — delegates to [`extract_jwt_identity`] with the DB builder.
+/// Axum extractor for `DbUser`.
+///
+/// This extracts and validates the JWT using `JwtClaimsValidator`,
+/// then performs a database lookup to fetch the user profile.
+///
+/// The state must provide:
+/// - `Arc<JwtClaimsValidator>` for JWT validation
+/// - `sqlx::SqlitePool` for database access
 impl<S> FromRequestParts<S> for DbUser
 where
     S: Send + Sync,
-    Arc<JwtValidator<DbIdentityBuilder>>: FromRef<S>,
+    Arc<JwtClaimsValidator>: FromRef<S>,
+    sqlx::SqlitePool: FromRef<S>,
 {
     type Rejection = quarlus_core::AppError;
 
@@ -105,6 +79,28 @@ where
         parts: &mut Parts,
         state: &S,
     ) -> Result<Self, Self::Rejection> {
-        extract_jwt_identity::<S, DbIdentityBuilder>(parts, state).await
+        // 1. Validate JWT and get claims (same validation as AuthenticatedUser)
+        let claims = extract_jwt_claims(parts, state).await?;
+        let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
+
+        // 2. Build light identity from claims
+        let auth = AuthenticatedUser::from_claims(claims);
+
+        // 3. Database lookup for profile data
+        let pool = sqlx::SqlitePool::from_ref(state);
+        let row: Option<(i64, String, String)> =
+            sqlx::query_as("SELECT id, name, email FROM users WHERE sub = ?")
+                .bind(&sub)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| quarlus_core::AppError::Internal(format!("DB error: {e}")))?;
+
+        let profile = row
+            .map(|(id, name, email)| UserProfile { id, name, email })
+            .ok_or_else(|| {
+                quarlus_core::AppError::NotFound(format!("No user profile for sub '{sub}'"))
+            })?;
+
+        Ok(DbUser { auth, profile })
     }
 }

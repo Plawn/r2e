@@ -9,7 +9,7 @@ use quarlus_events::EventBus;
 use quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
 use quarlus_prometheus::Prometheus;
 use quarlus_scheduler::Scheduler;
-use quarlus_security::{JwtValidator, SecurityConfig};
+use quarlus_security::{JwtClaimsValidator, SecurityConfig};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -22,12 +22,11 @@ mod state;
 use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
 use controllers::data_controller::DataController;
-use controllers::db_identity_controller::DbIdentityController;
+use controllers::db_identity_controller::IdentityController;
 use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::scheduled_controller::ScheduledJobs;
 use controllers::user_controller::UserController;
-use db_identity::DbIdentityBuilder;
 use services::UserService;
 use state::Services;
 
@@ -71,9 +70,10 @@ async fn main() {
     // --- Events (#7) ---
     let event_bus = EventBus::new();
 
-    // Build the JWT validator with a static HMAC key (no JWKS needed for the demo)
+    // Build the JWT claims validator with a static HMAC key (no JWKS needed for the demo)
+    // Using JwtClaimsValidator allows multiple identity types (AuthenticatedUser, DbUser, etc.)
     let sec_config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
-    let validator = JwtValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
+    let claims_validator = JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
     // Create an in-memory SQLite pool and initialise the schema
     let pool: sqlx::Pool<sqlx::Sqlite> = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -105,15 +105,6 @@ async fn main() {
             .await
             .unwrap();
     }
-    // Build a DB-backed JWT validator: same JWT verification, but the identity
-    // is resolved from the database instead of raw claims. See db_identity.rs.
-    let db_sec_config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
-    let db_validator = JwtValidator::from_static_key(
-        DecodingKey::from_secret(secret),
-        db_sec_config,
-        DbIdentityBuilder::new(pool.clone()),
-    );
-
     // --- Scheduling (#8) is now declarative via #[scheduled] in ScheduledJobs ---
     let cancel = CancellationToken::new();
 
@@ -122,8 +113,7 @@ async fn main() {
         .provide(event_bus)
         .provide(pool)
         .provide(config.clone())
-        .provide(Arc::new(validator))
-        .provide(Arc::new(db_validator))
+        .provide(Arc::new(claims_validator))
         .provide(cancel)
         .provide(quarlus_rate_limit::RateLimitRegistry::default())
         .with_bean::<UserService>()
@@ -165,7 +155,7 @@ async fn main() {
         .register_controller::<DataController>()
         .register_controller::<UserEventConsumer>()
         .register_controller::<MixedController>()
-        .register_controller::<DbIdentityController>()
+        .register_controller::<IdentityController>()
         .register_controller::<ScheduledJobs>()
         .with(NormalizePath) // Must be last to normalize paths before routing
         .serve("0.0.0.0:3001")

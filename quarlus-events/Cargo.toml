@@ -12,3 +12,6 @@ description = "In-process typed event bus for Quarlus - publish/subscribe with a
 
 [dependencies]
 tokio = { version = "1", features = ["sync", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }
