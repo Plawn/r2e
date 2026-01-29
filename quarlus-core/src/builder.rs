@@ -88,13 +88,8 @@ impl AppBuilder<NoState, TNil> {
 }
 
 impl<P> AppBuilder<NoState, P> {
-    /// Provide a pre-built bean instance.
-    ///
-    /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
-    /// for beans that depend on type `B`, and will be pulled into the state
-    /// struct when [`build_state`](Self::build_state) is called.
-    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>> {
-        self.shared.bean_registry.provide(bean);
+    /// Internal: reconstruct the builder with an updated provider type list.
+    fn with_updated_provider<NewP>(self) -> AppBuilder<NoState, NewP> {
         AppBuilder {
             shared: self.shared,
             state: None,
@@ -111,26 +106,23 @@ impl<P> AppBuilder<NoState, P> {
         }
     }
 
+    /// Provide a pre-built bean instance.
+    ///
+    /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
+    /// for beans that depend on type `B`, and will be pulled into the state
+    /// struct when [`build_state`](Self::build_state) is called.
+    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>> {
+        self.shared.bean_registry.provide(bean);
+        self.with_updated_provider()
+    }
+
     /// Register a bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans and
     /// provided instances when [`build_state`](Self::build_state) is called.
     pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
         self.shared.bean_registry.register::<B>();
-        AppBuilder {
-            shared: self.shared,
-            state: None,
-            routes: self.routes,
-            startup_hooks: self.startup_hooks,
-            shutdown_hooks: self.shutdown_hooks,
-            route_metadata: self.route_metadata,
-            openapi_builder: self.openapi_builder,
-            consumer_registrations: self.consumer_registrations,
-            scheduled_task_defs: self.scheduled_task_defs,
-            scheduler_starter: self.scheduler_starter,
-            scheduler_stopper: self.scheduler_stopper,
-            _provided: PhantomData,
-        }
+        self.with_updated_provider()
     }
 
     /// Resolve the bean dependency graph and build the application state.

@@ -168,7 +168,7 @@ async fn main() {
         .register_controller::<DbIdentityController>()
         .register_controller::<ScheduledJobs>()
         .with(NormalizePath) // Must be last to normalize paths before routing
-        .serve("0.0.0.0:3000")
+        .serve("0.0.0.0:3001")
         .await
         .unwrap();
 }

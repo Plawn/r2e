@@ -1,7 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
-pub(crate) mod attr_extract;
+pub(crate) mod extract;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
@@ -10,7 +10,7 @@ pub(crate) mod derive_controller;
 pub(crate) mod derive_parsing;
 pub(crate) mod route;
 pub(crate) mod routes_attr;
-pub(crate) mod routes_codegen;
+pub(crate) mod codegen;
 pub(crate) mod routes_parsing;
 pub(crate) mod types;
 

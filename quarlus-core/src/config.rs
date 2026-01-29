@@ -152,6 +152,18 @@ pub struct QuarlusConfig {
     profile: String,
 }
 
+/// Load and parse a YAML file, flattening it into the values map.
+fn load_yaml_file(path: &Path, values: &mut HashMap<String, ConfigValue>) -> Result<(), ConfigError> {
+    if path.exists() {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ConfigError::Load(e.to_string()))?;
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&content)
+            .map_err(|e| ConfigError::Load(e.to_string()))?;
+        flatten_yaml("", &yaml, values);
+    }
+    Ok(())
+}
+
 impl QuarlusConfig {
     /// Load configuration for the given profile.
     ///
@@ -163,25 +175,11 @@ impl QuarlusConfig {
         let mut values = HashMap::new();
 
         // 1. Load base config
-        let base_path = Path::new("application.yaml");
-        if base_path.exists() {
-            let content =
-                std::fs::read_to_string(base_path).map_err(|e| ConfigError::Load(e.to_string()))?;
-            let yaml: serde_yaml::Value =
-                serde_yaml::from_str(&content).map_err(|e| ConfigError::Load(e.to_string()))?;
-            flatten_yaml("", &yaml, &mut values);
-        }
+        load_yaml_file(Path::new("application.yaml"), &mut values)?;
 
         // 2. Load profile config
         let profile_path = format!("application-{active_profile}.yaml");
-        let profile_path = Path::new(&profile_path);
-        if profile_path.exists() {
-            let content = std::fs::read_to_string(profile_path)
-                .map_err(|e| ConfigError::Load(e.to_string()))?;
-            let yaml: serde_yaml::Value =
-                serde_yaml::from_str(&content).map_err(|e| ConfigError::Load(e.to_string()))?;
-            flatten_yaml("", &yaml, &mut values);
-        }
+        load_yaml_file(Path::new(&profile_path), &mut values)?;
 
         // 3. Overlay environment variables
         // Convention: `app.database.url` ↔ `APP_DATABASE_URL`

@@ -177,10 +177,29 @@ impl BeanRegistry {
             return Ok(BeanContext { entries });
         }
 
-        // Check for duplicates: a bean type that is also provided, or
-        // registered twice.
+        // Check for duplicates
+        Self::check_for_duplicates(&self.beans, &entries)?;
+
+        // Build dependency graph
+        let id_to_idx = Self::build_type_index(&self.beans);
+        Self::check_missing_dependencies(&self.beans, &entries, &id_to_idx)?;
+
+        // Topological sort
+        let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
+
+        // Construct beans in order
+        entries = Self::construct_beans_in_order(self.beans, sorted_order, entries);
+
+        Ok(BeanContext { entries })
+    }
+
+    /// Check for duplicate bean registrations.
+    fn check_for_duplicates(
+        beans: &[BeanRegistration],
+        entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) -> Result<(), BeanError> {
         let mut seen: HashMap<TypeId, &str> = HashMap::new();
-        for reg in &self.beans {
+        for reg in beans {
             if entries.contains_key(&reg.type_id) {
                 return Err(BeanError::DuplicateBean {
                     type_name: reg.type_name.to_string(),
@@ -192,17 +211,25 @@ impl BeanRegistry {
                 });
             }
         }
+        Ok(())
+    }
 
-        // Map TypeId -> index for beans.
-        let id_to_idx: HashMap<TypeId, usize> = self
-            .beans
+    /// Build a map from TypeId to bean index.
+    fn build_type_index(beans: &[BeanRegistration]) -> HashMap<TypeId, usize> {
+        beans
             .iter()
             .enumerate()
             .map(|(i, r)| (r.type_id, i))
-            .collect();
+            .collect()
+    }
 
-        // Check for missing dependencies.
-        for reg in &self.beans {
+    /// Check that all dependencies are available.
+    fn check_missing_dependencies(
+        beans: &[BeanRegistration],
+        entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+        id_to_idx: &HashMap<TypeId, usize>,
+    ) -> Result<(), BeanError> {
+        for reg in beans {
             for (dep_id, dep_name) in &reg.dependencies {
                 if !entries.contains_key(dep_id) && !id_to_idx.contains_key(dep_id) {
                     return Err(BeanError::MissingDependency {
@@ -212,22 +239,29 @@ impl BeanRegistry {
                 }
             }
         }
+        Ok(())
+    }
 
-        // Kahn's algorithm: topological sort.
+    /// Perform topological sort using Kahn's algorithm.
+    fn topological_sort(
+        beans: &[BeanRegistration],
+        id_to_idx: &HashMap<TypeId, usize>,
+        bean_count: usize,
+    ) -> Result<Vec<usize>, BeanError> {
         // in_degree = number of deps that are other beans (not provided).
-        let mut in_degree: Vec<usize> = Vec::with_capacity(bean_count);
-        for reg in &self.beans {
-            let deg = reg
-                .dependencies
-                .iter()
-                .filter(|(d, _)| id_to_idx.contains_key(d))
-                .count();
-            in_degree.push(deg);
-        }
+        let mut in_degree: Vec<usize> = beans
+            .iter()
+            .map(|reg| {
+                reg.dependencies
+                    .iter()
+                    .filter(|(d, _)| id_to_idx.contains_key(d))
+                    .count()
+            })
+            .collect();
 
         // Dependents: for each bean index, which other bean indices depend on it.
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
-        for (i, reg) in self.beans.iter().enumerate() {
+        for (i, reg) in beans.iter().enumerate() {
             for (dep_id, _) in &reg.dependencies {
                 if let Some(&dep_idx) = id_to_idx.get(dep_id) {
                     dependents[dep_idx].push(i);
@@ -256,15 +290,22 @@ impl BeanRegistry {
         if sorted_order.len() != bean_count {
             let cycle: Vec<String> = (0..bean_count)
                 .filter(|i| in_degree[*i] > 0)
-                .map(|i| self.beans[i].type_name.to_string())
+                .map(|i| beans[i].type_name.to_string())
                 .collect();
             return Err(BeanError::CyclicDependency { cycle });
         }
 
-        // Construct beans in topological order.
+        Ok(sorted_order)
+    }
+
+    /// Construct beans in topological order.
+    fn construct_beans_in_order(
+        beans: Vec<BeanRegistration>,
+        sorted_order: Vec<usize>,
+        mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) -> HashMap<TypeId, Box<dyn Any + Send + Sync>> {
         // Move factories and type_ids out so we can consume them one by one.
-        let mut bean_data: Vec<Option<(TypeId, Factory)>> = self
-            .beans
+        let mut bean_data: Vec<Option<(TypeId, Factory)>> = beans
             .into_iter()
             .map(|r| Some((r.type_id, r.factory)))
             .collect();
@@ -279,7 +320,7 @@ impl BeanRegistry {
             entries.insert(type_id, bean_value);
         }
 
-        Ok(BeanContext { entries })
+        entries
     }
 }
 

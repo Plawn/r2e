@@ -1,6 +1,12 @@
 use crate::http::response::{IntoResponse, Response};
 use crate::http::{Json, StatusCode};
 
+/// Helper to create a JSON error response with a standard `{ "error": message }` body.
+fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    let body = serde_json::json!({ "error": message.into() });
+    (status, Json(body)).into_response()
+}
+
 pub enum AppError {
     NotFound(String),
     Unauthorized(String),
@@ -40,8 +46,7 @@ impl IntoResponse for AppError {
                     AppError::Validation(_) => unreachable!(),
                     AppError::Custom { .. } => unreachable!(),
                 };
-                let body = serde_json::json!({ "error": message });
-                (status, Json(body)).into_response()
+                error_response(status, message)
             }
         }
     }
