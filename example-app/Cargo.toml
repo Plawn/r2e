@@ -5,17 +5,15 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+quarlus = { path = "../quarlus", features = ["full", "validation"] }
+# quarlus-core and quarlus-macros are required as direct dependencies because
+# the proc macros generate code referencing `quarlus_core::` paths.
 quarlus-core = { path = "../quarlus-core", features = ["validation"] }
 quarlus-macros = { path = "../quarlus-macros" }
-quarlus-cache = { path = "../quarlus-cache" }
+# quarlus-rate-limit is required because #[rate_limited] generates code
+# referencing `quarlus_rate_limit::` paths.
 quarlus-rate-limit = { path = "../quarlus-rate-limit" }
-quarlus-security = { path = "../quarlus-security" }
 quarlus-data = { path = "../quarlus-data", features = ["sqlite"] }
-quarlus-openapi = { path = "../quarlus-openapi" }
-quarlus-events = { path = "../quarlus-events" }
-quarlus-scheduler = { path = "../quarlus-scheduler" }
-quarlus-utils = { path = "../quarlus-utils" }
-quarlus-prometheus = { path = "../quarlus-prometheus" }
 tower-http = { version = "0.6", features = ["timeout"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -30,9 +28,6 @@ schemars = "0.8"
 
 [dev-dependencies]
 quarlus-test = { path = "../quarlus-test" }
-quarlus-utils = { path = "../quarlus-utils" }
-quarlus-openapi = { path = "../quarlus-openapi" }
-quarlus-events = { path = "../quarlus-events" }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 validator = { version = "0.18", features = ["derive"] }

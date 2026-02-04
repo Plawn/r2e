@@ -12,3 +12,8 @@ pub use error::DataError;
 pub use page::{Page, Pageable};
 pub use query::QueryBuilder;
 pub use repository::Repository;
+
+pub mod prelude {
+    //! Re-exports of the most commonly used data types.
+    pub use crate::{Entity, Page, Pageable, QueryBuilder, Repository};
+}

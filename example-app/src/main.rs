@@ -2,14 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
-use quarlus_core::config::QuarlusConfig;
-use quarlus_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath, Tracing};
-use quarlus_core::AppBuilder;
-use quarlus_events::EventBus;
-use quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
-use quarlus_prometheus::Prometheus;
-use quarlus_scheduler::Scheduler;
-use quarlus_security::{JwtClaimsValidator, SecurityConfig};
+use quarlus::prelude::*;
+use quarlus::quarlus_events::EventBus;
+use quarlus::quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
+use quarlus::quarlus_prometheus::Prometheus;
+use quarlus::quarlus_scheduler::Scheduler;
+use quarlus::quarlus_security::{JwtClaimsValidator, SecurityConfig};
+use quarlus::config::QuarlusConfig;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -52,7 +51,7 @@ fn generate_test_token(secret: &[u8]) -> String {
 
 #[tokio::main]
 async fn main() {
-    quarlus_core::init_tracing();
+    quarlus::init_tracing();
 
     let secret = b"quarlus-demo-secret-change-in-production";
 
@@ -115,7 +114,7 @@ async fn main() {
         .provide(config.clone())
         .provide(Arc::new(claims_validator))
         .provide(cancel)
-        .provide(quarlus_rate_limit::RateLimitRegistry::default())
+        .provide(quarlus::quarlus_rate_limit::RateLimitRegistry::default())
         .with_bean::<UserService>()
         .build_state::<Services, _>()
         .with_config(config)
@@ -130,7 +129,7 @@ async fn main() {
         .with(Tracing)
         .with(ErrorHandling) // Error handling (#3)
         .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            quarlus_core::http::StatusCode::REQUEST_TIMEOUT,
+            quarlus::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         )) // Global Tower layer
         .with(DevReload) // Dev mode (#9)

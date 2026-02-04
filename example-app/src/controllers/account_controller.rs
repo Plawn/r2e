@@ -1,8 +1,8 @@
 use crate::models::User;
 use crate::services::UserService;
 use crate::state::Services;
-use quarlus_core::prelude::*;
-use quarlus_security::AuthenticatedUser;
+use quarlus::prelude::*;
+use quarlus::quarlus_security::AuthenticatedUser;
 
 #[derive(Controller)]
 #[controller(state = Services)]
@@ -25,8 +25,8 @@ impl AccountController {
     }
 
     #[get("/error/custom")]
-    async fn custom_error(&self) -> Result<Json<()>, quarlus_core::AppError> {
-        Err(quarlus_core::AppError::Custom {
+    async fn custom_error(&self) -> Result<Json<()>, AppError> {
+        Err(AppError::Custom {
             status: StatusCode::from_u16(418).unwrap(),
             body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
         })

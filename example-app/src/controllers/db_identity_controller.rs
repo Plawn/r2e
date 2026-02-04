@@ -6,8 +6,8 @@
 //! - `/identity/light` — returns JWT claims only (no DB round-trip)
 //! - `/identity/full` — returns JWT claims + database profile (1 DB query)
 
-use quarlus_core::prelude::*;
-use quarlus_security::AuthenticatedUser;
+use quarlus::prelude::*;
+use quarlus::quarlus_security::AuthenticatedUser;
 
 use crate::db_identity::DbUser;
 use crate::state::Services;

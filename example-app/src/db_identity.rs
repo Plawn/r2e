@@ -9,10 +9,10 @@
 
 use std::sync::Arc;
 
-use quarlus_core::http::extract::{FromRef, FromRequestParts};
-use quarlus_core::http::header::Parts;
-use quarlus_core::Identity;
-use quarlus_security::{extract_jwt_claims, AuthenticatedUser, JwtClaimsValidator};
+use quarlus::http::extract::{FromRef, FromRequestParts};
+use quarlus::http::header::Parts;
+use quarlus::Identity;
+use quarlus::quarlus_security::{extract_jwt_claims, AuthenticatedUser, JwtClaimsValidator};
 use serde::{Deserialize, Serialize};
 
 /// A database-backed user identity.
@@ -73,7 +73,7 @@ where
     Arc<JwtClaimsValidator>: FromRef<S>,
     sqlx::SqlitePool: FromRef<S>,
 {
-    type Rejection = quarlus_core::AppError;
+    type Rejection = quarlus::AppError;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -93,12 +93,12 @@ where
                 .bind(&sub)
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| quarlus_core::AppError::Internal(format!("DB error: {e}")))?;
+                .map_err(|e| quarlus::AppError::Internal(format!("DB error: {e}")))?;
 
         let profile = row
             .map(|(id, name, email)| UserProfile { id, name, email })
             .ok_or_else(|| {
-                quarlus_core::AppError::NotFound(format!("No user profile for sub '{sub}'"))
+                quarlus::AppError::NotFound(format!("No user profile for sub '{sub}'"))
             })?;
 
         Ok(DbUser { auth, profile })

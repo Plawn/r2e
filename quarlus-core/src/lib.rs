@@ -17,6 +17,7 @@ pub mod prelude;
 pub mod scheduling;
 pub mod state;
 pub mod type_list;
+pub mod types;
 #[cfg(feature = "validation")]
 pub mod validation;
 

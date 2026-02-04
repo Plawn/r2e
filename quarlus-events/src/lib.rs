@@ -158,6 +158,11 @@ impl EventBus {
     }
 }
 
+pub mod prelude {
+    //! Re-exports of the most commonly used event types.
+    pub use crate::EventBus;
+}
+
 impl Default for EventBus {
     fn default() -> Self {
         Self::new()

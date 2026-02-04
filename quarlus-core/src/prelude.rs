@@ -47,6 +47,7 @@ pub use quarlus_macros::BeanState;
 // ── Core types (from quarlus-core) ──────────────────────────────────────────
 
 pub use crate::builder::AppBuilder;
+pub use crate::config::QuarlusConfig;
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::AppError;
 pub use crate::interceptors::{Interceptor, InterceptorContext};
@@ -54,6 +55,10 @@ pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
 pub use crate::plugin::Plugin;
 pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath};
 pub use crate::scheduling::{ScheduleConfig, ScheduledResult, ScheduledTaskDef};
+
+// ── Type aliases ──────────────────────────────────────────────────────────
+
+pub use crate::types::{ApiResult, JsonResult, StatusResult};
 
 // ── HTTP re-exports ────────────────────────────────────────────────────────
 

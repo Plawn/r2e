@@ -1,6 +1,6 @@
 use crate::services::UserService;
 use crate::state::Services;
-use quarlus_core::prelude::*;
+use quarlus::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]

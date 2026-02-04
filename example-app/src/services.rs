@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use quarlus_core::prelude::*;
-use quarlus_events::EventBus;
+use quarlus::prelude::*;
 
 use crate::models::{User, UserCreatedEvent};
 

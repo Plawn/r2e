@@ -1,7 +1,7 @@
 use crate::models::UserEntity;
 use crate::state::Services;
-use quarlus_core::prelude::*;
-use quarlus_data::{Entity, Page, Pageable, QueryBuilder};
+use quarlus::prelude::*;
+use quarlus::quarlus_data::{Entity, QueryBuilder};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -23,7 +23,7 @@ impl DataController {
     async fn list_paged(
         &self,
         Query(pageable): Query<Pageable>,
-    ) -> Result<Json<Page<UserEntity>>, quarlus_core::AppError> {
+    ) -> Result<Json<Page<UserEntity>>, AppError> {
         let count_qb = QueryBuilder::new(UserEntity::table_name());
         let (count_sql, count_params) = count_qb.build_count();
 
@@ -34,7 +34,7 @@ impl DataController {
         let total = count_query
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))? as u64;
+            .map_err(|e| AppError::Internal(e.to_string()))? as u64;
 
         let select_qb = QueryBuilder::new(UserEntity::table_name())
             .order_by("id", true)
@@ -49,7 +49,7 @@ impl DataController {
         let rows = select_query
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()
@@ -63,7 +63,7 @@ impl DataController {
     async fn search(
         &self,
         Query(params): Query<SearchParams>,
-    ) -> Result<Json<Vec<UserEntity>>, quarlus_core::AppError> {
+    ) -> Result<Json<Vec<UserEntity>>, AppError> {
         let mut qb = QueryBuilder::new(UserEntity::table_name());
         if let Some(ref name) = params.name {
             qb = qb.where_like("name", &format!("%{name}%"));
@@ -80,7 +80,7 @@ impl DataController {
         let rows = query
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| quarlus_core::AppError::Internal(e.to_string()))?;
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()

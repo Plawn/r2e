@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use quarlus_core::config::{ConfigValue, QuarlusConfig};
-use quarlus_core::plugins::{DevReload, ErrorHandling, Health};
-use quarlus_core::prelude::*;
-use quarlus_core::AppBuilder;
-use quarlus_events::EventBus;
+use quarlus::config::{ConfigValue, QuarlusConfig};
+use quarlus::prelude::*;
+use quarlus::quarlus_security::{AuthenticatedUser, JwtClaimsValidator};
 use quarlus_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 mod common {
     use std::sync::Arc;
     use tokio::sync::RwLock;
+    use quarlus::quarlus_events::EventBus;
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct User {
@@ -40,11 +39,11 @@ mod common {
     #[derive(Clone)]
     pub struct UserService {
         users: Arc<RwLock<Vec<User>>>,
-        event_bus: quarlus_events::EventBus,
+        event_bus: EventBus,
     }
 
     impl UserService {
-        pub fn new(event_bus: quarlus_events::EventBus) -> Self {
+        pub fn new(event_bus: EventBus) -> Self {
             let users = vec![
                 User { id: 1, name: "Alice".into(), email: "alice@example.com".into() },
                 User { id: 2, name: "Bob".into(), email: "bob@example.com".into() },
@@ -88,46 +87,45 @@ mod common {
 }
 
 use common::*;
-use quarlus_utils::interceptors::{Cache, Logged, Timed};
-use quarlus_security::{AuthenticatedUser, JwtValidator};
+use quarlus::quarlus_events::EventBus;
 
 #[derive(Clone)]
 struct TestServices {
     user_service: UserService,
-    jwt_validator: Arc<JwtValidator>,
+    jwt_validator: Arc<JwtClaimsValidator>,
     pool: sqlx::SqlitePool,
     event_bus: EventBus,
     config: QuarlusConfig,
     #[allow(dead_code)]
     cancel: CancellationToken,
-    rate_limiter: quarlus_rate_limit::RateLimitRegistry,
+    rate_limiter: quarlus::quarlus_rate_limit::RateLimitRegistry,
 }
 
-impl quarlus_core::http::extract::FromRef<TestServices> for Arc<JwtValidator> {
+impl quarlus::http::extract::FromRef<TestServices> for Arc<JwtClaimsValidator> {
     fn from_ref(state: &TestServices) -> Self {
         state.jwt_validator.clone()
     }
 }
 
-impl quarlus_core::http::extract::FromRef<TestServices> for sqlx::SqlitePool {
+impl quarlus::http::extract::FromRef<TestServices> for sqlx::SqlitePool {
     fn from_ref(state: &TestServices) -> Self {
         state.pool.clone()
     }
 }
 
-impl quarlus_core::http::extract::FromRef<TestServices> for QuarlusConfig {
+impl quarlus::http::extract::FromRef<TestServices> for QuarlusConfig {
     fn from_ref(state: &TestServices) -> Self {
         state.config.clone()
     }
 }
 
-impl quarlus_core::http::extract::FromRef<TestServices> for EventBus {
+impl quarlus::http::extract::FromRef<TestServices> for EventBus {
     fn from_ref(state: &TestServices) -> Self {
         state.event_bus.clone()
     }
 }
 
-impl quarlus_core::http::extract::FromRef<TestServices> for quarlus_rate_limit::RateLimitRegistry {
+impl quarlus::http::extract::FromRef<TestServices> for quarlus::quarlus_rate_limit::RateLimitRegistry {
     fn from_ref(state: &TestServices) -> Self {
         state.rate_limiter.clone()
     }
@@ -163,17 +161,17 @@ impl TestUserController {
     async fn get_by_id(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<Json<User>, quarlus_core::AppError> {
+    ) -> Result<Json<User>, AppError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
-            None => Err(quarlus_core::AppError::NotFound("User not found".into())),
+            None => Err(AppError::NotFound("User not found".into())),
         }
     }
 
     #[post("/users")]
     async fn create(
         &self,
-        quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
+        Validated(body): Validated<CreateUserRequest>,
     ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
@@ -185,8 +183,8 @@ impl TestUserController {
     }
 
     #[get("/error/custom")]
-    async fn custom_error(&self) -> Result<Json<()>, quarlus_core::AppError> {
-        Err(quarlus_core::AppError::Custom {
+    async fn custom_error(&self) -> Result<Json<()>, AppError> {
+        Err(AppError::Custom {
             status: StatusCode::from_u16(418).unwrap(),
             body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
         })
@@ -204,8 +202,8 @@ impl TestUserController {
     #[rate_limited(max = 3, window = 60)]
     async fn create_rate_limited(
         &self,
-        quarlus_core::validation::Validated(body): quarlus_core::validation::Validated<CreateUserRequest>,
-    ) -> Result<Json<User>, quarlus_core::AppError> {
+        Validated(body): Validated<CreateUserRequest>,
+    ) -> Result<Json<User>, AppError> {
         let user = self.user_service.create(body.name, body.email).await;
         Ok(Json(user))
     }
@@ -244,17 +242,17 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let services = TestServices {
         user_service: UserService::new(event_bus.clone()),
-        jwt_validator: Arc::new(jwt.validator()),
+        jwt_validator: Arc::new(jwt.claims_validator()),
         pool,
         event_bus,
         config: config.clone(),
         cancel: CancellationToken::new(),
-        rate_limiter: quarlus_rate_limit::RateLimitRegistry::default(),
+        rate_limiter: quarlus::quarlus_rate_limit::RateLimitRegistry::default(),
     };
 
     let openapi_config =
-        quarlus_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
-    let openapi = quarlus_openapi::openapi_routes::<TestServices>(
+        quarlus::quarlus_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
+    let openapi = quarlus::quarlus_openapi::openapi_routes::<TestServices>(
         openapi_config,
         vec![TestUserController::route_metadata()],
     );

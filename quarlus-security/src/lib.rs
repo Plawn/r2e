@@ -20,3 +20,8 @@ pub use jwt::{JwtClaimsValidator, JwtValidator};
 
 // Re-export the base RoleExtractor trait at crate root for convenience.
 pub use openid::RoleExtractor;
+
+pub mod prelude {
+    //! Re-exports of the most commonly used security types.
+    pub use crate::{AuthenticatedUser, JwtValidator, SecurityConfig};
+}

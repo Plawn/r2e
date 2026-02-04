@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use crate::models::UserCreatedEvent;
 use crate::state::Services;
-use quarlus_core::prelude::*;
-use quarlus_events::EventBus;
+use quarlus::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]

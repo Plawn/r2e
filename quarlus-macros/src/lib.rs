@@ -160,6 +160,28 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// When the controller has `#[controller(path = "/api")]`, the paths are
 /// nested: `/api/users`, `/api/users/{id}`, etc.
 ///
+/// # Return type aliases
+///
+/// ```ignore
+/// use quarlus_core::prelude::*;
+///
+/// // With type alias (recommended)
+/// #[get("/users")]
+/// async fn list(&self) -> JsonResult<Vec<User>> {
+///     Ok(Json(self.service.list().await))
+/// }
+///
+/// // Direct type (equivalent)
+/// #[get("/users/{id}")]
+/// async fn get(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> { ... }
+///
+/// // Any response type
+/// #[get("/health")]
+/// async fn health(&self) -> ApiResult<StatusCode> {
+///     Ok(StatusCode::OK)
+/// }
+/// ```
+///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn get(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -170,7 +192,13 @@ pub fn get(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[post("/users")]
-/// async fn create(&self, body: Validated<CreateUser>) -> Json<User> { ... }
+/// async fn create(&self, body: Validated<CreateUser>) -> JsonResult<User> {
+///     Ok(Json(self.service.create(body.into_inner()).await?))
+/// }
+///
+/// // Direct type (equivalent)
+/// #[post("/users")]
+/// async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, AppError> { ... }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
@@ -183,7 +211,9 @@ pub fn post(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[put("/users/{id}")]
-/// async fn update(&self, Path(id): Path<u64>, body: Json<UpdateUser>) -> Json<User> { ... }
+/// async fn update(&self, Path(id): Path<u64>, body: Json<UpdateUser>) -> JsonResult<User> {
+///     Ok(Json(self.service.update(id, body.0).await?))
+/// }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
@@ -195,6 +225,14 @@ pub fn put(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Register a **DELETE** route handler.
 ///
 /// ```ignore
+/// // With type alias
+/// #[delete("/users/{id}")]
+/// async fn delete(&self, Path(id): Path<u64>) -> StatusResult {
+///     self.service.delete(id).await?;
+///     Ok(StatusCode::NO_CONTENT)
+/// }
+///
+/// // Direct type (equivalent)
 /// #[delete("/users/{id}")]
 /// async fn delete(&self, Path(id): Path<u64>) -> StatusCode { ... }
 /// ```
@@ -209,7 +247,9 @@ pub fn delete(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[patch("/users/{id}")]
-/// async fn patch(&self, Path(id): Path<u64>, body: Json<PatchUser>) -> Json<User> { ... }
+/// async fn patch(&self, Path(id): Path<u64>, body: Json<PatchUser>) -> JsonResult<User> {
+///     Ok(Json(self.service.patch(id, body.0).await?))
+/// }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
