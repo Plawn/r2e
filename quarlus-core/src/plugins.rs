@@ -1,6 +1,6 @@
 //! Built-in plugins for common cross-cutting concerns.
 //!
-//! Each plugin implements [`Plugin<T>`](crate::plugin::Plugin) and can be
+//! Each plugin implements [`Plugin`](crate::plugin::Plugin) and can be
 //! installed via [`AppBuilder::with()`](crate::builder::AppBuilder::with).
 
 use crate::builder::AppBuilder;
@@ -30,8 +30,8 @@ impl Cors {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for Cors {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for Cors {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.with_layer_fn(move |router| router.layer(self.layer))
     }
 }
@@ -41,8 +41,8 @@ impl<T: Clone + Send + Sync + 'static> Plugin<T> for Cors {
 /// Adds a `TraceLayer` that logs requests and responses at the `DEBUG` level.
 pub struct Tracing;
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for Tracing {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for Tracing {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
     }
 }
@@ -52,8 +52,8 @@ impl<T: Clone + Send + Sync + 'static> Plugin<T> for Tracing {
 /// Adds a `GET /health` endpoint that returns `"OK"` with status 200.
 pub struct Health;
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for Health {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for Health {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.register_routes(
             crate::http::Router::new()
                 .route("/health", crate::http::routing::get(health_handler)),
@@ -70,8 +70,8 @@ async fn health_handler() -> &'static str {
 /// Adds a `CatchPanicLayer` that converts panics into JSON 500 responses.
 pub struct ErrorHandling;
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for ErrorHandling {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for ErrorHandling {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.with_layer_fn(|router| router.layer(crate::layers::catch_panic_layer()))
     }
 }
@@ -82,8 +82,8 @@ impl<T: Clone + Send + Sync + 'static> Plugin<T> for ErrorHandling {
 /// tooling and browser scripts to detect server restarts.
 pub struct DevReload;
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for DevReload {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for DevReload {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.register_routes(crate::dev::dev_routes())
     }
 }
@@ -93,11 +93,22 @@ impl<T: Clone + Send + Sync + 'static> Plugin<T> for DevReload {
 /// Removes trailing slashes from request paths, so `/users/` becomes `/users`.
 /// This ensures consistent routing regardless of whether clients include
 /// a trailing slash.
+///
+/// **Note:** This plugin should be installed last in the plugin chain to work
+/// correctly. Installing other plugins after this one will emit a warning.
 pub struct NormalizePath;
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for NormalizePath {
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T> {
+impl Plugin for NormalizePath {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         use tower_http::normalize_path::NormalizePathLayer;
         app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
+    }
+
+    fn should_be_last() -> bool {
+        true
+    }
+
+    fn name() -> &'static str {
+        "NormalizePath"
     }
 }

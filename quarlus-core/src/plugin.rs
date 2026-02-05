@@ -1,36 +1,73 @@
+//! Plugin system for Quarlus.
+//!
+//! Plugins are composable units of functionality that can be installed into an
+//! [`AppBuilder`] using the `.with(plugin)` method.
+//!
+//! # Two plugin traits
+//!
+//! - [`Plugin`]: For plugins that don't provide beans (most common). Works in
+//!   the post-state phase, after `build_state()`.
+//! - [`PreStatePlugin`]: For plugins that provide beans (like Scheduler).
+//!   Works in the pre-state phase, before `build_state()`.
+//!
+//! Both traits use the same `.with(plugin)` method on `AppBuilder`.
+
 use crate::builder::{AppBuilder, NoState};
 use crate::type_list::TCons;
+use std::any::Any;
+use tokio_util::sync::CancellationToken;
+
+// ── Post-state Plugin trait ────────────────────────────────────────────────
 
 /// A composable unit of functionality that can be installed into an [`AppBuilder`].
 ///
-/// Plugins replace the old `with_cors()`, `with_tracing()`, etc. methods with a
-/// single, uniform `.with(plugin)` entry point. This makes the builder extensible
-/// without requiring new methods on `AppBuilder` for every cross-cutting concern.
+/// Plugins are installed after `build_state()` is called. They can:
+/// - Add layers to the router
+/// - Register routes
+/// - Register startup/shutdown hooks
 ///
-/// # Built-in plugins
-///
-/// See [`crate::plugins`] for the plugins shipped with `quarlus-core`:
-/// [`Cors`](crate::plugins::Cors), [`Tracing`](crate::plugins::Tracing),
-/// [`Health`](crate::plugins::Health), [`ErrorHandling`](crate::plugins::ErrorHandling),
-/// [`DevReload`](crate::plugins::DevReload).
+/// For plugins that need to provide beans (like Scheduler), use [`PreStatePlugin`]
+/// instead.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use quarlus_core::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload};
+/// use quarlus_core::Plugin;
 ///
-/// AppBuilder::new()
-///     .build_state::<Services>()
-///     .with(Health)
-///     .with(Cors::permissive())
-///     .with(Tracing)
-///     .with(ErrorHandling)
-///     .with(DevReload)
+/// pub struct Health;
+///
+/// impl Plugin for Health {
+///     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+///         app.register_routes(Router::new().route("/health", get(|| async { "OK" })))
+///     }
+/// }
 /// ```
-pub trait Plugin<T: Clone + Send + Sync + 'static> {
+pub trait Plugin: Send + 'static {
     /// Install this plugin into the given `AppBuilder`, returning the modified builder.
-    fn install(self, app: AppBuilder<T>) -> AppBuilder<T>;
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T>;
+
+    /// Whether this plugin should be installed last in the layer stack.
+    ///
+    /// Plugins like `NormalizePath` need to be the outermost layer (installed last)
+    /// to work correctly. When `should_be_last()` returns `true`, the builder will
+    /// warn if other plugins are added after this one.
+    fn should_be_last() -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
+    /// The name of this plugin (for diagnostics).
+    fn name() -> &'static str
+    where
+        Self: Sized,
+    {
+        std::any::type_name::<Self>()
+    }
 }
+
+// ── Pre-state Plugin trait ─────────────────────────────────────────────────
 
 /// A plugin that runs in the pre-state phase and provides beans.
 ///
@@ -44,13 +81,21 @@ pub trait Plugin<T: Clone + Send + Sync + 'static> {
 /// # Example
 ///
 /// ```ignore
-/// use quarlus_scheduler::Scheduler;
+/// use quarlus_core::{PreStatePlugin, DeferredAction};
+/// use tokio_util::sync::CancellationToken;
 ///
-/// AppBuilder::new()
-///     .with_plugin(Scheduler)  // Provides CancellationToken, defers scheduler setup
-///     .build_state::<Services, _>()
-///     .register_controller::<MyController>()
-///     .serve("0.0.0.0:3000")
+/// pub struct Scheduler;
+///
+/// impl PreStatePlugin for Scheduler {
+///     type Provided = CancellationToken;
+///
+///     fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+///         let token = CancellationToken::new();
+///         app.provide(token.clone()).add_deferred(DeferredAction::new("Scheduler", move |ctx| {
+///             // ... setup ...
+///         }))
+///     }
+/// }
 /// ```
 pub trait PreStatePlugin: Send + 'static {
     /// The type this plugin provides to the bean registry.
@@ -61,29 +106,114 @@ pub trait PreStatePlugin: Send + 'static {
     /// The implementation should:
     /// 1. Create the provided instance
     /// 2. Call `app.provide(instance)` to register it
-    /// 3. Optionally call `app.add_deferred_plugin()` for post-state setup
-    fn pre_install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>>;
+    /// 3. Optionally call `app.add_deferred()` for post-state setup
+    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>>;
 }
 
-use std::any::Any;
+// ── Deferred action system ─────────────────────────────────────────────────
+
+/// A deferred action that runs after state resolution.
+///
+/// This is the mechanism for plugins that need to run setup code after
+/// `build_state()` is called. Each action is a closure that receives a
+/// `DeferredContext` providing access to builder internals.
+///
+/// # Example
+///
+/// ```ignore
+/// impl PreStatePlugin for MyPlugin {
+///     type Provided = MyToken;
+///
+///     fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+///         let token = MyToken::new();
+///         let handle = MyHandle::new(token.clone());
+///
+///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
+///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
+///             ctx.on_shutdown(|| { /* cleanup */ });
+///         }))
+///     }
+/// }
+/// ```
+pub struct DeferredAction {
+    /// Name of the action (for debugging/logging).
+    pub name: &'static str,
+    /// The action to execute.
+    pub action: Box<dyn FnOnce(&mut DeferredContext) + Send>,
+}
+
+impl DeferredAction {
+    /// Create a new deferred action.
+    pub fn new<F>(name: &'static str, action: F) -> Self
+    where
+        F: FnOnce(&mut DeferredContext) + Send + 'static,
+    {
+        Self {
+            name,
+            action: Box::new(action),
+        }
+    }
+}
+
+/// Context for executing a deferred action.
+///
+/// Provides access to builder internals that deferred actions may need to modify.
+pub struct DeferredContext<'a> {
+    /// Layers to apply to the router.
+    pub(crate) layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+    /// Plugin data storage.
+    pub(crate) plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
+    /// Serve hooks (called when server starts).
+    pub(crate) serve_hooks: &'a mut Vec<Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>>,
+    /// Shutdown hooks from plugins.
+    pub(crate) shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
+}
+
+impl DeferredContext<'_> {
+    /// Add a layer to the router.
+    pub fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+        self.layers.push(layer);
+    }
+
+    /// Store plugin-specific data for later retrieval.
+    ///
+    /// Plugins can store arbitrary data keyed by type. This data persists
+    /// through the builder lifecycle and can be retrieved during controller
+    /// registration or serve hooks.
+    pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
+        self.plugin_data.insert(std::any::TypeId::of::<D>(), Box::new(data));
+    }
+
+    /// Add a serve hook that runs when the server starts.
+    ///
+    /// The hook receives:
+    /// - `tasks`: Type-erased task definitions collected during controller registration
+    /// - `token`: A cancellation token (unused by the builder, but passed for consistency)
+    pub fn on_serve<F>(&mut self, hook: F)
+    where
+        F: FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send + 'static,
+    {
+        self.serve_hooks.push(Box::new(hook));
+    }
+
+    /// Add a shutdown hook that runs when the server stops.
+    pub fn on_shutdown<F>(&mut self, hook: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.shutdown_hooks.push(Box::new(hook));
+    }
+}
+
+// ── Legacy types (deprecated) ──────────────────────────────────────────────
 
 /// A type-erased deferred plugin that can be installed after state resolution.
 ///
-/// This is the generic mechanism for plugins that need to run setup code after
-/// `build_state()` is called. The plugin stores its data as `Box<dyn Any>` and
-/// provides an installer that knows how to process that data.
+/// # Deprecated
 ///
-/// # How it works
-///
-/// 1. In `pre_install()`, a plugin creates a `DeferredPlugin` containing:
-///    - Its setup data (boxed as `Any`)
-///    - An installer function that knows how to process that data
-///
-/// 2. The `DeferredPlugin` is stored in `BuilderConfig::deferred_plugins`
-///
-/// 3. When `from_pre<T>()` is called, each deferred plugin's installer is
-///    invoked with a `DeferredInstallContext<T>` that provides access to
-///    builder internals.
+/// Use [`DeferredAction`] instead.
+#[deprecated(since = "0.2.0", note = "Use DeferredAction instead")]
+#[allow(deprecated)]
 pub struct DeferredPlugin {
     /// The plugin's setup data, type-erased.
     pub data: Box<dyn Any + Send>,
@@ -91,6 +221,7 @@ pub struct DeferredPlugin {
     pub installer: Box<dyn DeferredPluginInstaller>,
 }
 
+#[allow(deprecated)]
 impl DeferredPlugin {
     /// Create a new deferred plugin.
     pub fn new<D: Send + 'static, I: DeferredPluginInstaller + 'static>(
@@ -106,9 +237,11 @@ impl DeferredPlugin {
 
 /// Trait for installing a deferred plugin into a typed builder.
 ///
-/// Implementors receive the plugin's data (as `Box<dyn Any>`) and a context
-/// that provides access to builder internals. The installer can downcast
-/// the data to its expected type and modify the builder accordingly.
+/// # Deprecated
+///
+/// Use [`DeferredAction`] instead.
+#[deprecated(since = "0.2.0", note = "Use DeferredAction instead")]
+#[allow(deprecated)]
 pub trait DeferredPluginInstaller: Send {
     /// Install the plugin using the provided data and context.
     fn install(
@@ -118,39 +251,24 @@ pub trait DeferredPluginInstaller: Send {
     );
 }
 
-use tokio_util::sync::CancellationToken;
-
 /// Context for installing a deferred plugin.
 ///
-/// This trait provides type-erased access to builder internals that deferred
-/// plugins may need to modify.
+/// # Deprecated
+///
+/// Use [`DeferredContext`] instead.
+#[deprecated(since = "0.2.0", note = "Use DeferredContext instead")]
 pub trait DeferredInstallContext {
     /// Add a layer to the router.
     fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>);
 
     /// Store plugin-specific data for later retrieval.
-    ///
-    /// Plugins can store arbitrary data keyed by type. This data persists
-    /// through the builder lifecycle and can be retrieved during controller
-    /// registration or serve hooks.
-    ///
-    /// The data must be `Send + Sync` to be accessible across threads.
     fn store_plugin_data(&mut self, data: Box<dyn Any + Send + Sync>);
 
     /// Add a serve hook that runs when the server starts.
-    ///
-    /// The `start_fn` is a function pointer (stored as `usize`) with signature:
-    /// `fn(Vec<ScheduledTaskDef<T>>, T, CancellationToken)` where `T` is the state type.
-    ///
-    /// The builder will:
-    /// 1. Retrieve the `TaskRegistryHandle` from plugin data
-    /// 2. Extract and downcast tasks to the correct type
-    /// 3. Call `start_fn` with the tasks, state, and token
-    ///
-    /// # Safety
-    ///
-    /// The `start_fn` must be a valid function pointer with the signature above.
-    fn add_serve_hook(&mut self, start_fn: usize, token: CancellationToken);
+    fn add_serve_hook(
+        &mut self,
+        hook: Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>,
+    );
 
     /// Add a shutdown hook that runs when the server stops.
     fn add_shutdown_hook(&mut self, hook: Box<dyn FnOnce() + Send>);

@@ -26,8 +26,8 @@ impl OpenApiPlugin {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for OpenApiPlugin {
-    fn install(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
+impl Plugin for OpenApiPlugin {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
         let config = self.config;
         app.with_openapi_builder(move |metadata| openapi_routes::<T>(config, metadata))
     }

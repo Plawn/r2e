@@ -29,7 +29,11 @@ pub use guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAut
 pub use interceptors::{Interceptor, InterceptorContext};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
-pub use plugin::{DeferredInstallContext, DeferredPlugin, DeferredPluginInstaller, Plugin, PreStatePlugin};
+#[allow(deprecated)]
+pub use plugin::{
+    DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin,
+    DeferredPluginInstaller, Plugin, PreStatePlugin,
+};
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
 pub use state::QuarlusState;
 pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};

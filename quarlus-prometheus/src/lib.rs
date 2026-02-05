@@ -75,8 +75,8 @@ impl Prometheus {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> Plugin<T> for Prometheus {
-    fn install(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
+impl Plugin for Prometheus {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
         // Initialize global metrics
         let config = self.config.clone();
         init_metrics(&config);

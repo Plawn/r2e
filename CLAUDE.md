@@ -310,11 +310,11 @@ Scheduled tasks are auto-discovered via `register_controller()`, following the s
 #[scheduled(cron = "0 */5 * * * *")]        // cron expression
 ```
 
-**Registration:** install the `Scheduler` plugin once, then register controllers normally:
+**Registration:** install the `Scheduler` plugin before `build_state()`, then register controllers:
 ```rust
 AppBuilder::new()
-    .build_state::<Services>()
-    .with(Scheduler)                          // install scheduler runtime
+    .plugin(Scheduler)                        // install scheduler runtime (provides CancellationToken)
+    .build_state::<Services, _>()
     .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
     .serve("0.0.0.0:3000")
 ```
@@ -355,14 +355,15 @@ Fluent API for assembling a Quarlus application:
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
+    .provide(services.pool.clone())        // provide beans
+    .build_state::<Services, _>()          // resolve bean graph
     .with_config(config)
-    .with(Health)                           // /health → 200 "OK"
+    .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // or Cors::new(custom_layer)
     .with(Tracing)
     .with(ErrorHandling)                   // catch panics → JSON 500
     .with(DevReload)                       // /__quarlus_dev/* endpoints
-    .with(Scheduler)                       // scheduler runtime (from quarlus-scheduler)
     .with(OpenApiPlugin::new(config))      // /openapi.json (+ /docs if docs_ui enabled)
     .on_start(|state| async move { Ok(()) })
     .on_stop(|| async { })

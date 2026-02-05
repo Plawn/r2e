@@ -1,7 +1,8 @@
 use crate::beans::{Bean, BeanRegistry, BeanState};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
-use crate::plugin::{DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
+#[allow(deprecated)]
+use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
 use crate::type_list::{BuildableFrom, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -32,10 +33,15 @@ struct BuilderConfig {
     config: Option<crate::config::QuarlusConfig>,
     custom_layers: Vec<LayerFn>,
     bean_registry: BeanRegistry,
-    /// Deferred plugins to be installed after state resolution.
+    /// Deferred actions to be executed after state resolution.
+    deferred_actions: Vec<DeferredAction>,
+    /// Legacy deferred plugins (deprecated, for backward compatibility).
+    #[allow(deprecated)]
     deferred_plugins: Vec<DeferredPlugin>,
     /// Plugin data storage (type-erased, keyed by TypeId).
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    /// Name of the last plugin that should be installed last (for ordering validation).
+    last_plugin_name: Option<&'static str>,
 }
 
 /// Builder for assembling a Quarlus application.
@@ -85,8 +91,10 @@ impl AppBuilder<NoState, TNil> {
                 config: None,
                 custom_layers: Vec::new(),
                 bean_registry: BeanRegistry::new(),
+                deferred_actions: Vec::new(),
                 deferred_plugins: Vec::new(),
                 plugin_data: HashMap::new(),
+                last_plugin_name: None,
             },
             state: None,
             routes: Vec::new(),
@@ -153,14 +161,24 @@ impl<P> AppBuilder<NoState, P> {
     /// use quarlus_scheduler::Scheduler;
     ///
     /// AppBuilder::new()
-    ///     .with_plugin(Scheduler)  // Provides CancellationToken
+    ///     .plugin(Scheduler)  // Provides CancellationToken
     ///     .build_state::<Services, _>()
     /// ```
-    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
-        plugin.pre_install(self)
+    pub fn plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
+        plugin.install(self)
     }
 
-    /// Add a deferred plugin to be installed after state resolution.
+    /// Alias for [`.plugin()`](Self::plugin) for pre-state plugins.
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`.plugin()`](Self::plugin) instead.
+    #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
+    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
+        plugin.install(self)
+    }
+
+    /// Add a deferred action to be executed after state resolution.
     ///
     /// This is called by [`PreStatePlugin`] implementations to register setup
     /// that needs to run after `build_state()` is called.
@@ -173,14 +191,27 @@ impl<P> AppBuilder<NoState, P> {
     ///
     ///     fn pre_install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
     ///         let token = MyToken::new();
-    ///         let plugin = DeferredPlugin::new(
-    ///             MySetupData { token: token.clone() },
-    ///             MyInstaller,
-    ///         );
-    ///         app.provide(token).add_deferred_plugin(plugin)
+    ///         let handle = MyHandle::new(token.clone());
+    ///
+    ///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
+    ///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
+    ///             ctx.on_shutdown(|| { /* cleanup */ });
+    ///         }))
     ///     }
     /// }
     /// ```
+    pub fn add_deferred(mut self, action: DeferredAction) -> Self {
+        self.shared.deferred_actions.push(action);
+        self
+    }
+
+    /// Add a deferred plugin to be installed after state resolution.
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`add_deferred`](Self::add_deferred) with [`DeferredAction`] instead.
+    #[deprecated(since = "0.2.0", note = "Use add_deferred with DeferredAction instead")]
+    #[allow(deprecated)]
     pub fn add_deferred_plugin(mut self, plugin: DeferredPlugin) -> Self {
         self.shared.deferred_plugins.push(plugin);
         self
@@ -238,8 +269,10 @@ impl Default for AppBuilder<NoState, TNil> {
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Internal: construct a typed builder from the pre-state shared config.
+    #[allow(deprecated)]
     fn from_pre(mut shared: BuilderConfig, state: T) -> Self {
-        // Take the deferred plugins before creating the builder.
+        // Take the deferred actions and plugins before creating the builder.
+        let deferred_actions = std::mem::take(&mut shared.deferred_actions);
         let deferred_plugins = std::mem::take(&mut shared.deferred_plugins);
 
         // Drop the bean registry since it's been consumed.
@@ -260,9 +293,20 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             _provided: PhantomData,
         };
 
-        // Install deferred plugins.
+        // Execute deferred actions (new API).
+        for action in deferred_actions {
+            let mut ctx = DeferredContext {
+                layers: &mut builder.shared.custom_layers,
+                plugin_data: &mut builder.shared.plugin_data,
+                serve_hooks: &mut builder.serve_hooks,
+                shutdown_hooks: &mut builder.plugin_shutdown_hooks,
+            };
+            (action.action)(&mut ctx);
+        }
+
+        // Install legacy deferred plugins (deprecated API).
         for plugin in deferred_plugins {
-            let mut ctx = InstallContext {
+            let mut ctx = LegacyInstallContext {
                 layers: &mut builder.shared.custom_layers,
                 plugin_data: &mut builder.shared.plugin_data,
                 serve_hooks: &mut builder.serve_hooks,
@@ -275,15 +319,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 }
 
-/// Context for installing deferred plugins into a typed builder.
-struct InstallContext<'a> {
+/// Context for installing legacy deferred plugins into a typed builder.
+#[allow(deprecated)]
+struct LegacyInstallContext<'a> {
     layers: &'a mut Vec<LayerFn>,
     plugin_data: &'a mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     serve_hooks: &'a mut Vec<ServeHook>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
 }
 
-impl DeferredInstallContext for InstallContext<'_> {
+#[allow(deprecated)]
+impl DeferredInstallContext for LegacyInstallContext<'_> {
     fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
         self.layers.push(layer);
     }
@@ -294,22 +340,11 @@ impl DeferredInstallContext for InstallContext<'_> {
         self.plugin_data.insert(type_id, data);
     }
 
-    fn add_serve_hook(&mut self, start_fn: usize, token: CancellationToken) {
-        // Reinterpret the function pointer.
-        // This is safe because tasks now capture their state, so the function
-        // only needs tasks and token (no generic T parameter needed).
-        type StartFn = fn(Vec<Box<dyn Any + Send>>, CancellationToken);
-        let start_fn: StartFn = unsafe { std::mem::transmute(start_fn) };
-
-        // Create a closure that will be called at serve time.
-        let closure: ServeHook = Box::new(move |tasks, token_at_serve| {
-            // Note: we use the token from add_serve_hook, not the one passed at serve time
-            // (they should be the same token anyway)
-            let _ = token_at_serve;
-            start_fn(tasks, token);
-        });
-
-        self.serve_hooks.push(closure);
+    fn add_serve_hook(
+        &mut self,
+        hook: Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>,
+    ) {
+        self.serve_hooks.push(hook);
     }
 
     fn add_shutdown_hook(&mut self, hook: Box<dyn FnOnce() + Send>) {
@@ -340,7 +375,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///     .with(ErrorHandling)
     ///     .with(DevReload)
     /// ```
-    pub fn with<Pl: Plugin<T>>(self, plugin: Pl) -> Self {
+    pub fn with<Pl: Plugin>(mut self, plugin: Pl) -> Self {
+        // Check if a "should be last" plugin was already installed
+        if let Some(last_name) = self.shared.last_plugin_name {
+            tracing::warn!(
+                previous = last_name,
+                current = Pl::name(),
+                "Plugin {} should be installed last, but {} is being installed after it. \
+                 This may cause unexpected behavior.",
+                last_name,
+                Pl::name(),
+            );
+        }
+
+        // Track if this plugin should be last
+        if Pl::should_be_last() {
+            self.shared.last_plugin_name = Some(Pl::name());
+        }
+
         plugin.install(self)
     }
 

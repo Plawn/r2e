@@ -16,7 +16,7 @@ use axum::http::request::Parts;
 use quarlus_core::builder::TaskRegistryHandle;
 use quarlus_core::http::StatusCode;
 use quarlus_core::type_list::TCons;
-use quarlus_core::{AppBuilder, DeferredInstallContext, DeferredPlugin, DeferredPluginInstaller, PreStatePlugin};
+use quarlus_core::{AppBuilder, DeferredAction, PreStatePlugin};
 
 /// Handle to the scheduler runtime.
 ///
@@ -119,75 +119,36 @@ pub struct Scheduler;
 impl PreStatePlugin for Scheduler {
     type Provided = CancellationToken;
 
-    fn pre_install<P>(
+    fn install<P>(
         self,
         app: AppBuilder<quarlus_core::builder::NoState, P>,
     ) -> AppBuilder<quarlus_core::builder::NoState, TCons<Self::Provided, P>> {
         let token = CancellationToken::new();
         let handle = SchedulerHandle::new(token.clone());
         let registry = TaskRegistryHandle::new();
+        let cancel_for_stopper = token.clone();
+        let token_for_serve = token.clone();
 
-        // Create the deferred plugin with our setup data and installer.
-        let setup_data = SchedulerSetupData {
-            token: token.clone(),
-            handle,
-            registry,
-        };
-        let plugin = DeferredPlugin::new(setup_data, SchedulerInstaller);
+        app.provide(token).add_deferred(DeferredAction::new("Scheduler", move |ctx| {
+            // Add the layer that provides SchedulerHandle via extension.
+            ctx.add_layer(Box::new(move |router| {
+                router.layer(axum::Extension(handle))
+            }));
 
-        app.provide(token).add_deferred_plugin(plugin)
-    }
-}
+            // Store the task registry for use during controller registration.
+            ctx.store_data(registry);
 
-/// Setup data for the scheduler plugin.
-struct SchedulerSetupData {
-    token: CancellationToken,
-    handle: SchedulerHandle,
-    registry: TaskRegistryHandle,
-}
+            // Register a serve hook to start scheduled tasks.
+            // Tasks already have their state captured, so no generic T is needed.
+            ctx.on_serve(move |tasks, _token_at_serve| {
+                start_scheduled_tasks(tasks, token_for_serve);
+            });
 
-/// Installer for the scheduler plugin.
-struct SchedulerInstaller;
-
-impl DeferredPluginInstaller for SchedulerInstaller {
-    fn install(
-        &self,
-        data: Box<dyn Any + Send>,
-        ctx: &mut dyn DeferredInstallContext,
-    ) {
-        // Downcast the data to our expected type.
-        let setup = match data.downcast::<SchedulerSetupData>() {
-            Ok(setup) => *setup,
-            Err(_) => {
-                tracing::error!("SchedulerInstaller received unexpected data type");
-                return;
-            }
-        };
-
-        let handle = setup.handle;
-        let registry = setup.registry;
-        let token = setup.token.clone();
-        let cancel_for_stopper = setup.token;
-
-        // Add the layer that provides SchedulerHandle via extension.
-        ctx.add_layer(Box::new(move |router| {
-            router.layer(axum::Extension(handle))
-        }));
-
-        // Store the task registry for use during controller registration.
-        ctx.store_plugin_data(Box::new(registry));
-
-        // Register a serve hook to start scheduled tasks.
-        // The function takes (Vec<Box<dyn Any + Send>>, CancellationToken).
-        // Tasks already have their state captured, so no generic T is needed.
-        let start_fn_ptr = start_scheduled_tasks as *const () as usize;
-        ctx.add_serve_hook(start_fn_ptr, token);
-
-        // Register shutdown hook.
-        let stopper = Box::new(move || {
-            cancel_for_stopper.cancel();
-        });
-        ctx.add_shutdown_hook(stopper);
+            // Register shutdown hook.
+            ctx.on_shutdown(move || {
+                cancel_for_stopper.cancel();
+            });
+        }))
     }
 }
 

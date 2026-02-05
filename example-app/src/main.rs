@@ -104,7 +104,7 @@ async fn main() {
     // --- App assembly using bean graph ---
     // Scheduler (#8) is installed before build_state() to provide CancellationToken
     AppBuilder::new()
-        .with_plugin(Scheduler) // Scheduling (#8) - provides CancellationToken
+        .plugin(Scheduler) // Scheduling (#8) - provides CancellationToken
         .provide(event_bus)
         .provide(pool)
         .provide(config.clone())
