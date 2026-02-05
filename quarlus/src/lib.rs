@@ -20,6 +20,7 @@
 //! | `rate-limit`  | no      | `quarlus-rate-limit` |
 //! | `openapi`     | no      | `quarlus-openapi`    |
 //! | `prometheus`  | no      | `quarlus-prometheus` |
+//! | `openfga`     | no      | `quarlus-openfga`    |
 //! | `validation`  | no      | `quarlus-core/validation` |
 //! | `full`        | no      | All of the above     |
 
@@ -61,6 +62,9 @@ pub use quarlus_openapi;
 #[cfg(feature = "prometheus")]
 pub use quarlus_prometheus;
 
+#[cfg(feature = "openfga")]
+pub use quarlus_openfga;
+
 /// Convenience type aliases that depend on types from optional sub-crates.
 pub mod types {
     pub use quarlus_core::types::*;
@@ -98,4 +102,7 @@ pub mod prelude {
 
     #[cfg(feature = "utils")]
     pub use quarlus_utils::prelude::*;
+
+    #[cfg(feature = "openfga")]
+    pub use quarlus_openfga::prelude::*;
 }

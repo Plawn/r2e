@@ -10,6 +10,7 @@ members = [
     "quarlus-events",
     "quarlus-scheduler",
     "quarlus-prometheus",
+    "quarlus-openfga",
     "quarlus-cli",
     "quarlus-test",
     "quarlus-utils",

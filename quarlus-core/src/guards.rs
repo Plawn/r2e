@@ -38,6 +38,54 @@ impl Identity for NoIdentity {
     }
 }
 
+/// Path parameters extracted from the matched route pattern.
+///
+/// In production, this borrows Axum's `RawPathParams` with zero copy.
+/// For testing, construct via [`PathParams::from_pairs`].
+pub struct PathParams<'a>(PathParamsInner<'a>);
+
+enum PathParamsInner<'a> {
+    Raw(&'a crate::http::extract::RawPathParams),
+    Pairs(&'a [(&'a str, &'a str)]),
+}
+
+impl<'a> PathParams<'a> {
+    /// Create from Axum's `RawPathParams` (zero copy, used by generated code).
+    pub fn from_raw(raw: &'a crate::http::extract::RawPathParams) -> Self {
+        Self(PathParamsInner::Raw(raw))
+    }
+
+    /// Create from a slice of `(key, value)` pairs (for testing).
+    pub fn from_pairs(pairs: &'a [(&'a str, &'a str)]) -> Self {
+        Self(PathParamsInner::Pairs(pairs))
+    }
+
+    /// Empty path params (convenience for contexts without route matching).
+    pub const EMPTY: PathParams<'static> = PathParams(PathParamsInner::Pairs(&[]));
+
+    /// Get a path parameter by name.
+    ///
+    /// Linear scan — optimal for the typical 1-3 path params.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // For route `/orgs/{org_id}/documents/{doc_id}`
+    /// // and request path `/orgs/acme/documents/123`
+    /// ctx.path_params.get("org_id")  // => Some("acme")
+    /// ctx.path_params.get("doc_id")  // => Some("123")
+    /// ```
+    pub fn get(&self, name: &str) -> Option<&str> {
+        match &self.0 {
+            PathParamsInner::Raw(raw) => {
+                raw.iter().find(|(k, _)| *k == name).map(|(_, v)| v)
+            }
+            PathParamsInner::Pairs(pairs) => {
+                pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
+            }
+        }
+    }
+}
+
 /// Context available to guards before the handler body runs.
 ///
 /// Generic over the identity type `I` so that guards can access the full
@@ -47,6 +95,7 @@ pub struct GuardContext<'a, I: Identity> {
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
     pub uri: &'a Uri,
+    pub path_params: PathParams<'a>,
     pub identity: Option<&'a I>,
 }
 
@@ -69,6 +118,19 @@ impl<'a, I: Identity> GuardContext<'a, I> {
     /// The request query string, if any.
     pub fn query_string(&self) -> Option<&str> {
         self.uri.query()
+    }
+
+    /// Get a path parameter by name.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // For route `/orgs/{org_id}/documents/{doc_id}`
+    /// // and request path `/orgs/acme/documents/123`
+    /// ctx.path_param("org_id")  // => Some("acme")
+    /// ctx.path_param("doc_id")  // => Some("123")
+    /// ```
+    pub fn path_param(&self, name: &str) -> Option<&str> {
+        self.path_params.get(name)
     }
 
     /// Convenience accessor for the identity email.
@@ -107,6 +169,7 @@ pub struct PreAuthGuardContext<'a> {
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
     pub uri: &'a Uri,
+    pub path_params: PathParams<'a>,
 }
 
 impl<'a> PreAuthGuardContext<'a> {
@@ -118,6 +181,19 @@ impl<'a> PreAuthGuardContext<'a> {
     /// The request query string, if any.
     pub fn query_string(&self) -> Option<&str> {
         self.uri.query()
+    }
+
+    /// Get a path parameter by name.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // For route `/orgs/{org_id}/documents/{doc_id}`
+    /// // and request path `/orgs/acme/documents/123`
+    /// ctx.path_param("org_id")  // => Some("acme")
+    /// ctx.path_param("doc_id")  // => Some("123")
+    /// ```
+    pub fn path_param(&self, name: &str) -> Option<&str> {
+        self.path_params.get(name)
     }
 }
 

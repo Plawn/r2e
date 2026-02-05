@@ -124,22 +124,26 @@ fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod, krate: &TokenS
             quote! { Some(&#arg_name) }
         };
         quote! {
+            let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
             let __guard_ctx = #krate::GuardContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
                 headers: &__headers,
                 uri: &__uri,
+                path_params: __path_params,
                 identity: #identity_expr,
             };
         }
     } else {
         // Case B: struct-level identity or no identity
         quote! {
+            let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
             let __guard_ctx = #krate::GuardContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
                 headers: &__headers,
                 uri: &__uri,
+                path_params: __path_params,
                 identity: #meta_mod::guard_identity(&__ctrl_ext.0),
             };
         }
@@ -271,6 +275,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             quote! {
                 __headers: #krate::http::HeaderMap,
                 __uri: #krate::http::Uri,
+                __raw_path_params: #krate::http::extract::RawPathParams,
             }
         } else {
             quote! {}

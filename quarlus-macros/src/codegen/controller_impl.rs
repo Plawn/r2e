@@ -128,6 +128,7 @@ fn generate_pre_auth_guards(
                                 controller_name: #controller_name_str,
                                 headers: __req.headers(),
                                 uri: __req.uri(),
+                                path_params: #krate::PathParams::EMPTY,
                             };
                             #(#pre_auth_checks)*
                             __next.run(__req).await

@@ -25,7 +25,7 @@ pub use builder::{AppBuilder, TaskRegistryHandle};
 pub use config::QuarlusConfig;
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
-pub use guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext, RolesGuard};
+pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext, RolesGuard};
 pub use interceptors::{Interceptor, InterceptorContext};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;

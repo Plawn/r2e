@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "scheduler", "cache", "rate-limit", "openapi", "prometheus"]
+full = ["security", "events", "utils", "data", "scheduler", "cache", "rate-limit", "openapi", "prometheus", "openfga"]
 security = ["dep:quarlus-security"]
 events = ["dep:quarlus-events"]
 utils = ["dep:quarlus-utils"]
@@ -22,6 +22,7 @@ cache = ["dep:quarlus-cache"]
 rate-limit = ["dep:quarlus-rate-limit"]
 openapi = ["dep:quarlus-openapi"]
 prometheus = ["dep:quarlus-prometheus"]
+openfga = ["dep:quarlus-openfga"]
 validation = ["quarlus-core/validation"]
 
 [dependencies]
@@ -36,3 +37,4 @@ quarlus-cache = { path = "../quarlus-cache", version = "0.1.0", optional = true 
 quarlus-rate-limit = { path = "../quarlus-rate-limit", version = "0.1.0", optional = true }
 quarlus-openapi = { path = "../quarlus-openapi", version = "0.1.0", optional = true }
 quarlus-prometheus = { path = "../quarlus-prometheus", version = "0.1.0", optional = true }
+quarlus-openfga = { path = "../quarlus-openfga", version = "0.1.0", optional = true }
