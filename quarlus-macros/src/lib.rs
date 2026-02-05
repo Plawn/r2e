@@ -1,6 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
+pub(crate) mod crate_path;
 pub(crate) mod extract;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
@@ -385,6 +386,26 @@ pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn guard(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Apply a custom pre-authentication guard to a route method.
+///
+/// Pre-auth guards run as middleware **before** JWT extraction/validation.
+/// The type must implement [`quarlus_core::PreAuthGuard`].
+///
+/// Use this for authorization checks that don't need identity (e.g.,
+/// IP-based allowlisting, custom rate limiting).
+///
+/// ```ignore
+/// #[pre_guard(MyIpAllowlistGuard)]
+/// #[get("/api/data")]
+/// async fn data(&self) -> Json<Data> { ... }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn pre_guard(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 

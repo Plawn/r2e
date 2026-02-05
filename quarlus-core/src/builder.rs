@@ -49,6 +49,7 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
     shared: BuilderConfig,
     state: Option<T>,
     routes: Vec<crate::http::Router<T>>,
+    pre_auth_guard_fns: Vec<Box<dyn FnOnce(crate::http::Router<T>, &T) -> crate::http::Router<T> + Send>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook>,
     route_metadata: Vec<Vec<crate::openapi::RouteInfo>>,
@@ -74,6 +75,7 @@ impl AppBuilder<NoState, TNil> {
             },
             state: None,
             routes: Vec::new(),
+            pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
             route_metadata: Vec::new(),
@@ -94,6 +96,7 @@ impl<P> AppBuilder<NoState, P> {
             shared: self.shared,
             state: None,
             routes: self.routes,
+            pre_auth_guard_fns: self.pre_auth_guard_fns,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
             route_metadata: self.route_metadata,
@@ -184,6 +187,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shared,
             state: Some(state),
             routes: Vec::new(),
+            pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
             route_metadata: Vec::new(),
@@ -373,6 +377,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// by `serve()`.
     pub fn register_controller<C: Controller<T>>(mut self) -> Self {
         self.routes.push(C::routes());
+        self.pre_auth_guard_fns
+            .push(Box::new(|router, state| C::apply_pre_auth_guards(router, state)));
         self.route_metadata.push(C::route_metadata());
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
@@ -448,6 +454,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Merge all controller / manual routes.
         for r in self.routes {
             router = router.merge(r);
+        }
+
+        // Apply pre-auth guard layers (before state finalization).
+        for guard_fn in self.pre_auth_guard_fns {
+            router = guard_fn(router, &state);
         }
 
         // Invoke the deferred OpenAPI builder, if registered.

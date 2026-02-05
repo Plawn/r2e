@@ -26,11 +26,8 @@
 // Re-export sub-crates as public modules so they're accessible as
 // `quarlus::quarlus_core`, `quarlus::quarlus_events`, etc.
 //
-// NOTE: The proc macros (`#[derive(Controller)]`, `#[routes]`) generate code
-// that references `quarlus_core::` and `quarlus_rate_limit::` as bare crate
-// paths. Downstream crates must keep `quarlus-core`, `quarlus-macros`, and
-// (if using `#[rate_limited]`) `quarlus-rate-limit` as direct Cargo dependencies
-// until the macros support configurable crate paths.
+// The proc macros use `proc-macro-crate` to detect whether the user depends
+// on `quarlus` (facade) or individual crates, and generate the correct paths.
 pub extern crate quarlus_core;
 pub extern crate quarlus_macros;
 

@@ -69,6 +69,7 @@ Dependency flow: `quarlus-macros` ← `quarlus-core` ← `quarlus-security` / `q
 
 **Handler parameter-level identity injection:**
 - `#[inject(identity)]` can also be placed on handler parameters (not just struct fields). This enables mixed controllers where some endpoints are public and others require authentication, while still allowing `StatefulConstruct` generation for consumers and scheduled tasks.
+- **Optional identity:** Use `#[inject(identity)] user: Option<AuthenticatedUser>` for endpoints that work both with and without authentication. The guard context will receive `None` when no JWT is present.
 
 **Controller declaration uses two macros working together:**
 
@@ -141,17 +142,66 @@ Handler generation pattern: each `#[get("/path")]` method becomes a standalone a
 
 ### Guards
 
-Handler-level guards run before controller construction and can short-circuit with an error response. The `Guard<S, I: Identity>` trait (`quarlus-core/src/guards.rs`) defines a `check(&self, state, ctx) -> Result<(), Response>` method. Guards are generic over both the application state `S` and the identity type `I`.
+Handler-level guards run before controller construction and can short-circuit with an error response. The `Guard<S, I: Identity>` trait (`quarlus-core/src/guards.rs`) defines an async `check(&self, state, ctx) -> impl Future<Output = Result<(), Response>> + Send` method. Guards are generic over both the application state `S` and the identity type `I`.
 
-`GuardContext<'a, I: Identity>` provides: method name, controller name, headers, and an `Option<&I>` for the full identity object. Convenience methods `identity_sub()` and `identity_roles()` access common fields via the `Identity` trait.
+`GuardContext<'a, I: Identity>` provides:
+- `method_name`, `controller_name` — handler identification
+- `headers` — request headers (`&HeaderMap`)
+- `uri` — request URI (`&Uri`) with convenience methods `path()` and `query_string()`
+- `identity` — optional identity reference (`Option<&'a I>`)
+- Convenience accessors: `identity_sub()`, `identity_roles()`, `identity_email()`, `identity_claims()`
 
-The `Identity` trait (`quarlus-core::Identity`) decouples guards from the concrete `AuthenticatedUser` type. It provides `sub()` and `roles()`. `NoIdentity` is a sentinel type used when no identity is available.
+The `Identity` trait (`quarlus-core::Identity`) decouples guards from the concrete `AuthenticatedUser` type:
+- `sub()` — unique subject identifier (required)
+- `roles()` — role list (required)
+- `email()` — email address (optional, default `None`)
+- `claims()` — raw JWT claims as `serde_json::Value` (optional, default `None`)
+
+`NoIdentity` is a sentinel type used when no identity is available.
 
 **Built-in guards:**
 - `RolesGuard` — checks required roles, returns 403 if missing. Applied via `#[roles("admin")]`. Implements `Guard<S, I>` for any `I: Identity`.
-- `RateLimitGuard` — token-bucket rate limiting, returns 429. Applied via `#[rate_limited(max = 5, window = 60)]`. Implements `Guard<S, I>` for any `I: Identity`.
+- `RateLimitGuard` — token-bucket rate limiting, returns 429. Applied via `#[rate_limited(max = 5, window = 60)]`. Implements `Guard<S, I>` for any `I: Identity`. **Note:** global/IP-keyed rate limiting runs as pre-auth middleware (before JWT validation).
 
-**Custom guards:** implement `Guard<S, I: Identity>` (generic) or `Guard<S, AuthenticatedUser>` (specific) and apply via `#[guard(MyGuard)]`.
+**Pre-authentication guards:**
+
+For authorization checks that don't require identity (e.g., IP-based rate limiting, allowlisting), use the `PreAuthGuard<S>` trait. Pre-auth guards run as middleware **before** JWT extraction, avoiding wasted token validation when requests will be rejected.
+
+- `PreAuthGuardContext` — provides `method_name`, `controller_name`, `headers`, `uri` (no identity)
+- `PreAuthRateLimitGuard` — pre-auth rate limiter for global/IP keys
+- Apply custom pre-auth guards via `#[pre_guard(MyPreAuthGuard)]`
+
+**Rate-limiting key classification:**
+- `key = "global"` or `key = "ip"` → pre-auth guard (runs before JWT validation)
+- `key = "user"` → post-auth guard (runs after JWT validation, needs identity)
+
+**Custom guards:**
+- Post-auth: implement `Guard<S, I: Identity>` (async via RPITIT) and apply via `#[guard(MyGuard)]`
+- Pre-auth: implement `PreAuthGuard<S>` and apply via `#[pre_guard(MyPreAuthGuard)]`
+
+**Async guard example:**
+```rust
+struct DatabaseGuard;
+
+impl<S: Send + Sync, I: Identity> Guard<S, I> for DatabaseGuard
+where
+    sqlx::SqlitePool: FromRef<S>,
+{
+    fn check(
+        &self,
+        state: &S,
+        ctx: &GuardContext<'_, I>,
+    ) -> impl Future<Output = Result<(), Response>> + Send {
+        async move {
+            let pool = sqlx::SqlitePool::from_ref(state);
+            // Async database check...
+            sqlx::query("SELECT 1").fetch_one(&pool).await
+                .map_err(|_| AppError::Internal("DB unavailable".into()).into_response())?;
+            Ok(())
+        }
+    }
+}
+```
 
 ### Interceptors
 
@@ -165,8 +215,12 @@ Cross-cutting concerns (logging, timing, caching) are implemented via a generic 
 
 **Interceptor wrapping order** (outermost → innermost):
 
-Handler level (before the controller, in `generate_single_handler`):
-1. `rate_limited` — short-circuits with 429
+Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
+0. `rate_limited(key = "global")` / `rate_limited(key = "ip")` — pre-auth rate limiting
+0. `pre_guard(CustomPreAuthGuard)` — custom pre-auth guards
+
+Handler level (after extraction, before controller body):
+1. `rate_limited(key = "user")` — per-user rate limiting (needs identity)
 2. `roles` — short-circuits with 403
 3. `guard(CustomGuard)` — custom guards, short-circuit with custom error
 
@@ -185,14 +239,15 @@ Inline codegen (no trait):
 ```rust
 #[transactional]                             // uses self.pool
 #[transactional(pool = "read_db")]           // custom pool field
-#[rate_limited(max = 5, window = 60)]                  // global key
-#[rate_limited(max = 5, window = 60, key = "user")]    // per-user (requires identity)
-#[rate_limited(max = 5, window = 60, key = "ip")]      // per-IP (X-Forwarded-For)
+#[rate_limited(max = 5, window = 60)]                  // global key (pre-auth)
+#[rate_limited(max = 5, window = 60, key = "user")]    // per-user (post-auth, requires identity)
+#[rate_limited(max = 5, window = 60, key = "ip")]      // per-IP (pre-auth, X-Forwarded-For)
 #[intercept(MyInterceptor)]                  // user-defined (must be a unit struct/constant)
 #[intercept(Logged::info())]                 // built-in interceptor with config
 #[intercept(Cache::ttl(30).group("users"))]  // cache with named group
 #[intercept(CacheInvalidate::group("users"))] // invalidate cache group
-#[guard(MyCustomGuard)]                      // custom guard
+#[guard(MyCustomGuard)]                      // custom post-auth guard (async)
+#[pre_guard(MyPreAuthGuard)]                 // custom pre-auth guard (runs before JWT)
 #[middleware(my_middleware_fn)]               // Tower middleware
 ```
 

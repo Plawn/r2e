@@ -6,13 +6,6 @@ publish = false
 
 [dependencies]
 quarlus = { path = "../quarlus", features = ["full", "validation"] }
-# quarlus-core and quarlus-macros are required as direct dependencies because
-# the proc macros generate code referencing `quarlus_core::` paths.
-quarlus-core = { path = "../quarlus-core", features = ["validation"] }
-quarlus-macros = { path = "../quarlus-macros" }
-# quarlus-rate-limit is required because #[rate_limited] generates code
-# referencing `quarlus_rate_limit::` paths.
-quarlus-rate-limit = { path = "../quarlus-rate-limit" }
 quarlus-data = { path = "../quarlus-data", features = ["sqlite"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 tokio = { version = "1", features = ["full"] }

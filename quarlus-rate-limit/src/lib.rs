@@ -1,5 +1,5 @@
 pub mod guard;
-pub use guard::{RateLimitGuard, RateLimitKeyKind};
+pub use guard::{PreAuthRateLimitGuard, RateLimitGuard, RateLimitKeyKind};
 
 use dashmap::DashMap;
 use std::hash::Hash;

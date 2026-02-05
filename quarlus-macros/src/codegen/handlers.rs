@@ -3,6 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::crate_path::quarlus_core_path;
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
 
@@ -91,16 +92,16 @@ fn build_call_args(
 }
 
 /// Generate guard check statements.
-fn generate_guard_checks(guard_fns: &[syn::Expr]) -> Vec<TokenStream> {
+fn generate_guard_checks(guard_fns: &[syn::Expr], krate: &TokenStream) -> Vec<TokenStream> {
     guard_fns
         .iter()
         .map(|guard_expr| {
             quote! {
-                if let Err(__resp) = quarlus_core::Guard::check(
+                if let Err(__resp) = #krate::Guard::check(
                     &#guard_expr,
                     &__state,
                     &__guard_ctx,
-                ) {
+                ).await {
                     return __resp;
                 }
             }
@@ -109,7 +110,7 @@ fn generate_guard_checks(guard_fns: &[syn::Expr]) -> Vec<TokenStream> {
 }
 
 /// Generate guard context construction based on identity source.
-fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod) -> TokenStream {
+fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod, krate: &TokenStream) -> TokenStream {
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
     let meta_mod = &ctx.meta_mod;
@@ -117,21 +118,28 @@ fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod) -> TokenStream
     if let Some(ref id_param) = rm.identity_param {
         // Case A: param-level identity
         let arg_name = format_ident!("__arg_{}", id_param.index);
+        let identity_expr = if id_param.is_optional {
+            quote! { #arg_name.as_ref() }
+        } else {
+            quote! { Some(&#arg_name) }
+        };
         quote! {
-            let __guard_ctx = quarlus_core::GuardContext {
+            let __guard_ctx = #krate::GuardContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
                 headers: &__headers,
-                identity: Some(&#arg_name),
+                uri: &__uri,
+                identity: #identity_expr,
             };
         }
     } else {
         // Case B: struct-level identity or no identity
         quote! {
-            let __guard_ctx = quarlus_core::GuardContext {
+            let __guard_ctx = #krate::GuardContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
                 headers: &__headers,
+                uri: &__uri,
                 identity: #meta_mod::guard_identity(&__ctrl_ext.0),
             };
         }
@@ -139,14 +147,14 @@ fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod) -> TokenStream
 }
 
 /// Generate managed resource acquisition statements.
-fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident) -> Vec<TokenStream> {
+fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
             quote! {
-                let mut #arg_name = match <#ty as quarlus_core::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -156,7 +164,7 @@ fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident) -> Vec<Toke
 }
 
 /// Generate managed resource release statements (in reverse order).
-fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident) -> Vec<TokenStream> {
+fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .rev()
@@ -164,7 +172,7 @@ fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident) -> Vec<Toke
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
             quote! {
-                if let Err(__e) = <#ty as quarlus_core::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
+                if let Err(__e) = <#ty as #krate::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
                     return __e.into();
                 }
             }
@@ -178,6 +186,7 @@ fn generate_body_and_release(
     managed_release: &[TokenStream],
     has_managed: bool,
     is_result: bool,
+    krate: &TokenStream,
 ) -> TokenStream {
     if has_managed {
         if is_result {
@@ -185,25 +194,26 @@ fn generate_body_and_release(
                 let __result = #call_expr;
                 let __success = __result.is_ok();
                 #(#managed_release)*
-                quarlus_core::http::response::IntoResponse::into_response(__result)
+                #krate::http::response::IntoResponse::into_response(__result)
             }
         } else {
             quote! {
                 let __result = #call_expr;
                 let __success = true;
                 #(#managed_release)*
-                quarlus_core::http::response::IntoResponse::into_response(__result)
+                #krate::http::response::IntoResponse::into_response(__result)
             }
         }
     } else {
         quote! {
-            quarlus_core::http::response::IntoResponse::into_response(#call_expr)
+            #krate::http::response::IntoResponse::into_response(#call_expr)
         }
     }
 }
 
 /// Generate a single Axum handler function.
 fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
+    let krate = quarlus_core_path();
     let ctx = HandlerContext::new(def, rm);
     let return_type = &rm.fn_item.sig.output;
 
@@ -244,21 +254,24 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         }
     } else {
         // Complex handler: returns Response
-        let guard_checks = generate_guard_checks(&rm.guard_fns);
+        let guard_checks = generate_guard_checks(&rm.guard_fns, &krate);
         let guard_context_construction = if has_guards {
-            generate_guard_context(&ctx, rm)
+            generate_guard_context(&ctx, rm, &krate)
         } else {
             quote! {}
         };
 
-        let managed_acquire = generate_managed_acquire(rm, meta_mod);
-        let managed_release = generate_managed_release(rm, meta_mod);
+        let managed_acquire = generate_managed_acquire(rm, meta_mod, &krate);
+        let managed_release = generate_managed_release(rm, meta_mod, &krate);
         let is_result = is_result_type(return_type);
         let body_and_release =
-            generate_body_and_release(&call_expr, &managed_release, has_managed, is_result);
+            generate_body_and_release(&call_expr, &managed_release, has_managed, is_result, &krate);
 
-        let headers_param = if has_guards {
-            quote! { __headers: quarlus_core::http::HeaderMap, }
+        let guard_params = if has_guards {
+            quote! {
+                __headers: #krate::http::HeaderMap,
+                __uri: #krate::http::Uri,
+            }
         } else {
             quote! {}
         };
@@ -266,11 +279,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
-                quarlus_core::http::extract::State(__state): quarlus_core::http::extract::State<#meta_mod::State>,
-                #headers_param
+                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+                #guard_params
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> quarlus_core::http::response::Response {
+            ) -> #krate::http::response::Response {
                 #guard_context_construction
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;

@@ -3,6 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::crate_path::quarlus_core_path;
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
 
@@ -62,6 +63,7 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream
         return quote! { #f };
     }
 
+    let krate = quarlus_core_path();
     let fn_item = &rm.fn_item;
     let attrs = &fn_item.attrs;
     let vis = &fn_item.vis;
@@ -78,12 +80,12 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream
         body = quote! {
             {
                 let mut tx = self.#pool_field.begin().await
-                    .map_err(|__e| quarlus_core::AppError::Internal(__e.to_string()))?;
+                    .map_err(|__e| #krate::AppError::Internal(__e.to_string()))?;
                 let __tx_result = #body;
                 match __tx_result {
                     Ok(__val) => {
                         tx.commit().await
-                            .map_err(|__e| quarlus_core::AppError::Internal(__e.to_string()))?;
+                            .map_err(|__e| #krate::AppError::Internal(__e.to_string()))?;
                         Ok(__val)
                     }
                     Err(__err) => Err(__err),
@@ -154,11 +156,13 @@ fn wrap_with_interceptors(
         return body;
     }
 
+    let krate = quarlus_core_path();
+
     for intercept_expr in all_intercepts.iter().rev() {
         body = quote! {
             {
                 let __interceptor = #intercept_expr;
-                quarlus_core::Interceptor::around(&__interceptor, __ctx, move || async move {
+                #krate::Interceptor::around(&__interceptor, __ctx, move || async move {
                     #body
                 }).await
             }
@@ -167,7 +171,7 @@ fn wrap_with_interceptors(
 
     quote! {
         {
-            let __ctx = quarlus_core::InterceptorContext {
+            let __ctx = #krate::InterceptorContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
             };

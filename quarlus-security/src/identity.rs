@@ -4,6 +4,75 @@ use crate::error::SecurityError;
 use crate::keycloak;
 use crate::openid::{Composite, RoleExtractor, StandardRoleExtractor};
 
+/// Simplified identity construction from JWT claims + app state.
+///
+/// Implement this trait to create custom identity types with minimal boilerplate.
+/// Combined with [`impl_claims_identity_extractor!`], this replaces the need to
+/// manually implement `FromRequestParts` for custom identity types.
+///
+/// # Example
+///
+/// ```ignore
+/// use quarlus_security::{ClaimsIdentity, AuthenticatedUser, impl_claims_identity_extractor};
+/// use quarlus_core::AppError;
+///
+/// #[derive(Clone)]
+/// pub struct DbUser {
+///     pub auth: AuthenticatedUser,
+///     pub profile: UserProfile,
+/// }
+///
+/// impl ClaimsIdentity<Services> for DbUser {
+///     async fn from_jwt_claims(claims: serde_json::Value, state: &Services) -> Result<Self, AppError> {
+///         let auth = AuthenticatedUser::from_claims(claims);
+///         let profile = fetch_profile(auth.sub(), &state.pool).await?;
+///         Ok(DbUser { auth, profile })
+///     }
+/// }
+///
+/// impl_claims_identity_extractor!(DbUser);
+/// ```
+pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
+    fn from_jwt_claims(
+        claims: serde_json::Value,
+        state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::AppError>> + Send;
+}
+
+/// Generate a `FromRequestParts` implementation for an identity type that implements
+/// [`ClaimsIdentity`].
+///
+/// This macro eliminates the boilerplate of manually implementing `FromRequestParts`.
+/// It extracts and validates the JWT using `JwtClaimsValidator`, then delegates to
+/// `ClaimsIdentity::from_jwt_claims` for custom construction.
+///
+/// # Usage
+///
+/// ```ignore
+/// impl_claims_identity_extractor!(DbUser);
+/// ```
+#[macro_export]
+macro_rules! impl_claims_identity_extractor {
+    ($identity:ty) => {
+        impl<S> $crate::__macro_support::http::extract::FromRequestParts<S> for $identity
+        where
+            S: Send + Sync,
+            Self: $crate::ClaimsIdentity<S>,
+            std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
+        {
+            type Rejection = $crate::__macro_support::AppError;
+
+            async fn from_request_parts(
+                parts: &mut $crate::__macro_support::http::header::Parts,
+                state: &S,
+            ) -> Result<Self, Self::Rejection> {
+                let claims = $crate::extract_jwt_claims(parts, state).await?;
+                <$identity as $crate::ClaimsIdentity<S>>::from_jwt_claims(claims, state).await
+            }
+        }
+    };
+}
+
 /// Trait for building an identity from validated JWT claims.
 ///
 /// Implement this trait to customize how JWT claims are mapped to your
@@ -143,12 +212,18 @@ pub struct AuthenticatedUser {
     pub claims: serde_json::Value,
 }
 
-impl quarlus_core::Identity for AuthenticatedUser {
+impl crate::__macro_support::Identity for AuthenticatedUser {
     fn sub(&self) -> &str {
         &self.sub
     }
     fn roles(&self) -> &[String] {
         &self.roles
+    }
+    fn email(&self) -> Option<&str> {
+        self.email.as_deref()
+    }
+    fn claims(&self) -> Option<&serde_json::Value> {
+        Some(&self.claims)
     }
 }
 

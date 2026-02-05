@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::crate_path::quarlus_core_path;
 use crate::derive_parsing::ControllerStructDef;
 
 pub fn generate(def: &ControllerStructDef) -> TokenStream {
@@ -18,6 +19,7 @@ pub fn generate(def: &ControllerStructDef) -> TokenStream {
 /// Generate `mod __quarlus_meta_<Name>` with State type alias, PATH_PREFIX,
 /// IdentityType, and guard_identity.
 fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
+    let krate = quarlus_core_path();
     let name = &def.name;
     let state_type = &def.state_type;
     let mod_name = format_ident!("__quarlus_meta_{}", name);
@@ -40,9 +42,9 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         )
     } else {
         (
-            quote! { pub type IdentityType = quarlus_core::NoIdentity; },
+            quote! { pub type IdentityType = #krate::NoIdentity; },
             quote! {
-                pub fn guard_identity(_ctrl: &super::#name) -> Option<&quarlus_core::NoIdentity> {
+                pub fn guard_identity(_ctrl: &super::#name) -> Option<&#krate::NoIdentity> {
                     None
                 }
             },
@@ -64,6 +66,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 
 /// Generate `struct __QuarlusExtract_<Name>` + `impl FromRequestParts<State>`.
 fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
+    let krate = quarlus_core_path();
     let name = &def.name;
     let state_type = &def.state_type;
     let extractor_name = format_ident!("__QuarlusExtract_{}", name);
@@ -76,10 +79,10 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             let field_name = &f.name;
             let field_type = &f.ty;
             quote! {
-                let #field_name = <#field_type as quarlus_core::http::extract::FromRequestParts<#state_type>>
+                let #field_name = <#field_type as #krate::http::extract::FromRequestParts<#state_type>>
                     ::from_request_parts(__parts, __state)
                     .await
-                    .map_err(quarlus_core::http::response::IntoResponse::into_response)?;
+                    .map_err(#krate::http::response::IntoResponse::into_response)?;
             }
         })
         .collect();
@@ -113,7 +116,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             let key = &f.key;
             quote! {
                 #field_name: {
-                    let __cfg = <quarlus_core::QuarlusConfig as quarlus_core::http::extract::FromRef<#state_type>>::from_ref(__state);
+                    let __cfg = <#krate::QuarlusConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
                     __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
                 }
             }
@@ -138,11 +141,11 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         #[allow(non_camel_case_types)]
         pub struct #extractor_name(pub #name);
 
-        impl quarlus_core::http::extract::FromRequestParts<#state_type> for #extractor_name {
-            type Rejection = quarlus_core::http::response::Response;
+        impl #krate::http::extract::FromRequestParts<#state_type> for #extractor_name {
+            type Rejection = #krate::http::response::Response;
 
             async fn from_request_parts(
-                __parts: &mut quarlus_core::http::header::Parts,
+                __parts: &mut #krate::http::header::Parts,
                 __state: &#state_type,
             ) -> Result<Self, Self::Rejection> {
                 #(#identity_extractions)*
@@ -158,6 +161,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         return quote! {};
     }
 
+    let krate = quarlus_core_path();
     let name = &def.name;
     let state_type = &def.state_type;
 
@@ -178,7 +182,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
             let key = &f.key;
             quote! {
                 #field_name: {
-                    let __cfg = <quarlus_core::QuarlusConfig as quarlus_core::http::extract::FromRef<#state_type>>::from_ref(__state);
+                    let __cfg = <#krate::QuarlusConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
                     __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
                 }
             }
@@ -197,7 +201,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
     };
 
     quote! {
-        impl quarlus_core::StatefulConstruct<#state_type> for #name {
+        impl #krate::StatefulConstruct<#state_type> for #name {
             fn from_state(__state: &#state_type) -> Self {
                 #struct_init
             }

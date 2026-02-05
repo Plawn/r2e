@@ -1,5 +1,8 @@
 //! Route-related attribute extraction.
 
+use quote::quote;
+
+use crate::crate_path::{quarlus_core_path, quarlus_rate_limit_path};
 use crate::route::{HttpMethod, RoutePath};
 use crate::types::TransactionalConfig;
 
@@ -21,6 +24,7 @@ pub fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
                 && !a.path().is_ident("rate_limited")
                 && !a.path().is_ident("intercept")
                 && !a.path().is_ident("guard")
+                && !a.path().is_ident("pre_guard")
                 && !a.path().is_ident("middleware")
                 && !a.path().is_ident("layer")
         })
@@ -84,7 +88,15 @@ pub fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<Tra
     Ok(None)
 }
 
-pub fn extract_rate_limited_guard(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>> {
+/// Result of parsing `#[rate_limited]` — classified into pre-auth or post-auth.
+pub struct RateLimitedGuards {
+    /// Post-auth guard (for user-keyed rate limiting).
+    pub post_auth: Option<syn::Expr>,
+    /// Pre-auth guard (for global or IP-keyed rate limiting).
+    pub pre_auth: Option<syn::Expr>,
+}
+
+pub fn extract_rate_limited_guards(attrs: &[syn::Attribute]) -> syn::Result<RateLimitedGuards> {
     for attr in attrs {
         if attr.path().is_ident("rate_limited") {
             let mut max: u64 = 100;
@@ -110,10 +122,13 @@ pub fn extract_rate_limited_guard(attrs: &[syn::Attribute]) -> syn::Result<Optio
                     Err(meta.error("expected `max`, `window`, or `key`"))
                 }
             })?;
-            let key_kind: syn::Expr = match key_str.as_str() {
-                "global" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::Global },
-                "user" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::User },
-                "ip" => syn::parse_quote! { quarlus_rate_limit::RateLimitKeyKind::Ip },
+
+            let rl_krate = quarlus_rate_limit_path();
+
+            let key_kind_tokens = match key_str.as_str() {
+                "global" => quote! { #rl_krate::RateLimitKeyKind::Global },
+                "user" => quote! { #rl_krate::RateLimitKeyKind::User },
+                "ip" => quote! { #rl_krate::RateLimitKeyKind::Ip },
                 _ => {
                     return Err(syn::Error::new_spanned(
                         attr,
@@ -121,28 +136,49 @@ pub fn extract_rate_limited_guard(attrs: &[syn::Attribute]) -> syn::Result<Optio
                     ))
                 }
             };
-            let expr: syn::Expr = syn::parse_quote! {
-                quarlus_rate_limit::RateLimitGuard {
-                    max: #max,
-                    window_secs: #window,
-                    key: #key_kind,
+
+            return match key_str.as_str() {
+                "user" => {
+                    // User-keyed → post-auth (needs identity)
+                    let expr_tokens = quote! {
+                        #rl_krate::RateLimitGuard {
+                            max: #max,
+                            window_secs: #window,
+                            key: #key_kind_tokens,
+                        }
+                    };
+                    let expr: syn::Expr = syn::parse2(expr_tokens)?;
+                    Ok(RateLimitedGuards { post_auth: Some(expr), pre_auth: None })
+                }
+                _ => {
+                    // Global or IP → pre-auth
+                    let expr_tokens = quote! {
+                        #rl_krate::PreAuthRateLimitGuard {
+                            max: #max,
+                            window_secs: #window,
+                            key: #key_kind_tokens,
+                        }
+                    };
+                    let expr: syn::Expr = syn::parse2(expr_tokens)?;
+                    Ok(RateLimitedGuards { post_auth: None, pre_auth: Some(expr) })
                 }
             };
-            return Ok(Some(expr));
         }
     }
-    Ok(None)
+    Ok(RateLimitedGuards { post_auth: None, pre_auth: None })
 }
 
 pub fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {
     if roles.is_empty() {
         return None;
     }
-    Some(syn::parse_quote! {
-        quarlus_core::RolesGuard {
+    let krate = quarlus_core_path();
+    let tokens = quote! {
+        #krate::RolesGuard {
             required_roles: &[#(#roles),*],
         }
-    })
+    };
+    syn::parse2(tokens).ok()
 }
 
 /// Macro to extract multiple attributes by name and parse their arguments.
@@ -171,4 +207,8 @@ pub fn extract_middleware_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::
 
 pub fn extract_layer_exprs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
     extract_attrs_by_name!(attrs, "layer")
+}
+
+pub fn extract_pre_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
+    extract_attrs_by_name!(attrs, "pre_guard")
 }

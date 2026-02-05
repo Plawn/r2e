@@ -4,6 +4,8 @@ use quote::quote;
 use std::collections::HashSet;
 use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
 
+use crate::crate_path::quarlus_core_path;
+
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match generate(&input) {
@@ -72,8 +74,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
+        let krate = quarlus_core_path();
         from_ref_impls.push(quote! {
-            impl quarlus_core::http::extract::FromRef<#name> for #field_type {
+            impl #krate::http::extract::FromRef<#name> for #field_type {
                 fn from_ref(state: &#name) -> Self {
                     state.#field_name.clone()
                 }
@@ -84,6 +87,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     // Generate BuildableFrom<P, Indices> impl with index witness type params.
     // Each unique field type gets its own __I{n} parameter bundled into a tuple
     // so the compiler can independently resolve Contains<FieldType, __I{n}>.
+    let krate = quarlus_core_path();
+
     let mut buildable_seen = HashSet::new();
     let mut idx_params = Vec::new();
     let mut buildable_bounds = Vec::new();
@@ -96,7 +101,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             idx_counter += 1;
             idx_params.push(quote! { #idx_ident });
             buildable_bounds.push(quote! {
-                __P: quarlus_core::type_list::Contains<#field_type, #idx_ident>
+                __P: #krate::type_list::Contains<#field_type, #idx_ident>
             });
         }
     }
@@ -109,15 +114,15 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     Ok(quote! {
-        impl quarlus_core::beans::BeanState for #name {
-            fn from_context(ctx: &quarlus_core::beans::BeanContext) -> Self {
+        impl #krate::beans::BeanState for #name {
+            fn from_context(ctx: &#krate::beans::BeanContext) -> Self {
                 Self {
                     #(#field_inits,)*
                 }
             }
         }
 
-        impl<__P, #(#idx_params,)*> quarlus_core::type_list::BuildableFrom<__P, #indices_tuple> for #name
+        impl<__P, #(#idx_params,)*> #krate::type_list::BuildableFrom<__P, #indices_tuple> for #name
         where
             #(#buildable_bounds,)*
         {}

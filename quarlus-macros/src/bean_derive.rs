@@ -3,6 +3,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
+use crate::crate_path::quarlus_core_path;
+
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match generate(&input) {
@@ -50,13 +52,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     }
 
+    let krate = quarlus_core_path();
     Ok(quote! {
-        impl quarlus_core::beans::Bean for #name {
+        impl #krate::beans::Bean for #name {
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                 vec![#(#dep_type_ids),*]
             }
 
-            fn build(ctx: &quarlus_core::beans::BeanContext) -> Self {
+            fn build(ctx: &#krate::beans::BeanContext) -> Self {
                 Self {
                     #(#field_inits,)*
                 }

@@ -12,6 +12,22 @@ pub struct RoutesImplDef {
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
+/// Try to unwrap `Option<T>` → `Some(T)`, or `None` if not an Option.
+fn unwrap_option_type(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return Some(inner);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Detect `#[inject(identity)]` or legacy `#[identity]` on handler parameters.
 /// Returns the parameter index (among typed params, excluding `&self`) and the
 /// parameter type if found. Strips the attribute from the parameter.
@@ -33,9 +49,15 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
                         "only one #[inject(identity)] parameter is allowed per handler",
                     ));
                 }
+                let declared_ty = (*pat_type.ty).clone();
+                let (inner_ty, is_optional) = match unwrap_option_type(&declared_ty) {
+                    Some(inner) => (inner.clone(), true),
+                    None => (declared_ty, false),
+                };
                 identity_param = Some(IdentityParam {
                     index: param_idx,
-                    ty: (*pat_type.ty).clone(),
+                    ty: inner_ty,
+                    is_optional,
                 });
                 // Strip the identity attribute
                 pat_type.attrs.retain(|a| {
@@ -130,13 +152,21 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     let layer_exprs = extract_layer_exprs(&all_attrs)?;
 
                     let mut guard_fns = Vec::new();
-                    if let Some(rl_guard) = extract_rate_limited_guard(&all_attrs)? {
-                        guard_fns.push(rl_guard);
+                    let mut pre_auth_guard_fns = Vec::new();
+
+                    let rl_guards = extract_rate_limited_guards(&all_attrs)?;
+                    if let Some(post_auth) = rl_guards.post_auth {
+                        guard_fns.push(post_auth);
                     }
+                    if let Some(pre_auth) = rl_guards.pre_auth {
+                        pre_auth_guard_fns.push(pre_auth);
+                    }
+
                     if let Some(roles_guard) = roles_guard_expr(&roles) {
                         guard_fns.push(roles_guard);
                     }
                     guard_fns.extend(extract_guard_fns(&all_attrs)?);
+                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
 
                     method.attrs = strip_route_attrs(all_attrs);
 
@@ -162,6 +192,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         transactional,
                         intercept_fns,
                         guard_fns,
+                        pre_auth_guard_fns,
                         middleware_fns,
                         layer_exprs,
                         identity_param,

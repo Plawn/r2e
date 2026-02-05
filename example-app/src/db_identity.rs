@@ -6,13 +6,16 @@
 //! 2. **Full identity** (`DbUser`) — JWT claims + database lookup
 //!
 //! Both use the same `JwtClaimsValidator`, so the JWT is validated only once.
+//!
+//! `DbUser` uses the [`ClaimsIdentity`] trait and [`impl_claims_identity_extractor!`]
+//! macro to reduce boilerplate. Compare with the manual `FromRequestParts` approach
+//! documented in `quarlus-security/src/extractor.rs`.
 
-use std::sync::Arc;
-
-use quarlus::http::extract::{FromRef, FromRequestParts};
-use quarlus::http::header::Parts;
+use quarlus::http::extract::FromRef;
 use quarlus::Identity;
-use quarlus::quarlus_security::{extract_jwt_claims, AuthenticatedUser, JwtClaimsValidator};
+use quarlus::quarlus_security::{
+    impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity,
+};
 use serde::{Deserialize, Serialize};
 
 /// A database-backed user identity.
@@ -45,6 +48,12 @@ impl Identity for DbUser {
     fn roles(&self) -> &[String] {
         self.auth.roles()
     }
+    fn email(&self) -> Option<&str> {
+        self.auth.email()
+    }
+    fn claims(&self) -> Option<&serde_json::Value> {
+        self.auth.claims()
+    }
 }
 
 impl DbUser {
@@ -59,34 +68,18 @@ impl DbUser {
     }
 }
 
-/// Axum extractor for `DbUser`.
-///
-/// This extracts and validates the JWT using `JwtClaimsValidator`,
-/// then performs a database lookup to fetch the user profile.
-///
-/// The state must provide:
-/// - `Arc<JwtClaimsValidator>` for JWT validation
-/// - `sqlx::SqlitePool` for database access
-impl<S> FromRequestParts<S> for DbUser
+impl<S> ClaimsIdentity<S> for DbUser
 where
     S: Send + Sync,
-    Arc<JwtClaimsValidator>: FromRef<S>,
     sqlx::SqlitePool: FromRef<S>,
 {
-    type Rejection = quarlus::AppError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
+    async fn from_jwt_claims(
+        claims: serde_json::Value,
         state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        // 1. Validate JWT and get claims (same validation as AuthenticatedUser)
-        let claims = extract_jwt_claims(parts, state).await?;
+    ) -> Result<Self, quarlus::AppError> {
         let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
-
-        // 2. Build light identity from claims
         let auth = AuthenticatedUser::from_claims(claims);
 
-        // 3. Database lookup for profile data
         let pool = sqlx::SqlitePool::from_ref(state);
         let row: Option<(i64, String, String)> =
             sqlx::query_as("SELECT id, name, email FROM users WHERE sub = ?")
@@ -104,3 +97,5 @@ where
         Ok(DbUser { auth, profile })
     }
 }
+
+impl_claims_identity_extractor!(DbUser);

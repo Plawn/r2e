@@ -37,7 +37,10 @@ pub struct ScheduledMethod {
 
 pub struct IdentityParam {
     pub index: usize,
+    /// The inner identity type (e.g. `AuthenticatedUser`), unwrapped from `Option<T>` if optional.
     pub ty: syn::Type,
+    /// Whether the parameter was declared as `Option<T>`.
+    pub is_optional: bool,
 }
 
 /// Parameter marked with `#[managed]` for automatic lifecycle management.
@@ -53,6 +56,7 @@ pub struct RouteMethod {
     pub transactional: Option<TransactionalConfig>,
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,
+    pub pre_auth_guard_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
     pub layer_exprs: Vec<syn::Expr>,
     pub identity_param: Option<IdentityParam>,
