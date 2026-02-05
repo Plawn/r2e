@@ -57,6 +57,11 @@ impl ConfigValue {
 }
 
 /// Trait for converting a `ConfigValue` into a concrete type.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a config value type",
+    label = "not a valid config value type",
+    note = "built-in types: String, i64, f64, bool, Option<T>. Implement `FromConfigValue` for custom types."
+)]
 pub trait FromConfigValue: Sized {
     fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError>;
 }

@@ -42,14 +42,20 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                     state_type = Some(value.parse()?);
                     Ok(())
                 } else {
-                    Err(meta.error("expected `path` or `state`"))
+                    Err(meta.error(
+                        "unknown attribute in #[controller(...)]: expected `path` or `state`"
+                    ))
                 }
             })?;
         }
     }
 
     let state_type = state_type.ok_or_else(|| {
-        syn::Error::new(name.span(), "#[controller(state = ...)] is required")
+        syn::Error::new(
+            name.span(),
+            "#[controller(state = ...)] is required\n\
+             example: #[controller(path = \"/users\", state = AppState)]",
+        )
     })?;
 
     // Parse fields
@@ -60,14 +66,16 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
             syn::Fields::Unnamed(_) => {
                 return Err(syn::Error::new(
                     name.span(),
-                    "Controller cannot have tuple fields, use named fields or unit struct",
+                    "Controller cannot have tuple fields — use named fields or a unit struct:\n\
+                     \n  struct MyController {\n      #[inject] service: MyService,\n  }\n\
+                     \n  // or: struct MyController;",
                 ))
             }
         },
         _ => {
             return Err(syn::Error::new(
                 name.span(),
-                "#[derive(Controller)] only works on structs",
+                "#[derive(Controller)] only works on structs — enums and unions are not supported",
             ))
         }
     };
@@ -97,7 +105,9 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                 // #[inject(something_else)] -> error
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[inject(...)] only supports `identity` qualifier; use #[inject] or #[inject(identity)]",
+                    "invalid qualifier in #[inject(...)]: only `identity` is supported\n\
+                     \n  #[inject]           — app-scoped (cloned from state)\n\
+                     \n  #[inject(identity)] — request-scoped identity extraction",
                 ));
             } else {
                 // #[inject] -> app-scoped (clone from state)
@@ -122,7 +132,10 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         } else {
             return Err(syn::Error::new(
                 field_name.span(),
-                "field in controller must have #[inject], #[inject(identity)], or #[config(\"key\")]",
+                "every controller field must be annotated with one of:\n\
+                 \n  #[inject]              — clone from app state\n\
+                 \n  #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)\n\
+                 \n  #[config(\"app.key\")]   — resolve from QuarlusConfig",
             ));
         }
     }
@@ -130,7 +143,9 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
     if identity_fields.len() > 1 {
         return Err(syn::Error::new(
             name.span(),
-            "controller can have at most one #[inject(identity)] field",
+            "controller can have at most one #[inject(identity)] struct field\n\n\
+             hint: use param-level injection for mixed public/protected endpoints:\n\
+             \n  #[get(\"/me\")]\n  async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> ... { }",
         ));
     }
 

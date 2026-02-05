@@ -5,6 +5,11 @@ use crate::http::{HeaderMap, Uri};
 ///
 /// Implement this trait on your identity type (e.g. `AuthenticatedUser`) to
 /// decouple guards from a concrete identity struct.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `Identity`",
+    label = "this type cannot be used as an identity",
+    note = "implement `Identity` for your type, or use `AuthenticatedUser` from `quarlus-security` which implements it"
+)]
 pub trait Identity: Send + Sync {
     /// Unique subject identifier (e.g. JWT "sub" claim).
     fn sub(&self) -> &str;
@@ -152,6 +157,11 @@ impl<'a, I: Identity> GuardContext<'a, I> {
 /// Users can implement custom guards and apply them with `#[guard(expr)]`.
 ///
 /// Generic over both the application state `S` and the identity type `I`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `Guard<{S}, {I}>`",
+    label = "this type cannot be used as a guard",
+    note = "implement `Guard<S, I>` for your type and apply it with `#[guard(YourGuard)]`"
+)]
 pub trait Guard<S, I: Identity>: Send + Sync {
     fn check(
         &self,
@@ -204,6 +214,11 @@ impl<'a> PreAuthGuardContext<'a> {
 ///
 /// Apply via `#[pre_guard(MyPreGuard)]` or automatically for `#[rate_limited]` with
 /// `key = "global"` or `key = "ip"`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `PreAuthGuard<{S}>`",
+    label = "this type cannot be used as a pre-auth guard",
+    note = "implement `PreAuthGuard<S>` for your type and apply it with `#[pre_guard(YourGuard)]`"
+)]
 pub trait PreAuthGuard<S>: Send + Sync {
     fn check(
         &self,

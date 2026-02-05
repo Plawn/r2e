@@ -173,6 +173,11 @@ use std::future::Future;
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `ManagedResource<{S}>`",
+    label = "this type cannot be used with `#[managed]`",
+    note = "implement `ManagedResource<S>` with `acquire()` and `release()` methods for your type"
+)]
 pub trait ManagedResource<S>: Sized {
     /// Error type returned by acquire/release operations.
     /// Must be convertible to an HTTP response.

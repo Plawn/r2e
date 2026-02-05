@@ -20,7 +20,9 @@ pub fn extract_managed_params(method: &mut syn::ImplItemFn) -> syn::Result<Vec<M
                 let inner_ty = extract_mut_ref_inner(&pat_type.ty).ok_or_else(|| {
                     syn::Error::new(
                         pat_type.ty.span(),
-                        "#[managed] parameters must be mutable references: `&mut Tx<...>`",
+                        "#[managed] parameter must be a mutable reference (`&mut T`):\n\
+                         \n  #[managed] tx: &mut Tx<'_, Sqlite>\n\n\
+                         The resource is acquired before the handler and released after it.",
                     )
                 })?;
 

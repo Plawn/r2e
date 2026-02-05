@@ -39,26 +39,33 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                     name = Some(lit.value());
                     Ok(())
                 } else {
-                    Err(meta.error("expected `every`, `cron`, `initial_delay`, or `name`"))
+                    Err(meta.error(
+                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, or `name`\n\n\
+                         examples:\n  #[scheduled(every = 30)]\n  #[scheduled(cron = \"0 */5 * * * *\")]\n  \
+                         #[scheduled(every = 60, initial_delay = 10)]"
+                    ))
                 }
             })?;
 
             if every.is_none() && cron.is_none() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[scheduled] requires either `every` or `cron`",
+                    "#[scheduled] requires either `every` (seconds) or `cron` (expression):\n\
+                     \n  #[scheduled(every = 30)]                  — run every 30 seconds\n\
+                     \n  #[scheduled(cron = \"0 */5 * * * *\")]      — cron schedule",
                 ));
             }
             if every.is_some() && cron.is_some() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[scheduled] cannot have both `every` and `cron`",
+                    "`every` and `cron` are mutually exclusive — use one or the other",
                 ));
             }
             if initial_delay.is_some() && cron.is_some() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "`initial_delay` is not compatible with `cron`",
+                    "`initial_delay` only works with `every` (interval-based schedules), not with `cron`\n\n\
+                     For cron, the schedule itself controls the first execution time.",
                 ));
             }
 

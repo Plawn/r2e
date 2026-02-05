@@ -108,16 +108,31 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         .collect();
 
     // Config field initializers
+    let controller_name_str = name.to_string();
     let config_inits: Vec<TokenStream> = def
         .config_fields
         .iter()
         .map(|f| {
             let field_name = &f.name;
             let key = &f.key;
+            let env_hint = key.to_uppercase().replace('.', "_");
             quote! {
                 #field_name: {
                     let __cfg = <#krate::QuarlusConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
+                    match __cfg.get(#key) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(#krate::http::response::IntoResponse::into_response(
+                                #krate::AppError::Internal(
+                                    format!(
+                                        "Configuration error in {}: key '{}' — {}. \
+                                         Add it to application.yaml or set env var {}.",
+                                        #controller_name_str, #key, e, #env_hint
+                                    )
+                                )
+                            ));
+                        }
+                    }
                 }
             }
         })
@@ -174,16 +189,23 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
+    let sc_controller_name_str = name.to_string();
     let config_inits: Vec<TokenStream> = def
         .config_fields
         .iter()
         .map(|f| {
             let field_name = &f.name;
             let key = &f.key;
+            let env_hint = key.to_uppercase().replace('.', "_");
             quote! {
                 #field_name: {
                     let __cfg = <#krate::QuarlusConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    __cfg.get(#key).unwrap_or_else(|e| panic!("Config key '{}' error: {}", #key, e))
+                    __cfg.get(#key).unwrap_or_else(|e| panic!(
+                        "Configuration error in `{}`: key '{}' — {}. \
+                         Add it to application.yaml / application-{{profile}}.yaml, \
+                         or set env var `{}`.",
+                        #sc_controller_name_str, #key, e, #env_hint
+                    ))
                 }
             }
         })

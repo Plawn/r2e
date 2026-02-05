@@ -37,7 +37,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
             FnArg::Receiver(_) => {
                 return Err(syn::Error::new_spanned(
                     arg,
-                    "#[bean] constructor must be an associated function (no `self` parameter)",
+                    "#[bean] constructor must be a static associated function (no `self` parameter):\n\
+                     \n  fn new(dep: MyDependency) -> Self {\n      Self { dep }\n  }",
                 ));
             }
             FnArg::Typed(pat_type) => {
@@ -92,7 +93,8 @@ fn find_constructor(item_impl: &ItemImpl) -> syn::Result<&syn::ImplItemFn> {
 
     Err(syn::Error::new_spanned(
         &item_impl.self_ty,
-        "#[bean] requires a constructor: an associated function returning Self",
+        "#[bean] requires a constructor — a static method returning Self:\n\
+         \n  #[bean]\n  impl MyService {\n      fn new(dep: OtherService) -> Self {\n          Self { dep }\n      }\n  }",
     ))
 }
 

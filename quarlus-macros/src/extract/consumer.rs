@@ -18,13 +18,17 @@ pub fn extract_consumer(attrs: &[syn::Attribute]) -> syn::Result<Option<String>>
                     bus_field = lit.value();
                     Ok(())
                 } else {
-                    Err(meta.error("expected `bus`"))
+                    Err(meta.error(
+                        "unknown key in #[consumer(...)]: expected `bus`\n\
+                         \n  usage: #[consumer(bus = \"event_bus\")]"
+                    ))
                 }
             })?;
             if bus_field.is_empty() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[consumer] requires bus = \"field_name\"",
+                    "#[consumer] requires `bus` — the name of the EventBus field on the controller:\n\
+                     \n  #[consumer(bus = \"event_bus\")]\n  async fn on_event(&self, event: Arc<MyEvent>) { }",
                 ));
             }
             return Ok(Some(bus_field));
@@ -47,6 +51,8 @@ pub fn extract_event_type_from_arc(ty: &syn::Type) -> syn::Result<syn::Type> {
     }
     Err(syn::Error::new_spanned(
         ty,
-        "consumer parameter must be Arc<EventType>",
+        "consumer event parameter must be wrapped in Arc<T>:\n\
+         \n  async fn on_event(&self, event: Arc<MyEvent>) { }\n\n\
+         Events are shared across subscribers via Arc, so the parameter type must be Arc<YourEventType>.",
     ))
 }

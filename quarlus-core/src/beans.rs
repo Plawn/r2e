@@ -8,6 +8,11 @@ use std::fmt;
 ///
 /// Implement this trait (or use `#[derive(Bean)]` / `#[bean]`) to declare
 /// a type as a bean that the [`BeanRegistry`] can resolve automatically.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as a Bean",
+    label = "this type is not a bean",
+    note = "add `#[derive(Bean)]` to your type or implement the `Bean` trait manually"
+)]
 pub trait Bean: Clone + Send + Sync + 'static {
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
@@ -21,6 +26,11 @@ pub trait Bean: Clone + Send + Sync + 'static {
 ///
 /// Use `#[derive(BeanState)]` to auto-generate this implementation along
 /// with `FromRef` impls for Axum state extraction.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `BeanState`",
+    label = "this type cannot be used as bean state",
+    note = "add `#[derive(BeanState)]` to your state struct"
+)]
 pub trait BeanState: Clone + Send + Sync + 'static {
     /// Construct the state struct by pulling every field from the context.
     fn from_context(ctx: &BeanContext) -> Self;

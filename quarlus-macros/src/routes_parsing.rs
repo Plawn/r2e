@@ -46,7 +46,10 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
                 if identity_param.is_some() {
                     return Err(syn::Error::new_spanned(
                         pat_type,
-                        "only one #[inject(identity)] parameter is allowed per handler",
+                        "only one #[inject(identity)] parameter is allowed per handler\n\n\
+                         hint: extract additional fields from the single identity:\n\
+                         \n  async fn handler(&self, #[inject(identity)] user: AuthenticatedUser) {\n\
+                         \n      let email = user.email();\n      let roles = user.roles();\n  }",
                     ));
                 }
                 let declared_ty = (*pat_type.ty).clone();
@@ -115,7 +118,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         .ok_or_else(|| {
                             syn::Error::new(
                                 method.sig.ident.span(),
-                                "consumer method must have an event parameter",
+                                "consumer method must have an event parameter typed as Arc<EventType>:\n\
+                                 \n  #[consumer(bus = \"event_bus\")]\n\
+                                 \n  async fn on_event(&self, event: Arc<MyEvent>) { }",
                             )
                         })?;
                     let event_type = extract_event_type_from_arc(&event_param.ty)?;
@@ -135,7 +140,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     if has_extra_params {
                         return Err(syn::Error::new(
                             method.sig.ident.span(),
-                            "scheduled methods cannot have parameters other than &self",
+                            "scheduled methods cannot have parameters other than &self — \
+                             there is no HTTP request context. Use #[inject] struct fields for dependencies.",
                         ));
                     }
                     method.attrs = strip_scheduled_attrs(all_attrs);
@@ -172,8 +178,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     if transactional.is_some() && !managed_params.is_empty() {
                         return Err(syn::Error::new(
                             method.sig.ident.span(),
-                            "#[managed] and #[transactional] cannot be used together; \
-                             use #[managed] tx: &mut Tx<...> instead of #[transactional]",
+                            "#[managed] and #[transactional] cannot be used on the same handler\n\n\
+                             hint: prefer #[managed] which is more explicit:\n\
+                             \n  #[post(\"/\")]\n  async fn create(&self, #[managed] tx: &mut Tx<'_, Sqlite>) -> ... { }",
                         ));
                     }
 

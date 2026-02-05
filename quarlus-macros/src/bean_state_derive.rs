@@ -23,14 +23,15 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "#[derive(BeanState)] only works on structs with named fields",
+                    "#[derive(BeanState)] only works on structs with named fields:\n\
+                     \n  #[derive(BeanState, Clone)]\n  struct AppState {\n      service: MyService,\n      pool: SqlitePool,\n  }",
                 ))
             }
         },
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                "#[derive(BeanState)] only works on structs",
+                "#[derive(BeanState)] only works on structs — enums and unions are not supported",
             ))
         }
     };

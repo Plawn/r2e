@@ -18,6 +18,11 @@ pub struct InterceptorContext {
 /// Interceptors that don't constrain the return type (e.g. `Logged`, `Timed`)
 /// are generic over all `R: Send`. Interceptors that need specific capabilities
 /// (e.g. `Cache` needs `Serialize + DeserializeOwned`) constrain `R` accordingly.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `Interceptor<{R}>`",
+    label = "this type cannot be used as an interceptor",
+    note = "implement `Interceptor<R>` for your type and apply it with `#[intercept(YourInterceptor)]`"
+)]
 pub trait Interceptor<R> {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
