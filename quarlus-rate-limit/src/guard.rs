@@ -9,6 +9,58 @@ pub enum RateLimitKeyKind {
     Ip,
 }
 
+/// Builder for rate limit guards.
+///
+/// Provides static methods to create rate limit guards for use with
+/// `#[guard(...)]` or `#[pre_guard(...)]` attributes.
+///
+/// # Examples
+///
+/// ```ignore
+/// use quarlus::quarlus_rate_limit::RateLimit;
+///
+/// #[pre_guard(RateLimit::global(5, 60))]    // 5 req / 60 sec, global
+/// #[pre_guard(RateLimit::per_ip(5, 60))]    // 5 req / 60 sec, per IP
+/// #[guard(RateLimit::per_user(5, 60))]      // 5 req / 60 sec, per user
+/// ```
+pub struct RateLimit;
+
+impl RateLimit {
+    /// Global rate limit (shared bucket). Use with `#[pre_guard(...)]`.
+    ///
+    /// All requests share the same token bucket regardless of user or IP.
+    pub fn global(max: u64, window_secs: u64) -> PreAuthRateLimitGuard {
+        PreAuthRateLimitGuard {
+            max,
+            window_secs,
+            key: RateLimitKeyKind::Global,
+        }
+    }
+
+    /// Per-IP rate limit. Use with `#[pre_guard(...)]`.
+    ///
+    /// Each unique IP address (from X-Forwarded-For header) gets its own bucket.
+    pub fn per_ip(max: u64, window_secs: u64) -> PreAuthRateLimitGuard {
+        PreAuthRateLimitGuard {
+            max,
+            window_secs,
+            key: RateLimitKeyKind::Ip,
+        }
+    }
+
+    /// Per-user rate limit (requires identity). Use with `#[guard(...)]`.
+    ///
+    /// Each authenticated user (by subject ID) gets their own bucket.
+    /// This guard runs after JWT validation.
+    pub fn per_user(max: u64, window_secs: u64) -> RateLimitGuard {
+        RateLimitGuard {
+            max,
+            window_secs,
+            key: RateLimitKeyKind::User,
+        }
+    }
+}
+
 pub struct RateLimitGuard {
     pub max: u64,
     pub window_secs: u64,

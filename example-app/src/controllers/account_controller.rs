@@ -2,7 +2,6 @@ use crate::models::User;
 use crate::services::UserService;
 use crate::state::Services;
 use quarlus::prelude::*;
-use quarlus::quarlus_security::AuthenticatedUser;
 
 #[derive(Controller)]
 #[controller(state = Services)]

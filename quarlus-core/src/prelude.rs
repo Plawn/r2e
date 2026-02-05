@@ -34,7 +34,7 @@ pub use quarlus_macros::routes;
 pub use quarlus_macros::{delete, get, patch, post, put};
 
 // Route-level attributes
-pub use quarlus_macros::{guard, intercept, layer, managed, middleware, rate_limited, roles, transactional};
+pub use quarlus_macros::{guard, intercept, layer, managed, middleware, pre_guard, roles, transactional};
 
 // Event & scheduling attributes
 pub use quarlus_macros::{consumer, scheduled};
@@ -54,7 +54,6 @@ pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
 pub use crate::plugin::Plugin;
 pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath};
-pub use crate::scheduling::{ScheduleConfig, ScheduledResult, ScheduledTaskDef};
 
 // ── Type aliases ──────────────────────────────────────────────────────────
 

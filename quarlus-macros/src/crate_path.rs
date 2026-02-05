@@ -35,21 +35,21 @@ pub fn quarlus_core_path() -> TokenStream {
     }
 }
 
-/// Returns the token stream for accessing `quarlus_rate_limit` types.
+/// Returns the token stream for accessing `quarlus_scheduler` types.
 ///
-/// If the user depends on `quarlus`, returns `::quarlus::quarlus_rate_limit`.
-/// Otherwise returns `::quarlus_rate_limit`.
-pub fn quarlus_rate_limit_path() -> TokenStream {
+/// If the user depends on `quarlus`, returns `::quarlus::quarlus_scheduler`.
+/// Otherwise returns `::quarlus_scheduler`.
+pub fn quarlus_scheduler_path() -> TokenStream {
     // First check if the facade crate is available
     if let Ok(found) = crate_name("quarlus") {
         match found {
-            FoundCrate::Itself => quote!(crate::quarlus_rate_limit),
+            FoundCrate::Itself => quote!(crate::quarlus_scheduler),
             FoundCrate::Name(name) => {
                 let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-                quote!(::#ident::quarlus_rate_limit)
+                quote!(::#ident::quarlus_scheduler)
             }
         }
-    } else if let Ok(found) = crate_name("quarlus-rate-limit") {
+    } else if let Ok(found) = crate_name("quarlus-scheduler") {
         match found {
             FoundCrate::Itself => quote!(crate),
             FoundCrate::Name(name) => {
@@ -59,6 +59,7 @@ pub fn quarlus_rate_limit_path() -> TokenStream {
         }
     } else {
         // Fallback
-        quote!(::quarlus_rate_limit)
+        quote!(::quarlus_scheduler)
     }
 }
+

@@ -1,15 +1,88 @@
+//! Background task scheduler for Quarlus.
+//!
+//! Provides interval, cron, and delayed task execution. Install with
+//! `.with_plugin(Scheduler)` before `build_state()`.
+
+mod types;
+
+pub use types::{extract_tasks, ScheduleConfig, ScheduledResult, ScheduledTask, ScheduledTaskDef};
+
+use std::any::Any;
 use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use quarlus_core::scheduling::{ScheduleConfig, ScheduledTaskDef};
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
+use quarlus_core::builder::TaskRegistryHandle;
+use quarlus_core::http::StatusCode;
+use quarlus_core::type_list::TCons;
+use quarlus_core::{AppBuilder, DeferredInstallContext, DeferredPlugin, DeferredPluginInstaller, PreStatePlugin};
 
-/// Scheduler plugin — installs the scheduler runtime into the application.
+/// Handle to the scheduler runtime.
 ///
-/// Add `.with(Scheduler)` to your `AppBuilder` to enable scheduled tasks.
-/// Controllers that declare `#[scheduled]` methods are auto-discovered via
-/// `register_controller()`.
+/// Can be extracted as an Axum handler parameter to check scheduler status
+/// or trigger cancellation.
+///
+/// # Example
+///
+/// ```ignore
+/// #[get("/scheduler/status")]
+/// async fn status(&self, scheduler: SchedulerHandle) -> Json<bool> {
+///     Json(scheduler.is_cancelled())
+/// }
+/// ```
+#[derive(Clone)]
+pub struct SchedulerHandle {
+    cancel: CancellationToken,
+}
+
+impl SchedulerHandle {
+    /// Create a new scheduler handle from a cancellation token.
+    pub fn new(cancel: CancellationToken) -> Self {
+        Self { cancel }
+    }
+
+    /// Cancel the scheduler and all running tasks.
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+
+    /// Check if the scheduler has been cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Get the underlying cancellation token.
+    pub fn token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for SchedulerHandle {
+    type Rejection = (StatusCode, &'static str);
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            parts
+                .extensions
+                .get::<SchedulerHandle>()
+                .cloned()
+                .ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Scheduler not installed. Add `.with_plugin(Scheduler)` before build_state().",
+                ))
+        }
+    }
+}
+
+/// Scheduler plugin — provides `CancellationToken` and installs the scheduler runtime.
+///
+/// Install this plugin **before** `build_state()` to:
+/// - Provide a `CancellationToken` bean for injection via `#[inject]`
+/// - Automatically set up the scheduler backend
 ///
 /// # Example
 ///
@@ -17,127 +90,128 @@ use quarlus_core::scheduling::{ScheduleConfig, ScheduledTaskDef};
 /// use quarlus_scheduler::Scheduler;
 ///
 /// AppBuilder::new()
-///     .build_state::<Services>()
-///     .with(Scheduler)
+///     .with_plugin(Scheduler)  // Before build_state()!
+///     .build_state::<Services, _>()
 ///     .register_controller::<ScheduledJobs>()
 ///     .serve("0.0.0.0:3000")
 /// ```
+///
+/// In controllers, inject the token directly:
+///
+/// ```ignore
+/// #[derive(Controller)]
+/// #[controller(state = Services)]
+/// pub struct MyController {
+///     #[inject] cancel: CancellationToken,
+/// }
+/// ```
+///
+/// Or extract the `SchedulerHandle` as a handler parameter:
+///
+/// ```ignore
+/// #[get("/status")]
+/// async fn status(&self, scheduler: SchedulerHandle) -> Json<bool> {
+///     Json(scheduler.is_cancelled())
+/// }
+/// ```
 pub struct Scheduler;
 
-impl<T: Clone + Send + Sync + 'static> quarlus_core::Plugin<T> for Scheduler {
-    fn install(self, app: quarlus_core::AppBuilder<T>) -> quarlus_core::AppBuilder<T> {
-        let cancel = CancellationToken::new();
-        let cancel_stop = cancel.clone();
+impl PreStatePlugin for Scheduler {
+    type Provided = CancellationToken;
 
-        app.set_scheduler_backend(
-            Box::new(move |task_defs, state| {
-                start_tasks_from_defs(task_defs, state, cancel);
-            }),
-            Box::new(move || {
-                cancel_stop.cancel();
-            }),
-        )
+    fn pre_install<P>(
+        self,
+        app: AppBuilder<quarlus_core::builder::NoState, P>,
+    ) -> AppBuilder<quarlus_core::builder::NoState, TCons<Self::Provided, P>> {
+        let token = CancellationToken::new();
+        let handle = SchedulerHandle::new(token.clone());
+        let registry = TaskRegistryHandle::new();
+
+        // Create the deferred plugin with our setup data and installer.
+        let setup_data = SchedulerSetupData {
+            token: token.clone(),
+            handle,
+            registry,
+        };
+        let plugin = DeferredPlugin::new(setup_data, SchedulerInstaller);
+
+        app.provide(token).add_deferred_plugin(plugin)
     }
 }
 
-/// Convert [`ScheduledTaskDef`]s (from quarlus-core) into running Tokio tasks.
-fn start_tasks_from_defs<T: Clone + Send + Sync + 'static>(
-    task_defs: Vec<ScheduledTaskDef<T>>,
-    state: T,
-    cancel: CancellationToken,
-) {
-    for def in task_defs {
-        let state = state.clone();
-        let cancel = cancel.clone();
-        let name = def.name.clone();
-
-        tokio::spawn(async move {
-            tracing::info!(task = %name, "Scheduled task started");
-            match def.schedule {
-                ScheduleConfig::Interval(interval) => {
-                    run_interval(&name, interval, Duration::ZERO, state, cancel, &def.task)
-                        .await;
-                }
-                ScheduleConfig::IntervalWithDelay {
-                    interval,
-                    initial_delay,
-                } => {
-                    run_interval(&name, interval, initial_delay, state, cancel, &def.task)
-                        .await;
-                }
-                ScheduleConfig::Cron(expr) => {
-                    run_cron(&name, &expr, state, cancel, &def.task).await;
-                }
-            }
-            tracing::info!(task = %name, "Scheduled task stopped");
-        });
-    }
+/// Setup data for the scheduler plugin.
+struct SchedulerSetupData {
+    token: CancellationToken,
+    handle: SchedulerHandle,
+    registry: TaskRegistryHandle,
 }
 
-async fn run_interval<T: Clone + Send + Sync + 'static>(
-    name: &str,
-    interval: Duration,
-    initial_delay: Duration,
-    state: T,
-    cancel: CancellationToken,
-    task: &(dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync),
-) {
-    if !initial_delay.is_zero() {
-        tokio::select! {
-            _ = tokio::time::sleep(initial_delay) => {},
-            _ = cancel.cancelled() => { return; }
-        }
-    }
+/// Installer for the scheduler plugin.
+struct SchedulerInstaller;
 
-    let mut tick = tokio::time::interval(interval);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => {
-                tracing::debug!(task = %name, "Executing scheduled task");
-                task(state.clone()).await;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            }
-        }
-    }
-}
-
-async fn run_cron<T: Clone + Send + Sync + 'static>(
-    name: &str,
-    expr: &str,
-    state: T,
-    cancel: CancellationToken,
-    task: &(dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync),
-) {
-    let schedule = match expr.parse::<cron::Schedule>() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(task = %name, error = %e, "Invalid cron expression");
-            return;
-        }
-    };
-
-    loop {
-        let now = chrono::Utc::now();
-        let next = match schedule.upcoming(chrono::Utc).next() {
-            Some(n) => n,
-            None => {
-                tracing::warn!(task = %name, "No more upcoming cron executions");
-                break;
+impl DeferredPluginInstaller for SchedulerInstaller {
+    fn install(
+        &self,
+        data: Box<dyn Any + Send>,
+        ctx: &mut dyn DeferredInstallContext,
+    ) {
+        // Downcast the data to our expected type.
+        let setup = match data.downcast::<SchedulerSetupData>() {
+            Ok(setup) => *setup,
+            Err(_) => {
+                tracing::error!("SchedulerInstaller received unexpected data type");
+                return;
             }
         };
 
-        let until = (next - now).to_std().unwrap_or(Duration::from_secs(1));
+        let handle = setup.handle;
+        let registry = setup.registry;
+        let token = setup.token.clone();
+        let cancel_for_stopper = setup.token;
 
-        tokio::select! {
-            _ = tokio::time::sleep(until) => {
-                tracing::debug!(task = %name, "Executing cron task");
-                task(state.clone()).await;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            }
-        }
+        // Add the layer that provides SchedulerHandle via extension.
+        ctx.add_layer(Box::new(move |router| {
+            router.layer(axum::Extension(handle))
+        }));
+
+        // Store the task registry for use during controller registration.
+        ctx.store_plugin_data(Box::new(registry));
+
+        // Register a serve hook to start scheduled tasks.
+        // The function takes (Vec<Box<dyn Any + Send>>, CancellationToken).
+        // Tasks already have their state captured, so no generic T is needed.
+        let start_fn_ptr = start_scheduled_tasks as *const () as usize;
+        ctx.add_serve_hook(start_fn_ptr, token);
+
+        // Register shutdown hook.
+        let stopper = Box::new(move || {
+            cancel_for_stopper.cancel();
+        });
+        ctx.add_shutdown_hook(stopper);
     }
 }
+
+/// Start scheduled tasks from boxed task definitions.
+///
+/// This function is called by the builder's serve() method. It receives:
+/// - `boxed_tasks`: Type-erased task definitions (Vec<Box<dyn Any + Send>>)
+/// - `token`: The cancellation token
+///
+/// Tasks already have their state captured (via `ScheduledTaskDef.state`), so
+/// no state parameter is needed here. The function extracts tasks by downcasting
+/// to `Box<dyn ScheduledTask>` and starts them.
+fn start_scheduled_tasks(
+    boxed_tasks: Vec<Box<dyn Any + Send>>,
+    token: CancellationToken,
+) {
+    let tasks = extract_tasks(boxed_tasks);
+    if tasks.is_empty() {
+        return;
+    }
+
+    tracing::info!(count = tasks.len(), "Starting scheduled tasks");
+    for task in tasks {
+        task.start(token.clone());
+    }
+}
+

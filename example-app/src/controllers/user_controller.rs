@@ -2,7 +2,7 @@ use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use crate::state::{Services, Tx};
 use quarlus::prelude::*;
-use quarlus::quarlus_security::AuthenticatedUser;
+use quarlus::quarlus_rate_limit::RateLimit;
 use sqlx::Sqlite;
 use std::future::Future;
 
@@ -122,9 +122,9 @@ impl UserController {
         Json(serde_json::to_value(users).unwrap())
     }
 
-    // Demo: rate_limited at handler level with per-user key
+    // Demo: rate limiting at handler level with per-user key
     #[post("/rate-limited")]
-    #[rate_limited(max = 5, window = 60, key = "user")]
+    #[guard(RateLimit::per_user(5, 60))]
     async fn create_rate_limited(
         &self,
         Validated(body): Validated<CreateUserRequest>,

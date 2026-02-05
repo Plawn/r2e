@@ -106,11 +106,11 @@ pub fn derive_controller(input: TokenStream) -> TokenStream {
 /// - **HTTP routes**: [`get`], [`post`], [`put`], [`delete`], [`patch`]
 /// - **Authorization**: [`roles`]
 /// - **Interceptors**: [`intercept`]
-/// - **Rate limiting**: [`rate_limited`]
 /// - **Transactions**: [`transactional`]
 /// - **Events**: [`consumer`]
 /// - **Scheduling**: [`scheduled`]
-/// - **Guards**: [`guard`]
+/// - **Guards**: [`guard`], [`pre_guard`]
+/// - **Rate limiting**: Use `#[guard(RateLimit::per_user(...))]` or `#[pre_guard(RateLimit::global(...))]`
 /// - **Middleware**: [`middleware`]
 ///
 /// # Block-level interceptors
@@ -307,34 +307,6 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn transactional(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Rate-limit a route — returns **429 Too Many Requests** when exceeded.
-///
-/// | Parameter | Required | Description |
-/// |-----------|----------|-------------|
-/// | `max`     | yes      | Maximum requests in the window |
-/// | `window`  | yes      | Window duration in seconds |
-/// | `key`     | no       | `"global"` (default), `"user"` (per-user), or `"ip"` (per-IP) |
-///
-/// ```ignore
-/// #[post("/users")]
-/// #[rate_limited(max = 5, window = 60)]                 // global
-/// async fn create(&self, ...) -> Json<User> { ... }
-///
-/// #[post("/users")]
-/// #[rate_limited(max = 10, window = 60, key = "user")]  // per-user (requires #[identity])
-/// async fn create(&self, ...) -> Json<User> { ... }
-///
-/// #[post("/login")]
-/// #[rate_limited(max = 5, window = 300, key = "ip")]    // per-IP (X-Forwarded-For)
-/// async fn login(&self, ...) -> Json<Token> { ... }
-/// ```
-///
-/// This attribute is consumed by [`routes`] — it is a no-op on its own.
-#[proc_macro_attribute]
-pub fn rate_limited(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 

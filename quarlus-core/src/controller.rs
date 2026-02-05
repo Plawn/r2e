@@ -43,9 +43,18 @@ pub trait Controller<T: Clone + Send + Sync + 'static> {
 
     /// Return scheduled task definitions declared via `#[scheduled]`.
     ///
+    /// Returns type-erased task definitions. Each task is a
+    /// `Box<Box<dyn ScheduledTask>>` wrapped in `Box<dyn Any + Send>`.
+    /// This double-boxing allows the scheduler to downcast and start tasks
+    /// without knowing the concrete state type.
+    ///
+    /// The `state` parameter is cloned into each task, so tasks have all
+    /// the state they need to run independently.
+    ///
     /// Called by `register_controller()` to collect tasks automatically.
     /// The default implementation returns an empty list.
-    fn scheduled_tasks() -> Vec<crate::scheduling::ScheduledTaskDef<T>> {
+    fn scheduled_tasks_boxed(state: &T) -> Vec<Box<dyn std::any::Any + Send>> {
+        let _ = state;
         Vec::new()
     }
 }

@@ -27,3 +27,4 @@ quarlus-macros = { path = "../quarlus-macros", version = "0.1.0" }
 validator = { version = "0.18", features = ["derive"], optional = true }
 serde_yaml = "0.9"
 schemars = "0.8"
+tokio-util = "0.7"

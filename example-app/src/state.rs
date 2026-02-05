@@ -1,10 +1,10 @@
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use quarlus::prelude::*;
 use quarlus::quarlus_rate_limit::RateLimitRegistry;
 use quarlus::quarlus_security::JwtClaimsValidator;
 use sqlx::{Database, Pool, Sqlite, Transaction};
-use std::ops::{Deref, DerefMut};
 use tokio_util::sync::CancellationToken;
 
 use crate::services::UserService;

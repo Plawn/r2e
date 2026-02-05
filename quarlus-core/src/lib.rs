@@ -14,7 +14,6 @@ pub mod openapi;
 pub mod plugin;
 pub mod plugins;
 pub mod prelude;
-pub mod scheduling;
 pub mod state;
 pub mod type_list;
 pub mod types;
@@ -22,7 +21,7 @@ pub mod types;
 pub mod validation;
 
 pub use beans::{Bean, BeanContext, BeanError, BeanRegistry, BeanState};
-pub use builder::AppBuilder;
+pub use builder::{AppBuilder, TaskRegistryHandle};
 pub use config::QuarlusConfig;
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
@@ -30,9 +29,8 @@ pub use guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAut
 pub use interceptors::{Interceptor, InterceptorContext};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
-pub use plugin::Plugin;
+pub use plugin::{DeferredInstallContext, DeferredPlugin, DeferredPluginInstaller, Plugin, PreStatePlugin};
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
-pub use scheduling::{ScheduleConfig, ScheduledResult, ScheduledTaskDef};
 pub use state::QuarlusState;
 pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};
 

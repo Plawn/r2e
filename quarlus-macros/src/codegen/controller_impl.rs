@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::crate_path::quarlus_core_path;
+use crate::crate_path::{quarlus_core_path, quarlus_scheduler_path};
 use crate::routes_parsing::RoutesImplDef;
 
 /// Generate the `Controller<State>` trait implementation.
@@ -376,6 +376,16 @@ fn generate_consumer_registrations(
 }
 
 /// Generate scheduled tasks function.
+///
+/// Note: Scheduling types (ScheduledTaskDef, ScheduleConfig, ScheduledResult, ScheduledTask) live in
+/// `quarlus-scheduler`, not `quarlus-core`. The macro generates code referencing the
+/// scheduler crate. If users use `#[scheduled]`, they need `quarlus-scheduler` as a dep.
+///
+/// Tasks capture the state at creation time. They are double-boxed:
+/// 1. `Box<dyn ScheduledTask>` - the trait object
+/// 2. `Box<dyn Any + Send>` - for type erasure in core
+///
+/// This allows the scheduler to downcast back to `Box<dyn ScheduledTask>` and call `start()`.
 fn generate_scheduled_tasks(
     def: &RoutesImplDef,
     name: &syn::Ident,
@@ -386,6 +396,7 @@ fn generate_scheduled_tasks(
     }
 
     let krate = quarlus_core_path();
+    let sched_krate = quarlus_scheduler_path();
     let controller_name_str = name.to_string();
     let task_defs: Vec<TokenStream> = def
         .scheduled_methods
@@ -398,7 +409,7 @@ fn generate_scheduled_tasks(
                 None => format!("{}_{}", controller_name_str, fn_name_str),
             };
 
-            let schedule_expr = generate_schedule_expr(sm, &krate);
+            let schedule_expr = generate_schedule_expr(sm, &sched_krate);
 
             let is_async = sm.fn_item.sig.asyncness.is_some();
             let call_expr = if is_async {
@@ -407,44 +418,51 @@ fn generate_scheduled_tasks(
                 quote! { __ctrl.#fn_name() }
             };
 
+            // Task captures state via the `state` field
             quote! {
-                #krate::ScheduledTaskDef {
-                    name: #task_name.to_string(),
-                    schedule: #schedule_expr,
-                    task: Box::new(move |__state: #meta_mod::State| {
-                        Box::pin(async move {
-                            let __ctrl = <#name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            #krate::ScheduledResult::log_if_err(
-                                #call_expr,
-                                #task_name,
-                            );
-                        })
-                    }),
+                {
+                    let __task_def = #sched_krate::ScheduledTaskDef {
+                        name: #task_name.to_string(),
+                        schedule: #schedule_expr,
+                        state: __state.clone(),
+                        task: Box::new(move |__state: #meta_mod::State| {
+                            Box::pin(async move {
+                                let __ctrl = <#name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                                #sched_krate::ScheduledResult::log_if_err(
+                                    #call_expr,
+                                    #task_name,
+                                );
+                            })
+                        }),
+                    };
+                    // Double-box: first as trait object, then as Any for type erasure
+                    let __boxed_task: Box<dyn #sched_krate::ScheduledTask> = Box::new(__task_def);
+                    Box::new(__boxed_task) as Box<dyn std::any::Any + Send>
                 }
             }
         })
         .collect();
 
     quote! {
-        fn scheduled_tasks() -> Vec<#krate::ScheduledTaskDef<#meta_mod::State>> {
+        fn scheduled_tasks_boxed(__state: &#meta_mod::State) -> Vec<Box<dyn std::any::Any + Send>> {
             vec![#(#task_defs),*]
         }
     }
 }
 
 /// Generate schedule configuration expression.
-fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, krate: &TokenStream) -> TokenStream {
+fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, sched_krate: &TokenStream) -> TokenStream {
     if let Some(every) = sm.config.every {
         if let Some(delay) = sm.config.initial_delay {
             quote! {
-                #krate::ScheduleConfig::IntervalWithDelay {
+                #sched_krate::ScheduleConfig::IntervalWithDelay {
                     interval: std::time::Duration::from_secs(#every),
                     initial_delay: std::time::Duration::from_secs(#delay),
                 }
             }
         } else {
             quote! {
-                #krate::ScheduleConfig::Interval(
+                #sched_krate::ScheduleConfig::Interval(
                     std::time::Duration::from_secs(#every)
                 )
             }
@@ -452,7 +470,7 @@ fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, krate: &TokenStrea
     } else {
         let cron_expr = sm.config.cron.as_ref().unwrap();
         quote! {
-            #krate::ScheduleConfig::Cron(#cron_expr.to_string())
+            #sched_krate::ScheduleConfig::Cron(#cron_expr.to_string())
         }
     }
 }

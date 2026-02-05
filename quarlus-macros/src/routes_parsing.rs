@@ -154,14 +154,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     let mut guard_fns = Vec::new();
                     let mut pre_auth_guard_fns = Vec::new();
 
-                    let rl_guards = extract_rate_limited_guards(&all_attrs)?;
-                    if let Some(post_auth) = rl_guards.post_auth {
-                        guard_fns.push(post_auth);
-                    }
-                    if let Some(pre_auth) = rl_guards.pre_auth {
-                        pre_auth_guard_fns.push(pre_auth);
-                    }
-
                     if let Some(roles_guard) = roles_guard_expr(&roles) {
                         guard_fns.push(roles_guard);
                     }

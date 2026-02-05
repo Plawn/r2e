@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use quarlus::config::{ConfigValue, QuarlusConfig};
 use quarlus::prelude::*;
+use quarlus::quarlus_rate_limit::RateLimit;
 use quarlus::quarlus_security::{AuthenticatedUser, JwtClaimsValidator};
 use quarlus_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
@@ -199,7 +200,7 @@ impl TestUserController {
     }
 
     #[post("/users/rate-limited")]
-    #[rate_limited(max = 3, window = 60)]
+    #[pre_guard(RateLimit::global(3, 60))]
     async fn create_rate_limited(
         &self,
         Validated(body): Validated<CreateUserRequest>,

@@ -1,7 +1,6 @@
 use crate::models::UserEntity;
 use crate::state::Services;
 use quarlus::prelude::*;
-use quarlus::quarlus_data::{Entity, QueryBuilder};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

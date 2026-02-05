@@ -7,7 +7,6 @@
 //! - `/identity/full` — returns JWT claims + database profile (1 DB query)
 
 use quarlus::prelude::*;
-use quarlus::quarlus_security::AuthenticatedUser;
 
 use crate::db_identity::DbUser;
 use crate::state::Services;

@@ -161,7 +161,14 @@ The `Identity` trait (`quarlus-core::Identity`) decouples guards from the concre
 
 **Built-in guards:**
 - `RolesGuard` — checks required roles, returns 403 if missing. Applied via `#[roles("admin")]`. Implements `Guard<S, I>` for any `I: Identity`.
-- `RateLimitGuard` — token-bucket rate limiting, returns 429. Applied via `#[rate_limited(max = 5, window = 60)]`. Implements `Guard<S, I>` for any `I: Identity`. **Note:** global/IP-keyed rate limiting runs as pre-auth middleware (before JWT validation).
+- `RateLimitGuard` / `PreAuthRateLimitGuard` — token-bucket rate limiting, returns 429. Use the `RateLimit` builder with `#[guard(...)]` or `#[pre_guard(...)]`:
+  ```rust
+  use quarlus::quarlus_rate_limit::RateLimit;
+
+  #[pre_guard(RateLimit::global(5, 60))]    // 5 req / 60 sec, shared bucket (pre-auth)
+  #[pre_guard(RateLimit::per_ip(5, 60))]    // 5 req / 60 sec, per IP (pre-auth)
+  #[guard(RateLimit::per_user(5, 60))]      // 5 req / 60 sec, per user (post-auth)
+  ```
 
 **Pre-authentication guards:**
 
@@ -172,8 +179,8 @@ For authorization checks that don't require identity (e.g., IP-based rate limiti
 - Apply custom pre-auth guards via `#[pre_guard(MyPreAuthGuard)]`
 
 **Rate-limiting key classification:**
-- `key = "global"` or `key = "ip"` → pre-auth guard (runs before JWT validation)
-- `key = "user"` → post-auth guard (runs after JWT validation, needs identity)
+- `RateLimit::global()` / `RateLimit::per_ip()` → use with `#[pre_guard(...)]` (runs before JWT validation)
+- `RateLimit::per_user()` → use with `#[guard(...)]` (runs after JWT validation, needs identity)
 
 **Custom guards:**
 - Post-auth: implement `Guard<S, I: Identity>` (async via RPITIT) and apply via `#[guard(MyGuard)]`
@@ -216,11 +223,11 @@ Cross-cutting concerns (logging, timing, caching) are implemented via a generic 
 **Interceptor wrapping order** (outermost → innermost):
 
 Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
-0. `rate_limited(key = "global")` / `rate_limited(key = "ip")` — pre-auth rate limiting
+0. `pre_guard(RateLimit::global(...))` / `pre_guard(RateLimit::per_ip(...))` — pre-auth rate limiting
 0. `pre_guard(CustomPreAuthGuard)` — custom pre-auth guards
 
 Handler level (after extraction, before controller body):
-1. `rate_limited(key = "user")` — per-user rate limiting (needs identity)
+1. `guard(RateLimit::per_user(...))` — per-user rate limiting (needs identity)
 2. `roles` — short-circuits with 403
 3. `guard(CustomGuard)` — custom guards, short-circuit with custom error
 
@@ -239,9 +246,9 @@ Inline codegen (no trait):
 ```rust
 #[transactional]                             // uses self.pool
 #[transactional(pool = "read_db")]           // custom pool field
-#[rate_limited(max = 5, window = 60)]                  // global key (pre-auth)
-#[rate_limited(max = 5, window = 60, key = "user")]    // per-user (post-auth, requires identity)
-#[rate_limited(max = 5, window = 60, key = "ip")]      // per-IP (pre-auth, X-Forwarded-For)
+#[pre_guard(RateLimit::global(5, 60))]       // global rate limit (pre-auth)
+#[pre_guard(RateLimit::per_ip(5, 60))]       // per-IP rate limit (pre-auth)
+#[guard(RateLimit::per_user(5, 60))]         // per-user rate limit (post-auth, requires identity)
 #[intercept(MyInterceptor)]                  // user-defined (must be a unit struct/constant)
 #[intercept(Logged::info())]                 // built-in interceptor with config
 #[intercept(Cache::ttl(30).group("users"))]  // cache with named group

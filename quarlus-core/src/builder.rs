@@ -1,16 +1,23 @@
 use crate::beans::{Bean, BeanRegistry, BeanState};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
-use crate::plugin::Plugin;
-use crate::scheduling::{ScheduledTaskDef, SchedulerStartFn, SchedulerStopFn};
+use crate::plugin::{DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
 use crate::type_list::{BuildableFrom, TCons, TNil};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
+
+/// A serve hook that receives tasks and starts them.
+/// Tasks already have their state captured, so only the token is needed.
+type ServeHook = Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>;
 
 /// Marker type: application state has not been set yet.
 ///
@@ -25,6 +32,10 @@ struct BuilderConfig {
     config: Option<crate::config::QuarlusConfig>,
     custom_layers: Vec<LayerFn>,
     bean_registry: BeanRegistry,
+    /// Deferred plugins to be installed after state resolution.
+    deferred_plugins: Vec<DeferredPlugin>,
+    /// Plugin data storage (type-erased, keyed by TypeId).
+    plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 /// Builder for assembling a Quarlus application.
@@ -56,9 +67,11 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
     openapi_builder:
         Option<Box<dyn FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> crate::http::Router<T> + Send>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
-    scheduled_task_defs: Vec<ScheduledTaskDef<T>>,
-    scheduler_starter: Option<SchedulerStartFn<T>>,
-    scheduler_stopper: Option<SchedulerStopFn>,
+    /// Serve hooks from plugins (called when server starts).
+    /// Tasks already capture their state, so only the token is needed.
+    serve_hooks: Vec<ServeHook>,
+    /// Shutdown hooks from plugins.
+    plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     _provided: PhantomData<P>,
 }
 
@@ -72,6 +85,8 @@ impl AppBuilder<NoState, TNil> {
                 config: None,
                 custom_layers: Vec::new(),
                 bean_registry: BeanRegistry::new(),
+                deferred_plugins: Vec::new(),
+                plugin_data: HashMap::new(),
             },
             state: None,
             routes: Vec::new(),
@@ -81,9 +96,8 @@ impl AppBuilder<NoState, TNil> {
             route_metadata: Vec::new(),
             openapi_builder: None,
             consumer_registrations: Vec::new(),
-            scheduled_task_defs: Vec::new(),
-            scheduler_starter: None,
-            scheduler_stopper: None,
+            serve_hooks: Vec::new(),
+            plugin_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
         }
     }
@@ -102,9 +116,8 @@ impl<P> AppBuilder<NoState, P> {
             route_metadata: self.route_metadata,
             openapi_builder: self.openapi_builder,
             consumer_registrations: self.consumer_registrations,
-            scheduled_task_defs: self.scheduled_task_defs,
-            scheduler_starter: self.scheduler_starter,
-            scheduler_stopper: self.scheduler_stopper,
+            serve_hooks: self.serve_hooks,
+            plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             _provided: PhantomData,
         }
     }
@@ -126,6 +139,51 @@ impl<P> AppBuilder<NoState, P> {
     pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
         self.shared.bean_registry.register::<B>();
         self.with_updated_provider()
+    }
+
+    /// Install a [`PreStatePlugin`] that provides beans and optionally defers setup.
+    ///
+    /// Pre-state plugins run before `build_state()` is called. They can:
+    /// - Provide bean instances to the bean registry
+    /// - Register deferred actions (like scheduler setup) that execute after state resolution
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use quarlus_scheduler::Scheduler;
+    ///
+    /// AppBuilder::new()
+    ///     .with_plugin(Scheduler)  // Provides CancellationToken
+    ///     .build_state::<Services, _>()
+    /// ```
+    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
+        plugin.pre_install(self)
+    }
+
+    /// Add a deferred plugin to be installed after state resolution.
+    ///
+    /// This is called by [`PreStatePlugin`] implementations to register setup
+    /// that needs to run after `build_state()` is called.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// impl PreStatePlugin for MyPlugin {
+    ///     type Provided = MyToken;
+    ///
+    ///     fn pre_install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+    ///         let token = MyToken::new();
+    ///         let plugin = DeferredPlugin::new(
+    ///             MySetupData { token: token.clone() },
+    ///             MyInstaller,
+    ///         );
+    ///         app.provide(token).add_deferred_plugin(plugin)
+    ///     }
+    /// }
+    /// ```
+    pub fn add_deferred_plugin(mut self, plugin: DeferredPlugin) -> Self {
+        self.shared.deferred_plugins.push(plugin);
+        self
     }
 
     /// Resolve the bean dependency graph and build the application state.
@@ -181,9 +239,13 @@ impl Default for AppBuilder<NoState, TNil> {
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Internal: construct a typed builder from the pre-state shared config.
     fn from_pre(mut shared: BuilderConfig, state: T) -> Self {
+        // Take the deferred plugins before creating the builder.
+        let deferred_plugins = std::mem::take(&mut shared.deferred_plugins);
+
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
-        Self {
+
+        let mut builder = Self {
             shared,
             state: Some(state),
             routes: Vec::new(),
@@ -193,13 +255,69 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             route_metadata: Vec::new(),
             openapi_builder: None,
             consumer_registrations: Vec::new(),
-            scheduled_task_defs: Vec::new(),
-            scheduler_starter: None,
-            scheduler_stopper: None,
+            serve_hooks: Vec::new(),
+            plugin_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
+        };
+
+        // Install deferred plugins.
+        for plugin in deferred_plugins {
+            let mut ctx = InstallContext {
+                layers: &mut builder.shared.custom_layers,
+                plugin_data: &mut builder.shared.plugin_data,
+                serve_hooks: &mut builder.serve_hooks,
+                shutdown_hooks: &mut builder.plugin_shutdown_hooks,
+            };
+            plugin.installer.install(plugin.data, &mut ctx);
         }
+
+        builder
+    }
+}
+
+/// Context for installing deferred plugins into a typed builder.
+struct InstallContext<'a> {
+    layers: &'a mut Vec<LayerFn>,
+    plugin_data: &'a mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    serve_hooks: &'a mut Vec<ServeHook>,
+    shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
+}
+
+impl DeferredInstallContext for InstallContext<'_> {
+    fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+        self.layers.push(layer);
     }
 
+    fn store_plugin_data(&mut self, data: Box<dyn Any + Send + Sync>) {
+        // Use the concrete type's TypeId as the key.
+        let type_id = (*data).type_id();
+        self.plugin_data.insert(type_id, data);
+    }
+
+    fn add_serve_hook(&mut self, start_fn: usize, token: CancellationToken) {
+        // Reinterpret the function pointer.
+        // This is safe because tasks now capture their state, so the function
+        // only needs tasks and token (no generic T parameter needed).
+        type StartFn = fn(Vec<Box<dyn Any + Send>>, CancellationToken);
+        let start_fn: StartFn = unsafe { std::mem::transmute(start_fn) };
+
+        // Create a closure that will be called at serve time.
+        let closure: ServeHook = Box::new(move |tasks, token_at_serve| {
+            // Note: we use the token from add_serve_hook, not the one passed at serve time
+            // (they should be the same token anyway)
+            let _ = token_at_serve;
+            start_fn(tasks, token);
+        });
+
+        self.serve_hooks.push(closure);
+    }
+
+    fn add_shutdown_hook(&mut self, hook: Box<dyn FnOnce() + Send>) {
+        self.shutdown_hooks.push(hook);
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     // ── Plugin system ───────────────────────────────────────────────────
 
     /// Install a [`Plugin`] into this builder.
@@ -370,6 +488,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Get plugin data by type.
+    ///
+    /// Returns a reference to plugin data previously stored via
+    /// `DeferredInstallContext::store_plugin_data`.
+    pub fn get_plugin_data<D: Any + Send + Sync + 'static>(&self) -> Option<&D> {
+        self.shared
+            .plugin_data
+            .get(&TypeId::of::<D>())
+            .and_then(|boxed| boxed.downcast_ref::<D>())
+    }
+
     /// Register a [`Controller`] whose routes will be merged into the application.
     ///
     /// This also collects event consumers and scheduled task definitions
@@ -382,21 +511,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.route_metadata.push(C::route_metadata());
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
-        self.scheduled_task_defs.extend(C::scheduled_tasks());
-        self
-    }
 
-    /// Set the scheduler backend (starter + stopper).
-    ///
-    /// Called by the scheduler plugin to provide the runtime that actually
-    /// spawns Tokio tasks for each [`ScheduledTaskDef`].
-    pub fn set_scheduler_backend(
-        mut self,
-        starter: SchedulerStartFn<T>,
-        stopper: SchedulerStopFn,
-    ) -> Self {
-        self.scheduler_starter = Some(starter);
-        self.scheduler_stopper = Some(stopper);
+        // Collect scheduled tasks (type-erased) and add to the task registry if present.
+        // Tasks capture the state, so we need to pass it here.
+        if let Some(state) = &self.state {
+            let boxed_tasks = C::scheduled_tasks_boxed(state);
+            if !boxed_tasks.is_empty() {
+                if let Some(registry) = self.get_plugin_data::<TaskRegistryHandle>() {
+                    registry.add_boxed(boxed_tasks);
+                } else {
+                    tracing::warn!(
+                        controller = std::any::type_name::<C>(),
+                        "Scheduled tasks found but no scheduler installed. \
+                         Add `.with_plugin(Scheduler)` before build_state()."
+                    );
+                }
+            }
+        }
+
         self
     }
 
@@ -419,17 +551,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Panics if [`with_state`](AppBuilder::<NoState>::with_state) or
     /// [`build_state`](AppBuilder::<NoState>::build_state) was never called.
-    pub fn build(mut self) -> crate::http::Router {
-        if !self.scheduled_task_defs.is_empty() && self.scheduler_starter.is_none() {
-            tracing::warn!(
-                "Scheduled tasks were registered but no scheduler backend was installed. \
-                 Add `.with(Scheduler)` (from quarlus-scheduler) to start them."
-            );
-        }
-        // Discard scheduler fields — build() returns a bare Router.
-        self.scheduled_task_defs.clear();
-        self.scheduler_starter = None;
-        self.scheduler_stopper = None;
+    pub fn build(self) -> crate::http::Router {
         self.build_inner().0
     }
 
@@ -440,9 +562,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         Vec<StartupHook<T>>,
         Vec<ShutdownHook>,
         Vec<ConsumerReg<T>>,
-        Vec<ScheduledTaskDef<T>>,
-        Option<SchedulerStartFn<T>>,
-        Option<SchedulerStopFn>,
+        Vec<ServeHook>,
+        Vec<Box<dyn FnOnce() + Send>>,
+        HashMap<TypeId, Box<dyn Any + Send + Sync>>,
         T,
     ) {
         let state = self
@@ -480,9 +602,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             self.startup_hooks,
             self.shutdown_hooks,
             self.consumer_registrations,
-            self.scheduled_task_defs,
-            self.scheduler_starter,
-            self.scheduler_stopper,
+            self.serve_hooks,
+            self.plugin_shutdown_hooks,
+            self.shared.plugin_data,
             state,
         )
     }
@@ -497,9 +619,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             startup_hooks,
             shutdown_hooks,
             consumer_regs,
-            scheduled_task_defs,
-            scheduler_starter,
-            scheduler_stopper,
+            serve_hooks,
+            plugin_shutdown_hooks,
+            plugin_data,
             state,
         ) = self.build_inner();
 
@@ -508,19 +630,18 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             reg(state.clone()).await;
         }
 
-        // Start scheduled tasks
-        if !scheduled_task_defs.is_empty() {
-            if let Some(starter) = scheduler_starter {
-                info!(
-                    count = scheduled_task_defs.len(),
-                    "Starting scheduled tasks"
-                );
-                starter(scheduled_task_defs, state.clone());
-            } else {
-                tracing::warn!(
-                    "Scheduled tasks were registered but no scheduler backend was installed. \
-                     Add `.with(Scheduler)` (from quarlus-scheduler) to start them."
-                );
+        // Call serve hooks (e.g., scheduler starts tasks).
+        // Tasks already have their state captured, so we just need to pass the token.
+        for hook in serve_hooks {
+            if let Some(registry) = plugin_data
+                .get(&TypeId::of::<TaskRegistryHandle>())
+                .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
+            {
+                let boxed_tasks = registry.take_all();
+                if !boxed_tasks.is_empty() {
+                    // The token is captured in the hook closure
+                    hook(boxed_tasks, CancellationToken::new());
+                }
             }
         }
 
@@ -537,18 +658,53 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 
-        // Stop scheduler
-        if let Some(stopper) = scheduler_stopper {
-            stopper();
+        // Run plugin shutdown hooks (e.g., cancel scheduler)
+        for hook in plugin_shutdown_hooks {
+            hook();
         }
 
-        // Run shutdown hooks
+        // Run user shutdown hooks
         for hook in shutdown_hooks {
             hook().await;
         }
 
         info!("Quarlus server stopped");
         Ok(())
+    }
+}
+
+/// Handle to a task registry for collecting scheduled tasks.
+///
+/// This is stored in plugin_data by the scheduler plugin and used by
+/// `register_controller` to collect scheduled tasks. It's cloneable
+/// (internally Arc) so it can be shared.
+#[derive(Clone)]
+pub struct TaskRegistryHandle {
+    inner: Arc<Mutex<Vec<Box<dyn Any + Send>>>>,
+}
+
+impl TaskRegistryHandle {
+    /// Create a new empty task registry handle.
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Add type-erased tasks to the registry.
+    pub fn add_boxed(&self, tasks: Vec<Box<dyn Any + Send>>) {
+        self.inner.lock().unwrap().extend(tasks);
+    }
+
+    /// Take all tasks from the registry, leaving it empty.
+    pub fn take_all(&self) -> Vec<Box<dyn Any + Send>> {
+        std::mem::take(&mut *self.inner.lock().unwrap())
+    }
+}
+
+impl Default for TaskRegistryHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

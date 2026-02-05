@@ -2,7 +2,7 @@
 
 use quote::quote;
 
-use crate::crate_path::{quarlus_core_path, quarlus_rate_limit_path};
+use crate::crate_path::quarlus_core_path;
 use crate::route::{HttpMethod, RoutePath};
 use crate::types::TransactionalConfig;
 
@@ -21,7 +21,6 @@ pub fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
             !is_route_attr(a)
                 && !a.path().is_ident("roles")
                 && !a.path().is_ident("transactional")
-                && !a.path().is_ident("rate_limited")
                 && !a.path().is_ident("intercept")
                 && !a.path().is_ident("guard")
                 && !a.path().is_ident("pre_guard")
@@ -86,86 +85,6 @@ pub fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<Tra
         }
     }
     Ok(None)
-}
-
-/// Result of parsing `#[rate_limited]` — classified into pre-auth or post-auth.
-pub struct RateLimitedGuards {
-    /// Post-auth guard (for user-keyed rate limiting).
-    pub post_auth: Option<syn::Expr>,
-    /// Pre-auth guard (for global or IP-keyed rate limiting).
-    pub pre_auth: Option<syn::Expr>,
-}
-
-pub fn extract_rate_limited_guards(attrs: &[syn::Attribute]) -> syn::Result<RateLimitedGuards> {
-    for attr in attrs {
-        if attr.path().is_ident("rate_limited") {
-            let mut max: u64 = 100;
-            let mut window: u64 = 60;
-            let mut key_str = String::from("global");
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("max") {
-                    let value = meta.value()?;
-                    let lit: syn::LitInt = value.parse()?;
-                    max = lit.base10_parse()?;
-                    Ok(())
-                } else if meta.path.is_ident("window") {
-                    let value = meta.value()?;
-                    let lit: syn::LitInt = value.parse()?;
-                    window = lit.base10_parse()?;
-                    Ok(())
-                } else if meta.path.is_ident("key") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    key_str = lit.value();
-                    Ok(())
-                } else {
-                    Err(meta.error("expected `max`, `window`, or `key`"))
-                }
-            })?;
-
-            let rl_krate = quarlus_rate_limit_path();
-
-            let key_kind_tokens = match key_str.as_str() {
-                "global" => quote! { #rl_krate::RateLimitKeyKind::Global },
-                "user" => quote! { #rl_krate::RateLimitKeyKind::User },
-                "ip" => quote! { #rl_krate::RateLimitKeyKind::Ip },
-                _ => {
-                    return Err(syn::Error::new_spanned(
-                        attr,
-                        "expected one of: global, user, ip",
-                    ))
-                }
-            };
-
-            return match key_str.as_str() {
-                "user" => {
-                    // User-keyed → post-auth (needs identity)
-                    let expr_tokens = quote! {
-                        #rl_krate::RateLimitGuard {
-                            max: #max,
-                            window_secs: #window,
-                            key: #key_kind_tokens,
-                        }
-                    };
-                    let expr: syn::Expr = syn::parse2(expr_tokens)?;
-                    Ok(RateLimitedGuards { post_auth: Some(expr), pre_auth: None })
-                }
-                _ => {
-                    // Global or IP → pre-auth
-                    let expr_tokens = quote! {
-                        #rl_krate::PreAuthRateLimitGuard {
-                            max: #max,
-                            window_secs: #window,
-                            key: #key_kind_tokens,
-                        }
-                    };
-                    let expr: syn::Expr = syn::parse2(expr_tokens)?;
-                    Ok(RateLimitedGuards { post_auth: None, pre_auth: Some(expr) })
-                }
-            };
-        }
-    }
-    Ok(RateLimitedGuards { post_auth: None, pre_auth: None })
 }
 
 pub fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {

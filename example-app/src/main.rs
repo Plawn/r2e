@@ -3,14 +3,11 @@ use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use quarlus::prelude::*;
-use quarlus::quarlus_events::EventBus;
 use quarlus::quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
 use quarlus::quarlus_prometheus::Prometheus;
 use quarlus::quarlus_scheduler::Scheduler;
 use quarlus::quarlus_security::{JwtClaimsValidator, SecurityConfig};
-use quarlus::config::QuarlusConfig;
 use sqlx::SqlitePool;
-use tokio_util::sync::CancellationToken;
 
 mod controllers;
 mod db_identity;
@@ -104,16 +101,14 @@ async fn main() {
             .await
             .unwrap();
     }
-    // --- Scheduling (#8) is now declarative via #[scheduled] in ScheduledJobs ---
-    let cancel = CancellationToken::new();
-
     // --- App assembly using bean graph ---
+    // Scheduler (#8) is installed before build_state() to provide CancellationToken
     AppBuilder::new()
+        .with_plugin(Scheduler) // Scheduling (#8) - provides CancellationToken
         .provide(event_bus)
         .provide(pool)
         .provide(config.clone())
         .provide(Arc::new(claims_validator))
-        .provide(cancel)
         .provide(quarlus::quarlus_rate_limit::RateLimitRegistry::default())
         .with_bean::<UserService>()
         .build_state::<Services, _>()
@@ -133,7 +128,6 @@ async fn main() {
             Duration::from_secs(30),
         )) // Global Tower layer
         .with(DevReload) // Dev mode (#9)
-        .with(Scheduler) // Scheduling (#8)
         .with(OpenApiPlugin::new(
             OpenApiConfig::new("Quarlus Example API", "0.1.0")
                 .with_description("Demo application showcasing all Quarlus features")

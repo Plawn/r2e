@@ -1666,6 +1666,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
@@ -1735,6 +1736,7 @@ dependencies = [
 name = "quarlus-scheduler"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "cron",
  "quarlus-core",
