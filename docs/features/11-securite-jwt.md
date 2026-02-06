@@ -33,7 +33,7 @@ Attribut de methode qui restreint l'acces aux utilisateurs ayant au moins un des
 #### Mode test (cle statique HMAC)
 
 ```rust
-use quarlus_security::{JwtValidator, SecurityConfig};
+use r2e_security::{JwtValidator, SecurityConfig};
 use jsonwebtoken::DecodingKey;
 
 let secret = b"mon-secret-change-en-production";
@@ -78,8 +78,8 @@ impl axum::extract::FromRef<Services> for Arc<JwtValidator> {
 ### 3. Utiliser `#[identity]` dans un controller
 
 ```rust
-use quarlus_core::prelude::*;
-use quarlus_security::AuthenticatedUser;
+use r2e_core::prelude::*;
+use r2e_security::AuthenticatedUser;
 
 #[derive(Controller)]
 #[controller(state = Services)]
@@ -184,12 +184,12 @@ user.has_any_role(&["admin", "manager"]);  // → bool
 
 ## Code genere par la macro
 
-Pour un controller avec `#[identity] user: AuthenticatedUser`, les macros generent un extractor `__QuarlusExtract_UserController` qui implemente `FromRequestParts` et construit le controller automatiquement :
+Pour un controller avec `#[identity] user: AuthenticatedUser`, les macros generent un extractor `__R2eExtract_UserController` qui implemente `FromRequestParts` et construit le controller automatiquement :
 
 ```rust
 // Genere (simplifie)
-async fn __quarlus_UserController_me(
-    __ctrl_ext: __QuarlusExtract_UserController,  // FromRequestParts — extrait identity + inject + config
+async fn __r2e_UserController_me(
+    __ctrl_ext: __R2eExtract_UserController,  // FromRequestParts — extrait identity + inject + config
 ) -> axum::Json<AuthenticatedUser> {
     let ctrl = __ctrl_ext.0;
     ctrl.me().await
@@ -209,7 +209,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/users
 
 # Endpoint /me → identite de l'utilisateur
 curl -H "Authorization: Bearer <token>" http://localhost:3000/me
-# → {"sub":"user-123","email":"demo@quarlus.dev","roles":["user","admin"],...}
+# → {"sub":"user-123","email":"demo@r2e.dev","roles":["user","admin"],...}
 
 # Admin sans role admin → 403
 TOKEN_USER=$(generate_token_with_roles "user")

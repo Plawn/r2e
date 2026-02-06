@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
-use quarlus::prelude::*;
-use quarlus::quarlus_openapi::{OpenApiConfig, OpenApiPlugin};
-use quarlus::quarlus_prometheus::Prometheus;
-use quarlus::quarlus_scheduler::Scheduler;
-use quarlus::quarlus_security::{JwtClaimsValidator, SecurityConfig};
+use r2e::prelude::*;
+use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
+use r2e::r2e_prometheus::Prometheus;
+use r2e::r2e_scheduler::Scheduler;
+use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 use sqlx::SqlitePool;
 
 mod controllers;
@@ -38,10 +38,10 @@ fn generate_test_token(secret: &[u8]) -> String {
 
     let claims = serde_json::json!({
         "sub": "user-123",
-        "email": "demo@quarlus.dev",
+        "email": "demo@r2e.dev",
         "roles": ["user", "admin"],
-        "iss": "quarlus-demo",
-        "aud": "quarlus-app",
+        "iss": "r2e-demo",
+        "aud": "r2e-app",
         "exp": exp,
     });
 
@@ -51,9 +51,9 @@ fn generate_test_token(secret: &[u8]) -> String {
 
 #[tokio::main]
 async fn main() {
-    quarlus::init_tracing();
+    r2e::init_tracing();
 
-    let secret = b"quarlus-demo-secret-change-in-production";
+    let secret = b"r2e-demo-secret-change-in-production";
 
     // Print a test JWT for curl usage
     let token = generate_test_token(secret);
@@ -64,14 +64,14 @@ async fn main() {
     // --- Configuration (#1) ---
     // load() succeeds even when application.yaml is absent (env vars still overlay),
     // so we always ensure the required keys exist with sensible defaults.
-    let config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
+    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 
     // --- Events (#7) ---
     let event_bus = EventBus::new();
 
     // Build the JWT claims validator with a static HMAC key (no JWKS needed for the demo)
     // Using JwtClaimsValidator allows multiple identity types (AuthenticatedUser, DbUser, etc.)
-    let sec_config = SecurityConfig::new("unused", "quarlus-demo", "quarlus-app");
+    let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app");
     let claims_validator = JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
     // Create an in-memory SQLite pool and initialise the schema
@@ -107,7 +107,7 @@ async fn main() {
     // --- App assembly using bean graph ---
     // Scheduler (#8) is installed before build_state() to provide CancellationToken
     // SSE broadcaster for real-time events
-    let sse_broadcaster = quarlus::sse::SseBroadcaster::new(128);
+    let sse_broadcaster = r2e::sse::SseBroadcaster::new(128);
     let notification_service = NotificationService::new(64);
 
     AppBuilder::new()
@@ -116,7 +116,7 @@ async fn main() {
         .provide(pool)
         .provide(config.clone())
         .provide(Arc::new(claims_validator))
-        .provide(quarlus::quarlus_rate_limit::RateLimitRegistry::default())
+        .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(sse_broadcaster)
         .provide(notification_service)
         .with_bean::<UserService>()
@@ -125,7 +125,7 @@ async fn main() {
         .with(Health)
         .with(Prometheus::builder()
             .endpoint("/metrics")
-            .namespace("quarlus")
+            .namespace("r2e")
             .exclude_path("/health")
             .exclude_path("/metrics")
             .build())
@@ -135,23 +135,23 @@ async fn main() {
         .with(Tracing)
         .with(ErrorHandling) // Error handling (#3)
         .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            quarlus::http::StatusCode::REQUEST_TIMEOUT,
+            r2e::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         )) // Global Tower layer
         .with(DevReload) // Dev mode (#9)
         .with(OpenApiPlugin::new(
-            OpenApiConfig::new("Quarlus Example API", "0.1.0")
-                .with_description("Demo application showcasing all Quarlus features")
+            OpenApiConfig::new("R2E Example API", "0.1.0")
+                .with_description("Demo application showcasing all R2E features")
                 .with_docs_ui(true),
         )) // OpenAPI (#5)
         .on_start(|_state| async move {
             // Lifecycle hook (#10)
-            tracing::info!("Quarlus example-app startup hook executed");
+            tracing::info!("R2E example-app startup hook executed");
             Ok(())
         })
         .on_stop(|| async {
             // Lifecycle hook (#10)
-            tracing::info!("Quarlus example-app shutdown hook executed");
+            tracing::info!("R2E example-app shutdown hook executed");
         })
         .register_controller::<UserController>()
         .register_controller::<AccountController>()

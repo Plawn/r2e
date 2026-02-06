@@ -9,11 +9,11 @@
 //!
 //! `DbUser` uses the [`ClaimsIdentity`] trait and [`impl_claims_identity_extractor!`]
 //! macro to reduce boilerplate. Compare with the manual `FromRequestParts` approach
-//! documented in `quarlus-security/src/extractor.rs`.
+//! documented in `r2e-security/src/extractor.rs`.
 
-use quarlus::http::extract::FromRef;
-use quarlus::Identity;
-use quarlus::quarlus_security::{
+use r2e::http::extract::FromRef;
+use r2e::Identity;
+use r2e::r2e_security::{
     impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity,
 };
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ where
     async fn from_jwt_claims(
         claims: serde_json::Value,
         state: &S,
-    ) -> Result<Self, quarlus::AppError> {
+    ) -> Result<Self, r2e::AppError> {
         let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
         let auth = AuthenticatedUser::from_claims(claims);
 
@@ -86,12 +86,12 @@ where
                 .bind(&sub)
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| quarlus::AppError::Internal(format!("DB error: {e}")))?;
+                .map_err(|e| r2e::AppError::Internal(format!("DB error: {e}")))?;
 
         let profile = row
             .map(|(id, name, email)| UserProfile { id, name, email })
             .ok_or_else(|| {
-                quarlus::AppError::NotFound(format!("No user profile for sub '{sub}'"))
+                r2e::AppError::NotFound(format!("No user profile for sub '{sub}'"))
             })?;
 
         Ok(DbUser { auth, profile })

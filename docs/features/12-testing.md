@@ -24,16 +24,16 @@ Generateur de tokens JWT pour les tests, avec un `JwtValidator` correspondant pr
 
 ```toml
 [dev-dependencies]
-quarlus-test = { path = "../quarlus-test" }
+r2e-test = { path = "../r2e-test" }
 http = "1"
 ```
 
 ### 2. Setup de test
 
 ```rust
-use quarlus_core::AppBuilder;
-use quarlus_core::Controller;
-use quarlus_test::{TestApp, TestJwt};
+use r2e_core::AppBuilder;
+use r2e_core::Controller;
+use r2e_test::{TestApp, TestJwt};
 
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
@@ -43,7 +43,7 @@ async fn setup() -> (TestApp, TestJwt) {
         user_service: UserService::new(),
         jwt_validator: Arc::new(jwt.validator()),
         pool: SqlitePool::connect("sqlite::memory:").await.unwrap(),
-        config: QuarlusConfig::empty(),
+        config: R2eConfig::empty(),
         // ...
     };
 
@@ -245,8 +245,8 @@ Les tokens sont signes en HMAC-SHA256 avec une validite de 1 heure et contiennen
 {
     "sub": "user-1",
     "roles": ["user"],
-    "iss": "quarlus-test",
-    "aud": "quarlus-test-app",
+    "iss": "r2e-test",
+    "aud": "r2e-test-app",
     "exp": 1706130000
 }
 ```
@@ -257,7 +257,7 @@ Pour les tests d'integration, il est courant de redefinir le controller dans le 
 
 ```rust
 // tests/user_controller_test.rs
-use quarlus_core::prelude::*;
+use r2e_core::prelude::*;
 
 // Redefinir les types necessaires
 mod common {

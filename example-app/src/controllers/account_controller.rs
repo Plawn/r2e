@@ -1,7 +1,7 @@
 use crate::models::User;
 use crate::services::UserService;
 use crate::state::Services;
-use quarlus::prelude::*;
+use r2e::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]

@@ -6,9 +6,9 @@ Fournir un systeme de configuration type, charge depuis des fichiers YAML et des
 
 ## Concepts cles
 
-### QuarlusConfig
+### R2eConfig
 
-`QuarlusConfig` est le conteneur central de configuration. Il stocke les valeurs sous forme de cles separees par des points (ex: `app.database.url`).
+`R2eConfig` est le conteneur central de configuration. Il stocke les valeurs sous forme de cles separees par des points (ex: `app.database.url`).
 
 ### Ordre de resolution
 
@@ -18,7 +18,7 @@ Fournir un systeme de configuration type, charge depuis des fichiers YAML et des
 
 ### Profil actif
 
-Determine par : variable d'environnement `QUARLUS_PROFILE` > argument de `load()` > defaut `"dev"`.
+Determine par : variable d'environnement `R2E_PROFILE` > argument de `load()` > defaut `"dev"`.
 
 ## Utilisation
 
@@ -40,15 +40,15 @@ database:
 ### 2. Charger la configuration
 
 ```rust
-use quarlus_core::config::{QuarlusConfig, ConfigValue};
+use r2e_core::config::{R2eConfig, ConfigValue};
 
-let config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
+let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 ```
 
 `load()` reussit meme si le fichier YAML est absent (les variables d'environnement sont toujours overlayees). Pour garantir la presence de cles requises, verifier et definir des valeurs par defaut :
 
 ```rust
-let mut config = QuarlusConfig::load("dev").unwrap_or_else(|_| QuarlusConfig::empty());
+let mut config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 
 if config.get::<String>("app.name").is_err() {
     config.set("app.name", ConfigValue::String("Default App".into()));
@@ -82,7 +82,7 @@ let timeout: i64 = config.get_or("app.timeout", 30);
 Le champ `#[config("cle")]` dans un controller injecte automatiquement la valeur depuis la configuration au moment de la requete :
 
 ```rust
-use quarlus_core::prelude::*;
+use r2e_core::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]
@@ -108,10 +108,10 @@ impl MyController {
 
 ### Prerequis pour `#[config]`
 
-Le type d'etat (`Services`) doit implementer `FromRef<Services>` pour `QuarlusConfig` :
+Le type d'etat (`Services`) doit implementer `FromRef<Services>` pour `R2eConfig` :
 
 ```rust
-impl axum::extract::FromRef<Services> for QuarlusConfig {
+impl axum::extract::FromRef<Services> for R2eConfig {
     fn from_ref(state: &Services) -> Self {
         state.config.clone()
     }
@@ -141,10 +141,10 @@ La conversion est : minuscules, remplacement de `_` par `.`.
 
 ## Tests
 
-En test, utiliser `QuarlusConfig::empty()` pour creer une configuration vide et definir les valeurs programmatiquement :
+En test, utiliser `R2eConfig::empty()` pour creer une configuration vide et definir les valeurs programmatiquement :
 
 ```rust
-let mut config = QuarlusConfig::empty();
+let mut config = R2eConfig::empty();
 config.set("app.name", ConfigValue::String("Test App".into()));
 config.set("app.greeting", ConfigValue::String("Hello from tests!".into()));
 ```

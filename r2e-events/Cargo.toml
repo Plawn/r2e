@@ -1,0 +1,17 @@
+[package]
+name = "r2e-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["events", "pubsub", "async"]
+categories = ["asynchronous"]
+description = "In-process typed event bus for R2E - publish/subscribe with async handlers"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }

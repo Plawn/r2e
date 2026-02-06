@@ -6,7 +6,7 @@
 //! - `/identity/light` — returns JWT claims only (no DB round-trip)
 //! - `/identity/full` — returns JWT claims + database profile (1 DB query)
 
-use quarlus::prelude::*;
+use r2e::prelude::*;
 
 use crate::db_identity::DbUser;
 use crate::state::Services;
@@ -30,7 +30,7 @@ impl IdentityController {
     /// ```json
     /// {
     ///   "sub": "user-123",
-    ///   "email": "demo@quarlus.dev",
+    ///   "email": "demo@r2e.dev",
     ///   "roles": ["user", "admin"],
     ///   "claims": { ... }
     /// }
@@ -58,7 +58,7 @@ impl IdentityController {
     /// {
     ///   "auth": {
     ///     "sub": "user-123",
-    ///     "email": "demo@quarlus.dev",
+    ///     "email": "demo@r2e.dev",
     ///     "roles": ["user", "admin"],
     ///     "claims": { ... }
     ///   },

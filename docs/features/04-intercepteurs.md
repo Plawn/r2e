@@ -6,7 +6,7 @@ Fournir des attributs declaratifs pour enrichir le comportement des methodes de 
 
 ## Architecture
 
-Les intercepteurs reposent sur un trait generique `Interceptor<R>` avec un pattern `around` (defini dans `quarlus-core/src/interceptors.rs`). Les intercepteurs built-in (`Logged`, `Timed`, `Cached`) sont des structs qui implementent ce trait. Tous les appels sont monomorphises (pas de `dyn`) → zero-cost a l'execution.
+Les intercepteurs reposent sur un trait generique `Interceptor<R>` avec un pattern `around` (defini dans `r2e-core/src/interceptors.rs`). Les intercepteurs built-in (`Logged`, `Timed`, `Cached`) sont des structs qui implementent ce trait. Tous les appels sont monomorphises (pas de `dyn`) → zero-cost a l'execution.
 
 Exceptions a cette architecture :
 - **`rate_limited`** — gere au niveau du handler (short-circuit avant le controller, comme `#[roles]`)
@@ -17,7 +17,7 @@ Les intercepteurs user-defined implementent le meme trait et s'appliquent via `#
 
 ### Pourquoi des attributs no-op ?
 
-Tous les attributs d'intercepteur (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[transactional]`, `#[cache_invalidate]`, `#[intercept]`) sont declares dans `quarlus-macros/src/lib.rs` comme des `#[proc_macro_attribute]` no-op — ils retournent leur input sans transformation. La vraie logique est dans l'attribut `#[routes]`, qui parse ces attributs depuis le flux de tokens brut du bloc `impl`.
+Tous les attributs d'intercepteur (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[transactional]`, `#[cache_invalidate]`, `#[intercept]`) sont declares dans `r2e-macros/src/lib.rs` comme des `#[proc_macro_attribute]` no-op — ils retournent leur input sans transformation. La vraie logique est dans l'attribut `#[routes]`, qui parse ces attributs depuis le flux de tokens brut du bloc `impl`.
 
 Ces declarations no-op existent pour trois raisons :
 
@@ -179,7 +179,7 @@ async fn list(&self) -> axum::Json<Vec<User>> { ... }
 async fn create(&self, ...) -> axum::Json<User> { ... }
 ```
 
-Le `CacheRegistry` (statique global dans `quarlus-core/src/cache.rs`) maintient un registre de caches nommes :
+Le `CacheRegistry` (statique global dans `r2e-core/src/cache.rs`) maintient un registre de caches nommes :
 - `get_or_create(group, ttl)` — retourne le cache du groupe (le cree au premier appel)
 - `invalidate(group)` — vide le cache du groupe
 
@@ -247,7 +247,7 @@ Enveloppe le corps de la methode dans une transaction SQL.
 ```rust
 #[post("/users/db")]
 #[transactional]                             // defaut: self.pool
-async fn create_in_db(&self, ...) -> Result<axum::Json<User>, quarlus_core::AppError> {
+async fn create_in_db(&self, ...) -> Result<axum::Json<User>, r2e_core::AppError> {
     sqlx::query("INSERT ...").execute(&mut *tx).await?;
     Ok(axum::Json(user))
 }
@@ -269,10 +269,10 @@ Les utilisateurs peuvent creer leurs propres intercepteurs en implementant le tr
 ```rust
 pub struct AuditLog;
 
-impl<R: Send> quarlus_core::Interceptor<R> for AuditLog {
+impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: quarlus_core::InterceptorContext,
+        ctx: r2e_core::InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -307,7 +307,7 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 
 ```rust
 use std::future::Future;
-use quarlus_core::prelude::*;
+use r2e_core::prelude::*;
 
 /// Intercepteur custom
 pub struct AuditLog;
@@ -377,7 +377,7 @@ impl UserController {
     #[post("/db")]
     #[transactional]
     async fn create_in_db(&self, axum::Json(body): axum::Json<CreateUserRequest>)
-        -> Result<axum::Json<User>, quarlus_core::AppError>
+        -> Result<axum::Json<User>, r2e_core::AppError>
     {
         sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
         Ok(axum::Json(user))

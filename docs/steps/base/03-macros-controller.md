@@ -1,4 +1,4 @@
-# Etape 3 — quarlus-macros : macro `#[controller]`
+# Etape 3 — r2e-macros : macro `#[controller]`
 
 ## Objectif
 
@@ -7,7 +7,7 @@ Implementer la macro `#[controller]` — la piece maitresse du framework. Elle t
 ## Fichiers a creer/modifier
 
 ```
-quarlus-macros/src/
+r2e-macros/src/
   lib.rs              # Ajout de #[controller]
   controller.rs       # Logique principale de la macro
   parsing.rs          # Extraction des champs inject/identity et des methodes routes
@@ -134,7 +134,7 @@ async fn list(&self) -> Json<Vec<User>>
 
 Sortie :
 ```rust
-async fn __quarlus_handler_list(
+async fn __r2e_handler_list(
     axum::extract::State(state): axum::extract::State<AppState<Services>>,
     user: AuthenticatedUser,    // chaque #[identity] field
 ) -> impl axum::response::IntoResponse {
@@ -160,8 +160,8 @@ async fn __quarlus_handler_list(
 impl Controller<Services> for UserResource {
     fn routes() -> axum::Router<AppState<Services>> {
         axum::Router::new()
-            .route("/users", axum::routing::get(__quarlus_handler_list))
-            .route("/users/:id", axum::routing::get(__quarlus_handler_get_by_id))
+            .route("/users", axum::routing::get(__r2e_handler_list))
+            .route("/users/:id", axum::routing::get(__r2e_handler_get_by_id))
             // ...
     }
 }
@@ -221,8 +221,8 @@ pub fn identity(_args: TokenStream, input: TokenStream) -> TokenStream {
 Test de compilation end-to-end (sans serveur) :
 
 ```rust
-use quarlus_macros::{controller, inject, identity, get};
-use quarlus_core::{AppState, Controller};
+use r2e_macros::{controller, inject, identity, get};
+use r2e_core::{AppState, Controller};
 
 #[derive(Clone)]
 struct Services {

@@ -1,4 +1,4 @@
-# Etape 2 — quarlus-macros : attributs de route
+# Etape 2 — r2e-macros : attributs de route
 
 ## Objectif
 
@@ -7,7 +7,7 @@ Implementer les macros d'attribut `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#
 ## Fichiers a creer/modifier
 
 ```
-quarlus-macros/src/
+r2e-macros/src/
   lib.rs             # Point d'entree proc-macro, declare les attributs
   route.rs           # Parsing des attributs de route
 ```
@@ -44,7 +44,7 @@ Le path est extrait depuis les arguments de l'attribut :
 Chaque macro (`#[get]`, `#[post]`, etc.) est un **attribute proc-macro** qui :
 
 1. Parse le path depuis `TokenStream` d'arguments
-2. Annote la methode avec un attribut custom reconnaissable (par ex. `#[quarlus_route(method = "GET", path = "/users")]`)
+2. Annote la methode avec un attribut custom reconnaissable (par ex. `#[r2e_route(method = "GET", path = "/users")]`)
 3. Retourne la methode inchangee (la transformation reelle est faite par `#[controller]`)
 
 ```rust
@@ -110,7 +110,7 @@ pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
 ## Critere de validation
 
 ```rust
-use quarlus_macros::get;
+use r2e_macros::get;
 
 struct Foo;
 

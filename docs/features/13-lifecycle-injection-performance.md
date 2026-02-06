@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-Ce document decrit le cycle de vie complet d'une application Quarlus — du demarrage a l'arret — ainsi que le fonctionnement interne de l'injection de dependances et ses implications sur la performance.
+Ce document decrit le cycle de vie complet d'une application R2E — du demarrage a l'arret — ainsi que le fonctionnement interne de l'injection de dependances et ses implications sur la performance.
 
 ---
 
@@ -40,7 +40,7 @@ La methode `build_inner()` produit un tuple `(Router, StartupHooks, ShutdownHook
 1. **Creation du Router Axum** — un `Router<T>` vide
 2. **Fusion des routes** — chaque controller enregistre ses routes via `Controller::routes()`
 3. **OpenAPI** (si active) — invocation du builder OpenAPI avec les metadonnees collectees, ajout des routes `/openapi.json` et `/docs`
-4. **Routes systeme** — `/health` et `/__quarlus_dev/*` si actives
+4. **Routes systeme** — `/health` et `/__r2e_dev/*` si actives
 5. **Application de l'etat** — `router.with_state(state.clone())` : un seul clone a la construction
 6. **Empilement des layers** — appliques dans l'ordre inverse de declaration (le dernier ajoute est le plus externe)
 
@@ -119,7 +119,7 @@ Requete HTTP
     |
     +-- State (si handler guarde)
     +-- HeaderMap (si handler guarde)
-    +-- __QuarlusExtract_<Name>  ← construction du controller
+    +-- __R2eExtract_<Name>  ← construction du controller
     |       +-- #[inject(identity)] : FromRequestParts (async)
     |       +-- #[inject]           : state.field.clone() (sync)
     |       +-- #[config("key")]    : config.get(key) (sync)
@@ -164,7 +164,7 @@ Reponse HTTP
 
 ### 2.2 Extraction du controller
 
-L'extracteur genere `__QuarlusExtract_<Name>` implemente `FromRequestParts<State>`. Il construit le controller en trois phases :
+L'extracteur genere `__R2eExtract_<Name>` implemente `FromRequestParts<State>`. Il construit le controller en trois phases :
 
 **Phase 1 — Identity (async, faillible)**
 
@@ -196,20 +196,20 @@ Chaque champ `#[inject]` est clone depuis l'etat. Operation purement synchrone.
 
 ```rust
 greeting: {
-    let cfg = <QuarlusConfig as FromRef<State>>::from_ref(state);
+    let cfg = <R2eConfig as FromRef<State>>::from_ref(state);
     cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
 }
 ```
 
-Extraction de `QuarlusConfig` depuis l'etat via `FromRef`, puis lookup dans le `HashMap`.
+Extraction de `R2eConfig` depuis l'etat via `FromRef`, puis lookup dans le `HashMap`.
 
 ### 2.3 Deux modes de handler
 
 **Mode simple** (sans guards) — le handler retourne directement le type de la methode :
 
 ```rust
-async fn __quarlus_UserController_list(
-    ctrl_ext: __QuarlusExtract_UserController,
+async fn __r2e_UserController_list(
+    ctrl_ext: __R2eExtract_UserController,
     // ... params
 ) -> Json<Vec<User>> {
     let ctrl = ctrl_ext.0;
@@ -220,10 +220,10 @@ async fn __quarlus_UserController_list(
 **Mode guarde** (avec `#[roles]`, `#[rate_limited]`, `#[guard]`) — le handler retourne `Response` pour permettre le short-circuit :
 
 ```rust
-async fn __quarlus_UserController_admin_list(
+async fn __r2e_UserController_admin_list(
     State(state): State<Services>,
     headers: HeaderMap,
-    ctrl_ext: __QuarlusExtract_UserController,
+    ctrl_ext: __R2eExtract_UserController,
 ) -> Response {
     let guard_ctx = GuardContext {
         method_name: "admin_list",
@@ -272,7 +272,7 @@ field_name: __state.field_name.clone()
 | `SqlxPool` | O(1) — `Arc` interne | Pool de connexions |
 | `EventBus` | O(1) — `Arc<RwLock<HashMap>>` | Bus d'evenements |
 | `RateLimitRegistry` | O(1) — `Arc` interne | Registre de limiteurs |
-| `QuarlusConfig` | O(n) — clone du `HashMap` | Configuration |
+| `R2eConfig` | O(n) — clone du `HashMap` | Configuration |
 
 **Bonne pratique** : envelopper les services lourds dans `Arc<T>` pour que le clone soit un simple increment de reference atomique. Le framework n'impose pas `Arc`, mais les types fournis (`SqlxPool`, `EventBus`, etc.) l'utilisent deja en interne.
 
@@ -316,7 +316,7 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
 **Code genere :**
 ```rust
 field_name: {
-    let __cfg = <QuarlusConfig as FromRef<State>>::from_ref(__state);
+    let __cfg = <R2eConfig as FromRef<State>>::from_ref(__state);
     __cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
 }
 ```
@@ -333,7 +333,7 @@ field_name: {
                     │  pool: SqlitePool           ←── Arc interne │
                     │  jwt_validator: Arc<JwtValidator>            │
                     │  event_bus: EventBus         ←── Arc interne │
-                    │  config: QuarlusConfig       ←── HashMap     │
+                    │  config: R2eConfig       ←── HashMap     │
                     │  rate_limiter: RateLimitRegistry             │
                     └──────────────┬──────────────────────────────┘
                                    │
@@ -419,7 +419,7 @@ impl MixedController {
 ### 5.1 Architecture
 
 ```rust
-// quarlus-core
+// r2e-core
 pub trait Identity: Send + Sync {
     fn sub(&self) -> &str;
     fn roles(&self) -> &[String];
@@ -458,7 +458,7 @@ let guard_ctx = GuardContext {
 ```rust
 // Appel a la fonction du meta-module
 let guard_ctx = GuardContext {
-    identity: __quarlus_meta_Name::guard_identity(&ctrl_ext.0),
+    identity: __r2e_meta_Name::guard_identity(&ctrl_ext.0),
     ...
 };
 ```
@@ -504,7 +504,7 @@ pub struct Services {
 // Mauvais : si UserService contenait Vec<User> directement → clone O(n) par requete
 ```
 
-**Anti-pattern** : stocker `QuarlusConfig` comme champ `#[inject]` plutot que via `#[config]`. Le `QuarlusConfig` est un `HashMap<String, ConfigValue>` — son clone copie l'integralite de la map a chaque requete. Preferer `#[config("key")]` qui ne clone que la valeur demandee, ou stocker la config comme `Arc<QuarlusConfig>`.
+**Anti-pattern** : stocker `R2eConfig` comme champ `#[inject]` plutot que via `#[config]`. Le `R2eConfig` est un `HashMap<String, ConfigValue>` — son clone copie l'integralite de la map a chaque requete. Preferer `#[config("key")]` qui ne clone que la valeur demandee, ou stocker la config comme `Arc<R2eConfig>`.
 
 #### Validation JWT (`#[inject(identity)]`)
 
@@ -530,7 +530,7 @@ C'est generalement l'operation la plus couteuse de l'extraction. Elle comprend :
 
 Chaque champ `#[config("key")]` effectue :
 
-1. `FromRef` extraction de `QuarlusConfig` — clone du `HashMap`, O(n) ou n = nombre de cles
+1. `FromRef` extraction de `R2eConfig` — clone du `HashMap`, O(n) ou n = nombre de cles
 2. `config.get(key)` — O(1) lookup + conversion de type
 
 **Le clone de la config est le point d'attention**. Si la config contient 100 cles, c'est 100 allocations par champ `#[config]` par requete.
@@ -599,7 +599,7 @@ Chaque execution d'une tache planifiee appelle `StatefulConstruct::from_state`, 
 
 1. **Envelopper les services dans `Arc<T>`** — le clone par requete devient un simple increment atomique
 2. **Preferer `#[inject(identity)]` param-level** pour les controllers mixtes — evite la validation JWT sur les endpoints publics
-3. **Limiter le nombre de champs `#[config]`** — chaque champ clone l'ensemble de `QuarlusConfig`
+3. **Limiter le nombre de champs `#[config]`** — chaque champ clone l'ensemble de `R2eConfig`
 4. **Pre-rechauffer le cache JWKS** au demarrage si le temps de premiere requete compte
 5. **Les intercepteurs sont gratuits** en termes d'overhead de dispatch — le cout est dans leur logique interne
 6. **Les guards doivent rester synchrones et O(1)** — pas d'I/O dans un guard

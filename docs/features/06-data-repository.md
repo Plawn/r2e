@@ -24,13 +24,13 @@ Builder fluide pour construire des requetes SELECT avec conditions, tri, et pagi
 
 ```toml
 [dependencies]
-quarlus-data = { path = "../quarlus-data", features = ["sqlite"] }
+r2e-data = { path = "../r2e-data", features = ["sqlite"] }
 ```
 
 ### 2. Definir une entite
 
 ```rust
-use quarlus_data::Entity;
+use r2e_data::Entity;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct UserEntity {
@@ -63,7 +63,7 @@ impl Entity for UserEntity {
 ### 3. Utiliser QueryBuilder
 
 ```rust
-use quarlus_data::QueryBuilder;
+use r2e_data::QueryBuilder;
 
 // Requete simple
 let (sql, params) = QueryBuilder::new("users")
@@ -107,13 +107,13 @@ let (sql, params) = QueryBuilder::new("users")
 
 ```rust
 use axum::extract::Query;
-use quarlus_data::{Pageable, Page};
+use r2e_data::{Pageable, Page};
 
 #[get("/data/users")]
 async fn list(
     &self,
     Query(pageable): Query<Pageable>,
-) -> Result<axum::Json<Page<UserEntity>>, quarlus_core::AppError> {
+) -> Result<axum::Json<Page<UserEntity>>, r2e_core::AppError> {
     let qb = QueryBuilder::new("users")
         .order_by("id", true)
         .limit(pageable.size)
@@ -175,7 +175,7 @@ struct SearchParams {
 async fn search(
     &self,
     Query(params): Query<SearchParams>,
-) -> Result<axum::Json<Vec<UserEntity>>, quarlus_core::AppError> {
+) -> Result<axum::Json<Vec<UserEntity>>, r2e_core::AppError> {
     let mut qb = QueryBuilder::new("users");
 
     if let Some(ref name) = params.name {

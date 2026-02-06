@@ -1,0 +1,16 @@
+[package]
+name = "r2e-rate-limit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["rate-limit", "throttle", "token-bucket"]
+categories = ["web-programming"]
+description = "Token-bucket rate limiting for R2E - per-user, per-IP, or global rate limits"
+
+[dependencies]
+dashmap = "6"
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+serde_json = "1"

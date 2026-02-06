@@ -2,9 +2,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use dashmap::DashMap;
-use quarlus::prelude::*;
-use quarlus::sse::SseBroadcaster;
-use quarlus::ws::WsRooms;
+use r2e::prelude::*;
+use r2e::sse::SseBroadcaster;
+use r2e::ws::WsRooms;
 
 use crate::models::{User, UserCreatedEvent};
 
@@ -74,7 +74,7 @@ impl NotificationService {
         }
     }
 
-    pub fn ws_room(&self, user_id: &str) -> quarlus::ws::WsBroadcaster {
+    pub fn ws_room(&self, user_id: &str) -> r2e::ws::WsBroadcaster {
         self.ws_rooms.room(user_id)
     }
 

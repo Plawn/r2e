@@ -1,0 +1,19 @@
+[package]
+name = "r2e-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["interceptors", "logging", "caching", "utilities"]
+categories = ["web-programming"]
+description = "Built-in interceptors for R2E - Logged, Timed, Cache, and CacheInvalidate"
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+r2e-cache = { path = "../r2e-cache", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["full"] }

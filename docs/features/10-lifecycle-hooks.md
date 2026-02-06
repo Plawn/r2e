@@ -165,14 +165,14 @@ cargo run -p example-app
 Au demarrage :
 
 ```
-INFO "Quarlus example-app startup hook executed"
-INFO addr="0.0.0.0:3000" "Quarlus server listening"
+INFO "R2E example-app startup hook executed"
+INFO addr="0.0.0.0:3000" "R2E server listening"
 ```
 
 A l'arret (Ctrl+C) :
 
 ```
 INFO "Shutdown signal received, starting graceful shutdown"
-INFO "Quarlus example-app shutdown hook executed"
-INFO "Quarlus server stopped"
+INFO "R2E example-app shutdown hook executed"
+INFO "R2E server stopped"
 ```

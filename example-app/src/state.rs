@@ -1,9 +1,9 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use quarlus::prelude::*;
-use quarlus::quarlus_rate_limit::RateLimitRegistry;
-use quarlus::quarlus_security::JwtClaimsValidator;
+use r2e::prelude::*;
+use r2e::r2e_rate_limit::RateLimitRegistry;
+use r2e::r2e_security::JwtClaimsValidator;
 use sqlx::{Database, Pool, Sqlite, Transaction};
 use tokio_util::sync::CancellationToken;
 
@@ -15,10 +15,10 @@ pub struct Services {
     pub claims_validator: Arc<JwtClaimsValidator>,
     pub pool: sqlx::SqlitePool,
     pub event_bus: EventBus,
-    pub config: QuarlusConfig,
+    pub config: R2eConfig,
     pub cancel: CancellationToken,
     pub rate_limiter: RateLimitRegistry,
-    pub sse_broadcaster: quarlus::sse::SseBroadcaster,
+    pub sse_broadcaster: r2e::sse::SseBroadcaster,
     pub notification_service: NotificationService,
 }
 

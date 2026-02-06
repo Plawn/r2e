@@ -1,14 +1,14 @@
-# Plan d'implementation Quarlus — Index des etapes
+# Plan d'implementation R2E — Index des etapes
 
 ## Vue d'ensemble
 
 | Etape | Fichier | Description |
 |-------|---------|-------------|
 | 0 | [00-workspace-setup.md](./00-workspace-setup.md) | Setup du workspace Cargo multi-crates |
-| 1 | [01-quarlus-core-fondations.md](./01-quarlus-core-fondations.md) | AppState, AppBuilder, error handling, trait Controller |
+| 1 | [01-r2e-core-fondations.md](./01-r2e-core-fondations.md) | AppState, AppBuilder, error handling, trait Controller |
 | 2 | [02-macros-route-attributes.md](./02-macros-route-attributes.md) | Macros `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` |
 | 3 | [03-macros-controller.md](./03-macros-controller.md) | Macro `#[controller]` — parsing + generation de code |
-| 4 | [04-quarlus-security.md](./04-quarlus-security.md) | JWT, JWKS cache, extracteur `AuthenticatedUser` |
+| 4 | [04-r2e-security.md](./04-r2e-security.md) | JWT, JWKS cache, extracteur `AuthenticatedUser` |
 | 5 | [05-router-assembly.md](./05-router-assembly.md) | Assemblage du router, layers Tower, serve helper |
 | 6 | [06-example-app.md](./06-example-app.md) | Application de demonstration complete |
 | 7 | [07-extensions-futures.md](./07-extensions-futures.md) | Extensions hors scope v0.1 |

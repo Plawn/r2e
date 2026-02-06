@@ -7,7 +7,7 @@ Completer le `AppBuilder` pour qu'il assemble automatiquement les routes des con
 ## Fichiers a modifier/creer
 
 ```
-quarlus-core/src/
+r2e-core/src/
   builder.rs          # Enrichir AppBuilder
   layers.rs           # Configuration des layers Tower
   lib.rs              # Re-export layers
@@ -98,7 +98,7 @@ Optionnel — si `with_security()` est appele, injecter le `JwtValidator` dans l
 Fournir un controller built-in optionnel :
 
 ```rust
-// Dans quarlus-core
+// Dans r2e-core
 pub async fn health_handler() -> &'static str {
     "OK"
 }

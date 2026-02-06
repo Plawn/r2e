@@ -20,7 +20,7 @@ Les evenements sont dispatches par type Rust. Un abonne a `UserCreatedEvent` ne 
 
 ```toml
 [dependencies]
-quarlus-events = { path = "../quarlus-events" }
+r2e-events = { path = "../r2e-events" }
 ```
 
 ### 2. Definir un type d'evenement
@@ -40,7 +40,7 @@ Le type doit etre `Send + Sync + 'static`. Pas besoin d'implementer de trait spe
 
 ```rust
 use std::sync::Arc;
-use quarlus_events::EventBus;
+use r2e_events::EventBus;
 
 let event_bus = EventBus::new();
 

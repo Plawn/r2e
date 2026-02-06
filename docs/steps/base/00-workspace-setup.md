@@ -7,15 +7,15 @@ Transformer le projet en **workspace Cargo** multi-crates avec la structure cibl
 ## Structure finale
 
 ```
-quarlus/
+r2e/
   Cargo.toml              # workspace root
-  quarlus-core/
+  r2e-core/
     Cargo.toml
     src/lib.rs
-  quarlus-macros/
+  r2e-macros/
     Cargo.toml
     src/lib.rs
-  quarlus-security/
+  r2e-security/
     Cargo.toml
     src/lib.rs
   example-app/
@@ -30,9 +30,9 @@ quarlus/
 ```toml
 [workspace]
 members = [
-    "quarlus-core",
-    "quarlus-macros",
-    "quarlus-security",
+    "r2e-core",
+    "r2e-macros",
+    "r2e-security",
     "example-app",
 ]
 resolver = "2"
@@ -40,11 +40,11 @@ resolver = "2"
 
 Supprimer le `src/main.rs` racine existant (le code applicatif ira dans `example-app`).
 
-### 2. Creer `quarlus-macros`
+### 2. Creer `r2e-macros`
 
 ```toml
 [package]
-name = "quarlus-macros"
+name = "r2e-macros"
 version = "0.1.0"
 edition = "2021"
 
@@ -59,11 +59,11 @@ proc-macro2 = "1"
 
 `src/lib.rs` : fichier vide avec `extern crate proc_macro;`
 
-### 3. Creer `quarlus-core`
+### 3. Creer `r2e-core`
 
 ```toml
 [package]
-name = "quarlus-core"
+name = "r2e-core"
 version = "0.1.0"
 edition = "2021"
 
@@ -74,14 +74,14 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-quarlus-macros = { path = "../quarlus-macros" }
+r2e-macros = { path = "../r2e-macros" }
 ```
 
-### 4. Creer `quarlus-security`
+### 4. Creer `r2e-security`
 
 ```toml
 [package]
-name = "quarlus-security"
+name = "r2e-security"
 version = "0.1.0"
 edition = "2021"
 
@@ -91,7 +91,7 @@ jsonwebtoken = "9"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["sync"] }
-quarlus-core = { path = "../quarlus-core" }
+r2e-core = { path = "../r2e-core" }
 ```
 
 ### 5. Creer `example-app`
@@ -103,9 +103,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-quarlus-core = { path = "../quarlus-core" }
-quarlus-macros = { path = "../quarlus-macros" }
-quarlus-security = { path = "../quarlus-security" }
+r2e-core = { path = "../r2e-core" }
+r2e-macros = { path = "../r2e-macros" }
+r2e-security = { path = "../r2e-security" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

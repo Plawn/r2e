@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use quarlus::config::{ConfigValue, QuarlusConfig};
-use quarlus::prelude::*;
-use quarlus::quarlus_rate_limit::RateLimit;
-use quarlus::quarlus_security::{AuthenticatedUser, JwtClaimsValidator};
-use quarlus_test::{TestApp, TestJwt};
+use r2e::config::{ConfigValue, R2eConfig};
+use r2e::prelude::*;
+use r2e::r2e_rate_limit::RateLimit;
+use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 mod common {
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use quarlus::quarlus_events::EventBus;
+    use r2e::r2e_events::EventBus;
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct User {
@@ -88,7 +88,7 @@ mod common {
 }
 
 use common::*;
-use quarlus::quarlus_events::EventBus;
+use r2e::r2e_events::EventBus;
 
 #[derive(Clone)]
 struct TestServices {
@@ -96,37 +96,37 @@ struct TestServices {
     jwt_validator: Arc<JwtClaimsValidator>,
     pool: sqlx::SqlitePool,
     event_bus: EventBus,
-    config: QuarlusConfig,
+    config: R2eConfig,
     #[allow(dead_code)]
     cancel: CancellationToken,
-    rate_limiter: quarlus::quarlus_rate_limit::RateLimitRegistry,
+    rate_limiter: r2e::r2e_rate_limit::RateLimitRegistry,
 }
 
-impl quarlus::http::extract::FromRef<TestServices> for Arc<JwtClaimsValidator> {
+impl r2e::http::extract::FromRef<TestServices> for Arc<JwtClaimsValidator> {
     fn from_ref(state: &TestServices) -> Self {
         state.jwt_validator.clone()
     }
 }
 
-impl quarlus::http::extract::FromRef<TestServices> for sqlx::SqlitePool {
+impl r2e::http::extract::FromRef<TestServices> for sqlx::SqlitePool {
     fn from_ref(state: &TestServices) -> Self {
         state.pool.clone()
     }
 }
 
-impl quarlus::http::extract::FromRef<TestServices> for QuarlusConfig {
+impl r2e::http::extract::FromRef<TestServices> for R2eConfig {
     fn from_ref(state: &TestServices) -> Self {
         state.config.clone()
     }
 }
 
-impl quarlus::http::extract::FromRef<TestServices> for EventBus {
+impl r2e::http::extract::FromRef<TestServices> for EventBus {
     fn from_ref(state: &TestServices) -> Self {
         state.event_bus.clone()
     }
 }
 
-impl quarlus::http::extract::FromRef<TestServices> for quarlus::quarlus_rate_limit::RateLimitRegistry {
+impl r2e::http::extract::FromRef<TestServices> for r2e::r2e_rate_limit::RateLimitRegistry {
     fn from_ref(state: &TestServices) -> Self {
         state.rate_limiter.clone()
     }
@@ -227,7 +227,7 @@ async fn setup() -> (TestApp, TestJwt) {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let event_bus = EventBus::new();
 
-    let mut config = QuarlusConfig::empty();
+    let mut config = R2eConfig::empty();
     config.set(
         "app.name",
         ConfigValue::String("Test App".into()),
@@ -248,12 +248,12 @@ async fn setup() -> (TestApp, TestJwt) {
         event_bus,
         config: config.clone(),
         cancel: CancellationToken::new(),
-        rate_limiter: quarlus::quarlus_rate_limit::RateLimitRegistry::default(),
+        rate_limiter: r2e::r2e_rate_limit::RateLimitRegistry::default(),
     };
 
     let openapi_config =
-        quarlus::quarlus_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
-    let openapi = quarlus::quarlus_openapi::openapi_routes::<TestServices>(
+        r2e::r2e_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
+    let openapi = r2e::r2e_openapi::openapi_routes::<TestServices>(
         openapi_config,
         vec![TestUserController::route_metadata()],
     );
@@ -483,14 +483,14 @@ async fn test_docs_ui_endpoint() {
 #[tokio::test]
 async fn test_dev_mode_status() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/__quarlus_dev/status").await.assert_ok();
+    let resp = app.get("/__r2e_dev/status").await.assert_ok();
     assert_eq!(resp.text(), "dev");
 }
 
 #[tokio::test]
 async fn test_dev_mode_ping() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/__quarlus_dev/ping").await.assert_ok();
+    let resp = app.get("/__r2e_dev/ping").await.assert_ok();
     let body: serde_json::Value = serde_json::from_str(&resp.text()).unwrap();
     assert!(body["boot_time"].is_number());
     assert_eq!(body["status"], "ok");

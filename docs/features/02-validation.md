@@ -12,7 +12,7 @@ Valider automatiquement les corps de requete JSON avec des regles declaratives, 
 
 ### Crate validator
 
-Quarlus utilise la crate `validator` (derive) pour declarer les regles de validation sur les structs.
+R2E utilise la crate `validator` (derive) pour declarer les regles de validation sur les structs.
 
 ## Utilisation
 
@@ -45,10 +45,10 @@ pub struct CreateUserRequest {
 
 ### 2. Utiliser dans un handler
 
-Remplacer `axum::Json<T>` par `quarlus_core::validation::Validated<T>` :
+Remplacer `axum::Json<T>` par `r2e_core::validation::Validated<T>` :
 
 ```rust
-use quarlus_core::prelude::*;
+use r2e_core::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]
@@ -73,7 +73,7 @@ impl UserController {
 
 ### 3. Reponse en cas d'erreur de validation
 
-Si la validation echoue, Quarlus retourne automatiquement :
+Si la validation echoue, R2E retourne automatiquement :
 
 ```http
 HTTP/1.1 400 Bad Request
@@ -130,11 +130,11 @@ impl<T: DeserializeOwned + Validate, S: Send + Sync> FromRequest<S> for Validate
 
 ```toml
 [dependencies]
-quarlus-core = { path = "../quarlus-core", features = ["validation"] }
+r2e-core = { path = "../r2e-core", features = ["validation"] }
 validator = { version = "0.18", features = ["derive"] }
 ```
 
-Le feature flag `validation` active le variant `AppError::Validation` et le module `quarlus_core::validation`.
+Le feature flag `validation` active le variant `AppError::Validation` et le module `r2e_core::validation`.
 
 ## Critere de validation
 

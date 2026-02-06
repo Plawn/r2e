@@ -1,7 +1,7 @@
 use crate::models::User;
 use crate::services::UserService;
 use crate::state::Services;
-use quarlus::prelude::*;
+use r2e::prelude::*;
 
 /// A mixed controller demonstrating param-level identity injection.
 ///
@@ -46,7 +46,7 @@ impl MixedController {
 
     /// Endpoint with a per-route Tower layer (2-second timeout).
     #[get("/slow")]
-    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(quarlus::http::StatusCode::REQUEST_TIMEOUT, std::time::Duration::from_secs(2)))]
+    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(r2e::http::StatusCode::REQUEST_TIMEOUT, std::time::Duration::from_secs(2)))]
     async fn slow_endpoint(&self) -> Json<&'static str> {
         Json("done")
     }

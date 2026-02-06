@@ -18,18 +18,18 @@ cargo run -p example-app
 cargo test --workspace
 
 # Build a specific crate
-cargo build -p quarlus-core
-cargo build -p quarlus-macros
-cargo build -p quarlus-security
-cargo build -p quarlus-events
-cargo build -p quarlus-scheduler
-cargo build -p quarlus-data
-cargo build -p quarlus-cache
-cargo build -p quarlus-rate-limit
-cargo build -p quarlus-openapi
-cargo build -p quarlus-utils
-cargo build -p quarlus-test
-cargo build -p quarlus-cli
+cargo build -p r2e-core
+cargo build -p r2e-macros
+cargo build -p r2e-security
+cargo build -p r2e-events
+cargo build -p r2e-scheduler
+cargo build -p r2e-data
+cargo build -p r2e-cache
+cargo build -p r2e-rate-limit
+cargo build -p r2e-openapi
+cargo build -p r2e-utils
+cargo build -p r2e-test
+cargo build -p r2e-cli
 
 # Expand macros for debugging (requires cargo-expand)
 cargo expand -p example-app
@@ -37,35 +37,35 @@ cargo expand -p example-app
 
 ## Architecture
 
-Quarlus is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declarative controllers with compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.
+R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declarative controllers with compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.
 
 ### Workspace Crates
 
 ```
-quarlus-macros      → Proc-macro crate (no runtime deps). #[derive(Controller)] + #[routes] generate Axum handlers.
-quarlus-core        → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct trait, AppError, Guard trait,
-                      Interceptor trait, QuarlusConfig, lifecycle hooks, Tower layers, dev-mode endpoints.
-quarlus-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
-quarlus-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
-quarlus-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
-quarlus-data        → Data access: Entity trait, QueryBuilder, Repository trait, SqlxRepository, Pageable/Page.
-quarlus-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore), global cache backend singleton.
-quarlus-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend trait, RateLimitRegistry, RateLimitGuard.
-quarlus-openapi     → OpenAPI 3.0.3 spec generation from route metadata, Swagger UI at /docs.
-quarlus-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-quarlus-test        → Test helpers: TestApp (HTTP client wrapper), TestJwt (JWT generation for tests).
-quarlus-cli         → CLI tool: quarlus new, quarlus add, quarlus dev, quarlus generate.
+r2e-macros      → Proc-macro crate (no runtime deps). #[derive(Controller)] + #[routes] generate Axum handlers.
+r2e-core        → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct trait, AppError, Guard trait,
+                      Interceptor trait, R2eConfig, lifecycle hooks, Tower layers, dev-mode endpoints.
+r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
+r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
+r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
+r2e-data        → Data access: Entity trait, QueryBuilder, Repository trait, SqlxRepository, Pageable/Page.
+r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore), global cache backend singleton.
+r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend trait, RateLimitRegistry, RateLimitGuard.
+r2e-openapi     → OpenAPI 3.0.3 spec generation from route metadata, Swagger UI at /docs.
+r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
+r2e-test        → Test helpers: TestApp (HTTP client wrapper), TestJwt (JWT generation for tests).
+r2e-cli         → CLI tool: r2e new, r2e add, r2e dev, r2e generate.
 example-app         → Demo binary exercising all features.
 ```
 
-Dependency flow: `quarlus-macros` ← `quarlus-core` ← `quarlus-security` / `quarlus-events` / `quarlus-scheduler` / `quarlus-data` / `quarlus-cache` / `quarlus-rate-limit` / `quarlus-openapi` / `quarlus-utils` / `quarlus-test` ← `example-app`
+Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
 
 ### Core Concepts
 
 **Three injection scopes, all resolved at compile time:**
 - `#[inject]` — App-scoped. Field is cloned from the Axum state (services, repos, pools). Type must be `Clone + Send + Sync`.
 - `#[inject(identity)]` — Request-scoped. Field is extracted via Axum's `FromRequestParts` (e.g., `AuthenticatedUser` from JWT). Type must implement `Identity`. Legacy `#[identity]` syntax is still supported.
-- `#[config("key")]` — App-scoped. Field is resolved from `QuarlusConfig` at request time. Field type must implement `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`).
+- `#[config("key")]` — App-scoped. Field is resolved from `R2eConfig` at request time. Field type must implement `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`).
 
 **Handler parameter-level identity injection:**
 - `#[inject(identity)]` can also be placed on handler parameters (not just struct fields). This enables mixed controllers where some endpoints are public and others require authentication, while still allowing `StatefulConstruct` generation for consumers and scheduled tasks.
@@ -115,13 +115,13 @@ impl MixedController {
 ```
 
 **Generated items (hidden):**
-- `mod __quarlus_meta_<Name>` — contains `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`
-- `struct __QuarlusExtract_<Name>` — `FromRequestParts` extractor that constructs the controller from state + request parts
+- `mod __r2e_meta_<Name>` — contains `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`
+- `struct __R2eExtract_<Name>` — `FromRequestParts` extractor that constructs the controller from state + request parts
 - `impl StatefulConstruct<State> for Name` — only when no `#[inject(identity)]` struct fields; used by consumers and scheduled tasks
-- Free-standing Axum handler functions (named `__quarlus_<Name>_<method>`)
+- Free-standing Axum handler functions (named `__r2e_<Name>_<method>`)
 - `impl Controller<State> for Name` — wires routes into `axum::Router<State>`
 
-### Macro Crate Internals (quarlus-macros)
+### Macro Crate Internals (r2e-macros)
 
 The proc-macro pipeline has two entry points:
 
@@ -134,15 +134,15 @@ The proc-macro pipeline has two entry points:
 - `attr_extract.rs` — attribute extraction functions (`extract_route_attr`, `extract_roles`, `extract_transactional`, `extract_intercept_fns`, etc.)
 - `route.rs` — `HttpMethod` enum and `RoutePath` parser
 
-**Inter-macro liaison:** The derive generates a hidden module `__quarlus_meta_<Name>` and an extractor struct `__QuarlusExtract_<Name>`. The `#[routes]` macro references these by naming convention.
+**Inter-macro liaison:** The derive generates a hidden module `__r2e_meta_<Name>` and an extractor struct `__R2eExtract_<Name>`. The `#[routes]` macro references these by naming convention.
 
-Handler generation pattern: each `#[get("/path")]` method becomes a standalone async function that takes `__QuarlusExtract_<Name>` (which implements `FromRequestParts`) and method parameters. The extractor constructs the controller from state + request parts. For guarded handlers, `State(state)` and `HeaderMap` are also extracted.
+Handler generation pattern: each `#[get("/path")]` method becomes a standalone async function that takes `__R2eExtract_<Name>` (which implements `FromRequestParts`) and method parameters. The extractor constructs the controller from state + request parts. For guarded handlers, `State(state)` and `HeaderMap` are also extracted.
 
 **No-op attribute macros:** `lib.rs` declares attributes like `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, etc. as no-op `#[proc_macro_attribute]` that return their input unchanged. These are parsed from the token stream by `#[routes]`. The no-op declarations exist for: (1) preventing "cannot find attribute" errors outside `#[routes]`, (2) `cargo doc` visibility, (3) IDE autocomplete support. The `#[inject]`, `#[identity]`, and `#[config]` attributes are derive helper attributes (consumed by `#[derive(Controller)]`). Note: `#[inject(identity)]` on handler parameters is parsed and stripped by `#[routes]` macro processing.
 
 ### Guards
 
-Handler-level guards run before controller construction and can short-circuit with an error response. The `Guard<S, I: Identity>` trait (`quarlus-core/src/guards.rs`) defines an async `check(&self, state, ctx) -> impl Future<Output = Result<(), Response>> + Send` method. Guards are generic over both the application state `S` and the identity type `I`.
+Handler-level guards run before controller construction and can short-circuit with an error response. The `Guard<S, I: Identity>` trait (`r2e-core/src/guards.rs`) defines an async `check(&self, state, ctx) -> impl Future<Output = Result<(), Response>> + Send` method. Guards are generic over both the application state `S` and the identity type `I`.
 
 `GuardContext<'a, I: Identity>` provides:
 - `method_name`, `controller_name` — handler identification
@@ -151,7 +151,7 @@ Handler-level guards run before controller construction and can short-circuit wi
 - `identity` — optional identity reference (`Option<&'a I>`)
 - Convenience accessors: `identity_sub()`, `identity_roles()`, `identity_email()`, `identity_claims()`
 
-The `Identity` trait (`quarlus-core::Identity`) decouples guards from the concrete `AuthenticatedUser` type:
+The `Identity` trait (`r2e-core::Identity`) decouples guards from the concrete `AuthenticatedUser` type:
 - `sub()` — unique subject identifier (required)
 - `roles()` — role list (required)
 - `email()` — email address (optional, default `None`)
@@ -163,7 +163,7 @@ The `Identity` trait (`quarlus-core::Identity`) decouples guards from the concre
 - `RolesGuard` — checks required roles, returns 403 if missing. Applied via `#[roles("admin")]`. Implements `Guard<S, I>` for any `I: Identity`.
 - `RateLimitGuard` / `PreAuthRateLimitGuard` — token-bucket rate limiting, returns 429. Use the `RateLimit` builder with `#[guard(...)]` or `#[pre_guard(...)]`:
   ```rust
-  use quarlus::quarlus_rate_limit::RateLimit;
+  use r2e::r2e_rate_limit::RateLimit;
 
   #[pre_guard(RateLimit::global(5, 60))]    // 5 req / 60 sec, shared bucket (pre-auth)
   #[pre_guard(RateLimit::per_ip(5, 60))]    // 5 req / 60 sec, per IP (pre-auth)
@@ -212,9 +212,9 @@ where
 
 ### Interceptors
 
-Cross-cutting concerns (logging, timing, caching) are implemented via a generic `Interceptor<R>` trait with an `around` pattern (`quarlus-core/src/interceptors.rs`). All calls are monomorphized (no `dyn`) for zero overhead.
+Cross-cutting concerns (logging, timing, caching) are implemented via a generic `Interceptor<R>` trait with an `around` pattern (`r2e-core/src/interceptors.rs`). All calls are monomorphized (no `dyn`) for zero overhead.
 
-**Built-in interceptors** (in `quarlus-utils`):
+**Built-in interceptors** (in `r2e-utils`):
 - `Logged` — logs entry/exit at a configurable `LogLevel`.
 - `Timed` — measures execution time, with an optional threshold (only logs if exceeded).
 - `Cache` — caches `Json<T>` responses via the global `CacheStore`. Supports TTL and named groups.
@@ -260,21 +260,21 @@ Inline codegen (no trait):
 
 **User-defined interceptors** implement `Interceptor<R>` and are applied via `#[intercept(TypeName)]`. The type must be constructable as a bare path expression (unit struct or constant).
 
-### Cache (quarlus-cache)
+### Cache (r2e-cache)
 
 `TtlCache<K, V>` — thread-safe TTL cache backed by `DashMap`. Supports get, insert, remove, clear, evict_expired.
 
 `CacheStore` trait — pluggable async cache backend. Default: `InMemoryStore` (DashMap-backed). Supports get, set, remove, clear, remove_by_prefix. Global singleton via `set_cache_backend()` / `cache_backend()`.
 
-The `Cache` interceptor (in `quarlus-utils`) uses the global `CacheStore` backend. `#[intercept(Cache::ttl(30).group("users"))]` stores in a named group; `#[intercept(CacheInvalidate::group("users"))]` clears by prefix.
+The `Cache` interceptor (in `r2e-utils`) uses the global `CacheStore` backend. `#[intercept(Cache::ttl(30).group("users"))]` stores in a named group; `#[intercept(CacheInvalidate::group("users"))]` clears by prefix.
 
-### Rate Limiting (quarlus-rate-limit)
+### Rate Limiting (r2e-rate-limit)
 
 `RateLimiter<K>` — generic token-bucket rate limiter keyed by arbitrary type. `RateLimitBackend` trait for pluggable backends (default: `InMemoryRateLimiter`). `RateLimitRegistry` — clonable handle stored in app state, used by the generated `RateLimitGuard`.
 
 Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"ip"` (per X-Forwarded-For).
 
-### Security (quarlus-security)
+### Security (r2e-security)
 
 - `AuthenticatedUser` implements `FromRequestParts` and `Identity` — extracts Bearer token, validates via `JwtValidator`, returns user with sub/email/roles/claims.
 - `JwtValidator` supports both static keys (testing) and JWKS endpoint (production) via `JwksCache`.
@@ -282,7 +282,7 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 - `#[roles("admin")]` attribute generates a guard that checks identity roles via the `Identity` trait and returns 403 if missing.
 - Role extraction is trait-based (`RoleExtractor`) to support multiple OIDC providers; default (`DefaultRoleExtractor`) checks top-level `roles` and Keycloak's `realm_access.roles`.
 
-### Events (quarlus-events)
+### Events (r2e-events)
 
 `EventBus` — in-process typed pub/sub. Events are dispatched by `TypeId`. Subscribers receive `Arc<E>`.
 
@@ -292,11 +292,11 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 **Declarative consumers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. The controller must not have `#[inject(identity)]` struct fields (requires `StatefulConstruct`). Consumers are registered automatically by `AppBuilder::register_controller`.
 
-### Scheduling (quarlus-scheduler)
+### Scheduling (r2e-scheduler)
 
-Scheduled tasks are auto-discovered via `register_controller()`, following the same pattern as event consumers. The scheduler runtime (`quarlus-scheduler`) provides the `Scheduler` plugin (unit struct) that installs `CancellationToken`-based lifecycle management.
+Scheduled tasks are auto-discovered via `register_controller()`, following the same pattern as event consumers. The scheduler runtime (`r2e-scheduler`) provides the `Scheduler` plugin (unit struct) that installs `CancellationToken`-based lifecycle management.
 
-**Schedule data types** (in `quarlus-core::scheduling`, zero new deps):
+**Schedule data types** (in `r2e-core::scheduling`, zero new deps):
 - `ScheduleConfig::Interval(duration)` — fixed interval.
 - `ScheduleConfig::IntervalWithDelay { interval, initial_delay }` — with initial delay.
 - `ScheduleConfig::Cron(expr)` — cron expression (via `cron` crate in the runtime).
@@ -323,7 +323,7 @@ The `Controller` trait's `scheduled_tasks()` method (auto-generated by `#[routes
 
 Controllers with `#[inject(identity)]` struct fields cannot be used for scheduling (no `StatefulConstruct` impl). Controllers using param-level `#[inject(identity)]` only retain `StatefulConstruct` and can be used for scheduling.
 
-### Data (quarlus-data)
+### Data (r2e-data)
 
 - `Entity` trait — maps a Rust struct to a SQL table (table name, column list).
 - `QueryBuilder` — fluent SQL query builder (`where_eq`, `where_like`, `order_by`, `limit`, `offset`).
@@ -333,7 +333,7 @@ Controllers with `#[inject(identity)]` struct fields cannot be used for scheduli
 - `Page<T>` — paginated response wrapper (content, total_elements, total_pages, page, size).
 - `DataError` — data-layer error type.
 
-### OpenAPI (quarlus-openapi)
+### OpenAPI (r2e-openapi)
 
 - `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page.
 - `AppBuilderOpenApiExt::with_openapi(config)` — registers OpenAPI routes.
@@ -341,7 +341,7 @@ Controllers with `#[inject(identity)]` struct fields cannot be used for scheduli
 - Route metadata is collected from `Controller::route_metadata()` during `register_controller`.
 - Always serves the spec at `/openapi.json`. When `docs_ui` is enabled, also serves an interactive API documentation UI at `/docs`.
 
-### StatefulConstruct (quarlus-core)
+### StatefulConstruct (r2e-core)
 
 `StatefulConstruct<S>` trait allows constructing a controller from state alone (no HTTP context). Auto-generated by `#[derive(Controller)]` when the struct has no `#[inject(identity)]` fields. Used by:
 - Consumer methods (`#[consumer]`) — event handlers that run outside HTTP requests
@@ -349,9 +349,9 @@ Controllers with `#[inject(identity)]` struct fields cannot be used for scheduli
 
 Controllers with `#[inject(identity)]` struct fields do NOT get this impl. Attempting to use them in consumer/scheduled context produces a compile error with a diagnostic message via `#[diagnostic::on_unimplemented]`. Controllers using param-level `#[inject(identity)]` only retain `StatefulConstruct` — this is the key advantage of the mixed controller pattern.
 
-### AppBuilder (quarlus-core)
+### AppBuilder (r2e-core)
 
-Fluent API for assembling a Quarlus application:
+Fluent API for assembling a R2E application:
 
 ```rust
 AppBuilder::new()
@@ -363,7 +363,7 @@ AppBuilder::new()
     .with(Cors::permissive())              // or Cors::new(custom_layer)
     .with(Tracing)
     .with(ErrorHandling)                   // catch panics → JSON 500
-    .with(DevReload)                       // /__quarlus_dev/* endpoints
+    .with(DevReload)                       // /__r2e_dev/* endpoints
     .with(OpenApiPlugin::new(config))      // /openapi.json (+ /docs if docs_ui enabled)
     .on_start(|state| async move { Ok(()) })
     .on_stop(|| async { })
@@ -376,23 +376,23 @@ AppBuilder::new()
 
 `build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks.
 
-### Testing (quarlus-test)
+### Testing (r2e-test)
 
 - `TestApp` — wraps an `axum::Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch` with builder pattern for headers/body.
 - `TestResponse` — response wrapper with status, headers, and body helpers.
 - `TestJwt` — generates valid JWT tokens for test scenarios with configurable sub/email/roles.
 
-### Configuration (quarlus-core)
+### Configuration (r2e-core)
 
-`QuarlusConfig` — key-value configuration store loaded from YAML files + environment variable overlay.
-- `QuarlusConfig::load("dev")` — load `application.yaml`, then `application-dev.yaml`, then overlay env vars. Profile overridable via `QUARLUS_PROFILE` env var.
-- `QuarlusConfig::empty()` — empty config for testing.
+`R2eConfig` — key-value configuration store loaded from YAML files + environment variable overlay.
+- `R2eConfig::load("dev")` — load `application.yaml`, then `application-dev.yaml`, then overlay env vars. Profile overridable via `R2E_PROFILE` env var.
+- `R2eConfig::empty()` — empty config for testing.
 - `config.set("key", ConfigValue::String("value".into()))` — manual key-value setup.
 - `config.get::<T>("key")` — retrieve a typed value (`T: FromConfigValue`).
 - `config.get_or("key", default)` — retrieve with fallback.
 - `#[config("app.key")]` field attribute on controllers — injected at request time from the config stored in state.
 
-### Managed Resources (quarlus-core)
+### Managed Resources (r2e-core)
 
 The `#[managed]` attribute enables automatic lifecycle management for resources like database transactions, connections, scoped caches, or audit contexts. Resources are acquired before handler execution and released after, with success/failure status.
 
@@ -466,13 +466,13 @@ where
 
 **Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code as it's more flexible and explicit.
 
-### Error Handling (quarlus-core)
+### Error Handling (r2e-core)
 
-Quarlus provides `AppError` as a default error type, but applications can define custom error types.
+R2E provides `AppError` as a default error type, but applications can define custom error types.
 
 **Using the built-in `AppError`:**
 ```rust
-use quarlus_core::AppError;
+use r2e_core::AppError;
 
 #[get("/{id}")]
 async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
@@ -520,13 +520,13 @@ impl From<sqlx::Error> for MyAppError {
 
 **Error wrappers for `ManagedResource`:**
 
-The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. Quarlus provides two wrappers:
+The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. R2E provides two wrappers:
 
 - `ManagedError` — wraps the built-in `AppError`
 - `ManagedErr<E>` — generic wrapper for any error type implementing `IntoResponse`
 
 ```rust
-use quarlus_core::{ManagedResource, ManagedErr};
+use r2e_core::{ManagedResource, ManagedErr};
 
 impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
     type Error = ManagedErr<MyAppError>;  // Use your custom error
@@ -545,13 +545,13 @@ impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
 Rust's orphan rules prevent implementing foreign traits (`Into`) for foreign types (`Response`). `ManagedErr<E>` is a local newtype that bridges the gap:
 
 ```
-MyAppError (your type)     →  ManagedErr<MyAppError> (quarlus type)  →  Response (axum type)
+MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response (axum type)
          impl IntoResponse              impl Into<Response>
 ```
 
 ### Feature Flags
 
-- `quarlus-core` has an optional `validation` feature that enables the `Validated<T>` extractor.
+- `r2e-core` has an optional `validation` feature that enables the `Validated<T>` extractor.
 - `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field. Consider using `#[managed]` instead for more flexibility.
 
 ## Language & Documentation

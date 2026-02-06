@@ -42,7 +42,7 @@ Enveloppe l'execution de la methode dans une transaction SQL. Commit automatique
 
 ### Prerequis
 
-- Integration SQLx dans `quarlus-core`
+- Integration SQLx dans `r2e-core`
 - Pool de connexion dans l'AppState
 - Trait `Transactional` pour les services
 

@@ -89,7 +89,7 @@ pub struct Services {
 ### Health controller (`controllers/health_controller.rs`)
 
 ```rust
-use quarlus_macros::{controller, get};
+use r2e_macros::{controller, get};
 
 pub struct HealthController;
 
@@ -105,8 +105,8 @@ impl HealthController {
 ### User controller (`controllers/user_controller.rs`)
 
 ```rust
-use quarlus_macros::{controller, inject, identity, get, post};
-use quarlus_security::AuthenticatedUser;
+use r2e_macros::{controller, inject, identity, get, post};
+use r2e_security::AuthenticatedUser;
 use crate::services::UserService;
 use crate::models::User;
 use axum::Json;
@@ -129,10 +129,10 @@ impl UserController {
     }
 
     #[get("/users/:id")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, quarlus_core::AppError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, r2e_core::AppError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
-            None => Err(quarlus_core::AppError::NotFound("User not found".into())),
+            None => Err(r2e_core::AppError::NotFound("User not found".into())),
         }
     }
 
@@ -158,8 +158,8 @@ pub struct CreateUserRequest {
 ## 5. Point d'entree (`main.rs`)
 
 ```rust
-use quarlus_core::AppBuilder;
-use quarlus_security::SecurityConfig;
+use r2e_core::AppBuilder;
+use r2e_security::SecurityConfig;
 
 mod models;
 mod services;

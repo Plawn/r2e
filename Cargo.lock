@@ -657,9 +657,9 @@ dependencies = [
  "futures-core",
  "http 1.4.0",
  "jsonwebtoken",
- "quarlus",
- "quarlus-data",
- "quarlus-test",
+ "r2e",
+ "r2e-data",
+ "r2e-test",
  "schemars",
  "serde",
  "serde_json",
@@ -2015,25 +2015,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
-name = "quarlus"
-version = "0.1.0"
+name = "quote"
+version = "1.0.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
 dependencies = [
- "quarlus-cache",
- "quarlus-core",
- "quarlus-data",
- "quarlus-events",
- "quarlus-macros",
- "quarlus-openapi",
- "quarlus-openfga",
- "quarlus-prometheus",
- "quarlus-rate-limit",
- "quarlus-scheduler",
- "quarlus-security",
- "quarlus-utils",
+ "proc-macro2",
 ]
 
 [[package]]
-name = "quarlus-cache"
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "r2e"
+version = "0.1.0"
+dependencies = [
+ "r2e-cache",
+ "r2e-core",
+ "r2e-data",
+ "r2e-events",
+ "r2e-macros",
+ "r2e-openapi",
+ "r2e-openfga",
+ "r2e-prometheus",
+ "r2e-rate-limit",
+ "r2e-scheduler",
+ "r2e-security",
+ "r2e-utils",
+]
+
+[[package]]
+name = "r2e-cache"
 version = "0.1.0"
 dependencies = [
  "dashmap",
@@ -2041,7 +2056,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-cli"
+name = "r2e-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -2050,13 +2065,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-core"
+name = "r2e-core"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "dashmap",
  "futures-core",
- "quarlus-macros",
+ "r2e-macros",
  "schemars",
  "serde",
  "serde_json",
@@ -2072,25 +2087,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-data"
+name = "r2e-data"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "quarlus-core",
+ "r2e-core",
  "serde",
  "serde_json",
  "sqlx",
 ]
 
 [[package]]
-name = "quarlus-events"
+name = "r2e-events"
 version = "0.1.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
-name = "quarlus-macros"
+name = "r2e-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro-crate",
@@ -2100,21 +2115,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-openapi"
+name = "r2e-openapi"
 version = "0.1.0"
 dependencies = [
- "quarlus-core",
+ "r2e-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "quarlus-openfga"
+name = "r2e-openfga"
 version = "0.1.0"
 dependencies = [
  "dashmap",
  "openfga-rs",
- "quarlus-core",
+ "r2e-core",
  "serde",
  "serde_json",
  "tokio",
@@ -2124,45 +2139,45 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-prometheus"
+name = "r2e-prometheus"
 version = "0.1.0"
 dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "pin-project-lite",
  "prometheus",
- "quarlus-core",
+ "r2e-core",
  "tower 0.5.3",
 ]
 
 [[package]]
-name = "quarlus-rate-limit"
+name = "r2e-rate-limit"
 version = "0.1.0"
 dependencies = [
  "dashmap",
- "quarlus-core",
+ "r2e-core",
  "serde_json",
 ]
 
 [[package]]
-name = "quarlus-scheduler"
+name = "r2e-scheduler"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "chrono",
  "cron",
- "quarlus-core",
+ "r2e-core",
  "tokio",
  "tokio-util",
  "tracing",
 ]
 
 [[package]]
-name = "quarlus-security"
+name = "r2e-security"
 version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
- "quarlus-core",
+ "r2e-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -2171,15 +2186,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-test"
+name = "r2e-test"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "http 1.4.0",
  "http-body-util",
  "jsonwebtoken",
- "quarlus-core",
- "quarlus-security",
+ "r2e-core",
+ "r2e-security",
  "serde",
  "serde_json",
  "tokio",
@@ -2187,31 +2202,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarlus-utils"
+name = "r2e-utils"
 version = "0.1.0"
 dependencies = [
- "quarlus-cache",
- "quarlus-core",
+ "r2e-cache",
+ "r2e-core",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
 ]
-
-[[package]]
-name = "quote"
-version = "1.0.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
-dependencies = [
- "proc-macro2",
-]
-
-[[package]]
-name = "r-efi"
-version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"

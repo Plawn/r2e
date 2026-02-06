@@ -1,20 +1,20 @@
 [workspace]
 members = [
-    "quarlus-core",
-    "quarlus-macros",
-    "quarlus-cache",
-    "quarlus-rate-limit",
-    "quarlus-security",
-    "quarlus-data",
-    "quarlus-openapi",
-    "quarlus-events",
-    "quarlus-scheduler",
-    "quarlus-prometheus",
-    "quarlus-openfga",
-    "quarlus-cli",
-    "quarlus-test",
-    "quarlus-utils",
-    "quarlus",
+    "r2e-core",
+    "r2e-macros",
+    "r2e-cache",
+    "r2e-rate-limit",
+    "r2e-security",
+    "r2e-data",
+    "r2e-openapi",
+    "r2e-events",
+    "r2e-scheduler",
+    "r2e-prometheus",
+    "r2e-openfga",
+    "r2e-cli",
+    "r2e-test",
+    "r2e-utils",
+    "r2e",
     "example-app",
 ]
 resolver = "2"
@@ -23,8 +23,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/plawn/quarlus"
-homepage = "https://github.com/plawn/quarlus"
+repository = "https://github.com/plawn/r2e"
+homepage = "https://github.com/plawn/r2e"
 authors = ["Plawn"]
 keywords = ["web", "framework", "axum", "dependency-injection"]
 categories = ["web-programming::http-server", "asynchronous"]

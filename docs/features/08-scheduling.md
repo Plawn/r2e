@@ -31,7 +31,7 @@ Token de `tokio-util` permettant d'arreter proprement les taches planifiees (typ
 
 ```toml
 [dependencies]
-quarlus-scheduler = { path = "../quarlus-scheduler" }
+r2e-scheduler = { path = "../r2e-scheduler" }
 tokio-util = { version = "0.7", features = ["rt"] }
 ```
 
@@ -39,7 +39,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 ```rust
 use std::time::Duration;
-use quarlus_scheduler::{Scheduler, ScheduledTask, Schedule};
+use r2e_scheduler::{Scheduler, ScheduledTask, Schedule};
 use tokio_util::sync::CancellationToken;
 
 let cancel = CancellationToken::new();

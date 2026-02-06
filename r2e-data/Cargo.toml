@@ -1,0 +1,24 @@
+[package]
+name = "r2e-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["database", "sql", "repository", "orm"]
+categories = ["database"]
+description = "Data access layer for R2E - Entity trait, QueryBuilder, Repository pattern with SQLx"
+
+[features]
+default = []
+sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+sqlx = { version = "0.8", features = ["runtime-tokio"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

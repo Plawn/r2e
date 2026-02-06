@@ -24,14 +24,14 @@ Fonction qui prend un `OpenApiConfig` et les metadonnees de tous les controllers
 
 ```toml
 [dependencies]
-quarlus-openapi = { path = "../quarlus-openapi" }
+r2e-openapi = { path = "../r2e-openapi" }
 ```
 
 ### 2. Configurer et enregistrer
 
 ```rust
-use quarlus_core::Controller;
-use quarlus_openapi::{openapi_routes, OpenApiConfig};
+use r2e_core::Controller;
+use r2e_openapi::{openapi_routes, OpenApiConfig};
 
 let openapi_config = OpenApiConfig::new("Mon API", "0.1.0")
     .with_description("Description de mon API")

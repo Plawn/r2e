@@ -1,0 +1,23 @@
+[package]
+name = "r2e-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["testing", "http-client", "jwt"]
+categories = ["development-tools::testing"]
+description = "Test utilities for R2E - TestApp HTTP client and TestJwt token generation"
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+r2e-security = { path = "../r2e-security", version = "0.1.0" }
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+jsonwebtoken = "9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

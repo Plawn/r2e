@@ -1,6 +1,6 @@
 use crate::models::UserEntity;
 use crate::state::Services;
-use quarlus::prelude::*;
+use r2e::prelude::*;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

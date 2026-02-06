@@ -39,10 +39,10 @@ Layer Tower qui capture les panics dans les handlers et les convertit en reponse
 async fn get_by_id(
     &self,
     Path(id): Path<u64>,
-) -> Result<axum::Json<User>, quarlus_core::AppError> {
+) -> Result<axum::Json<User>, r2e_core::AppError> {
     match self.user_service.get_by_id(id).await {
         Some(user) => Ok(axum::Json(user)),
-        None => Err(quarlus_core::AppError::NotFound("User not found".into())),
+        None => Err(r2e_core::AppError::NotFound("User not found".into())),
     }
 }
 ```
@@ -62,8 +62,8 @@ Le variant `Custom` permet de retourner n'importe quel code HTTP avec un body JS
 
 ```rust
 #[get("/error/custom")]
-async fn custom_error(&self) -> Result<axum::Json<()>, quarlus_core::AppError> {
-    Err(quarlus_core::AppError::Custom {
+async fn custom_error(&self) -> Result<axum::Json<()>, r2e_core::AppError> {
+    Err(r2e_core::AppError::Custom {
         status: axum::http::StatusCode::from_u16(418).unwrap(),
         body: serde_json::json!({
             "error": "I'm a teapot",
@@ -99,7 +99,7 @@ impl From<sqlx::Error> for AppError { ... }
 Pour ajouter des conversions supplementaires dans votre code applicatif :
 
 ```rust
-quarlus_core::map_error! {
+r2e_core::map_error! {
     serde_json::Error => Internal,
     reqwest::Error => Internal,
 }

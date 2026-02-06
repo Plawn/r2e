@@ -25,7 +25,7 @@ pub struct UserEntity {
     pub email: String,
 }
 
-impl quarlus_data::Entity for UserEntity {
+impl r2e_data::Entity for UserEntity {
     type Id = i64;
     fn table_name() -> &'static str {
         "users"

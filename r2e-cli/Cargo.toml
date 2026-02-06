@@ -1,0 +1,20 @@
+[package]
+name = "r2e-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["cli", "scaffolding", "code-generation"]
+categories = ["command-line-utilities", "development-tools"]
+description = "CLI tool for R2E - project scaffolding, code generation, and development server"
+
+[[bin]]
+name = "r2e"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+toml_edit = "0.22"
+colored = "3"
