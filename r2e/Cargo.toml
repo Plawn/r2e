@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "scheduler", "cache", "rate-limit", "openapi", "prometheus", "openfga", "ws"]
+full = ["security", "events", "utils", "data", "scheduler", "cache", "rate-limit", "openapi", "prometheus", "openfga", "ws", "multipart"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -25,6 +25,7 @@ prometheus = ["dep:r2e-prometheus"]
 openfga = ["dep:r2e-openfga"]
 validation = ["r2e-core/validation"]
 ws = ["r2e-core/ws"]
+multipart = ["r2e-core/multipart"]
 
 [dependencies]
 r2e-core = { path = "../r2e-core", version = "0.1.0" }

@@ -23,6 +23,8 @@ pub mod type_list;
 pub mod types;
 #[cfg(feature = "validation")]
 pub mod validation;
+#[cfg(feature = "multipart")]
+pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
 

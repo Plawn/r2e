@@ -3,6 +3,7 @@ use proc_macro::TokenStream;
 
 pub(crate) mod crate_path;
 pub(crate) mod extract;
+pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
@@ -555,6 +556,50 @@ pub fn ws(_args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn managed(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
+}
+
+// ---------------------------------------------------------------------------
+// Multipart
+// ---------------------------------------------------------------------------
+
+/// Derive macro for typed multipart form extraction.
+///
+/// Generates a `FromMultipart` impl that extracts fields from a
+/// `multipart/form-data` request body.
+///
+/// # Supported field types
+///
+/// | Rust type | Extraction |
+/// |-----------|-----------|
+/// | `String` | Required text field |
+/// | `UploadedFile` | Required file upload |
+/// | `Vec<UploadedFile>` | All files for the field name |
+/// | `Bytes` | Raw bytes from either text or file field |
+/// | `Option<T>` | Optional version of any above type |
+/// | Other (`i32`, `bool`, ...) | Text field parsed via `FromStr` |
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e::multipart::{FromMultipart, UploadedFile, TypedMultipart};
+///
+/// #[derive(FromMultipart)]
+/// pub struct ProfileUpload {
+///     pub name: String,
+///     pub bio: Option<String>,
+///     pub age: i32,
+///     pub avatar: UploadedFile,
+///     pub attachments: Vec<UploadedFile>,
+/// }
+///
+/// #[post("/profile")]
+/// async fn upload(&self, TypedMultipart(form): TypedMultipart<ProfileUpload>) -> Json<String> {
+///     Json(format!("Hello {}, got {} bytes", form.name, form.avatar.len()))
+/// }
+/// ```
+#[proc_macro_derive(FromMultipart)]
+pub fn derive_from_multipart(input: TokenStream) -> TokenStream {
+    from_multipart::expand(input)
 }
 
 // ---------------------------------------------------------------------------

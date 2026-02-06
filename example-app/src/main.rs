@@ -25,6 +25,7 @@ use controllers::scheduled_controller::ScheduledJobs;
 use controllers::sse_controller::SseController;
 use controllers::user_controller::UserController;
 use controllers::notification_controller::NotificationController;
+use controllers::upload_controller::UploadController;
 use controllers::ws_controller::WsEchoController;
 use services::{NotificationService, UserService};
 use state::Services;
@@ -164,6 +165,7 @@ async fn main() {
         .register_controller::<SseController>()
         .register_controller::<WsEchoController>()
         .register_controller::<NotificationController>()
+        .register_controller::<UploadController>()
         .with(NormalizePath) // Must be last to normalize paths before routing
         .serve("0.0.0.0:3001")
         .await

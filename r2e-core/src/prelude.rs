@@ -72,3 +72,9 @@ pub use crate::http::response::{IntoResponse, Response};
 
 #[cfg(feature = "validation")]
 pub use crate::validation::Validated;
+
+#[cfg(feature = "multipart")]
+pub use crate::multipart::{FromMultipart, TypedMultipart, UploadedFile};
+
+#[cfg(feature = "multipart")]
+pub use r2e_macros::FromMultipart;

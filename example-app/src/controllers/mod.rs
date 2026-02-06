@@ -7,5 +7,6 @@ pub mod mixed_controller;
 pub mod notification_controller;
 pub mod scheduled_controller;
 pub mod sse_controller;
+pub mod upload_controller;
 pub mod user_controller;
 pub mod ws_controller;
