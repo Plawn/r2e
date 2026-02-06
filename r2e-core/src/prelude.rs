@@ -67,8 +67,8 @@ pub use crate::types::{ApiResult, JsonResult, StatusResult};
 // ── HTTP re-exports ────────────────────────────────────────────────────────
 
 pub use crate::http::{Json, Router, StatusCode, HeaderMap};
-pub use crate::http::extract::{Path, Query, FromRef, State};
-pub use crate::http::response::{IntoResponse, Response};
+pub use crate::http::extract::{Path, Query, FromRef, State, Form};
+pub use crate::http::response::{IntoResponse, Redirect, Response};
 
 #[cfg(feature = "validation")]
 pub use crate::validation::Validated;

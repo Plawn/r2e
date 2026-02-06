@@ -706,9 +706,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         info!(%addr, "R2E server listening");
-        crate::http::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        crate::http::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
         // Run plugin shutdown hooks (e.g., cancel scheduler)
         for hook in plugin_shutdown_hooks {
