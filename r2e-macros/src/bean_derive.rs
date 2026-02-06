@@ -15,6 +15,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
+    let name_str = name.to_string();
 
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
@@ -35,25 +36,55 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    let krate = r2e_core_path();
     let mut dep_type_ids = Vec::new();
     let mut field_inits = Vec::new();
+    let mut has_config = false;
 
     for field in fields {
         let field_name = field.ident.as_ref().unwrap();
         let field_type = &field.ty;
 
         let is_inject = field.attrs.iter().any(|a| a.path().is_ident("inject"));
+        let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
 
         if is_inject {
             dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
             field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
+        } else if let Some(attr) = config_attr {
+            let key: syn::LitStr = attr.parse_args()?;
+            let key_str = key.value();
+            let env_hint = key_str.replace('.', "_").to_uppercase();
+            field_inits.push(quote! {
+                #field_name: __r2e_config.get::<#field_type>(#key_str).unwrap_or_else(|_| {
+                    panic!(
+                        "Configuration error in bean `{}`: key '{}' — Config key not found. \
+                         Add it to application.yaml or set env var `{}`.",
+                        #name_str, #key_str, #env_hint
+                    )
+                })
+            });
+            has_config = true;
         } else {
-            // Fields without #[inject] use Default::default()
+            // Fields without #[inject] or #[config] use Default::default()
             field_inits.push(quote! { #field_name: Default::default() });
         }
     }
 
-    let krate = r2e_core_path();
+    // If any #[config] fields, add R2eConfig to the dependency list once
+    if has_config {
+        dep_type_ids.push(
+            quote! { (std::any::TypeId::of::<#krate::config::R2eConfig>(), std::any::type_name::<#krate::config::R2eConfig>()) },
+        );
+    }
+
+    // Extract R2eConfig once if any #[config] fields are present
+    let config_prelude = if has_config {
+        quote! { let __r2e_config: #krate::config::R2eConfig = ctx.get::<#krate::config::R2eConfig>(); }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         impl #krate::beans::Bean for #name {
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -61,6 +92,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
 
             fn build(ctx: &#krate::beans::BeanContext) -> Self {
+                #config_prelude
                 Self {
                     #(#field_inits,)*
                 }

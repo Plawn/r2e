@@ -7,6 +7,7 @@ pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
+pub(crate) mod producer_attr;
 pub(crate) mod derive_codegen;
 pub(crate) mod derive_controller;
 pub(crate) mod derive_parsing;
@@ -631,6 +632,37 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
     bean_attr::expand(input)
 }
 
+/// Attribute macro on a free function — marks it as a producer and generates
+/// a [`Producer`](r2e_core::beans::Producer) trait impl.
+///
+/// The macro generates a PascalCase struct from the function name
+/// (e.g., `create_pool` → `CreatePool`) and implements the `Producer` trait
+/// on it, with the function's return type as `Producer::Output`.
+///
+/// Supports both sync and async functions. Parameters are resolved from the
+/// [`BeanContext`](r2e_core::beans::BeanContext) unless annotated with
+/// `#[config("key")]`, in which case they are resolved from `R2eConfig`.
+///
+/// # Example
+///
+/// ```ignore
+/// #[producer]
+/// async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
+///     SqlitePool::connect(&url).await.unwrap()
+/// }
+///
+/// // Use with the builder:
+/// AppBuilder::new()
+///     .provide(config)
+///     .with_producer::<CreatePool>()   // registers SqlitePool
+///     .build_state::<Services, _>()
+///     .await
+/// ```
+#[proc_macro_attribute]
+pub fn producer(_args: TokenStream, input: TokenStream) -> TokenStream {
+    producer_attr::expand(input)
+}
+
 /// Derive macro for simple beans whose `#[inject]` fields are resolved
 /// from the [`BeanContext`](r2e_core::beans::BeanContext).
 ///
@@ -646,7 +678,7 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     #[inject] event_bus: EventBus,
 /// }
 /// ```
-#[proc_macro_derive(Bean, attributes(inject))]
+#[proc_macro_derive(Bean, attributes(inject, config))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
 }

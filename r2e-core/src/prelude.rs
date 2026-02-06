@@ -44,6 +44,7 @@ pub use r2e_macros::{consumer, scheduled};
 
 // Bean / DI macros
 pub use r2e_macros::bean;
+pub use r2e_macros::producer;
 pub use r2e_macros::Bean;
 pub use r2e_macros::BeanState;
 

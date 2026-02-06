@@ -1,6 +1,8 @@
 use std::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 
 // ── Traits ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +22,46 @@ pub trait Bean: Clone + Send + Sync + 'static {
 
     /// Construct the bean from a fully resolved context.
     fn build(ctx: &BeanContext) -> Self;
+}
+
+/// Trait for beans that require async initialization (e.g. DB pools, HTTP clients).
+///
+/// Use `#[bean]` on an `impl` block with an `async fn new(...)` constructor,
+/// or implement this trait manually. Register with `.with_async_bean::<T>()`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as an AsyncBean",
+    label = "this type is not an async bean",
+    note = "add `#[bean]` to your impl block with an `async fn` constructor, or implement `AsyncBean` manually"
+)]
+pub trait AsyncBean: Clone + Send + Sync + 'static {
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to construct this bean.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Construct the bean asynchronously from a fully resolved context.
+    fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
+}
+
+/// Trait for producer functions that create types you don't own
+/// (e.g. `SqlitePool`, third-party clients).
+///
+/// Use the `#[producer]` attribute macro on a free function to generate
+/// this implementation automatically. Register with `.with_producer::<P>()`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as a Producer",
+    label = "this type is not a producer",
+    note = "add `#[producer]` to a free function that returns the desired type"
+)]
+pub trait Producer: Send + 'static {
+    /// The type this producer creates.
+    type Output: Clone + Send + Sync + 'static;
+
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to produce the output.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Produce the output from a fully resolved context.
+    fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
 }
 
 /// Trait for state structs that can be assembled from a [`BeanContext`].
@@ -83,7 +125,15 @@ impl BeanContext {
 
 // ── BeanRegistry ────────────────────────────────────────────────────────────
 
-type Factory = Box<dyn FnOnce(&BeanContext) -> Box<dyn Any + Send + Sync> + Send>;
+/// Async factory: takes BeanContext by value (to avoid lifetime issues with
+/// async captures), returns the context back along with the constructed bean.
+type Factory = Box<
+    dyn FnOnce(
+            BeanContext,
+        ) -> Pin<
+            Box<dyn Future<Output = (BeanContext, Box<dyn Any + Send + Sync>)> + Send>,
+        > + Send,
+>;
 
 /// Builder that collects bean registrations and provided instances,
 /// resolves the dependency graph, and produces a [`BeanContext`].
@@ -155,7 +205,7 @@ impl BeanRegistry {
         self
     }
 
-    /// Register a bean type for automatic construction.
+    /// Register a (sync) bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans or provided
     /// instances during [`resolve`](Self::resolve).
@@ -164,7 +214,49 @@ impl BeanRegistry {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
             dependencies: T::dependencies(),
-            factory: Box::new(|ctx| Box::new(T::build(ctx))),
+            factory: Box::new(|ctx| {
+                Box::pin(async move {
+                    let bean = T::build(&ctx);
+                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                })
+            }),
+        });
+        self
+    }
+
+    /// Register an async bean type for automatic construction.
+    ///
+    /// The bean's constructor is awaited during resolution.
+    pub fn register_async<T: AsyncBean>(&mut self) -> &mut Self {
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<T>(),
+            type_name: type_name::<T>(),
+            dependencies: T::dependencies(),
+            factory: Box::new(|ctx| {
+                Box::pin(async move {
+                    let bean = T::build(&ctx).await;
+                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                })
+            }),
+        });
+        self
+    }
+
+    /// Register a producer for automatic construction of its output type.
+    ///
+    /// The producer is awaited during resolution. The resulting bean is
+    /// registered under the producer's `Output` type.
+    pub fn register_producer<P: Producer>(&mut self) -> &mut Self {
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<P::Output>(),
+            type_name: type_name::<P::Output>(),
+            dependencies: P::dependencies(),
+            factory: Box::new(|ctx| {
+                Box::pin(async move {
+                    let output = P::produce(&ctx).await;
+                    (ctx, Box::new(output) as Box<dyn Any + Send + Sync>)
+                })
+            }),
         });
         self
     }
@@ -174,7 +266,7 @@ impl BeanRegistry {
     /// Uses Kahn's algorithm for topological sorting. Returns a
     /// [`BeanContext`] with all instances, or a [`BeanError`] if the graph
     /// is invalid (cycles, missing deps, or duplicates).
-    pub fn resolve(self) -> Result<BeanContext, BeanError> {
+    pub async fn resolve(self) -> Result<BeanContext, BeanError> {
         let mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
 
         // Move provided instances into the resolved set.
@@ -197,8 +289,8 @@ impl BeanRegistry {
         // Topological sort
         let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
 
-        // Construct beans in order
-        entries = Self::construct_beans_in_order(self.beans, sorted_order, entries);
+        // Construct beans in order (async)
+        entries = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
 
         Ok(BeanContext { entries })
     }
@@ -308,8 +400,8 @@ impl BeanRegistry {
         Ok(sorted_order)
     }
 
-    /// Construct beans in topological order.
-    fn construct_beans_in_order(
+    /// Construct beans in topological order (async).
+    async fn construct_beans_in_order(
         beans: Vec<BeanRegistration>,
         sorted_order: Vec<usize>,
         mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
@@ -322,11 +414,11 @@ impl BeanRegistry {
 
         for idx in sorted_order {
             let (type_id, factory) = bean_data[idx].take().unwrap();
-            // Temporarily move entries into a BeanContext so the factory can
-            // call ctx.get::<T>(). After the call, move entries back.
+            // Move entries into a BeanContext so the factory can call ctx.get::<T>().
+            // The factory returns entries back along with the constructed bean.
             let ctx = BeanContext { entries };
-            let bean_value = factory(&ctx);
-            entries = ctx.entries;
+            let (returned_ctx, bean_value) = factory(ctx).await;
+            entries = returned_ctx.entries;
             entries.insert(type_id, bean_value);
         }
 
@@ -386,24 +478,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_simple_graph() {
+    #[tokio::test]
+    async fn resolve_simple_graph() {
         let mut reg = BeanRegistry::new();
         reg.provide(Dep { value: 42 });
         reg.register::<ServiceA>();
         reg.register::<ServiceB>();
-        let ctx = reg.resolve().unwrap();
+        let ctx = reg.resolve().await.unwrap();
 
         let b: ServiceB = ctx.get();
         assert_eq!(b.dep.value, 42);
         assert_eq!(b.a.dep.value, 42);
     }
 
-    #[test]
-    fn missing_dependency() {
+    #[tokio::test]
+    async fn missing_dependency() {
         let mut reg = BeanRegistry::new();
         reg.register::<ServiceA>();
-        let err = reg.resolve().unwrap_err();
+        let err = reg.resolve().await.unwrap_err();
         match &err {
             BeanError::MissingDependency { dependency, .. } => {
                 assert!(dependency.contains("Dep"), "error should name the missing type: {}", err);
@@ -412,25 +504,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn duplicate_bean_registered_twice() {
+    #[tokio::test]
+    async fn duplicate_bean_registered_twice() {
         let mut reg = BeanRegistry::new();
         reg.provide(Dep { value: 1 });
         reg.register::<ServiceA>();
         reg.register::<ServiceA>();
-        let err = reg.resolve().unwrap_err();
+        let err = reg.resolve().await.unwrap_err();
         assert!(matches!(err, BeanError::DuplicateBean { .. }));
     }
 
-    #[test]
-    fn duplicate_provided_and_bean() {
+    #[tokio::test]
+    async fn duplicate_provided_and_bean() {
         let mut reg = BeanRegistry::new();
         reg.provide(Dep { value: 1 });
         reg.provide(ServiceA {
             dep: Dep { value: 2 },
         });
         reg.register::<ServiceA>();
-        let err = reg.resolve().unwrap_err();
+        let err = reg.resolve().await.unwrap_err();
         assert!(matches!(err, BeanError::DuplicateBean { .. }));
     }
 
@@ -458,35 +550,143 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cyclic_dependency() {
+    #[tokio::test]
+    async fn cyclic_dependency() {
         let mut reg = BeanRegistry::new();
         reg.register::<CycleA>();
         reg.register::<CycleB>();
-        let err = reg.resolve().unwrap_err();
+        let err = reg.resolve().await.unwrap_err();
         assert!(matches!(err, BeanError::CyclicDependency { .. }));
     }
 
-    #[test]
-    fn provided_only() {
+    #[tokio::test]
+    async fn provided_only() {
         let mut reg = BeanRegistry::new();
         reg.provide(Dep { value: 7 });
-        let ctx = reg.resolve().unwrap();
+        let ctx = reg.resolve().await.unwrap();
         let d: Dep = ctx.get();
         assert_eq!(d.value, 7);
     }
 
-    #[test]
-    fn try_get_none() {
+    #[tokio::test]
+    async fn try_get_none() {
         let reg = BeanRegistry::new();
-        let ctx = reg.resolve().unwrap();
+        let ctx = reg.resolve().await.unwrap();
         assert!(ctx.try_get::<Dep>().is_none());
     }
 
-    #[test]
-    fn empty_registry() {
+    #[tokio::test]
+    async fn empty_registry() {
         let reg = BeanRegistry::new();
-        let ctx = reg.resolve().unwrap();
+        let ctx = reg.resolve().await.unwrap();
         assert!(ctx.try_get::<i32>().is_none());
+    }
+
+    // ── Async bean tests ──────────────────────────────────────────────────
+
+    #[derive(Clone)]
+    struct AsyncService {
+        dep: Dep,
+    }
+
+    impl AsyncBean for AsyncService {
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
+        }
+        async fn build(ctx: &BeanContext) -> Self {
+            // Simulate async init
+            tokio::task::yield_now().await;
+            Self {
+                dep: ctx.get::<Dep>(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn async_bean_resolution() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 99 });
+        reg.register_async::<AsyncService>();
+        let ctx = reg.resolve().await.unwrap();
+
+        let svc: AsyncService = ctx.get();
+        assert_eq!(svc.dep.value, 99);
+    }
+
+    #[tokio::test]
+    async fn mixed_sync_async_graph() {
+        let mut reg = BeanRegistry::new();
+        reg.provide(Dep { value: 10 });
+        reg.register::<ServiceA>();          // sync: depends on Dep
+        reg.register_async::<AsyncService>(); // async: depends on Dep
+        let ctx = reg.resolve().await.unwrap();
+
+        let a: ServiceA = ctx.get();
+        let svc: AsyncService = ctx.get();
+        assert_eq!(a.dep.value, 10);
+        assert_eq!(svc.dep.value, 10);
+    }
+
+    // ── Producer tests ────────────────────────────────────────────────────
+
+    #[derive(Clone)]
+    struct DbPool {
+        url: String,
+    }
+
+    struct CreateDbPool;
+
+    impl Producer for CreateDbPool {
+        type Output = DbPool;
+
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![]
+        }
+
+        async fn produce(_ctx: &BeanContext) -> DbPool {
+            // Simulate async pool creation
+            tokio::task::yield_now().await;
+            DbPool {
+                url: "sqlite::memory:".to_string(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn producer_resolution() {
+        let mut reg = BeanRegistry::new();
+        reg.register_producer::<CreateDbPool>();
+        let ctx = reg.resolve().await.unwrap();
+
+        let pool: DbPool = ctx.get();
+        assert_eq!(pool.url, "sqlite::memory:");
+    }
+
+    #[tokio::test]
+    async fn producer_as_dependency() {
+        // Producer creates DbPool, then a sync bean depends on it.
+        #[derive(Clone)]
+        struct RepoService {
+            pool: DbPool,
+        }
+
+        impl Bean for RepoService {
+            fn dependencies() -> Vec<(TypeId, &'static str)> {
+                vec![(TypeId::of::<DbPool>(), type_name::<DbPool>())]
+            }
+            fn build(ctx: &BeanContext) -> Self {
+                Self {
+                    pool: ctx.get::<DbPool>(),
+                }
+            }
+        }
+
+        let mut reg = BeanRegistry::new();
+        reg.register_producer::<CreateDbPool>();
+        reg.register::<RepoService>();
+        let ctx = reg.resolve().await.unwrap();
+
+        let repo: RepoService = ctx.get();
+        assert_eq!(repo.pool.url, "sqlite::memory:");
     }
 }

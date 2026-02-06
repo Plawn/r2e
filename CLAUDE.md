@@ -315,6 +315,7 @@ Scheduled tasks are auto-discovered via `register_controller()`, following the s
 AppBuilder::new()
     .plugin(Scheduler)                        // install scheduler runtime (provides CancellationToken)
     .build_state::<Services, _>()
+    .await
     .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
     .serve("0.0.0.0:3000")
 ```
@@ -357,7 +358,11 @@ Fluent API for assembling a R2E application:
 AppBuilder::new()
     .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
     .provide(services.pool.clone())        // provide beans
-    .build_state::<Services, _>()          // resolve bean graph
+    .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
+    .with_async_bean::<MyAsyncService>()   // async bean constructor
+    .with_bean::<UserService>()            // sync bean (unchanged)
+    .build_state::<Services, _>()          // resolve bean graph (async — .await required)
+    .await
     .with_config(config)
     .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // or Cors::new(custom_layer)
@@ -553,6 +558,70 @@ MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response
 
 - `r2e-core` has an optional `validation` feature that enables the `Validated<T>` extractor.
 - `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field. Consider using `#[managed]` instead for more flexibility.
+
+### Beans & Dependency Injection (r2e-core, r2e-macros)
+
+**Three bean traits** for the dependency graph:
+
+| Trait | Constructor | Registration | Use case |
+|-------|-----------|-------------|----------|
+| `Bean` | `fn build(ctx) -> Self` (sync) | `.with_bean::<T>()` | Simple services |
+| `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` | Services needing async init |
+| `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` | Types you don't own (pools, clients) |
+
+**`build_state()` is async** — it must be `.await`ed because the bean graph may contain async beans or producers.
+
+**`#[bean]` attribute macro** — auto-detects sync vs async constructors:
+
+```rust
+// Sync → generates `impl Bean`
+#[bean]
+impl UserService {
+    fn new(event_bus: EventBus) -> Self { Self { event_bus } }
+}
+
+// Async → generates `impl AsyncBean`
+#[bean]
+impl MyAsyncService {
+    async fn new(pool: SqlitePool) -> Self { /* ... */ Self { pool } }
+}
+```
+
+**`#[producer]` attribute macro** — for free functions producing types you don't own:
+
+```rust
+#[producer]
+async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
+    SqlitePool::connect(&url).await.unwrap()
+}
+// Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
+```
+
+**`#[config("key")]` in beans** — resolve values from `R2eConfig` instead of the bean graph:
+
+```rust
+// In #[bean] constructor params:
+#[bean]
+impl NotificationService {
+    fn new(bus: EventBus, #[config("notification.capacity")] capacity: i64) -> Self { ... }
+}
+
+// In #[derive(Bean)] fields:
+#[derive(Clone, Bean)]
+struct MyService {
+    #[inject] event_bus: EventBus,
+    #[config("app.name")] name: String,
+}
+```
+
+When `#[config]` is used, `R2eConfig` is automatically added to the dependency list. Missing config keys panic with a message including the env var equivalent (e.g., `APP_DB_URL`).
+
+**Key files:**
+- `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `BeanContext`, `BeanRegistry`
+- `r2e-core/src/builder.rs` — `with_bean()`, `with_async_bean()`, `with_producer()`, async `build_state()`
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support)
+- `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support)
+- `r2e-macros/src/producer_attr.rs` — `#[producer]` macro
 
 ## Language & Documentation
 

@@ -1,4 +1,4 @@
-use crate::beans::{Bean, BeanRegistry, BeanState};
+use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 #[allow(deprecated)]
@@ -140,12 +140,31 @@ impl<P> AppBuilder<NoState, P> {
         self.with_updated_provider()
     }
 
-    /// Register a bean type for automatic construction.
+    /// Register a (sync) bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans and
     /// provided instances when [`build_state`](Self::build_state) is called.
     pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
         self.shared.bean_registry.register::<B>();
+        self.with_updated_provider()
+    }
+
+    /// Register an async bean type for automatic construction.
+    ///
+    /// The bean's async constructor will be awaited during
+    /// [`build_state`](Self::build_state).
+    pub fn with_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
+        self.shared.bean_registry.register_async::<B>();
+        self.with_updated_provider()
+    }
+
+    /// Register a producer for automatic construction of its output type.
+    ///
+    /// The producer creates an instance of `Pr::Output` during
+    /// [`build_state`](Self::build_state). The output type (not the producer
+    /// struct) is tracked in the provision list.
+    pub fn with_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>> {
+        self.shared.bean_registry.register_producer::<Pr>();
         self.with_updated_provider()
     }
 
@@ -163,6 +182,7 @@ impl<P> AppBuilder<NoState, P> {
     /// AppBuilder::new()
     ///     .plugin(Scheduler)  // Provides CancellationToken
     ///     .build_state::<Services, _>()
+    ///     .await
     /// ```
     pub fn plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
         plugin.install(self)
@@ -220,32 +240,33 @@ impl<P> AppBuilder<NoState, P> {
     /// Resolve the bean dependency graph and build the application state.
     ///
     /// Consumes the bean registry, topologically sorts all beans, constructs
-    /// them in order, and assembles the state struct via
-    /// [`BeanState::from_context()`](crate::beans::BeanState::from_context).
+    /// them in order (awaiting async beans/producers), and assembles the
+    /// state struct via [`BeanState::from_context()`](crate::beans::BeanState::from_context).
     ///
     /// # Panics
     ///
     /// Panics if the bean graph has cycles, missing dependencies, or
     /// duplicate registrations. Use [`try_build_state`](Self::try_build_state)
     /// for a non-panicking alternative.
-    pub fn build_state<S, Idx>(self) -> AppBuilder<S>
+    pub async fn build_state<S, Idx>(self) -> AppBuilder<S>
     where
         S: BeanState + BuildableFrom<P, Idx>,
     {
         self.try_build_state()
+            .await
             .expect("Failed to resolve bean dependency graph")
     }
 
     /// Resolve the bean dependency graph and build the application state,
     /// returning an error instead of panicking on resolution failure.
-    pub fn try_build_state<S, Idx>(
+    pub async fn try_build_state<S, Idx>(
         mut self,
     ) -> Result<AppBuilder<S>, crate::beans::BeanError>
     where
         S: BeanState + BuildableFrom<P, Idx>,
     {
         let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
-        let ctx = registry.resolve()?;
+        let ctx = registry.resolve().await?;
         let state = S::from_context(&ctx);
         Ok(AppBuilder::<S>::from_pre(self.shared, state))
     }
@@ -369,6 +390,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// AppBuilder::new()
     ///     .build_state::<Services>()
+    ///     .await
     ///     .with(Health)
     ///     .with(Cors::permissive())
     ///     .with(Tracing)

@@ -14,6 +14,7 @@
 //! // As a plugin
 //! AppBuilder::new()
 //!     .build_state::<S, _>()
+//!     .await
 //!     .with(RequestId)
 //!     // ...
 //!

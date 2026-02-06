@@ -44,11 +44,13 @@
 //!     .provide(pool)
 //!     .with_bean::<UserService>()
 //!     .build_state::<Services>()  // ✓ Pool and UserService are both provided
+//!     .await
 //!
 //! // This fails at compile time with a helpful error:
 //! AppBuilder::new()
 //!     .provide(pool)
 //!     .build_state::<Services>()  // ✗ UserService not provided
+//!     .await
 //! // Error: type `UserService` was not provided to the AppBuilder
 //! //        missing `.provide::<UserService>()` or `.with_bean::<UserService>()`
 //! ```

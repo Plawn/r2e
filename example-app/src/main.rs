@@ -122,6 +122,7 @@ async fn main() {
         .provide(notification_service)
         .with_bean::<UserService>()
         .build_state::<Services, _>()
+        .await
         .with_config(config)
         .with(Health)
         .with(Prometheus::builder()

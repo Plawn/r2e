@@ -10,6 +10,7 @@
 //!
 //! AppBuilder::new()
 //!     .build_state::<MyState, _>()
+//!     .await
 //!     .with(Prometheus::new("/metrics"))
 //!     .serve("0.0.0.0:3000")
 //!     .await;

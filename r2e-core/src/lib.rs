@@ -28,7 +28,7 @@ pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use beans::{Bean, BeanContext, BeanError, BeanRegistry, BeanState};
+pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, Producer};
 pub use builder::{AppBuilder, TaskRegistryHandle};
 pub use config::R2eConfig;
 pub use controller::{Controller, StatefulConstruct};

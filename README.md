@@ -127,6 +127,7 @@ async fn main() {
     AppBuilder::new()
         .with_bean::<UserService>()
         .build_state::<AppState, _>()
+        .await
         .with_config(config)
         .with(Health)           // GET /health
         .with(Cors::permissive())
@@ -333,6 +334,7 @@ Register the scheduler plugin **before** `build_state()`:
 AppBuilder::new()
     .plugin(Scheduler)
     .build_state::<AppState, _>()
+    .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
     .await
@@ -386,6 +388,7 @@ use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
     .build_state::<AppState, _>()
+    .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")
             .with_description("API description")

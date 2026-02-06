@@ -78,6 +78,7 @@ async fn main() {
 
     AppBuilder::new()
         .build_state::<AppState, _>()
+        .await
         .with(Health)
         .with(Tracing)
         .register_controller::<HelloController>()
