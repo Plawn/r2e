@@ -7,6 +7,8 @@ pub struct RoutesImplDef {
     pub controller_name: syn::Ident,
     pub controller_intercepts: Vec<syn::Expr>,
     pub route_methods: Vec<RouteMethod>,
+    pub sse_methods: Vec<SseMethod>,
+    pub ws_methods: Vec<WsMethod>,
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
@@ -74,6 +76,53 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
     Ok(identity_param)
 }
 
+/// Check if a type is a WS type (WsStream or WebSocket) by inspecting the last path segment.
+fn is_ws_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        type_path
+            .path
+            .segments
+            .last()
+            .map_or(false, |s| s.ident == "WsStream" || s.ident == "WebSocket")
+    } else {
+        false
+    }
+}
+
+/// Detect WsStream/WebSocket parameter in a method signature.
+fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
+    let mut ws_param = None;
+    let mut idx = 0;
+    for arg in method.sig.inputs.iter() {
+        if let syn::FnArg::Typed(pt) = arg {
+            if is_ws_type(&pt.ty) {
+                if ws_param.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        pt,
+                        "only one WsStream/WebSocket parameter allowed",
+                    ));
+                }
+                let is_ws_stream = if let syn::Type::Path(type_path) = &*pt.ty {
+                    type_path
+                        .path
+                        .segments
+                        .last()
+                        .map_or(false, |s| s.ident == "WsStream")
+                } else {
+                    false
+                };
+                ws_param = Some(WsParam {
+                    index: idx,
+                    ty: (*pt.ty).clone(),
+                    is_ws_stream,
+                });
+            }
+            idx += 1;
+        }
+    }
+    Ok(ws_param)
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -97,6 +146,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
     // Classify methods
     let mut route_methods = Vec::new();
+    let mut sse_methods = Vec::new();
+    let mut ws_methods = Vec::new();
     let mut consumer_methods = Vec::new();
     let mut scheduled_methods = Vec::new();
     let mut other_methods = Vec::new();
@@ -148,6 +199,67 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     scheduled_methods.push(ScheduledMethod {
                         config,
                         intercept_fns,
+                        fn_item: method,
+                    });
+                } else if let Some((sse_path, keep_alive)) = extract_sse_attr(&all_attrs)? {
+                    let roles = extract_roles(&all_attrs)?;
+                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
+                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
+
+                    let mut guard_fns = Vec::new();
+                    let mut pre_auth_guard_fns = Vec::new();
+
+                    if let Some(roles_guard) = roles_guard_expr(&roles) {
+                        guard_fns.push(roles_guard);
+                    }
+                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
+                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
+
+                    method.attrs = strip_route_attrs(all_attrs);
+                    let identity_param = extract_identity_param(&mut method)?;
+
+                    sse_methods.push(SseMethod {
+                        path: sse_path,
+                        keep_alive,
+                        roles,
+                        intercept_fns,
+                        guard_fns,
+                        pre_auth_guard_fns,
+                        middleware_fns,
+                        layer_exprs,
+                        identity_param,
+                        fn_item: method,
+                    });
+                } else if let Some(ws_path) = extract_ws_attr(&all_attrs)? {
+                    let roles = extract_roles(&all_attrs)?;
+                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
+                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
+
+                    let mut guard_fns = Vec::new();
+                    let mut pre_auth_guard_fns = Vec::new();
+
+                    if let Some(roles_guard) = roles_guard_expr(&roles) {
+                        guard_fns.push(roles_guard);
+                    }
+                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
+                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
+
+                    method.attrs = strip_route_attrs(all_attrs);
+                    let identity_param = extract_identity_param(&mut method)?;
+                    let ws_param = find_ws_param(&method)?;
+
+                    ws_methods.push(WsMethod {
+                        path: ws_path,
+                        roles,
+                        intercept_fns,
+                        guard_fns,
+                        pre_auth_guard_fns,
+                        middleware_fns,
+                        layer_exprs,
+                        identity_param,
+                        ws_param,
                         fn_item: method,
                     });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
@@ -211,6 +323,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         controller_name,
         controller_intercepts,
         route_methods,
+        sse_methods,
+        ws_methods,
         consumer_methods,
         scheduled_methods,
         other_methods,

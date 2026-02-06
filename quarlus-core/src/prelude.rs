@@ -36,6 +36,9 @@ pub use quarlus_macros::{delete, get, patch, post, put};
 // Route-level attributes
 pub use quarlus_macros::{guard, intercept, layer, managed, middleware, pre_guard, roles, transactional};
 
+// SSE & WebSocket attributes
+pub use quarlus_macros::{sse, ws};
+
 // Event & scheduling attributes
 pub use quarlus_macros::{consumer, scheduled};
 
@@ -53,7 +56,9 @@ pub use crate::error::AppError;
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
 pub use crate::plugin::Plugin;
-pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath};
+pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
+pub use crate::request_id::{RequestId, RequestIdPlugin};
+pub use crate::secure_headers::SecureHeaders;
 
 // ── Type aliases ──────────────────────────────────────────────────────────
 

@@ -67,3 +67,47 @@ pub struct RouteMethod {
 pub struct TransactionalConfig {
     pub pool_field: String,
 }
+
+/// Keep-alive configuration for SSE endpoints.
+pub enum SseKeepAlive {
+    /// Use the default keep-alive (Axum default).
+    Default,
+    /// Custom interval in seconds.
+    Interval(u64),
+    /// Disable keep-alive.
+    Disabled,
+}
+
+pub struct SseMethod {
+    pub path: String,
+    pub keep_alive: SseKeepAlive,
+    pub roles: Vec<String>,
+    pub intercept_fns: Vec<syn::Expr>,
+    pub guard_fns: Vec<syn::Expr>,
+    pub pre_auth_guard_fns: Vec<syn::Expr>,
+    pub middleware_fns: Vec<syn::Path>,
+    pub layer_exprs: Vec<syn::Expr>,
+    pub identity_param: Option<IdentityParam>,
+    pub fn_item: syn::ImplItemFn,
+}
+
+pub struct WsMethod {
+    pub path: String,
+    pub roles: Vec<String>,
+    pub intercept_fns: Vec<syn::Expr>,
+    pub guard_fns: Vec<syn::Expr>,
+    pub pre_auth_guard_fns: Vec<syn::Expr>,
+    pub middleware_fns: Vec<syn::Path>,
+    pub layer_exprs: Vec<syn::Expr>,
+    pub identity_param: Option<IdentityParam>,
+    /// Index of the WsStream/WebSocket parameter among typed params, or None if returning WsHandler.
+    pub ws_param: Option<WsParam>,
+    pub fn_item: syn::ImplItemFn,
+}
+
+pub struct WsParam {
+    pub index: usize,
+    pub ty: syn::Type,
+    /// True if the type is WsStream (vs raw WebSocket).
+    pub is_ws_stream: bool,
+}

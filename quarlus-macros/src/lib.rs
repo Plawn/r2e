@@ -468,6 +468,48 @@ pub fn layer(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Declare an **SSE** (Server-Sent Events) endpoint.
+///
+/// The method should return an `impl Stream<Item = Result<SseEvent, Infallible>>`.
+/// The macro wraps the result in `Sse::new()` with keep-alive.
+///
+/// ```ignore
+/// #[sse("/events")]
+/// async fn events(&self) -> impl Stream<Item = Result<SseEvent, Infallible>> {
+///     self.broadcaster.subscribe()
+/// }
+///
+/// #[sse("/events", keep_alive = 15)]   // custom keep-alive interval
+/// #[sse("/events", keep_alive = false)] // disable keep-alive
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn sse(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Declare a **WebSocket** endpoint.
+///
+/// The handler receives a `WsStream` (or raw `WebSocket`) parameter.
+/// The macro generates the `WebSocketUpgrade` extraction and `on_upgrade` call.
+///
+/// ```ignore
+/// // Pattern 1: WsStream parameter (recommended)
+/// #[ws("/chat")]
+/// async fn chat(&self, mut ws: WsStream, Path(room): Path<String>) { ... }
+///
+/// // Pattern 2: return impl WsHandler (framework manages the loop)
+/// #[ws("/echo")]
+/// async fn echo(&self) -> impl WsHandler { EchoHandler }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn ws(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Mark a handler parameter as a **managed resource** with automatic lifecycle.
 ///
 /// Managed resources implement [`quarlus_core::ManagedResource`] and have their

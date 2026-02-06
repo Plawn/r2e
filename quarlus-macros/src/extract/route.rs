@@ -14,11 +14,21 @@ pub fn is_route_attr(attr: &syn::Attribute) -> bool {
         || attr.path().is_ident("patch")
 }
 
+pub fn is_sse_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("sse")
+}
+
+pub fn is_ws_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("ws")
+}
+
 pub fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs
         .into_iter()
         .filter(|a| {
             !is_route_attr(a)
+                && !is_sse_attr(a)
+                && !is_ws_attr(a)
                 && !a.path().is_ident("roles")
                 && !a.path().is_ident("transactional")
                 && !a.path().is_ident("intercept")
@@ -130,4 +140,75 @@ pub fn extract_layer_exprs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Exp
 
 pub fn extract_pre_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
     extract_attrs_by_name!(attrs, "pre_guard")
+}
+
+/// Extract `#[sse("/path")]` or `#[sse("/path", keep_alive = ...)]`.
+/// Returns `(path, keep_alive)` if found.
+pub fn extract_sse_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(String, crate::types::SseKeepAlive)>> {
+    for attr in attrs {
+        if !attr.path().is_ident("sse") {
+            continue;
+        }
+        // Parse arguments: first is the path, optionally followed by keep_alive = ...
+        let args: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]> =
+            attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+
+        let mut iter = args.iter();
+        let path = match iter.next() {
+            Some(syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(lit_str),
+                ..
+            })) => lit_str.value(),
+            _ => return Err(syn::Error::new_spanned(attr, "#[sse] requires a path string as first argument")),
+        };
+
+        let mut keep_alive = crate::types::SseKeepAlive::Default;
+
+        for expr in iter {
+            // Parse keep_alive = <value>
+            if let syn::Expr::Assign(assign) = expr {
+                if let syn::Expr::Path(ref p) = *assign.left {
+                    if p.path.is_ident("keep_alive") {
+                        match *assign.right.clone() {
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Bool(ref b),
+                                ..
+                            }) => {
+                                if !b.value {
+                                    keep_alive = crate::types::SseKeepAlive::Disabled;
+                                }
+                            }
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Int(ref i),
+                                ..
+                            }) => {
+                                keep_alive = crate::types::SseKeepAlive::Interval(i.base10_parse()?);
+                            }
+                            _ => return Err(syn::Error::new_spanned(
+                                &assign.right,
+                                "keep_alive must be a bool or integer",
+                            )),
+                        }
+                        continue;
+                    }
+                }
+            }
+            return Err(syn::Error::new_spanned(expr, "unexpected argument in #[sse]"));
+        }
+
+        return Ok(Some((path, keep_alive)));
+    }
+    Ok(None)
+}
+
+/// Extract `#[ws("/path")]`. Returns the path if found.
+pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs {
+        if !attr.path().is_ident("ws") {
+            continue;
+        }
+        let route_path: RoutePath = attr.parse_args()?;
+        return Ok(Some(route_path.path));
+    }
+    Ok(None)
 }

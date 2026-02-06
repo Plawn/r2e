@@ -4,6 +4,8 @@ pub mod header;
 pub mod middleware;
 pub mod response;
 pub mod routing;
+#[cfg(feature = "ws")]
+pub mod ws;
 
 pub use axum::{serve, Extension, Json, Router};
 pub use axum::http::Uri;

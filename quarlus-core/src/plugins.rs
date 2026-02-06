@@ -49,20 +49,83 @@ impl Plugin for Tracing {
 
 /// Health-check endpoint plugin.
 ///
-/// Adds a `GET /health` endpoint that returns `"OK"` with status 200.
+/// # Simple mode (backwards-compatible)
+///
+/// ```ignore
+/// .with(Health)  // GET /health → "OK"
+/// ```
+///
+/// # Advanced mode
+///
+/// ```ignore
+/// .with(Health::builder()
+///     .check(DbHealth::new(pool.clone()))
+///     .check(RedisHealth::new(redis.clone()))
+///     .build())
+/// ```
+///
+/// Advanced mode provides:
+/// - `GET /health` → JSON with aggregated status (200/503)
+/// - `GET /health/live` → always 200 (liveness probe)
+/// - `GET /health/ready` → 200 if all checks pass, 503 otherwise
 pub struct Health;
+
+impl Health {
+    /// Start building an advanced health check configuration.
+    pub fn builder() -> crate::health::HealthBuilder {
+        crate::health::HealthBuilder::new()
+    }
+}
 
 impl Plugin for Health {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.register_routes(
             crate::http::Router::new()
-                .route("/health", crate::http::routing::get(health_handler)),
+                .route("/health", crate::http::routing::get(simple_health_handler)),
         )
     }
 }
 
-async fn health_handler() -> &'static str {
+async fn simple_health_handler() -> &'static str {
     "OK"
+}
+
+/// Advanced health-check plugin with liveness/readiness probes.
+///
+/// Created via [`Health::builder()`].
+pub struct AdvancedHealth {
+    checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>,
+}
+
+impl AdvancedHealth {
+    pub(crate) fn new(checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>) -> Self {
+        Self { checks }
+    }
+}
+
+impl Plugin for AdvancedHealth {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        use std::sync::Arc;
+        let state = Arc::new(crate::health::HealthState { checks: self.checks });
+        let s1 = state.clone();
+        app.register_routes(
+            crate::http::Router::new()
+                .route(
+                    "/health",
+                    crate::http::routing::get(crate::health::health_handler)
+                        .with_state(state),
+                )
+                .route(
+                    "/health/live",
+                    crate::http::routing::get(crate::health::liveness_handler),
+                )
+                .route(
+                    "/health/ready",
+                    crate::http::routing::get(crate::health::readiness_handler)
+                        .with_state(s1),
+                ),
+        )
+    }
 }
 
 /// Error-handling plugin.

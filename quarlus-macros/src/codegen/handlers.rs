@@ -9,13 +9,29 @@ use crate::types::*;
 
 /// Generate all handler functions for a controller.
 pub fn generate_handlers(def: &RoutesImplDef) -> TokenStream {
-    let handlers: Vec<_> = def
+    let route_handlers: Vec<_> = def
         .route_methods
         .iter()
         .map(|rm| generate_single_handler(def, rm))
         .collect();
 
-    quote! { #(#handlers)* }
+    let sse_handlers: Vec<_> = def
+        .sse_methods
+        .iter()
+        .map(|sm| generate_sse_handler(def, sm))
+        .collect();
+
+    let ws_handlers: Vec<_> = def
+        .ws_methods
+        .iter()
+        .map(|wm| generate_ws_handler(def, wm))
+        .collect();
+
+    quote! {
+        #(#route_handlers)*
+        #(#sse_handlers)*
+        #(#ws_handlers)*
+    }
 }
 
 /// Context for handler generation, containing names and identifiers.
@@ -309,4 +325,315 @@ fn is_result_type(return_type: &syn::ReturnType) -> bool {
         }
     }
     false
+}
+
+// ── SSE handler generation ───────────────────────────────────────────────
+
+/// Generate a handler function for an `#[sse("/path")]` method.
+fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
+    let krate = quarlus_core_path();
+    let controller_name = &def.controller_name;
+    let fn_name = &sm.fn_item.sig.ident;
+    let meta_mod = format_ident!("__quarlus_meta_{}", controller_name);
+    let extractor_name = format_ident!("__QuarlusExtract_{}", controller_name);
+    let handler_name = format_ident!("__quarlus_{}_{}", controller_name, fn_name);
+
+    let fn_name_str = fn_name.to_string();
+    let controller_name_str = controller_name.to_string();
+
+    // Extra params (excluding &self)
+    let extra_params: Vec<(usize, &syn::PatType)> = sm
+        .fn_item
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pt) => Some(pt),
+            _ => None,
+        })
+        .enumerate()
+        .collect();
+
+    let handler_extra_params: Vec<_> = extra_params
+        .iter()
+        .map(|(i, pt)| {
+            let arg_name = format_ident!("__arg_{}", i);
+            let ty = &pt.ty;
+            quote! { #arg_name: #ty }
+        })
+        .collect();
+
+    let call_args: Vec<_> = extra_params
+        .iter()
+        .map(|(i, _)| {
+            let arg_name = format_ident!("__arg_{}", i);
+            quote! { #arg_name }
+        })
+        .collect();
+
+    let call_expr = if sm.fn_item.sig.asyncness.is_some() {
+        quote! { __ctrl.#fn_name(#(#call_args),*).await }
+    } else {
+        quote! { __ctrl.#fn_name(#(#call_args),*) }
+    };
+
+    // Keep-alive wrapping
+    let keep_alive_expr = match sm.keep_alive {
+        SseKeepAlive::Default => {
+            quote! {
+                #krate::http::response::Sse::new(__stream)
+                    .keep_alive(#krate::http::response::SseKeepAlive::default())
+            }
+        }
+        SseKeepAlive::Interval(secs) => {
+            quote! {
+                #krate::http::response::Sse::new(__stream)
+                    .keep_alive(
+                        #krate::http::response::SseKeepAlive::new()
+                            .interval(std::time::Duration::from_secs(#secs))
+                    )
+            }
+        }
+        SseKeepAlive::Disabled => {
+            quote! { #krate::http::response::Sse::new(__stream) }
+        }
+    };
+
+    let has_guards = !sm.guard_fns.is_empty();
+
+    if !has_guards {
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+            ) -> impl #krate::http::response::IntoResponse {
+                let __ctrl = __ctrl_ext.0;
+                let __stream = #call_expr;
+                #keep_alive_expr
+            }
+        }
+    } else {
+        let guard_checks = generate_guard_checks(&sm.guard_fns, &krate);
+
+        let guard_context = if let Some(ref id_param) = sm.identity_param {
+            let arg_name = format_ident!("__arg_{}", id_param.index);
+            let identity_expr = if id_param.is_optional {
+                quote! { #arg_name.as_ref() }
+            } else {
+                quote! { Some(&#arg_name) }
+            };
+            quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                let __guard_ctx = #krate::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    uri: &__uri,
+                    path_params: __path_params,
+                    identity: #identity_expr,
+                };
+            }
+        } else {
+            quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                let __guard_ctx = #krate::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    uri: &__uri,
+                    path_params: __path_params,
+                    identity: #meta_mod::guard_identity(&__ctrl_ext.0),
+                };
+            }
+        };
+
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+                __headers: #krate::http::HeaderMap,
+                __uri: #krate::http::Uri,
+                __raw_path_params: #krate::http::extract::RawPathParams,
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+            ) -> #krate::http::response::Response {
+                #guard_context
+                #(#guard_checks)*
+                let __ctrl = __ctrl_ext.0;
+                let __stream = #call_expr;
+                #krate::http::response::IntoResponse::into_response(#keep_alive_expr)
+            }
+        }
+    }
+}
+
+// ── WS handler generation ────────────────────────────────────────────────
+
+/// Generate a handler function for a `#[ws("/path")]` method.
+fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
+    let krate = quarlus_core_path();
+    let controller_name = &def.controller_name;
+    let fn_name = &wm.fn_item.sig.ident;
+    let meta_mod = format_ident!("__quarlus_meta_{}", controller_name);
+    let extractor_name = format_ident!("__QuarlusExtract_{}", controller_name);
+    let handler_name = format_ident!("__quarlus_{}_{}", controller_name, fn_name);
+
+    let fn_name_str = fn_name.to_string();
+    let controller_name_str = controller_name.to_string();
+
+    // Collect all typed params, excluding WsStream/WebSocket
+    let extra_params: Vec<(usize, &syn::PatType)> = wm
+        .fn_item
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pt) => Some(pt),
+            _ => None,
+        })
+        .enumerate()
+        .collect();
+
+    let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
+
+    // Handler params: skip the WsStream/WebSocket param (it comes from on_upgrade)
+    let handler_extra_params: Vec<_> = extra_params
+        .iter()
+        .filter(|(i, _)| Some(*i) != ws_param_index)
+        .map(|(i, pt)| {
+            let arg_name = format_ident!("__arg_{}", i);
+            let ty = &pt.ty;
+            quote! { #arg_name: #ty }
+        })
+        .collect();
+
+    let has_guards = !wm.guard_fns.is_empty();
+
+    // Build the on_upgrade closure body
+    let upgrade_body = if let Some(ref ws_p) = wm.ws_param {
+        // Pattern 1: WsStream or WebSocket parameter
+        let call_args: Vec<_> = extra_params
+            .iter()
+            .map(|(i, _)| {
+                let arg_name = format_ident!("__arg_{}", i);
+                if Some(*i) == ws_param_index {
+                    if ws_p.is_ws_stream {
+                        quote! { __ws_stream }
+                    } else {
+                        quote! { __socket }
+                    }
+                } else {
+                    quote! { #arg_name }
+                }
+            })
+            .collect();
+
+        let ws_setup = if ws_p.is_ws_stream {
+            quote! { let __ws_stream = #krate::ws::WsStream::new(__socket); }
+        } else {
+            quote! {}
+        };
+
+        let call = if wm.fn_item.sig.asyncness.is_some() {
+            quote! { __ctrl.#fn_name(#(#call_args),*).await; }
+        } else {
+            quote! { __ctrl.#fn_name(#(#call_args),*); }
+        };
+
+        quote! {
+            #ws_setup
+            #call
+        }
+    } else {
+        // Pattern 2: no WsStream param → method returns impl WsHandler
+        let call_args: Vec<_> = extra_params
+            .iter()
+            .map(|(i, _)| {
+                let arg_name = format_ident!("__arg_{}", i);
+                quote! { #arg_name }
+            })
+            .collect();
+
+        let call = if wm.fn_item.sig.asyncness.is_some() {
+            quote! { let __handler = __ctrl.#fn_name(#(#call_args),*).await; }
+        } else {
+            quote! { let __handler = __ctrl.#fn_name(#(#call_args),*); }
+        };
+
+        quote! {
+            #call
+            #krate::ws::run_ws_handler(#krate::ws::WsStream::new(__socket), __handler).await;
+        }
+    };
+
+    if !has_guards {
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+                __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
+            ) -> #krate::http::response::Response {
+                __ws_upgrade.on_upgrade(move |__socket| async move {
+                    let __ctrl = __ctrl_ext.0;
+                    #upgrade_body
+                }).into_response()
+            }
+        }
+    } else {
+        let guard_checks = generate_guard_checks(&wm.guard_fns, &krate);
+
+        let guard_context = if let Some(ref id_param) = wm.identity_param {
+            let arg_name = format_ident!("__arg_{}", id_param.index);
+            let identity_expr = if id_param.is_optional {
+                quote! { #arg_name.as_ref() }
+            } else {
+                quote! { Some(&#arg_name) }
+            };
+            quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                let __guard_ctx = #krate::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    uri: &__uri,
+                    path_params: __path_params,
+                    identity: #identity_expr,
+                };
+            }
+        } else {
+            quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                let __guard_ctx = #krate::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    uri: &__uri,
+                    path_params: __path_params,
+                    identity: #meta_mod::guard_identity(&__ctrl_ext.0),
+                };
+            }
+        };
+
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+                __headers: #krate::http::HeaderMap,
+                __uri: #krate::http::Uri,
+                __raw_path_params: #krate::http::extract::RawPathParams,
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+                __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
+            ) -> #krate::http::response::Response {
+                #guard_context
+                #(#guard_checks)*
+                __ws_upgrade.on_upgrade(move |__socket| async move {
+                    let __ctrl = __ctrl_ext.0;
+                    #upgrade_body
+                }).into_response()
+            }
+        }
+    }
 }

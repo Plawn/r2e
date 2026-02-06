@@ -13,7 +13,11 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let meta_mod = format_ident!("__quarlus_meta_{}", name);
 
     let route_registrations = generate_route_registrations(def, name);
+    let sse_route_registrations = generate_sse_route_registrations(def, name);
+    let ws_route_registrations = generate_ws_route_registrations(def, name);
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
+    let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
+    let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
     let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
     let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
     let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
@@ -21,7 +25,9 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let router_body = quote! {
         {
             let __inner = #krate::http::Router::new()
-                #(#route_registrations)*;
+                #(#route_registrations)*
+                #(#sse_route_registrations)*
+                #(#ws_route_registrations)*;
             match #meta_mod::PATH_PREFIX {
                 Some("/") | None => __inner,
                 Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
@@ -36,7 +42,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             }
 
             fn route_metadata() -> Vec<#krate::openapi::RouteInfo> {
-                vec![#(#route_metadata_items),*]
+                let mut __meta = vec![#(#route_metadata_items),*];
+                __meta.extend(vec![#(#sse_metadata_items),*]);
+                __meta.extend(vec![#(#ws_metadata_items),*]);
+                __meta
             }
 
             #pre_auth_guards_fn
@@ -449,6 +458,164 @@ fn generate_scheduled_tasks(
             vec![#(#task_defs),*]
         }
     }
+}
+
+// ── SSE route registration ──────────────────────────────────────────────
+
+fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
+    let krate = quarlus_core_path();
+
+    def.sse_methods
+        .iter()
+        .filter(|sm| sm.pre_auth_guard_fns.is_empty())
+        .map(|sm| {
+            let handler_name = format_ident!("__quarlus_{}_{}", name, sm.fn_item.sig.ident);
+            let path = &sm.path;
+
+            let has_layers = !sm.middleware_fns.is_empty() || !sm.layer_exprs.is_empty();
+
+            if !has_layers {
+                quote! {
+                    .route(#path, #krate::http::routing::get(#handler_name))
+                }
+            } else {
+                let middleware_layers: Vec<_> = sm
+                    .middleware_fns
+                    .iter()
+                    .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                    .collect();
+                let direct_layers: Vec<_> = sm
+                    .layer_exprs
+                    .iter()
+                    .map(|expr| quote! { .layer(#expr) })
+                    .collect();
+                quote! {
+                    .route(
+                        #path,
+                        #krate::http::routing::get(#handler_name)
+                            #(#middleware_layers)*
+                            #(#direct_layers)*
+                    )
+                }
+            }
+        })
+        .collect()
+}
+
+fn generate_sse_route_metadata(
+    def: &RoutesImplDef,
+    name: &syn::Ident,
+    meta_mod: &syn::Ident,
+) -> Vec<TokenStream> {
+    let krate = quarlus_core_path();
+    let tag_name = name.to_string();
+
+    def.sse_methods
+        .iter()
+        .map(|sm| {
+            let path = &sm.path;
+            let op_id = format!("{}_{}", name, sm.fn_item.sig.ident);
+            let roles: Vec<_> = sm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let tag = &tag_name;
+
+            quote! {
+                #krate::openapi::RouteInfo {
+                    path: match #meta_mod::PATH_PREFIX {
+                        Some(__prefix) => format!("{}{}", __prefix, #path),
+                        None => #path.to_string(),
+                    },
+                    method: "GET".to_string(),
+                    operation_id: #op_id.to_string(),
+                    summary: Some("SSE stream".to_string()),
+                    request_body_type: None,
+                    request_body_schema: None,
+                    response_type: None,
+                    params: vec![],
+                    roles: vec![#(#roles),*],
+                    tag: Some(#tag.to_string()),
+                }
+            }
+        })
+        .collect()
+}
+
+// ── WS route registration ───────────────────────────────────────────────
+
+fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
+    let krate = quarlus_core_path();
+
+    def.ws_methods
+        .iter()
+        .filter(|wm| wm.pre_auth_guard_fns.is_empty())
+        .map(|wm| {
+            let handler_name = format_ident!("__quarlus_{}_{}", name, wm.fn_item.sig.ident);
+            let path = &wm.path;
+
+            let has_layers = !wm.middleware_fns.is_empty() || !wm.layer_exprs.is_empty();
+
+            if !has_layers {
+                quote! {
+                    .route(#path, #krate::http::routing::get(#handler_name))
+                }
+            } else {
+                let middleware_layers: Vec<_> = wm
+                    .middleware_fns
+                    .iter()
+                    .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                    .collect();
+                let direct_layers: Vec<_> = wm
+                    .layer_exprs
+                    .iter()
+                    .map(|expr| quote! { .layer(#expr) })
+                    .collect();
+                quote! {
+                    .route(
+                        #path,
+                        #krate::http::routing::get(#handler_name)
+                            #(#middleware_layers)*
+                            #(#direct_layers)*
+                    )
+                }
+            }
+        })
+        .collect()
+}
+
+fn generate_ws_route_metadata(
+    def: &RoutesImplDef,
+    name: &syn::Ident,
+    meta_mod: &syn::Ident,
+) -> Vec<TokenStream> {
+    let krate = quarlus_core_path();
+    let tag_name = name.to_string();
+
+    def.ws_methods
+        .iter()
+        .map(|wm| {
+            let path = &wm.path;
+            let op_id = format!("{}_{}", name, wm.fn_item.sig.ident);
+            let roles: Vec<_> = wm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let tag = &tag_name;
+
+            quote! {
+                #krate::openapi::RouteInfo {
+                    path: match #meta_mod::PATH_PREFIX {
+                        Some(__prefix) => format!("{}{}", __prefix, #path),
+                        None => #path.to_string(),
+                    },
+                    method: "GET".to_string(),
+                    operation_id: #op_id.to_string(),
+                    summary: Some("WebSocket endpoint".to_string()),
+                    request_body_type: None,
+                    request_body_schema: None,
+                    response_type: None,
+                    params: vec![],
+                    roles: vec![#(#roles),*],
+                    tag: Some(#tag.to_string()),
+                }
+            }
+        })
+        .collect()
 }
 
 /// Generate schedule configuration expression.

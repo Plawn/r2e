@@ -7,7 +7,7 @@ use quarlus::quarlus_security::JwtClaimsValidator;
 use sqlx::{Database, Pool, Sqlite, Transaction};
 use tokio_util::sync::CancellationToken;
 
-use crate::services::UserService;
+use crate::services::{NotificationService, UserService};
 
 #[derive(Clone, BeanState)]
 pub struct Services {
@@ -18,6 +18,8 @@ pub struct Services {
     pub config: QuarlusConfig,
     pub cancel: CancellationToken,
     pub rate_limiter: RateLimitRegistry,
+    pub sse_broadcaster: quarlus::sse::SseBroadcaster,
+    pub notification_service: NotificationService,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

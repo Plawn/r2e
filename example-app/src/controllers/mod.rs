@@ -4,5 +4,8 @@ pub mod data_controller;
 pub mod db_identity_controller;
 pub mod event_controller;
 pub mod mixed_controller;
+pub mod notification_controller;
 pub mod scheduled_controller;
+pub mod sse_controller;
 pub mod user_controller;
+pub mod ws_controller;

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use dashmap::DashMap;
 use quarlus::prelude::*;
+use quarlus::sse::SseBroadcaster;
+use quarlus::ws::WsRooms;
 
 use crate::models::{User, UserCreatedEvent};
 
@@ -52,5 +55,41 @@ impl UserService {
 
     pub async fn count(&self) -> usize {
         self.users.read().await.len()
+    }
+}
+
+#[derive(Clone)]
+pub struct NotificationService {
+    ws_rooms: WsRooms,
+    sse_users: Arc<DashMap<String, SseBroadcaster>>,
+    capacity: usize,
+}
+
+impl NotificationService {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            ws_rooms: WsRooms::new(capacity),
+            sse_users: Arc::new(DashMap::new()),
+            capacity,
+        }
+    }
+
+    pub fn ws_room(&self, user_id: &str) -> quarlus::ws::WsBroadcaster {
+        self.ws_rooms.room(user_id)
+    }
+
+    pub fn sse_broadcaster(&self, user_id: &str) -> SseBroadcaster {
+        self.sse_users
+            .entry(user_id.to_string())
+            .or_insert_with(|| SseBroadcaster::new(self.capacity))
+            .clone()
+    }
+
+    pub fn notify(&self, user_id: &str, message: &str) {
+        self.ws_rooms.room(user_id).send_text(message);
+
+        if let Some(broadcaster) = self.sse_users.get(user_id) {
+            let _ = broadcaster.value().send_event("notification", message);
+        }
     }
 }

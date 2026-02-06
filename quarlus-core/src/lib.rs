@@ -5,6 +5,7 @@ pub mod controller;
 pub mod dev;
 pub mod error;
 pub mod guards;
+pub mod health;
 pub mod http;
 pub mod interceptors;
 pub mod layers;
@@ -14,11 +15,16 @@ pub mod openapi;
 pub mod plugin;
 pub mod plugins;
 pub mod prelude;
+pub mod request_id;
+pub mod secure_headers;
+pub mod sse;
 pub mod state;
 pub mod type_list;
 pub mod types;
 #[cfg(feature = "validation")]
 pub mod validation;
+#[cfg(feature = "ws")]
+pub mod ws;
 
 pub use beans::{Bean, BeanContext, BeanError, BeanRegistry, BeanState};
 pub use builder::{AppBuilder, TaskRegistryHandle};
@@ -35,6 +41,9 @@ pub use plugin::{
     DeferredPluginInstaller, Plugin, PreStatePlugin,
 };
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
+pub use plugins::AdvancedHealth;
+pub use request_id::{RequestId, RequestIdPlugin};
+pub use secure_headers::SecureHeaders;
 pub use state::QuarlusState;
 pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};
 

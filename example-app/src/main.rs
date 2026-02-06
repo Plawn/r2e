@@ -22,8 +22,11 @@ use controllers::db_identity_controller::IdentityController;
 use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::scheduled_controller::ScheduledJobs;
+use controllers::sse_controller::SseController;
 use controllers::user_controller::UserController;
-use services::UserService;
+use controllers::notification_controller::NotificationController;
+use controllers::ws_controller::WsEchoController;
+use services::{NotificationService, UserService};
 use state::Services;
 
 fn generate_test_token(secret: &[u8]) -> String {
@@ -103,6 +106,10 @@ async fn main() {
     }
     // --- App assembly using bean graph ---
     // Scheduler (#8) is installed before build_state() to provide CancellationToken
+    // SSE broadcaster for real-time events
+    let sse_broadcaster = quarlus::sse::SseBroadcaster::new(128);
+    let notification_service = NotificationService::new(64);
+
     AppBuilder::new()
         .plugin(Scheduler) // Scheduling (#8) - provides CancellationToken
         .provide(event_bus)
@@ -110,6 +117,8 @@ async fn main() {
         .provide(config.clone())
         .provide(Arc::new(claims_validator))
         .provide(quarlus::quarlus_rate_limit::RateLimitRegistry::default())
+        .provide(sse_broadcaster)
+        .provide(notification_service)
         .with_bean::<UserService>()
         .build_state::<Services, _>()
         .with_config(config)
@@ -120,6 +129,8 @@ async fn main() {
             .exclude_path("/health")
             .exclude_path("/metrics")
             .build())
+        .with(RequestIdPlugin)  // Request ID propagation
+        .with(SecureHeaders::default()) // Security headers
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling) // Error handling (#3)
@@ -150,6 +161,9 @@ async fn main() {
         .register_controller::<MixedController>()
         .register_controller::<IdentityController>()
         .register_controller::<ScheduledJobs>()
+        .register_controller::<SseController>()
+        .register_controller::<WsEchoController>()
+        .register_controller::<NotificationController>()
         .with(NormalizePath) // Must be last to normalize paths before routing
         .serve("0.0.0.0:3001")
         .await
