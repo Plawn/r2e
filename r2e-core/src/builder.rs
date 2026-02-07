@@ -705,18 +705,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
 
         // Call serve hooks (e.g., scheduler starts tasks).
-        // Tasks already have their state captured, so we just need to pass the token.
+        // Serve hooks should run even if no scheduler is installed.
+        let mut boxed_tasks = plugin_data
+            .get(&TypeId::of::<TaskRegistryHandle>())
+            .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
+            .map(|registry| registry.take_all())
+            .unwrap_or_default();
         for hook in serve_hooks {
-            if let Some(registry) = plugin_data
-                .get(&TypeId::of::<TaskRegistryHandle>())
-                .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
-            {
-                let boxed_tasks = registry.take_all();
-                if !boxed_tasks.is_empty() {
-                    // The token is captured in the hook closure
-                    hook(boxed_tasks, CancellationToken::new());
-                }
-            }
+            // Tasks are single-consumer; only the first hook receives them.
+            let tasks_for_hook = if boxed_tasks.is_empty() {
+                Vec::new()
+            } else {
+                std::mem::take(&mut boxed_tasks)
+            };
+            // The token is captured in the hook closure
+            hook(tasks_for_hook, CancellationToken::new());
         }
 
         // Run startup hooks
