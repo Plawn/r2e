@@ -11,6 +11,7 @@ categories = ["web-programming"]
 description = "Built-in interceptors for R2E - Logged, Timed, Cache, and CacheInvalidate"
 
 [dependencies]
+bytes = "1"
 r2e-core = { path = "../r2e-core", version = "0.1.0" }
 r2e-cache = { path = "../r2e-cache", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }

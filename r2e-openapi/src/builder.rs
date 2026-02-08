@@ -1,4 +1,4 @@
-use r2e_core::openapi::{ParamLocation, RouteInfo};
+use r2e_core::meta::{ParamLocation, RouteInfo};
 use serde_json::{json, Map, Value};
 
 /// Recursively sanitize a JSON Schema value for OpenAPI 3.0.3 compatibility.

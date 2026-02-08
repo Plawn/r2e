@@ -11,7 +11,7 @@ pub mod interceptors;
 pub mod layers;
 pub mod lifecycle;
 pub mod managed;
-pub mod openapi;
+pub mod meta;
 pub mod plugin;
 pub mod plugins;
 pub mod prelude;
@@ -34,7 +34,7 @@ pub use config::R2eConfig;
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
 pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext, RolesGuard};
-pub use interceptors::{Interceptor, InterceptorContext};
+pub use interceptors::{Cacheable, Interceptor, InterceptorContext};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
 #[allow(deprecated)]
@@ -43,6 +43,7 @@ pub use plugin::{
     DeferredPluginInstaller, Plugin, PreStatePlugin,
 };
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
+pub use meta::MetaRegistry;
 pub use plugins::AdvancedHealth;
 pub use request_id::{RequestId, RequestIdPlugin};
 pub use secure_headers::SecureHeaders;

@@ -1,6 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
+pub(crate) mod cacheable_derive;
 pub(crate) mod crate_path;
 pub(crate) mod extract;
 pub(crate) mod from_multipart;
@@ -705,4 +706,22 @@ pub fn derive_bean(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(BeanState, attributes(bean_state))]
 pub fn derive_bean_state(input: TokenStream) -> TokenStream {
     bean_state_derive::expand(input)
+}
+
+/// Derive macro that generates a [`Cacheable`](r2e_core::Cacheable) impl
+/// using `serde_json` serialization.
+///
+/// The type must implement `Serialize` and `DeserializeOwned`.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Serialize, Deserialize, Cacheable)]
+/// pub struct UserList {
+///     pub users: Vec<User>,
+/// }
+/// ```
+#[proc_macro_derive(Cacheable)]
+pub fn derive_cacheable(input: TokenStream) -> TokenStream {
+    cacheable_derive::expand(input)
 }

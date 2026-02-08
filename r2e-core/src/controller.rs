@@ -25,11 +25,10 @@ pub trait Controller<T: Clone + Send + Sync + 'static> {
         router
     }
 
-    /// Return metadata about all routes registered by this controller.
-    /// Used for OpenAPI spec generation. Default returns an empty list.
-    fn route_metadata() -> Vec<crate::openapi::RouteInfo> {
-        Vec::new()
-    }
+    /// Push metadata about this controller's routes into the registry.
+    ///
+    /// Called by `register_controller()`. The default implementation is a no-op.
+    fn register_meta(_registry: &mut crate::meta::MetaRegistry) {}
 
     /// Register event consumers for this controller.
     ///

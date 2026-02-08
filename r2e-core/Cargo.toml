@@ -14,13 +14,13 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 default = []
 validation = ["dep:validator"]
 ws = ["axum/ws", "dep:dashmap"]
-multipart = ["axum/multipart", "dep:bytes"]
+multipart = ["axum/multipart"]
 
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "catch-panic", "normalize-path"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "catch-panic"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,5 +32,5 @@ schemars = "0.8"
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 dashmap = { version = "6", optional = true }
-bytes = { version = "1", optional = true }
+bytes = "1"
 futures-core = "0.3"

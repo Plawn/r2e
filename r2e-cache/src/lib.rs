@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use dashmap::DashMap;
 use std::future::Future;
 use std::hash::Hash;
@@ -67,8 +68,8 @@ impl<K: Eq + Hash + Clone, V: Clone> TtlCache<K, V> {
 /// Implement this to swap the default in-memory store for Redis, Memcached, etc.
 /// Register your implementation at startup via [`set_cache_backend`].
 pub trait CacheStore: Send + Sync + 'static {
-    fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
-    fn set<'a>(&'a self, key: &'a str, value: String, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<Bytes>> + Send + 'a>>;
+    fn set<'a>(&'a self, key: &'a str, value: Bytes, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     fn remove<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     fn clear(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     fn remove_by_prefix<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -79,7 +80,7 @@ pub trait CacheStore: Send + Sync + 'static {
 /// Each entry stores `(value, inserted_at, ttl)` and is lazily evicted on access.
 #[derive(Clone)]
 pub struct InMemoryStore {
-    inner: Arc<DashMap<String, (String, Instant, Duration)>>,
+    inner: Arc<DashMap<String, (Bytes, Instant, Duration)>>,
 }
 
 impl InMemoryStore {
@@ -97,7 +98,7 @@ impl Default for InMemoryStore {
 }
 
 impl CacheStore for InMemoryStore {
-    fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>> {
+    fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<Bytes>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(entry) = self.inner.get(key) {
                 let (val, inserted, ttl) = entry.value();
@@ -111,7 +112,7 @@ impl CacheStore for InMemoryStore {
         })
     }
 
-    fn set<'a>(&'a self, key: &'a str, value: String, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn set<'a>(&'a self, key: &'a str, value: Bytes, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             self.inner.insert(key.to_string(), (value, Instant::now(), ttl));
         })
@@ -210,8 +211,8 @@ mod tests {
     #[tokio::test]
     async fn test_in_memory_store() {
         let store = InMemoryStore::new();
-        store.set("k1", "v1".to_string(), Duration::from_secs(60)).await;
-        assert_eq!(store.get("k1").await, Some("v1".to_string()));
+        store.set("k1", Bytes::from("v1"), Duration::from_secs(60)).await;
+        assert_eq!(store.get("k1").await, Some(Bytes::from("v1")));
 
         store.remove("k1").await;
         assert_eq!(store.get("k1").await, None);
@@ -220,13 +221,13 @@ mod tests {
     #[tokio::test]
     async fn test_in_memory_store_prefix_removal() {
         let store = InMemoryStore::new();
-        store.set("users:1", "a".to_string(), Duration::from_secs(60)).await;
-        store.set("users:2", "b".to_string(), Duration::from_secs(60)).await;
-        store.set("posts:1", "c".to_string(), Duration::from_secs(60)).await;
+        store.set("users:1", Bytes::from("a"), Duration::from_secs(60)).await;
+        store.set("users:2", Bytes::from("b"), Duration::from_secs(60)).await;
+        store.set("posts:1", Bytes::from("c"), Duration::from_secs(60)).await;
 
         store.remove_by_prefix("users:").await;
         assert_eq!(store.get("users:1").await, None);
         assert_eq!(store.get("users:2").await, None);
-        assert_eq!(store.get("posts:1").await, Some("c".to_string()));
+        assert_eq!(store.get("posts:1").await, Some(Bytes::from("c")));
     }
 }

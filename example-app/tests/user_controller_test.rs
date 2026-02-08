@@ -253,10 +253,6 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let openapi_config =
         r2e::r2e_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
-    let openapi = r2e::r2e_openapi::openapi_routes::<TestServices>(
-        openapi_config,
-        vec![TestUserController::route_metadata()],
-    );
 
     let app = TestApp::from_builder(
         AppBuilder::new()
@@ -264,9 +260,10 @@ async fn setup() -> (TestApp, TestJwt) {
             .with_config(config)
             .with(Health)
             .with(ErrorHandling)
+            .with(NormalizePath)
             .with(DevReload)
-            .register_controller::<TestUserController>()
-            .register_routes(openapi),
+            .with(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))
+            .register_controller::<TestUserController>(),
     );
 
     (app, jwt)
@@ -494,4 +491,38 @@ async fn test_dev_mode_ping() {
     let body: serde_json::Value = serde_json::from_str(&resp.text()).unwrap();
     assert!(body["boot_time"].is_number());
     assert_eq!(body["status"], "ok");
+}
+
+// ─── NormalizePath trailing-slash tests ───
+
+#[tokio::test]
+async fn test_trailing_slash_list_users() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["user"]);
+    let resp = app.get_authenticated("/users/", &token).await.assert_ok();
+    let users: Vec<User> = resp.json();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].name, "Alice");
+}
+
+#[tokio::test]
+async fn test_trailing_slash_get_user_by_id() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["user"]);
+    let resp = app.get_authenticated("/users/1/", &token).await.assert_ok();
+    let user: User = resp.json();
+    assert_eq!(user.name, "Alice");
+}
+
+#[tokio::test]
+async fn test_trailing_slash_health() {
+    let (app, _jwt) = setup().await;
+    let resp = app.get("/health/").await.assert_ok();
+    assert_eq!(resp.text(), "OK");
+}
+
+#[tokio::test]
+async fn test_trailing_slash_nonexistent_still_404() {
+    let (app, _jwt) = setup().await;
+    app.get("/nonexistent/").await.assert_not_found();
 }

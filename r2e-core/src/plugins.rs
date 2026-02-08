@@ -157,21 +157,13 @@ impl Plugin for DevReload {
 /// This ensures consistent routing regardless of whether clients include
 /// a trailing slash.
 ///
-/// **Note:** This plugin should be installed last in the plugin chain to work
-/// correctly. Installing other plugins after this one will emit a warning.
+/// Uses a router fallback approach: when no route matches and the path has a
+/// trailing slash, the request is re-dispatched with the slash stripped. This
+/// can be installed at any point in the plugin chain.
 pub struct NormalizePath;
 
 impl Plugin for NormalizePath {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        use tower_http::normalize_path::NormalizePathLayer;
-        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
-    }
-
-    fn should_be_last() -> bool {
-        true
-    }
-
-    fn name() -> &'static str {
-        "NormalizePath"
+        app.enable_normalize_path()
     }
 }

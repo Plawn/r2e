@@ -22,6 +22,22 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
     let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
 
+    // Only emit extend() calls for non-empty metadata lists to avoid
+    // type inference issues with empty vec![].
+    let register_meta_stmts = {
+        let mut stmts = Vec::new();
+        if !route_metadata_items.is_empty() {
+            stmts.push(quote! { __registry.extend(vec![#(#route_metadata_items),*]); });
+        }
+        if !sse_metadata_items.is_empty() {
+            stmts.push(quote! { __registry.extend(vec![#(#sse_metadata_items),*]); });
+        }
+        if !ws_metadata_items.is_empty() {
+            stmts.push(quote! { __registry.extend(vec![#(#ws_metadata_items),*]); });
+        }
+        stmts
+    };
+
     let router_body = quote! {
         {
             let __inner = #krate::http::Router::new()
@@ -41,11 +57,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #router_body
             }
 
-            fn route_metadata() -> Vec<#krate::openapi::RouteInfo> {
-                let mut __meta = vec![#(#route_metadata_items),*];
-                __meta.extend(vec![#(#sse_metadata_items),*]);
-                __meta.extend(vec![#(#ws_metadata_items),*]);
-                __meta
+            fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
+                #(#register_meta_stmts)*
             }
 
             #pre_auth_guards_fn
@@ -241,7 +254,7 @@ fn generate_route_metadata(
             let (body_type_token, body_schema_token) = extract_body_info(rm);
 
             quote! {
-                #krate::openapi::RouteInfo {
+                #krate::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
                         Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
                         None => #route_path_str.to_string(),
@@ -275,9 +288,9 @@ fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> V
                         if let Some(elem) = ts.elems.first() {
                             let param_name = quote!(#elem).to_string();
                             return Some(quote! {
-                                #krate::openapi::ParamInfo {
+                                #krate::meta::ParamInfo {
                                     name: #param_name.to_string(),
-                                    location: #krate::openapi::ParamLocation::Path,
+                                    location: #krate::meta::ParamLocation::Path,
                                     param_type: "string".to_string(),
                                     required: true,
                                 }
@@ -519,7 +532,7 @@ fn generate_sse_route_metadata(
             let tag = &tag_name;
 
             quote! {
-                #krate::openapi::RouteInfo {
+                #krate::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
                         Some(__prefix) => format!("{}{}", __prefix, #path),
                         None => #path.to_string(),
@@ -598,7 +611,7 @@ fn generate_ws_route_metadata(
             let tag = &tag_name;
 
             quote! {
-                #krate::openapi::RouteInfo {
+                #krate::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
                         Some(__prefix) => format!("{}{}", __prefix, #path),
                         None => #path.to_string(),

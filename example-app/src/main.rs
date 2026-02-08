@@ -167,7 +167,7 @@ async fn main() {
         .register_controller::<WsEchoController>()
         .register_controller::<NotificationController>()
         .register_controller::<UploadController>()
-        .with(NormalizePath) // Must be last to normalize paths before routing
+        .with(NormalizePath) // Trailing-slash normalization (can be installed anywhere)
         .serve("0.0.0.0:3001")
         .await
         .unwrap();

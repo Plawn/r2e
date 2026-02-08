@@ -1,4 +1,5 @@
 use crate::{openapi_routes, OpenApiConfig};
+use r2e_core::meta::RouteInfo;
 use r2e_core::Plugin;
 
 /// Plugin that adds OpenAPI spec generation and optional documentation UI.
@@ -30,6 +31,6 @@ impl OpenApiPlugin {
 impl Plugin for OpenApiPlugin {
     fn install<T: Clone + Send + Sync + 'static>(self, app: r2e_core::AppBuilder<T>) -> r2e_core::AppBuilder<T> {
         let config = self.config;
-        app.with_openapi_builder(move |metadata| openapi_routes::<T>(config, metadata))
+        app.with_meta_consumer::<RouteInfo, _>(move |routes| openapi_routes::<T>(config, routes))
     }
 }

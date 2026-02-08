@@ -199,18 +199,18 @@ impl Cache {
     }
 }
 
-impl<T> Interceptor<r2e_core::http::Json<T>> for Cache
+impl<R> Interceptor<R> for Cache
 where
-    T: serde::Serialize + serde::de::DeserializeOwned + Send,
+    R: r2e_core::Cacheable,
 {
     fn around<F, Fut>(
         &self,
         ctx: InterceptorContext,
         next: F,
-    ) -> impl Future<Output = r2e_core::http::Json<T>> + Send
+    ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = r2e_core::http::Json<T>> + Send,
+        Fut: Future<Output = R> + Send,
     {
         let store = r2e_cache::cache_backend();
         let key = self.full_key(&ctx);
@@ -218,16 +218,16 @@ where
         async move {
             // Cache hit
             if let Some(cached) = store.get(&key).await {
-                if let Ok(val) = serde_json::from_str::<T>(&cached) {
-                    return r2e_core::http::Json(val);
+                if let Some(val) = R::from_cache(&cached) {
+                    return val;
                 }
                 // Deserialization failed — remove stale entry
                 store.remove(&key).await;
             }
             // Cache miss
             let result = next().await;
-            if let Ok(s) = serde_json::to_string(&result.0) {
-                store.set(&key, s, ttl).await;
+            if let Some(bytes) = result.to_cache() {
+                store.set(&key, bytes, ttl).await;
             }
             result
         }
@@ -390,7 +390,7 @@ mod tests {
         // Pre-populate cache under group prefix
         let store = r2e_cache::cache_backend();
         store
-            .set("mygroup:item1", "\"val\"".to_string(), std::time::Duration::from_secs(60))
+            .set("mygroup:item1", bytes::Bytes::from("\"val\""), std::time::Duration::from_secs(60))
             .await;
 
         let invalidator = CacheInvalidate::group("mygroup");

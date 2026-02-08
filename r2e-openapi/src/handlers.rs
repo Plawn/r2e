@@ -1,7 +1,7 @@
 use r2e_core::http::response::{Html, IntoResponse};
 use r2e_core::http::routing::get;
 use r2e_core::http::Router;
-use r2e_core::openapi::RouteInfo;
+use r2e_core::meta::RouteInfo;
 use std::sync::Arc;
 
 use crate::builder::{build_spec, OpenApiConfig};
@@ -18,10 +18,9 @@ struct OpenApiState {
 /// The returned router can be passed to `AppBuilder::register_routes()`.
 pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     config: OpenApiConfig,
-    route_metadata: Vec<Vec<RouteInfo>>,
+    routes: &[RouteInfo],
 ) -> Router<T> {
-    let all_routes: Vec<RouteInfo> = route_metadata.into_iter().flatten().collect();
-    let spec = build_spec(&config, &all_routes);
+    let spec = build_spec(&config, &routes);
     let spec_json = serde_json::to_string_pretty(&spec).unwrap_or_else(|_| "{}".to_string());
     let docs_ui = config.docs_ui;
 

@@ -2069,6 +2069,7 @@ dependencies = [
 name = "r2e-cache"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "dashmap",
  "tokio",
 ]
@@ -2224,6 +2225,7 @@ dependencies = [
 name = "r2e-utils"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "r2e-cache",
  "r2e-core",
  "serde",

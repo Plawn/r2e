@@ -1,6 +1,7 @@
 use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
+use crate::meta::MetaRegistry;
 #[allow(deprecated)]
 use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
 use crate::type_list::{BuildableFrom, TCons, TNil};
@@ -15,6 +16,10 @@ type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
+
+/// A meta consumer that drains typed metadata from the registry and returns
+/// a router fragment to be merged into the application.
+type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
 
 /// A serve hook that receives tasks and starts them.
 /// Tasks already have their state captured, so only the token is needed.
@@ -42,6 +47,8 @@ struct BuilderConfig {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// Name of the last plugin that should be installed last (for ordering validation).
     last_plugin_name: Option<&'static str>,
+    /// Whether to install a trailing-slash normalization fallback.
+    normalize_path: bool,
 }
 
 /// Builder for assembling a R2E application.
@@ -69,9 +76,8 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
     pre_auth_guard_fns: Vec<Box<dyn FnOnce(crate::http::Router<T>, &T) -> crate::http::Router<T> + Send>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook>,
-    route_metadata: Vec<Vec<crate::openapi::RouteInfo>>,
-    openapi_builder:
-        Option<Box<dyn FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> crate::http::Router<T> + Send>>,
+    meta_registry: MetaRegistry,
+    meta_consumers: Vec<MetaConsumer<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
     /// Serve hooks from plugins (called when server starts).
     /// Tasks already capture their state, so only the token is needed.
@@ -95,14 +101,15 @@ impl AppBuilder<NoState, TNil> {
                 deferred_plugins: Vec::new(),
                 plugin_data: HashMap::new(),
                 last_plugin_name: None,
+                normalize_path: false,
             },
             state: None,
             routes: Vec::new(),
             pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
-            route_metadata: Vec::new(),
-            openapi_builder: None,
+            meta_registry: MetaRegistry::new(),
+            meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
@@ -121,8 +128,8 @@ impl<P> AppBuilder<NoState, P> {
             pre_auth_guard_fns: self.pre_auth_guard_fns,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
-            route_metadata: self.route_metadata,
-            openapi_builder: self.openapi_builder,
+            meta_registry: self.meta_registry,
+            meta_consumers: self.meta_consumers,
             consumer_registrations: self.consumer_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
@@ -306,8 +313,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
-            route_metadata: Vec::new(),
-            openapi_builder: None,
+            meta_registry: MetaRegistry::new(),
+            meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
@@ -374,6 +381,18 @@ impl DeferredInstallContext for LegacyInstallContext<'_> {
 }
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
+    // ── Path normalization ──────────────────────────────────────────────
+
+    /// Enable trailing-slash normalization via a router fallback.
+    ///
+    /// When enabled, requests to paths with a trailing slash (e.g. `/users/`)
+    /// that don't match any route are re-dispatched with the slash stripped
+    /// (e.g. `/users`). This can be installed at any point in the plugin chain.
+    pub(crate) fn enable_normalize_path(mut self) -> Self {
+        self.shared.normalize_path = true;
+        self
+    }
+
     // ── Plugin system ───────────────────────────────────────────────────
 
     /// Install a [`Plugin`] into this builder.
@@ -582,7 +601,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.routes.push(C::routes());
         self.pre_auth_guard_fns
             .push(Box::new(|router, state| C::apply_pre_auth_guards(router, state)));
-        self.route_metadata.push(C::route_metadata());
+        C::register_meta(&mut self.meta_registry);
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
 
@@ -606,16 +625,28 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Register a deferred OpenAPI route builder.
+    /// Register a typed metadata consumer.
     ///
-    /// The callback receives all route metadata collected from `register_controller`
-    /// calls (in order) and must return a `Router<T>` to merge into the app.
-    /// Called at `build()` time, so registration order does not matter.
-    pub fn with_openapi_builder<F>(mut self, f: F) -> Self
+    /// At `build()` time, the consumer receives a shared slice of all `M` items
+    /// from the [`MetaRegistry`] and returns a `Router<T>` to merge into the app.
+    /// Multiple consumers for the same type can coexist (non-draining).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// app.with_meta_consumer::<RouteInfo, _>(|items| {
+    ///     openapi_routes::<T>(config, items)
+    /// })
+    /// ```
+    pub fn with_meta_consumer<M, F>(mut self, f: F) -> Self
     where
-        F: FnOnce(Vec<Vec<crate::openapi::RouteInfo>>) -> crate::http::Router<T> + Send + 'static,
+        M: Any + Send + Sync,
+        F: FnOnce(&[M]) -> crate::http::Router<T> + Send + 'static,
     {
-        self.openapi_builder = Some(Box::new(f));
+        self.meta_consumers.push(Box::new(move |registry| {
+            let items = registry.get_or_empty::<M>();
+            f(items)
+        }));
         self
     }
 
@@ -657,14 +688,42 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             router = guard_fn(router, &state);
         }
 
-        // Invoke the deferred OpenAPI builder, if registered.
-        if let Some(builder) = self.openapi_builder {
-            let openapi_router = builder(self.route_metadata);
-            router = router.merge(openapi_router);
+        // Invoke meta consumers (e.g. OpenAPI spec builder).
+        let meta_registry = self.meta_registry;
+        for consumer in self.meta_consumers {
+            let consumer_router = consumer(&meta_registry);
+            router = router.merge(consumer_router);
         }
 
         // Apply the application state.
         let mut app = router.with_state(state.clone());
+
+        // Install trailing-slash normalization fallback.
+        // When no route matches and the path has a trailing slash, strip it
+        // and re-dispatch to the same router via `tower::ServiceExt::oneshot`.
+        if self.shared.normalize_path {
+            use crate::http::response::IntoResponse;
+            let inner = app.clone();
+            app = app.fallback(move |req: crate::http::extract::Request| async move {
+                let path = req.uri().path();
+                if path.len() > 1 && path.ends_with('/') {
+                    let trimmed = path.trim_end_matches('/');
+                    let new_uri = match req.uri().query() {
+                        Some(q) => format!("{}?{}", trimmed, q),
+                        None => trimmed.to_string(),
+                    };
+                    let (mut parts, body) = req.into_parts();
+                    parts.uri = new_uri.parse().unwrap_or(parts.uri);
+                    let new_req = crate::http::header::HttpRequest::from_parts(parts, body);
+                    match tower::ServiceExt::oneshot(inner.clone(), new_req).await {
+                        Ok(resp) => resp,
+                        Err(infallible) => match infallible {},
+                    }
+                } else {
+                    crate::http::StatusCode::NOT_FOUND.into_response()
+                }
+            });
+        }
 
         // Apply layers (in registration order).
         for layer_fn in self.shared.custom_layers {
