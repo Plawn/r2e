@@ -190,7 +190,6 @@ static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone)]
 struct BroadcastMessage {
     data: Arc<Message>,
-    #[allow(dead_code)]
     sender_id: Option<u64>,
 }
 
@@ -233,6 +232,34 @@ impl WsBroadcaster {
         });
     }
 
+    /// Broadcast a text message, excluding the sender.
+    pub fn send_text_from(&self, sender_id: u64, text: impl Into<String>) {
+        let s: String = text.into();
+        let _ = self.tx.send(BroadcastMessage {
+            data: Arc::new(Message::Text(s.into())),
+            sender_id: Some(sender_id),
+        });
+    }
+
+    /// Broadcast a JSON message, excluding the sender.
+    pub fn send_json_from<T: Serialize>(
+        &self,
+        sender_id: u64,
+        data: &T,
+    ) -> Result<(), serde_json::Error> {
+        let json = serde_json::to_string(data)?;
+        self.send_text_from(sender_id, json);
+        Ok(())
+    }
+
+    /// Broadcast a raw message, excluding the sender.
+    pub fn send_from(&self, sender_id: u64, msg: Message) {
+        let _ = self.tx.send(BroadcastMessage {
+            data: Arc::new(msg),
+            sender_id: Some(sender_id),
+        });
+    }
+
     /// Create a receiver for a new client.
     pub fn subscribe(&self) -> WsBroadcastReceiver {
         WsBroadcastReceiver {
@@ -245,16 +272,25 @@ impl WsBroadcaster {
 /// Receiver end of a WsBroadcaster subscription.
 pub struct WsBroadcastReceiver {
     rx: broadcast::Receiver<BroadcastMessage>,
-    #[allow(dead_code)]
     client_id: u64,
 }
 
 impl WsBroadcastReceiver {
-    /// Receive the next broadcast message.
+    /// Returns this receiver's unique client ID (for use with `send_*_from`).
+    pub fn client_id(&self) -> u64 {
+        self.client_id
+    }
+
+    /// Receive the next broadcast message, skipping messages sent by this client.
     pub async fn recv(&mut self) -> Option<Message> {
         loop {
             match self.rx.recv().await {
-                Ok(msg) => return Some((*msg.data).clone()),
+                Ok(msg) => {
+                    if msg.sender_id == Some(self.client_id) {
+                        continue; // skip own messages
+                    }
+                    return Some((*msg.data).clone());
+                }
                 Err(broadcast::error::RecvError::Closed) => return None,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
             }
