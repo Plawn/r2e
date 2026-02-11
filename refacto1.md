@@ -28,11 +28,13 @@
   - Mettre a jour le message de warning pour pointer vers `.plugin(Scheduler)`.
 - Fichier: `r2e-core/src/builder.rs`.
 
-## 5) Champs morts dans le broadcaster WS
-- Probleme: `sender_id`/`client_id` ne sont jamais utilises; `allow(dead_code)` masque le probleme.
-- Remediation:
-  - Option A: implementer l'exclusion de l'emetteur (ex: `send_from(sender_id, msg)` et filtrage cote receiver).
-  - Option B: supprimer `sender_id`/`client_id` et les `allow(dead_code)` associes.
+## 5) ~~Champs morts dans le broadcaster WS~~ ✅
+- ~~Probleme: `sender_id`/`client_id` ne sont jamais utilises; `allow(dead_code)` masque le probleme.~~
+- Resolution: Option A implementee — exclusion de l'emetteur.
+  - Retire les `#[allow(dead_code)]` sur `sender_id` et `client_id`.
+  - Ajoute `send_text_from()`, `send_json_from()`, `send_from()` sur `WsBroadcaster` (prennent un `sender_id: u64`).
+  - Expose `client_id()` sur `WsBroadcastReceiver`.
+  - `recv()` filtre les messages ou `sender_id == Some(self.client_id)`.
 - Fichier: `r2e-core/src/ws.rs`.
 
 ## 6) `#[allow(unused_variables)]` global sur `WsHandler`
