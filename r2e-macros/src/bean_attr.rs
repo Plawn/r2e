@@ -31,6 +31,7 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
     // Extract parameter types and generate dependency list + build args.
     let mut dep_type_ids = Vec::new();
     let mut build_args = Vec::new();
+    let mut config_key_entries = Vec::new();
     let mut has_config = false;
 
     let fn_name = &constructor.sig.ident;
@@ -56,6 +57,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     let key: syn::LitStr = attr.parse_args()?;
                     let key_str = key.value();
                     let env_hint = key_str.replace('.', "_").to_uppercase();
+                    let ty_name_str = quote!(#ty).to_string();
+                    config_key_entries.push(quote! { (#key_str, #ty_name_str) });
                     build_args.push(quote! {
                         let #arg_name: #ty = __r2e_config.get::<#ty>(#key_str).unwrap_or_else(|_| {
                             panic!(
@@ -98,6 +101,16 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
+    let config_keys_fn = if config_key_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> Vec<(&'static str, &'static str)> {
+                vec![#(#config_key_entries),*]
+            }
+        }
+    };
+
     if is_async {
         // Generate AsyncBean impl
         Ok(quote! {
@@ -105,6 +118,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]
                 }
+
+                #config_keys_fn
 
                 async fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude
@@ -120,6 +135,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]
                 }
+
+                #config_keys_fn
 
                 fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude

@@ -30,7 +30,11 @@ pub mod ws;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, Producer};
 pub use builder::{AppBuilder, TaskRegistryHandle};
-pub use config::R2eConfig;
+pub use config::{
+    ConfigError, ConfigProperties, ConfigValidationError, ConfigValue, DefaultSecretResolver,
+    FromConfigValue, MissingKeyError, PropertyMeta, R2eConfig, RegisteredSection, SecretResolver,
+    register_section, registered_sections, validate_keys, validate_section,
+};
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
 pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext, RolesGuard};

@@ -51,6 +51,65 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         )
     };
 
+    // Generate unified validate_config function
+    let controller_name_str = name.to_string();
+
+    // Individual #[config("key")] fields
+    let config_key_entries: Vec<TokenStream> = def
+        .config_fields
+        .iter()
+        .map(|f| {
+            let key = &f.key;
+            let ty = &f.ty;
+            let ty_name_str = quote!(#ty).to_string();
+            quote! { (#controller_name_str, #key, #ty_name_str) }
+        })
+        .collect();
+
+    // #[config_section] fields
+    let config_section_validations: Vec<TokenStream> = def
+        .config_section_fields
+        .iter()
+        .map(|f| {
+            let field_type = &f.ty;
+            quote! {
+                __errors.extend(#krate::config::validation::validate_section::<#field_type>(__config));
+            }
+        })
+        .collect();
+
+    let has_any_config = !config_key_entries.is_empty() || !config_section_validations.is_empty();
+
+    let validate_fn = if !has_any_config {
+        quote! {
+            pub fn validate_config(
+                _config: &#krate::config::R2eConfig,
+            ) -> Vec<#krate::config::MissingKeyError> {
+                Vec::new()
+            }
+        }
+    } else {
+        let keys_validation = if config_key_entries.is_empty() {
+            quote! {}
+        } else {
+            quote! {
+                let __keys: &[(&str, &str, &str)] = &[#(#config_key_entries),*];
+                __errors.extend(#krate::config::validation::validate_keys(__config, __keys));
+            }
+        };
+
+        quote! {
+            pub fn validate_config(
+                __config: &#krate::config::R2eConfig,
+            ) -> Vec<#krate::config::MissingKeyError> {
+                let mut __errors = Vec::new();
+                #keys_validation
+                #(#config_section_validations)*
+                __errors
+            }
+        }
+    };
+
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -60,6 +119,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
             #identity_type
             #guard_identity_fn
+            #validate_fn
         }
     }
 }
@@ -138,11 +198,42 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
+    // Config section field initializers (#[config_section])
+    let config_section_inits: Vec<TokenStream> = def
+        .config_section_fields
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            let field_type = &f.ty;
+            quote! {
+                #field_name: {
+                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
+                    match <#field_type as #krate::ConfigProperties>::from_config(&__cfg) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(#krate::http::response::IntoResponse::into_response(
+                                #krate::AppError::Internal(
+                                    format!(
+                                        "Configuration error in {}: failed to load {} — {}",
+                                        #controller_name_str,
+                                        <#field_type as #krate::ConfigProperties>::prefix(),
+                                        e,
+                                    )
+                                )
+                            ));
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
     // All field initializers in declaration order
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
         .chain(identity_inits.iter())
         .chain(config_inits.iter())
+        .chain(config_section_inits.iter())
         .collect();
 
     let struct_init = if def.is_unit_struct {
@@ -211,9 +302,31 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
+    let config_section_inits: Vec<TokenStream> = def
+        .config_section_fields
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            let field_type = &f.ty;
+            quote! {
+                #field_name: {
+                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
+                    <#field_type as #krate::ConfigProperties>::from_config(&__cfg)
+                        .unwrap_or_else(|e| panic!(
+                            "Configuration error in `{}`: failed to load {} — {}",
+                            #sc_controller_name_str,
+                            <#field_type as #krate::ConfigProperties>::prefix(),
+                            e,
+                        ))
+                }
+            }
+        })
+        .collect();
+
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
         .chain(config_inits.iter())
+        .chain(config_section_inits.iter())
         .collect();
 
     let struct_init = if def.is_unit_struct {

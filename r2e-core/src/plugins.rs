@@ -38,11 +38,49 @@ impl Plugin for Cors {
 
 /// HTTP request/response tracing plugin.
 ///
-/// Adds a `TraceLayer` that logs requests and responses at the `DEBUG` level.
+/// Initialises the global `tracing` subscriber (via [`init_tracing()`]) and
+/// adds a tower-http `TraceLayer` that logs requests and responses at the
+/// `DEBUG` level.
+///
+/// This is the **lightweight** tracing option bundled with `r2e-core`. It
+/// writes structured logs to stdout but does **not** export traces to an
+/// external collector.
+///
+/// # When to use `Tracing` vs `Observability`
+///
+/// | | `Tracing` | `Observability` |
+/// |---|---|---|
+/// | Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
+/// | Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
+/// | HTTP trace layer | tower-http `TraceLayer` | tower-http `TraceLayer` + `OtelTraceLayer` |
+/// | Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
+/// | Context propagation | No | Yes (W3C `traceparent`) |
+/// | Configuration | None (RUST_LOG only) | `ObservabilityConfig` builder + YAML |
+///
+/// **Rule of thumb:** use `Tracing` for local development and simple services.
+/// Switch to `Observability` when you need distributed tracing across
+/// microservices.
+///
+/// **Do not** install both — `Observability` already includes the
+/// `TraceLayer` and its own log subscriber.
+///
+/// [`init_tracing()`]: crate::init_tracing
+///
+/// # Example
+///
+/// ```ignore
+/// AppBuilder::new()
+///     .build_state::<MyState, _>()
+///     .await
+///     .with(Tracing)
+///     .serve("0.0.0.0:3000")
+///     .await;
+/// ```
 pub struct Tracing;
 
 impl Plugin for Tracing {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        crate::layers::init_tracing();
         app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
     }
 }
@@ -95,18 +133,27 @@ async fn simple_health_handler() -> &'static str {
 /// Created via [`Health::builder()`].
 pub struct AdvancedHealth {
     checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>,
+    cache_ttl: Option<std::time::Duration>,
 }
 
 impl AdvancedHealth {
-    pub(crate) fn new(checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>) -> Self {
-        Self { checks }
+    pub(crate) fn new(
+        checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>,
+        cache_ttl: Option<std::time::Duration>,
+    ) -> Self {
+        Self { checks, cache_ttl }
     }
 }
 
 impl Plugin for AdvancedHealth {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         use std::sync::Arc;
-        let state = Arc::new(crate::health::HealthState { checks: self.checks });
+        let state = Arc::new(crate::health::HealthState {
+            checks: self.checks,
+            start_time: std::time::Instant::now(),
+            cache_ttl: self.cache_ttl,
+            cache: tokio::sync::RwLock::new(None),
+        });
         let s1 = state.clone();
         app.register_routes(
             crate::http::Router::new()

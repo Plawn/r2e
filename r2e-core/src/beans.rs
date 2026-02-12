@@ -20,6 +20,14 @@ pub trait Bean: Clone + Send + Sync + 'static {
     /// to construct this bean.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
+    /// Returns the config keys required by this bean as `(key, type_name)` pairs.
+    ///
+    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
+    /// constructing any bean. The default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
     /// Construct the bean from a fully resolved context.
     fn build(ctx: &BeanContext) -> Self;
 }
@@ -37,6 +45,14 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Returns the config keys required by this bean as `(key, type_name)` pairs.
+    ///
+    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
+    /// constructing any bean. The default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
 
     /// Construct the bean asynchronously from a fully resolved context.
     fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
@@ -59,6 +75,14 @@ pub trait Producer: Send + 'static {
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to produce the output.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Returns the config keys required by this producer as `(key, type_name)` pairs.
+    ///
+    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
+    /// constructing any bean. The default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
 
     /// Produce the output from a fully resolved context.
     fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
@@ -147,6 +171,8 @@ struct BeanRegistration {
     type_name: &'static str,
     /// (TypeId, human-readable name) for each dependency.
     dependencies: Vec<(TypeId, &'static str)>,
+    /// (config_key, expected_type_name) for config validation.
+    config_keys: Vec<(&'static str, &'static str)>,
     factory: Factory,
 }
 
@@ -159,6 +185,8 @@ pub enum BeanError {
     MissingDependency { bean: String, dependency: String },
     /// The same type was registered more than once.
     DuplicateBean { type_name: String },
+    /// One or more config keys required by beans are missing.
+    MissingConfigKeys(crate::config::ConfigValidationError),
 }
 
 impl fmt::Display for BeanError {
@@ -181,6 +209,9 @@ impl fmt::Display for BeanError {
             }
             BeanError::DuplicateBean { type_name } => {
                 write!(f, "Bean of type '{}' registered twice", type_name)
+            }
+            BeanError::MissingConfigKeys(err) => {
+                write!(f, "{}", err)
             }
         }
     }
@@ -214,6 +245,7 @@ impl BeanRegistry {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
             dependencies: T::dependencies(),
+            config_keys: T::config_keys(),
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let bean = T::build(&ctx);
@@ -232,6 +264,7 @@ impl BeanRegistry {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
             dependencies: T::dependencies(),
+            config_keys: T::config_keys(),
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let bean = T::build(&ctx).await;
@@ -251,6 +284,7 @@ impl BeanRegistry {
             type_id: TypeId::of::<P::Output>(),
             type_name: type_name::<P::Output>(),
             dependencies: P::dependencies(),
+            config_keys: P::config_keys(),
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let output = P::produce(&ctx).await;
@@ -285,6 +319,9 @@ impl BeanRegistry {
         // Build dependency graph
         let id_to_idx = Self::build_type_index(&self.beans);
         Self::check_missing_dependencies(&self.beans, &entries, &id_to_idx)?;
+
+        // Validate config keys before construction
+        Self::validate_config_keys(&self.beans, &entries)?;
 
         // Topological sort
         let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
@@ -342,6 +379,44 @@ impl BeanRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Validate all config keys declared by beans against the provided R2eConfig.
+    ///
+    /// Uses the shared [`validate_keys`](crate::config::validate_keys) function.
+    fn validate_config_keys(
+        beans: &[BeanRegistration],
+        entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) -> Result<(), BeanError> {
+        let all_keys: Vec<_> = beans
+            .iter()
+            .flat_map(|reg| {
+                reg.config_keys
+                    .iter()
+                    .map(move |(key, ty_name)| (reg.type_name, *key, *ty_name))
+            })
+            .collect();
+
+        if all_keys.is_empty() {
+            return Ok(());
+        }
+
+        let config = entries
+            .get(&TypeId::of::<crate::config::R2eConfig>())
+            .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
+
+        let Some(config) = config else {
+            return Ok(());
+        };
+
+        let errors = crate::config::validate_keys(config, &all_keys);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(BeanError::MissingConfigKeys(
+                crate::config::ConfigValidationError { errors },
+            ))
+        }
     }
 
     /// Perform topological sort using Kahn's algorithm.

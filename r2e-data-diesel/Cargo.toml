@@ -1,0 +1,21 @@
+[package]
+name = "r2e-data-diesel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["database", "sql", "diesel", "repository"]
+categories = ["database"]
+description = "Diesel backend for R2E data layer (skeleton)"
+
+[features]
+default = []
+sqlite = ["diesel/sqlite"]
+postgres = ["diesel/postgres"]
+mysql = ["diesel/mysql"]
+
+[dependencies]
+r2e-data = { path = "../r2e-data", version = "0.1.0" }
+diesel = { version = "2", features = ["r2d2"] }

@@ -2,6 +2,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 
 pub(crate) mod cacheable_derive;
+pub(crate) mod config_derive;
 pub(crate) mod crate_path;
 pub(crate) mod extract;
 pub(crate) mod from_multipart;
@@ -92,7 +93,7 @@ pub(crate) mod types;
 /// - `impl StatefulConstruct<State> for Name` — **only** when there are no
 ///   `#[inject(identity)]` fields on the struct. Used by event consumers and
 ///   scheduled tasks that run outside HTTP context.
-#[proc_macro_derive(Controller, attributes(controller, inject, identity, config))]
+#[proc_macro_derive(Controller, attributes(controller, inject, identity, config, config_section))]
 pub fn derive_controller(input: TokenStream) -> TokenStream {
     derive_controller::expand(input)
 }
@@ -724,4 +725,48 @@ pub fn derive_bean_state(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Cacheable)]
 pub fn derive_cacheable(input: TokenStream) -> TokenStream {
     cacheable_derive::expand(input)
+}
+
+/// Derive macro for strongly-typed configuration sections.
+///
+/// Generates a [`ConfigProperties`](r2e_core::config::typed::ConfigProperties)
+/// impl that maps a YAML config prefix to struct fields.
+///
+/// # Struct-level attribute
+///
+/// `#[config(prefix = "...")]` sets the config key prefix.
+///
+/// # Field attributes
+///
+/// | Attribute | Description |
+/// |-----------|-------------|
+/// | `#[config(default = <expr>)]` | Default value if key is missing |
+/// | `Option<T>` field type | Automatically optional (returns `None` if missing) |
+/// | No attribute + non-Option | Required — `from_config()` returns error if missing |
+///
+/// Doc comments on fields become property descriptions in metadata.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(ConfigProperties, Clone, Debug)]
+/// #[config(prefix = "app.database")]
+/// pub struct DatabaseConfig {
+///     /// Database connection URL
+///     pub url: String,
+///
+///     /// Connection pool size (default: 10)
+///     #[config(default = 10)]
+///     pub pool_size: i64,
+///
+///     /// Optional connection timeout in seconds
+///     pub timeout: Option<i64>,
+/// }
+///
+/// // Usage:
+/// let db_config = DatabaseConfig::from_config(&config)?;
+/// ```
+#[proc_macro_derive(ConfigProperties, attributes(config))]
+pub fn derive_config_properties(input: TokenStream) -> TokenStream {
+    config_derive::expand(input)
 }

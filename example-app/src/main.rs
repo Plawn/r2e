@@ -4,6 +4,7 @@ use std::time::Duration;
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use r2e::prelude::*;
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
+use r2e::r2e_observability::{Observability, ObservabilityConfig};
 use r2e::r2e_prometheus::Prometheus;
 use r2e::r2e_scheduler::Scheduler;
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
@@ -52,8 +53,6 @@ fn generate_test_token(secret: &[u8]) -> String {
 
 #[tokio::main]
 async fn main() {
-    r2e::init_tracing();
-
     let secret = b"r2e-demo-secret-change-in-production";
 
     // Print a test JWT for curl usage
@@ -134,7 +133,11 @@ async fn main() {
         .with(RequestIdPlugin)  // Request ID propagation
         .with(SecureHeaders::default()) // Security headers
         .with(Cors::permissive())
-        .with(Tracing)
+        .with(Observability::new(
+            ObservabilityConfig::new("r2e-example")
+                .with_service_version("0.1.0")
+                .capture_header("x-request-id"),
+        ))
         .with(ErrorHandling) // Error handling (#3)
         .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
             r2e::http::StatusCode::REQUEST_TIMEOUT,

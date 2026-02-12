@@ -1,0 +1,23 @@
+[package]
+name = "r2e-data-sqlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["database", "sql", "sqlx", "repository"]
+categories = ["database"]
+description = "SQLx backend for R2E data layer — SqlxRepository, Tx, HasPool, ManagedResource impl"
+
+[features]
+default = []
+sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+r2e-data = { path = "../r2e-data", version = "0.1.0" }
+sqlx = { version = "0.8", features = ["runtime-tokio"] }
+serde_json = "1"

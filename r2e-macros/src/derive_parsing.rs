@@ -8,6 +8,7 @@ pub struct ControllerStructDef {
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub config_fields: Vec<ConfigField>,
+    pub config_section_fields: Vec<ConfigSectionField>,
     pub is_unit_struct: bool,
 }
 
@@ -83,6 +84,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
     let mut injected_fields = Vec::new();
     let mut identity_fields = Vec::new();
     let mut config_fields = Vec::new();
+    let mut config_section_fields = Vec::new();
 
     for field in fields {
         let field_name = field.ident.clone().ok_or_else(|| {
@@ -93,6 +95,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         let inject_attr = field.attrs.iter().find(|a| a.path().is_ident("inject"));
         let legacy_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
+        let config_section_attr = field.attrs.iter().any(|a| a.path().is_ident("config_section"));
 
         if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {
@@ -129,13 +132,19 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                 ty: field_type,
                 key: key.value(),
             });
+        } else if config_section_attr {
+            config_section_fields.push(ConfigSectionField {
+                name: field_name,
+                ty: field_type,
+            });
         } else {
             return Err(syn::Error::new(
                 field_name.span(),
                 "every controller field must be annotated with one of:\n\
                  \n  #[inject]              — clone from app state\n\
                  \n  #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)\n\
-                 \n  #[config(\"app.key\")]   — resolve from R2eConfig",
+                 \n  #[config(\"app.key\")]   — resolve from R2eConfig\n\
+                 \n  #[config_section]      — resolve typed config section via ConfigProperties",
             ));
         }
     }
@@ -156,6 +165,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         injected_fields,
         identity_fields,
         config_fields,
+        config_section_fields,
         is_unit_struct,
     })
 }

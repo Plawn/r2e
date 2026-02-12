@@ -1,0 +1,28 @@
+[package]
+name = "r2e-observability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["opentelemetry", "tracing", "observability", "distributed-tracing"]
+categories = ["web-programming"]
+description = "OpenTelemetry observability plugin for R2E — distributed tracing and context propagation"
+
+[features]
+default = ["otlp"]
+otlp = ["opentelemetry-otlp"]
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", optional = true }
+opentelemetry-semantic-conventions = "0.31"
+tracing-opentelemetry = "0.32"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry", "json"] }
+tower = "0.5"
+http = "1"
+pin-project-lite = "0.2"

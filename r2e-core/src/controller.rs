@@ -56,4 +56,16 @@ pub trait Controller<T: Clone + Send + Sync + 'static> {
         let _ = state;
         Vec::new()
     }
+
+    /// Validate all config requirements declared on the controller.
+    ///
+    /// This covers both `#[config("key")]` individual fields and
+    /// `#[config_section]` typed sections. Called automatically by
+    /// `register_controller()` when a `R2eConfig` is available.
+    /// The default implementation returns an empty list.
+    fn validate_config(
+        _config: &crate::config::R2eConfig,
+    ) -> Vec<crate::config::MissingKeyError> {
+        Vec::new()
+    }
 }

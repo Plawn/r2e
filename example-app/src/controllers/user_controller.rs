@@ -1,6 +1,6 @@
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
-use crate::state::{Services, Tx};
+use crate::state::Services;
 use r2e::prelude::*;
 use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;

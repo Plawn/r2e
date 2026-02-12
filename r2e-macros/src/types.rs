@@ -16,6 +16,11 @@ pub struct ConfigField {
     pub key: String,
 }
 
+pub struct ConfigSectionField {
+    pub name: syn::Ident,
+    pub ty: syn::Type,
+}
+
 pub struct ConsumerMethod {
     pub bus_field: String,
     pub event_type: syn::Type,

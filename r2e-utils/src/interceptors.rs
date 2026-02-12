@@ -273,6 +273,112 @@ impl<R: Send> Interceptor<R> for CacheInvalidate {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Counted
+// ---------------------------------------------------------------------------
+
+/// Increments a named counter on each invocation, logged via `tracing`.
+///
+/// # Usage
+/// ```ignore
+/// #[intercept(Counted::new("user_list_total"))]
+/// async fn list(&self) -> Json<Vec<User>> { ... }
+/// ```
+pub struct Counted {
+    pub metric_name: String,
+    pub level: LogLevel,
+}
+
+impl Counted {
+    /// Create a counter with the given metric name.
+    pub fn new(name: &str) -> Self {
+        Self {
+            metric_name: name.to_string(),
+            level: LogLevel::Info,
+        }
+    }
+
+    /// Set the log level for the counter event.
+    pub fn with_level(mut self, level: LogLevel) -> Self {
+        self.level = level;
+        self
+    }
+}
+
+impl<R: Send> Interceptor<R> for Counted {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = R> + Send,
+    {
+        let metric_name = self.metric_name.clone();
+        let level = self.level;
+        async move {
+            let result = next().await;
+            log_at_level(
+                level,
+                ctx.method_name,
+                &format!("counted metric={metric_name}"),
+            );
+            result
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MetricTimed
+// ---------------------------------------------------------------------------
+
+/// Records the execution duration as a named metric, logged via `tracing`.
+///
+/// # Usage
+/// ```ignore
+/// #[intercept(MetricTimed::new("user_list_duration"))]
+/// async fn list(&self) -> Json<Vec<User>> { ... }
+/// ```
+pub struct MetricTimed {
+    pub metric_name: String,
+    pub level: LogLevel,
+}
+
+impl MetricTimed {
+    /// Create a duration metric with the given name.
+    pub fn new(name: &str) -> Self {
+        Self {
+            metric_name: name.to_string(),
+            level: LogLevel::Info,
+        }
+    }
+
+    /// Set the log level for the duration event.
+    pub fn with_level(mut self, level: LogLevel) -> Self {
+        self.level = level;
+        self
+    }
+}
+
+impl<R: Send> Interceptor<R> for MetricTimed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = R> + Send,
+    {
+        let metric_name = self.metric_name.clone();
+        let level = self.level;
+        async move {
+            let start = std::time::Instant::now();
+            let result = next().await;
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            log_at_level(
+                level,
+                ctx.method_name,
+                &format!("metric={metric_name} elapsed_ms={elapsed_ms}"),
+            );
+            result
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

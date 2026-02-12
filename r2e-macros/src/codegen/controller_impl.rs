@@ -66,6 +66,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             #register_consumers_fn
 
             #scheduled_tasks_fn
+
+            fn validate_config(
+                __config: &#krate::config::R2eConfig,
+            ) -> Vec<#krate::config::MissingKeyError> {
+                #meta_mod::validate_config(__config)
+            }
         }
     }
 }

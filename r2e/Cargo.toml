@@ -12,17 +12,24 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "scheduler", "cache", "rate-limit", "openapi", "prometheus", "openfga", "ws", "multipart"]
+full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "prometheus", "openfga", "observability", "ws", "multipart"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
 data = ["dep:r2e-data"]
+data-sqlx = ["data", "dep:r2e-data-sqlx"]
+data-diesel = ["data", "dep:r2e-data-diesel"]
+# Convenience pass-through features for sqlx database drivers
+sqlite = ["data-sqlx", "r2e-data-sqlx/sqlite"]
+postgres = ["data-sqlx", "r2e-data-sqlx/postgres"]
+mysql = ["data-sqlx", "r2e-data-sqlx/mysql"]
 scheduler = ["dep:r2e-scheduler"]
 cache = ["dep:r2e-cache"]
 rate-limit = ["dep:r2e-rate-limit"]
 openapi = ["dep:r2e-openapi"]
 prometheus = ["dep:r2e-prometheus"]
 openfga = ["dep:r2e-openfga"]
+observability = ["dep:r2e-observability"]
 validation = ["r2e-core/validation"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
@@ -34,9 +41,12 @@ r2e-security = { path = "../r2e-security", version = "0.1.0", optional = true }
 r2e-events = { path = "../r2e-events", version = "0.1.0", optional = true }
 r2e-utils = { path = "../r2e-utils", version = "0.1.0", optional = true }
 r2e-data = { path = "../r2e-data", version = "0.1.0", optional = true }
+r2e-data-sqlx = { path = "../r2e-data-sqlx", version = "0.1.0", optional = true }
+r2e-data-diesel = { path = "../r2e-data-diesel", version = "0.1.0", optional = true }
 r2e-scheduler = { path = "../r2e-scheduler", version = "0.1.0", optional = true }
 r2e-cache = { path = "../r2e-cache", version = "0.1.0", optional = true }
 r2e-rate-limit = { path = "../r2e-rate-limit", version = "0.1.0", optional = true }
 r2e-openapi = { path = "../r2e-openapi", version = "0.1.0", optional = true }
 r2e-prometheus = { path = "../r2e-prometheus", version = "0.1.0", optional = true }
 r2e-openfga = { path = "../r2e-openfga", version = "0.1.0", optional = true }
+r2e-observability = { path = "../r2e-observability", version = "0.1.0", optional = true }

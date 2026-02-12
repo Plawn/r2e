@@ -39,6 +39,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let krate = r2e_core_path();
     let mut dep_type_ids = Vec::new();
     let mut field_inits = Vec::new();
+    let mut config_key_entries = Vec::new();
     let mut has_config = false;
 
     for field in fields {
@@ -55,6 +56,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             let key: syn::LitStr = attr.parse_args()?;
             let key_str = key.value();
             let env_hint = key_str.replace('.', "_").to_uppercase();
+            let ty_name_str = quote!(#field_type).to_string();
+            config_key_entries.push(quote! { (#key_str, #ty_name_str) });
             field_inits.push(quote! {
                 #field_name: __r2e_config.get::<#field_type>(#key_str).unwrap_or_else(|_| {
                     panic!(
@@ -85,11 +88,23 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
+    let config_keys_fn = if config_key_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> Vec<(&'static str, &'static str)> {
+                vec![#(#config_key_entries),*]
+            }
+        }
+    };
+
     Ok(quote! {
         impl #krate::beans::Bean for #name {
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                 vec![#(#dep_type_ids),*]
             }
+
+            #config_keys_fn
 
             fn build(ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude

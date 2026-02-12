@@ -23,32 +23,19 @@ impl DataController {
         &self,
         Query(pageable): Query<Pageable>,
     ) -> Result<Json<Page<UserEntity>>, AppError> {
-        let count_qb = QueryBuilder::new(UserEntity::table_name());
-        let (count_sql, count_params) = count_qb.build_count();
-
-        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
-        for p in &count_params {
-            count_query = count_query.bind(p);
-        }
-        let total = count_query
+        let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))? as u64;
 
-        let select_qb = QueryBuilder::new(UserEntity::table_name())
-            .order_by("id", true)
-            .limit(pageable.size)
-            .offset(pageable.offset());
-        let (sql, params) = select_qb.build_select("id, name, email");
-
-        let mut select_query = sqlx::query_as::<_, (i64, String, String)>(&sql);
-        for p in &params {
-            select_query = select_query.bind(p);
-        }
-        let rows = select_query
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, name, email FROM users ORDER BY id ASC LIMIT ? OFFSET ?",
+        )
+        .bind(pageable.size as i64)
+        .bind(pageable.offset() as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()
@@ -63,19 +50,28 @@ impl DataController {
         &self,
         Query(params): Query<SearchParams>,
     ) -> Result<Json<Vec<UserEntity>>, AppError> {
-        let mut qb = QueryBuilder::new(UserEntity::table_name());
+        let mut sql = String::from("SELECT id, name, email FROM users WHERE 1=1");
+        let mut bind_name: Option<String> = None;
+        let mut bind_email: Option<&str> = None;
+
         if let Some(ref name) = params.name {
-            qb = qb.where_like("name", &format!("%{name}%"));
+            sql.push_str(" AND name LIKE ?");
+            bind_name = Some(format!("%{name}%"));
         }
         if let Some(ref email) = params.email {
-            qb = qb.where_eq("email", email);
+            sql.push_str(" AND email = ?");
+            bind_email = Some(email);
         }
-        let (sql, bind_params) = qb.order_by("id", true).build_select("id, name, email");
+        sql.push_str(" ORDER BY id ASC");
 
         let mut query = sqlx::query_as::<_, (i64, String, String)>(&sql);
-        for p in &bind_params {
-            query = query.bind(p);
+        if let Some(ref pattern) = bind_name {
+            query = query.bind(pattern);
         }
+        if let Some(email) = bind_email {
+            query = query.bind(email);
+        }
+
         let rows = query
             .fetch_all(&self.pool)
             .await

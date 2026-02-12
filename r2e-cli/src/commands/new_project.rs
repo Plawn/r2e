@@ -1,109 +1,198 @@
 use colored::Colorize;
+use dialoguer::{MultiSelect, Select};
 use std::fs;
 use std::path::Path;
 
-pub fn run(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = Path::new(name);
+use super::templates;
+
+#[derive(Debug, Clone)]
+pub enum DbKind {
+    Sqlite,
+    Postgres,
+    Mysql,
+}
+
+pub struct ProjectOptions {
+    pub name: String,
+    pub db: Option<DbKind>,
+    pub auth: bool,
+    pub openapi: bool,
+    #[allow(dead_code)]
+    pub metrics: bool,
+    pub scheduler: bool,
+    pub events: bool,
+}
+
+pub struct CliNewOpts {
+    pub db: Option<String>,
+    pub auth: bool,
+    pub openapi: bool,
+    pub metrics: bool,
+    pub full: bool,
+    pub no_interactive: bool,
+}
+
+impl CliNewOpts {
+    fn has_any_flag(&self) -> bool {
+        self.db.is_some() || self.auth || self.openapi || self.metrics
+    }
+}
+
+pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::Error>> {
+    let opts = if cli_opts.full {
+        ProjectOptions {
+            name: name.to_string(),
+            db: Some(DbKind::Sqlite),
+            auth: true,
+            openapi: true,
+            metrics: false,
+            scheduler: true,
+            events: true,
+        }
+    } else if cli_opts.no_interactive || cli_opts.has_any_flag() {
+        let db = cli_opts.db.as_deref().map(|d| match d {
+            "sqlite" => DbKind::Sqlite,
+            "postgres" | "pg" => DbKind::Postgres,
+            "mysql" => DbKind::Mysql,
+            _ => DbKind::Sqlite,
+        });
+        ProjectOptions {
+            name: name.to_string(),
+            db,
+            auth: cli_opts.auth,
+            openapi: cli_opts.openapi,
+            metrics: cli_opts.metrics,
+            scheduler: false,
+            events: false,
+        }
+    } else {
+        prompt_options(name)?
+    };
+
+    generate_project(&opts)
+}
+
+fn prompt_options(name: &str) -> Result<ProjectOptions, Box<dyn std::error::Error>> {
+    println!(
+        "{} Creating a new R2E project: {}",
+        "->".blue(),
+        name.green()
+    );
+    println!();
+
+    // Database selection
+    let db_choices = &["None", "SQLite", "PostgreSQL", "MySQL"];
+    let db_idx = Select::new()
+        .with_prompt("Database")
+        .items(db_choices)
+        .default(0)
+        .interact()?;
+    let db = match db_idx {
+        1 => Some(DbKind::Sqlite),
+        2 => Some(DbKind::Postgres),
+        3 => Some(DbKind::Mysql),
+        _ => None,
+    };
+
+    // Features selection
+    let feature_choices = &[
+        "JWT/OIDC Authentication",
+        "OpenAPI Documentation",
+        "Task Scheduling",
+        "Event Bus",
+    ];
+    let selected = MultiSelect::new()
+        .with_prompt("Select features (space to toggle, enter to confirm)")
+        .items(feature_choices)
+        .interact()?;
+
+    Ok(ProjectOptions {
+        name: name.to_string(),
+        db,
+        auth: selected.contains(&0),
+        openapi: selected.contains(&1),
+        metrics: false,
+        scheduler: selected.contains(&2),
+        events: selected.contains(&3),
+    })
+}
+
+fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = Path::new(&opts.name);
     if project_dir.exists() {
-        return Err(format!("Directory '{}' already exists", name).into());
+        return Err(format!("Directory '{}' already exists", opts.name).into());
     }
 
-    println!("{} Creating new R2E project: {}", "→".blue(), name.green());
+    println!(
+        "{} Creating new R2E project: {}",
+        "->".blue(),
+        opts.name.green()
+    );
 
     fs::create_dir_all(project_dir.join("src/controllers"))?;
 
-    // Cargo.toml
-    let cargo_toml = format!(
-        r#"[package]
-name = "{name}"
-version = "0.1.0"
-edition = "2021"
+    // 1. Cargo.toml
+    fs::write(
+        project_dir.join("Cargo.toml"),
+        templates::project::cargo_toml(opts),
+    )?;
 
-[dependencies]
-r2e-core = "0.1"
-r2e-macros = "0.1"
-axum = "0.8"
-tokio = {{ version = "1", features = ["full"] }}
-serde = {{ version = "1", features = ["derive"] }}
-serde_json = "1"
-tracing = "0.1"
-tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
-"#
-    );
-    fs::write(project_dir.join("Cargo.toml"), cargo_toml)?;
+    // 2. state.rs
+    fs::write(
+        project_dir.join("src/state.rs"),
+        templates::project::state_rs(opts),
+    )?;
 
-    // state.rs
-    let state_rs = r#"use r2e_core::prelude::*;
+    // 3. main.rs
+    fs::write(
+        project_dir.join("src/main.rs"),
+        templates::project::main_rs(opts),
+    )?;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {}
-"#;
-    fs::write(project_dir.join("src/state.rs"), state_rs)?;
+    // 4. Hello controller
+    fs::write(
+        project_dir.join("src/controllers/hello.rs"),
+        templates::project::hello_controller(),
+    )?;
+    fs::write(
+        project_dir.join("src/controllers/mod.rs"),
+        "pub mod hello;\n",
+    )?;
 
-    // controllers/mod.rs
-    let controllers_mod = "pub mod hello;\n";
-    fs::write(project_dir.join("src/controllers/mod.rs"), controllers_mod)?;
+    // 5. application.yaml
+    fs::write(
+        project_dir.join("application.yaml"),
+        templates::project::application_yaml(opts),
+    )?;
 
-    // controllers/hello.rs
-    let hello_controller = r#"use crate::state::AppState;
-use r2e_core::prelude::*;
-
-#[derive(Controller)]
-#[controller(path = "/", state = AppState)]
-pub struct HelloController;
-
-#[routes]
-impl HelloController {
-    #[get("/")]
-    async fn hello(&self) -> &'static str {
-        "Hello, World!"
+    // 6. Migrations directory if DB selected
+    if opts.db.is_some() {
+        fs::create_dir_all(project_dir.join("migrations"))?;
     }
-}
-"#;
-    fs::write(project_dir.join("src/controllers/hello.rs"), hello_controller)?;
 
-    // main.rs
-    let main_rs = r#"use r2e_core::prelude::*;
-use r2e_core::plugins::{Health, Tracing};
+    // 7. .gitignore
+    fs::write(project_dir.join(".gitignore"), "/target\n")?;
 
-mod controllers;
-mod state;
-
-use controllers::hello::HelloController;
-use state::AppState;
-
-#[tokio::main]
-async fn main() {
-    r2e_core::init_tracing();
-
-    AppBuilder::new()
-        .build_state::<AppState, _>()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controller::<HelloController>()
-        .serve("0.0.0.0:8080")
-        .await
-        .unwrap();
-}
-"#;
-    fs::write(project_dir.join("src/main.rs"), main_rs)?;
-
-    // application.yaml
-    let app_yaml = format!(
-        r#"app:
-  name: {name}
-  port: 8080
-"#
+    println!(
+        "{} Project '{}' created successfully!",
+        "✓".green(),
+        opts.name.green()
     );
-    fs::write(project_dir.join("application.yaml"), app_yaml)?;
-
-    println!("{} Project '{}' created successfully!", "✓".green(), name.green());
     println!();
-    println!("  cd {name}");
+    println!("  cd {}", opts.name);
     println!("  cargo run");
     println!();
-    println!("Then visit: {}", "http://localhost:8080".cyan());
+
+    if opts.openapi {
+        println!(
+            "  API docs: {}",
+            "http://localhost:8080/docs".cyan()
+        );
+    }
+    println!(
+        "  Health:   {}",
+        "http://localhost:8080/health".cyan()
+    );
 
     Ok(())
 }

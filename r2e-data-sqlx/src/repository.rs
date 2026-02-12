@@ -1,18 +1,14 @@
-use crate::entity::Entity;
-use crate::query::QueryBuilder;
 use sqlx::{Database, Pool};
 use std::marker::PhantomData;
 
 /// A generic SQL-based repository implementation.
 ///
-/// Uses the `Entity` trait to construct SQL queries dynamically.
-/// Requires that the entity type also implements `sqlx::FromRow`.
+/// Wraps an `sqlx::Pool<DB>` for a given entity type.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let repo = SqlxRepository::<UserEntity, Sqlite>::new(pool.clone());
-/// let users = repo.find_all().await?;
 /// ```
 pub struct SqlxRepository<T, DB: Database> {
     pool: Pool<DB>,
@@ -30,14 +26,6 @@ impl<T, DB: Database> SqlxRepository<T, DB> {
     /// Get the underlying pool reference.
     pub fn pool(&self) -> &Pool<DB> {
         &self.pool
-    }
-
-    /// Create a `QueryBuilder` pre-configured for this entity's table.
-    pub fn query(&self) -> QueryBuilder
-    where
-        T: Entity,
-    {
-        QueryBuilder::new(T::table_name())
     }
 }
 

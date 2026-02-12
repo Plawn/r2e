@@ -10,14 +10,19 @@ use tracing_subscriber::EnvFilter;
 /// Respects the `RUST_LOG` environment variable. Falls back to
 /// `info,tower_http=debug` when `RUST_LOG` is not set.
 ///
-/// Call this once, at the very start of `main`, before any tracing macro.
+/// This function is idempotent — calling it more than once is safe (subsequent
+/// calls are silently ignored). It is called automatically by the [`Tracing`]
+/// plugin, so you only need to call it manually if you want logs *before* the
+/// plugin is installed (e.g. during state construction).
+///
+/// [`Tracing`]: crate::plugins::Tracing
 pub fn init_tracing() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,tower_http=debug".parse().unwrap()),
         )
-        .init();
+        .try_init();
 }
 
 /// Returns a permissive CORS layer that allows any origin, method, and headers.

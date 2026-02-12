@@ -55,6 +55,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
     // Process parameters — detect #[config("key")] vs regular dependencies
     let mut dep_type_ids = Vec::new();
     let mut build_args = Vec::new();
+    let mut config_key_entries = Vec::new();
     let mut has_config = false;
 
     // Collect parameter info, stripping #[config] attrs
@@ -78,6 +79,8 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                     let key: syn::LitStr = attr.parse_args()?;
                     let key_str = key.value();
                     let env_hint = key_str.replace('.', "_").to_uppercase();
+                    let ty_name_str = quote!(#ty).to_string();
+                    config_key_entries.push(quote! { (#key_str, #ty_name_str) });
                     build_args.push(quote! {
                         let #arg_name: #ty = __r2e_config.get::<#ty>(#key_str).unwrap_or_else(|_| {
                             panic!(
@@ -156,6 +159,10 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
 
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                 vec![#(#dep_type_ids),*]
+            }
+
+            fn config_keys() -> Vec<(&'static str, &'static str)> {
+                vec![#(#config_key_entries),*]
             }
 
             async fn produce(ctx: &#krate::beans::BeanContext) -> Self::Output {

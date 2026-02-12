@@ -18,3 +18,6 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 toml_edit = "0.22"
 colored = "3"
+dialoguer = "0.11"
+chrono = "0.4"
+open = "5"

@@ -605,6 +605,19 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
 
+        // Auto-validate config keys and sections declared on this controller
+        if let Some(config) = &self.shared.config {
+            let errors = C::validate_config(config);
+            if !errors.is_empty() {
+                let err = crate::config::ConfigValidationError { errors };
+                panic!(
+                    "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
+                    std::any::type_name::<C>(),
+                    err
+                );
+            }
+        }
+
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
         if let Some(state) = &self.state {

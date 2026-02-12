@@ -48,17 +48,19 @@ r2e-core        → Runtime foundation. AppBuilder, Controller trait, StatefulCo
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
 r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
-r2e-data        → Data access: Entity trait, QueryBuilder, Repository trait, SqlxRepository, Pageable/Page.
+r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError (no driver deps).
+r2e-data-sqlx   → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, error bridge, migrations.
+r2e-data-diesel → Diesel backend (skeleton): DieselRepository, error bridge.
 r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore), global cache backend singleton.
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend trait, RateLimitRegistry, RateLimitGuard.
 r2e-openapi     → OpenAPI 3.0.3 spec generation from route metadata, Swagger UI at /docs.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → Test helpers: TestApp (HTTP client wrapper), TestJwt (JWT generation for tests).
-r2e-cli         → CLI tool: r2e new, r2e add, r2e dev, r2e generate.
+r2e-cli         → CLI tool: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
 example-app         → Demo binary exercising all features.
 ```
 
-Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` ← `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
 
 ### Core Concepts
 
@@ -622,6 +624,102 @@ When `#[config]` is used, `R2eConfig` is automatically added to the dependency l
 - `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro
+
+### CLI (r2e-cli)
+
+The `r2e` binary provides project scaffolding, code generation, diagnostics, and development tooling.
+
+**Key files:**
+- `r2e-cli/src/main.rs` — CLI entry point (clap `Commands` + `GenerateKind` enums)
+- `r2e-cli/src/commands/` — one module per command
+- `r2e-cli/src/commands/templates/` — code generation templates (project, middleware)
+
+#### `r2e new <name>` — Project scaffolding
+
+Creates a new R2E project with optional feature selection.
+
+**Flags:**
+- `--db <sqlite|postgres|mysql>` — include database support (adds sqlx dep, pool in state, migrations/ dir)
+- `--auth` — include JWT/OIDC security (adds `r2e-security`, `JwtClaimsValidator` in state)
+- `--openapi` — include OpenAPI documentation (adds `OpenApiPlugin` to builder)
+- `--metrics` — reserved for Prometheus metrics (not yet wired)
+- `--full` — enable all features (SQLite + auth + openapi + scheduler + events)
+- `--no-interactive` — skip interactive prompts, use flags/defaults only
+
+**Interactive mode:** When no flags are provided, uses `dialoguer` to prompt for database and feature selection.
+
+**Generated project uses the `r2e` facade crate** (not `r2e-core` + `r2e-macros` separately). Templates are in `commands/templates/project.rs`.
+
+**Types:**
+- `ProjectOptions` — aggregates all feature selections
+- `DbKind` — `Sqlite | Postgres | Mysql`
+- `CliNewOpts` — raw CLI flag values before resolution
+
+#### `r2e generate` — Code generation
+
+Subcommands:
+
+- **`controller <Name>`** — generates `src/controllers/<snake_name>.rs` with a skeleton controller, updates `mod.rs`
+- **`service <Name>`** — generates `src/<snake_name>.rs` with a skeleton service struct
+- **`crud <Name> --fields "name:Type ..."`** — generates a complete CRUD set:
+  - `src/models/<snake>.rs` — entity struct + `Create`/`Update` request types
+  - `src/services/<snake>_service.rs` — service with list/get/create/update/delete methods
+  - `src/controllers/<snake>_controller.rs` — REST controller with GET/POST/PUT/DELETE endpoints
+  - `migrations/<timestamp>_create_<plural>.sql` — SQL migration (if `migrations/` dir exists)
+  - `tests/<snake>_test.rs` — integration test skeleton
+  - Updates `mod.rs` in each directory
+- **`middleware <Name>`** — generates `src/middleware/<snake_name>.rs` with an `Interceptor<R>` impl skeleton, updates `mod.rs`
+
+**Field parsing:** fields are `"name:Type"` pairs (e.g. `"title:String published:bool"`). `Field` struct has `name`, `rust_type`, `is_optional`. SQL type mapping: `String` → `TEXT`, `i64` → `INTEGER`, `f64` → `REAL`, `bool` → `BOOLEAN`.
+
+#### `r2e doctor` — Project health diagnostics
+
+Runs 8 checks against the current working directory and reports issues:
+
+| Check | Level | What it verifies |
+|-------|-------|------------------|
+| Cargo.toml exists | Error | Current dir is a Rust project |
+| R2E dependency | Error | `r2e` appears in Cargo.toml dependencies |
+| Configuration file | Warning | `application.yaml` exists |
+| Controllers directory | Warning | `src/controllers/` exists, counts `.rs` files |
+| Rust toolchain | Error | `rustc --version` succeeds |
+| cargo-watch | Warning | `cargo watch --version` succeeds (needed for `r2e dev`) |
+| Migrations directory | Warning | If data feature is used, `migrations/` dir exists |
+| Application entrypoint | Warning | `src/main.rs` contains a `.serve()` call |
+
+Each check returns `Ok`, `Warning`, or `Error` with a colored indicator (`✓` / `!` / `x`).
+
+#### `r2e routes` — Route listing
+
+Static source parsing of `src/controllers/*.rs` (no compilation required). For each controller file:
+1. Extracts `#[controller(path = "...")]` base path
+2. Finds `#[get("/...")]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` attributes
+3. Resolves the handler name from the next `fn` declaration
+4. Captures `#[roles("...")]` if present
+
+Output is a colored table sorted by path, with method color-coding (GET=green, POST=blue, PUT=yellow, DELETE=red, PATCH=magenta).
+
+#### `r2e dev` — Development server
+
+Wraps `cargo watch` with R2E-specific defaults:
+- Watches `src/`, `application.yaml`, `application-dev.yaml`, `migrations/`
+- Sets `R2E_PROFILE=dev` environment variable
+- Prints discovered routes before starting the watch loop
+- `--open` flag opens `http://localhost:8080` in the browser after a 5s delay
+
+Requires `cargo-watch` to be installed (`cargo install cargo-watch`).
+
+#### `r2e add <extension>` — Extension management
+
+Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `test`.
+
+#### Template system (`commands/templates/`)
+
+Shared helpers in `templates/mod.rs`:
+- `to_snake_case("UserController")` → `"user_controller"`
+- `to_pascal_case("user_service")` → `"UserService"`
+- `pluralize("user")` → `"users"`, `pluralize("category")` → `"categories"`
+- `render(template, &[("key", "value")])` — `{{key}}` substitution
 
 ## Language & Documentation
 

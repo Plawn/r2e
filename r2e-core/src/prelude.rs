@@ -48,10 +48,13 @@ pub use r2e_macros::producer;
 pub use r2e_macros::Bean;
 pub use r2e_macros::BeanState;
 
+// Config macros
+pub use r2e_macros::ConfigProperties;
+
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
 pub use crate::builder::AppBuilder;
-pub use crate::config::R2eConfig;
+pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::AppError;
 pub use crate::interceptors::{Interceptor, InterceptorContext};

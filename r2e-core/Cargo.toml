@@ -34,3 +34,6 @@ uuid = { version = "1", features = ["v4"] }
 dashmap = { version = "6", optional = true }
 bytes = "1"
 futures-core = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

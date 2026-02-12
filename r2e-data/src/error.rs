@@ -2,8 +2,18 @@
 #[derive(Debug)]
 pub enum DataError {
     NotFound(String),
-    Database(sqlx::Error),
+    Database(Box<dyn std::error::Error + Send + Sync>),
     Other(String),
+}
+
+impl DataError {
+    /// Construct a `Database` variant from any error type.
+    ///
+    /// Used by backend crates (e.g. `r2e-data-sqlx`, `r2e-data-diesel`)
+    /// to wrap driver-specific errors.
+    pub fn database(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        DataError::Database(Box::new(err))
+    }
 }
 
 impl std::fmt::Display for DataError {
@@ -16,11 +26,12 @@ impl std::fmt::Display for DataError {
     }
 }
 
-impl std::error::Error for DataError {}
-
-impl From<sqlx::Error> for DataError {
-    fn from(err: sqlx::Error) -> Self {
-        DataError::Database(err)
+impl std::error::Error for DataError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DataError::Database(err) => Some(err.as_ref()),
+            _ => None,
+        }
     }
 }
 

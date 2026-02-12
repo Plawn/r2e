@@ -4,6 +4,8 @@ use std::path::Path;
 const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("security", "r2e-security"),
     ("data", "r2e-data"),
+    ("data-sqlx", "r2e-data-sqlx"),
+    ("data-diesel", "r2e-data-diesel"),
     ("openapi", "r2e-openapi"),
     ("events", "r2e-events"),
     ("scheduler", "r2e-scheduler"),
