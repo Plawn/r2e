@@ -2,6 +2,7 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
+use crate::service::ServiceComponent;
 #[allow(deprecated)]
 use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
 use crate::type_list::{BuildableFrom, TCons, TNil};
@@ -173,6 +174,62 @@ impl<P> AppBuilder<NoState, P> {
     pub fn with_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>> {
         self.shared.bean_registry.register_producer::<Pr>();
         self.with_updated_provider()
+    }
+
+    /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
+    ///
+    /// The closure receives a reference to the resolved config and returns
+    /// a bean instance. Use this when you need programmatic construction
+    /// based on configuration values.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .provide(config)
+    ///     .with_bean_factory(|config: &R2eConfig| {
+    ///         let url = config.get::<String>("redis.url").unwrap();
+    ///         RedisClient::new(&url)
+    ///     })
+    ///     .build_state::<Services, _>().await
+    /// ```
+    pub fn with_bean_factory<B, F>(mut self, factory: F) -> AppBuilder<NoState, TCons<B, P>>
+    where
+        B: Clone + Send + Sync + 'static,
+        F: FnOnce(&crate::config::R2eConfig) -> B + Send + 'static,
+    {
+        self.shared
+            .bean_registry
+            .provide_factory_with_config::<B, F>(factory);
+        self.with_updated_provider()
+    }
+
+    /// Enable bean override mode (useful for testing).
+    ///
+    /// When enabled, duplicate bean registrations are allowed and the last
+    /// registration wins. Must be called before [`override_provide`](Self::override_provide).
+    pub fn allow_bean_override(mut self) -> Self {
+        self.shared.bean_registry.allow_overrides = true;
+        self
+    }
+
+    /// Override a previously registered bean with a pre-built instance.
+    ///
+    /// Requires [`allow_bean_override`](Self::allow_bean_override) to be called first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `allow_bean_override()` was not called.
+    pub fn override_provide<B: Clone + Send + Sync + 'static>(
+        mut self,
+        value: B,
+    ) -> Self {
+        assert!(
+            self.shared.bean_registry.allow_overrides,
+            "Call allow_bean_override() before override_provide()"
+        );
+        self.shared.bean_registry.provide(value);
+        self
     }
 
     /// Install a [`PreStatePlugin`] that provides beans and optionally defers setup.
@@ -578,6 +635,48 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Register a raw `axum::Router` fragment to be merged into the application.
     pub fn register_routes(mut self, router: crate::http::Router<T>) -> Self {
         self.routes.push(router);
+        self
+    }
+
+    /// Escape hatch: merge a raw Axum router alongside controllers.
+    ///
+    /// Raw routes benefit from global plugins (Tracing, CORS, ErrorHandling)
+    /// but do NOT get controller-level DI, interceptors, or guards.
+    ///
+    /// This is a convenience alias for [`register_routes`](Self::register_routes).
+    pub fn merge_router(self, router: crate::http::Router<T>) -> Self {
+        self.register_routes(router)
+    }
+
+    /// Spawn a background [`ServiceComponent`] that participates in DI.
+    ///
+    /// The service is constructed from the application state via
+    /// [`ServiceComponent::from_state`] and started in a Tokio task during
+    /// `on_start`. A [`CancellationToken`] is provided and cancelled
+    /// automatically during shutdown.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .build_state::<Services, _>().await
+    ///     .spawn_service::<MetricsExporter>()
+    ///     .serve("0.0.0.0:3000").await
+    /// ```
+    pub fn spawn_service<C: ServiceComponent<T>>(mut self) -> Self {
+        let token = CancellationToken::new();
+        let shutdown_token = token.clone();
+
+        self = self.on_start(move |state| async move {
+            let service = C::from_state(&state);
+            tokio::spawn(service.start(token));
+            Ok(())
+        });
+
+        self.plugin_shutdown_hooks.push(Box::new(move || {
+            shutdown_token.cancel();
+        }));
+
         self
     }
 

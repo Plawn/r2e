@@ -19,6 +19,10 @@ members = [
     "r2e-utils",
     "r2e",
     "example-app",
+    "example-postgres",
+    "example-multi-tenant",
+    "example-websocket-chat",
+    "example-microservice",
 ]
 resolver = "2"
 

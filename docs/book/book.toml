@@ -1,0 +1,18 @@
+[book]
+title = "R2E — Rust Enterprise Edition"
+description = "A Quarkus-like ergonomic layer over Axum for Rust"
+authors = ["R2E Contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/plawn/r2e"
+no-section-label = false
+
+[output.html.search]
+enable = true

@@ -218,6 +218,11 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     method.attrs = strip_route_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
+                    for arg in method.sig.inputs.iter_mut() {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
+                        }
+                    }
 
                     sse_methods.push(SseMethod {
                         path: sse_path,
@@ -249,6 +254,11 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     method.attrs = strip_route_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
                     let ws_param = find_ws_param(&method)?;
+                    for arg in method.sig.inputs.iter_mut() {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
+                        }
+                    }
 
                     ws_methods.push(WsMethod {
                         path: ws_path,
@@ -285,6 +295,13 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     // Detect #[managed] on handler params
                     let managed_params = extract_managed_params(&mut method)?;
+
+                    // Strip #[raw] no-op marker from handler params
+                    for arg in method.sig.inputs.iter_mut() {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
+                        }
+                    }
 
                     // Validate: #[managed] and #[transactional] are mutually exclusive
                     if transactional.is_some() && !managed_params.is_empty() {

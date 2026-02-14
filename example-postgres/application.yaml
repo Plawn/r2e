@@ -1,0 +1,5 @@
+app:
+  name: "example-postgres"
+
+database:
+  url: "postgres://postgres:postgres@localhost:5432/r2e_example"

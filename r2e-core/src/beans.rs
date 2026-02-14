@@ -164,6 +164,8 @@ type Factory = Box<
 pub struct BeanRegistry {
     beans: Vec<BeanRegistration>,
     provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    /// When true, duplicate bean registrations are allowed (last wins).
+    pub(crate) allow_overrides: bool,
 }
 
 struct BeanRegistration {
@@ -225,6 +227,7 @@ impl BeanRegistry {
         Self {
             beans: Vec::new(),
             provided: HashMap::new(),
+            allow_overrides: false,
         }
     }
 
@@ -275,6 +278,35 @@ impl BeanRegistry {
         self
     }
 
+    /// Register a bean via factory closure that receives `R2eConfig`.
+    ///
+    /// The closure is invoked during [`resolve`](Self::resolve) after all
+    /// dependencies (including `R2eConfig`) are available.
+    ///
+    /// This is the underlying method for [`AppBuilder::with_bean_factory`].
+    pub fn provide_factory_with_config<T, F>(&mut self, factory: F)
+    where
+        T: Clone + Send + Sync + 'static,
+        F: FnOnce(&crate::config::R2eConfig) -> T + Send + 'static,
+    {
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<T>(),
+            type_name: type_name::<T>(),
+            dependencies: vec![(
+                TypeId::of::<crate::config::R2eConfig>(),
+                "R2eConfig",
+            )],
+            config_keys: vec![],
+            factory: Box::new(move |ctx| {
+                Box::pin(async move {
+                    let config = ctx.get::<crate::config::R2eConfig>();
+                    let bean = factory(&config);
+                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                })
+            }),
+        });
+    }
+
     /// Register a producer for automatic construction of its output type.
     ///
     /// The producer is awaited during resolution. The resulting bean is
@@ -300,12 +332,17 @@ impl BeanRegistry {
     /// Uses Kahn's algorithm for topological sorting. Returns a
     /// [`BeanContext`] with all instances, or a [`BeanError`] if the graph
     /// is invalid (cycles, missing deps, or duplicates).
-    pub async fn resolve(self) -> Result<BeanContext, BeanError> {
+    pub async fn resolve(mut self) -> Result<BeanContext, BeanError> {
         let mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
 
         // Move provided instances into the resolved set.
         for (tid, value) in self.provided {
             entries.insert(tid, value);
+        }
+
+        // When overrides are allowed, deduplicate beans (last registration wins).
+        if self.allow_overrides {
+            Self::deduplicate_beans(&mut self.beans, &mut entries);
         }
 
         let bean_count = self.beans.len();
@@ -314,7 +351,9 @@ impl BeanRegistry {
         }
 
         // Check for duplicates
-        Self::check_for_duplicates(&self.beans, &entries)?;
+        if !self.allow_overrides {
+            Self::check_for_duplicates(&self.beans, &entries)?;
+        }
 
         // Build dependency graph
         let id_to_idx = Self::build_type_index(&self.beans);
@@ -330,6 +369,33 @@ impl BeanRegistry {
         entries = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
 
         Ok(BeanContext { entries })
+    }
+
+    /// Deduplicate beans when overrides are enabled: last registration wins.
+    /// Also removes beans whose type_id already exists in provided entries.
+    fn deduplicate_beans(
+        beans: &mut Vec<BeanRegistration>,
+        entries: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) {
+        // Remove beans that conflict with provided instances (provided wins by default,
+        // but with overrides a later bean should win over an earlier provide).
+        // Strategy: iterate in order; for each type_id, keep the last occurrence.
+        let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
+        for (i, reg) in beans.iter().enumerate() {
+            last_seen.insert(reg.type_id, i);
+        }
+        let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
+        let mut idx = 0;
+        beans.retain(|_| {
+            let kept = keep.contains(&idx);
+            idx += 1;
+            kept
+        });
+        // If a bean type also exists in provided, remove the provided entry
+        // (the bean factory will be constructed instead).
+        for reg in beans.iter() {
+            entries.remove(&reg.type_id);
+        }
     }
 
     /// Check for duplicate bean registrations.

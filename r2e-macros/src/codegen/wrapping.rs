@@ -1,4 +1,7 @@
-//! Method wrapping for interceptors and transactional behavior.
+//! Method wrapping for transactional behavior.
+//!
+//! Interceptor wrapping has moved to `handlers.rs` where it has access
+//! to the application state (needed by `InterceptorContext<'_, S>`).
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -14,7 +17,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .map(|rm| generate_wrapped_method(rm, def))
+        .map(|rm| generate_wrapped_method(rm))
         .collect();
 
     let consumer_fns: Vec<_> = def
@@ -74,13 +77,10 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// Wrap a route method with interceptors and transactional behavior.
-fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream {
-    let has_interceptors = rm.transactional.is_some()
-        || !rm.intercept_fns.is_empty()
-        || !def.controller_intercepts.is_empty();
-
-    if !has_interceptors {
+/// Wrap a route method with transactional behavior only.
+/// Interceptors are now handled at the handler level (handlers.rs).
+fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
+    if rm.transactional.is_none() {
         let f = &rm.fn_item;
         return quote! { #f };
     }
@@ -90,13 +90,11 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream
     let attrs = &fn_item.attrs;
     let vis = &fn_item.vis;
     let sig = &fn_item.sig;
-    let fn_name_str = sig.ident.to_string();
-    let controller_name_str = def.controller_name.to_string();
     let original_body = &fn_item.block;
 
     let mut body: TokenStream = quote! { #original_body };
 
-    // Inline wrapper (innermost): transactional
+    // Inline wrapper: transactional
     if let Some(ref tx_config) = rm.transactional {
         let pool_field = format_ident!("{}", tx_config.pool_field);
         body = quote! {
@@ -116,9 +114,6 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream
         };
     }
 
-    // Trait-based interceptors (via Interceptor::around)
-    body = wrap_with_interceptors(body, &fn_name_str, &controller_name_str, def, &rm.intercept_fns);
-
     quote! {
         #(#attrs)*
         #vis #sig {
@@ -128,6 +123,8 @@ fn generate_wrapped_method(rm: &RouteMethod, def: &RoutesImplDef) -> TokenStream
 }
 
 /// Wrap a scheduled method with interceptors.
+/// Scheduled methods keep interceptor wrapping here because they don't
+/// go through the handler path (no State extraction).
 fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
     let has_interceptors = !sm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
 
@@ -144,7 +141,7 @@ fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) 
     let controller_name_str = def.controller_name.to_string();
     let original_body = &fn_item.block;
 
-    let body = wrap_with_interceptors(
+    let body = wrap_with_interceptors_no_state(
         quote! { #original_body },
         &fn_name_str,
         &controller_name_str,
@@ -160,8 +157,9 @@ fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) 
     }
 }
 
-/// Apply interceptor chain to a body expression.
-fn wrap_with_interceptors(
+/// Apply interceptor chain without state (for scheduled tasks).
+/// Uses a unit-type `()` state since scheduled tasks don't have HTTP state.
+fn wrap_with_interceptors_no_state(
     mut body: TokenStream,
     fn_name_str: &str,
     controller_name_str: &str,
@@ -196,6 +194,7 @@ fn wrap_with_interceptors(
             let __ctx = #krate::InterceptorContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
+                state: &(),
             };
             #body
         }

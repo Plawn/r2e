@@ -16,6 +16,7 @@ pub mod plugin;
 pub mod plugins;
 pub mod prelude;
 pub mod request_id;
+pub mod service;
 pub mod secure_headers;
 pub mod sse;
 pub mod state;
@@ -38,7 +39,7 @@ pub use config::{
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
 pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext, RolesGuard};
-pub use interceptors::{Cacheable, Interceptor, InterceptorContext};
+pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
 #[allow(deprecated)]
@@ -51,6 +52,7 @@ pub use meta::MetaRegistry;
 pub use plugins::AdvancedHealth;
 pub use request_id::{RequestId, RequestIdPlugin};
 pub use secure_headers::SecureHeaders;
+pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};
 

@@ -1,13 +1,19 @@
 use bytes::Bytes;
 use std::future::Future;
 
-/// Context passed to each interceptor. `Copy` so it can be captured
-/// by nested `async move` closures without ownership issues.
-#[derive(Clone, Copy)]
-pub struct InterceptorContext {
+/// Context passed to each interceptor, including a reference to the
+/// application state.
+///
+/// The state reference allows interceptors to access DI-resolved services,
+/// database pools, or any other component in the application state.
+pub struct InterceptorContext<'a, S> {
     pub method_name: &'static str,
     pub controller_name: &'static str,
+    pub state: &'a S,
 }
+
+// Manual Clone/Copy impls are not possible because S may not be Copy.
+// InterceptorContext is consumed by value in the around() call.
 
 /// Generic interceptor trait with an `around` pattern.
 ///
@@ -16,16 +22,31 @@ pub struct InterceptorContext {
 /// next interceptor, and so on.
 ///
 /// Type parameter `R` is the return type of the wrapped computation.
-/// Interceptors that don't constrain the return type (e.g. `Logged`, `Timed`)
-/// are generic over all `R: Send`. Interceptors that need specific capabilities
-/// (e.g. `Cache` needs `Cacheable`) constrain `R` accordingly.
+/// Type parameter `S` is the application state type, available via
+/// [`InterceptorContext::state`].
+///
+/// Interceptors that don't need the state use a generic `S: Send + Sync`:
+///
+/// ```ignore
+/// impl<R: Send, S: Send + Sync> Interceptor<R, S> for Logged { ... }
+/// ```
+///
+/// Interceptors that need state access constrain `S` to their concrete type:
+///
+/// ```ignore
+/// impl<R: Send> Interceptor<R, AppState> for AuditInterceptor { ... }
+/// ```
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `Interceptor<{R}>`",
+    message = "`{Self}` does not implement `Interceptor<{R}, {S}>`",
     label = "this type cannot be used as an interceptor",
-    note = "implement `Interceptor<R>` for your type and apply it with `#[intercept(YourInterceptor)]`"
+    note = "implement `Interceptor<R, S>` for your type and apply it with `#[intercept(YourInterceptor)]`"
 )]
-pub trait Interceptor<R> {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+pub trait Interceptor<R, S> {
+    fn around<F, Fut>(
+        &self,
+        ctx: InterceptorContext<'_, S>,
+        next: F,
+    ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send;

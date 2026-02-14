@@ -63,17 +63,18 @@ impl Default for Logged {
     }
 }
 
-impl<R: Send> Interceptor<R> for Logged {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for Logged {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
         let level = self.level;
+        let method_name = ctx.method_name;
         async move {
-            log_at_level(level, ctx.method_name, "entering");
+            log_at_level(level, method_name, "entering");
             let result = next().await;
-            log_at_level(level, ctx.method_name, "exiting");
+            log_at_level(level, method_name, "exiting");
             result
         }
     }
@@ -118,14 +119,15 @@ impl Default for Timed {
     }
 }
 
-impl<R: Send> Interceptor<R> for Timed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for Timed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
         let level = self.level;
         let threshold_ms = self.threshold_ms;
+        let method_name = ctx.method_name;
         async move {
             let start = std::time::Instant::now();
             let result = next().await;
@@ -134,7 +136,7 @@ impl<R: Send> Interceptor<R> for Timed {
                 Some(threshold) if elapsed_ms <= threshold => {}
                 _ => log_at_level(
                     level,
-                    ctx.method_name,
+                    method_name,
                     &format!("elapsed_ms={elapsed_ms}"),
                 ),
             }
@@ -185,12 +187,12 @@ impl Cache {
         self
     }
 
-    fn full_key(&self, ctx: &InterceptorContext) -> String {
+    fn full_key(&self, controller_name: &str, method_name: &str) -> String {
         let prefix = self.group.as_deref().unwrap_or_else(|| {
             ""
         });
         let prefix = if prefix.is_empty() {
-            format!("__{}_{}", ctx.controller_name, ctx.method_name)
+            format!("__{}_{}", controller_name, method_name)
         } else {
             prefix.to_string()
         };
@@ -199,13 +201,13 @@ impl Cache {
     }
 }
 
-impl<R> Interceptor<R> for Cache
+impl<R, S: Send + Sync> Interceptor<R, S> for Cache
 where
     R: r2e_core::Cacheable,
 {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext,
+        ctx: InterceptorContext<'_, S>,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -213,7 +215,7 @@ where
         Fut: Future<Output = R> + Send,
     {
         let store = r2e_cache::cache_backend();
-        let key = self.full_key(&ctx);
+        let key = self.full_key(ctx.controller_name, ctx.method_name);
         let ttl = self.ttl;
         async move {
             // Cache hit
@@ -256,8 +258,8 @@ impl CacheInvalidate {
     }
 }
 
-impl<R: Send> Interceptor<R> for CacheInvalidate {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for CacheInvalidate {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -305,19 +307,20 @@ impl Counted {
     }
 }
 
-impl<R: Send> Interceptor<R> for Counted {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for Counted {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
         let metric_name = self.metric_name.clone();
         let level = self.level;
+        let method_name = ctx.method_name;
         async move {
             let result = next().await;
             log_at_level(
                 level,
-                ctx.method_name,
+                method_name,
                 &format!("counted metric={metric_name}"),
             );
             result
@@ -357,21 +360,22 @@ impl MetricTimed {
     }
 }
 
-impl<R: Send> Interceptor<R> for MetricTimed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for MetricTimed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
         let metric_name = self.metric_name.clone();
         let level = self.level;
+        let method_name = ctx.method_name;
         async move {
             let start = std::time::Instant::now();
             let result = next().await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
             log_at_level(
                 level,
-                ctx.method_name,
+                method_name,
                 &format!("metric={metric_name} elapsed_ms={elapsed_ms}"),
             );
             result
@@ -383,14 +387,23 @@ impl<R: Send> Interceptor<R> for MetricTimed {
 mod tests {
     use super::*;
 
+    // A dummy state for tests.
+    #[derive(Clone)]
+    struct TestState;
+
+    fn test_ctx(state: &TestState) -> InterceptorContext<'_, TestState> {
+        InterceptorContext {
+            method_name: "test_method",
+            controller_name: "TestController",
+            state,
+        }
+    }
+
     #[tokio::test]
     async fn test_logged_interceptor() {
         let logged = Logged::info();
-        let ctx = InterceptorContext {
-            method_name: "test_method",
-            controller_name: "TestController",
-        };
-        let result = logged.around(ctx, || async { 42 }).await;
+        let state = TestState;
+        let result = logged.around(test_ctx(&state), || async { 42 }).await;
         assert_eq!(result, 42);
     }
 
@@ -408,20 +421,19 @@ mod tests {
     #[tokio::test]
     async fn test_timed_interceptor() {
         let timed = Timed::info();
-        let ctx = InterceptorContext {
-            method_name: "test_method",
-            controller_name: "TestController",
-        };
-        let result = timed.around(ctx, || async { "hello" }).await;
+        let state = TestState;
+        let result = timed.around(test_ctx(&state), || async { "hello" }).await;
         assert_eq!(result, "hello");
     }
 
     #[tokio::test]
     async fn test_timed_with_threshold() {
         let timed = Timed::threshold_warn(1000);
+        let state = TestState;
         let ctx = InterceptorContext {
             method_name: "fast_method",
             controller_name: "TestController",
+            state: &state,
         };
         // Fast call should not log (threshold not exceeded)
         let result = timed.around(ctx, || async { 99 }).await;
@@ -444,15 +456,13 @@ mod tests {
     async fn test_nested_interceptors() {
         let logged = Logged::debug();
         let timed = Timed::info();
-        let ctx = InterceptorContext {
-            method_name: "nested",
-            controller_name: "TestController",
-        };
+        let state = TestState;
+        let state_ref: &_ = &state;
 
         let result = logged
-            .around(ctx, || async move {
+            .around(test_ctx(state_ref), move || async move {
                 timed
-                    .around(ctx, || async move { "nested_result" })
+                    .around(test_ctx(state_ref), || async move { "nested_result" })
                     .await
             })
             .await;
@@ -461,9 +471,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_interceptor() {
+        let state = TestState;
         let ctx = InterceptorContext {
             method_name: "cached_method",
             controller_name: "TestController",
+            state: &state,
         };
 
         let cache = Cache::ttl(60);
@@ -477,8 +489,13 @@ mod tests {
 
         // Second call — cache hit (same key)
         let cache2 = Cache::ttl(60);
+        let ctx2 = InterceptorContext {
+            method_name: "cached_method",
+            controller_name: "TestController",
+            state: &state,
+        };
         let result2: r2e_core::http::Json<Vec<String>> = cache2
-            .around(ctx, || async {
+            .around(ctx2, || async {
                 // Should NOT be called because of cache hit
                 r2e_core::http::Json(vec!["c".to_string()])
             })
@@ -488,9 +505,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_invalidate_interceptor() {
+        let state = TestState;
         let ctx = InterceptorContext {
             method_name: "create",
             controller_name: "TestController",
+            state: &state,
         };
 
         // Pre-populate cache under group prefix

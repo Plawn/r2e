@@ -514,6 +514,27 @@ pub fn ws(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Mark a handler parameter as a **raw Axum extractor** (documentation only).
+///
+/// This is a no-op marker attribute. All handler parameters that are not
+/// annotated with `#[inject(identity)]` or `#[managed]` are already passed
+/// as raw Axum extractors. Use `#[raw]` to make this intent explicit:
+///
+/// ```ignore
+/// #[get("/")]
+/// async fn handler(
+///     &self,
+///     #[raw] connect_info: ConnectInfo<SocketAddr>,
+///     #[raw] headers: HeaderMap,
+/// ) -> Json<&'static str> { ... }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn raw(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Mark a handler parameter as a **managed resource** with automatic lifecycle.
 ///
 /// Managed resources implement [`r2e_core::ManagedResource`] and have their

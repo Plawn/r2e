@@ -6,31 +6,69 @@ use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;
 use std::future::Future;
 
-/// A custom user-defined interceptor for audit logging.
+/// A custom user-defined interceptor for audit logging (generic — no state access).
 pub struct AuditLog;
 
-impl<R: Send> Interceptor<R> for AuditLog {
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext,
+        ctx: InterceptorContext<'_, S>,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
+        let controller_name = ctx.controller_name;
         async move {
             tracing::info!(
-                method = ctx.method_name,
-                controller = ctx.controller_name,
+                method = method_name,
+                controller = controller_name,
                 "audit: entering"
             );
             let result = next().await;
             tracing::info!(
-                method = ctx.method_name,
-                controller = ctx.controller_name,
+                method = method_name,
+                controller = controller_name,
                 "audit: done"
             );
+            result
+        }
+    }
+}
+
+/// A stateful interceptor that accesses the application state.
+///
+/// Unlike `AuditLog` (generic over `S`), this interceptor is bound to `Services`
+/// and can access the database pool, event bus, or any other field from the state.
+///
+/// # Usage
+/// ```ignore
+/// #[intercept(DbAuditLog)]
+/// async fn create(&self, body: Json<User>) -> Result<Json<User>, AppError> { ... }
+/// ```
+pub struct DbAuditLog;
+
+impl<R: Send> Interceptor<R, Services> for DbAuditLog {
+    fn around<F, Fut>(
+        &self,
+        ctx: InterceptorContext<'_, Services>,
+        next: F,
+    ) -> impl Future<Output = R> + Send
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = R> + Send,
+    {
+        let method_name = ctx.method_name;
+        let pool = ctx.state.pool.clone();
+        async move {
+            let result = next().await;
+            // Write an audit log entry to the database after execution
+            let _ = sqlx::query("INSERT INTO audit_log (method, ts) VALUES (?, datetime('now'))")
+                .bind(method_name)
+                .execute(&pool)
+                .await;
             result
         }
     }
@@ -133,11 +171,19 @@ impl UserController {
         Json(user)
     }
 
-    // Demo: custom interceptor via #[intercept]
+    // Demo: custom interceptor via #[intercept] (generic, no state access)
     #[get("/audited")]
     #[intercept(Logged::info())]
     #[intercept(AuditLog)]
     async fn audited_list(&self) -> Json<Vec<User>> {
+        let users = self.user_service.list().await;
+        Json(users)
+    }
+
+    // Demo: stateful interceptor that accesses ctx.state (writes audit log to DB)
+    #[get("/db-audited")]
+    #[intercept(DbAuditLog)]
+    async fn db_audited_list(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
         Json(users)
     }

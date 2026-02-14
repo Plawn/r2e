@@ -231,6 +231,93 @@ fn generate_body_and_release(
     }
 }
 
+/// Check if a route method has interceptors (method-level or controller-level).
+fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
+    !rm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
+}
+
+/// Wrap a body expression with the interceptor chain at handler level.
+///
+/// Uses `__state_ref: &S` (which is `Copy`) to construct `InterceptorContext`
+/// at each layer. The `move || async move { ... }` closures capture
+/// `__state_ref` by copy and other variables by move.
+fn wrap_with_handler_interceptors(
+    body: TokenStream,
+    fn_name_str: &str,
+    controller_name_str: &str,
+    def: &RoutesImplDef,
+    method_intercepts: &[syn::Expr],
+    krate: &TokenStream,
+) -> TokenStream {
+    let all_intercepts: Vec<&syn::Expr> = def
+        .controller_intercepts
+        .iter()
+        .chain(method_intercepts.iter())
+        .collect();
+
+    if all_intercepts.is_empty() {
+        return body;
+    }
+
+    // Start with the innermost: the body wrapped in a move closure
+    let mut wrapped = quote! {
+        move || async move { #body }
+    };
+
+    // Wrap from innermost interceptor to second interceptor (skip outermost)
+    for intercept_expr in all_intercepts[1..].iter().rev() {
+        wrapped = quote! {
+            move || async move {
+                let __interceptor = #intercept_expr;
+                #krate::Interceptor::around(
+                    &__interceptor,
+                    #krate::InterceptorContext {
+                        method_name: #fn_name_str,
+                        controller_name: #controller_name_str,
+                        state: __state_ref,
+                    },
+                    #wrapped
+                ).await
+            }
+        };
+    }
+
+    // Apply the outermost interceptor directly (not wrapped in a closure)
+    let outermost = &all_intercepts[0];
+    quote! {
+        {
+            let __state_ref: &_ = &__state;
+            let __interceptor = #outermost;
+            #krate::Interceptor::around(
+                &__interceptor,
+                #krate::InterceptorContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    state: __state_ref,
+                },
+                #wrapped
+            ).await
+        }
+    }
+}
+
+/// Generate managed resource acquisition using `__state_ref` (for use inside interceptor closures).
+fn generate_managed_acquire_ref(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
+    rm.managed_params
+        .iter()
+        .map(|mp| {
+            let arg_name = format_ident!("__arg_{}", mp.index);
+            let ty = &mp.ty;
+            quote! {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(__state_ref).await {
+                    Ok(__r) => __r,
+                    Err(__e) => return __e.into(),
+                };
+            }
+        })
+        .collect()
+}
+
 /// Generate a single Axum handler function.
 fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
@@ -254,14 +341,18 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
     let has_guards = !rm.guard_fns.is_empty();
     let has_managed = !rm.managed_params.is_empty();
+    let has_intercepts = has_interceptors(def, rm);
     let needs_response = has_guards || has_managed;
+    let needs_state = needs_response || has_intercepts;
 
     let extractor_name = &ctx.extractor_name;
     let handler_name = &ctx.handler_name;
     let meta_mod = &ctx.meta_mod;
+    let fn_name_str = &ctx.fn_name_str;
+    let controller_name_str = &ctx.controller_name_str;
 
-    if !needs_response {
-        // Simple handler: returns the method's own type
+    if !needs_state {
+        // Case 1: Simple handler — no guards, no managed, no interceptors
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
@@ -272,20 +363,36 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 #call_expr
             }
         }
+    } else if has_intercepts && !needs_response {
+        // Case 2: Interceptors only — needs State, returns method's own type
+        let interceptor_body = wrap_with_handler_interceptors(
+            call_expr,
+            fn_name_str,
+            controller_name_str,
+            def,
+            &rm.intercept_fns,
+            &krate,
+        );
+
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+            ) #return_type {
+                let __ctrl = __ctrl_ext.0;
+                #interceptor_body
+            }
+        }
     } else {
-        // Complex handler: returns Response
+        // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
         let guard_checks = generate_guard_checks(&rm.guard_fns, &krate);
         let guard_context_construction = if has_guards {
             generate_guard_context(&ctx, rm, &krate)
         } else {
             quote! {}
         };
-
-        let managed_acquire = generate_managed_acquire(rm, meta_mod, &krate);
-        let managed_release = generate_managed_release(rm, meta_mod, &krate);
-        let is_result = is_result_type(return_type);
-        let body_and_release =
-            generate_body_and_release(&call_expr, &managed_release, has_managed, is_result, &krate);
 
         let guard_params = if has_guards {
             quote! {
@@ -295,6 +402,54 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         } else {
             quote! {}
+        };
+
+        // Build the inner body (after guards, including managed lifecycle)
+        let inner_body = if has_intercepts {
+            // Wrap the managed lifecycle + call in interceptors.
+            // Inside the interceptor closure, use __state_ref for acquire.
+            let is_result = is_result_type(return_type);
+            if has_managed {
+                let managed_acquire_ref = generate_managed_acquire_ref(rm, meta_mod, &krate);
+                let managed_release = generate_managed_release(rm, meta_mod, &krate);
+                let body_and_release =
+                    generate_body_and_release(&call_expr, &managed_release, true, is_result, &krate);
+                let managed_body = quote! {
+                    #(#managed_acquire_ref)*
+                    #body_and_release
+                };
+                wrap_with_handler_interceptors(
+                    managed_body,
+                    fn_name_str,
+                    controller_name_str,
+                    def,
+                    &rm.intercept_fns,
+                    &krate,
+                )
+            } else {
+                let wrapped_call = quote! {
+                    #krate::http::response::IntoResponse::into_response(#call_expr)
+                };
+                wrap_with_handler_interceptors(
+                    wrapped_call,
+                    fn_name_str,
+                    controller_name_str,
+                    def,
+                    &rm.intercept_fns,
+                    &krate,
+                )
+            }
+        } else {
+            // No interceptors — original behavior
+            let managed_acquire = generate_managed_acquire(rm, meta_mod, &krate);
+            let managed_release = generate_managed_release(rm, meta_mod, &krate);
+            let is_result = is_result_type(return_type);
+            let body_and_release =
+                generate_body_and_release(&call_expr, &managed_release, has_managed, is_result, &krate);
+            quote! {
+                #(#managed_acquire)*
+                #body_and_release
+            }
         };
 
         quote! {
@@ -308,8 +463,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 #guard_context_construction
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
-                #(#managed_acquire)*
-                #body_and_release
+                #inner_body
             }
         }
     }

@@ -1,0 +1,9 @@
+app:
+  name: "order-service"
+
+server:
+  port: 3002
+
+services:
+  product:
+    url: "http://localhost:3001"
