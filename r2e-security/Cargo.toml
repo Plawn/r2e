@@ -11,7 +11,7 @@ categories = ["authentication", "web-programming"]
 description = "JWT/OIDC security module for R2E - token validation, JWKS cache, and AuthenticatedUser extractor"
 
 [dependencies]
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
