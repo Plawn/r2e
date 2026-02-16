@@ -4,20 +4,22 @@ Plugins encapsulate reusable middleware, routes, and services. R2E supports two 
 
 ## Post-state plugins
 
-Install after `build_state()` with `.with(plugin)`. They receive and transform the router:
+Install after `build_state()` with `.with(plugin)`. They receive and transform the `AppBuilder`:
 
 ```rust
-use r2e_core::plugin::Plugin;
-use axum::Router;
+use r2e::Plugin;
+use r2e::AppBuilder;
 
 pub struct RequestLogger;
 
-impl<S: Clone + Send + Sync + 'static> Plugin<S> for RequestLogger {
-    fn install(self, router: Router<S>) -> Router<S> {
-        router.layer(axum::middleware::from_fn(|req, next| async move {
-            tracing::info!("Request: {} {}", req.method(), req.uri());
-            next.run(req).await
-        }))
+impl Plugin for RequestLogger {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        app.with_layer_fn(|router| {
+            router.layer(axum::middleware::from_fn(|req, next| async move {
+                tracing::info!("Request: {} {}", req.method(), req.uri());
+                next.run(req).await
+            }))
+        })
     }
 }
 ```
@@ -37,30 +39,38 @@ AppBuilder::new()
 Override `should_be_last()` for plugins that must be the outermost layer:
 
 ```rust
-impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
-    fn install(self, router: Router<S>) -> Router<S> { router }
+impl Plugin for NormalizePathPlugin {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
+    }
 
-    fn should_be_last(&self) -> bool {
-        true  // R2E warns if plugins are added after this one
+    fn should_be_last() -> bool
+    where
+        Self: Sized,
+    {
+        true // R2E warns if plugins are added after this one
     }
 }
 ```
 
 ## Pre-state plugins
 
-Install before `build_state()` with `.plugin(plugin)`. They can inject values into the bean graph:
+Install before `build_state()` with `.plugin(plugin)`. They provide beans to the DI graph:
 
 ```rust
-use r2e_core::plugin::PreStatePlugin;
-use r2e_core::builder::AppBuilder;
+use r2e::{PreStatePlugin, AppBuilder};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
 
 pub struct MyPlugin {
     config: MyPluginConfig,
 }
 
 impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &mut AppBuilder) {
-        builder.provide(self.config);
+    type Provided = MyPluginConfig;
+
+    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+        app.provide(self.config)
     }
 }
 ```
@@ -80,49 +90,192 @@ AppBuilder::new()
 For plugins that need to set up infrastructure after state is built but during serve:
 
 ```rust
-use r2e_core::plugin::{DeferredAction, DeferredContext};
+use r2e::{PreStatePlugin, AppBuilder};
+use r2e::plugin::{DeferredAction, DeferredContext};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
+use tokio_util::sync::CancellationToken;
+
+pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &mut AppBuilder) {
-        let token = CancellationToken::new();
-        builder.provide(token.clone());
+    type Provided = CancellationToken;
 
-        builder.defer(DeferredAction::new("my-plugin", move |ctx: &mut DeferredContext| {
+    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+        let token = CancellationToken::new();
+
+        app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &mut DeferredContext| {
             // Add a Tower layer
-            ctx.add_layer(my_custom_layer());
+            ctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
 
             // Store data for later access
             ctx.store_data(MyPluginHandle::new());
 
             // Hook into server lifecycle
             let t = token.clone();
-            ctx.on_serve(move || {
-                let t = t.clone();
-                async move {
-                    tracing::info!("Plugin started");
-                }
+            ctx.on_serve(move |_tasks, _cancel_token| {
+                tracing::info!("Plugin started");
             });
 
-            ctx.on_shutdown(move || async move {
+            ctx.on_shutdown(move || {
+                t.cancel();
                 tracing::info!("Plugin shutting down");
             });
-        }));
+        }))
     }
 }
 ```
 
 ### DeferredContext methods
 
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add_layer` | `(&mut self, Box<dyn FnOnce(Router) -> Router + Send>)` | Add a Tower layer to the router |
+| `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | Store a value keyed by type for later retrieval |
+| `on_serve` | `(&mut self, FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken))` | Run when the server starts listening |
+| `on_shutdown` | `(&mut self, FnOnce())` | Run during graceful shutdown |
+
+## Step-by-step: Request ID plugin
+
+A post-state plugin that adds a unique `X-Request-Id` header to every response.
+
+```rust
+use r2e::{Plugin, AppBuilder};
+use axum::http::{Request, HeaderValue};
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use uuid::Uuid;
+
+pub struct RequestId;
+
+impl Plugin for RequestId {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        app.with_layer_fn(|router| {
+            router.layer(middleware::from_fn(request_id_middleware))
+        })
+    }
+}
+
+async fn request_id_middleware(
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "X-Request-Id",
+        HeaderValue::from_str(&request_id).unwrap(),
+    );
+    response
+}
+```
+
+Usage:
+
+```rust
+AppBuilder::new()
+    .build_state::<AppState, _>()
+    .await
+    .with(RequestId)
+    .serve("0.0.0.0:3000")
+    .await;
+```
+
+## Step-by-step: Background health checker
+
+A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.
+
+```rust
+use r2e::{PreStatePlugin, AppBuilder};
+use r2e::plugin::{DeferredAction, DeferredContext};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
+use tokio_util::sync::CancellationToken;
+use std::time::Duration;
+
+pub struct HealthChecker {
+    pub interval: Duration,
+    pub url: String,
+}
+
+impl PreStatePlugin for HealthChecker {
+    type Provided = CancellationToken;
+
+    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+        let token = CancellationToken::new();
+        let interval = self.interval;
+        let url = self.url;
+
+        app.provide(token.clone()).add_deferred(DeferredAction::new("health-checker", move |ctx: &mut DeferredContext| {
+            let t = token.clone();
+
+            // Start the checker when the server begins serving
+            ctx.on_serve(move |_tasks, _cancel_token| {
+                let t = t.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = tokio::time::sleep(interval) => {
+                                match reqwest::get(&url).await {
+                                    Ok(resp) => tracing::info!("Health check: {}", resp.status()),
+                                    Err(e) => tracing::warn!("Health check failed: {}", e),
+                                }
+                            }
+                            _ = t.cancelled() => {
+                                tracing::info!("Health checker stopped");
+                                break;
+                            }
+                        }
+                    }
+                });
+            });
+
+            // Cancel the checker on shutdown
+            ctx.on_shutdown(move || {
+                token.cancel();
+            });
+        }))
+    }
+}
+```
+
+Usage:
+
+```rust
+use std::time::Duration;
+
+AppBuilder::new()
+    .plugin(HealthChecker {
+        interval: Duration::from_secs(30),
+        url: "https://api.example.com/health".into(),
+    })
+    .build_state::<AppState, _>()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+```
+
+## Available AppBuilder methods for plugin authors
+
+Post-state plugins (`Plugin::install`) receive `AppBuilder<T>` and can call:
+
 | Method | Description |
 |--------|-------------|
-| `add_layer(layer)` | Add a Tower layer to the router |
-| `store_data(value)` | Store a value accessible later |
-| `on_serve(closure)` | Run when the server starts listening |
-| `on_shutdown(closure)` | Run during graceful shutdown |
+| `with_layer(layer)` | Add a Tower layer (strict type bounds) |
+| `with_layer_fn(\|router\| ...)` | Apply a custom router transformation (escape hatch) |
+| `with_service_builder(\|router\| ...)` | Alias for `with_layer_fn` |
+| `register_routes(router)` | Merge a raw `axum::Router<T>` into the app |
+| `merge_router(router)` | Alias for `register_routes` |
+| `on_start(\|state\| async { Ok(()) })` | Register a startup hook (runs before listening) |
+| `on_stop(\|\| async { })` | Register a shutdown hook (runs after signal) |
 
 ## Example: Metrics plugin
 
 ```rust
+use r2e::{Plugin, AppBuilder};
+use axum::routing::get;
+use axum::Router;
+
 pub struct MetricsPlugin {
     endpoint: String,
 }
@@ -133,11 +286,11 @@ impl MetricsPlugin {
     }
 }
 
-impl<S: Clone + Send + Sync + 'static> Plugin<S> for MetricsPlugin {
-    fn install(self, router: Router<S>) -> Router<S> {
-        router
-            .route(&self.endpoint, get(|| async { "metrics data" }))
-            .layer(/* metrics collection layer */)
+impl Plugin for MetricsPlugin {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        let metrics_router = Router::new()
+            .route(&self.endpoint, get(|| async { "metrics data" }));
+        app.register_routes(metrics_router)
     }
 }
 ```

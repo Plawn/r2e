@@ -1,0 +1,9 @@
+error: invalid qualifier in #[inject(...)]: only `identity` is supported
+
+         #[inject]           — app-scoped (cloned from state)
+
+         #[inject(identity)] — request-scoped identity extraction
+  --> compile-fail/invalid_inject_qualifier.rs:11:5
+   |
+11 |     #[inject(something)]
+   |     ^^^^^^^^^^^^^^^^^^^^

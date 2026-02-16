@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3d13c481.js";
+            window.path_to_searchindex_js = "searchindex-df6d6725.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-4ee90a30.js"></script>
+        <script src="toc-e378e123.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -3101,20 +3101,22 @@ async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;Response&gt;
 <h1 id="custom-plugins"><a class="header" href="#custom-plugins">Custom Plugins</a></h1>
 <p>Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (<code>Plugin</code>) and pre-state (<code>PreStatePlugin</code>).</p>
 <h2 id="post-state-plugins-1"><a class="header" href="#post-state-plugins-1">Post-state plugins</a></h2>
-<p>Install after <code>build_state()</code> with <code>.with(plugin)</code>. They receive and transform the router:</p>
+<p>Install after <code>build_state()</code> with <code>.with(plugin)</code>. They receive and transform the <code>AppBuilder</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::Plugin;
-use axum::Router;
+</span>use r2e::Plugin;
+use r2e::AppBuilder;
 
 pub struct RequestLogger;
 
-impl&lt;S: Clone + Send + Sync + 'static&gt; Plugin&lt;S&gt; for RequestLogger {
-    fn install(self, router: Router&lt;S&gt;) -&gt; Router&lt;S&gt; {
-        router.layer(axum::middleware::from_fn(|req, next| async move {
-            tracing::info!("Request: {} {}", req.method(), req.uri());
-            next.run(req).await
-        }))
+impl Plugin for RequestLogger {
+    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
+        app.with_layer_fn(|router| {
+            router.layer(axum::middleware::from_fn(|req, next| async move {
+                tracing::info!("Request: {} {}", req.method(), req.uri());
+                next.run(req).await
+            }))
+        })
     }
 }
 <span class="boring">}</span></code></pre>
@@ -3131,28 +3133,36 @@ impl&lt;S: Clone + Send + Sync + 'static&gt; Plugin&lt;S&gt; for RequestLogger {
 <p>Override <code>should_be_last()</code> for plugins that must be the outermost layer:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>impl&lt;S: Clone + Send + Sync + 'static&gt; Plugin&lt;S&gt; for MyPlugin {
-    fn install(self, router: Router&lt;S&gt;) -&gt; Router&lt;S&gt; { router }
+</span>impl Plugin for NormalizePathPlugin {
+    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
+        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
+    }
 
-    fn should_be_last(&amp;self) -&gt; bool {
-        true  // R2E warns if plugins are added after this one
+    fn should_be_last() -&gt; bool
+    where
+        Self: Sized,
+    {
+        true // R2E warns if plugins are added after this one
     }
 }
 <span class="boring">}</span></code></pre>
 <h2 id="pre-state-plugins-2"><a class="header" href="#pre-state-plugins-2">Pre-state plugins</a></h2>
-<p>Install before <code>build_state()</code> with <code>.plugin(plugin)</code>. They can inject values into the bean graph:</p>
+<p>Install before <code>build_state()</code> with <code>.plugin(plugin)</code>. They provide beans to the DI graph:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::PreStatePlugin;
-use r2e_core::builder::AppBuilder;
+</span>use r2e::{PreStatePlugin, AppBuilder};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
 
 pub struct MyPlugin {
     config: MyPluginConfig,
 }
 
 impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &amp;mut AppBuilder) {
-        builder.provide(self.config);
+    type Provided = MyPluginConfig;
+
+    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
+        app.provide(self.config)
     }
 }
 <span class="boring">}</span></code></pre>
@@ -3169,33 +3179,38 @@ impl PreStatePlugin for MyPlugin {
 <p>For plugins that need to set up infrastructure after state is built but during serve:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::{DeferredAction, DeferredContext};
+</span>use r2e::{PreStatePlugin, AppBuilder};
+use r2e::plugin::{DeferredAction, DeferredContext};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
+use tokio_util::sync::CancellationToken;
+
+pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &amp;mut AppBuilder) {
-        let token = CancellationToken::new();
-        builder.provide(token.clone());
+    type Provided = CancellationToken;
 
-        builder.defer(DeferredAction::new("my-plugin", move |ctx: &amp;mut DeferredContext| {
+    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
+        let token = CancellationToken::new();
+
+        app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &amp;mut DeferredContext| {
             // Add a Tower layer
-            ctx.add_layer(my_custom_layer());
+            ctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
 
             // Store data for later access
             ctx.store_data(MyPluginHandle::new());
 
             // Hook into server lifecycle
             let t = token.clone();
-            ctx.on_serve(move || {
-                let t = t.clone();
-                async move {
-                    tracing::info!("Plugin started");
-                }
+            ctx.on_serve(move |_tasks, _cancel_token| {
+                tracing::info!("Plugin started");
             });
 
-            ctx.on_shutdown(move || async move {
+            ctx.on_shutdown(move || {
+                t.cancel();
                 tracing::info!("Plugin shutting down");
             });
-        }));
+        }))
     }
 }
 <span class="boring">}</span></code></pre>
@@ -3203,20 +3218,156 @@ impl PreStatePlugin for MyPlugin {
 <div class="table-wrapper">
 <table>
 <thead>
+<tr><th>Method</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>add_layer</code></td><td><code>(&amp;mut self, Box&lt;dyn FnOnce(Router) -&gt; Router + Send&gt;)</code></td><td>Add a Tower layer to the router</td></tr>
+<tr><td><code>store_data</code></td><td><code>&lt;D: Any + Send + Sync&gt;(&amp;mut self, D)</code></td><td>Store a value keyed by type for later retrieval</td></tr>
+<tr><td><code>on_serve</code></td><td><code>(&amp;mut self, FnOnce(Vec&lt;Box&lt;dyn Any + Send&gt;&gt;, CancellationToken))</code></td><td>Run when the server starts listening</td></tr>
+<tr><td><code>on_shutdown</code></td><td><code>(&amp;mut self, FnOnce())</code></td><td>Run during graceful shutdown</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="step-by-step-request-id-plugin"><a class="header" href="#step-by-step-request-id-plugin">Step-by-step: Request ID plugin</a></h2>
+<p>A post-state plugin that adds a unique <code>X-Request-Id</code> header to every response.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, AppBuilder};
+use axum::http::{Request, HeaderValue};
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use uuid::Uuid;
+
+pub struct RequestId;
+
+impl Plugin for RequestId {
+    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
+        app.with_layer_fn(|router| {
+            router.layer(middleware::from_fn(request_id_middleware))
+        })
+    }
+}
+
+async fn request_id_middleware(
+    request: Request&lt;axum::body::Body&gt;,
+    next: Next,
+) -&gt; Response {
+    let request_id = Uuid::new_v4().to_string();
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "X-Request-Id",
+        HeaderValue::from_str(&amp;request_id).unwrap(),
+    );
+    response
+}
+<span class="boring">}</span></code></pre>
+<p>Usage:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .build_state::&lt;AppState, _&gt;()
+    .await
+    .with(RequestId)
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<h2 id="step-by-step-background-health-checker"><a class="header" href="#step-by-step-background-health-checker">Step-by-step: Background health checker</a></h2>
+<p>A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{PreStatePlugin, AppBuilder};
+use r2e::plugin::{DeferredAction, DeferredContext};
+use r2e::builder::NoState;
+use r2e::type_list::TCons;
+use tokio_util::sync::CancellationToken;
+use std::time::Duration;
+
+pub struct HealthChecker {
+    pub interval: Duration,
+    pub url: String,
+}
+
+impl PreStatePlugin for HealthChecker {
+    type Provided = CancellationToken;
+
+    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
+        let token = CancellationToken::new();
+        let interval = self.interval;
+        let url = self.url;
+
+        app.provide(token.clone()).add_deferred(DeferredAction::new("health-checker", move |ctx: &amp;mut DeferredContext| {
+            let t = token.clone();
+
+            // Start the checker when the server begins serving
+            ctx.on_serve(move |_tasks, _cancel_token| {
+                let t = t.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = tokio::time::sleep(interval) =&gt; {
+                                match reqwest::get(&amp;url).await {
+                                    Ok(resp) =&gt; tracing::info!("Health check: {}", resp.status()),
+                                    Err(e) =&gt; tracing::warn!("Health check failed: {}", e),
+                                }
+                            }
+                            _ = t.cancelled() =&gt; {
+                                tracing::info!("Health checker stopped");
+                                break;
+                            }
+                        }
+                    }
+                });
+            });
+
+            // Cancel the checker on shutdown
+            ctx.on_shutdown(move || {
+                token.cancel();
+            });
+        }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Usage:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+
+AppBuilder::new()
+    .plugin(HealthChecker {
+        interval: Duration::from_secs(30),
+        url: "https://api.example.com/health".into(),
+    })
+    .build_state::&lt;AppState, _&gt;()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<h2 id="available-appbuilder-methods-for-plugin-authors"><a class="header" href="#available-appbuilder-methods-for-plugin-authors">Available AppBuilder methods for plugin authors</a></h2>
+<p>Post-state plugins (<code>Plugin::install</code>) receive <code>AppBuilder&lt;T&gt;</code> and can call:</p>
+<div class="table-wrapper">
+<table>
+<thead>
 <tr><th>Method</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>add_layer(layer)</code></td><td>Add a Tower layer to the router</td></tr>
-<tr><td><code>store_data(value)</code></td><td>Store a value accessible later</td></tr>
-<tr><td><code>on_serve(closure)</code></td><td>Run when the server starts listening</td></tr>
-<tr><td><code>on_shutdown(closure)</code></td><td>Run during graceful shutdown</td></tr>
+<tr><td><code>with_layer(layer)</code></td><td>Add a Tower layer (strict type bounds)</td></tr>
+<tr><td><code>with_layer_fn(|router| ...)</code></td><td>Apply a custom router transformation (escape hatch)</td></tr>
+<tr><td><code>with_service_builder(|router| ...)</code></td><td>Alias for <code>with_layer_fn</code></td></tr>
+<tr><td><code>register_routes(router)</code></td><td>Merge a raw <code>axum::Router&lt;T&gt;</code> into the app</td></tr>
+<tr><td><code>merge_router(router)</code></td><td>Alias for <code>register_routes</code></td></tr>
+<tr><td><code>on_start(|state| async { Ok(()) })</code></td><td>Register a startup hook (runs before listening)</td></tr>
+<tr><td><code>on_stop(|| async { })</code></td><td>Register a shutdown hook (runs after signal)</td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="example-metrics-plugin"><a class="header" href="#example-metrics-plugin">Example: Metrics plugin</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>pub struct MetricsPlugin {
+</span>use r2e::{Plugin, AppBuilder};
+use axum::routing::get;
+use axum::Router;
+
+pub struct MetricsPlugin {
     endpoint: String,
 }
 
@@ -3226,14 +3377,276 @@ impl MetricsPlugin {
     }
 }
 
-impl&lt;S: Clone + Send + Sync + 'static&gt; Plugin&lt;S&gt; for MetricsPlugin {
-    fn install(self, router: Router&lt;S&gt;) -&gt; Router&lt;S&gt; {
-        router
-            .route(&amp;self.endpoint, get(|| async { "metrics data" }))
-            .layer(/* metrics collection layer */)
+impl Plugin for MetricsPlugin {
+    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
+        let metrics_router = Router::new()
+            .route(&amp;self.endpoint, get(|| async { "metrics data" }));
+        app.register_routes(metrics_router)
     }
 }
 <span class="boring">}</span></code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="macro-debugging-with-cargo-expand"><a class="header" href="#macro-debugging-with-cargo-expand">Macro Debugging with <code>cargo expand</code></a></h1>
+<p>R2E relies heavily on proc macros to generate boilerplate. When things go wrong, seeing the generated code is invaluable. <code>cargo expand</code> shows you exactly what the macros produce.</p>
+<h2 id="setup-6"><a class="header" href="#setup-6">Setup</a></h2>
+<p>Install <code>cargo-expand</code>:</p>
+<pre><code class="language-bash">cargo install cargo-expand
+</code></pre>
+<p>Usage:</p>
+<pre><code class="language-bash"># Expand an entire crate
+cargo expand -p example-app
+
+# Expand a single module
+cargo expand -p example-app controllers::user_controller
+
+# Filter for R2E-generated items
+cargo expand -p example-app 2&gt;/dev/null | grep "__r2e_"
+</code></pre>
+<h2 id="what-derivecontroller-generates"><a class="header" href="#what-derivecontroller-generates">What <code>#[derive(Controller)]</code> generates</a></h2>
+<p>Given this controller:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Controller)]
+#[controller(path = "/users", state = AppState)]
+pub struct UserController {
+    #[inject] user_service: UserService,
+    #[inject] event_bus: EventBus,
+}
+<span class="boring">}</span></code></pre>
+<p>The derive produces <strong>three items</strong>:</p>
+<h3 id="1-metadata-module-__r2e_meta_usercontroller"><a class="header" href="#1-metadata-module-__r2e_meta_usercontroller">1. Metadata module <code>__r2e_meta_UserController</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[doc(hidden)]
+mod __r2e_meta_UserController {
+    use super::*;
+    pub type State = AppState;
+    pub const PATH_PREFIX: Option&lt;&amp;str&gt; = Some("/users");
+    pub type IdentityType = r2e::NoIdentity;  // no #[inject(identity)] field
+
+    pub fn guard_identity(_ctrl: &amp;super::UserController) -&gt; Option&lt;&amp;r2e::NoIdentity&gt; {
+        None
+    }
+
+    pub fn validate_config(_config: &amp;r2e::config::R2eConfig) -&gt; Vec&lt;r2e::config::MissingKeyError&gt; {
+        Vec::new()
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>This module is referenced by <code>#[routes]</code> through naming convention. It tells the routes macro what state type to use, what the path prefix is, and what identity type is available for guards.</p>
+<h3 id="2-extractor-struct-__r2eextract_usercontroller"><a class="header" href="#2-extractor-struct-__r2eextract_usercontroller">2. Extractor struct <code>__R2eExtract_UserController</code></a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[doc(hidden)]
+pub struct __R2eExtract_UserController(pub UserController);
+
+impl r2e::http::extract::FromRequestParts&lt;AppState&gt; for __R2eExtract_UserController {
+    type Rejection = r2e::http::response::Response;
+
+    async fn from_request_parts(
+        __parts: &amp;mut r2e::http::header::Parts,
+        __state: &amp;AppState,
+    ) -&gt; Result&lt;Self, Self::Rejection&gt; {
+        Ok(Self(UserController {
+            user_service: __state.user_service.clone(),
+            event_bus: __state.event_bus.clone(),
+        }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Each <code>#[inject]</code> field is cloned from the corresponding field on the state struct. Identity fields (<code>#[inject(identity)]</code>) use Axum’s <code>FromRequestParts</code> instead.</p>
+<h3 id="3-statefulconstruct-impl"><a class="header" href="#3-statefulconstruct-impl">3. <code>StatefulConstruct</code> impl</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl r2e::StatefulConstruct&lt;AppState&gt; for UserController {
+    fn from_state(__state: &amp;AppState) -&gt; Self {
+        Self {
+            user_service: __state.user_service.clone(),
+            event_bus: __state.event_bus.clone(),
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>This is only generated when there are <strong>no</strong> <code>#[inject(identity)]</code> struct fields. It enables the controller to be used with <code>#[consumer]</code> and <code>#[scheduled]</code> methods that run outside of HTTP requests.</p>
+<h2 id="what-routes-generates"><a class="header" href="#what-routes-generates">What <code>#[routes]</code> generates</a></h2>
+<p>Given:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl UserController {
+    #[get("/")]
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+        Json(self.user_service.list().await)
+    }
+
+    #[get("/{id}")]
+    #[roles("admin")]
+    async fn get_by_id(&amp;self, Path(id): Path&lt;i64&gt;) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+        // ...
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="plain-handler"><a class="header" href="#plain-handler">Plain handler</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>async fn __r2e_UserController_list(
+    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
+) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    __ctrl.list().await
+}
+<span class="boring">}</span></code></pre>
+<p>The extractor constructs the controller from state, then the handler delegates to the method.</p>
+<h3 id="guarded-handler-with-roles"><a class="header" href="#guarded-handler-with-roles">Guarded handler (with <code>#[roles]</code>)</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>async fn __r2e_UserController_get_by_id(
+    axum::extract::State(__state): axum::extract::State&lt;AppState&gt;,
+    __headers: axum::http::HeaderMap,
+    __uri: axum::http::Uri,
+    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    // Guard check runs before method body
+    let __identity_ref = __r2e_meta_UserController::guard_identity(&amp;__ctrl);
+    let __guard_ctx = r2e::GuardContext::new(
+        "get_by_id",
+        "UserController",
+        &amp;__headers,
+        &amp;__uri,
+        __identity_ref,
+    );
+    r2e::Guard::check(&amp;r2e::RolesGuard::new(&amp;["admin"]), &amp;__state, &amp;__guard_ctx)
+        .await
+        .map_err(/* ... */)?;
+
+    // Original method body
+    __ctrl.get_by_id(Path(id)).await
+}
+<span class="boring">}</span></code></pre>
+<p>Guarded handlers also extract <code>State</code>, <code>HeaderMap</code>, and <code>Uri</code> to build a <code>GuardContext</code>.</p>
+<h3 id="controllerappstate-impl"><a class="header" href="#controllerappstate-impl"><code>Controller&lt;AppState&gt;</code> impl</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl r2e::Controller&lt;AppState&gt; for UserController {
+    fn routes() -&gt; axum::Router&lt;AppState&gt; {
+        axum::Router::new()
+            .route("/users/", axum::routing::get(__r2e_UserController_list))
+            .route("/users/{id}", axum::routing::get(__r2e_UserController_get_by_id))
+    }
+
+    fn register_meta(registry: &amp;mut r2e::MetaRegistry) { /* ... */ }
+
+    fn scheduled_tasks(_state: &amp;AppState) -&gt; Vec&lt;r2e::scheduling::ScheduledTaskDef&lt;AppState&gt;&gt; {
+        vec![]
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="what-bean-generates"><a class="header" href="#what-bean-generates">What <code>#[bean]</code> generates</a></h2>
+<h3 id="sync-bean"><a class="header" href="#sync-bean">Sync bean</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[bean]
+impl UserService {
+    fn new(event_bus: EventBus) -&gt; Self { Self { event_bus } }
+}
+<span class="boring">}</span></code></pre>
+<p>Generates:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl r2e::beans::Bean for UserService {
+    fn dependencies() -&gt; Vec&lt;(std::any::TypeId, &amp;'static str)&gt; {
+        vec![(std::any::TypeId::of::&lt;EventBus&gt;(), std::any::type_name::&lt;EventBus&gt;())]
+    }
+
+    fn build(ctx: &amp;r2e::beans::BeanContext) -&gt; Self {
+        let __arg_0: EventBus = ctx.get::&lt;EventBus&gt;();
+        UserService::new(__arg_0)
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="async-bean"><a class="header" href="#async-bean">Async bean</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[bean]
+impl DbService {
+    async fn new(pool: SqlitePool) -&gt; Self { Self { pool } }
+}
+<span class="boring">}</span></code></pre>
+<p>Generates <code>impl AsyncBean</code> with an <code>async fn build(ctx)</code> instead.</p>
+<h2 id="what-producer-generates"><a class="header" href="#what-producer-generates">What <code>#[producer]</code> generates</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[producer]
+async fn create_pool(#[config("app.db.url")] url: String) -&gt; SqlitePool {
+    SqlitePool::connect(&amp;url).await.unwrap()
+}
+<span class="boring">}</span></code></pre>
+<p>Generates:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Original function (with #[config] stripped)
+async fn create_pool(url: String) -&gt; SqlitePool {
+    SqlitePool::connect(&amp;url).await.unwrap()
+}
+
+// Generated struct
+pub struct CreatePool;
+
+impl r2e::beans::Producer for CreatePool {
+    type Output = SqlitePool;
+
+    fn dependencies() -&gt; Vec&lt;(std::any::TypeId, &amp;'static str)&gt; {
+        vec![(std::any::TypeId::of::&lt;r2e::config::R2eConfig&gt;(), /* ... */)]
+    }
+
+    async fn produce(ctx: &amp;r2e::beans::BeanContext) -&gt; Self::Output {
+        let __r2e_config: r2e::config::R2eConfig = ctx.get::&lt;r2e::config::R2eConfig&gt;();
+        let __arg_0: String = __r2e_config.get::&lt;String&gt;("app.db.url").unwrap_or_else(|_| {
+            panic!("Configuration error in producer `CreatePool`: key 'app.db.url' ...")
+        });
+        create_pool(__arg_0).await
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>The function name is converted to PascalCase for the struct name (<code>create_pool</code> -&gt; <code>CreatePool</code>).</p>
+<h2 id="scheduled-and-consumer"><a class="header" href="#scheduled-and-consumer"><code>#[scheduled]</code> and <code>#[consumer]</code></a></h2>
+<p>These contribute to the <code>Controller</code> trait impl generated by <code>#[routes]</code>:</p>
+<ul>
+<li><code>#[scheduled(every = 30)]</code> methods appear in <code>scheduled_tasks()</code> as <code>ScheduledTaskDef</code> entries</li>
+<li><code>#[consumer(bus = "event_bus")]</code> methods are wired up in <code>register_event_consumers()</code></li>
+</ul>
+<p>Both require <code>StatefulConstruct</code> (i.e. no struct-level <code>#[inject(identity)]</code>).</p>
+<h2 id="debugging-tips"><a class="header" href="#debugging-tips">Debugging tips</a></h2>
+<h3 id="common-error-patterns"><a class="header" href="#common-error-patterns">Common error patterns</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Error message</th><th>Cause</th><th>Fix</th></tr>
+</thead>
+<tbody>
+<tr><td><code>cannot find __R2eExtract_X</code></td><td>Missing <code>#[derive(Controller)]</code> on the struct</td><td>Add <code>#[derive(Controller)]</code></td></tr>
+<tr><td><code>StatefulConstruct is not implemented</code></td><td>Struct has <code>#[inject(identity)]</code> field</td><td>Use param-level <code>#[inject(identity)]</code> on individual handlers instead</td></tr>
+<tr><td><code>#[controller(state = ...)] is required</code></td><td>Missing <code>state</code> in controller attribute</td><td>Add <code>#[controller(state = AppState)]</code></td></tr>
+<tr><td><code>every controller field must be annotated</code></td><td>Field without <code>#[inject]</code>, <code>#[config]</code>, etc.</td><td>Annotate the field with one of the supported attributes</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="filtering-expanded-output"><a class="header" href="#filtering-expanded-output">Filtering expanded output</a></h3>
+<p>The expanded output can be very long. Filter for R2E-generated items:</p>
+<pre><code class="language-bash"># Find all generated handler functions
+cargo expand -p my-app 2&gt;/dev/null | grep "fn __r2e_"
+
+# Find all generated modules
+cargo expand -p my-app 2&gt;/dev/null | grep "mod __r2e_meta_"
+
+# Find all Controller trait impls
+cargo expand -p my-app 2&gt;/dev/null | grep "impl.*Controller.*for"
+</code></pre>
+<h3 id="expand-a-single-controller"><a class="header" href="#expand-a-single-controller">Expand a single controller</a></h3>
+<p>If you know your controller is in <code>src/controllers/user_controller.rs</code>:</p>
+<pre><code class="language-bash">cargo expand -p my-app controllers::user_controller
+</code></pre>
+<p>This limits output to just that module, making it much easier to read.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="managed-resources"><a class="header" href="#managed-resources">Managed Resources</a></h1>
 <p>The <code>#[managed]</code> attribute enables automatic lifecycle management for resources that need acquire/release semantics — transactions, connections, scoped caches, or audit contexts.</p>
@@ -3534,7 +3947,7 @@ builder = builder.with(DevReload);
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="openapi"><a class="header" href="#openapi">OpenAPI</a></h1>
 <p>R2E auto-generates an OpenAPI 3.0.3 specification from your controller route metadata, with an optional interactive documentation UI.</p>
-<h2 id="setup-6"><a class="header" href="#setup-6">Setup</a></h2>
+<h2 id="setup-7"><a class="header" href="#setup-7">Setup</a></h2>
 <p>Enable the openapi feature:</p>
 <pre><code class="language-toml">r2e = { version = "0.1", features = ["openapi"] }
 </code></pre>
@@ -4557,22 +4970,6 @@ r2e add test          # r2e-test (dev-dependency)
         <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
         <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
 
-        <!-- Livereload script (if served using the cli tool) -->
-        <script>
-            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
-            const socket = new WebSocket(wsAddress);
-            socket.onmessage = function (event) {
-                if (event.data === "reload") {
-                    socket.close();
-                    location.reload();
-                }
-            };
-
-            window.onbeforeunload = function() {
-                socket.close();
-            }
-        </script>
 
 
         <script>

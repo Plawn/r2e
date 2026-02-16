@@ -1,0 +1,13 @@
+error: every controller field must be annotated with one of:
+
+         #[inject]              — clone from app state
+
+         #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)
+
+         #[config("app.key")]   — resolve from R2eConfig
+
+         #[config_section]      — resolve typed config section via ConfigProperties
+  --> compile-fail/unannotated_field.rs:11:5
+   |
+11 |     name: String,
+   |     ^^^^

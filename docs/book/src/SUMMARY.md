@@ -43,6 +43,7 @@
 - [Interceptors](./advanced/interceptors.md)
 - [Custom Guards](./advanced/custom-guards.md)
 - [Custom Plugins](./advanced/custom-plugins.md)
+- [Macro Debugging](./advanced/macro-debugging.md)
 - [Managed Resources](./advanced/managed-resources.md)
 - [Lifecycle Hooks](./advanced/lifecycle-hooks.md)
 - [Dev Mode](./advanced/dev-mode.md)

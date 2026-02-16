@@ -1,0 +1,5 @@
+error: #[derive(Controller)] only works on structs — enums and unions are not supported
+ --> compile-fail/enum_controller.rs:8:10
+  |
+8 | pub enum MyController {
+  |          ^^^^^^^^^^^^

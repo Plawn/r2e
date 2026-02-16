@@ -1,0 +1,8 @@
+error: #[producer] function must have a return type:
+
+         #[producer]
+         async fn create_pool() -> SqlitePool { ... }
+ --> compile-fail/producer_no_return.rs:4:4
+  |
+4 | fn create_something() {
+  |    ^^^^^^^^^^^^^^^^

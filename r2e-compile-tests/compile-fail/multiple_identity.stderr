@@ -1,0 +1,10 @@
+error: controller can have at most one #[inject(identity)] struct field
+
+       hint: use param-level injection for mixed public/protected endpoints:
+
+         #[get("/me")]
+         async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> ... { }
+ --> compile-fail/multiple_identity.rs:9:12
+  |
+9 | pub struct MyController {
+  |            ^^^^^^^^^^^^

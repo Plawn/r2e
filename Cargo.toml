@@ -23,6 +23,7 @@ members = [
     "example-multi-tenant",
     "example-websocket-chat",
     "example-microservice",
+    "r2e-compile-tests",
 ]
 resolver = "2"
 

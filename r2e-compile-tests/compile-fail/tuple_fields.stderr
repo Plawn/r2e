@@ -1,0 +1,11 @@
+error: Controller cannot have tuple fields — use named fields or a unit struct:
+
+         struct MyController {
+             #[inject] service: MyService,
+         }
+
+         // or: struct MyController;
+ --> compile-fail/tuple_fields.rs:8:12
+  |
+8 | pub struct MyController(String, i32);
+  |            ^^^^^^^^^^^^
