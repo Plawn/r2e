@@ -35,6 +35,39 @@ cargo build -p r2e-cli
 cargo expand -p example-app
 ```
 
+## Testing Conventions
+
+**Tests live in `<crate>/tests/` directories, not inline.** Do NOT use `#[cfg(test)] mod tests { ... }` blocks inside source files. Instead, create separate test files under the crate's `tests/` directory.
+
+### Rules
+
+- One test file per source module: `src/foo.rs` → `tests/foo.rs`
+- Use external imports (`use <crate_name>::...`) instead of `use super::*`
+- Keep test-only helpers (structs, functions) in the test file, not in the source
+- If a test needs access to an internal item, add a `pub` accessor or make the item `pub` + `#[doc(hidden)]` — do NOT use `#[cfg(test)] pub(crate)` visibility hacks
+- Feature-gated modules need `#![cfg(feature = "...")]` at the top of the test file (e.g., `ws.rs` tests use `#![cfg(feature = "ws")]`)
+
+### Example
+
+```rust
+// tests/config.rs
+use r2e_core::config::{R2eConfig, ConfigValue};
+
+#[test]
+fn test_get_or_returns_default() {
+    let config = R2eConfig::empty();
+    assert_eq!(config.get_or("missing", "fallback".to_string()), "fallback");
+}
+```
+
+### Running tests
+
+```bash
+cargo test --workspace           # all tests
+cargo test -p r2e-core           # single crate
+cargo test -p r2e-core --test config  # single test file
+```
+
 ## Architecture
 
 R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declarative controllers with compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.

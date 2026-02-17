@@ -103,7 +103,8 @@ pub struct HealthBuilder {
 }
 
 /// Object-safe wrapper for HealthIndicator.
-pub(crate) trait HealthIndicatorErased: Send + Sync + 'static {
+#[doc(hidden)]
+pub trait HealthIndicatorErased: Send + Sync + 'static {
     fn name(&self) -> &str;
     fn check(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthStatus> + Send + '_>>;
     fn affects_readiness(&self) -> bool;
@@ -159,15 +160,21 @@ impl Default for HealthBuilder {
 }
 
 /// Shared state for health check handlers.
-pub(crate) struct HealthState {
-    pub(crate) checks: Vec<Box<dyn HealthIndicatorErased>>,
-    pub(crate) start_time: Instant,
-    pub(crate) cache_ttl: Option<Duration>,
-    pub(crate) cache: tokio::sync::RwLock<Option<(HealthResponse, Instant)>>,
+#[doc(hidden)]
+pub struct HealthState {
+    #[doc(hidden)]
+    pub checks: Vec<Box<dyn HealthIndicatorErased>>,
+    #[doc(hidden)]
+    pub start_time: Instant,
+    #[doc(hidden)]
+    pub cache_ttl: Option<Duration>,
+    #[doc(hidden)]
+    pub cache: tokio::sync::RwLock<Option<(HealthResponse, Instant)>>,
 }
 
 impl HealthState {
-    async fn aggregate(&self) -> HealthResponse {
+    #[doc(hidden)]
+    pub async fn aggregate(&self) -> HealthResponse {
         // Check cache
         if let Some(ttl) = self.cache_ttl {
             let cache = self.cache.read().await;
@@ -222,7 +229,8 @@ impl HealthState {
     }
 
     /// Aggregate only checks that affect readiness.
-    async fn aggregate_readiness(&self) -> HealthResponse {
+    #[doc(hidden)]
+    pub async fn aggregate_readiness(&self) -> HealthResponse {
         // Check cache — readiness uses the same cache as full health
         if let Some(ttl) = self.cache_ttl {
             let cache = self.cache.read().await;
@@ -293,71 +301,6 @@ impl HealthState {
             checks,
             uptime_seconds: Some(self.start_time.elapsed().as_secs()),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn health_status_is_up() {
-        assert!(HealthStatus::Up.is_up());
-    }
-
-    #[test]
-    fn health_status_down_is_not_up() {
-        assert!(!HealthStatus::Down("db unreachable".into()).is_up());
-    }
-
-    #[test]
-    fn health_builder_default() {
-        // Verify default builder creates without error
-        let _advanced = HealthBuilder::default().build();
-    }
-
-    struct AlwaysUp;
-    impl HealthIndicator for AlwaysUp {
-        fn name(&self) -> &str { "up-check" }
-        fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
-            async { HealthStatus::Up }
-        }
-    }
-
-    struct AlwaysDown;
-    impl HealthIndicator for AlwaysDown {
-        fn name(&self) -> &str { "down-check" }
-        fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
-            async { HealthStatus::Down("broken".into()) }
-        }
-    }
-
-    #[test]
-    fn health_builder_collects_checks() {
-        // Builder chain should accept multiple checks without panicking
-        let _advanced = HealthBuilder::new()
-            .check(AlwaysUp)
-            .check(AlwaysDown)
-            .build();
-    }
-
-    #[tokio::test]
-    async fn health_state_aggregate() {
-        let state = HealthState {
-            checks: vec![
-                Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>,
-                Box::new(AlwaysDown) as Box<dyn HealthIndicatorErased>,
-            ],
-            start_time: Instant::now(),
-            cache_ttl: None,
-            cache: tokio::sync::RwLock::new(None),
-        };
-        let response = state.aggregate().await;
-        assert!(matches!(response.status, HealthCheckStatus::Down));
-        assert_eq!(response.checks.len(), 2);
-        assert!(matches!(response.checks[0].status, HealthCheckStatus::Up));
-        assert!(matches!(response.checks[1].status, HealthCheckStatus::Down));
-        assert_eq!(response.checks[1].reason.as_deref(), Some("broken"));
     }
 }
 

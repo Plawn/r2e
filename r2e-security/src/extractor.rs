@@ -9,7 +9,7 @@ use crate::identity::{AuthenticatedUser, IdentityBuilder};
 use crate::jwt::{JwtClaimsValidator, JwtValidator};
 
 /// Extract a Bearer token from the Authorization header value.
-fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
+pub fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
     let parts: Vec<&str> = header_value.splitn(2, ' ').collect();
     if parts.len() != 2 {
         return Err(SecurityError::InvalidAuthScheme);

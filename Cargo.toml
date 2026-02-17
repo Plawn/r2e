@@ -18,11 +18,11 @@ members = [
     "r2e-test",
     "r2e-utils",
     "r2e",
-    "example-app",
-    "example-postgres",
-    "example-multi-tenant",
-    "example-websocket-chat",
-    "example-microservice",
+    "examples/example-app",
+    "examples/example-postgres",
+    "examples/example-multi-tenant",
+    "examples/example-websocket-chat",
+    "examples/example-microservice",
     "r2e-compile-tests",
 ]
 resolver = "2"
