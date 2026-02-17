@@ -475,6 +475,8 @@ r2e-test         TestApp, TestJwt for integration testing
 r2e-cli          CLI scaffolding tool
 ```
 
+For a detailed file-by-file breakdown of every crate, see [REPO_MAP.md](REPO_MAP.md).
+
 ## Building
 
 ```bash
