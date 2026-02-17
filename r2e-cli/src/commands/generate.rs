@@ -420,7 +420,7 @@ use serde_json::json;
 #[tokio::test]
 async fn test_list_{plural}() {{
     // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.get("/{plural}").await;
+    // let resp = app.get("/{plural}").send().await;
     // resp.assert_ok();
     todo!("Setup TestApp and test list endpoint");
 }}
@@ -429,23 +429,23 @@ async fn test_list_{plural}() {{
 async fn test_create_{snake}() {{
     // let app = TestApp::from_builder(/* your builder */);
     // let body = json!({{ /* fields */ }});
-    // let resp = app.post("/{plural}", &body).await;
-    // resp.assert_status(201);
+    // let resp = app.post("/{plural}").json(&body).send().await;
+    // resp.assert_created();
     todo!("Setup TestApp and test create endpoint");
 }}
 
 #[tokio::test]
 async fn test_get_{snake}_not_found() {{
     // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.get("/{plural}/999").await;
-    // resp.assert_status(404);
+    // let resp = app.get("/{plural}/999").send().await;
+    // resp.assert_not_found();
     todo!("Setup TestApp and test 404");
 }}
 
 #[tokio::test]
 async fn test_delete_{snake}() {{
     // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.delete("/{plural}/1").await;
+    // let resp = app.delete("/{plural}/1").send().await;
     // resp.assert_ok();
     todo!("Setup TestApp and test delete");
 }}

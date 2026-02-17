@@ -274,7 +274,7 @@ async fn setup() -> (TestApp, TestJwt) {
 #[tokio::test]
 async fn test_health_endpoint() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/health").await.assert_ok();
+    let resp = app.get("/health").send().await.assert_ok();
     assert_eq!(resp.text(), "OK");
 }
 
@@ -282,7 +282,7 @@ async fn test_health_endpoint() {
 async fn test_list_users_authenticated() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get_authenticated("/users", &token).await.assert_ok();
+    let resp = app.get("/users").bearer(&token).send().await.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
     assert_eq!(users[0].name, "Alice");
@@ -291,14 +291,14 @@ async fn test_list_users_authenticated() {
 #[tokio::test]
 async fn test_list_users_unauthenticated() {
     let (app, _jwt) = setup().await;
-    app.get("/users").await.assert_unauthorized();
+    app.get("/users").send().await.assert_unauthorized();
 }
 
 #[tokio::test]
 async fn test_get_user_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get_authenticated("/users/1", &token).await.assert_ok();
+    let resp = app.get("/users/1").bearer(&token).send().await.assert_ok();
     let user: User = resp.json();
     assert_eq!(user.name, "Alice");
 }
@@ -307,16 +307,14 @@ async fn test_get_user_by_id() {
 async fn test_get_user_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    app.get_authenticated("/users/999", &token)
-        .await
-        .assert_not_found();
+    app.get("/users/999").bearer(&token).send().await.assert_not_found();
 }
 
 #[tokio::test]
 async fn test_me_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token_with_claims("user-42", &["user"], Some("test@example.com"));
-    let resp = app.get_authenticated("/me", &token).await.assert_ok();
+    let resp = app.get("/me").bearer(&token).send().await.assert_ok();
     let user: AuthenticatedUser = resp.json();
     assert_eq!(user.sub, "user-42");
 }
@@ -326,7 +324,9 @@ async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
     let resp = app
-        .get_authenticated("/admin/users", &token)
+        .get("/admin/users")
+        .bearer(&token)
+        .send()
         .await
         .assert_ok();
     let users: Vec<User> = resp.json();
@@ -337,7 +337,9 @@ async fn test_admin_endpoint_with_admin_role() {
 async fn test_admin_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    app.get_authenticated("/admin/users", &token)
+    app.get("/admin/users")
+        .bearer(&token)
+        .send()
         .await
         .assert_forbidden();
 }
@@ -349,7 +351,9 @@ async fn test_config_greeting_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     let resp = app
-        .get_authenticated("/greeting", &token)
+        .get("/greeting")
+        .bearer(&token)
+        .send()
         .await
         .assert_ok();
     let body: serde_json::Value = resp.json();
@@ -367,7 +371,10 @@ async fn test_create_user_with_valid_data() {
         email: "charlie@example.com".into(),
     };
     let resp = app
-        .post_json_authenticated("/users", &body, &token)
+        .post("/users")
+        .json(&body)
+        .bearer(&token)
+        .send()
         .await
         .assert_ok();
     let user: User = resp.json();
@@ -383,7 +390,10 @@ async fn test_create_user_with_invalid_email() {
         "name": "Valid Name",
         "email": "not-an-email"
     });
-    app.post_json_authenticated("/users", &body, &token)
+    app.post("/users")
+        .json(&body)
+        .bearer(&token)
+        .send()
         .await
         .assert_bad_request();
 }
@@ -396,7 +406,10 @@ async fn test_create_user_with_empty_name() {
         "name": "",
         "email": "valid@example.com"
     });
-    app.post_json_authenticated("/users", &body, &token)
+    app.post("/users")
+        .json(&body)
+        .bearer(&token)
+        .send()
         .await
         .assert_bad_request();
 }
@@ -408,7 +421,9 @@ async fn test_custom_error_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     let resp = app
-        .get_authenticated("/error/custom", &token)
+        .get("/error/custom")
+        .bearer(&token)
+        .send()
         .await
         .assert_status(http::StatusCode::from_u16(418).unwrap());
     let body: serde_json::Value = resp.json();
@@ -423,7 +438,9 @@ async fn test_cached_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     let resp = app
-        .get_authenticated("/users/cached", &token)
+        .get("/users/cached")
+        .bearer(&token)
+        .send()
         .await
         .assert_ok();
     let body: serde_json::Value = resp.json();
@@ -443,13 +460,19 @@ async fn test_rate_limited_endpoint() {
 
     // First 3 requests should succeed (max=3 in test controller)
     for _ in 0..3 {
-        app.post_json_authenticated("/users/rate-limited", &body, &token)
+        app.post("/users/rate-limited")
+            .json(&body)
+            .bearer(&token)
+            .send()
             .await
             .assert_ok();
     }
 
     // 4th request should be rate limited
-    app.post_json_authenticated("/users/rate-limited", &body, &token)
+    app.post("/users/rate-limited")
+        .json(&body)
+        .bearer(&token)
+        .send()
         .await
         .assert_status(http::StatusCode::TOO_MANY_REQUESTS);
 }
@@ -459,7 +482,7 @@ async fn test_rate_limited_endpoint() {
 #[tokio::test]
 async fn test_openapi_json_endpoint() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/openapi.json").await.assert_ok();
+    let resp = app.get("/openapi.json").send().await.assert_ok();
     let spec: serde_json::Value = resp.json();
     assert_eq!(spec["openapi"], "3.0.3");
     assert_eq!(spec["info"]["title"], "Test API");
@@ -469,7 +492,7 @@ async fn test_openapi_json_endpoint() {
 #[tokio::test]
 async fn test_docs_ui_endpoint() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/docs").await.assert_ok();
+    let resp = app.get("/docs").send().await.assert_ok();
     let html = resp.text();
     assert!(html.contains("wti-element"));
     assert!(html.contains("spec-url"));
@@ -480,14 +503,14 @@ async fn test_docs_ui_endpoint() {
 #[tokio::test]
 async fn test_dev_mode_status() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/__r2e_dev/status").await.assert_ok();
+    let resp = app.get("/__r2e_dev/status").send().await.assert_ok();
     assert_eq!(resp.text(), "dev");
 }
 
 #[tokio::test]
 async fn test_dev_mode_ping() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/__r2e_dev/ping").await.assert_ok();
+    let resp = app.get("/__r2e_dev/ping").send().await.assert_ok();
     let body: serde_json::Value = serde_json::from_str(&resp.text()).unwrap();
     assert!(body["boot_time"].is_number());
     assert_eq!(body["status"], "ok");
@@ -499,7 +522,7 @@ async fn test_dev_mode_ping() {
 async fn test_trailing_slash_list_users() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get_authenticated("/users/", &token).await.assert_ok();
+    let resp = app.get("/users/").bearer(&token).send().await.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
     assert_eq!(users[0].name, "Alice");
@@ -509,7 +532,7 @@ async fn test_trailing_slash_list_users() {
 async fn test_trailing_slash_get_user_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get_authenticated("/users/1/", &token).await.assert_ok();
+    let resp = app.get("/users/1/").bearer(&token).send().await.assert_ok();
     let user: User = resp.json();
     assert_eq!(user.name, "Alice");
 }
@@ -517,12 +540,12 @@ async fn test_trailing_slash_get_user_by_id() {
 #[tokio::test]
 async fn test_trailing_slash_health() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/health/").await.assert_ok();
+    let resp = app.get("/health/").send().await.assert_ok();
     assert_eq!(resp.text(), "OK");
 }
 
 #[tokio::test]
 async fn test_trailing_slash_nonexistent_still_404() {
     let (app, _jwt) = setup().await;
-    app.get("/nonexistent/").await.assert_not_found();
+    app.get("/nonexistent/").send().await.assert_not_found();
 }

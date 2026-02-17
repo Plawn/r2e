@@ -296,6 +296,71 @@ impl HealthState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_status_is_up() {
+        assert!(HealthStatus::Up.is_up());
+    }
+
+    #[test]
+    fn health_status_down_is_not_up() {
+        assert!(!HealthStatus::Down("db unreachable".into()).is_up());
+    }
+
+    #[test]
+    fn health_builder_default() {
+        // Verify default builder creates without error
+        let _advanced = HealthBuilder::default().build();
+    }
+
+    struct AlwaysUp;
+    impl HealthIndicator for AlwaysUp {
+        fn name(&self) -> &str { "up-check" }
+        fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
+            async { HealthStatus::Up }
+        }
+    }
+
+    struct AlwaysDown;
+    impl HealthIndicator for AlwaysDown {
+        fn name(&self) -> &str { "down-check" }
+        fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
+            async { HealthStatus::Down("broken".into()) }
+        }
+    }
+
+    #[test]
+    fn health_builder_collects_checks() {
+        // Builder chain should accept multiple checks without panicking
+        let _advanced = HealthBuilder::new()
+            .check(AlwaysUp)
+            .check(AlwaysDown)
+            .build();
+    }
+
+    #[tokio::test]
+    async fn health_state_aggregate() {
+        let state = HealthState {
+            checks: vec![
+                Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>,
+                Box::new(AlwaysDown) as Box<dyn HealthIndicatorErased>,
+            ],
+            start_time: Instant::now(),
+            cache_ttl: None,
+            cache: tokio::sync::RwLock::new(None),
+        };
+        let response = state.aggregate().await;
+        assert!(matches!(response.status, HealthCheckStatus::Down));
+        assert_eq!(response.checks.len(), 2);
+        assert!(matches!(response.checks[0].status, HealthCheckStatus::Up));
+        assert!(matches!(response.checks[1].status, HealthCheckStatus::Down));
+        assert_eq!(response.checks[1].reason.as_deref(), Some("broken"));
+    }
+}
+
 /// Handler: GET /health — aggregated status.
 pub(crate) async fn health_handler(
     state: axum::extract::State<Arc<HealthState>>,
