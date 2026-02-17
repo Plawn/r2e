@@ -36,16 +36,16 @@ impl fmt::Display for OpenFgaError {
 
 impl std::error::Error for OpenFgaError {}
 
-impl From<tonic::transport::Error> for OpenFgaError {
-    fn from(err: tonic::transport::Error) -> Self {
+impl From<openfga_rs::tonic::transport::Error> for OpenFgaError {
+    fn from(err: openfga_rs::tonic::transport::Error) -> Self {
         OpenFgaError::ConnectionFailed(err.to_string())
     }
 }
 
-impl From<tonic::Status> for OpenFgaError {
-    fn from(status: tonic::Status) -> Self {
+impl From<openfga_rs::tonic::Status> for OpenFgaError {
+    fn from(status: openfga_rs::tonic::Status) -> Self {
         match status.code() {
-            tonic::Code::DeadlineExceeded => OpenFgaError::Timeout,
+            openfga_rs::tonic::Code::DeadlineExceeded => OpenFgaError::Timeout,
             _ => OpenFgaError::ServerError(status.message().to_string()),
         }
     }

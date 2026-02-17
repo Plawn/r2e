@@ -39,12 +39,16 @@ pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
     ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::AppError>> + Send;
 }
 
-/// Generate a `FromRequestParts` implementation for an identity type that implements
-/// [`ClaimsIdentity`].
+/// Generate `FromRequestParts` and `OptionalFromRequestParts` implementations
+/// for an identity type that implements [`ClaimsIdentity`].
 ///
-/// This macro eliminates the boilerplate of manually implementing `FromRequestParts`.
+/// This macro eliminates the boilerplate of manually implementing these traits.
 /// It extracts and validates the JWT using `JwtClaimsValidator`, then delegates to
 /// `ClaimsIdentity::from_jwt_claims` for custom construction.
+///
+/// The `OptionalFromRequestParts` impl enables `Option<YourIdentity>` as a handler
+/// parameter: returns `None` when no `Authorization` header is present, and errors
+/// on invalid JWTs.
 ///
 /// # Usage
 ///
@@ -68,6 +72,28 @@ macro_rules! impl_claims_identity_extractor {
             ) -> Result<Self, Self::Rejection> {
                 let claims = $crate::extract_jwt_claims(parts, state).await?;
                 <$identity as $crate::ClaimsIdentity<S>>::from_jwt_claims(claims, state).await
+            }
+        }
+
+        impl<S> $crate::__macro_support::http::extract::OptionalFromRequestParts<S> for $identity
+        where
+            S: Send + Sync,
+            Self: $crate::ClaimsIdentity<S>,
+            std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
+        {
+            type Rejection = $crate::__macro_support::AppError;
+
+            async fn from_request_parts(
+                parts: &mut $crate::__macro_support::http::header::Parts,
+                state: &S,
+            ) -> Result<Option<Self>, Self::Rejection> {
+                if !parts.headers.contains_key($crate::__macro_support::http::header::AUTHORIZATION) {
+                    return Ok(None);
+                }
+
+                let claims = $crate::extract_jwt_claims(parts, state).await?;
+                let identity = <$identity as $crate::ClaimsIdentity<S>>::from_jwt_claims(claims, state).await?;
+                Ok(Some(identity))
             }
         }
     };

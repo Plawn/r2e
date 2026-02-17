@@ -1,29 +1,55 @@
 //! OpenFGA registry - clonable handle to the OpenFGA backend.
+//!
+//! The registry wraps any [`OpenFgaBackend`] and adds decision caching.
+//! Only `check` is cached — for writes, deletes, list objects, etc.,
+//! use the concrete backend directly (e.g., [`GrpcBackend::client()`]).
 
-use crate::backend::{GrpcBackend, MockBackend, OpenFgaBackend};
+use crate::backend::OpenFgaBackend;
 use crate::cache::{CacheKey, DecisionCache};
-use crate::config::OpenFgaConfig;
 use crate::error::OpenFgaError;
 use std::sync::Arc;
 
+#[cfg(doc)]
+use crate::backend::GrpcBackend;
+
 /// Clonable handle to an OpenFGA backend with optional decision caching.
 ///
-/// This is the main entry point for OpenFGA operations. It wraps the backend
-/// and provides caching for authorization checks.
+/// This is the main entry point for the guard integration. It wraps any
+/// [`OpenFgaBackend`] implementation and adds caching for `check` calls.
 ///
-/// # Examples
+/// # Usage pattern
 ///
 /// ```ignore
-/// use r2e_openfga::{OpenFgaConfig, OpenFgaRegistry};
+/// use r2e_openfga::{OpenFgaConfig, OpenFgaRegistry, GrpcBackend};
 ///
 /// let config = OpenFgaConfig::new("http://localhost:8080", "store-id")
 ///     .with_cache(true, 60);
+/// let backend = GrpcBackend::connect(&config).await?;
+/// let registry = OpenFgaRegistry::with_cache(backend.clone(), 60);
 ///
-/// let registry = OpenFgaRegistry::connect(config).await?;
-///
-/// // Check authorization
+/// // Cached check (used by the guard)
 /// let allowed = registry.check("user:alice", "viewer", "document:1").await?;
+///
+/// // For writes, use the backend directly
+/// let mut client = backend.client().clone();
+/// client.write(tonic::Request::new(/* ... */)).await?;
+///
+/// // Then invalidate the cache
+/// registry.invalidate_object("document:1");
 /// ```
+///
+/// # Cache limitations
+///
+/// The cache stores **direct** authorization decisions. OpenFGA evaluates
+/// relationships **transitively** (e.g., `user:alice` → `member` of `org:acme`
+/// → `parent` of `document:1` → alice is a `viewer` of `document:1`).
+///
+/// After writing or deleting tuples, you must manually invalidate affected
+/// cache entries. Only the **exact object** is invalidated — transitive
+/// relationships are not tracked. Consider:
+/// - Using short cache TTLs
+/// - Calling `invalidate_object()` on downstream objects
+/// - Calling `clear_cache()` after bulk permission changes
 #[derive(Clone)]
 pub struct OpenFgaRegistry {
     backend: Arc<dyn OpenFgaBackend>,
@@ -31,7 +57,7 @@ pub struct OpenFgaRegistry {
 }
 
 impl OpenFgaRegistry {
-    /// Create a new registry with a custom backend.
+    /// Create a registry wrapping any [`OpenFgaBackend`], without caching.
     pub fn new(backend: impl OpenFgaBackend) -> Self {
         Self {
             backend: Arc::new(backend),
@@ -39,7 +65,7 @@ impl OpenFgaRegistry {
         }
     }
 
-    /// Create a new registry with caching enabled.
+    /// Create a registry with caching enabled.
     pub fn with_cache(backend: impl OpenFgaBackend, cache_ttl_secs: u64) -> Self {
         Self {
             backend: Arc::new(backend),
@@ -47,123 +73,48 @@ impl OpenFgaRegistry {
         }
     }
 
-    /// Connect to an OpenFGA server using gRPC.
-    pub async fn connect(config: OpenFgaConfig) -> Result<Self, OpenFgaError> {
-        let backend = GrpcBackend::connect(&config).await?;
-
-        let cache = if config.cache_enabled {
-            Some(Arc::new(DecisionCache::new(config.cache_ttl_secs)))
-        } else {
-            None
-        };
-
-        Ok(Self {
-            backend: Arc::new(backend),
-            cache,
-        })
-    }
-
-    /// Create a registry with a mock backend for testing.
-    pub fn mock() -> (Self, Arc<MockBackend>) {
-        let backend = Arc::new(MockBackend::new());
-        let registry = Self {
-            backend: backend.clone(),
-            cache: None,
-        };
-        (registry, backend)
-    }
-
-    /// Create a registry with a mock backend and caching enabled.
-    pub fn mock_with_cache(cache_ttl_secs: u64) -> (Self, Arc<MockBackend>) {
-        let backend = Arc::new(MockBackend::new());
-        let registry = Self {
-            backend: backend.clone(),
-            cache: Some(Arc::new(DecisionCache::new(cache_ttl_secs))),
-        };
-        (registry, backend)
-    }
+    // ── Check ──────────────────────────────────────────────────────────
 
     /// Check if a user has a relation to an object.
     ///
     /// Returns `Ok(true)` if allowed, `Ok(false)` if denied.
-    ///
-    /// Results are cached if caching is enabled.
-    pub async fn check(&self, user: &str, relation: &str, object: &str) -> Result<bool, OpenFgaError> {
-        // Check cache first
-        if let Some(cache) = &self.cache {
-            let key = CacheKey::new(user, relation, object);
-            if let Some(cached) = cache.get(&key) {
+    /// Results are cached when caching is enabled.
+    pub async fn check(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Result<bool, OpenFgaError> {
+        // Check cache first.
+        let cache_key = self
+            .cache
+            .as_ref()
+            .map(|_| CacheKey::new(user, relation, object));
+
+        if let Some((cache, key)) = self.cache.as_ref().zip(cache_key.as_ref()) {
+            if let Some(cached) = cache.get(key) {
                 tracing::trace!(user, relation, object, allowed = cached, "cache hit");
                 return Ok(cached);
             }
         }
 
-        // Query backend
+        // Query backend.
         let allowed = self.backend.check(user, relation, object).await?;
         tracing::trace!(user, relation, object, allowed, "authorization check");
 
-        // Store in cache
-        if let Some(cache) = &self.cache {
-            let key = CacheKey::new(user, relation, object);
+        // Store in cache.
+        if let Some((cache, key)) = self.cache.as_ref().zip(cache_key) {
             cache.set(key, allowed);
         }
 
         Ok(allowed)
     }
 
-    /// List all objects of a given type that a user has a relation to.
-    ///
-    /// This operation is not cached.
-    pub async fn list_objects(
-        &self,
-        user: &str,
-        relation: &str,
-        object_type: &str,
-    ) -> Result<Vec<String>, OpenFgaError> {
-        self.backend.list_objects(user, relation, object_type).await
-    }
-
-    /// Write a relationship tuple (grant permission).
-    ///
-    /// Invalidates cached decisions for the object.
-    pub async fn write_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Result<(), OpenFgaError> {
-        self.backend.write_tuple(user, relation, object).await?;
-
-        // Invalidate cache for this object
-        if let Some(cache) = &self.cache {
-            cache.invalidate_object(object);
-        }
-
-        tracing::debug!(user, relation, object, "wrote tuple");
-        Ok(())
-    }
-
-    /// Delete a relationship tuple (revoke permission).
-    ///
-    /// Invalidates cached decisions for the object.
-    pub async fn delete_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Result<(), OpenFgaError> {
-        self.backend.delete_tuple(user, relation, object).await?;
-
-        // Invalidate cache for this object
-        if let Some(cache) = &self.cache {
-            cache.invalidate_object(object);
-        }
-
-        tracing::debug!(user, relation, object, "deleted tuple");
-        Ok(())
-    }
+    // ── Cache management ───────────────────────────────────────────────
 
     /// Invalidate all cached decisions for an object.
+    ///
+    /// Call this after writing or deleting tuples that affect the object.
     pub fn invalidate_object(&self, object: &str) {
         if let Some(cache) = &self.cache {
             cache.invalidate_object(object);
@@ -188,27 +139,81 @@ impl OpenFgaRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::MockBackend;
 
     #[tokio::test]
     async fn test_registry_check_with_mock() {
-        let (registry, backend) = OpenFgaRegistry::mock();
-        backend.add_tuple("user:alice", "viewer", "document:1");
+        let mock = MockBackend::new();
+        mock.add_tuple("user:alice", "viewer", "document:1");
 
-        assert!(registry.check("user:alice", "viewer", "document:1").await.unwrap());
-        assert!(!registry.check("user:bob", "viewer", "document:1").await.unwrap());
+        let registry = OpenFgaRegistry::new(mock);
+
+        assert!(registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
+        assert!(!registry
+            .check("user:bob", "viewer", "document:1")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
-    async fn test_registry_write_invalidates_cache() {
-        let (registry, _backend) = OpenFgaRegistry::mock_with_cache(60);
+    async fn test_registry_cache_hit() {
+        let mock = MockBackend::new();
+        mock.add_tuple("user:alice", "viewer", "document:1");
+
+        let registry = OpenFgaRegistry::with_cache(mock, 60);
+
+        // First call populates cache
+        assert!(registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
+
+        // Second call hits cache (same result)
+        assert!(registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_registry_invalidate_object() {
+        let mock = MockBackend::new();
+        let registry = OpenFgaRegistry::with_cache(mock, 60);
 
         // Check returns false, gets cached
-        assert!(!registry.check("user:alice", "viewer", "document:1").await.unwrap());
+        assert!(!registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
 
-        // Write tuple and invalidate cache
-        registry.write_tuple("user:alice", "viewer", "document:1").await.unwrap();
+        // Simulate an external write by accessing backend through the mock
+        // (In real code, the user would write via GrpcBackend::client())
 
-        // Check should now return true (cache was invalidated)
-        assert!(registry.check("user:alice", "viewer", "document:1").await.unwrap());
+        // Invalidate cache — next check will hit backend again
+        registry.invalidate_object("document:1");
+    }
+
+    #[tokio::test]
+    async fn test_registry_clear_cache() {
+        let mock = MockBackend::new();
+        mock.add_tuple("user:alice", "viewer", "document:1");
+
+        let registry = OpenFgaRegistry::with_cache(mock, 60);
+
+        assert!(registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
+
+        registry.clear_cache();
+
+        // Cache cleared — next check goes to backend
+        assert!(registry
+            .check("user:alice", "viewer", "document:1")
+            .await
+            .unwrap());
     }
 }

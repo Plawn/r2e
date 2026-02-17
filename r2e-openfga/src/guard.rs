@@ -138,50 +138,69 @@ pub struct FgaGuard {
 
 impl FgaGuard {
     /// Resolve the object ID from the request context.
+    ///
+    /// For dynamic resolvers (`PathParam`, `QueryParam`, `Header`), the resolved
+    /// value is treated as a raw ID and formatted as `"type:id"`. Colons are
+    /// rejected in the raw ID to prevent object type injection (e.g. an attacker
+    /// supplying `"secret:admin"` to bypass the declared object type).
+    ///
+    /// For `Fixed`, the value is used as-is (it is developer-controlled).
     fn resolve_object<I: Identity>(
         &self,
         ctx: &GuardContext<'_, I>,
     ) -> Result<String, OpenFgaError> {
-        let id = match &self.resolver {
-            ObjectResolver::PathParam(param) => ctx
-                .path_param(param)
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    OpenFgaError::ObjectResolutionFailed(format!(
-                        "path param '{}' not found",
-                        param
-                    ))
-                })?,
-            ObjectResolver::QueryParam(param) => ctx
-                .query_string()
-                .and_then(|qs| {
-                    url::form_urlencoded::parse(qs.as_bytes())
-                        .find(|(k, _)| k == *param)
-                        .map(|(_, v)| v.into_owned())
-                })
-                .ok_or_else(|| {
-                    OpenFgaError::ObjectResolutionFailed(format!(
-                        "query param '{}' not found",
-                        param
-                    ))
-                })?,
-            ObjectResolver::Header(header) => ctx
-                .headers
-                .get(*header)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    OpenFgaError::ObjectResolutionFailed(format!("header '{}' not found", header))
-                })?,
-            ObjectResolver::Fixed(object) => object.to_string(),
-        };
+        match &self.resolver {
+            ObjectResolver::Fixed(object) => Ok(object.to_string()),
+            resolver => {
+                let raw_id = match resolver {
+                    ObjectResolver::PathParam(param) => ctx
+                        .path_param(param)
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| {
+                            OpenFgaError::ObjectResolutionFailed(format!(
+                                "path param '{}' not found",
+                                param
+                            ))
+                        })?,
+                    ObjectResolver::QueryParam(param) => ctx
+                        .query_string()
+                        .and_then(|qs| {
+                            url::form_urlencoded::parse(qs.as_bytes())
+                                .find(|(k, _)| k == *param)
+                                .map(|(_, v)| v.into_owned())
+                        })
+                        .ok_or_else(|| {
+                            OpenFgaError::ObjectResolutionFailed(format!(
+                                "query param '{}' not found",
+                                param
+                            ))
+                        })?,
+                    ObjectResolver::Header(header) => ctx
+                        .headers
+                        .get(*header)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| {
+                            OpenFgaError::ObjectResolutionFailed(format!(
+                                "header '{}' not found",
+                                header
+                            ))
+                        })?,
+                    ObjectResolver::Fixed(_) => unreachable!(),
+                };
 
-        // Format as "type:id"
-        if id.contains(':') {
-            // Already formatted
-            Ok(id)
-        } else {
-            Ok(format!("{}:{}", self.object_type, id))
+                // Reject colons in dynamic IDs to prevent object type injection.
+                // Without this check, an attacker could supply "secret:admin" as
+                // a path/query/header param to bypass the declared object type.
+                if raw_id.contains(':') {
+                    return Err(OpenFgaError::ObjectResolutionFailed(format!(
+                        "object ID must not contain ':' (got '{}')",
+                        raw_id
+                    )));
+                }
+
+                Ok(format!("{}:{}", self.object_type, raw_id))
+            }
         }
     }
 }
@@ -464,5 +483,109 @@ mod tests {
 
         let result = guard.resolve_object(&ctx);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_object_rejects_colon_in_path() {
+        let guard = FgaCheck::relation("viewer")
+            .on("document")
+            .from_path("doc_id");
+
+        let uri: Uri = "/api/documents/secret:admin".parse().unwrap();
+        let headers = HeaderMap::new();
+        let pairs = [("doc_id", "secret:admin")];
+        let path_params = PathParams::from_pairs(&pairs);
+        let identity = TestIdentity {
+            sub: "alice".to_string(),
+        };
+
+        let ctx = GuardContext {
+            method_name: "get",
+            controller_name: "DocumentController",
+            headers: &headers,
+            uri: &uri,
+            path_params,
+            identity: Some(&identity),
+        };
+
+        let result = guard.resolve_object(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_object_rejects_colon_in_query() {
+        let guard = FgaCheck::relation("viewer")
+            .on("document")
+            .from_query("doc_id");
+
+        let uri: Uri = "/api/documents?doc_id=secret:admin".parse().unwrap();
+        let headers = HeaderMap::new();
+        let identity = TestIdentity {
+            sub: "alice".to_string(),
+        };
+
+        let ctx = GuardContext {
+            method_name: "get",
+            controller_name: "DocumentController",
+            headers: &headers,
+            uri: &uri,
+            path_params: PathParams::EMPTY,
+            identity: Some(&identity),
+        };
+
+        let result = guard.resolve_object(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_object_rejects_colon_in_header() {
+        let guard = FgaCheck::relation("viewer")
+            .on("document")
+            .from_header("X-Document-Id");
+
+        let uri: Uri = "/api/documents".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Document-Id", "secret:admin".parse().unwrap());
+        let identity = TestIdentity {
+            sub: "alice".to_string(),
+        };
+
+        let ctx = GuardContext {
+            method_name: "get",
+            controller_name: "DocumentController",
+            headers: &headers,
+            uri: &uri,
+            path_params: PathParams::EMPTY,
+            identity: Some(&identity),
+        };
+
+        let result = guard.resolve_object(&ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_object_fixed_allows_colon() {
+        let guard = FgaCheck::relation("admin")
+            .on("system")
+            .fixed("system:global");
+
+        let uri: Uri = "/api/admin".parse().unwrap();
+        let headers = HeaderMap::new();
+        let identity = TestIdentity {
+            sub: "alice".to_string(),
+        };
+
+        let ctx = GuardContext {
+            method_name: "get",
+            controller_name: "AdminController",
+            headers: &headers,
+            uri: &uri,
+            path_params: PathParams::EMPTY,
+            identity: Some(&identity),
+        };
+
+        // Fixed values are developer-controlled, colons are allowed
+        let object = guard.resolve_object(&ctx).unwrap();
+        assert_eq!(object, "system:global");
     }
 }

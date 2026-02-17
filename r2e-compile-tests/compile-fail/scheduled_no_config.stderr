@@ -1,0 +1,5 @@
+error: expected attribute arguments in parentheses: #[scheduled(...)]
+  --> compile-fail/scheduled_no_config.rs:12:7
+   |
+12 |     #[scheduled]
+   |       ^^^^^^^^^

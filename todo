@@ -23,4 +23,6 @@
 - remvoe #rate_limited -> move to a generic plugin instead
 - audit double boxing and how Scheduler is implemented in core
 - how is pub/sub implemented and how it works with a custom pub/sub ?
-- make sure path param fga compile check    
+- make sure path param fga compile check 
+- support grpc 
+- 

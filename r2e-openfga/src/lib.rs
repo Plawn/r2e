@@ -15,22 +15,65 @@
 //! # Setup
 //!
 //! ```ignore
-//! use r2e_openfga::{OpenFgaConfig, OpenFgaRegistry};
+//! use r2e_openfga::{OpenFgaConfig, GrpcBackend, OpenFgaRegistry};
 //!
-//! // Configure the OpenFGA client
 //! let config = OpenFgaConfig::new("http://localhost:8080", "store-id")
-//!     .with_cache(true, 60);  // Cache decisions for 60 seconds
+//!     .with_cache(true, 60);
 //!
-//! // Connect to OpenFGA
-//! let registry = OpenFgaRegistry::connect(config).await?;
+//! let backend = GrpcBackend::connect(&config).await?;
+//! let registry = OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs);
 //!
-//! // Add to application state
+//! // Add both to application state
 //! AppBuilder::new()
-//!     .provide(registry)
+//!     .provide(registry)   // for guards (cached check)
+//!     .provide(backend)    // for direct gRPC access
 //!     .build_state::<Services, _>()
 //!     .await
 //!     .register_controller::<DocumentController>()
 //!     .serve("0.0.0.0:3000").await
+//! ```
+//!
+//! # Architecture
+//!
+//! The crate is split into two concerns:
+//!
+//! - **[`OpenFgaRegistry`]** — wraps any [`OpenFgaBackend`](backend::OpenFgaBackend)
+//!   and adds decision caching. Only exposes `check()`. Used by the guard.
+//! - **[`GrpcBackend`]** — the concrete gRPC implementation. Exposes the raw
+//!   `openfga-rs` client via [`client()`](GrpcBackend::client) for full API access
+//!   (writes, deletes, list objects, model management, batch operations, etc.).
+//!
+//! ```ignore
+//! // Cached check (via registry)
+//! let allowed = registry.check("user:alice", "viewer", "document:1").await?;
+//!
+//! // Raw gRPC operations (via backend)
+//! let mut client = backend.client().clone();
+//! client.write(tonic::Request::new(/* ... */)).await?;
+//!
+//! // Then invalidate the cache
+//! registry.invalidate_object("document:1");
+//! ```
+//!
+//! # Custom Backends
+//!
+//! Implement [`OpenFgaBackend`](backend::OpenFgaBackend) to plug in a custom
+//! authorization check (REST proxy, in-process evaluation, etc.):
+//!
+//! ```ignore
+//! use r2e_openfga::{OpenFgaBackend, OpenFgaError};
+//!
+//! struct MyCustomBackend { /* ... */ }
+//!
+//! impl OpenFgaBackend for MyCustomBackend {
+//!     fn check(&self, user: &str, relation: &str, object: &str)
+//!         -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>>
+//!     {
+//!         Box::pin(async move { /* your logic */ Ok(true) })
+//!     }
+//! }
+//!
+//! let registry = OpenFgaRegistry::with_cache(MyCustomBackend { /* ... */ }, 60);
 //! ```
 //!
 //! # Using Guards
@@ -49,15 +92,15 @@
 //!
 //! #[routes]
 //! impl DocumentController {
+//!     // Check using path parameter: GET /documents/{doc_id}
+//!     #[get("/{doc_id}")]
+//!     #[guard(FgaCheck::relation("viewer").on("document").from_path("doc_id"))]
+//!     async fn get(&self, Path(doc_id): Path<String>) -> Json<Document> { ... }
+//!
 //!     // Check using query parameter: GET /documents?id=123
 //!     #[get("/")]
 //!     #[guard(FgaCheck::relation("viewer").on("document").from_query("id"))]
-//!     async fn get(&self, Query(q): Query<DocQuery>) -> Json<Document> { ... }
-//!
-//!     // Check using header: X-Document-Id: 123
-//!     #[put("/")]
-//!     #[guard(FgaCheck::relation("editor").on("document").from_header("X-Document-Id"))]
-//!     async fn update(&self, body: Json<Update>) -> Json<Document> { ... }
+//!     async fn list(&self, Query(q): Query<DocQuery>) -> Json<Vec<Document>> { ... }
 //!
 //!     // Check using fixed object (e.g., global admin)
 //!     #[delete("/all")]
@@ -71,6 +114,9 @@
 //! The guard extracts object IDs from the request. You must specify the source:
 //!
 //! ```ignore
+//! // From path parameter: /documents/{doc_id}
+//! FgaCheck::relation("viewer").on("document").from_path("doc_id")
+//!
 //! // From query parameter: ?doc_id=123
 //! FgaCheck::relation("viewer").on("document").from_query("doc_id")
 //!
@@ -81,51 +127,22 @@
 //! FgaCheck::relation("admin").on("system").fixed("system:global")
 //! ```
 //!
-//! For path-based IDs, extract the path parameter in your handler and do a
-//! manual check using the registry:
-//!
-//! ```ignore
-//! #[get("/{id}")]
-//! async fn get(&self, Path(id): Path<i64>) -> Result<Json<Document>, AppError> {
-//!     let object = format!("document:{}", id);
-//!     if !self.fga.check(&format!("user:{}", self.user.sub()), "viewer", &object).await? {
-//!         return Err(AppError::Forbidden("Access denied".into()));
-//!     }
-//!     // ... fetch document
-//! }
-//! ```
-//!
-//! # Managing Permissions
-//!
-//! Use the registry to manage relationship tuples:
-//!
-//! ```ignore
-//! // Grant permission
-//! registry.write_tuple("user:alice", "editor", "document:1").await?;
-//!
-//! // Check permission
-//! let can_edit = registry.check("user:alice", "editor", "document:1").await?;
-//!
-//! // List accessible objects
-//! let documents = registry.list_objects("user:alice", "viewer", "document").await?;
-//!
-//! // Revoke permission
-//! registry.delete_tuple("user:alice", "editor", "document:1").await?;
-//! ```
+//! **Security:** Dynamic resolvers (path, query, header) reject IDs containing
+//! `:` to prevent object type injection. Only the `Fixed` variant accepts
+//! pre-formatted `type:id` values.
 //!
 //! # Testing
 //!
 //! Use the mock backend for testing:
 //!
 //! ```ignore
-//! use r2e_openfga::OpenFgaRegistry;
+//! use r2e_openfga::{OpenFgaRegistry, MockBackend};
 //!
-//! let (registry, mock) = OpenFgaRegistry::mock();
-//!
-//! // Set up test permissions
+//! let mock = MockBackend::new();
 //! mock.add_tuple("user:alice", "viewer", "document:1");
 //!
-//! // Run tests...
+//! let registry = OpenFgaRegistry::new(mock);
+//! assert!(registry.check("user:alice", "viewer", "document:1").await.unwrap());
 //! ```
 
 pub mod backend;
@@ -134,6 +151,9 @@ pub mod config;
 pub mod error;
 pub mod guard;
 pub mod registry;
+
+// Re-export openfga-rs so users can access raw types.
+pub use openfga_rs;
 
 // Re-exports
 pub use backend::{GrpcBackend, MockBackend, OpenFgaBackend};

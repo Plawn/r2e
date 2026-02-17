@@ -1,0 +1,9 @@
+error: consumer event parameter must be wrapped in Arc<T>:
+
+         async fn on_event(&self, event: Arc<MyEvent>) { }
+
+       Events are shared across subscribers via Arc, so the parameter type must be Arc<YourEventType>.
+  --> compile-fail/consumer_no_arc.rs:22:37
+   |
+22 |     async fn on_event(&self, event: MyEvent) {
+   |                                     ^^^^^^^

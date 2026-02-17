@@ -1,0 +1,5 @@
+error: #[derive(Bean)] only works on structs — enums and unions are not supported
+ --> compile-fail/bean_derive_enum.rs:4:10
+  |
+4 | pub enum MyService {
+  |          ^^^^^^^^^

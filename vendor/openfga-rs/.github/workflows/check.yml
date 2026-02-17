@@ -1,0 +1,223 @@
+permissions:
+  contents: read
+on:
+  push:
+  pull_request:
+name: Check
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    name: stable / fmt
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.toolchain }} / clippy
+    permissions:
+      contents: read
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@protoc
+
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1.30.1
+        with:
+          version: 1.30.1
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - name: cargo clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  doc:
+    runs-on: ubuntu-latest
+    name: nightly / doc
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@protoc
+
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1.30.1
+        with:
+          version: 1.30.1
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo doc
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs
+
+  hack:
+    runs-on: ubuntu-latest
+    name: ubuntu / stable / features
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@protoc
+
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1.30.1
+        with:
+          version: 1.30.1
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+
+      - name: cargo hack
+        run: cargo hack --feature-powerset check --lib --tests
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    name: Dependency audit
+    steps:
+      - uses: actions/checkout@v3
+      - uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  udeps:
+    runs-on: ubuntu-latest
+    name: Check unused dependencies
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - uses: taiki-e/install-action@protoc
+
+      - uses: taiki-e/install-action@just
+
+      - name: Install Buf CLI
+        uses: bufbuild/buf-setup-action@v1.30.1
+        with:
+          version: 1.30.1
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo udeps
+        run: cargo install cargo-udeps --locked
+
+      - name: Check for unused dependencies
+        run: cargo +nightly udeps
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        checks:
+          # - advisories
+          - bans licenses sources
+
+    # Prevent sudden announcement of a new advisory from failing ci:
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check ${{ matrix.checks }}
+
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "true"
+          cache-all-crates: "true"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+
+      - name: Generate SBOM
+        run: cargo cyclonedx
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: openfga-rs-sbom
+          path: bom.xml

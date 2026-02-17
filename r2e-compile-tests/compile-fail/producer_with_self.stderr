@@ -1,0 +1,8 @@
+error: #[producer] must be a free function (no `self` parameter):
+
+         #[producer]
+         async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool { ... }
+ --> compile-fail/producer_with_self.rs:7:8
+  |
+7 |     fn create(&self) -> String {
+  |        ^^^^^^

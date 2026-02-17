@@ -1,0 +1,12 @@
+error: #[bean] requires a constructor — a static method returning Self:
+
+         #[bean]
+         impl MyService {
+             fn new(dep: OtherService) -> Self {
+                 Self { dep }
+             }
+         }
+ --> compile-fail/bean_no_constructor.rs:7:6
+  |
+7 | impl MyService {
+  |      ^^^^^^^^^

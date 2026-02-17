@@ -1,0 +1,10 @@
+error: #[derive(Bean)] only works on structs with named fields:
+
+         #[derive(Bean, Clone)]
+         struct MyService {
+             #[inject] dep: OtherService,
+         }
+ --> compile-fail/bean_derive_tuple.rs:4:12
+  |
+4 | pub struct MyService(String, i32);
+  |            ^^^^^^^^^

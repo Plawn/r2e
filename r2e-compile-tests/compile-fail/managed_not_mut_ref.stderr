@@ -1,0 +1,9 @@
+error: #[managed] parameter must be a mutable reference (`&mut T`):
+
+         #[managed] tx: &mut Tx<'_, Sqlite>
+
+       The resource is acquired before the handler and released after it.
+  --> compile-fail/managed_not_mut_ref.rs:15:44
+   |
+15 |     async fn create(&self, #[managed] res: MyResource) -> &'static str {
+   |                                            ^^^^^^^^^^

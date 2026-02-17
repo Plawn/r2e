@@ -13,7 +13,6 @@ description = "OpenFGA fine-grained authorization for R2E - Zanzibar-style relat
 [dependencies]
 r2e-core = { path = "../r2e-core", version = "0.1.0" }
 openfga-rs = "0.1"
-tonic = "0.11"
 tokio = { version = "1", features = ["time", "sync"] }
 dashmap = "6"
 tracing = "0.1"

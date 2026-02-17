@@ -27,6 +27,9 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+openfga-rs = { path = "vendor/openfga-rs" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

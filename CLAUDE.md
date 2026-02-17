@@ -62,6 +62,10 @@ example-app         → Demo binary exercising all features.
 
 Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` ← `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
 
+### Vendored Dependencies
+
+`vendor/openfga-rs/` — patched copy of the upstream git version of `openfga-rs`. The crates.io release (0.1.0) uses tonic ~0.11 which cannot separate the gRPC client (`channel`) from `server`/`router`/axum, causing a dual axum-core conflict with r2e's axum 0.8. The vendored copy uses tonic ~0.12 with `default-features = false, features = ["tls", "channel", "codegen", "prost"]` to get the client without pulling in axum. See `vendor/README.md` for full details. The workspace `[patch.crates-io]` section points to this directory.
+
 ### Core Concepts
 
 **Three injection scopes, all resolved at compile time:**

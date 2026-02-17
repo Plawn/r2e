@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use r2e_core::http::extract::{FromRef, FromRequestParts};
+use r2e_core::http::extract::{FromRef, FromRequestParts, OptionalFromRequestParts};
 use r2e_core::http::header::{Parts, AUTHORIZATION};
 use tracing::{debug, warn};
 
@@ -196,5 +196,48 @@ where
     ) -> Result<Self, Self::Rejection> {
         let claims = extract_jwt_claims(parts, state).await?;
         Ok(AuthenticatedUser::from_claims(claims))
+    }
+}
+
+/// Optional extractor for `AuthenticatedUser`.
+///
+/// Enables `Option<AuthenticatedUser>` as a handler parameter for endpoints
+/// that work both with and without authentication:
+///
+/// - No `Authorization` header → `Ok(None)`
+/// - Valid JWT → `Ok(Some(user))`
+/// - Invalid/expired JWT → `Err(AppError::Unauthorized)`
+///
+/// # Example
+///
+/// ```ignore
+/// #[get("/whoami")]
+/// async fn whoami(
+///     &self,
+///     #[inject(identity)] user: Option<AuthenticatedUser>,
+/// ) -> Json<String> {
+///     match user {
+///         Some(u) => Json(format!("Hello, {}", u.sub())),
+///         None => Json("Hello, anonymous".to_string()),
+///     }
+/// }
+/// ```
+impl<S> OptionalFromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+    Arc<JwtClaimsValidator>: FromRef<S>,
+{
+    type Rejection = r2e_core::AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        if !parts.headers.contains_key(AUTHORIZATION) {
+            return Ok(None);
+        }
+
+        let claims = extract_jwt_claims(parts, state).await?;
+        Ok(Some(AuthenticatedUser::from_claims(claims)))
     }
 }

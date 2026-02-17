@@ -1,0 +1,5 @@
+error: unknown attribute in #[controller(...)]: expected `path` or `state`
+ --> compile-fail/unknown_controller_attr.rs:7:48
+  |
+7 | #[controller(path = "/test", state = AppState, foo = "bar")]
+  |                                                ^^^

@@ -1,0 +1,5 @@
+error: scheduled methods cannot have parameters other than &self — there is no HTTP request context. Use #[inject] struct fields for dependencies.
+  --> compile-fail/scheduled_with_params.rs:13:14
+   |
+13 |     async fn my_task(&self, name: String) {
+   |              ^^^^^^^

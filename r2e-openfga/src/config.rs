@@ -1,9 +1,28 @@
 //! Configuration for OpenFGA client.
 
 use crate::error::OpenFgaError;
+use serde::Deserialize;
+
+fn default_connect_timeout() -> u64 { 10 }
+fn default_request_timeout() -> u64 { 5 }
+fn default_cache_enabled() -> bool { true }
+fn default_cache_ttl() -> u64 { 60 }
 
 /// Configuration for connecting to an OpenFGA server.
-#[derive(Debug, Clone)]
+///
+/// Can be deserialized from `application.yaml` via the R2E config system.
+/// `endpoint` and `store_id` are required; all other fields have defaults.
+///
+/// ```yaml
+/// openfga:
+///   endpoint: "http://localhost:8080"
+///   store_id: "my-store-id"
+///   model_id: "model-id"        # optional
+///   api_token: "secret"         # optional
+///   cache_enabled: true         # default: true
+///   cache_ttl_secs: 60          # default: 60
+/// ```
+#[derive(Debug, Clone, Deserialize)]
 pub struct OpenFgaConfig {
     /// The OpenFGA server endpoint (e.g., "http://localhost:8080").
     pub endpoint: String,
@@ -14,12 +33,16 @@ pub struct OpenFgaConfig {
     /// Optional API token for authentication.
     pub api_token: Option<String>,
     /// Connection timeout in seconds. Default: 10.
+    #[serde(default = "default_connect_timeout")]
     pub connect_timeout_secs: u64,
     /// Request timeout in seconds. Default: 5.
+    #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
     /// Whether to enable decision caching. Default: true.
+    #[serde(default = "default_cache_enabled")]
     pub cache_enabled: bool,
     /// Cache TTL in seconds. Default: 60.
+    #[serde(default = "default_cache_ttl")]
     pub cache_ttl_secs: u64,
 }
 
@@ -92,11 +115,5 @@ impl OpenFgaConfig {
             return Err(OpenFgaError::InvalidConfig("store_id cannot be empty".into()));
         }
         Ok(())
-    }
-}
-
-impl Default for OpenFgaConfig {
-    fn default() -> Self {
-        Self::new("http://localhost:8080", "")
     }
 }

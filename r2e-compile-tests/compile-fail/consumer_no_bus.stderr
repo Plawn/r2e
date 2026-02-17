@@ -1,0 +1,5 @@
+error: expected attribute arguments in parentheses: #[consumer(...)]
+  --> compile-fail/consumer_no_bus.rs:21:7
+   |
+21 |     #[consumer]
+   |       ^^^^^^^^

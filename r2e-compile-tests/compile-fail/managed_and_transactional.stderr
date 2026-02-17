@@ -1,0 +1,10 @@
+error: #[managed] and #[transactional] cannot be used on the same handler
+
+       hint: prefer #[managed] which is more explicit:
+
+         #[post("/")]
+         async fn create(&self, #[managed] tx: &mut Tx<'_, Sqlite>) -> ... { }
+  --> compile-fail/managed_and_transactional.rs:16:14
+   |
+16 |     async fn create(&self, #[managed] res: &mut MyResource) -> &'static str {
+   |              ^^^^^^

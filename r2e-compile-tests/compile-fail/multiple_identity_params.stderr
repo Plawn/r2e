@@ -1,0 +1,21 @@
+error: only one #[inject(identity)] parameter is allowed per handler
+
+       hint: extract additional fields from the single identity:
+
+         async fn handler(&self, #[inject(identity)] user: AuthenticatedUser) {
+
+             let email = user.email();
+             let roles = user.roles();
+         }
+  --> compile-fail/multiple_identity_params.rs:20:9
+   |
+20 |         #[inject(identity)] user2: AuthenticatedUser,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::r2e_security::AuthenticatedUser`
+ --> compile-fail/multiple_identity_params.rs:2:5
+  |
+2 | use r2e::r2e_security::AuthenticatedUser;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

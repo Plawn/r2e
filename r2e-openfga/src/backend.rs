@@ -1,97 +1,133 @@
-//! Backend trait and gRPC implementation for OpenFGA.
+//! Backend trait and implementations for OpenFGA authorization.
+//!
+//! [`OpenFgaBackend`] is the core abstraction — implement it to plug in a
+//! custom authorization check (REST proxy, in-process evaluation, etc.).
+//!
+//! Provided implementations:
+//! - [`GrpcBackend`] — production gRPC client wrapping `openfga-rs`
+//! - [`MockBackend`] — in-memory mock for tests
 
 use crate::config::OpenFgaConfig;
 use crate::error::OpenFgaError;
+use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
+use openfga_rs::tonic;
+use openfga_rs::{CheckRequest, CheckRequestTupleKey};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use tonic::transport::Channel;
 
-/// Trait for OpenFGA backends.
+/// Backend trait for OpenFGA authorization checks.
 ///
-/// This trait abstracts the OpenFGA API, allowing for different implementations
-/// (gRPC, mock for testing, etc.).
+/// Only `check` is required — that's the operation the registry caches
+/// and the guard delegates to. For writes, deletes, list objects, model
+/// management, etc., use the concrete backend directly (e.g.,
+/// [`GrpcBackend::client()`] for the raw gRPC client).
 pub trait OpenFgaBackend: Send + Sync + 'static {
-    /// Check if a user has a relation to an object.
-    ///
-    /// Returns `Ok(true)` if allowed, `Ok(false)` if denied.
+    /// Check if `user` has `relation` to `object`.
     fn check(
         &self,
         user: &str,
         relation: &str,
         object: &str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>>;
-
-    /// List all objects of a given type that a user has a relation to.
-    fn list_objects(
-        &self,
-        user: &str,
-        relation: &str,
-        object_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, OpenFgaError>> + Send + '_>>;
-
-    /// Write a relationship tuple (grant permission).
-    fn write_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>>;
-
-    /// Delete a relationship tuple (revoke permission).
-    fn delete_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>>;
 }
 
-/// gRPC-based OpenFGA backend using `openfga-rs`.
+// ── GrpcBackend ────────────────────────────────────────────────────────
+
+/// Production gRPC backend wrapping the `openfga-rs` client.
+///
+/// Use [`client()`](Self::client) for raw access to the full OpenFGA API
+/// (batch writes, list objects, model management, etc.).
+///
+/// The tonic client is cheap to clone (shares the underlying HTTP/2 channel).
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e_openfga::{OpenFgaConfig, GrpcBackend};
+/// use openfga_rs::{ListObjectsRequest, TupleKey, WriteRequest, WriteRequestWrites};
+///
+/// let config = OpenFgaConfig::new("http://localhost:8080", "store-id");
+/// let backend = GrpcBackend::connect(&config).await?;
+///
+/// // Write a tuple via raw client
+/// let mut client = backend.client().clone();
+/// client.write(tonic::Request::new(WriteRequest {
+///     store_id: backend.store_id().to_string(),
+///     writes: Some(WriteRequestWrites {
+///         tuple_keys: vec![TupleKey {
+///             user: "user:alice".into(),
+///             relation: "viewer".into(),
+///             object: "document:1".into(),
+///             condition: None,
+///         }],
+///     }),
+///     ..Default::default()
+/// })).await?;
+/// ```
+#[derive(Clone)]
 pub struct GrpcBackend {
-    client: Arc<
-        tokio::sync::RwLock<
-            openfga_rs::open_fga_service_client::OpenFgaServiceClient<tonic::transport::Channel>,
-        >,
-    >,
+    client: OpenFgaServiceClient<Channel>,
     store_id: String,
     model_id: Option<String>,
-    #[allow(dead_code)]
-    request_timeout: Duration,
+    api_token: Option<String>,
 }
 
 impl GrpcBackend {
-    /// Connect to an OpenFGA server with the given configuration.
+    /// Connect to an OpenFGA server using the given config.
     pub async fn connect(config: &OpenFgaConfig) -> Result<Self, OpenFgaError> {
         config.validate()?;
 
         let endpoint = tonic::transport::Endpoint::from_shared(config.endpoint.clone())
-            .map_err(|e| OpenFgaError::InvalidConfig(e.to_string()))?
-            .connect_timeout(Duration::from_secs(config.connect_timeout_secs))
-            .timeout(Duration::from_secs(config.request_timeout_secs));
+            .map_err(|e| OpenFgaError::ConnectionFailed(e.to_string()))?
+            .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
+            .timeout(std::time::Duration::from_secs(config.request_timeout_secs));
 
         let channel = endpoint.connect().await?;
 
-        let client = openfga_rs::open_fga_service_client::OpenFgaServiceClient::new(channel);
-
         Ok(Self {
-            client: Arc::new(tokio::sync::RwLock::new(client)),
+            client: OpenFgaServiceClient::new(channel),
             store_id: config.store_id.clone(),
             model_id: config.model_id.clone(),
-            request_timeout: Duration::from_secs(config.request_timeout_secs),
+            api_token: config.api_token.clone(),
         })
     }
 
-    fn make_check_tuple_key(
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> openfga_rs::CheckRequestTupleKey {
-        openfga_rs::CheckRequestTupleKey {
-            user: user.to_string(),
-            relation: relation.to_string(),
-            object: object.to_string(),
+    /// Returns a reference to the raw gRPC client.
+    ///
+    /// Clone it before calling methods (tonic clients are cheap to clone).
+    pub fn client(&self) -> &OpenFgaServiceClient<Channel> {
+        &self.client
+    }
+
+    /// Returns the store ID.
+    pub fn store_id(&self) -> &str {
+        &self.store_id
+    }
+
+    /// Returns the authorization model ID, if configured.
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
+
+    /// Build a `tonic::Request`, injecting the Bearer token if configured.
+    fn make_request<T>(&self, msg: T) -> Result<tonic::Request<T>, OpenFgaError> {
+        let mut request = tonic::Request::new(msg);
+        if let Some(token) = &self.api_token {
+            request.metadata_mut().insert(
+                "authorization",
+                format!("Bearer {}", token)
+                    .parse()
+                    .map_err(|e: tonic::metadata::errors::InvalidMetadataValue| {
+                        OpenFgaError::InvalidConfig(format!(
+                            "invalid api_token for header: {}",
+                            e
+                        ))
+                    })?,
+            );
         }
+        Ok(request)
     }
 }
 
@@ -102,162 +138,87 @@ impl OpenFgaBackend for GrpcBackend {
         relation: &str,
         object: &str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>> {
-        let user = user.to_string();
-        let relation = relation.to_string();
-        let object = object.to_string();
-        let store_id = self.store_id.clone();
-        let model_id = self.model_id.clone();
-        let client = self.client.clone();
+        let req = CheckRequest {
+            store_id: self.store_id.clone(),
+            authorization_model_id: self.model_id.clone().unwrap_or_default(),
+            tuple_key: Some(CheckRequestTupleKey {
+                user: user.to_string(),
+                relation: relation.to_string(),
+                object: object.to_string(),
+            }),
+            ..Default::default()
+        };
 
         Box::pin(async move {
-            let request = openfga_rs::CheckRequest {
-                store_id,
-                authorization_model_id: model_id.unwrap_or_default(),
-                tuple_key: Some(Self::make_check_tuple_key(&user, &relation, &object)),
-                contextual_tuples: None,
-                context: None,
-                trace: false,
-            };
-
-            let mut client = client.write().await;
-            let response = client.check(request).await?;
-            Ok(response.into_inner().allowed)
-        })
-    }
-
-    fn list_objects(
-        &self,
-        user: &str,
-        relation: &str,
-        object_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, OpenFgaError>> + Send + '_>> {
-        let user = user.to_string();
-        let relation = relation.to_string();
-        let object_type = object_type.to_string();
-        let store_id = self.store_id.clone();
-        let model_id = self.model_id.clone();
-        let client = self.client.clone();
-
-        Box::pin(async move {
-            let request = openfga_rs::ListObjectsRequest {
-                store_id,
-                authorization_model_id: model_id.unwrap_or_default(),
-                r#type: object_type,
-                relation,
-                user,
-                contextual_tuples: None,
-                context: None,
-            };
-
-            let mut client = client.write().await;
-            let response = client.list_objects(request).await?;
-            Ok(response.into_inner().objects)
-        })
-    }
-
-    fn write_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
-        let user = user.to_string();
-        let relation = relation.to_string();
-        let object = object.to_string();
-        let store_id = self.store_id.clone();
-        let model_id = self.model_id.clone();
-        let client = self.client.clone();
-
-        Box::pin(async move {
-            let tuple = openfga_rs::TupleKey {
-                user,
-                relation,
-                object,
-                condition: None,
-            };
-
-            let request = openfga_rs::WriteRequest {
-                store_id,
-                authorization_model_id: model_id.unwrap_or_default(),
-                writes: Some(openfga_rs::WriteRequestWrites {
-                    tuple_keys: vec![tuple],
-                }),
-                deletes: None,
-            };
-
-            let mut client = client.write().await;
-            client.write(request).await?;
-            Ok(())
-        })
-    }
-
-    fn delete_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
-        let user = user.to_string();
-        let relation = relation.to_string();
-        let object = object.to_string();
-        let store_id = self.store_id.clone();
-        let model_id = self.model_id.clone();
-        let client = self.client.clone();
-
-        Box::pin(async move {
-            let tuple = openfga_rs::TupleKeyWithoutCondition {
-                user,
-                relation,
-                object,
-            };
-
-            let request = openfga_rs::WriteRequest {
-                store_id,
-                authorization_model_id: model_id.unwrap_or_default(),
-                writes: None,
-                deletes: Some(openfga_rs::WriteRequestDeletes {
-                    tuple_keys: vec![tuple],
-                }),
-            };
-
-            let mut client = client.write().await;
-            client.write(request).await?;
-            Ok(())
+            let request = self.make_request(req)?;
+            let resp = self
+                .client
+                .clone()
+                .check(request)
+                .await
+                .map_err(OpenFgaError::from)?;
+            Ok(resp.into_inner().allowed)
         })
     }
 }
 
-/// A mock backend for testing purposes.
+// ── MockBackend ────────────────────────────────────────────────────────
+
+/// In-memory mock backend for testing.
 ///
-/// Stores tuples in memory and performs simple checks.
+/// Stores tuples as `(user, relation, object)` triples in a `DashSet`.
+/// Only performs direct tuple lookups — does **not** model transitive
+/// relationships like a real OpenFGA server would.
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e_openfga::OpenFgaRegistry;
+///
+/// let (registry, mock) = OpenFgaRegistry::mock();
+/// mock.add_tuple("user:alice", "viewer", "document:1");
+///
+/// assert!(registry.check("user:alice", "viewer", "document:1").await.unwrap());
+/// assert!(!registry.check("user:bob", "viewer", "document:1").await.unwrap());
+/// ```
 pub struct MockBackend {
     tuples: Arc<dashmap::DashSet<(String, String, String)>>,
 }
 
 impl MockBackend {
-    /// Create a new mock backend.
+    /// Create a new empty mock backend.
     pub fn new() -> Self {
         Self {
             tuples: Arc::new(dashmap::DashSet::new()),
         }
     }
 
-    /// Add a tuple to the mock backend.
+    /// Add a relationship tuple.
     pub fn add_tuple(&self, user: &str, relation: &str, object: &str) {
         self.tuples
             .insert((user.to_string(), relation.to_string(), object.to_string()));
     }
 
-    /// Remove a tuple from the mock backend.
+    /// Remove a relationship tuple.
     pub fn remove_tuple(&self, user: &str, relation: &str, object: &str) {
         self.tuples
             .remove(&(user.to_string(), relation.to_string(), object.to_string()));
     }
 
-    /// Check if a tuple exists in the mock backend.
+    /// Check if a tuple exists (direct lookup only, no transitive evaluation).
     pub fn has_tuple(&self, user: &str, relation: &str, object: &str) -> bool {
         self.tuples
             .contains(&(user.to_string(), relation.to_string(), object.to_string()))
+    }
+
+    /// List all objects of a given type that a user has a relation to.
+    pub fn list_objects(&self, user: &str, relation: &str, object_type: &str) -> Vec<String> {
+        let prefix = format!("{}:", object_type);
+        self.tuples
+            .iter()
+            .filter(|t| t.0 == user && t.1 == relation && t.2.starts_with(&prefix))
+            .map(|t| t.2.clone())
+            .collect()
     }
 }
 
@@ -274,48 +235,8 @@ impl OpenFgaBackend for MockBackend {
         relation: &str,
         object: &str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>> {
-        let allowed = self.has_tuple(user, relation, object);
-        Box::pin(std::future::ready(Ok(allowed)))
-    }
-
-    fn list_objects(
-        &self,
-        user: &str,
-        relation: &str,
-        object_type: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, OpenFgaError>> + Send + '_>> {
-        let user = user.to_string();
-        let relation = relation.to_string();
-        let prefix = format!("{}:", object_type);
-
-        let objects: Vec<String> = self
-            .tuples
-            .iter()
-            .filter(|t| t.0 == user && t.1 == relation && t.2.starts_with(&prefix))
-            .map(|t| t.2.clone())
-            .collect();
-
-        Box::pin(std::future::ready(Ok(objects)))
-    }
-
-    fn write_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
-        self.add_tuple(user, relation, object);
-        Box::pin(std::future::ready(Ok(())))
-    }
-
-    fn delete_tuple(
-        &self,
-        user: &str,
-        relation: &str,
-        object: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
-        self.remove_tuple(user, relation, object);
-        Box::pin(std::future::ready(Ok(())))
+        let result = self.has_tuple(user, relation, object);
+        Box::pin(async move { Ok(result) })
     }
 }
 
@@ -323,66 +244,39 @@ impl OpenFgaBackend for MockBackend {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_mock_backend_check() {
+    #[test]
+    fn test_mock_backend_check() {
         let backend = MockBackend::new();
         backend.add_tuple("user:alice", "viewer", "document:1");
 
-        assert!(backend
-            .check("user:alice", "viewer", "document:1")
-            .await
-            .unwrap());
-        assert!(!backend
-            .check("user:bob", "viewer", "document:1")
-            .await
-            .unwrap());
-        assert!(!backend
-            .check("user:alice", "editor", "document:1")
-            .await
-            .unwrap());
+        assert!(backend.has_tuple("user:alice", "viewer", "document:1"));
+        assert!(!backend.has_tuple("user:bob", "viewer", "document:1"));
+        assert!(!backend.has_tuple("user:alice", "editor", "document:1"));
     }
 
-    #[tokio::test]
-    async fn test_mock_backend_list_objects() {
+    #[test]
+    fn test_mock_backend_list_objects() {
         let backend = MockBackend::new();
         backend.add_tuple("user:alice", "viewer", "document:1");
         backend.add_tuple("user:alice", "viewer", "document:2");
         backend.add_tuple("user:alice", "editor", "document:3");
 
-        let objects = backend
-            .list_objects("user:alice", "viewer", "document")
-            .await
-            .unwrap();
+        let objects = backend.list_objects("user:alice", "viewer", "document");
         assert_eq!(objects.len(), 2);
         assert!(objects.contains(&"document:1".to_string()));
         assert!(objects.contains(&"document:2".to_string()));
     }
 
-    #[tokio::test]
-    async fn test_mock_backend_write_delete() {
+    #[test]
+    fn test_mock_backend_write_delete() {
         let backend = MockBackend::new();
 
-        assert!(!backend
-            .check("user:alice", "viewer", "document:1")
-            .await
-            .unwrap());
+        assert!(!backend.has_tuple("user:alice", "viewer", "document:1"));
 
-        backend
-            .write_tuple("user:alice", "viewer", "document:1")
-            .await
-            .unwrap();
-        assert!(backend
-            .check("user:alice", "viewer", "document:1")
-            .await
-            .unwrap());
+        backend.add_tuple("user:alice", "viewer", "document:1");
+        assert!(backend.has_tuple("user:alice", "viewer", "document:1"));
 
-        backend
-            .delete_tuple("user:alice", "viewer", "document:1")
-            .await
-            .unwrap();
-        assert!(!backend
-            .check("user:alice", "viewer", "document:1")
-            .await
-            .unwrap());
+        backend.remove_tuple("user:alice", "viewer", "document:1");
+        assert!(!backend.has_tuple("user:alice", "viewer", "document:1"));
     }
 }
