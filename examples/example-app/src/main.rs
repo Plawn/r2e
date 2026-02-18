@@ -71,7 +71,8 @@ async fn main() {
 
     // Build the JWT claims validator with a static HMAC key (no JWKS needed for the demo)
     // Using JwtClaimsValidator allows multiple identity types (AuthenticatedUser, DbUser, etc.)
-    let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app");
+    let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
+        .with_allowed_algorithm(jsonwebtoken::Algorithm::HS256);
     let claims_validator = JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
     // Create an in-memory SQLite pool and initialise the schema

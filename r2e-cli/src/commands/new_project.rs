@@ -21,6 +21,7 @@ pub struct ProjectOptions {
     pub metrics: bool,
     pub scheduler: bool,
     pub events: bool,
+    pub grpc: bool,
 }
 
 pub struct CliNewOpts {
@@ -28,13 +29,14 @@ pub struct CliNewOpts {
     pub auth: bool,
     pub openapi: bool,
     pub metrics: bool,
+    pub grpc: bool,
     pub full: bool,
     pub no_interactive: bool,
 }
 
 impl CliNewOpts {
     fn has_any_flag(&self) -> bool {
-        self.db.is_some() || self.auth || self.openapi || self.metrics
+        self.db.is_some() || self.auth || self.openapi || self.metrics || self.grpc
     }
 }
 
@@ -48,6 +50,7 @@ pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::E
             metrics: false,
             scheduler: true,
             events: true,
+            grpc: true,
         }
     } else if cli_opts.no_interactive || cli_opts.has_any_flag() {
         let db = cli_opts.db.as_deref().map(|d| match d {
@@ -64,6 +67,7 @@ pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::E
             metrics: cli_opts.metrics,
             scheduler: false,
             events: false,
+            grpc: cli_opts.grpc,
         }
     } else {
         prompt_options(name)?
@@ -100,6 +104,7 @@ fn prompt_options(name: &str) -> Result<ProjectOptions, Box<dyn std::error::Erro
         "OpenAPI Documentation",
         "Task Scheduling",
         "Event Bus",
+        "gRPC Server",
     ];
     let selected = MultiSelect::new()
         .with_prompt("Select features (space to toggle, enter to confirm)")
@@ -114,6 +119,7 @@ fn prompt_options(name: &str) -> Result<ProjectOptions, Box<dyn std::error::Erro
         metrics: false,
         scheduler: selected.contains(&2),
         events: selected.contains(&3),
+        grpc: selected.contains(&4),
     })
 }
 
@@ -170,7 +176,20 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         fs::create_dir_all(project_dir.join("migrations"))?;
     }
 
-    // 7. .gitignore
+    // 7. gRPC scaffolding
+    if opts.grpc {
+        fs::create_dir_all(project_dir.join("proto"))?;
+        fs::write(
+            project_dir.join("proto/greeter.proto"),
+            templates::project::greeter_proto(&opts.name),
+        )?;
+        fs::write(
+            project_dir.join("build.rs"),
+            templates::project::build_rs(),
+        )?;
+    }
+
+    // 8. .gitignore
     fs::write(project_dir.join(".gitignore"), "/target\n")?;
 
     println!(
@@ -193,6 +212,13 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         "  Health:   {}",
         "http://localhost:8080/health".cyan()
     );
+
+    if opts.grpc {
+        println!(
+            "  gRPC:     {}",
+            "localhost:50051".cyan()
+        );
+    }
 
     Ok(())
 }

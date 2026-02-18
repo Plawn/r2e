@@ -10,6 +10,7 @@ const TEST_AUDIENCE: &str = "test-audience";
 
 fn test_config() -> SecurityConfig {
     SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
+        .with_allowed_algorithm(Algorithm::HS256)
 }
 
 fn test_claims_validator() -> JwtClaimsValidator {
@@ -107,6 +108,35 @@ async fn validate_invalid_signature() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err, SecurityError::InvalidToken(_)), "expected InvalidToken, got: {err}");
+}
+
+#[tokio::test]
+async fn validate_disallowed_algorithm() {
+    let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE);
+    let validator = JwtClaimsValidator::new_with_static_key(
+        DecodingKey::from_secret(TEST_SECRET),
+        config,
+    );
+    let token = valid_token("user-1", &["admin"]);
+    let result = validator.validate(&token).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, SecurityError::ValidationFailed(_)));
+}
+
+#[tokio::test]
+async fn validate_empty_allowed_algorithms() {
+    let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
+        .with_allowed_algorithms(std::iter::empty::<Algorithm>());
+    let validator = JwtClaimsValidator::new_with_static_key(
+        DecodingKey::from_secret(TEST_SECRET),
+        config,
+    );
+    let token = valid_token("user-1", &["admin"]);
+    let result = validator.validate(&token).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, SecurityError::ValidationFailed(_)));
 }
 
 #[tokio::test]

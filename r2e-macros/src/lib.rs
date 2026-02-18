@@ -18,6 +18,8 @@ pub(crate) mod routes_attr;
 pub(crate) mod codegen;
 pub(crate) mod routes_parsing;
 pub(crate) mod types;
+pub(crate) mod grpc_codegen;
+pub(crate) mod grpc_routes_parsing;
 
 /// Derive macro for declaring a R2E controller struct.
 ///
@@ -790,4 +792,51 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(ConfigProperties, attributes(config))]
 pub fn derive_config_properties(input: TokenStream) -> TokenStream {
     config_derive::expand(input)
+}
+
+// ---------------------------------------------------------------------------
+// gRPC support
+// ---------------------------------------------------------------------------
+
+/// Attribute macro for wiring a tonic-generated service trait into R2E.
+///
+/// The argument is the path to the tonic-generated service trait
+/// (e.g., `proto::user_service_server::UserService`).
+///
+/// The struct must derive [`Controller`] (for `#[inject]`, `#[config]`,
+/// and the metadata module). The macro generates:
+///
+/// - A wrapper struct implementing the tonic trait
+/// - An `impl GrpcService<State>` for the controller
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Controller)]
+/// #[controller(state = Services)]
+/// pub struct UserGrpcService {
+///     #[inject] user_service: UserService,
+///     #[config("grpc.max_page_size")] max_page: i64,
+/// }
+///
+/// #[grpc_routes(proto::user_service_server::UserService)]
+/// impl UserGrpcService {
+///     #[guard(AdminGuard)]
+///     #[intercept(Logged::info())]
+///     async fn get_user(
+///         &self,
+///         request: Request<GetUserRequest>,
+///     ) -> Result<Response<GetUserResponse>, Status> {
+///         // ...
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    let service_trait = syn::parse_macro_input!(args as syn::Path);
+    let item = syn::parse_macro_input!(input as syn::ItemImpl);
+    match grpc_routes_parsing::parse(service_trait, item) {
+        Ok(def) => grpc_codegen::generate(&def).into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }

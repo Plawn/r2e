@@ -453,6 +453,141 @@ async fn test_delete_{snake}() {{
     )
 }
 
+pub fn grpc_service(name: &str, package: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let snake = to_snake_case(name);
+
+    println!(
+        "{} Generating gRPC service '{}'",
+        "->".blue(),
+        name.green()
+    );
+
+    // 1. Proto file
+    let proto_dir = Path::new("proto");
+    fs::create_dir_all(proto_dir)?;
+    let proto_path = proto_dir.join(format!("{snake}.proto"));
+    if proto_path.exists() {
+        return Err(format!("Proto file '{}' already exists", proto_path.display()).into());
+    }
+    fs::write(&proto_path, grpc_proto(name, package))?;
+    println!("  {} {}", "✓".green(), proto_path.display());
+
+    // 2. Rust service file
+    let service_dir = Path::new("src/grpc");
+    fs::create_dir_all(service_dir)?;
+    let service_path = service_dir.join(format!("{snake}.rs"));
+    if service_path.exists() {
+        return Err(format!("Service file '{}' already exists", service_path.display()).into());
+    }
+    fs::write(&service_path, grpc_service_rs(name, package, &snake))?;
+    update_mod_rs(service_dir, &snake)?;
+    println!("  {} {}", "✓".green(), service_path.display());
+
+    println!();
+    println!(
+        "{} gRPC service '{}' generated!",
+        "✓".green(),
+        name.green()
+    );
+    println!();
+    println!("  Next steps:");
+    println!(
+        "  1. Add to build.rs: {}",
+        format!("tonic_build::compile_protos(\"proto/{snake}.proto\")?;").cyan()
+    );
+    println!(
+        "  2. Register in main.rs: {}",
+        format!(".register_grpc_service::<{name}Service>()").cyan()
+    );
+    println!("  3. Run `cargo build` to generate proto code");
+
+    Ok(())
+}
+
+fn grpc_proto(name: &str, package: &str) -> String {
+    format!(
+        r#"syntax = "proto3";
+
+package {package};
+
+service {name} {{
+  rpc Get{name} (Get{name}Request) returns (Get{name}Response);
+  rpc List{name} (List{name}Request) returns (List{name}Response);
+}}
+
+message Get{name}Request {{
+  string id = 1;
+}}
+
+message Get{name}Response {{
+  string id = 1;
+  string name = 2;
+}}
+
+message List{name}Request {{
+  int32 page_size = 1;
+  string page_token = 2;
+}}
+
+message List{name}Response {{
+  repeated Get{name}Response items = 1;
+  string next_page_token = 2;
+}}
+"#
+    )
+}
+
+fn grpc_service_rs(name: &str, package: &str, snake: &str) -> String {
+    format!(
+        r#"use r2e::prelude::*;
+use r2e::r2e_grpc::AppBuilderGrpcExt;
+
+pub mod proto {{
+    tonic::include_proto!("{package}");
+}}
+
+use proto::{snake}_server::{name};
+use proto::*;
+
+// TODO: import your state type
+// use crate::state::AppState;
+
+#[derive(Controller)]
+#[controller(state = AppState)]
+pub struct {name}Service {{
+    // #[inject]
+    // your_dependency: YourDependency,
+}}
+
+#[grpc_routes(proto::{snake}_server::{name})]
+impl {name}Service {{
+    async fn get_{snake}(
+        &self,
+        request: tonic::Request<Get{name}Request>,
+    ) -> Result<tonic::Response<Get{name}Response>, tonic::Status> {{
+        let req = request.into_inner();
+        let reply = Get{name}Response {{
+            id: req.id,
+            name: "TODO".to_string(),
+        }};
+        Ok(tonic::Response::new(reply))
+    }}
+
+    async fn list_{snake}(
+        &self,
+        _request: tonic::Request<List{name}Request>,
+    ) -> Result<tonic::Response<List{name}Response>, tonic::Status> {{
+        let reply = List{name}Response {{
+            items: vec![],
+            next_page_token: String::new(),
+        }};
+        Ok(tonic::Response::new(reply))
+    }}
+}}
+"#
+    )
+}
+
 pub fn middleware(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let file_name = to_snake_case(name);
 

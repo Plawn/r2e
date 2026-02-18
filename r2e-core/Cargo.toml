@@ -28,7 +28,6 @@ serde_json = "1"
 r2e-macros = { path = "../r2e-macros", version = "0.1.0" }
 validator = { version = "0.18", features = ["derive"], optional = true }
 serde_yaml = "0.9"
-schemars = "0.8"
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 dashmap = { version = "6", optional = true }

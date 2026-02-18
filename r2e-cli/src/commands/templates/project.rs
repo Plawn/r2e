@@ -17,6 +17,9 @@ pub fn cargo_toml(opts: &ProjectOptions) -> String {
     if opts.db.is_some() {
         r2e_features.push("data");
     }
+    if opts.grpc {
+        r2e_features.push("grpc");
+    }
 
     let features_str = if r2e_features.is_empty() {
         String::new()
@@ -44,6 +47,23 @@ pub fn cargo_toml(opts: &ProjectOptions) -> String {
         None => "",
     };
 
+    let grpc_deps = if opts.grpc {
+        r#"
+tonic = "~0.12"
+prost = "~0.13""#
+    } else {
+        ""
+    };
+
+    let grpc_build_deps = if opts.grpc {
+        r#"
+[build-dependencies]
+tonic-build = "~0.12"
+"#
+    } else {
+        ""
+    };
+
     let name = &opts.name;
 
     format!(
@@ -58,8 +78,8 @@ tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tracing = "0.1"
-tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}
-"#
+tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}{grpc_deps}
+{grpc_build_deps}"#
     )
 }
 
@@ -73,6 +93,9 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
     if opts.scheduler {
         imports.push_str("use r2e::r2e_scheduler::Scheduler;\n");
     }
+    if opts.grpc {
+        imports.push_str("use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};\n");
+    }
 
     imports.push_str("\nmod controllers;\nmod state;\n\n");
     imports.push_str("use controllers::hello::HelloController;\n");
@@ -83,6 +106,9 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
 
     if opts.scheduler {
         builder_lines.push("        .plugin(Scheduler)".to_string());
+    }
+    if opts.grpc {
+        builder_lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
     }
 
     builder_lines.push("        .build_state::<AppState, _>()".to_string());
@@ -194,6 +220,10 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
         );
     }
 
+    if opts.grpc {
+        yaml.push_str("\ngrpc:\n  port: 50051\n");
+    }
+
     yaml
 }
 
@@ -211,6 +241,35 @@ impl HelloController {
     async fn hello(&self) -> &'static str {
         "Hello, World!"
     }
+}
+"#
+}
+
+pub fn greeter_proto(project_name: &str) -> String {
+    format!(
+        r#"syntax = "proto3";
+
+package {project_name};
+
+service Greeter {{
+  rpc SayHello (HelloRequest) returns (HelloReply);
+}}
+
+message HelloRequest {{
+  string name = 1;
+}}
+
+message HelloReply {{
+  string message = 1;
+}}
+"#
+    )
+}
+
+pub fn build_rs() -> &'static str {
+    r#"fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::compile_protos("proto/greeter.proto")?;
+    Ok(())
 }
 "#
 }

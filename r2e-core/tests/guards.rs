@@ -1,18 +1,16 @@
-use r2e_core::guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, RolesGuard};
+use r2e_core::guards::{GuardContext, Identity, NoIdentity, PathParams};
 use r2e_core::http::{HeaderMap, Uri};
 
 struct TestIdentity {
     sub: String,
-    roles: Vec<String>,
     email: Option<String>,
     claims: Option<serde_json::Value>,
 }
 
 impl TestIdentity {
-    fn new(sub: &str, roles: &[&str]) -> Self {
+    fn new(sub: &str) -> Self {
         Self {
             sub: sub.to_string(),
-            roles: roles.iter().map(|r| r.to_string()).collect(),
             email: None,
             claims: None,
         }
@@ -27,9 +25,6 @@ impl TestIdentity {
 impl Identity for TestIdentity {
     fn sub(&self) -> &str {
         &self.sub
-    }
-    fn roles(&self) -> &[String] {
-        &self.roles
     }
     fn email(&self) -> Option<&str> {
         self.email.as_deref()
@@ -85,15 +80,10 @@ fn no_identity_sub_is_empty() {
     assert_eq!(NoIdentity.sub(), "");
 }
 
-#[test]
-fn no_identity_roles_is_empty() {
-    assert!(NoIdentity.roles().is_empty());
-}
-
 // GuardContext accessor tests
 #[test]
 fn guard_context_identity_sub() {
-    let id = TestIdentity::new("user-1", &["admin"]);
+    let id = TestIdentity::new("user-1");
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
@@ -101,20 +91,8 @@ fn guard_context_identity_sub() {
 }
 
 #[test]
-fn guard_context_identity_roles() {
-    let id = TestIdentity::new("user-1", &["admin", "editor"]);
-    let uri = make_uri("/test");
-    let headers = HeaderMap::new();
-    let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
-    let roles = ctx.identity_roles().unwrap();
-    assert_eq!(roles.len(), 2);
-    assert_eq!(roles[0], "admin");
-    assert_eq!(roles[1], "editor");
-}
-
-#[test]
 fn guard_context_identity_email() {
-    let id = TestIdentity::new("user-1", &[]).with_email("a@b.com");
+    let id = TestIdentity::new("user-1").with_email("a@b.com");
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
@@ -127,7 +105,6 @@ fn guard_context_identity_none() {
     let headers = HeaderMap::new();
     let ctx: GuardContext<'_, TestIdentity> = make_ctx(None, &uri, &headers, PathParams::EMPTY);
     assert_eq!(ctx.identity_sub(), None);
-    assert_eq!(ctx.identity_roles(), None);
     assert_eq!(ctx.identity_email(), None);
 }
 
@@ -158,35 +135,6 @@ fn guard_context_path_param() {
     assert_eq!(ctx.path_param("missing"), None);
 }
 
-// RolesGuard tests
-#[tokio::test]
-async fn roles_guard_passes() {
-    let guard = RolesGuard {
-        required_roles: &["admin"],
-    };
-    let id = TestIdentity::new("user-1", &["admin", "user"]);
-    let uri = make_uri("/test");
-    let headers = HeaderMap::new();
-    let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
-    let result = guard.check(&(), &ctx).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn roles_guard_rejects() {
-    let guard = RolesGuard {
-        required_roles: &["admin"],
-    };
-    let id = TestIdentity::new("user-1", &["user"]);
-    let uri = make_uri("/test");
-    let headers = HeaderMap::new();
-    let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
-    let result = guard.check(&(), &ctx).await;
-    assert!(result.is_err());
-    let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
-}
-
 #[test]
 fn guard_context_method_name() {
     let uri = make_uri("/test");
@@ -206,7 +154,7 @@ fn guard_context_controller_name() {
 #[test]
 fn guard_context_identity_claims() {
     let claims = serde_json::json!({"aud": "test-app", "scope": "read"});
-    let mut id = TestIdentity::new("user-1", &["admin"]);
+    let mut id = TestIdentity::new("user-1");
     id.claims = Some(claims.clone());
     let uri = make_uri("/test");
     let headers = HeaderMap::new();

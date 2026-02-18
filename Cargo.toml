@@ -14,6 +14,8 @@ members = [
     "r2e-prometheus",
     "r2e-observability",
     "r2e-openfga",
+    "r2e-grpc",
+    "r2e-oidc",
     "r2e-cli",
     "r2e-test",
     "r2e-utils",
@@ -22,6 +24,7 @@ members = [
     "examples/example-postgres",
     "examples/example-multi-tenant",
     "examples/example-websocket-chat",
+    "examples/example-grpc",
     "examples/example-microservice",
     "r2e-compile-tests",
 ]

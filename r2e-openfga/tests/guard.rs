@@ -10,9 +10,6 @@ impl Identity for TestIdentity {
     fn sub(&self) -> &str {
         &self.sub
     }
-    fn roles(&self) -> &[String] {
-        &[]
-    }
 }
 
 #[test]

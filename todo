@@ -25,4 +25,4 @@
 - how is pub/sub implemented and how it works with a custom pub/sub ?
 - make sure path param fga compile check 
 - support grpc 
-- 
+- better plugable macro system ? -> properly isolate features from macro and core

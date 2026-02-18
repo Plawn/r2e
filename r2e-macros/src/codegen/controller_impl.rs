@@ -1,6 +1,7 @@
 //! Controller trait implementation generation.
 
 use proc_macro2::TokenStream;
+use proc_macro_crate::crate_name;
 use quote::{format_ident, quote};
 
 use crate::crate_path::{r2e_core_path, r2e_scheduler_path};
@@ -323,15 +324,20 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
     });
 
     match &body_info {
-        Some((bname, inner_ty)) => (
-            quote! { Some(#bname.to_string()) },
-            quote! {
-                Some({
-                    let __schema = schemars::schema_for!(#inner_ty);
-                    serde_json::to_value(__schema).unwrap()
-                })
-            },
-        ),
+        Some((bname, inner_ty)) => {
+            let has_schemars = crate_name("schemars").is_ok();
+            let schema_token = if has_schemars {
+                quote! {
+                    Some({
+                        let __schema = schemars::schema_for!(#inner_ty);
+                        serde_json::to_value(__schema).unwrap()
+                    })
+                }
+            } else {
+                quote! { None }
+            };
+            (quote! { Some(#bname.to_string()) }, schema_token)
+        }
         None => (quote! { None }, quote! { None }),
     }
 }

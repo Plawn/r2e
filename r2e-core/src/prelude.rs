@@ -42,6 +42,9 @@ pub use r2e_macros::{sse, ws};
 // Event & scheduling attributes
 pub use r2e_macros::{consumer, scheduled};
 
+// gRPC attribute
+pub use r2e_macros::grpc_routes;
+
 // Bean / DI macros
 pub use r2e_macros::bean;
 pub use r2e_macros::producer;
@@ -50,6 +53,9 @@ pub use r2e_macros::BeanState;
 
 // Config macros
 pub use r2e_macros::ConfigProperties;
+
+// Cache macros
+pub use r2e_macros::Cacheable;
 
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 

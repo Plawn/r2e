@@ -28,6 +28,9 @@ enum Commands {
         /// Include Prometheus metrics
         #[arg(long)]
         metrics: bool,
+        /// Include gRPC server support
+        #[arg(long)]
+        grpc: bool,
         /// Include all features
         #[arg(long)]
         full: bool,
@@ -82,6 +85,14 @@ enum GenerateKind {
         /// Middleware name (e.g. AuditLog)
         name: String,
     },
+    /// Generate a gRPC service (.proto + Rust service)
+    GrpcService {
+        /// Service name in PascalCase (e.g. UserService)
+        name: String,
+        /// Proto package name (e.g. myapp)
+        #[arg(long, default_value = "myapp")]
+        package: String,
+    },
 }
 
 fn main() {
@@ -94,6 +105,7 @@ fn main() {
             auth,
             openapi,
             metrics,
+            grpc,
             full,
             no_interactive,
         } => new_project::run(
@@ -103,6 +115,7 @@ fn main() {
                 auth,
                 openapi,
                 metrics,
+                grpc,
                 full,
                 no_interactive,
             },
@@ -112,6 +125,7 @@ fn main() {
             GenerateKind::Service { name } => generate::service(&name),
             GenerateKind::Crud { name, fields } => generate::crud(&name, &fields),
             GenerateKind::Middleware { name } => generate::middleware(&name),
+            GenerateKind::GrpcService { name, package } => generate::grpc_service(&name, &package),
         },
         Commands::Add { extension } => add::run(&extension),
         Commands::Dev { open } => dev::run(open),

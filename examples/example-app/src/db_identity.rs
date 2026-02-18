@@ -14,7 +14,7 @@
 use r2e::http::extract::FromRef;
 use r2e::Identity;
 use r2e::r2e_security::{
-    impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity,
+    impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,14 +45,17 @@ impl Identity for DbUser {
     fn sub(&self) -> &str {
         self.auth.sub()
     }
-    fn roles(&self) -> &[String] {
-        self.auth.roles()
-    }
     fn email(&self) -> Option<&str> {
         self.auth.email()
     }
     fn claims(&self) -> Option<&serde_json::Value> {
         self.auth.claims()
+    }
+}
+
+impl RoleBasedIdentity for DbUser {
+    fn roles(&self) -> &[String] {
+        self.auth.roles()
     }
 }
 

@@ -1,10 +1,12 @@
-use crate::http::response::{IntoResponse, Response};
+use crate::http::response::Response;
 use crate::http::{HeaderMap, Uri};
 
 /// Trait representing an authenticated identity (user, service account, etc.).
 ///
 /// Implement this trait on your identity type (e.g. `AuthenticatedUser`) to
 /// decouple guards from a concrete identity struct.
+///
+/// For role-based access control, see `RoleBasedIdentity` in `r2e-security`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not implement `Identity`",
     label = "this type cannot be used as an identity",
@@ -13,9 +15,6 @@ use crate::http::{HeaderMap, Uri};
 pub trait Identity: Send + Sync {
     /// Unique subject identifier (e.g. JWT "sub" claim).
     fn sub(&self) -> &str;
-
-    /// Roles associated with this identity.
-    fn roles(&self) -> &[String];
 
     /// Email associated with this identity, if available.
     fn email(&self) -> Option<&str> {
@@ -37,9 +36,6 @@ pub struct NoIdentity;
 impl Identity for NoIdentity {
     fn sub(&self) -> &str {
         ""
-    }
-    fn roles(&self) -> &[String] {
-        &[]
     }
 }
 
@@ -110,11 +106,6 @@ impl<'a, I: Identity> GuardContext<'a, I> {
         self.identity.map(|i| i.sub())
     }
 
-    /// Convenience accessor for the identity roles.
-    pub fn identity_roles(&self) -> Option<&[String]> {
-        self.identity.map(|i| i.roles())
-    }
-
     /// The request path.
     pub fn path(&self) -> &str {
         self.uri.path()
@@ -153,7 +144,7 @@ impl<'a, I: Identity> GuardContext<'a, I> {
 /// Returns `Ok(())` to proceed, `Err(Response)` to short-circuit.
 ///
 /// Guards are the handler-level counterpart of `Interceptor<R>` (which is method-level).
-/// Built-in guards: `RolesGuard`, `RateLimitGuard` (in `r2e-rate-limit`).
+/// Built-in guards: `RolesGuard` (in `r2e-security`), `RateLimitGuard` (in `r2e-rate-limit`).
 /// Users can implement custom guards and apply them with `#[guard(expr)]`.
 ///
 /// Generic over both the application state `S` and the identity type `I`.
@@ -227,33 +218,3 @@ pub trait PreAuthGuard<S>: Send + Sync {
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
 }
 
-/// Guard that checks required roles. Returns 403 if missing.
-pub struct RolesGuard {
-    pub required_roles: &'static [&'static str],
-}
-
-impl<S: Send + Sync, I: Identity> Guard<S, I> for RolesGuard {
-    fn check(
-        &self,
-        _state: &S,
-        ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
-        let result = (|| {
-            let identity = ctx.identity.ok_or_else(|| {
-                crate::AppError::Forbidden("No identity available for role check".into())
-                    .into_response()
-            })?;
-            let roles = identity.roles();
-            let has_role = self
-                .required_roles
-                .iter()
-                .any(|req| roles.iter().any(|r| r.as_str() == *req));
-            if has_role {
-                Ok(())
-            } else {
-                Err(crate::AppError::Forbidden("Insufficient roles".into()).into_response())
-            }
-        })();
-        std::future::ready(result)
-    }
-}

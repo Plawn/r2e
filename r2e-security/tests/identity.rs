@@ -1,5 +1,6 @@
 use r2e_security::identity::AuthenticatedUser;
 use r2e_security::openid::RoleExtractor;
+use r2e_security::RoleBasedIdentity;
 use r2e_core::Identity;
 use serde_json::json;
 
@@ -127,7 +128,7 @@ fn identity_roles() {
     let user = AuthenticatedUser::from_claims(json!({
         "sub": "u", "roles": ["a", "b"]
     }));
-    assert_eq!(Identity::roles(&user), &["a".to_string(), "b".to_string()]);
+    assert_eq!(RoleBasedIdentity::roles(&user), &["a".to_string(), "b".to_string()]);
 }
 
 #[test]

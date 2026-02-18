@@ -79,6 +79,18 @@ impl JwtClaimsValidator {
         let algorithm = header.alg;
         debug!(?algorithm, kid = ?header.kid, "Decoded JWT header");
 
+        if self.config.allowed_algorithms.is_empty() {
+            return Err(SecurityError::ValidationFailed(
+                "No allowed JWT algorithms configured".into(),
+            ));
+        }
+
+        if !self.config.allowed_algorithms.contains(&algorithm) {
+            return Err(SecurityError::ValidationFailed(format!(
+                "Disallowed JWT algorithm: {algorithm:?}"
+            )));
+        }
+
         // Step 2: Get the decoding key
         let decoding_key = match &self.key_source {
             KeySource::Static(key) => key.clone(),
@@ -92,6 +104,7 @@ impl JwtClaimsValidator {
 
         // Step 3: Set up validation parameters
         let mut validation = Validation::new(algorithm);
+        validation.algorithms = self.config.allowed_algorithms.clone();
         validation.set_issuer(&[&self.config.issuer]);
         validation.set_audience(&[&self.config.audience]);
         validation.validate_exp = true;

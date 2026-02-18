@@ -1,0 +1,8 @@
+error: FromMultipart can only be derived on structs
+ --> compile-fail/from_multipart_enum.rs:4:1
+  |
+4 | / pub enum BadUpload {
+5 | |     Text(String),
+6 | |     File(Vec<u8>),
+7 | | }
+  | |_^

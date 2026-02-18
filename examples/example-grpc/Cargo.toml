@@ -1,0 +1,15 @@
+[package]
+name = "example-grpc"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+r2e = { path = "../../r2e", features = ["grpc"] }
+tokio = { version = "1", features = ["full"] }
+tonic = "~0.12"
+prost = "~0.13"
+tracing = "0.1"
+
+[build-dependencies]
+tonic-build = "~0.12"

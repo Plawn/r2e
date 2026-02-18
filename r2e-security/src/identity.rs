@@ -242,14 +242,17 @@ impl crate::__macro_support::Identity for AuthenticatedUser {
     fn sub(&self) -> &str {
         &self.sub
     }
-    fn roles(&self) -> &[String] {
-        &self.roles
-    }
     fn email(&self) -> Option<&str> {
         self.email.as_deref()
     }
     fn claims(&self) -> Option<&serde_json::Value> {
         Some(&self.claims)
+    }
+}
+
+impl crate::guards::RoleBasedIdentity for AuthenticatedUser {
+    fn roles(&self) -> &[String] {
+        &self.roles
     }
 }
 

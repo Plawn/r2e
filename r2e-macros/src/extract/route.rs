@@ -2,7 +2,7 @@
 
 use quote::quote;
 
-use crate::crate_path::r2e_core_path;
+use crate::crate_path::r2e_security_path;
 use crate::route::{HttpMethod, RoutePath};
 use crate::types::TransactionalConfig;
 
@@ -101,7 +101,7 @@ pub fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {
     if roles.is_empty() {
         return None;
     }
-    let krate = r2e_core_path();
+    let krate = r2e_security_path();
     let tokens = quote! {
         #krate::RolesGuard {
             required_roles: &[#(#roles),*],

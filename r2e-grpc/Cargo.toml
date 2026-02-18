@@ -1,0 +1,37 @@
+[package]
+name = "r2e-grpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["grpc", "tonic", "web", "framework"]
+categories = ["web-programming"]
+description = "gRPC server support for R2E framework"
+
+[features]
+default = []
+reflection = ["dep:tonic-reflection"]
+
+[dependencies]
+r2e-core = { path = "../r2e-core", version = "0.1.0" }
+tonic = { version = "~0.12", default-features = false, features = ["server", "prost", "codegen"] }
+prost = "~0.13"
+tokio = { version = "1", features = ["net", "rt"] }
+hyper = { version = "1", features = ["server", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+tower = "0.5"
+http = "1"
+http-body = "1"
+tracing = "0.1"
+serde_json = "1"
+bytes = "1"
+futures-util = "0.3"
+pin-project-lite = "0.2"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+tonic-reflection = { version = "~0.12", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

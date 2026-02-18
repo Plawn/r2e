@@ -1,7 +1,6 @@
 use r2e::prelude::*;
 use r2e::{Guard, GuardContext, Identity};
-use r2e::r2e_security::AuthenticatedUser;
-use r2e::r2e_security::JwtClaimsValidator;
+use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
 use std::future::Future;
 use std::sync::Arc;
 

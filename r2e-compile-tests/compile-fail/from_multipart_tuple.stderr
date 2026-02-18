@@ -1,0 +1,5 @@
+error: FromMultipart can only be derived on structs with named fields
+ --> compile-fail/from_multipart_tuple.rs:4:1
+  |
+4 | pub struct TupleUpload(String, Vec<u8>);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

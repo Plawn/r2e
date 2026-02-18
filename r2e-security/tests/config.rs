@@ -1,3 +1,4 @@
+use jsonwebtoken::Algorithm;
 use r2e_security::config::SecurityConfig;
 
 #[test]
@@ -11,6 +12,8 @@ fn config_new_required_fields() {
     assert_eq!(config.issuer, "my-issuer");
     assert_eq!(config.audience, "my-audience");
     assert_eq!(config.jwks_cache_ttl_secs, 3600); // default
+    assert_eq!(config.jwks_min_refresh_interval_secs, 10); // default
+    assert_eq!(config.allowed_algorithms, vec![Algorithm::RS256]); // default
 }
 
 #[test]
@@ -21,11 +24,16 @@ fn config_with_cache_ttl() {
 
 #[test]
 fn config_fields_accessible() {
-    let config = SecurityConfig::new("u", "i", "a").with_cache_ttl(60);
+    let config = SecurityConfig::new("u", "i", "a")
+        .with_cache_ttl(60)
+        .with_min_refresh_interval(5)
+        .with_allowed_algorithm(Algorithm::HS256);
     // All fields are pub, verify they're accessible and cloneable
     let cloned = config.clone();
     assert_eq!(cloned.jwks_url, "u");
     assert_eq!(cloned.issuer, "i");
     assert_eq!(cloned.audience, "a");
     assert_eq!(cloned.jwks_cache_ttl_secs, 60);
+    assert_eq!(cloned.jwks_min_refresh_interval_secs, 5);
+    assert_eq!(cloned.allowed_algorithms, vec![Algorithm::HS256]);
 }

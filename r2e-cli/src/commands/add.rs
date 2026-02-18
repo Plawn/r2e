@@ -13,6 +13,7 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("rate-limit", "r2e-rate-limit"),
     ("utils", "r2e-utils"),
     ("prometheus", "r2e-prometheus"),
+    ("grpc", "r2e-grpc"),
     ("test", "r2e-test"),
 ];
 

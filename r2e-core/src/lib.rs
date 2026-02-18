@@ -38,7 +38,7 @@ pub use config::{
 };
 pub use controller::{Controller, StatefulConstruct};
 pub use error::AppError;
-pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext, RolesGuard};
+pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;
@@ -56,4 +56,3 @@ pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{BuildableFrom, Contains, Here, TCons, TNil, There};
 
-pub use schemars;

@@ -42,16 +42,21 @@ impl std::fmt::Display for SecurityError {
 
 impl std::error::Error for SecurityError {}
 
+impl SecurityError {
+    pub fn public_message(&self) -> &'static str {
+        "Unauthorized"
+    }
+}
+
 impl IntoResponse for SecurityError {
     fn into_response(self) -> Response {
-        let message = self.to_string();
-        let body = serde_json::json!({ "error": message });
+        let body = serde_json::json!({ "error": self.public_message() });
         (StatusCode::UNAUTHORIZED, r2e_core::http::Json(body)).into_response()
     }
 }
 
 impl From<SecurityError> for r2e_core::AppError {
     fn from(err: SecurityError) -> Self {
-        r2e_core::AppError::Unauthorized(err.to_string())
+        r2e_core::AppError::Unauthorized(err.public_message().to_string())
     }
 }

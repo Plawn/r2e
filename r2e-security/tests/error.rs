@@ -16,35 +16,35 @@ async fn error_parts(err: SecurityError) -> (StatusCode, serde_json::Value) {
 async fn missing_auth_header_401() {
     let (status, body) = error_parts(SecurityError::MissingAuthHeader).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Missing Authorization header");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
 async fn invalid_auth_scheme_401() {
     let (status, body) = error_parts(SecurityError::InvalidAuthScheme).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Invalid authorization scheme");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
 async fn invalid_token_401() {
     let (status, body) = error_parts(SecurityError::InvalidToken("bad sig".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Invalid token: bad sig");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
 async fn token_expired_401() {
     let (status, body) = error_parts(SecurityError::TokenExpired).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Token expired");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
 async fn unknown_key_id_401() {
     let (status, body) = error_parts(SecurityError::UnknownKeyId("kid-123".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Unknown signing key: kid-123");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
@@ -52,7 +52,7 @@ async fn jwks_fetch_error_401() {
     let (status, body) =
         error_parts(SecurityError::JwksFetchError("timeout".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "JWKS fetch error: timeout");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn validation_failed_401() {
     let (status, body) =
         error_parts(SecurityError::ValidationFailed("bad issuer".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"], "Token validation failed: bad issuer");
+    assert_eq!(body["error"], "Unauthorized");
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn into_app_error() {
     let app_err: r2e_core::AppError = sec_err.into();
     match app_err {
         r2e_core::AppError::Unauthorized(msg) => {
-            assert!(msg.contains("Invalid token: bad"));
+            assert_eq!(msg, "Unauthorized");
         }
         other => panic!("expected Unauthorized, got {other}"),
     }

@@ -35,6 +35,34 @@ pub fn r2e_core_path() -> TokenStream {
     }
 }
 
+/// Returns the token stream for accessing `r2e_security` types.
+///
+/// If the user depends on `r2e`, returns `::r2e::r2e_security`.
+/// Otherwise returns `::r2e_security`.
+pub fn r2e_security_path() -> TokenStream {
+    // First check if the facade crate is available
+    if let Ok(found) = crate_name("r2e") {
+        match found {
+            FoundCrate::Itself => quote!(crate::r2e_security),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident::r2e_security)
+            }
+        }
+    } else if let Ok(found) = crate_name("r2e-security") {
+        match found {
+            FoundCrate::Itself => quote!(crate),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident)
+            }
+        }
+    } else {
+        // Fallback
+        quote!(::r2e_security)
+    }
+}
+
 /// Returns the token stream for accessing `r2e_scheduler` types.
 ///
 /// If the user depends on `r2e`, returns `::r2e::r2e_scheduler`.
@@ -63,3 +91,30 @@ pub fn r2e_scheduler_path() -> TokenStream {
     }
 }
 
+/// Returns the token stream for accessing `r2e_grpc` types.
+///
+/// If the user depends on `r2e`, returns `::r2e::r2e_grpc`.
+/// Otherwise returns `::r2e_grpc`.
+pub fn r2e_grpc_path() -> TokenStream {
+    // First check if the facade crate is available
+    if let Ok(found) = crate_name("r2e") {
+        match found {
+            FoundCrate::Itself => quote!(crate::r2e_grpc),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident::r2e_grpc)
+            }
+        }
+    } else if let Ok(found) = crate_name("r2e-grpc") {
+        match found {
+            FoundCrate::Itself => quote!(crate),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident)
+            }
+        }
+    } else {
+        // Fallback
+        quote!(::r2e_grpc)
+    }
+}

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use jsonwebtoken::DecodingKey;
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::config::SecurityConfig;
 use crate::error::SecurityError;
@@ -73,6 +73,7 @@ impl CachedJwk {
 struct CacheInner {
     keys: HashMap<String, CachedJwk>,
     last_refresh: Option<Instant>,
+    last_refresh_attempt: Option<Instant>,
 }
 
 /// JWKS cache that stores public keys fetched from a JWKS endpoint.
@@ -83,6 +84,7 @@ pub struct JwksCache {
     inner: Arc<RwLock<CacheInner>>,
     config: SecurityConfig,
     client: reqwest::Client,
+    refresh_lock: Mutex<()>,
 }
 
 impl JwksCache {
@@ -93,9 +95,11 @@ impl JwksCache {
             inner: Arc::new(RwLock::new(CacheInner {
                 keys: HashMap::new(),
                 last_refresh: None,
+                last_refresh_attempt: None,
             })),
             config,
             client,
+            refresh_lock: Mutex::new(()),
         };
         cache.refresh().await?;
         Ok(cache)
@@ -106,16 +110,30 @@ impl JwksCache {
     /// If the `kid` is not in the cache, the cache is refreshed first.
     /// If still not found after refresh, returns `SecurityError::UnknownKeyId`.
     pub async fn get_key(&self, kid: &str) -> Result<DecodingKey, SecurityError> {
-        // First, try to read from cache
+        let ttl = Duration::from_secs(self.config.jwks_cache_ttl_secs);
+
+        // First, try cache. If stale or missing, attempt a refresh.
+        let mut needs_refresh = false;
+        let mut force_refresh = false;
         {
             let cache = self.inner.read().await;
             if let Some(jwk) = cache.keys.get(kid) {
-                return jwk.to_decoding_key();
+                if is_stale(cache.last_refresh, ttl) {
+                    needs_refresh = true;
+                    force_refresh = false;
+                } else {
+                    return jwk.to_decoding_key();
+                }
+            } else {
+                needs_refresh = true;
+                force_refresh = true;
             }
         }
 
-        // Kid not found, refresh and try again
-        self.refresh().await?;
+        if needs_refresh {
+            // Kid not found (or cache was stale). Attempt refresh, then try again.
+            self.try_refresh(force_refresh).await?;
+        }
 
         let cache = self.inner.read().await;
         cache
@@ -132,6 +150,10 @@ impl JwksCache {
             .get(&self.config.jwks_url)
             .send()
             .await
+            .map_err(|e| SecurityError::JwksFetchError(e.to_string()))?;
+
+        let response = response
+            .error_for_status()
             .map_err(|e| SecurityError::JwksFetchError(e.to_string()))?;
 
         let jwks: JwksResponse = response
@@ -151,10 +173,100 @@ impl JwksCache {
             }
         }
 
+        let now = Instant::now();
         let mut cache = self.inner.write().await;
         cache.keys = keys;
-        cache.last_refresh = Some(Instant::now());
+        cache.last_refresh = Some(now);
+        cache.last_refresh_attempt = Some(now);
 
         Ok(())
+    }
+
+    async fn try_refresh(&self, force: bool) -> Result<(), SecurityError> {
+        let ttl = Duration::from_secs(self.config.jwks_cache_ttl_secs);
+        let min_interval = Duration::from_secs(self.config.jwks_min_refresh_interval_secs);
+
+        {
+            let cache = self.inner.read().await;
+            if !force && !is_stale(cache.last_refresh, ttl) {
+                return Ok(());
+            }
+            if !can_attempt(cache.last_refresh_attempt, min_interval) {
+                return Ok(());
+            }
+        }
+
+        let _guard = self.refresh_lock.lock().await;
+
+        {
+            let cache = self.inner.read().await;
+            if !force && !is_stale(cache.last_refresh, ttl) {
+                return Ok(());
+            }
+            if !can_attempt(cache.last_refresh_attempt, min_interval) {
+                return Ok(());
+            }
+        }
+
+        {
+            let mut cache = self.inner.write().await;
+            cache.last_refresh_attempt = Some(Instant::now());
+        }
+
+        self.refresh().await
+    }
+}
+
+fn is_stale(last_refresh: Option<Instant>, ttl: Duration) -> bool {
+    match last_refresh {
+        None => true,
+        Some(ts) => ts.elapsed() >= ttl,
+    }
+}
+
+fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> bool {
+    match last_attempt {
+        None => true,
+        Some(ts) => ts.elapsed() >= min_interval,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_attempt, is_stale};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stale_when_never_refreshed() {
+        assert!(is_stale(None, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn stale_when_ttl_elapsed() {
+        let ts = Instant::now() - Duration::from_secs(61);
+        assert!(is_stale(Some(ts), Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn not_stale_before_ttl() {
+        let ts = Instant::now() - Duration::from_secs(10);
+        assert!(!is_stale(Some(ts), Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn can_attempt_when_never_attempted() {
+        assert!(can_attempt(None, Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn can_attempt_when_interval_elapsed() {
+        let ts = Instant::now() - Duration::from_secs(11);
+        assert!(can_attempt(Some(ts), Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn cannot_attempt_too_soon() {
+        let ts = Instant::now() - Duration::from_secs(3);
+        assert!(!can_attempt(Some(ts), Duration::from_secs(10)));
     }
 }

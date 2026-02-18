@@ -67,6 +67,9 @@ pub use r2e_scheduler;
 #[cfg(feature = "cache")]
 pub use r2e_cache;
 
+#[cfg(feature = "oidc")]
+pub use r2e_oidc;
+
 #[cfg(feature = "openapi")]
 pub use r2e_openapi;
 
@@ -75,6 +78,9 @@ pub use r2e_prometheus;
 
 #[cfg(feature = "openfga")]
 pub use r2e_openfga;
+
+#[cfg(feature = "grpc")]
+pub use r2e_grpc;
 
 #[cfg(feature = "observability")]
 pub use r2e_observability;
@@ -123,6 +129,12 @@ pub mod prelude {
     #[cfg(feature = "utils")]
     pub use r2e_utils::prelude::*;
 
+    #[cfg(feature = "oidc")]
+    pub use r2e_oidc::prelude::*;
+
     #[cfg(feature = "openfga")]
     pub use r2e_openfga::prelude::*;
+
+    #[cfg(feature = "grpc")]
+    pub use r2e_grpc::prelude::*;
 }
