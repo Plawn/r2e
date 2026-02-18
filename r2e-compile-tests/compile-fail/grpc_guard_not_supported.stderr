@@ -1,0 +1,5 @@
+error: #[guard] is not supported on #[grpc_routes] methods
+  --> compile-fail/grpc_guard_not_supported.rs:12:5
+   |
+12 |     #[guard(MyGuard)]
+   |     ^^^^^^^^^^^^^^^^^

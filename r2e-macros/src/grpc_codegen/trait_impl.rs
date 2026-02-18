@@ -60,10 +60,10 @@ fn generate_method_impl(
     let fn_name_str = fn_name.to_string();
 
     // Determine identity extraction and guard context
-    let has_guards = !method.guard_fns.is_empty() || !method.roles.is_empty();
+    let has_guards = !method.decorators.guard_fns.is_empty() || !method.decorators.roles.is_empty();
     let has_identity = method.identity_param.is_some();
     let has_intercepts =
-        !method.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
+        !method.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
 
     // Build the request param for the tonic trait signature
     let request_param_tokens = if let Some(pt) = request_param {
@@ -111,7 +111,7 @@ fn generate_method_impl(
             &fn_name_str,
             &controller_name_str,
             def,
-            &method.intercept_fns,
+            &method.decorators.intercept_fns,
             krate,
         )
     } else {
@@ -167,8 +167,8 @@ fn generate_grpc_guard_checks(
     let security_krate = r2e_security_path();
 
     // Build roles guard if needed
-    let roles_guard = if !method.roles.is_empty() {
-        let roles = &method.roles;
+    let roles_guard = if !method.decorators.roles.is_empty() {
+        let roles = &method.decorators.roles;
         Some(quote! {
             {
                 let __roles_guard = #grpc_krate::GrpcRolesGuard {
@@ -190,6 +190,7 @@ fn generate_grpc_guard_checks(
 
     // Build custom guard checks
     let custom_guards: Vec<TokenStream> = method
+        .decorators
         .guard_fns
         .iter()
         .map(|guard_expr| {

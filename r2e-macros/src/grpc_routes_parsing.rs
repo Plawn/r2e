@@ -2,7 +2,7 @@
 
 use crate::derive_parsing::has_identity_qualifier;
 use crate::extract::*;
-use crate::types::IdentityParam;
+use crate::types::{IdentityParam, MethodDecorators};
 
 /// Parsed representation of a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
 pub struct GrpcRoutesImplDef {
@@ -22,12 +22,8 @@ pub struct GrpcRoutesImplDef {
 pub struct GrpcMethod {
     /// Method name (must match the tonic trait method name).
     pub name: syn::Ident,
-    /// Roles required for this method.
-    pub roles: Vec<String>,
-    /// Guard expressions.
-    pub guard_fns: Vec<syn::Expr>,
-    /// Interceptor expressions.
-    pub intercept_fns: Vec<syn::Expr>,
+    /// Parsed decorator attributes (gRPC currently supports interceptors only).
+    pub decorators: MethodDecorators,
     /// Identity parameter (if `#[inject(identity)]` is on a handler param).
     pub identity_param: Option<IdentityParam>,
     /// The original method item (with route attrs stripped).
@@ -91,18 +87,6 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
     Ok(identity_param)
 }
 
-/// Strip gRPC-consumed attributes from a method.
-fn strip_grpc_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
-    attrs
-        .into_iter()
-        .filter(|a| {
-            !a.path().is_ident("roles")
-                && !a.path().is_ident("guard")
-                && !a.path().is_ident("intercept")
-        })
-        .collect()
-}
-
 /// Parse a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
 pub fn parse(
     service_trait: syn::Path,
@@ -145,19 +129,15 @@ pub fn parse(
                     .map_or(false, |arg| matches!(arg, syn::FnArg::Receiver(_)));
 
                 if method.sig.asyncness.is_some() && is_receiver {
-                    let roles = extract_roles(&all_attrs)?;
-                    let guard_fns = extract_guard_fns(&all_attrs)?;
-                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    let decorators = parse_grpc_decorators(&all_attrs)?;
 
-                    method.attrs = strip_grpc_attrs(all_attrs);
+                    method.attrs = strip_known_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
                     let name = method.sig.ident.clone();
 
                     methods.push(GrpcMethod {
                         name,
-                        roles,
-                        guard_fns,
-                        intercept_fns,
+                        decorators,
                         identity_param,
                         fn_item: method,
                     });

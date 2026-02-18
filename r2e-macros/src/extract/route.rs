@@ -22,24 +22,6 @@ pub fn is_ws_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("ws")
 }
 
-pub fn strip_route_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
-    attrs
-        .into_iter()
-        .filter(|a| {
-            !is_route_attr(a)
-                && !is_sse_attr(a)
-                && !is_ws_attr(a)
-                && !a.path().is_ident("roles")
-                && !a.path().is_ident("transactional")
-                && !a.path().is_ident("intercept")
-                && !a.path().is_ident("guard")
-                && !a.path().is_ident("pre_guard")
-                && !a.path().is_ident("middleware")
-                && !a.path().is_ident("layer")
-        })
-        .collect()
-}
-
 pub fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpMethod, String)>> {
     for attr in attrs {
         let method = if attr.path().is_ident("get") {

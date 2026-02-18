@@ -80,7 +80,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 /// Wrap a route method with transactional behavior only.
 /// Interceptors are now handled at the handler level (handlers.rs).
 fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
-    if rm.transactional.is_none() {
+    if rm.decorators.transactional.is_none() {
         let f = &rm.fn_item;
         return quote! { #f };
     }
@@ -95,7 +95,7 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
     let mut body: TokenStream = quote! { #original_body };
 
     // Inline wrapper: transactional
-    if let Some(ref tx_config) = rm.transactional {
+    if let Some(ref tx_config) = rm.decorators.transactional {
         let pool_field = format_ident!("{}", tx_config.pool_field);
         body = quote! {
             {

@@ -91,7 +91,7 @@ fn generate_pre_auth_guards(
     let has_pre_auth = def
         .route_methods
         .iter()
-        .any(|rm| !rm.pre_auth_guard_fns.is_empty());
+        .any(|rm| !rm.decorators.pre_auth_guard_fns.is_empty());
 
     if !has_pre_auth {
         return quote! {};
@@ -105,7 +105,7 @@ fn generate_pre_auth_guards(
     let pre_auth_routes: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .filter(|rm| !rm.pre_auth_guard_fns.is_empty())
+        .filter(|rm| !rm.decorators.pre_auth_guard_fns.is_empty())
         .map(|rm| {
             let handler_name = format_ident!("__r2e_{}_{}", name, rm.fn_item.sig.ident);
             let fn_name_str = rm.fn_item.sig.ident.to_string();
@@ -114,6 +114,7 @@ fn generate_pre_auth_guards(
             let controller_name_str = &controller_name_str;
 
             let pre_auth_checks: Vec<_> = rm
+                .decorators
                 .pre_auth_guard_fns
                 .iter()
                 .map(|guard_expr| {
@@ -130,6 +131,7 @@ fn generate_pre_auth_guards(
                 .collect();
 
             let middleware_layers: Vec<_> = rm
+                .decorators
                 .middleware_fns
                 .iter()
                 .map(|mw_fn| {
@@ -138,6 +140,7 @@ fn generate_pre_auth_guards(
                 .collect();
 
             let direct_layers: Vec<_> = rm
+                .decorators
                 .layer_exprs
                 .iter()
                 .map(|expr| {
@@ -197,13 +200,13 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
 
     def.route_methods
         .iter()
-        .filter(|rm| rm.pre_auth_guard_fns.is_empty())
+        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty())
         .map(|rm| {
             let handler_name = format_ident!("__r2e_{}_{}", name, rm.fn_item.sig.ident);
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
 
-            let has_layers = !rm.middleware_fns.is_empty() || !rm.layer_exprs.is_empty();
+            let has_layers = !rm.decorators.middleware_fns.is_empty() || !rm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -211,6 +214,7 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
                 }
             } else {
                 let middleware_layers: Vec<_> = rm
+                    .decorators
                     .middleware_fns
                     .iter()
                     .map(|mw_fn| {
@@ -219,6 +223,7 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
                     .collect();
 
                 let direct_layers: Vec<_> = rm
+                    .decorators
                     .layer_exprs
                     .iter()
                     .map(|expr| {
@@ -254,7 +259,7 @@ fn generate_route_metadata(
             let route_path_str = &rm.path;
             let method = rm.method.as_routing_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
-            let roles: Vec<_> = rm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = rm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
             let params = extract_path_params(rm, &krate);
@@ -492,12 +497,12 @@ fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> V
 
     def.sse_methods
         .iter()
-        .filter(|sm| sm.pre_auth_guard_fns.is_empty())
+        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty())
         .map(|sm| {
             let handler_name = format_ident!("__r2e_{}_{}", name, sm.fn_item.sig.ident);
             let path = &sm.path;
 
-            let has_layers = !sm.middleware_fns.is_empty() || !sm.layer_exprs.is_empty();
+            let has_layers = !sm.decorators.middleware_fns.is_empty() || !sm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -505,11 +510,13 @@ fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> V
                 }
             } else {
                 let middleware_layers: Vec<_> = sm
+                    .decorators
                     .middleware_fns
                     .iter()
                     .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
                     .collect();
                 let direct_layers: Vec<_> = sm
+                    .decorators
                     .layer_exprs
                     .iter()
                     .map(|expr| quote! { .layer(#expr) })
@@ -540,7 +547,7 @@ fn generate_sse_route_metadata(
         .map(|sm| {
             let path = &sm.path;
             let op_id = format!("{}_{}", name, sm.fn_item.sig.ident);
-            let roles: Vec<_> = sm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = sm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
             quote! {
@@ -571,12 +578,12 @@ fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Ve
 
     def.ws_methods
         .iter()
-        .filter(|wm| wm.pre_auth_guard_fns.is_empty())
+        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty())
         .map(|wm| {
             let handler_name = format_ident!("__r2e_{}_{}", name, wm.fn_item.sig.ident);
             let path = &wm.path;
 
-            let has_layers = !wm.middleware_fns.is_empty() || !wm.layer_exprs.is_empty();
+            let has_layers = !wm.decorators.middleware_fns.is_empty() || !wm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -584,11 +591,13 @@ fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Ve
                 }
             } else {
                 let middleware_layers: Vec<_> = wm
+                    .decorators
                     .middleware_fns
                     .iter()
                     .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
                     .collect();
                 let direct_layers: Vec<_> = wm
+                    .decorators
                     .layer_exprs
                     .iter()
                     .map(|expr| quote! { .layer(#expr) })
@@ -619,7 +628,7 @@ fn generate_ws_route_metadata(
         .map(|wm| {
             let path = &wm.path;
             let op_id = format!("{}_{}", name, wm.fn_item.sig.ident);
-            let roles: Vec<_> = wm.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = wm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
             quote! {

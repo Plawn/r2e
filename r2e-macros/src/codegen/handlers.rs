@@ -233,7 +233,7 @@ fn generate_body_and_release(
 
 /// Check if a route method has interceptors (method-level or controller-level).
 fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
-    !rm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
+    !rm.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
 }
 
 /// Wrap a body expression with the interceptor chain at handler level.
@@ -339,7 +339,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         quote! { __ctrl.#fn_name(#(#call_args),*) }
     };
 
-    let has_guards = !rm.guard_fns.is_empty();
+    let has_guards = !rm.decorators.guard_fns.is_empty();
     let has_managed = !rm.managed_params.is_empty();
     let has_intercepts = has_interceptors(def, rm);
     let needs_response = has_guards || has_managed;
@@ -370,7 +370,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             fn_name_str,
             controller_name_str,
             def,
-            &rm.intercept_fns,
+            &rm.decorators.intercept_fns,
             &krate,
         );
 
@@ -387,7 +387,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         }
     } else {
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
-        let guard_checks = generate_guard_checks(&rm.guard_fns, &krate);
+        let guard_checks = generate_guard_checks(&rm.decorators.guard_fns, &krate);
         let guard_context_construction = if has_guards {
             generate_guard_context(&ctx, rm, &krate)
         } else {
@@ -423,7 +423,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     fn_name_str,
                     controller_name_str,
                     def,
-                    &rm.intercept_fns,
+                    &rm.decorators.intercept_fns,
                     &krate,
                 )
             } else {
@@ -435,7 +435,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     fn_name_str,
                     controller_name_str,
                     def,
-                    &rm.intercept_fns,
+                    &rm.decorators.intercept_fns,
                     &krate,
                 )
             }
@@ -553,7 +553,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         }
     };
 
-    let has_guards = !sm.guard_fns.is_empty();
+    let has_guards = !sm.decorators.guard_fns.is_empty();
 
     if !has_guards {
         quote! {
@@ -568,7 +568,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
             }
         }
     } else {
-        let guard_checks = generate_guard_checks(&sm.guard_fns, &krate);
+        let guard_checks = generate_guard_checks(&sm.decorators.guard_fns, &krate);
 
         let guard_context = if let Some(ref id_param) = sm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);
@@ -662,7 +662,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         })
         .collect();
 
-    let has_guards = !wm.guard_fns.is_empty();
+    let has_guards = !wm.decorators.guard_fns.is_empty();
 
     // Build the on_upgrade closure body
     let upgrade_body = if let Some(ref ws_p) = wm.ws_param {
@@ -736,7 +736,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             }
         }
     } else {
-        let guard_checks = generate_guard_checks(&wm.guard_fns, &krate);
+        let guard_checks = generate_guard_checks(&wm.decorators.guard_fns, &krate);
 
         let guard_context = if let Some(ref id_param) = wm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);

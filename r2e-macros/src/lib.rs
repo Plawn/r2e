@@ -821,7 +821,6 @@ pub fn derive_config_properties(input: TokenStream) -> TokenStream {
 ///
 /// #[grpc_routes(proto::user_service_server::UserService)]
 /// impl UserGrpcService {
-///     #[guard(AdminGuard)]
 ///     #[intercept(Logged::info())]
 ///     async fn get_user(
 ///         &self,

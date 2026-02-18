@@ -202,21 +202,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         fn_item: method,
                     });
                 } else if let Some((sse_path, keep_alive)) = extract_sse_attr(&all_attrs)? {
-                    let roles = extract_roles(&all_attrs)?;
-                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
-                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
-                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
+                    let decorators = parse_decorators(&all_attrs)?;
 
-                    let mut guard_fns = Vec::new();
-                    let mut pre_auth_guard_fns = Vec::new();
-
-                    if let Some(roles_guard) = roles_guard_expr(&roles) {
-                        guard_fns.push(roles_guard);
-                    }
-                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
-                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
-
-                    method.attrs = strip_route_attrs(all_attrs);
+                    method.attrs = strip_known_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
                     for arg in method.sig.inputs.iter_mut() {
                         if let syn::FnArg::Typed(pat_type) = arg {
@@ -227,31 +215,14 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     sse_methods.push(SseMethod {
                         path: sse_path,
                         keep_alive,
-                        roles,
-                        intercept_fns,
-                        guard_fns,
-                        pre_auth_guard_fns,
-                        middleware_fns,
-                        layer_exprs,
+                        decorators,
                         identity_param,
                         fn_item: method,
                     });
                 } else if let Some(ws_path) = extract_ws_attr(&all_attrs)? {
-                    let roles = extract_roles(&all_attrs)?;
-                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
-                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
-                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
+                    let decorators = parse_decorators(&all_attrs)?;
 
-                    let mut guard_fns = Vec::new();
-                    let mut pre_auth_guard_fns = Vec::new();
-
-                    if let Some(roles_guard) = roles_guard_expr(&roles) {
-                        guard_fns.push(roles_guard);
-                    }
-                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
-                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
-
-                    method.attrs = strip_route_attrs(all_attrs);
+                    method.attrs = strip_known_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
                     let ws_param = find_ws_param(&method)?;
                     for arg in method.sig.inputs.iter_mut() {
@@ -262,33 +233,15 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     ws_methods.push(WsMethod {
                         path: ws_path,
-                        roles,
-                        intercept_fns,
-                        guard_fns,
-                        pre_auth_guard_fns,
-                        middleware_fns,
-                        layer_exprs,
+                        decorators,
                         identity_param,
                         ws_param,
                         fn_item: method,
                     });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
-                    let roles = extract_roles(&all_attrs)?;
-                    let transactional = extract_transactional(&all_attrs)?;
-                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
-                    let middleware_fns = extract_middleware_fns(&all_attrs)?;
-                    let layer_exprs = extract_layer_exprs(&all_attrs)?;
+                    let decorators = parse_decorators(&all_attrs)?;
 
-                    let mut guard_fns = Vec::new();
-                    let mut pre_auth_guard_fns = Vec::new();
-
-                    if let Some(roles_guard) = roles_guard_expr(&roles) {
-                        guard_fns.push(roles_guard);
-                    }
-                    guard_fns.extend(extract_guard_fns(&all_attrs)?);
-                    pre_auth_guard_fns.extend(extract_pre_guard_fns(&all_attrs)?);
-
-                    method.attrs = strip_route_attrs(all_attrs);
+                    method.attrs = strip_known_attrs(all_attrs);
 
                     // Detect #[inject(identity)] on handler params
                     let identity_param = extract_identity_param(&mut method)?;
@@ -304,7 +257,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     }
 
                     // Validate: #[managed] and #[transactional] are mutually exclusive
-                    if transactional.is_some() && !managed_params.is_empty() {
+                    if decorators.transactional.is_some() && !managed_params.is_empty() {
                         return Err(syn::Error::new(
                             method.sig.ident.span(),
                             "#[managed] and #[transactional] cannot be used on the same handler\n\n\
@@ -316,13 +269,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     route_methods.push(RouteMethod {
                         method: http_method,
                         path,
-                        roles,
-                        transactional,
-                        intercept_fns,
-                        guard_fns,
-                        pre_auth_guard_fns,
-                        middleware_fns,
-                        layer_exprs,
+                        decorators,
                         identity_param,
                         managed_params,
                         fn_item: method,

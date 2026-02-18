@@ -40,6 +40,19 @@ pub struct ScheduledMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
+/// Shared decorator data extracted from method attributes.
+/// Used by RouteMethod, SseMethod, WsMethod, and GrpcMethod.
+#[derive(Default)]
+pub struct MethodDecorators {
+    pub roles: Vec<String>,
+    pub transactional: Option<TransactionalConfig>,
+    pub intercept_fns: Vec<syn::Expr>,
+    pub guard_fns: Vec<syn::Expr>,
+    pub pre_auth_guard_fns: Vec<syn::Expr>,
+    pub middleware_fns: Vec<syn::Path>,
+    pub layer_exprs: Vec<syn::Expr>,
+}
+
 pub struct IdentityParam {
     pub index: usize,
     /// The inner identity type (e.g. `AuthenticatedUser`), unwrapped from `Option<T>` if optional.
@@ -57,13 +70,7 @@ pub struct ManagedParam {
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
-    pub roles: Vec<String>,
-    pub transactional: Option<TransactionalConfig>,
-    pub intercept_fns: Vec<syn::Expr>,
-    pub guard_fns: Vec<syn::Expr>,
-    pub pre_auth_guard_fns: Vec<syn::Expr>,
-    pub middleware_fns: Vec<syn::Path>,
-    pub layer_exprs: Vec<syn::Expr>,
+    pub decorators: MethodDecorators,
     pub identity_param: Option<IdentityParam>,
     pub managed_params: Vec<ManagedParam>,
     pub fn_item: syn::ImplItemFn,
@@ -86,24 +93,14 @@ pub enum SseKeepAlive {
 pub struct SseMethod {
     pub path: String,
     pub keep_alive: SseKeepAlive,
-    pub roles: Vec<String>,
-    pub intercept_fns: Vec<syn::Expr>,
-    pub guard_fns: Vec<syn::Expr>,
-    pub pre_auth_guard_fns: Vec<syn::Expr>,
-    pub middleware_fns: Vec<syn::Path>,
-    pub layer_exprs: Vec<syn::Expr>,
+    pub decorators: MethodDecorators,
     pub identity_param: Option<IdentityParam>,
     pub fn_item: syn::ImplItemFn,
 }
 
 pub struct WsMethod {
     pub path: String,
-    pub roles: Vec<String>,
-    pub intercept_fns: Vec<syn::Expr>,
-    pub guard_fns: Vec<syn::Expr>,
-    pub pre_auth_guard_fns: Vec<syn::Expr>,
-    pub middleware_fns: Vec<syn::Path>,
-    pub layer_exprs: Vec<syn::Expr>,
+    pub decorators: MethodDecorators,
     pub identity_param: Option<IdentityParam>,
     /// Index of the WsStream/WebSocket parameter among typed params, or None if returning WsHandler.
     pub ws_param: Option<WsParam>,

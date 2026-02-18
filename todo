@@ -26,3 +26,6 @@
 - make sure path param fga compile check 
 - support grpc 
 - better plugable macro system ? -> properly isolate features from macro and core
+- managed vs transactionnel ? -> ça existe toujours ?
+
+- avoir un tuto pour patch crate pour ajouter des annotations facilements comme plugin dans les macros ?
