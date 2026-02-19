@@ -20,6 +20,7 @@ r2e-openapi      OpenAPI 3.0.3 spec generation + docs UI
 r2e-prometheus   Prometheus metrics middleware
 r2e-observability Structured observability (tracing, metrics)
 r2e-openfga      OpenFGA authorization integration
+r2e-oidc         Embedded OIDC server — issue JWT tokens without an external IdP
 r2e-utils        Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
 r2e-test         TestApp, TestJwt for integration testing
 r2e-cli          CLI scaffolding tool
@@ -55,6 +56,7 @@ The `r2e` facade crate gates sub-crates behind features:
 | `rate-limit` | `r2e-rate-limit` |
 | `openapi` | `r2e-openapi` |
 | `utils` | `r2e-utils` |
+| `oidc` | `r2e-oidc` |
 | `prometheus` | `r2e-prometheus` |
 | `validation` | Enables `Validated<T>` in `r2e-core` |
 | `full` | All of the above |

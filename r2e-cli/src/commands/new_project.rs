@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::templates;
 
+/// Supported database backends for project scaffolding.
 #[derive(Debug, Clone)]
 pub enum DbKind {
     Sqlite,
@@ -12,6 +13,7 @@ pub enum DbKind {
     Mysql,
 }
 
+/// Resolved project options after CLI flag parsing or interactive prompts.
 pub struct ProjectOptions {
     pub name: String,
     pub db: Option<DbKind>,
@@ -24,6 +26,7 @@ pub struct ProjectOptions {
     pub grpc: bool,
 }
 
+/// Raw CLI flags for `r2e new`, before resolution into [`ProjectOptions`].
 pub struct CliNewOpts {
     pub db: Option<String>,
     pub auth: bool,
@@ -40,6 +43,15 @@ impl CliNewOpts {
     }
 }
 
+/// Create a new R2E project.
+///
+/// Resolves feature flags from `cli_opts`:
+/// - `--full` enables all features (SQLite, auth, openapi, scheduler, events, gRPC).
+/// - `--no-interactive` or any explicit flag uses provided values.
+/// - Otherwise, prompts interactively with `dialoguer`.
+///
+/// Creates the project directory and all scaffold files (Cargo.toml, main.rs,
+/// state.rs, hello controller, application.yaml, etc.).
 pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::Error>> {
     let opts = if cli_opts.full {
         ProjectOptions {

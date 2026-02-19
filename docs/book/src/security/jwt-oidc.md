@@ -174,3 +174,7 @@ security:
     audience: "my-app"
     jwks-url: "https://auth.example.com/.well-known/jwks.json"
 ```
+
+## Serveur OIDC embarqué
+
+Pour émettre des tokens JWT directement depuis votre application — sans provider externe — consultez le [Serveur OIDC embarqué](./embedded-oidc.md).

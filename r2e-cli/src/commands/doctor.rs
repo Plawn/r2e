@@ -8,6 +8,19 @@ enum CheckResult {
     Error(String),
 }
 
+/// Run project health diagnostics.
+///
+/// Checks 8 aspects of the current directory:
+/// 1. `Cargo.toml` exists (Error if missing)
+/// 2. R2E dependency in Cargo.toml (Error if missing)
+/// 3. `application.yaml` exists (Warning if missing)
+/// 4. `src/controllers/` exists and has `.rs` files (Warning if missing)
+/// 5. Rust toolchain (`rustc --version`) (Error if missing)
+/// 6. `cargo-watch` installed (Warning if missing)
+/// 7. `migrations/` exists when data features are used (Warning if missing)
+/// 8. `src/main.rs` contains `.serve()` call (Warning if missing)
+///
+/// Results are printed with colored indicators. Always returns `Ok(())`.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "R2E Doctor — Checking project health".bold());
     println!();

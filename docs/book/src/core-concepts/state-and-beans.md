@@ -66,7 +66,7 @@ Register with `.with_async_bean::<CacheService>()`. The `#[bean]` macro auto-det
 
 ### `Producer` — Factory for types you don't own
 
-For types from external crates (e.g., connection pools):
+For types from external crates (e.g., connection pools) where you can't write `impl Bean`:
 
 ```rust
 #[producer]
@@ -75,7 +75,24 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 }
 ```
 
-This generates a struct `CreatePool` with `impl Producer`. Register with `.with_producer::<CreatePool>()`.
+This generates a struct `CreatePool` (PascalCase of the function name) with `impl Producer`. Register with `.with_producer::<CreatePool>()`. The struct is just a vehicle for the trait impl — you never instantiate it yourself.
+
+Producer parameters can be **bean dependencies**, **config values**, or both:
+
+```rust
+#[producer]
+async fn create_notifier(
+    bus: EventBus,                                // ← resolved from BeanContext
+    #[config("notification.url")] url: String,    // ← resolved from R2eConfig
+    #[config("notification.timeout")] timeout: i64,
+) -> NotificationClient {
+    NotificationClient::new(&url, timeout, bus).await
+}
+// Generates: CreateNotifier with deps [EventBus, R2eConfig]
+// Register: .with_producer::<CreateNotifier>()
+```
+
+Parameters without `#[config]` are treated as bean dependencies (pulled from `ctx.get::<T>()`). Parameters with `#[config("key")]` are resolved from `R2eConfig` — and `R2eConfig` is automatically added to the dependency list when any `#[config]` param is present.
 
 ### `#[derive(Bean)]` — Derive-based beans
 

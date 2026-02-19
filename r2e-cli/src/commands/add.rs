@@ -17,6 +17,16 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("test", "r2e-test"),
 ];
 
+/// Add an R2E extension crate to the project's `Cargo.toml`.
+///
+/// Looks up `extension` in the known extensions map, parses `Cargo.toml`
+/// with `toml_edit`, and inserts the dependency with version `"0.1"`.
+///
+/// Returns an error if:
+/// - `Cargo.toml` does not exist
+/// - The extension name is unknown
+///
+/// Prints a warning (but returns `Ok`) if the dependency is already present.
 pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cargo_path = Path::new("Cargo.toml");
     if !cargo_path.exists() {

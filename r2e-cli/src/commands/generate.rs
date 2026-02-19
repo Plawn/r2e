@@ -4,6 +4,13 @@ use std::path::Path;
 
 use super::templates::{self, to_snake_case, pluralize};
 
+/// Generate a controller skeleton.
+///
+/// Creates `src/controllers/<snake_name>.rs` with a `#[derive(Controller)]`
+/// struct and a `#[routes]` impl block. Updates `src/controllers/mod.rs`
+/// if it exists.
+///
+/// Returns an error if the file already exists.
 pub fn controller(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let file_name = to_snake_case(name);
     let path = Path::new("src/controllers").join(format!("{file_name}.rs"));
@@ -63,6 +70,12 @@ impl {name} {{
     Ok(())
 }
 
+/// Generate a service skeleton.
+///
+/// Creates `src/<snake_name>.rs` with a `#[derive(Clone)]` struct
+/// and a `new()` constructor.
+///
+/// Returns an error if the file already exists.
 pub fn service(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let file_name = to_snake_case(name);
     let path = Path::new("src").join(format!("{file_name}.rs"));
@@ -100,6 +113,10 @@ impl {name} {{
     Ok(())
 }
 
+/// A parsed field definition for CRUD code generation.
+///
+/// Parsed from `"name:Type"` format. `is_optional` is `true` when
+/// `rust_type` starts with `Option<`.
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
@@ -107,7 +124,22 @@ pub struct Field {
     pub is_optional: bool,
 }
 
-fn parse_fields(fields: &[String]) -> Result<Vec<Field>, Box<dyn std::error::Error>> {
+/// Parse field definitions from `"name:Type"` strings.
+///
+/// Each field string must contain exactly one `:` separating the name
+/// from the Rust type. Returns an error for malformed inputs.
+///
+/// # Example
+///
+/// ```
+/// use r2e_cli::commands::generate::parse_fields;
+///
+/// let fields = parse_fields(&["name:String".into(), "age:i64".into()]).unwrap();
+/// assert_eq!(fields[0].name, "name");
+/// assert_eq!(fields[1].rust_type, "i64");
+/// ```
+#[doc(hidden)]
+pub fn parse_fields(fields: &[String]) -> Result<Vec<Field>, Box<dyn std::error::Error>> {
     fields
         .iter()
         .map(|f| {
@@ -129,6 +161,13 @@ fn parse_fields(fields: &[String]) -> Result<Vec<Field>, Box<dyn std::error::Err
         .collect()
 }
 
+/// Generate a complete CRUD set: model, service, controller, migration, and test.
+///
+/// Creates 5 files (model, service, controller, test, and optionally a migration)
+/// for the given entity name and field definitions. Updates `mod.rs` in each
+/// directory.
+///
+/// The migration is only created if a `migrations/` directory exists.
 pub fn crud(name: &str, raw_fields: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let fields = parse_fields(raw_fields)?;
     let snake = to_snake_case(name);
@@ -391,7 +430,20 @@ CREATE TABLE IF NOT EXISTS {plural} (
     )
 }
 
-fn rust_type_to_sql(rust_type: &str) -> &str {
+/// Map a Rust type to its SQL column type.
+///
+/// Handles `Option<T>` by stripping the wrapper and mapping the inner type.
+/// Unknown types default to `TEXT`.
+///
+/// | Rust Type | SQL Type |
+/// |-----------|----------|
+/// | `String`, `&str` | `TEXT` |
+/// | `i32`, `i64`, `u32`, `u64`, `usize` | `INTEGER` |
+/// | `f32`, `f64` | `REAL` |
+/// | `bool` | `BOOLEAN` |
+/// | Unknown | `TEXT` |
+#[doc(hidden)]
+pub fn rust_type_to_sql(rust_type: &str) -> &str {
     let inner = rust_type
         .strip_prefix("Option<")
         .and_then(|s| s.strip_suffix('>'))
@@ -453,6 +505,12 @@ async fn test_delete_{snake}() {{
     )
 }
 
+/// Generate a gRPC service scaffold (`.proto` + Rust implementation).
+///
+/// Creates `proto/<snake>.proto` with a service definition and
+/// `src/grpc/<snake>.rs` with a `#[grpc_routes]` controller implementation.
+///
+/// The `package` parameter sets the protobuf package name.
 pub fn grpc_service(name: &str, package: &str) -> Result<(), Box<dyn std::error::Error>> {
     let snake = to_snake_case(name);
 
@@ -588,6 +646,12 @@ impl {name}Service {{
     )
 }
 
+/// Generate a middleware/interceptor skeleton.
+///
+/// Creates `src/middleware/<snake_name>.rs` with an `Interceptor<R, S>`
+/// implementation and updates `src/middleware/mod.rs`.
+///
+/// Returns an error if the file already exists.
 pub fn middleware(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let file_name = to_snake_case(name);
 

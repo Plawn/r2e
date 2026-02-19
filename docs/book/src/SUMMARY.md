@@ -22,6 +22,7 @@
 # Security
 
 - [JWT / OIDC Authentication](./security/jwt-oidc.md)
+- [Serveur OIDC embarqué](./security/embedded-oidc.md)
 - [Guards and Roles](./security/guards-and-roles.md)
 - [Rate Limiting](./security/rate-limiting.md)
 
@@ -37,6 +38,11 @@
 - [Event Bus](./events-and-scheduling/event-bus.md)
 - [Declarative Consumers](./events-and-scheduling/consumers.md)
 - [Scheduling](./events-and-scheduling/scheduling.md)
+
+# gRPC
+
+- [gRPC Services](./grpc/services.md)
+- [Guards and Identity](./grpc/guards-and-identity.md)
 
 # Advanced
 

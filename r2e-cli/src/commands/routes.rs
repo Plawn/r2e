@@ -3,15 +3,24 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug)]
-struct Route {
-    method: String,
-    path: String,
-    handler: String,
-    file: String,
-    line: usize,
-    roles: Option<String>,
+#[doc(hidden)]
+pub struct Route {
+    pub method: String,
+    pub path: String,
+    pub handler: String,
+    pub file: String,
+    pub line: usize,
+    pub roles: Option<String>,
 }
 
+/// List all declared routes by parsing source files.
+///
+/// Scans `src/controllers/*.rs` (excluding `mod.rs`) for route attributes
+/// (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`), extracts
+/// base paths from `#[controller(path = "...")]`, and prints a sorted
+/// table with method, path, handler name, file, and line number.
+///
+/// Returns an error if `src/controllers/` does not exist.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let controllers_dir = Path::new("src/controllers");
     if !controllers_dir.exists() {
@@ -77,7 +86,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_routes_from_file(
+#[doc(hidden)]
+pub fn parse_routes_from_file(
     path: &Path,
     routes: &mut Vec<Route>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -132,7 +142,8 @@ fn parse_routes_from_file(
     Ok(())
 }
 
-fn extract_controller_path(content: &str) -> Option<String> {
+#[doc(hidden)]
+pub fn extract_controller_path(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.contains("controller(") && trimmed.contains("path") {
@@ -150,7 +161,8 @@ fn extract_controller_path(content: &str) -> Option<String> {
     None
 }
 
-fn extract_string_arg(line: &str, attr_name: &str) -> Option<String> {
+#[doc(hidden)]
+pub fn extract_string_arg(line: &str, attr_name: &str) -> Option<String> {
     let pattern = format!("#[{}(", attr_name);
     if let Some(start) = line.find(&pattern) {
         let rest = &line[start + pattern.len()..];
@@ -164,7 +176,8 @@ fn extract_string_arg(line: &str, attr_name: &str) -> Option<String> {
     None
 }
 
-fn find_next_fn_name(content: &str, from_line: usize) -> Option<String> {
+#[doc(hidden)]
+pub fn find_next_fn_name(content: &str, from_line: usize) -> Option<String> {
     for line in content.lines().skip(from_line + 1).take(5) {
         let trimmed = line.trim();
         if trimmed.contains("fn ") {
