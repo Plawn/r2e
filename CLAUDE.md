@@ -596,7 +596,7 @@ MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response
 ### Feature Flags
 
 - Validation uses `garde` crate and is always available (no feature flag). Types deriving `garde::Validate` are automatically validated when extracted via `Json<T>`.
-- `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like).
+- `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like). Also generates `ParamsMetadata` for automatic OpenAPI parameter documentation.
 - `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field. Consider using `#[managed]` instead for more flexibility.
 
 ### Beans & Dependency Injection (r2e-core, r2e-macros)

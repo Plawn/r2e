@@ -1,12 +1,16 @@
+use r2e_core::prelude::Params;
 use serde::{Deserialize, Serialize};
 
 /// Pagination parameters, extractable from query params.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Params)]
 pub struct Pageable {
-    #[serde(default)]
+    #[query]
+    #[param(default)]
     pub page: u64,
-    #[serde(default = "default_page_size")]
+    #[query]
+    #[param(default = 20u64)]
     pub size: u64,
+    #[query]
     pub sort: Option<String>,
 }
 

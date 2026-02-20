@@ -486,8 +486,13 @@ struct GetUserParams {
     id: u64,
 
     #[query]
+    #[param(default = 1)]
     #[garde(range(min = 1))]
-    page: Option<u32>,
+    page: u32,
+
+    #[query]
+    #[param(default = 20)]
+    size: u32,
 
     #[header("X-Tenant-Id")]
     #[garde(length(min = 1))]
@@ -496,9 +501,12 @@ struct GetUserParams {
 
 #[get("/{id}")]
 async fn get(&self, params: GetUserParams) -> Json<User> {
-    // params.id, params.page, params.tenant_id extracted and validated
+    // params.id, params.page, params.size, params.tenant_id extracted and validated
+    // page defaults to 1, size defaults to 20 when absent
 }
 ```
+
+`#[derive(Params)]` also generates `ParamsMetadata`, so all fields automatically appear in the OpenAPI spec (`/openapi.json`) with correct name, location, type, and required status.
 
 ---
 

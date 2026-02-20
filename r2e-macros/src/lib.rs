@@ -886,7 +886,8 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     // params.id, params.page, params.tenant_id extracted and validated
 /// }
 /// ```
-#[proc_macro_derive(Params, attributes(path, query, header))]
+#[proc_macro_derive(Params, attributes(path, query, header, param, params))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     params_derive::expand(input)
 }
+

@@ -132,6 +132,109 @@ impl r2e::http::extract::FromRef<TestServices> for r2e::r2e_rate_limit::RateLimi
     }
 }
 
+// ─── Test controller for OpenAPI query params ───
+
+#[derive(serde::Deserialize, Params)]
+pub struct TestSearchParams {
+    #[query]
+    pub name: Option<String>,
+    #[query]
+    pub age: Option<i64>,
+}
+
+// ─── Nested Params test types ───
+
+#[derive(serde::Deserialize, Params)]
+pub struct FlatNestedParams {
+    #[params]
+    pub pageable: Pageable,
+    #[query]
+    pub name: Option<String>,
+    #[query]
+    pub email: Option<String>,
+}
+
+#[derive(serde::Deserialize, Params)]
+pub struct PrefixedNestedParams {
+    #[params(prefix)]
+    pub pageable: Pageable,
+    #[query]
+    pub q: Option<String>,
+}
+
+#[derive(serde::Deserialize, Params)]
+pub struct CustomPrefixParams {
+    #[params(prefix = "p")]
+    pub pageable: Pageable,
+    #[query]
+    pub q: Option<String>,
+}
+
+#[derive(Controller)]
+#[controller(path = "/search", state = TestServices)]
+pub struct TestSearchController {
+    #[inject]
+    pool: sqlx::SqlitePool,
+}
+
+#[routes]
+impl TestSearchController {
+    #[get("/")]
+    async fn search(&self, Query(_params): Query<TestSearchParams>) -> Json<Vec<User>> {
+        Json(vec![])
+    }
+
+    #[get("/paged")]
+    async fn paged(&self, Query(_pageable): Query<Pageable>) -> Json<Vec<User>> {
+        Json(vec![])
+    }
+}
+
+// ─── Nested Params test controller ───
+
+#[derive(Controller)]
+#[controller(path = "/nested", state = TestServices)]
+pub struct NestedParamsController {
+    #[inject]
+    pool: sqlx::SqlitePool,
+}
+
+#[routes]
+impl NestedParamsController {
+    #[get("/flat")]
+    async fn flat_search(&self, params: FlatNestedParams) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "page": params.pageable.page,
+            "size": params.pageable.size,
+            "sort": params.pageable.sort,
+            "name": params.name,
+            "email": params.email,
+        }))
+    }
+
+    #[get("/prefixed")]
+    async fn prefixed_search(&self, params: PrefixedNestedParams) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "page": params.pageable.page,
+            "size": params.pageable.size,
+            "sort": params.pageable.sort,
+            "q": params.q,
+        }))
+    }
+
+    #[get("/custom-prefix")]
+    async fn custom_prefix_search(&self, params: CustomPrefixParams) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "page": params.pageable.page,
+            "size": params.pageable.size,
+            "sort": params.pageable.sort,
+            "q": params.q,
+        }))
+    }
+}
+
+// ─── Main test controller ───
+
 #[derive(Controller)]
 #[controller(state = TestServices)]
 pub struct TestUserController {
@@ -263,7 +366,9 @@ async fn setup() -> (TestApp, TestJwt) {
             .with(NormalizePath)
             .with(DevReload)
             .with(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))
-            .register_controller::<TestUserController>(),
+            .register_controller::<TestUserController>()
+            .register_controller::<TestSearchController>()
+            .register_controller::<NestedParamsController>(),
     );
 
     (app, jwt)
@@ -490,6 +595,63 @@ async fn test_openapi_json_endpoint() {
 }
 
 #[tokio::test]
+async fn test_openapi_path_params() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/users/{id}"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /users/{id} should have parameters");
+    assert!(
+        params.iter().any(|p| p["name"] == "id" && p["in"] == "path" && p["required"] == true),
+        "should have required path param 'id'"
+    );
+}
+
+#[tokio::test]
+async fn test_openapi_query_params_from_derive() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/search/"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /search/ should have parameters from #[derive(Params)]");
+
+    assert_eq!(params.len(), 2, "search endpoint should have 2 query params");
+
+    let name_param = params.iter().find(|p| p["name"] == "name").expect("missing 'name' param");
+    assert_eq!(name_param["in"], "query");
+    assert_eq!(name_param["required"], false);
+    assert_eq!(name_param["schema"]["type"], "string");
+
+    let age_param = params.iter().find(|p| p["name"] == "age").expect("missing 'age' param");
+    assert_eq!(age_param["in"], "query");
+    assert_eq!(age_param["required"], false);
+    assert_eq!(age_param["schema"]["type"], "integer");
+}
+
+#[tokio::test]
+async fn test_openapi_pageable_params() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/search/paged"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /search/paged should have Pageable parameters");
+
+    assert_eq!(params.len(), 3, "Pageable should expose page, size, sort");
+
+    assert!(params.iter().any(|p| p["name"] == "page" && p["schema"]["type"] == "integer"));
+    assert!(params.iter().any(|p| p["name"] == "size" && p["schema"]["type"] == "integer"));
+    assert!(params.iter().any(|p| p["name"] == "sort" && p["schema"]["type"] == "string"));
+
+    // All Pageable params are optional (they have defaults)
+    for p in params {
+        assert_eq!(p["required"], false, "Pageable param '{}' should be optional", p["name"]);
+    }
+}
+
+#[tokio::test]
 async fn test_docs_ui_endpoint() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/docs").send().await.assert_ok();
@@ -514,6 +676,142 @@ async fn test_dev_mode_ping() {
     let body: serde_json::Value = serde_json::from_str(&resp.text()).unwrap();
     assert!(body["boot_time"].is_number());
     assert_eq!(body["status"], "ok");
+}
+
+// ─── Nested Params extraction tests ───
+
+#[tokio::test]
+async fn test_flat_nested_params_extraction() {
+    let (app, _jwt) = setup().await;
+    let resp = app
+        .get("/nested/flat?page=2&size=10&sort=name&name=alice&email=a@b.com")
+        .send()
+        .await
+        .assert_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["page"], 2);
+    assert_eq!(body["size"], 10);
+    assert_eq!(body["sort"], "name");
+    assert_eq!(body["name"], "alice");
+    assert_eq!(body["email"], "a@b.com");
+}
+
+#[tokio::test]
+async fn test_flat_nested_params_defaults() {
+    let (app, _jwt) = setup().await;
+    // No page/size → Pageable defaults (page=0, size=20)
+    let resp = app
+        .get("/nested/flat?name=bob")
+        .send()
+        .await
+        .assert_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["page"], 0);
+    assert_eq!(body["size"], 20);
+    assert_eq!(body["name"], "bob");
+    assert!(body["sort"].is_null());
+    assert!(body["email"].is_null());
+}
+
+#[tokio::test]
+async fn test_prefixed_nested_params_extraction() {
+    let (app, _jwt) = setup().await;
+    let resp = app
+        .get("/nested/prefixed?pageable.page=3&pageable.size=5&pageable.sort=id&q=hello")
+        .send()
+        .await
+        .assert_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["page"], 3);
+    assert_eq!(body["size"], 5);
+    assert_eq!(body["sort"], "id");
+    assert_eq!(body["q"], "hello");
+}
+
+#[tokio::test]
+async fn test_prefixed_nested_params_defaults() {
+    let (app, _jwt) = setup().await;
+    // Pageable fields without prefix should NOT populate the prefixed params
+    let resp = app
+        .get("/nested/prefixed?page=99&q=test")
+        .send()
+        .await
+        .assert_ok();
+    let body: serde_json::Value = resp.json();
+    // page=99 should NOT be picked up because the prefix is "pageable"
+    assert_eq!(body["page"], 0);
+    assert_eq!(body["size"], 20);
+    assert_eq!(body["q"], "test");
+}
+
+#[tokio::test]
+async fn test_custom_prefix_nested_params_extraction() {
+    let (app, _jwt) = setup().await;
+    let resp = app
+        .get("/nested/custom-prefix?p.page=1&p.size=50&q=world")
+        .send()
+        .await
+        .assert_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["page"], 1);
+    assert_eq!(body["size"], 50);
+    assert_eq!(body["q"], "world");
+}
+
+// ─── Nested Params OpenAPI tests ───
+
+#[tokio::test]
+async fn test_openapi_flat_nested_params() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/nested/flat"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /nested/flat should have parameters");
+
+    // Should have: page, size, sort (from Pageable), name, email (own)
+    assert_eq!(params.len(), 5, "flat nested should have 5 params, got: {:?}", params);
+
+    assert!(params.iter().any(|p| p["name"] == "page" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "size" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "sort" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "name" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "email" && p["in"] == "query"));
+}
+
+#[tokio::test]
+async fn test_openapi_prefixed_nested_params() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/nested/prefixed"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /nested/prefixed should have parameters");
+
+    // Should have: pageable.page, pageable.size, pageable.sort, q
+    assert_eq!(params.len(), 4, "prefixed nested should have 4 params, got: {:?}", params);
+
+    assert!(params.iter().any(|p| p["name"] == "pageable.page" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "pageable.size" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "pageable.sort" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "q" && p["in"] == "query"));
+}
+
+#[tokio::test]
+async fn test_openapi_custom_prefix_params() {
+    let (app, _jwt) = setup().await;
+    let spec: serde_json::Value = app.get("/openapi.json").send().await.assert_ok().json();
+
+    let params = spec["paths"]["/nested/custom-prefix"]["get"]["parameters"]
+        .as_array()
+        .expect("GET /nested/custom-prefix should have parameters");
+
+    assert_eq!(params.len(), 4, "custom prefix should have 4 params, got: {:?}", params);
+
+    assert!(params.iter().any(|p| p["name"] == "p.page" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "p.size" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "p.sort" && p["in"] == "query"));
+    assert!(params.iter().any(|p| p["name"] == "q" && p["in"] == "query"));
 }
 
 // ─── NormalizePath trailing-slash tests ───

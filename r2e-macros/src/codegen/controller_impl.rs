@@ -262,8 +262,24 @@ fn generate_route_metadata(
             let roles: Vec<_> = rm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
-            let params = extract_path_params(rm, &krate);
+            let path_params = extract_path_params(rm, &krate);
+            let handler_param_types = extract_handler_param_types(rm);
             let (body_type_token, body_schema_token) = extract_body_info(rm);
+
+            // Autoref specialization: for each handler param type, probe for ParamsMetadata.
+            // Types implementing ParamsMetadata return their param infos; others return empty vec.
+            let probe_blocks: Vec<TokenStream> = handler_param_types
+                .iter()
+                .map(|ty| {
+                    quote! {
+                        {
+                            let __probe = #krate::params::__ParamMetaProbe::<#ty>(::core::marker::PhantomData);
+                            use #krate::params::__NoParamsMeta as _;
+                            __p.extend((&__probe).param_infos());
+                        }
+                    }
+                })
+                .collect();
 
             quote! {
                 #krate::meta::RouteInfo {
@@ -277,7 +293,17 @@ fn generate_route_metadata(
                     request_body_type: #body_type_token,
                     request_body_schema: #body_schema_token,
                     response_type: None,
-                    params: vec![#(#params),*],
+                    params: {
+                        let mut __p: Vec<#krate::meta::ParamInfo> = vec![#(#path_params),*];
+                        #(#probe_blocks)*
+                        // Deduplicate params by (name, location) — possible when
+                        // a Params struct includes #[path] fields alongside Path<T>.
+                        {
+                            let mut seen = ::std::collections::HashSet::new();
+                            __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));
+                        }
+                        __p
+                    },
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
                 }
@@ -294,16 +320,18 @@ fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> V
         .iter()
         .filter_map(|arg| {
             if let syn::FnArg::Typed(pt) = arg {
-                let ty_str = quote!(#pt.ty).to_string();
+                let ty = &pt.ty;
+                let ty_str = quote!(#ty).to_string();
                 if ty_str.contains("Path") {
                     if let syn::Pat::TupleStruct(ts) = pt.pat.as_ref() {
                         if let Some(elem) = ts.elems.first() {
                             let param_name = quote!(#elem).to_string();
+                            let param_type = infer_path_param_openapi_type(&pt.ty);
                             return Some(quote! {
                                 #krate::meta::ParamInfo {
                                     name: #param_name.to_string(),
                                     location: #krate::meta::ParamLocation::Path,
-                                    param_type: "string".to_string(),
+                                    param_type: #param_type.to_string(),
                                     required: true,
                                 }
                             });
@@ -316,6 +344,77 @@ fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> V
             }
         })
         .collect()
+}
+
+/// Extract the types to probe for `ParamsMetadata` from handler parameters.
+///
+/// For wrapper types like `Query<T>`, `Path<T>`, we unwrap to probe the inner
+/// type `T` instead, since `T` is where `ParamsMetadata` would be implemented.
+fn extract_handler_param_types(rm: &crate::types::RouteMethod) -> Vec<syn::Type> {
+    rm.fn_item
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            if let syn::FnArg::Typed(pt) = arg {
+                Some(unwrap_extractor_inner(&pt.ty))
+            } else {
+                None // skip &self
+            }
+        })
+        .collect()
+}
+
+/// Unwrap generic wrapper types to get the inner type for metadata probing.
+/// `Query<T>` → `T`, `Path<T>` → `T`, other types → unchanged.
+fn unwrap_extractor_inner(ty: &syn::Type) -> syn::Type {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident_str = segment.ident.to_string();
+            if matches!(ident_str.as_str(), "Query" | "Path") {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return inner.clone();
+                    }
+                }
+            }
+        }
+    }
+    ty.clone()
+}
+
+/// Infer an OpenAPI type string from a `Path<T>` type.
+/// Returns "integer" for integer types, "number" for floats, "boolean" for bool, otherwise "string".
+fn infer_path_param_openapi_type(ty: &syn::Type) -> &'static str {
+    // Extract the inner type from Path<T>
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Path" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return type_to_openapi_str(inner);
+                    }
+                }
+            }
+        }
+    }
+    "string"
+}
+
+/// Map a syn::Type to an OpenAPI type string by inspecting the last path segment.
+fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return match segment.ident.to_string().as_str() {
+                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64"
+                | "isize" => "integer",
+                "f32" | "f64" => "number",
+                "bool" => "boolean",
+                _ => "string",
+            };
+        }
+    }
+    "string"
 }
 
 /// Extract request body type information.

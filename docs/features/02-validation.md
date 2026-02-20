@@ -145,6 +145,8 @@ pub struct GetUserParams {
 
 - `Option<T>` → parametre optionnel (absent = `None`)
 - `T` non-Option → parametre requis (absent = 400 Bad Request)
+- `#[param(default)]` → utilise `Default::default()` si le parametre est absent
+- `#[param(default = expr)]` → utilise l'expression donnee si absent
 - Conversion via `FromStr` pour les types non-String
 
 ### Utilisation dans un handler
@@ -160,6 +162,10 @@ impl UserController {
     }
 }
 ```
+
+### Integration OpenAPI
+
+`#[derive(Params)]` genere egalement une implementation de `ParamsMetadata`, qui alimente les metadonnees de parametres (nom, emplacement, type, requis) dans la spec OpenAPI. Quand un struct `Params` est utilise comme parametre de handler, ses champs apparaissent automatiquement dans le `/openapi.json` genere — aucune annotation manuelle necessaire.
 
 ## Fonctionnement interne
 

@@ -1,11 +1,14 @@
 use crate::models::UserEntity;
 use crate::state::Services;
 use r2e::prelude::*;
-use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Params)]
 pub struct SearchParams {
+    #[params]
+    pub pageable: Pageable,
+    #[query]
     pub name: Option<String>,
+    #[query]
     pub email: Option<String>,
 }
 
@@ -48,7 +51,7 @@ impl DataController {
     #[get("/search")]
     async fn search(
         &self,
-        Query(params): Query<SearchParams>,
+        params: SearchParams,
     ) -> Result<Json<Vec<UserEntity>>, AppError> {
         let mut sql = String::from("SELECT id, name, email FROM users WHERE 1=1");
         let mut bind_name: Option<String> = None;

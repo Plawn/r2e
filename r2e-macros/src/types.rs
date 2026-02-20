@@ -109,6 +109,7 @@ pub struct WsMethod {
 
 pub struct WsParam {
     pub index: usize,
+    #[allow(dead_code)]
     pub ty: syn::Type,
     /// True if the type is WsStream (vs raw WebSocket).
     pub is_ws_stream: bool,

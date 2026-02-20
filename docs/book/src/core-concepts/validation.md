@@ -152,9 +152,13 @@ pub struct GetUserParams {
 | `#[query]` | Query string | Field name |
 | `#[query(name = "q")]` | Query string | Custom name |
 | `#[header("X-Custom")]` | HTTP headers | Explicit (required) |
+| `#[param(default)]` | — | Uses `Default::default()` when absent |
+| `#[param(default = expr)]` | — | Uses `expr` when absent |
 
 - `Option<T>` fields are optional — absent values become `None`
 - Non-Option fields are required — absent values return 400 Bad Request
+- `#[param(default)]` uses `Default::default()` when the parameter is absent
+- `#[param(default = expr)]` uses the given expression when absent
 - Values are parsed via `FromStr` (supports `u32`, `u64`, `i64`, `String`, `bool`, `Uuid`, etc.)
 
 ### Using in handlers
@@ -190,6 +194,34 @@ Missing or unparseable parameters return 400:
 
 If the struct also derives `Validate`, validation errors are returned in the same format as JSON body validation.
 
+### Default values
+
+Use `#[param(default)]` or `#[param(default = expr)]` on non-Option fields to provide a fallback when the parameter is absent, instead of returning 400:
+
+```rust
+#[derive(Params)]
+pub struct PaginationParams {
+    #[query]
+    #[param(default = 1)]
+    pub page: u32,
+
+    #[query]
+    #[param(default = 20)]
+    pub size: u32,
+
+    #[query]
+    #[param(default)]           // uses Default::default() → ""
+    pub sort: String,
+}
+```
+
+- `#[param(default)]` — calls `Default::default()` (the field type must implement `Default`)
+- `#[param(default = expr)]` — uses the given expression (e.g., `1`, `"name".to_string()`, `MyEnum::Asc`)
+
+### OpenAPI integration
+
+`#[derive(Params)]` also generates an implementation of `ParamsMetadata`, which feeds parameter metadata (name, location, type, required) into the OpenAPI spec. When a `Params` struct is used as a handler parameter, its fields automatically appear in the generated `/openapi.json` — no manual annotation needed.
+
 ### Params without validation
 
 `#[derive(Params)]` works on its own without `Validate`. In that case only extraction and type parsing are performed:
@@ -198,10 +230,12 @@ If the struct also derives `Validate`, validation errors are returned in the sam
 #[derive(Params)]
 pub struct PaginationParams {
     #[query]
-    pub page: Option<u32>,
+    #[param(default = 1)]
+    pub page: u32,
 
     #[query]
-    pub size: Option<u32>,
+    #[param(default = 20)]
+    pub size: u32,
 }
 ```
 
