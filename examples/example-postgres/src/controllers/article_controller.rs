@@ -35,7 +35,7 @@ impl ArticleController {
     #[post("/")]
     async fn create(
         &self,
-        Validated(body): Validated<CreateArticleRequest>,
+        Json(body): Json<CreateArticleRequest>,
     ) -> Result<Json<Article>, AppError> {
         let article = self.article_service.create(body).await?;
         Ok(Json(article))
@@ -45,7 +45,7 @@ impl ArticleController {
     async fn update(
         &self,
         Path(id): Path<i64>,
-        Validated(body): Validated<UpdateArticleRequest>,
+        Json(body): Json<UpdateArticleRequest>,
     ) -> Result<Json<Article>, AppError> {
         let article = self.article_service.update(id, body).await?;
         Ok(Json(article))

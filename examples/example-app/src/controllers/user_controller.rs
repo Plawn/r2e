@@ -118,7 +118,7 @@ impl UserController {
     #[intercept(CacheInvalidate::group("users"))]
     async fn create(
         &self,
-        Validated(body): Validated<CreateUserRequest>,
+        Json(body): Json<CreateUserRequest>,
     ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
@@ -165,7 +165,7 @@ impl UserController {
     #[guard(RateLimit::per_user(5, 60))]
     async fn create_rate_limited(
         &self,
-        Validated(body): Validated<CreateUserRequest>,
+        Json(body): Json<CreateUserRequest>,
     ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)

@@ -1,8 +1,8 @@
-use crate::http::extract::{FromRequest, Request};
 use crate::http::response::{IntoResponse, Response};
-use serde::de::DeserializeOwned;
+use crate::http::{Json, StatusCode};
 use serde::Serialize;
-use validator::Validate;
+
+// ── Error types ────────────────────────────────────────────
 
 /// A field-level validation error.
 #[derive(Debug, Clone, Serialize)]
@@ -18,63 +18,72 @@ pub struct ValidationErrorResponse {
     pub errors: Vec<FieldError>,
 }
 
-/// An Axum extractor that deserializes JSON and validates it using `validator::Validate`.
+// ── Autoref specialization for automatic validation ────────
+
+/// Wrapper used by the autoref specialization trick in generated code.
 ///
-/// Drop-in replacement for `Json<T>` — returns a structured 400 response
-/// when validation fails.
-///
-/// # Example
-///
+/// The generated handler code calls:
 /// ```ignore
-/// use r2e_core::validation::Validated;
-///
-/// async fn create(Validated(body): Validated<CreateUserRequest>) -> Json<User> {
-///     // body is guaranteed to pass validation rules
-/// }
+/// (&__AutoValidator(&value)).__maybe_validate()
 /// ```
-pub struct Validated<T>(pub T);
+///
+/// Method resolution picks:
+/// - `__DoValidate` (direct match) when `T: garde::Validate<Context = ()>` → runs validation
+/// - `__SkipValidate` (autoref fallback) when `T` doesn't impl Validate → no-op
+pub struct __AutoValidator<'a, T>(pub &'a T);
 
-impl<T, S> FromRequest<S> for Validated<T>
+/// Matched when `T: garde::Validate<Context = ()>` (direct, higher priority).
+pub trait __DoValidate {
+    fn __maybe_validate(&self) -> Result<(), Response>;
+}
+
+impl<T: garde::Validate> __DoValidate for __AutoValidator<'_, T>
 where
-    T: DeserializeOwned + Validate + 'static,
-    S: Send + Sync,
+    T::Context: Default,
 {
-    type Rejection = Response;
-
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let json = crate::http::Json::<T>::from_request(req, state)
-            .await
-            .map_err(|rejection: axum::extract::rejection::JsonRejection| {
-                let err = crate::AppError::BadRequest(rejection.body_text());
-                err.into_response()
-            })?;
-
-        json.0.validate().map_err(|errors| {
-            let field_errors = convert_validation_errors(&errors);
-            let resp = ValidationErrorResponse {
-                errors: field_errors,
-            };
-            crate::AppError::Validation(resp).into_response()
-        })?;
-
-        Ok(Validated(json.0))
+    fn __maybe_validate(&self) -> Result<(), Response> {
+        self.0
+            .validate()
+            .map_err(|report| convert_garde_report(&report))
     }
 }
 
-fn convert_validation_errors(errors: &validator::ValidationErrors) -> Vec<FieldError> {
-    let mut result = Vec::new();
-    for (field, field_errors) in errors.field_errors() {
-        for error in field_errors {
-            result.push(FieldError {
-                field: field.to_string(),
-                message: error
-                    .message
-                    .as_ref()
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| format!("Validation failed for field '{field}'")),
-                code: error.code.to_string(),
-            });
-        }
-    }
-    result
+/// Fallback via autoref (lower priority) — no-op for types without Validate.
+pub trait __SkipValidate {
+    fn __maybe_validate(&self) -> Result<(), Response>;
 }
+
+impl<T> __SkipValidate for &__AutoValidator<'_, T> {
+    fn __maybe_validate(&self) -> Result<(), Response> {
+        Ok(())
+    }
+}
+
+fn convert_garde_report(report: &garde::Report) -> Response {
+    let mut field_errors = Vec::new();
+
+    for (path, error) in report.iter() {
+        let field = {
+            let s = path.to_string();
+            if s.is_empty() { "value".to_string() } else { s }
+        };
+        field_errors.push(FieldError {
+            field,
+            message: error.message().to_string(),
+            code: "validation".to_string(),
+        });
+    }
+
+    let resp = ValidationErrorResponse {
+        errors: field_errors,
+    };
+
+    let body = serde_json::json!({
+        "error": "Validation failed",
+        "details": resp.errors,
+    });
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
+}
+
+// Re-export garde::Validate for convenience.
+pub use garde::Validate;

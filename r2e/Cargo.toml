@@ -32,7 +32,6 @@ prometheus = ["dep:r2e-prometheus"]
 openfga = ["dep:r2e-openfga"]
 observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc"]
-validation = ["r2e-core/validation"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
 

@@ -347,12 +347,12 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
     }
 }
 
-/// Extract body type info from Json<T> or Validated<T> types.
+/// Extract body type info from Json<T> types.
 fn extract_body_type_info(ty: &syn::Type) -> Option<(String, syn::Type)> {
     if let syn::Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             let ident = segment.ident.to_string();
-            if ident == "Json" || ident == "Validated" {
+            if ident == "Json" {
                 if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
                     if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
                         if let syn::Type::Path(inner_path) = inner_ty {

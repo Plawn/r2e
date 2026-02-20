@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use garde::Validate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
@@ -11,9 +11,9 @@ pub struct User {
 
 #[derive(Deserialize, Validate, JsonSchema)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1, max = 100))]
+    #[garde(length(min = 1, max = 100))]
     pub name: String,
-    #[validate(email)]
+    #[garde(email)]
     pub email: String,
 }
 

@@ -360,17 +360,17 @@ impl UserController {
 
     #[post("/")]
     #[cache_invalidate("users")]
-    async fn create(&self, body: Validated<CreateUserRequest>) -> axum::Json<User> {
-        axum::Json(self.user_service.create(body.0.name, body.0.email).await)
+    async fn create(&self, axum::Json(body): axum::Json<CreateUserRequest>) -> axum::Json<User> {
+        axum::Json(self.user_service.create(body.name, body.email).await)
     }
 
     // Rate limit par user
     #[post("/rate-limited")]
     #[rate_limited(max = 5, window = 60, key = "user")]
-    async fn create_rate_limited(&self, body: Validated<CreateUserRequest>)
+    async fn create_rate_limited(&self, axum::Json(body): axum::Json<CreateUserRequest>)
         -> axum::Json<User>
     {
-        axum::Json(self.user_service.create(body.0.name, body.0.email).await)
+        axum::Json(self.user_service.create(body.name, body.email).await)
     }
 
     // Transaction

@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-r2e = { path = "../../r2e", features = ["full", "validation"] }
+r2e = { path = "../../r2e", features = ["full"] }
 r2e-data-sqlx = { path = "../../r2e-data-sqlx", features = ["sqlite"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 tokio = { version = "1", features = ["full"] }
@@ -16,7 +16,7 @@ jsonwebtoken = "10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-validator = { version = "0.20", features = ["derive"] }
+garde = { version = "0.22", features = ["derive"] }
 dashmap = "6"
 schemars = "0.8"
 futures-core = "0.3"
@@ -25,5 +25,5 @@ futures-core = "0.3"
 r2e-test = { path = "../../r2e-test" }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-validator = { version = "0.20", features = ["derive"] }
+garde = { version = "0.22", features = ["derive"] }
 http = "1"

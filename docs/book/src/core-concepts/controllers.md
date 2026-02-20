@@ -81,13 +81,34 @@ Handler methods receive the controller instance as `&self` plus any Axum extract
 async fn add_comment(
     &self,
     Path(id): Path<u64>,                    // Path parameter
-    Json(body): Json<CreateCommentRequest>,  // JSON body
+    Json(body): Json<CreateCommentRequest>,  // JSON body (auto-validated if T: Validate)
     Query(params): Query<PaginationParams>,  // Query string
     headers: HeaderMap,                      // Headers
 ) -> Result<Json<Comment>, AppError> {
     // ...
 }
 ```
+
+You can also aggregate multiple parameter sources into a single struct using `#[derive(Params)]`:
+
+```rust
+#[derive(Params)]
+pub struct CommentParams {
+    #[path]
+    pub id: u64,
+    #[query]
+    pub page: Option<u32>,
+    #[header("X-Tenant-Id")]
+    pub tenant_id: String,
+}
+
+#[get("/{id}/comments")]
+async fn list_comments(&self, params: CommentParams) -> Json<Vec<Comment>> {
+    // params.id, params.page, params.tenant_id extracted automatically
+}
+```
+
+See [Validation](./validation.md#params--aggregated-parameter-extraction) for details on `#[derive(Params)]` and its integration with garde validation.
 
 ## Injection scopes
 

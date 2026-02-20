@@ -13,7 +13,6 @@ pub enum AppError {
     Forbidden(String),
     BadRequest(String),
     Internal(String),
-    #[cfg(feature = "validation")]
     Validation(crate::validation::ValidationErrorResponse),
     Custom {
         status: StatusCode,
@@ -24,7 +23,6 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            #[cfg(feature = "validation")]
             AppError::Validation(resp) => {
                 let body = serde_json::json!({
                     "error": "Validation failed",
@@ -42,7 +40,6 @@ impl IntoResponse for AppError {
                     AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
                     AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
                     AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-                    #[cfg(feature = "validation")]
                     AppError::Validation(_) => unreachable!(),
                     AppError::Custom { .. } => unreachable!(),
                 };
@@ -60,7 +57,6 @@ impl std::fmt::Display for AppError {
             AppError::Forbidden(msg) => write!(f, "Forbidden: {msg}"),
             AppError::BadRequest(msg) => write!(f, "Bad Request: {msg}"),
             AppError::Internal(msg) => write!(f, "Internal Error: {msg}"),
-            #[cfg(feature = "validation")]
             AppError::Validation(resp) => write!(f, "Validation Error: {} errors", resp.errors.len()),
             AppError::Custom { status, body } => write!(f, "Custom Error ({status}): {body}"),
         }

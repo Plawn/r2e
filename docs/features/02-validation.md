@@ -6,13 +6,13 @@ Valider automatiquement les corps de requete JSON avec des regles declaratives, 
 
 ## Concepts cles
 
-### Validated<T>
+### Validation automatique
 
-`Validated<T>` est un extracteur Axum qui remplace `Json<T>`. Il deserialise le JSON **puis** applique les regles `validator::Validate`. Si la validation echoue, une reponse 400 est retournee avec le detail des erreurs par champ.
+R2E valide automatiquement les parametres de handler qui derivent `garde::Validate`. Il suffit de deriver `Validate` sur le type et d'utiliser `Json<T>` — la validation se fait de maniere transparente dans le code genere.
 
-### Crate validator
+### Crate garde
 
-R2E utilise la crate `validator` (derive) pour declarer les regles de validation sur les structs.
+R2E utilise la crate `garde` pour declarer les regles de validation sur les structs. Garde offre une verification compile-time des regles et un systeme de contexte type.
 
 ## Utilisation
 
@@ -20,35 +20,36 @@ R2E utilise la crate `validator` (derive) pour declarer les regles de validation
 
 ```rust
 use serde::Deserialize;
-use validator::Validate;
+use garde::Validate;
 
 #[derive(Deserialize, Validate)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1, max = 100))]
+    #[garde(length(min = 1, max = 100))]
     pub name: String,
 
-    #[validate(email)]
+    #[garde(email)]
     pub email: String,
 }
 ```
 
-### Regles disponibles (crate `validator`)
+### Regles disponibles (crate `garde`)
 
 | Regle | Attribut | Exemple |
 |-------|---------|---------|
-| Longueur | `#[validate(length(min=1, max=100))]` | Chaines |
-| Email | `#[validate(email)]` | Format email |
-| URL | `#[validate(url)]` | Format URL |
-| Range | `#[validate(range(min=0, max=1000))]` | Nombres |
-| Regex | `#[validate(regex(path = "RE"))]` | Patterns custom |
-| Custom | `#[validate(custom(function = "fn"))]` | Logique arbitraire |
+| Longueur | `#[garde(length(min=1, max=100))]` | Chaines |
+| Email | `#[garde(email)]` | Format email |
+| URL | `#[garde(url)]` | Format URL |
+| Range | `#[garde(range(min=0, max=1000))]` | Nombres |
+| Pattern | `#[garde(pattern("regex"))]` | Patterns custom |
+| Custom | `#[garde(custom(my_fn))]` | Logique arbitraire |
+| Skip | `#[garde(skip)]` | Ne pas valider ce champ |
 
 ### 2. Utiliser dans un handler
 
-Remplacer `axum::Json<T>` par `r2e_core::validation::Validated<T>` :
+Utiliser `Json<T>` normalement — la validation est automatique :
 
 ```rust
-use r2e_core::prelude::*;
+use r2e::prelude::*;
 
 #[derive(Controller)]
 #[controller(state = Services)]
@@ -62,11 +63,11 @@ impl UserController {
     #[post("/users")]
     async fn create(
         &self,
-        Validated(body): Validated<CreateUserRequest>,
-    ) -> axum::Json<User> {
+        Json(body): Json<CreateUserRequest>,
+    ) -> Json<User> {
         // `body` est garanti valide ici
         let user = self.user_service.create(body.name, body.email).await;
-        axum::Json(user)
+        Json(user)
     }
 }
 ```
@@ -84,13 +85,13 @@ Content-Type: application/json
     "details": [
         {
             "field": "email",
-            "message": "Validation failed for field 'email'",
-            "code": "email"
+            "message": "not a valid email address",
+            "code": "validation"
         },
         {
             "field": "name",
-            "message": "Validation failed for field 'name'",
-            "code": "length"
+            "message": "length is lower than 1",
+            "code": "validation"
         }
     ]
 }
@@ -106,35 +107,79 @@ Si le corps n'est pas du JSON valide (erreur de deserialisation), une 400 standa
 }
 ```
 
-## Fonctionnement interne
+## Params — extraction agregee de parametres
 
-L'extracteur `Validated<T>` implemente `FromRequest` en deux etapes :
+`#[derive(Params)]` permet de regrouper path, query et header dans un seul struct (equivalent de `@BeanParam` en JAX-RS). Combine avec `garde::Validate`, tous les parametres sont extraits **et** valides en une seule etape.
 
-1. Deserialisation via `axum::Json<T>` — si echec → `AppError::BadRequest`
-2. Validation via `T::validate()` — si echec → `AppError::Validation` avec la liste des `FieldError`
+### Definition
 
 ```rust
-// Simplifie
-impl<T: DeserializeOwned + Validate, S: Send + Sync> FromRequest<S> for Validated<T> {
-    type Rejection = Response;
+use r2e::prelude::*;
+use garde::Validate;
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(value) = Json::<T>::from_request(req, state).await?;
-        value.validate()?;
-        Ok(Validated(value))
+#[derive(Params, Validate)]
+pub struct GetUserParams {
+    #[path]
+    #[garde(skip)]
+    pub id: u64,
+
+    #[query]
+    #[garde(range(min = 1))]
+    pub page: Option<u32>,
+
+    #[header("X-Tenant-Id")]
+    #[garde(length(min = 1))]
+    pub tenant_id: String,
+}
+```
+
+### Attributs disponibles
+
+| Attribut | Source | Nom par defaut |
+|----------|--------|---------------|
+| `#[path]` | Segments du path | Nom du champ |
+| `#[path(name = "userId")]` | Segments du path | Nom custom |
+| `#[query]` | Query string | Nom du champ |
+| `#[query(name = "q")]` | Query string | Nom custom |
+| `#[header("X-Custom")]` | Headers HTTP | Nom explicite (obligatoire) |
+
+- `Option<T>` → parametre optionnel (absent = `None`)
+- `T` non-Option → parametre requis (absent = 400 Bad Request)
+- Conversion via `FromStr` pour les types non-String
+
+### Utilisation dans un handler
+
+```rust
+#[routes]
+impl UserController {
+    #[get("/{id}")]
+    async fn get_user(&self, params: GetUserParams) -> Json<User> {
+        // params.id, params.page, params.tenant_id extraits et valides
+        let user = self.user_service.find(params.id).await;
+        Json(user)
     }
 }
 ```
+
+## Fonctionnement interne
+
+Le code genere par `#[routes]` utilise un mecanisme d'autoref specialization :
+
+1. Deserialisation via `Json<T>` (Axum standard)
+2. Validation automatique via `__AutoValidator` — si le type derive `Validate`, la validation est executee ; sinon, c'est un no-op (zero overhead)
+3. Si echec → reponse 400 avec le detail des erreurs par champ
+
+Les types sans `#[derive(Validate)]` fonctionnent normalement — aucune validation n'est executee.
 
 ## Dependencies
 
 ```toml
 [dependencies]
-r2e-core = { path = "../r2e-core", features = ["validation"] }
-validator = { version = "0.18", features = ["derive"] }
+r2e = "0.1"
+garde = { version = "0.22", features = ["derive", "email"] }
 ```
 
-Le feature flag `validation` active le variant `AppError::Validation` et le module `r2e_core::validation`.
+La validation est toujours disponible — plus besoin de feature flag.
 
 ## Critere de validation
 

@@ -8,7 +8,7 @@ Full CRUD REST API with PostgreSQL demonstrating:
 - `#[managed] tx: &mut Tx<'_, Postgres>` for transactional writes
 - `Pageable`/`Page` for paginated listings
 - Custom `AppError` with `IntoResponse` + `From<sqlx::Error>`
-- `Validated<T>` for input validation
+- Automatic validation via `garde::Validate`
 - `Entity` trait implementation
 
 ## Running

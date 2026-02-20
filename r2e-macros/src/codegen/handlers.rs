@@ -107,6 +107,55 @@ fn build_call_args(
         .collect()
 }
 
+/// Generate automatic validation calls for handler parameters.
+///
+/// Uses the autoref specialization trick: types deriving `garde::Validate` are
+/// validated automatically; types without it compile to a no-op.
+fn generate_validation_calls(
+    extra_params: &[(usize, &syn::PatType)],
+    managed_indices: &std::collections::HashSet<usize>,
+    identity_param_index: Option<usize>,
+    krate: &TokenStream,
+) -> Vec<TokenStream> {
+    extra_params
+        .iter()
+        .filter(|(i, _)| !managed_indices.contains(i) && Some(*i) != identity_param_index)
+        .map(|(i, pt)| {
+            let arg_name = format_ident!("__arg_{}", i);
+            let validate_target = if is_wrapper_type(&pt.ty) {
+                // For Json<T>, Query<T>, Path<T>, Form<T> → validate the inner .0
+                quote! { &#arg_name.0 }
+            } else {
+                // For Params and other custom types → validate directly
+                quote! { &#arg_name }
+            };
+            quote! {
+                {
+                    use #krate::validation::__DoValidate as _;
+                    use #krate::validation::__SkipValidate as _;
+                    if let Err(__validation_err) = (&#krate::validation::__AutoValidator(#validate_target)).__maybe_validate() {
+                        return __validation_err;
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+/// Check if a type is a known Axum wrapper (Json, Query, Path, Form).
+fn is_wrapper_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            return matches!(
+                ident.as_str(),
+                "Json" | "Query" | "Path" | "Form"
+            );
+        }
+    }
+    false
+}
+
 /// Generate guard check statements.
 fn generate_guard_checks(guard_fns: &[syn::Expr], krate: &TokenStream) -> Vec<TokenStream> {
     guard_fns
@@ -351,8 +400,18 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
 
-    if !needs_state {
-        // Case 1: Simple handler — no guards, no managed, no interceptors
+    // Generate validation calls for all non-managed, non-identity parameters
+    let identity_param_index = rm.identity_param.as_ref().map(|p| p.index);
+    let validation_calls = generate_validation_calls(
+        &extra_params,
+        &managed_indices,
+        identity_param_index,
+        &krate,
+    );
+    let has_validation = !validation_calls.is_empty();
+
+    if !needs_state && !has_validation {
+        // Case 1a: Simple handler — no guards, no managed, no interceptors, no validation
         quote! {
             #[allow(non_snake_case)]
             async fn #handler_name(
@@ -363,8 +422,21 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 #call_expr
             }
         }
-    } else if has_intercepts && !needs_response {
-        // Case 2: Interceptors only — needs State, returns method's own type
+    } else if !needs_state && has_validation {
+        // Case 1b: Simple handler with validation — returns Response
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+            ) -> #krate::http::response::Response {
+                #(#validation_calls)*
+                let __ctrl = __ctrl_ext.0;
+                #krate::http::response::IntoResponse::into_response(#call_expr)
+            }
+        }
+    } else if has_intercepts && !needs_response && !has_validation {
+        // Case 2a: Interceptors only, no validation — returns method's own type
         let interceptor_body = wrap_with_handler_interceptors(
             call_expr,
             fn_name_str,
@@ -381,6 +453,32 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
             ) #return_type {
+                let __ctrl = __ctrl_ext.0;
+                #interceptor_body
+            }
+        }
+    } else if has_intercepts && !needs_response && has_validation {
+        // Case 2b: Interceptors + validation — returns Response
+        let inner_call = quote! {
+            #krate::http::response::IntoResponse::into_response(#call_expr)
+        };
+        let interceptor_body = wrap_with_handler_interceptors(
+            inner_call,
+            fn_name_str,
+            controller_name_str,
+            def,
+            &rm.decorators.intercept_fns,
+            &krate,
+        );
+
+        quote! {
+            #[allow(non_snake_case)]
+            async fn #handler_name(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+                __ctrl_ext: #extractor_name,
+                #(#handler_extra_params,)*
+            ) -> #krate::http::response::Response {
+                #(#validation_calls)*
                 let __ctrl = __ctrl_ext.0;
                 #interceptor_body
             }
@@ -462,6 +560,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             ) -> #krate::http::response::Response {
                 #guard_context_construction
                 #(#guard_checks)*
+                #(#validation_calls)*
                 let __ctrl = __ctrl_ext.0;
                 #inner_body
             }

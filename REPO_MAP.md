@@ -99,7 +99,8 @@ src/
   type_list.rs              Heterogeneous type list (TNil, TCons, Contains, BuildableFrom) for compile-time DI
   types.rs                  Shared type definitions
   prelude.rs                Convenience re-exports
-  validation.rs             Validated<T> extractor (feature = "validation")
+  validation.rs             Automatic validation via garde (autoref specialization)
+  params.rs                 Params derive helpers (ParamError, parse_query_string)
   multipart.rs              Multipart extraction (feature = "multipart")
 
   config/

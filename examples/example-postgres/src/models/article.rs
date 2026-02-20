@@ -1,7 +1,7 @@
 use r2e::r2e_data::Entity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use garde::Validate;
 
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Article {
@@ -35,19 +35,21 @@ impl Entity for Article {
 
 #[derive(Debug, Deserialize, Validate, JsonSchema)]
 pub struct CreateArticleRequest {
-    #[validate(length(min = 1, max = 200, message = "Title must be 1-200 characters"))]
+    #[garde(length(min = 1, max = 200))]
     pub title: String,
-    #[validate(length(min = 1, message = "Body must not be empty"))]
+    #[garde(length(min = 1))]
     pub body: String,
+    #[garde(skip)]
     #[serde(default)]
     pub published: bool,
 }
 
 #[derive(Debug, Deserialize, Validate, JsonSchema)]
 pub struct UpdateArticleRequest {
-    #[validate(length(min = 1, max = 200, message = "Title must be 1-200 characters"))]
+    #[garde(length(min = 1, max = 200))]
     pub title: Option<String>,
-    #[validate(length(min = 1, message = "Body must not be empty"))]
+    #[garde(length(min = 1))]
     pub body: Option<String>,
+    #[garde(skip)]
     pub published: Option<bool>,
 }

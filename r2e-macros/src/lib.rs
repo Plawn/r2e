@@ -21,6 +21,7 @@ pub(crate) mod routes_parsing;
 pub(crate) mod types;
 pub(crate) mod grpc_codegen;
 pub(crate) mod grpc_routes_parsing;
+pub(crate) mod params_derive;
 
 /// Derive macro for declaring a R2E controller struct.
 ///
@@ -133,7 +134,7 @@ pub fn derive_controller(input: TokenStream) -> TokenStream {
 ///     async fn list(&self) -> Json<Vec<User>> { ... }
 ///
 ///     #[post("/")]
-///     async fn create(&self, body: Validated<CreateUser>) -> Json<User> { ... }
+///     async fn create(&self, Json(body): Json<CreateUser>) -> Json<User> { ... }
 /// }
 /// ```
 ///
@@ -200,13 +201,10 @@ pub fn get(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[post("/users")]
-/// async fn create(&self, body: Validated<CreateUser>) -> JsonResult<User> {
-///     Ok(Json(self.service.create(body.into_inner()).await?))
+/// async fn create(&self, Json(body): Json<CreateUser>) -> JsonResult<User> {
+///     // body is automatically validated if CreateUser derives garde::Validate
+///     Ok(Json(self.service.create(body).await?))
 /// }
-///
-/// // Direct type (equivalent)
-/// #[post("/users")]
-/// async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, AppError> { ... }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
@@ -839,4 +837,56 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(def) => grpc_codegen::generate(&def).into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Params derive
+// ---------------------------------------------------------------------------
+
+/// Derive macro for aggregating path, query, and header parameters into a
+/// single struct.
+///
+/// Fields are annotated with `#[path]`, `#[query]`, or `#[header("Name")]`
+/// to indicate their extraction source. The generated `FromRequestParts`
+/// implementation extracts and parses each field automatically.
+///
+/// # Attributes
+///
+/// | Attribute | Source | Default name |
+/// |---|---|---|
+/// | `#[path]` | URL path segments | field name |
+/// | `#[path(name = "userId")]` | URL path segments | custom name |
+/// | `#[query]` | Query string | field name |
+/// | `#[query(name = "q")]` | Query string | custom name |
+/// | `#[header("X-Custom")]` | HTTP headers | explicit name |
+///
+/// `Option<T>` fields are optional (absent = `None`).
+/// Non-Option fields are required (absent = 400 Bad Request).
+/// Conversion uses `FromStr` for non-String types.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Params, garde::Validate)]
+/// struct GetUserParams {
+///     #[path]
+///     id: u64,
+///
+///     #[query]
+///     #[garde(range(min = 1))]
+///     page: Option<u32>,
+///
+///     #[header("X-Tenant-Id")]
+///     #[garde(length(min = 1))]
+///     tenant_id: String,
+/// }
+///
+/// #[get("/{id}")]
+/// async fn get(&self, params: GetUserParams) -> Json<User> {
+///     // params.id, params.page, params.tenant_id extracted and validated
+/// }
+/// ```
+#[proc_macro_derive(Params, attributes(path, query, header))]
+pub fn derive_params(input: TokenStream) -> TokenStream {
+    params_derive::expand(input)
 }

@@ -9,13 +9,13 @@
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full", "validation"] }
+r2e = { version = "0.1", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `scheduler`, `cache`, `rate-limit`, `openapi`, `prometheus`, `openfga`, `validation`, `multipart`, `ws`. `full` enables all.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `scheduler`, `cache`, `rate-limit`, `openapi`, `prometheus`, `openfga`, `multipart`, `ws`. `full` enables all. Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application
 
@@ -71,7 +71,7 @@ Always start controllers with:
 use r2e::prelude::*;
 ```
 
-This brings in: `Controller` (derive), `routes`, HTTP method attrs (`get`, `post`, `put`, `delete`, `patch`), `guard`, `pre_guard`, `roles`, `intercept`, `transactional`, `managed`, `consumer`, `scheduled`, `sse`, `ws`, `layer`, `middleware`, `Bean`, `BeanState`, `bean`, `AppBuilder`, `R2eConfig`, `AppError`, `Plugin`, built-in plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`), type aliases (`JsonResult`, `ApiResult`, `StatusResult`), HTTP types (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `State`, `FromRef`, `Form`, `IntoResponse`, `Redirect`, `Response`), and optionally `Validated`, `TypedMultipart`, `UploadedFile`, `FromMultipart`.
+This brings in: `Controller` (derive), `Params` (derive), `Validate` (re-export from garde), `routes`, HTTP method attrs (`get`, `post`, `put`, `delete`, `patch`), `guard`, `pre_guard`, `roles`, `intercept`, `transactional`, `managed`, `consumer`, `scheduled`, `sse`, `ws`, `layer`, `middleware`, `Bean`, `BeanState`, `bean`, `AppBuilder`, `R2eConfig`, `AppError`, `Plugin`, built-in plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`), type aliases (`JsonResult`, `ApiResult`, `StatusResult`), HTTP types (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `State`, `FromRef`, `Form`, `IntoResponse`, `Redirect`, `Response`), and optionally `TypedMultipart`, `UploadedFile`, `FromMultipart`.
 
 ### Controller Declaration
 
@@ -133,7 +133,7 @@ type StatusResult  = Result<StatusCode, AppError>;
 
 ### AppError
 
-Built-in error type with variants: `NotFound(String)`, `Unauthorized(String)`, `Forbidden(String)`, `BadRequest(String)`, `Internal(String)`, `Validation(...)` (with `validation` feature), `Custom { status, body }`.
+Built-in error type with variants: `NotFound(String)`, `Unauthorized(String)`, `Forbidden(String)`, `BadRequest(String)`, `Internal(String)`, `Validation(...)`, `Custom { status, body }`.
 
 ```rust
 Err(AppError::NotFound("User not found".into()))
@@ -451,24 +451,52 @@ async fn audited(&self) -> Json<Data> { ... }
 
 ## Validation
 
-Requires feature: `validation`
+Validation is always available — no feature flag needed. Uses `garde` crate.
 
 ```rust
-use validator::Validate;
+use garde::Validate;
 use schemars::JsonSchema;
 
 #[derive(Deserialize, Validate, JsonSchema)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1, max = 100))]
+    #[garde(length(min = 1, max = 100))]
     pub name: String,
-    #[validate(email)]
+    #[garde(email)]
     pub email: String,
 }
 
 #[post("/")]
-async fn create(&self, Validated(body): Validated<CreateUserRequest>) -> JsonResult<User> {
-    // body is guaranteed valid; returns 400 with field errors on failure
+async fn create(&self, Json(body): Json<CreateUserRequest>) -> JsonResult<User> {
+    // body is automatically validated; returns 400 with field errors on failure
     Ok(Json(self.service.create(body.name, body.email).await))
+}
+```
+
+Types without `#[derive(Validate)]` work normally — no validation overhead.
+
+### Params (BeanParam-like aggregation)
+
+```rust
+use r2e::prelude::*;
+use garde::Validate;
+
+#[derive(Params, Validate)]
+struct GetUserParams {
+    #[path]
+    id: u64,
+
+    #[query]
+    #[garde(range(min = 1))]
+    page: Option<u32>,
+
+    #[header("X-Tenant-Id")]
+    #[garde(length(min = 1))]
+    tenant_id: String,
+}
+
+#[get("/{id}")]
+async fn get(&self, params: GetUserParams) -> Json<User> {
+    // params.id, params.page, params.tenant_id extracted and validated
 }
 ```
 
@@ -851,14 +879,14 @@ These work as handler parameters alongside `&self`:
 |-----------|-------------|
 | `Path(id): Path<u64>` | URL path parameter |
 | `Query(params): Query<T>` | Query string (T: Deserialize) |
-| `Json(body): Json<T>` | JSON request body |
-| `Validated(body): Validated<T>` | Validated JSON body (needs `validation` feature) |
+| `Json(body): Json<T>` | JSON request body (auto-validated if T: Validate) |
 | `TypedMultipart(form): TypedMultipart<T>` | Typed multipart (needs `multipart` feature) |
 | `mut multipart: Multipart` | Raw multipart (needs `multipart` feature) |
 | `Form(data): Form<T>` | URL-encoded form body (T: Deserialize) |
 | `ConnectInfo(addr): ConnectInfo<SocketAddr>` | Client socket address |
 | `HeaderMap` | All request headers |
 | `State(s): State<S>` | App state |
+| `params: MyParams` | Aggregated params (`#[derive(Params)]` with `#[path]`, `#[query]`, `#[header]`) |
 | `#[inject(identity)] user: AuthenticatedUser` | Identity from JWT |
 | `#[managed] tx: &mut Tx<'_, Sqlite>` | Managed resource |
 

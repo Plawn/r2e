@@ -16,7 +16,7 @@ reflection = ["dep:tonic-reflection"]
 
 [dependencies]
 r2e-core = { path = "../r2e-core", version = "0.1.0" }
-tonic = { version = "~0.13", default-features = false, features = ["server", "prost", "codegen"] }
+tonic = { version = "~0.13", default-features = false, features = ["server", "router", "prost", "codegen"] }
 prost = "~0.13"
 tokio = { version = "1", features = ["net", "rt"] }
 hyper = { version = "1", features = ["server", "http2"] }

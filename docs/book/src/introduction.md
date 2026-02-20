@@ -24,7 +24,7 @@ impl UserController {
     #[post("/")]
     #[roles("admin")]
     #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&self, Validated(body): Validated<CreateUserRequest>) -> Json<User> {
+    async fn create(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
         Json(self.user_service.create(body.name, body.email).await)
     }
 }
@@ -44,7 +44,7 @@ If you've used Java's Quarkus, Spring Boot, or C#'s ASP.NET, this should feel fa
 - **Scheduling** — `#[scheduled(every = 30)]` and `#[scheduled(cron = "...")]` for background tasks
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle
 - **Data access** — `Entity`, `Repository`, `QueryBuilder`, and `Pageable`/`Page`
-- **Validation** — `Validated<T>` extractor backed by the `validator` crate
+- **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI
 - **Configuration** — YAML + env var overlay with profile support
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication

@@ -22,11 +22,11 @@ mod common {
         pub email: String,
     }
 
-    #[derive(serde::Deserialize, serde::Serialize, validator::Validate, schemars::JsonSchema)]
+    #[derive(serde::Deserialize, serde::Serialize, garde::Validate, schemars::JsonSchema)]
     pub struct CreateUserRequest {
-        #[validate(length(min = 1, max = 100))]
+        #[garde(length(min = 1, max = 100))]
         pub name: String,
-        #[validate(email)]
+        #[garde(email)]
         pub email: String,
     }
 
@@ -172,7 +172,7 @@ impl TestUserController {
     #[post("/users")]
     async fn create(
         &self,
-        Validated(body): Validated<CreateUserRequest>,
+        Json(body): Json<CreateUserRequest>,
     ) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
@@ -203,7 +203,7 @@ impl TestUserController {
     #[pre_guard(RateLimit::global(3, 60))]
     async fn create_rate_limited(
         &self,
-        Validated(body): Validated<CreateUserRequest>,
+        Json(body): Json<CreateUserRequest>,
     ) -> Result<Json<User>, AppError> {
         let user = self.user_service.create(body.name, body.email).await;
         Ok(Json(user))

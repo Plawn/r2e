@@ -80,8 +80,8 @@ pub use crate::http::{Json, Router, StatusCode, HeaderMap};
 pub use crate::http::extract::{Path, Query, FromRef, State, Form};
 pub use crate::http::response::{IntoResponse, Redirect, Response};
 
-#[cfg(feature = "validation")]
-pub use crate::validation::Validated;
+pub use crate::validation::Validate;
+pub use r2e_macros::Params;
 
 #[cfg(feature = "multipart")]
 pub use crate::multipart::{FromMultipart, TypedMultipart, UploadedFile};

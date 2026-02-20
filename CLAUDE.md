@@ -595,7 +595,8 @@ MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response
 
 ### Feature Flags
 
-- `r2e-core` has an optional `validation` feature that enables the `Validated<T>` extractor.
+- Validation uses `garde` crate and is always available (no feature flag). Types deriving `garde::Validate` are automatically validated when extracted via `Json<T>`.
+- `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like).
 - `#[transactional]` attribute (in macros) wraps a method body in `self.pool.begin()`/`commit()` — requires the controller to have an injected `pool` field. Consider using `#[managed]` instead for more flexibility.
 
 ### Beans & Dependency Injection (r2e-core, r2e-macros)

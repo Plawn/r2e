@@ -115,7 +115,7 @@ pub struct User { pub id: i64, pub name: String }
 
 #[derive(Deserialize, Validate)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1))]
+    #[garde(length(min = 1))]
     pub name: String,
 }
 ```

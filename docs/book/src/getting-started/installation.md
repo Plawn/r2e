@@ -11,7 +11,7 @@ Add R2E and its common dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full", "validation"] }
+r2e = { version = "0.1", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -37,7 +37,6 @@ r2e = { version = "0.1", features = ["security", "data", "openapi"] }
 | `rate-limit` | Token-bucket rate limiting (`r2e-rate-limit`) |
 | `openapi` | OpenAPI 3.0.3 spec generation (`r2e-openapi`) |
 | `utils` | Built-in interceptors: Logged, Timed, Cache (`r2e-utils`) |
-| `validation` | `Validated<T>` extractor (`validator` crate integration) |
 | `full` | Enables all features above |
 
 ## Installing the CLI (optional)

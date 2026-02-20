@@ -22,7 +22,7 @@ pub mod sse;
 pub mod state;
 pub mod type_list;
 pub mod types;
-#[cfg(feature = "validation")]
+pub mod params;
 pub mod validation;
 #[cfg(feature = "multipart")]
 pub mod multipart;

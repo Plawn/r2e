@@ -58,7 +58,6 @@ The `r2e` facade crate gates sub-crates behind features:
 | `utils` | `r2e-utils` |
 | `oidc` | `r2e-oidc` |
 | `prometheus` | `r2e-prometheus` |
-| `validation` | Enables `Validated<T>` in `r2e-core` |
 | `full` | All of the above |
 
 ## Using sub-crates directly

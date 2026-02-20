@@ -277,20 +277,28 @@ ws.send_json(&my_data).await?;
 
 `WsBroadcaster` and `WsRooms` provide multi-client broadcast utilities.
 
-## Validation (feature: `validation`)
+## Validation
 
-`Validated<T>` extractor that deserializes JSON and validates fields:
+Automatic validation via `garde` crate. Types deriving `garde::Validate` are validated transparently when extracted via `Json<T>`:
 
 ```rust
-use r2e_core::Validated;
+use garde::Validate;
+
+#[derive(Deserialize, Validate)]
+pub struct CreateUserRequest {
+    #[garde(length(min = 1, max = 100))]
+    pub name: String,
+    #[garde(email)]
+    pub email: String,
+}
 
 #[post("/")]
-async fn create(&self, Validated(body): Validated<CreateUserRequest>) -> Json<User> {
-    // body is validated — handler only runs if all checks pass
+async fn create(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
+    // body is automatically validated — handler only runs if all checks pass
 }
 ```
 
-Returns 400 with structured `ValidationErrorResponse` on failure.
+Returns 400 with structured `ValidationErrorResponse` on failure. No feature flag needed.
 
 ## Multipart file upload (feature: `multipart`)
 
@@ -393,7 +401,6 @@ pub struct RouteInfo {
 
 | Feature | Description |
 |---------|-------------|
-| `validation` | `Validated<T>` extractor via `validator` crate |
 | `ws` | WebSocket support (`WsStream`, `WsBroadcaster`, `WsRooms`) |
 | `multipart` | File upload support (`TypedMultipart`, `UploadedFile`) |
 

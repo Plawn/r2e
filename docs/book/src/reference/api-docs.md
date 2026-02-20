@@ -37,7 +37,8 @@ This generates and opens documentation for all R2E crates.
 | `AsyncBean` | Async bean trait |
 | `Producer` | Factory trait for external types |
 | `BeanContext` | Bean graph context |
-| `Validated<T>` | Validation extractor (feature: `validation`) |
+| `Validate` | Re-export of `garde::Validate` for automatic validation |
+| `Params` | Derive macro for aggregating path/query/header params |
 
 ### r2e-macros
 

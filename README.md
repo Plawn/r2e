@@ -22,7 +22,7 @@ impl UserController {
     #[post("/")]
     #[roles("admin")]
     #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&self, Validated(body): Validated<CreateUserRequest>) -> Json<User> {
+    async fn create(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
         Json(self.user_service.create(body.name, body.email).await)
     }
 }
@@ -40,7 +40,7 @@ impl UserController {
 - **Scheduling** — `#[scheduled(every = 30)]` and `#[scheduled(cron = "0 */5 * * * *")]` for background tasks
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle (begin/commit/rollback)
 - **Data access** — `Entity`, `Repository`, `QueryBuilder`, and `Pageable`/`Page` for database operations
-- **Validation** — `Validated<T>` extractor backed by the `validator` crate
+- **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI at `/docs`
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
 - **Configuration** — YAML + env var overlay with profile support (`R2E_PROFILE=prod`)
@@ -54,7 +54,7 @@ Add R2E to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full", "validation"] }
+r2e = { version = "0.1", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
