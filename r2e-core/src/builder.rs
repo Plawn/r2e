@@ -122,8 +122,12 @@ impl AppBuilder<NoState, TNil, TNil> {
 }
 
 impl<P, R> AppBuilder<NoState, P, R> {
-    /// Internal: reconstruct the builder with updated type parameters.
-    fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR> {
+    /// Reconstruct the builder with updated type-level tracking parameters.
+    ///
+    /// Since `P` and `R` are phantom types used only for compile-time bean graph
+    /// validation, this is a zero-cost conversion that just changes the markers.
+    #[doc(hidden)]
+    pub fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR> {
         AppBuilder {
             shared: self.shared,
             state: None,
@@ -261,7 +265,13 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///     .build_state::<Services, _, _>()
     ///     .await
     /// ```
-    pub fn plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>, R> {
+    pub fn plugin<Pl: PreStatePlugin>(
+        self,
+        plugin: Pl,
+    ) -> AppBuilder<NoState, TCons<Pl::Provided, P>, <R as TAppend<Pl::Required>>::Output>
+    where
+        R: TAppend<Pl::Required>,
+    {
         plugin.install(self)
     }
 
@@ -271,7 +281,13 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// Use [`.plugin()`](Self::plugin) instead.
     #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>, R> {
+    pub fn with_plugin<Pl: PreStatePlugin>(
+        self,
+        plugin: Pl,
+    ) -> AppBuilder<NoState, TCons<Pl::Provided, P>, <R as TAppend<Pl::Required>>::Output>
+    where
+        R: TAppend<Pl::Required>,
+    {
         plugin.install(self)
     }
 
@@ -285,15 +301,19 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```ignore
     /// impl PreStatePlugin for MyPlugin {
     ///     type Provided = MyToken;
+    ///     type Required = TNil;
     ///
-    ///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+    ///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    ///     where
+    ///         R: TAppend<Self::Required>,
+    ///     {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
     ///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
     ///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
     ///             ctx.on_shutdown(|| { /* cleanup */ });
-    ///         }))
+    ///         })).with_updated_types()
     ///     }
     /// }
     /// ```

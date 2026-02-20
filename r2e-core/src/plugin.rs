@@ -13,7 +13,7 @@
 //! Both traits use the same `.with(plugin)` method on `AppBuilder`.
 
 use crate::builder::{AppBuilder, NoState};
-use crate::type_list::TCons;
+use crate::type_list::{TAppend, TCons};
 use std::any::Any;
 use tokio_util::sync::CancellationToken;
 
@@ -82,24 +82,54 @@ pub trait Plugin: Send + 'static {
 ///
 /// ```ignore
 /// use r2e_core::{PreStatePlugin, DeferredAction};
+/// use r2e_core::builder::NoState;
+/// use r2e_core::type_list::{TAppend, TCons, TNil};
 /// use tokio_util::sync::CancellationToken;
 ///
 /// pub struct Scheduler;
 ///
 /// impl PreStatePlugin for Scheduler {
 ///     type Provided = CancellationToken;
+///     type Required = TNil;
 ///
-///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+///     where
+///         R: TAppend<Self::Required>,
+///     {
 ///         let token = CancellationToken::new();
-///         app.provide(token.clone()).add_deferred(DeferredAction::new("Scheduler", move |ctx| {
-///             // ... setup ...
-///         }))
+///         app.provide(token.clone())
+///             .add_deferred(DeferredAction::new("Scheduler", move |ctx| {
+///                 // ... setup ...
+///             }))
+///             .with_updated_types()
 ///     }
 /// }
 /// ```
+///
+/// # `Required = TNil` and `with_updated_types()`
+///
+/// When `Required` is `TNil`, the compiler cannot prove that
+/// `<R as TAppend<TNil>>::Output == R`. Since `R` is a phantom type parameter,
+/// call [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
+/// `install()` to perform the zero-cost phantom type conversion.
+///
+/// Forgetting `.with_updated_types()` produces a compile error:
+/// ```text
+/// expected AppBuilder<_, _, <R as TAppend<TNil>>::Output>
+///    found AppBuilder<_, _, R>
+/// ```
+/// The fix is always to append `.with_updated_types()` to the returned builder chain.
 pub trait PreStatePlugin: Send + 'static {
     /// The type this plugin provides to the bean registry.
     type Provided: Clone + Send + Sync + 'static;
+
+    /// Bean dependencies this plugin requires from the bean graph.
+    ///
+    /// Most plugins set this to `TNil` (no additional requirements). Plugins that
+    /// register beans via `.with_bean()` or `.with_producer()` inside `install()`
+    /// should declare their transitive dependencies here so the compile-time
+    /// provision checker can verify them at `build_state()`.
+    type Required;
 
     /// Install the plugin in the pre-state phase.
     ///
@@ -107,7 +137,14 @@ pub trait PreStatePlugin: Send + 'static {
     /// 1. Create the provided instance
     /// 2. Call `app.provide(instance)` to register it
     /// 3. Optionally call `app.add_deferred()` for post-state setup
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R>;
+    /// 4. Call `.with_updated_types()` at the end when `Required = TNil`
+    ///    (see [trait-level docs](PreStatePlugin) for details)
+    fn install<P, R>(
+        self,
+        app: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>;
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────
@@ -123,15 +160,19 @@ pub trait PreStatePlugin: Send + 'static {
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = MyToken;
+///     type Required = TNil;
 ///
-///     fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+///     where
+///         R: TAppend<Self::Required>,
+///     {
 ///         let token = MyToken::new();
 ///         let handle = MyHandle::new(token.clone());
 ///
 ///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
 ///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
 ///             ctx.on_shutdown(|| { /* cleanup */ });
-///         }))
+///         })).with_updated_types()
 ///     }
 /// }
 /// ```

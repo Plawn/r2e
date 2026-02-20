@@ -42,7 +42,7 @@ use std::sync::Arc;
 use axum::routing::{get, post};
 use axum::Router;
 use r2e_core::builder::{AppBuilder, NoState};
-use r2e_core::type_list::TCons;
+use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{DeferredAction, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
@@ -117,11 +117,15 @@ impl Default for OidcServer {
 
 impl PreStatePlugin for OidcServer {
     type Provided = Arc<JwtClaimsValidator>;
+    type Required = TNil;
 
     fn install<P, R>(
         self,
         app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
         // 1. Generate RSA-2048 key pair.
         let key_pair = Arc::new(keys::OidcKeyPair::generate(&self.config.kid));
 
@@ -159,6 +163,7 @@ impl PreStatePlugin for OidcServer {
                     router.merge(oidc_routes(oidc_state, &base_path))
                 }));
             }))
+            .with_updated_types()
     }
 }
 

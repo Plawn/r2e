@@ -60,7 +60,7 @@ Install before `build_state()` with `.plugin(plugin)`. They provide beans to the
 ```rust
 use r2e::{PreStatePlugin, AppBuilder};
 use r2e::builder::NoState;
-use r2e::type_list::TCons;
+use r2e::type_list::{TAppend, TCons, TNil};
 
 pub struct MyPlugin {
     config: MyPluginConfig,
@@ -68,9 +68,13 @@ pub struct MyPlugin {
 
 impl PreStatePlugin for MyPlugin {
     type Provided = MyPluginConfig;
+    type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
-        app.provide(self.config)
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
+        app.provide(self.config).with_updated_types()
     }
 }
 ```
@@ -93,15 +97,19 @@ For plugins that need to set up infrastructure after state is built but during s
 use r2e::{PreStatePlugin, AppBuilder};
 use r2e::plugin::{DeferredAction, DeferredContext};
 use r2e::builder::NoState;
-use r2e::type_list::TCons;
+use r2e::type_list::{TAppend, TCons, TNil};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
     type Provided = CancellationToken;
+    type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
         let token = CancellationToken::new();
 
         app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &mut DeferredContext| {
@@ -121,7 +129,7 @@ impl PreStatePlugin for MyPlugin {
                 t.cancel();
                 tracing::info!("Plugin shutting down");
             });
-        }))
+        })).with_updated_types()
     }
 }
 ```
@@ -189,7 +197,7 @@ A pre-state plugin that spawns a periodic health check task and cancels it on sh
 use r2e::{PreStatePlugin, AppBuilder};
 use r2e::plugin::{DeferredAction, DeferredContext};
 use r2e::builder::NoState;
-use r2e::type_list::TCons;
+use r2e::type_list::{TAppend, TCons, TNil};
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -200,8 +208,12 @@ pub struct HealthChecker {
 
 impl PreStatePlugin for HealthChecker {
     type Provided = CancellationToken;
+    type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
         let token = CancellationToken::new();
         let interval = self.interval;
         let url = self.url;
@@ -234,7 +246,7 @@ impl PreStatePlugin for HealthChecker {
             ctx.on_shutdown(move || {
                 token.cancel();
             });
-        }))
+        })).with_updated_types()
     }
 }
 ```

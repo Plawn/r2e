@@ -15,7 +15,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::http::StatusCode;
-use r2e_core::type_list::TCons;
+use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{AppBuilder, DeferredAction, PreStatePlugin};
 
 /// Handle to the scheduler runtime.
@@ -119,11 +119,15 @@ pub struct Scheduler;
 
 impl PreStatePlugin for Scheduler {
     type Provided = CancellationToken;
+    type Required = TNil;
 
     fn install<P, R>(
         self,
         app: AppBuilder<r2e_core::builder::NoState, P, R>,
-    ) -> AppBuilder<r2e_core::builder::NoState, TCons<Self::Provided, P>, R> {
+    ) -> AppBuilder<r2e_core::builder::NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
         let token = CancellationToken::new();
         let handle = SchedulerHandle::new(token.clone());
         let registry = TaskRegistryHandle::new();
@@ -149,7 +153,7 @@ impl PreStatePlugin for Scheduler {
             ctx.on_shutdown(move || {
                 cancel_for_stopper.cancel();
             });
-        }))
+        })).with_updated_types()
     }
 }
 

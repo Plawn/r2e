@@ -1,5 +1,5 @@
 use r2e_core::builder::NoState;
-use r2e_core::type_list::TCons;
+use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{AppBuilder, DeferredAction, PreStatePlugin};
 use tokio_util::sync::CancellationToken;
 
@@ -65,11 +65,15 @@ impl PreStatePlugin for GrpcServer {
     /// GrpcServer doesn't provide beans — it uses `()` as a placeholder.
     /// The real coordination happens via `GrpcServiceRegistry` in plugin_data.
     type Provided = GrpcMarker;
+    type Required = TNil;
 
     fn install<P, R>(
         self,
         app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
+    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport.clone();
         let cancel = CancellationToken::new();
@@ -93,7 +97,7 @@ impl PreStatePlugin for GrpcServer {
                     cancel_for_shutdown.cancel();
                 });
             },
-        ))
+        )).with_updated_types()
     }
 }
 

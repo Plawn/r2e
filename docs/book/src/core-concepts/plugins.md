@@ -103,13 +103,21 @@ impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
 Implement `PreStatePlugin` for plugins that need to run before `build_state()`:
 
 ```rust
-use r2e_core::plugin::PreStatePlugin;
+use r2e::{PreStatePlugin, AppBuilder};
+use r2e::builder::NoState;
+use r2e::type_list::{TAppend, TCons, TNil};
 
 pub struct MyPreStatePlugin;
 
 impl PreStatePlugin for MyPreStatePlugin {
-    fn install(self, builder: &mut AppBuilder) {
-        // Store data, register deferred actions, etc.
+    type Provided = MyConfig;
+    type Required = TNil;
+
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
+        app.provide(MyConfig::default()).with_updated_types()
     }
 }
 ```
@@ -119,15 +127,25 @@ impl PreStatePlugin for MyPreStatePlugin {
 For plugins that need to perform setup after state construction, use `DeferredAction`:
 
 ```rust
-use r2e_core::plugin::{DeferredAction, DeferredContext};
+use r2e::plugin::{DeferredAction, DeferredContext};
+use r2e::{PreStatePlugin, AppBuilder};
+use r2e::builder::NoState;
+use r2e::type_list::{TAppend, TCons, TNil};
 
 impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &mut AppBuilder) {
-        builder.defer(DeferredAction::new("my-plugin", |ctx: &mut DeferredContext| {
-            ctx.add_layer(my_layer);
-            ctx.on_serve(|| async { /* run when server starts */ });
-            ctx.on_shutdown(|| async { /* run when server stops */ });
-        }));
+    type Provided = MyToken;
+    type Required = TNil;
+
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    where
+        R: TAppend<Self::Required>,
+    {
+        let token = MyToken::new();
+        app.provide(token).add_deferred(DeferredAction::new("my-plugin", |ctx: &mut DeferredContext| {
+            ctx.add_layer(Box::new(|router| router));
+            ctx.on_serve(|_tasks, _token| { /* run when server starts */ });
+            ctx.on_shutdown(|| { /* run when server stops */ });
+        })).with_updated_types()
     }
 }
 ```
