@@ -4,6 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 use crate::crate_path::r2e_core_path;
+use crate::type_list_gen::build_tcons_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -38,6 +39,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let krate = r2e_core_path();
     let mut dep_type_ids = Vec::new();
+    let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut field_inits = Vec::new();
     let mut config_key_entries = Vec::new();
     let mut has_config = false;
@@ -51,6 +53,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         if is_inject {
             dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
+            dep_types.push(quote! { #field_type });
             field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
         } else if let Some(attr) = config_attr {
             let key: syn::LitStr = attr.parse_args()?;
@@ -79,7 +82,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         dep_type_ids.push(
             quote! { (std::any::TypeId::of::<#krate::config::R2eConfig>(), std::any::type_name::<#krate::config::R2eConfig>()) },
         );
+        dep_types.push(quote! { #krate::config::R2eConfig });
     }
+
+    let deps_type = build_tcons_type(&dep_types, &krate);
 
     // Extract R2eConfig once if any #[config] fields are present
     let config_prelude = if has_config {
@@ -100,6 +106,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #krate::beans::Bean for #name {
+            type Deps = #deps_type;
+
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                 vec![#(#dep_type_ids),*]
             }

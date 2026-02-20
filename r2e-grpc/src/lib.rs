@@ -15,7 +15,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-//!     .build_state::<Services, _>()
+//!     .build_state::<Services, _, _>()
 //!     .await
 //!     .register_grpc_service::<UserGrpcService>()
 //!     .serve("0.0.0.0:3000")
@@ -53,7 +53,7 @@ pub use prost;
 ///
 /// AppBuilder::new()
 ///     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-///     .build_state::<Services, _>()
+///     .build_state::<Services, _, _>()
 ///     .await
 ///     .register_grpc_service::<UserGrpcService>()
 ///     .register_grpc_service::<OrderGrpcService>()

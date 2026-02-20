@@ -55,7 +55,7 @@ Register consumer controllers like any other controller:
 ```rust
 AppBuilder::new()
     .provide(event_bus)
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<UserEventConsumer>()
     // ...

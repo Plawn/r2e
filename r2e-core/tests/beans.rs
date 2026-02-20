@@ -1,6 +1,7 @@
 use std::any::{type_name, TypeId};
 
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, Producer};
+use r2e_core::type_list::TNil;
 
 #[derive(Clone)]
 struct Dep {
@@ -13,6 +14,7 @@ struct ServiceA {
 }
 
 impl Bean for ServiceA {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
@@ -30,6 +32,7 @@ struct ServiceB {
 }
 
 impl Bean for ServiceB {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![
             (TypeId::of::<ServiceA>(), type_name::<ServiceA>()),
@@ -98,6 +101,7 @@ struct CycleA;
 struct CycleB;
 
 impl Bean for CycleA {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CycleB>(), type_name::<CycleB>())]
     }
@@ -107,6 +111,7 @@ impl Bean for CycleA {
     }
 }
 impl Bean for CycleB {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CycleA>(), type_name::<CycleA>())]
     }
@@ -156,6 +161,7 @@ struct AsyncService {
 }
 
 impl AsyncBean for AsyncService {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
@@ -204,6 +210,7 @@ struct CreateDbPool;
 
 impl Producer for CreateDbPool {
     type Output = DbPool;
+    type Deps = TNil;
 
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
@@ -237,6 +244,7 @@ async fn producer_as_dependency() {
     }
 
     impl Bean for RepoService {
+        type Deps = TNil;
         fn dependencies() -> Vec<(TypeId, &'static str)> {
             vec![(TypeId::of::<DbPool>(), type_name::<DbPool>())]
         }

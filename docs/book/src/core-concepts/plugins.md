@@ -8,7 +8,7 @@ Install plugins with `.with(plugin)` on the builder (after `build_state()`):
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(Health)
     .with(Cors::permissive())
@@ -43,7 +43,7 @@ Some plugins need to install before `build_state()`. Use `.plugin()` instead of 
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)    // provides CancellationToken to the bean graph
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     // ...
 ```
@@ -68,7 +68,7 @@ For Tower middleware that doesn't need the full plugin API, use `.with_layer()`:
 use tower_http::timeout::TimeoutLayer;
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
     // ...

@@ -99,7 +99,7 @@ async fn setup() -> (TestApp, TestJwt) {
         AppBuilder::new()
             .provide(Arc::new(jwt.claims_validator()))
             // ...
-            .build_state::<AppState, _>()
+            .build_state::<AppState, _, _>()
             .await
             .register_controller::<UserController>(),
     );

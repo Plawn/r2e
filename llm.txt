@@ -46,7 +46,7 @@ async fn main() {
 
     AppBuilder::new()
         .provide(config.clone())
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .with_config(config)
         .with(Health)
@@ -194,7 +194,7 @@ AppBuilder::new()
     .provide(Arc::new(claims_validator))
     .provide(RateLimitRegistry::default())
     .with_bean::<UserService>()            // register bean for auto-wiring
-    .build_state::<Services, _>()          // resolve bean graph → state (async)
+    .build_state::<Services, _, _>()          // resolve bean graph → state (async)
     .await
     .with_config(config)                   // make config available for #[config] fields
     .with(Health)                          // /health → 200 "OK"
@@ -217,7 +217,7 @@ AppBuilder::new()
 **Order matters:**
 1. `.plugin(...)` — pre-state plugins (before `build_state`)
 2. `.provide(...)` / `.with_bean::<T>()` — register deps (before `build_state`)
-3. `.build_state::<S, _>().await` — resolves the bean graph (async)
+3. `.build_state::<S, _, _>().await` — resolves the bean graph (async)
 4. `.with(...)` — post-state plugins
 5. `.register_controller::<T>()` — register controllers
 6. `.with(NormalizePath)` — must be last plugin
@@ -614,7 +614,7 @@ use r2e::r2e_scheduler::Scheduler;
 // In AppBuilder:
 AppBuilder::new()
     .plugin(Scheduler)            // MUST be before build_state()
-    .build_state::<Services, _>()
+    .build_state::<Services, _, _>()
     .await
     .register_controller::<ScheduledJobs>()
 ```

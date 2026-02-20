@@ -9,7 +9,7 @@
 //! use r2e_observability::{Observability, ObservabilityConfig};
 //!
 //! AppBuilder::new()
-//!     .build_state::<MyState, _>()
+//!     .build_state::<MyState, _, _>()
 //!     .await
 //!     .with(Observability::new(
 //!         ObservabilityConfig::new("my-service")
@@ -66,7 +66,7 @@ use r2e_core::Plugin;
 /// use r2e_observability::{Observability, ObservabilityConfig};
 ///
 /// AppBuilder::new()
-///     .build_state::<MyState, _>()
+///     .build_state::<MyState, _, _>()
 ///     .await
 ///     // No init_tracing() call needed — the plugin handles it
 ///     .with(Observability::new(

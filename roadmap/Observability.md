@@ -476,7 +476,7 @@ Fournir un plugin unique `Observability` qui installe toute la stack en un seul 
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(Observability::new(
         ObservabilityConfig::new("my-service")
@@ -996,7 +996,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(Scheduler)
         // ... (existing setup)
-        .build_state::<Services, _>()
+        .build_state::<Services, _, _>()
         .await
         .with(Observability::new(otel_config))
         .with(health)  // Remplace le simple Health

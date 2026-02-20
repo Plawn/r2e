@@ -353,7 +353,7 @@ Scheduled tasks are auto-discovered via `register_controller()`, following the s
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)                        // install scheduler runtime (provides CancellationToken)
-    .build_state::<Services, _>()
+    .build_state::<Services, _, _>()
     .await
     .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
     .serve("0.0.0.0:3000")
@@ -400,7 +400,7 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
     .with_async_bean::<MyAsyncService>()   // async bean constructor
     .with_bean::<UserService>()            // sync bean (unchanged)
-    .build_state::<Services, _>()          // resolve bean graph (async — .await required)
+    .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
     .await
     .with_config(config)
     .with(Health)                          // /health → 200 "OK"
@@ -608,7 +608,9 @@ MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response
 | `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` | Services needing async init |
 | `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` | Types you don't own (pools, clients) |
 
-**`build_state()` is async** — it must be `.await`ed because the bean graph may contain async beans or producers.
+All three traits have an associated `type Deps` that declares their dependencies as a type-level list (e.g., `type Deps = TCons<EventBus, TNil>`). This is generated automatically by the `#[bean]`, `#[derive(Bean)]`, and `#[producer]` macros. For manual impls without dependencies, use `type Deps = TNil;`.
+
+**`build_state()` is async** — it must be `.await`ed because the bean graph may contain async beans or producers. It takes 3 generic args: `build_state::<S, _, _>()` (state type, provisions, requirements).
 
 **`#[bean]` attribute macro** — auto-detects sync vs async constructors:
 

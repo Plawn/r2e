@@ -26,7 +26,7 @@ async fn main() {
         .provide(config.clone())
         .with_bean::<services::ProductClient>()
         .with_bean::<services::OrderService>()
-        .build_state::<OrderState, _>()
+        .build_state::<OrderState, _, _>()
         .await
         .with_config(config)
         .with(Health)

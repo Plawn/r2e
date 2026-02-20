@@ -43,7 +43,7 @@ let registry = OpenFgaRegistry::connect(config).await?;
 ```rust
 AppBuilder::new()
     .provide(registry)
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<DocumentController>()
     .serve("0.0.0.0:3000")

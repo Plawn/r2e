@@ -8,7 +8,7 @@ Add the `DevReload` plugin:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(DevReload)
     // ...

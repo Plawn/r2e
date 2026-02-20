@@ -25,7 +25,7 @@ async fn main() {
     AppBuilder::new()
         .provide(config.clone())
         .with_bean::<services::ProductService>()
-        .build_state::<ProductState, _>()
+        .build_state::<ProductState, _, _>()
         .await
         .with_config(config)
         .with(Health)

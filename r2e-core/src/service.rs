@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// // Register in builder:
 /// AppBuilder::new()
-///     .build_state::<Services, _>().await
+///     .build_state::<Services, _, _>().await
 ///     .spawn_service::<MetricsExporter>()
 ///     .serve("0.0.0.0:3000").await
 /// ```

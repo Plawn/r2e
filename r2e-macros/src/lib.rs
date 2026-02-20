@@ -10,6 +10,7 @@ pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
 pub(crate) mod producer_attr;
+pub(crate) mod type_list_gen;
 pub(crate) mod derive_codegen;
 pub(crate) mod derive_controller;
 pub(crate) mod derive_parsing;
@@ -680,7 +681,7 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// AppBuilder::new()
 ///     .provide(config)
 ///     .with_producer::<CreatePool>()   // registers SqlitePool
-///     .build_state::<Services, _>()
+///     .build_state::<Services, _, _>()
 ///     .await
 /// ```
 #[proc_macro_attribute]

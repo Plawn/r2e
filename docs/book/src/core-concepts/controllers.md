@@ -153,7 +153,7 @@ Controllers are registered with the application builder:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<UserController>()
     .register_controller::<AccountController>()

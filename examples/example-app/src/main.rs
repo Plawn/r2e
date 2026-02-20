@@ -121,7 +121,7 @@ async fn main() {
         .provide(sse_broadcaster)
         .provide(notification_service)
         .with_bean::<UserService>()
-        .build_state::<Services, _>()
+        .build_state::<Services, _, _>()
         .await
         .with_config(config)
         .with(Health)

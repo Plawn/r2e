@@ -91,7 +91,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SchedulerHandle {
 ///
 /// AppBuilder::new()
 ///     .with_plugin(Scheduler)  // Before build_state()!
-///     .build_state::<Services, _>()
+///     .build_state::<Services, _, _>()
 ///     .await
 ///     .register_controller::<ScheduledJobs>()
 ///     .serve("0.0.0.0:3000")
@@ -120,10 +120,10 @@ pub struct Scheduler;
 impl PreStatePlugin for Scheduler {
     type Provided = CancellationToken;
 
-    fn install<P>(
+    fn install<P, R>(
         self,
-        app: AppBuilder<r2e_core::builder::NoState, P>,
-    ) -> AppBuilder<r2e_core::builder::NoState, TCons<Self::Provided, P>> {
+        app: AppBuilder<r2e_core::builder::NoState, P, R>,
+    ) -> AppBuilder<r2e_core::builder::NoState, TCons<Self::Provided, P>, R> {
         let token = CancellationToken::new();
         let handle = SchedulerHandle::new(token.clone());
         let registry = TaskRegistryHandle::new();

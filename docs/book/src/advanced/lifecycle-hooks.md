@@ -8,7 +8,7 @@ Runs before the server starts listening. Receives the application state:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .on_start(|state| async move {
         // Verify database connectivity
@@ -66,7 +66,7 @@ Register multiple hooks — they execute in registration order:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .on_start(|state| async move {
         tracing::info!("Hook 1: check DB");

@@ -21,7 +21,7 @@ r2e = { version = "0.1", features = ["prometheus"] }
 use r2e::r2e_prometheus::Prometheus;
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(Prometheus)
     .register_controller::<UserController>()

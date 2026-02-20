@@ -193,6 +193,8 @@ Generates:
 
 ```rust
 impl r2e::beans::Bean for UserService {
+    type Deps = r2e::type_list::TCons<EventBus, r2e::type_list::TNil>;
+
     fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
         vec![(std::any::TypeId::of::<EventBus>(), std::any::type_name::<EventBus>())]
     }
@@ -213,7 +215,7 @@ impl DbService {
 }
 ```
 
-Generates `impl AsyncBean` with an `async fn build(ctx)` instead.
+Generates `impl AsyncBean` with `type Deps = TCons<SqlitePool, TNil>` and an `async fn build(ctx)` instead.
 
 ## What `#[producer]` generates
 
@@ -237,6 +239,7 @@ pub struct CreatePool;
 
 impl r2e::beans::Producer for CreatePool {
     type Output = SqlitePool;
+    type Deps = r2e::type_list::TCons<r2e::config::R2eConfig, r2e::type_list::TNil>;
 
     fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
         vec![(std::any::TypeId::of::<r2e::config::R2eConfig>(), /* ... */)]

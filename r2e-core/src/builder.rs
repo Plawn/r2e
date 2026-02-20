@@ -5,7 +5,7 @@ use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
 #[allow(deprecated)]
 use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
-use crate::type_list::{BuildableFrom, TCons, TNil};
+use crate::type_list::{AllSatisfied, BuildableFrom, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -70,7 +70,7 @@ struct BuilderConfig {
 /// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
 /// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
 /// or `.serve()`.
-pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
+pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil> {
     shared: BuilderConfig,
     state: Option<T>,
     routes: Vec<crate::http::Router<T>>,
@@ -86,11 +86,12 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil> {
     /// Shutdown hooks from plugins.
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     _provided: PhantomData<P>,
+    _required: PhantomData<R>,
 }
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
-impl AppBuilder<NoState, TNil> {
+impl AppBuilder<NoState, TNil, TNil> {
     /// Create a new, empty builder in the pre-state phase.
     pub fn new() -> Self {
         Self {
@@ -115,13 +116,14 @@ impl AppBuilder<NoState, TNil> {
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
+            _required: PhantomData,
         }
     }
 }
 
-impl<P> AppBuilder<NoState, P> {
-    /// Internal: reconstruct the builder with an updated provider type list.
-    fn with_updated_provider<NewP>(self) -> AppBuilder<NoState, NewP> {
+impl<P, R> AppBuilder<NoState, P, R> {
+    /// Internal: reconstruct the builder with updated type parameters.
+    fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR> {
         AppBuilder {
             shared: self.shared,
             state: None,
@@ -135,6 +137,7 @@ impl<P> AppBuilder<NoState, P> {
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             _provided: PhantomData,
+            _required: PhantomData,
         }
     }
 
@@ -143,27 +146,33 @@ impl<P> AppBuilder<NoState, P> {
     /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
     /// for beans that depend on type `B`, and will be pulled into the state
     /// struct when [`build_state`](Self::build_state) is called.
-    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>> {
+    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>, R> {
         self.shared.bean_registry.provide(bean);
-        self.with_updated_provider()
+        self.with_updated_types()
     }
 
     /// Register a (sync) bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans and
     /// provided instances when [`build_state`](Self::build_state) is called.
-    pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
+    pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    where
+        R: TAppend<B::Deps>,
+    {
         self.shared.bean_registry.register::<B>();
-        self.with_updated_provider()
+        self.with_updated_types()
     }
 
     /// Register an async bean type for automatic construction.
     ///
     /// The bean's async constructor will be awaited during
     /// [`build_state`](Self::build_state).
-    pub fn with_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>> {
+    pub fn with_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    where
+        R: TAppend<B::Deps>,
+    {
         self.shared.bean_registry.register_async::<B>();
-        self.with_updated_provider()
+        self.with_updated_types()
     }
 
     /// Register a producer for automatic construction of its output type.
@@ -171,9 +180,12 @@ impl<P> AppBuilder<NoState, P> {
     /// The producer creates an instance of `Pr::Output` during
     /// [`build_state`](Self::build_state). The output type (not the producer
     /// struct) is tracked in the provision list.
-    pub fn with_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>> {
+    pub fn with_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>, <R as TAppend<Pr::Deps>>::Output>
+    where
+        R: TAppend<Pr::Deps>,
+    {
         self.shared.bean_registry.register_producer::<Pr>();
-        self.with_updated_provider()
+        self.with_updated_types()
     }
 
     /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
@@ -191,17 +203,18 @@ impl<P> AppBuilder<NoState, P> {
     ///         let url = config.get::<String>("redis.url").unwrap();
     ///         RedisClient::new(&url)
     ///     })
-    ///     .build_state::<Services, _>().await
+    ///     .build_state::<Services, _, _>().await
     /// ```
-    pub fn with_bean_factory<B, F>(mut self, factory: F) -> AppBuilder<NoState, TCons<B, P>>
+    pub fn with_bean_factory<B, F>(mut self, factory: F) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<TCons<crate::config::R2eConfig, TNil>>>::Output>
     where
         B: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> B + Send + 'static,
+        R: TAppend<TCons<crate::config::R2eConfig, TNil>>,
     {
         self.shared
             .bean_registry
             .provide_factory_with_config::<B, F>(factory);
-        self.with_updated_provider()
+        self.with_updated_types()
     }
 
     /// Enable bean override mode (useful for testing).
@@ -245,10 +258,10 @@ impl<P> AppBuilder<NoState, P> {
     ///
     /// AppBuilder::new()
     ///     .plugin(Scheduler)  // Provides CancellationToken
-    ///     .build_state::<Services, _>()
+    ///     .build_state::<Services, _, _>()
     ///     .await
     /// ```
-    pub fn plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
+    pub fn plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>, R> {
         plugin.install(self)
     }
 
@@ -258,7 +271,7 @@ impl<P> AppBuilder<NoState, P> {
     ///
     /// Use [`.plugin()`](Self::plugin) instead.
     #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>> {
+    pub fn with_plugin<Pl: PreStatePlugin>(self, plugin: Pl) -> AppBuilder<NoState, TCons<Pl::Provided, P>, R> {
         plugin.install(self)
     }
 
@@ -273,7 +286,7 @@ impl<P> AppBuilder<NoState, P> {
     /// impl PreStatePlugin for MyPlugin {
     ///     type Provided = MyToken;
     ///
-    ///     fn pre_install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+    ///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
@@ -307,14 +320,20 @@ impl<P> AppBuilder<NoState, P> {
     /// them in order (awaiting async beans/producers), and assembles the
     /// state struct via [`BeanState::from_context()`](crate::beans::BeanState::from_context).
     ///
+    /// The `R` (requirements) type parameter is checked against `P` (provisions)
+    /// at compile time via the [`AllSatisfied`] bound: every bean dependency
+    /// must be present in the provision list. If a dependency is missing, the
+    /// compiler emits an error.
+    ///
     /// # Panics
     ///
     /// Panics if the bean graph has cycles, missing dependencies, or
     /// duplicate registrations. Use [`try_build_state`](Self::try_build_state)
     /// for a non-panicking alternative.
-    pub async fn build_state<S, Idx>(self) -> AppBuilder<S>
+    pub async fn build_state<S, Idx, RIdx>(self) -> AppBuilder<S>
     where
         S: BeanState + BuildableFrom<P, Idx>,
+        R: AllSatisfied<P, RIdx>,
     {
         self.try_build_state()
             .await
@@ -323,11 +342,12 @@ impl<P> AppBuilder<NoState, P> {
 
     /// Resolve the bean dependency graph and build the application state,
     /// returning an error instead of panicking on resolution failure.
-    pub async fn try_build_state<S, Idx>(
+    pub async fn try_build_state<S, Idx, RIdx>(
         mut self,
     ) -> Result<AppBuilder<S>, crate::beans::BeanError>
     where
         S: BeanState + BuildableFrom<P, Idx>,
+        R: AllSatisfied<P, RIdx>,
     {
         let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
         let ctx = registry.resolve().await?;
@@ -344,7 +364,7 @@ impl<P> AppBuilder<NoState, P> {
     }
 }
 
-impl Default for AppBuilder<NoState, TNil> {
+impl Default for AppBuilder<NoState, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }
@@ -376,6 +396,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
+            _required: PhantomData,
         };
 
         // Execute deferred actions (new API).
@@ -659,7 +680,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .build_state::<Services, _>().await
+    ///     .build_state::<Services, _, _>().await
     ///     .spawn_service::<MetricsExporter>()
     ///     .serve("0.0.0.0:3000").await
     /// ```

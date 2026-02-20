@@ -39,7 +39,7 @@ async fn main() {
         .provide(pool)
         .provide(config.clone())
         .with_bean::<services::ChatService>()
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .with_config(config)
         .with(Health)

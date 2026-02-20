@@ -38,7 +38,7 @@ let oidc = OidcServer::new()
 
 AppBuilder::new()
     .plugin(oidc)
-    .build_state::<AppState, _>().await
+    .build_state::<AppState, _, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```

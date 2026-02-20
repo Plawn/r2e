@@ -24,7 +24,7 @@ use r2e::r2e_scheduler::Scheduler;
 
 AppBuilder::new()
     .plugin(Scheduler)
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")

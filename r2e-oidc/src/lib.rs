@@ -22,7 +22,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(oidc)
-//!     .build_state::<Services, _>().await
+//!     .build_state::<Services, _, _>().await
 //!     .register_controller::<UserController>()
 //!     .serve("0.0.0.0:3000").await.unwrap();
 //! ```
@@ -118,10 +118,10 @@ impl Default for OidcServer {
 impl PreStatePlugin for OidcServer {
     type Provided = Arc<JwtClaimsValidator>;
 
-    fn install<P>(
+    fn install<P, R>(
         self,
-        app: AppBuilder<NoState, P>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+        app: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
         // 1. Generate RSA-2048 key pair.
         let key_pair = Arc::new(keys::OidcKeyPair::generate(&self.config.kid));
 

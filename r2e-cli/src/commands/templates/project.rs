@@ -111,7 +111,7 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
         builder_lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
     }
 
-    builder_lines.push("        .build_state::<AppState, _>()".to_string());
+    builder_lines.push("        .build_state::<AppState, _, _>()".to_string());
     builder_lines.push("        .await".to_string());
     builder_lines.push("        .with(Health)".to_string());
     builder_lines.push("        .with(Tracing)".to_string());

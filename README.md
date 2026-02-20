@@ -126,7 +126,7 @@ async fn main() {
 
     AppBuilder::new()
         .with_bean::<UserService>()
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .with_config(config)
         .with(Health)           // GET /health
@@ -333,7 +333,7 @@ Register the scheduler plugin **before** `build_state()`:
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
@@ -387,7 +387,7 @@ let config = R2eConfig::load("dev").unwrap(); // loads application.yaml + applic
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")

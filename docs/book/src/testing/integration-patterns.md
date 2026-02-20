@@ -20,7 +20,7 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(event_bus)
             .with_bean::<UserService>()
-            .build_state::<AppState, _>()
+            .build_state::<AppState, _, _>()
             .await
             .with(Health)
             .with(ErrorHandling)
@@ -97,7 +97,7 @@ async fn setup_with_db() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(pool)
             .with_bean::<UserService>()
-            .build_state::<AppState, _>()
+            .build_state::<AppState, _, _>()
             .await
             .with(ErrorHandling)
             .register_controller::<UserController>(),
@@ -152,7 +152,7 @@ async fn test_event_emission() {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(event_bus)
             .with_bean::<UserService>()
-            .build_state::<AppState, _>()
+            .build_state::<AppState, _, _>()
             .await
             .register_controller::<UserController>(),
     );

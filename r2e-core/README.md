@@ -18,7 +18,7 @@ AppBuilder::new()
     .with_bean::<UserService>()            // sync bean
     .with_async_bean::<MyAsyncService>()   // async bean
     .with_producer::<CreatePool>()         // async producer
-    .build_state::<Services, _>().await    // resolve bean graph → phase 2
+    .build_state::<Services, _, _>().await    // resolve bean graph → phase 2
 
     // Phase 2: post-state (plugins, routes, lifecycle)
     .with_config(config)

@@ -26,7 +26,7 @@ pub enum GrpcTransport {
 /// AppBuilder::new()
 ///     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
 ///     // or: .plugin(GrpcServer::multiplexed())
-///     .build_state::<Services, _>()
+///     .build_state::<Services, _, _>()
 ///     .await
 ///     .register_grpc_service::<UserGrpcService>()
 ///     .serve("0.0.0.0:3000")
@@ -66,10 +66,10 @@ impl PreStatePlugin for GrpcServer {
     /// The real coordination happens via `GrpcServiceRegistry` in plugin_data.
     type Provided = GrpcMarker;
 
-    fn install<P>(
+    fn install<P, R>(
         self,
-        app: AppBuilder<NoState, P>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+        app: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport.clone();
         let cancel = CancellationToken::new();

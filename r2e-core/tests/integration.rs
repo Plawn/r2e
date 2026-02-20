@@ -285,7 +285,7 @@ async fn cors_preflight_returns_200() {
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanState, Producer};
-use r2e_core::type_list::{BuildableFrom, Contains};
+use r2e_core::type_list::{BuildableFrom, Contains, TNil};
 use std::any::TypeId;
 
 #[derive(Clone, Debug)]
@@ -315,7 +315,7 @@ where
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
-        .build_state::<SingleDepState, _>()
+        .build_state::<SingleDepState, _, _>()
         .await
         .with(Health)
         .build();
@@ -331,6 +331,7 @@ struct TestService {
 }
 
 impl Bean for TestService {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
@@ -364,7 +365,7 @@ where
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .with_bean::<TestService>()
-        .build_state::<BeanTestState, _>()
+        .build_state::<BeanTestState, _, _>()
         .await
         .with(Health)
         .build();
@@ -379,6 +380,7 @@ struct AsyncService {
 }
 
 impl AsyncBean for AsyncService {
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
@@ -410,7 +412,7 @@ where
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .with_async_bean::<AsyncService>()
-        .build_state::<AsyncBeanTestState, _>()
+        .build_state::<AsyncBeanTestState, _, _>()
         .await
         .with(Health)
         .build();
@@ -426,6 +428,7 @@ struct TestProducer;
 
 impl Producer for TestProducer {
     type Output = ProducedValue;
+    type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
@@ -457,7 +460,7 @@ where
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .with_producer::<TestProducer>()
-        .build_state::<ProducerTestState, _>()
+        .build_state::<ProducerTestState, _, _>()
         .await
         .with(Health)
         .build();
@@ -475,7 +478,7 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
-        .build_state::<SingleDepState, _>()
+        .build_state::<SingleDepState, _, _>()
         .await
         .with(Health)
         .build();

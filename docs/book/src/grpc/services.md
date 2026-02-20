@@ -181,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = AppBuilder::new()
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
         .provide(prefix)
-        .build_state::<Services, _>()
+        .build_state::<Services, _, _>()
         .await
         .register_grpc_service::<GreeterService>();
 
@@ -238,7 +238,7 @@ A single application can serve both HTTP controllers and gRPC services:
 let app = AppBuilder::new()
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .provide(prefix)
-    .build_state::<Services, _>()
+    .build_state::<Services, _, _>()
     .await
     .register_grpc_service::<GreeterService>()    // gRPC
     .register_controller::<HealthController>()     // HTTP

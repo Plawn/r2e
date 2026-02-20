@@ -16,6 +16,12 @@ use std::pin::Pin;
     note = "add `#[derive(Bean)]` to your type or implement the `Bean` trait manually"
 )]
 pub trait Bean: Clone + Send + Sync + 'static {
+    /// Type-level list of dependency types required to construct this bean.
+    ///
+    /// Generated automatically by `#[bean]` and `#[derive(Bean)]`.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
+
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
@@ -42,6 +48,12 @@ pub trait Bean: Clone + Send + Sync + 'static {
     note = "add `#[bean]` to your impl block with an `async fn` constructor, or implement `AsyncBean` manually"
 )]
 pub trait AsyncBean: Clone + Send + Sync + 'static {
+    /// Type-level list of dependency types required to construct this bean.
+    ///
+    /// Generated automatically by `#[bean]` on async constructors.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
+
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
@@ -71,6 +83,12 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
 pub trait Producer: Send + 'static {
     /// The type this producer creates.
     type Output: Clone + Send + Sync + 'static;
+
+    /// Type-level list of dependency types required to produce the output.
+    ///
+    /// Generated automatically by `#[producer]`.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to produce the output.

@@ -16,7 +16,7 @@ r2e = { version = "0.1", features = ["openapi"] }
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")

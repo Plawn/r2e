@@ -27,7 +27,7 @@ async fn main() {
         .provide(config.clone())
         .with_producer::<CreatePool>()
         .with_bean::<services::ArticleService>()
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .with_config(config)
         .with(Health)

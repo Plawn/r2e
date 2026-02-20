@@ -35,7 +35,7 @@ let oidc = OidcServer::new()
 
 AppBuilder::new()
     .plugin(oidc)                              // pre-state : fournit Arc<JwtClaimsValidator>
-    .build_state::<Services, _>().await
+    .build_state::<Services, _, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -354,7 +354,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(oidc)
         .with_bean::<UserService>()
-        .build_state::<Services, _>().await
+        .build_state::<Services, _, _>().await
         .with(Health)
         .with(Tracing)
         .register_controller::<ApiController>()
@@ -381,7 +381,7 @@ let oidc = OidcServer::new().with_user_store(users);
 
 let app = AppBuilder::new()
     .plugin(oidc)
-    .build_state::<TestState, _>().await
+    .build_state::<TestState, _, _>().await
     .register_controller::<MyController>()
     .build();
 

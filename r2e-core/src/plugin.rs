@@ -89,7 +89,7 @@ pub trait Plugin: Send + 'static {
 /// impl PreStatePlugin for Scheduler {
 ///     type Provided = CancellationToken;
 ///
-///     fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
 ///         let token = CancellationToken::new();
 ///         app.provide(token.clone()).add_deferred(DeferredAction::new("Scheduler", move |ctx| {
 ///             // ... setup ...
@@ -107,7 +107,7 @@ pub trait PreStatePlugin: Send + 'static {
     /// 1. Create the provided instance
     /// 2. Call `app.provide(instance)` to register it
     /// 3. Optionally call `app.add_deferred()` for post-state setup
-    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>>;
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R>;
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────

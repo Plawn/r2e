@@ -349,7 +349,7 @@ impl<T> AppBuilder<T> {
 AppBuilder::new()
     .validate_config::<DatabaseConfig>()
     .validate_config::<SecurityConfig>()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     // ...
 ```

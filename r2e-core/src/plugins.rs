@@ -70,7 +70,7 @@ impl Plugin for Cors {
 ///
 /// ```ignore
 /// AppBuilder::new()
-///     .build_state::<MyState, _>()
+///     .build_state::<MyState, _, _>()
 ///     .await
 ///     .with(Tracing)
 ///     .serve("0.0.0.0:3000")

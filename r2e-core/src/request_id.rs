@@ -13,7 +13,7 @@
 //!
 //! // As a plugin
 //! AppBuilder::new()
-//!     .build_state::<S, _>()
+//!     .build_state::<S, _, _>()
 //!     .await
 //!     .with(RequestId)
 //!     // ...

@@ -168,3 +168,55 @@ impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {
     note = "one or more field types are missing — add `.provide(value)` or `.with_bean::<Type>()` calls before `.build_state()`"
 )]
 pub trait BuildableFrom<P, Indices> {}
+
+// ── Type-level list concatenation ────────────────────────────────────────
+
+/// Concatenate two type-level lists.
+///
+/// `TNil ++ Other = Other`, `TCons<H, T> ++ Other = TCons<H, T ++ Other>`.
+///
+/// Used internally by `AppBuilder` to accumulate bean dependency requirements
+/// from multiple bean registrations.
+pub trait TAppend<Other> {
+    /// The resulting concatenated list.
+    type Output;
+}
+
+impl<Other> TAppend<Other> for TNil {
+    type Output = Other;
+}
+
+impl<H, T, Other> TAppend<Other> for TCons<H, T>
+where
+    T: TAppend<Other>,
+{
+    type Output = TCons<H, T::Output>;
+}
+
+// ── Compile-time requirement verification ────────────────────────────────
+
+/// Compile-time verification that every type in `Self` (the requirements list)
+/// is present in the provision list `P`.
+///
+/// This trait is checked on [`AppBuilder::build_state()`] to ensure that all
+/// bean dependencies are satisfied by the current provisions. If a bean
+/// declares a dependency that was never `.provide()`-d or registered via
+/// `.with_bean()`, the compiler will emit an error at the call site.
+///
+/// `Indices` is an opaque witness tuple inferred by the compiler.
+#[diagnostic::on_unimplemented(
+    message = "one or more bean dependencies are missing from the AppBuilder",
+    note = "a registered bean has a dependency that was not provided — add `.provide(value)` or `.with_bean::<Type>()` for the missing type"
+)]
+pub trait AllSatisfied<P, Indices> {}
+
+// Base case: an empty requirements list is always satisfied.
+impl<P> AllSatisfied<P, ()> for TNil {}
+
+// Recursive case: the head must be in P, and the tail must also be satisfied.
+impl<H, T, P, IH, IT> AllSatisfied<P, (IH, IT)> for TCons<H, T>
+where
+    P: Contains<H, IH>,
+    T: AllSatisfied<P, IT>,
+{
+}

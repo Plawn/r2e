@@ -131,7 +131,7 @@ let config = R2eConfig::load("dev").unwrap();
 
 AppBuilder::new()
     .provide(config.clone())
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with_config(config)  // makes it available for #[config] fields
     // ...

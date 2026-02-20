@@ -4,6 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ReturnType, Type};
 
 use crate::crate_path::r2e_core_path;
+use crate::type_list_gen::build_tcons_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item_impl = parse_macro_input!(input as ItemImpl);
@@ -30,6 +31,7 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
 
     // Extract parameter types and generate dependency list + build args.
     let mut dep_type_ids = Vec::new();
+    let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut build_args = Vec::new();
     let mut config_key_entries = Vec::new();
     let mut has_config = false;
@@ -71,6 +73,7 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     has_config = true;
                 } else {
                     dep_type_ids.push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
+                    dep_types.push(quote! { #ty });
                     build_args.push(quote! { let #arg_name: #ty = ctx.get::<#ty>(); });
                 }
             }
@@ -83,6 +86,7 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         dep_type_ids.push(
             quote! { (std::any::TypeId::of::<#krate::config::R2eConfig>(), std::any::type_name::<#krate::config::R2eConfig>()) },
         );
+        dep_types.push(quote! { #krate::config::R2eConfig });
     }
 
     let arg_forwards: Vec<_> = (0..build_args.len())
@@ -93,6 +97,7 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         .collect();
 
     let krate = r2e_core_path();
+    let deps_type = build_tcons_type(&dep_types, &krate);
 
     // Extract R2eConfig once if any #[config] params are present
     let config_prelude = if has_config {
@@ -115,6 +120,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         // Generate AsyncBean impl
         Ok(quote! {
             impl #krate::beans::AsyncBean for #self_ty {
+                type Deps = #deps_type;
+
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]
                 }
@@ -129,9 +136,11 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
             }
         })
     } else {
-        // Generate Bean impl (unchanged behavior)
+        // Generate Bean impl
         Ok(quote! {
             impl #krate::beans::Bean for #self_ty {
+                type Deps = #deps_type;
+
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]
                 }

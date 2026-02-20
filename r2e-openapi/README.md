@@ -25,7 +25,7 @@ let openapi = OpenApiConfig::new("My API", "1.0.0")
     .with_docs_ui(true);
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(OpenApiPlugin::new(openapi))
     .register_controller::<UserController>()

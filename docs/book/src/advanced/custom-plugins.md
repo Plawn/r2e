@@ -28,7 +28,7 @@ Usage:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(RequestLogger)
     // ...
@@ -69,7 +69,7 @@ pub struct MyPlugin {
 impl PreStatePlugin for MyPlugin {
     type Provided = MyPluginConfig;
 
-    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
         app.provide(self.config)
     }
 }
@@ -80,7 +80,7 @@ Usage:
 ```rust
 AppBuilder::new()
     .plugin(MyPlugin { config: MyPluginConfig::default() })
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     // ...
 ```
@@ -101,7 +101,7 @@ pub struct MyPlugin;
 impl PreStatePlugin for MyPlugin {
     type Provided = CancellationToken;
 
-    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
         let token = CancellationToken::new();
 
         app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &mut DeferredContext| {
@@ -174,7 +174,7 @@ Usage:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .with(RequestId)
     .serve("0.0.0.0:3000")
@@ -201,7 +201,7 @@ pub struct HealthChecker {
 impl PreStatePlugin for HealthChecker {
     type Provided = CancellationToken;
 
-    fn install<P>(self, app: AppBuilder<NoState, P>) -> AppBuilder<NoState, TCons<Self::Provided, P>> {
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, R> {
         let token = CancellationToken::new();
         let interval = self.interval;
         let url = self.url;
@@ -249,7 +249,7 @@ AppBuilder::new()
         interval: Duration::from_secs(30),
         url: "https://api.example.com/health".into(),
     })
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .serve("0.0.0.0:3000")
     .await;

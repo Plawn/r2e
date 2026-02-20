@@ -59,7 +59,7 @@ fn boxed_task(
 async fn scheduler_plugin_provides_token() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _>()
+        .build_state::<TestState, _, _>()
         .await;
 
     let data = app.get_plugin_data::<TaskRegistryHandle>();
@@ -71,7 +71,7 @@ async fn scheduler_plugin_provides_token() {
 async fn scheduler_plugin_stores_registry() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _>()
+        .build_state::<TestState, _, _>()
         .await;
 
     let registry = app.get_plugin_data::<TaskRegistryHandle>();
@@ -82,7 +82,7 @@ async fn scheduler_plugin_stores_registry() {
 async fn registry_collects_and_extracts() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _>()
+        .build_state::<TestState, _, _>()
         .await;
 
     let registry = app
@@ -107,7 +107,7 @@ async fn registry_collects_and_extracts() {
 async fn full_lifecycle_without_serve() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _>()
+        .build_state::<TestState, _, _>()
         .await;
 
     let registry = app

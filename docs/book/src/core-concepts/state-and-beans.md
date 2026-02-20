@@ -137,7 +137,7 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer
     .with_async_bean::<CacheService>()     // async bean
     .with_bean::<UserService>()            // sync bean
-    .build_state::<AppState, _>()          // resolve the graph
+    .build_state::<AppState, _, _>()          // resolve the graph
     .await                                 // async because graph may contain async beans
 ```
 
@@ -185,7 +185,7 @@ async fn main() {
         .with_producer::<CreatePool>()
         .with_bean::<UserService>()
         .with_bean::<NotificationService>()
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .with_config(config)
         // ... register controllers, plugins, etc.

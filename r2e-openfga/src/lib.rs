@@ -27,7 +27,7 @@
 //! AppBuilder::new()
 //!     .provide(registry)   // for guards (cached check)
 //!     .provide(backend)    // for direct gRPC access
-//!     .build_state::<Services, _>()
+//!     .build_state::<Services, _, _>()
 //!     .await
 //!     .register_controller::<DocumentController>()
 //!     .serve("0.0.0.0:3000").await

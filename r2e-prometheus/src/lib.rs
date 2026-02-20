@@ -9,7 +9,7 @@
 //! use r2e_prometheus::Prometheus;
 //!
 //! AppBuilder::new()
-//!     .build_state::<MyState, _>()
+//!     .build_state::<MyState, _, _>()
 //!     .await
 //!     .with(Prometheus::new("/metrics"))
 //!     .serve("0.0.0.0:3000")

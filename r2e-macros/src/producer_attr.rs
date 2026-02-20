@@ -4,6 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 
 use crate::crate_path::r2e_core_path;
+use crate::type_list_gen::build_tcons_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item_fn = parse_macro_input!(input as ItemFn);
@@ -54,6 +55,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
 
     // Process parameters — detect #[config("key")] vs regular dependencies
     let mut dep_type_ids = Vec::new();
+    let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut build_args = Vec::new();
     let mut config_key_entries = Vec::new();
     let mut has_config = false;
@@ -94,6 +96,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                 } else {
                     dep_type_ids
                         .push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
+                    dep_types.push(quote! { #ty });
                     build_args.push(quote! { let #arg_name: #ty = ctx.get::<#ty>(); });
                 }
 
@@ -115,6 +118,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
         dep_type_ids.push(
             quote! { (std::any::TypeId::of::<#krate::config::R2eConfig>(), std::any::type_name::<#krate::config::R2eConfig>()) },
         );
+        dep_types.push(quote! { #krate::config::R2eConfig });
     }
 
     let arg_forwards: Vec<_> = (0..item_fn.sig.inputs.len())
@@ -126,6 +130,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
         .collect();
 
     let krate = r2e_core_path();
+    let deps_type = build_tcons_type(&dep_types, &krate);
 
     // Extract R2eConfig once if any #[config] params are present
     let config_prelude = if has_config {
@@ -156,6 +161,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
 
         impl #krate::beans::Producer for #struct_ident {
             type Output = #output_ty;
+            type Deps = #deps_type;
 
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                 vec![#(#dep_type_ids),*]

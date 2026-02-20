@@ -26,7 +26,7 @@ async fn raw_handler() -> impl IntoResponse {
 }
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .register_controller::<UserController>()
     // Escape hatch: mount a raw Axum router alongside controllers
@@ -72,7 +72,7 @@ AppBuilder::new()
             EmailService::smtp(config.get::<String>("app.email.host").unwrap())
         }
     })
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
 ```
 
@@ -85,7 +85,7 @@ let app = TestApp::from_builder(
         .with_bean::<UserService>()
         // Override: replace UserService with a mock
         .override_bean(MockUserService::new())
-        .build_state::<AppState, _>()
+        .build_state::<AppState, _, _>()
         .await
         .register_controller::<UserController>(),
 );
@@ -214,7 +214,7 @@ impl MetricsAggregator {
 
 // Registration
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state::<AppState, _, _>()
     .await
     .spawn_component::<MetricsAggregator>()  // runs in background, not an HTTP controller
     .register_controller::<UserController>()
