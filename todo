@@ -30,3 +30,4 @@
 - rendre l'exploitation de la config plus clean -> on provide deux fois en general
 - avoir un tuto pour patch crate pour ajouter des annotations facilements comme plugin dans les macros ?
 - avoir la gestion de la config required / optional + auto -> eviter les pattern de verif manuelle dans le main.rs
+- vrai hot reload

@@ -42,7 +42,7 @@ Some plugins need to install before `build_state()`. Use `.plugin()` instead of 
 
 ```rust
 AppBuilder::new()
-    .plugin(Scheduler)    // provides CancellationToken to the bean graph
+    .plugin(Scheduler)    // provides CancellationToken + ScheduledJobRegistry
     .build_state::<AppState, _, _>()
     .await
     // ...
@@ -98,14 +98,13 @@ impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
 }
 ```
 
-### Pre-state plugins
+### Pre-state plugins (simple path)
 
-Implement `PreStatePlugin` for plugins that need to run before `build_state()`:
+Implement `PreStatePlugin` for plugins that provide a single bean. No builder generics needed:
 
 ```rust
-use r2e::{PreStatePlugin, AppBuilder};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::type_list::TNil;
 
 pub struct MyPreStatePlugin;
 
@@ -113,39 +112,34 @@ impl PreStatePlugin for MyPreStatePlugin {
     type Provided = MyConfig;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
-        app.provide(MyConfig::default()).with_updated_types()
+    fn install(self, _ctx: &mut PluginInstallContext) -> MyConfig {
+        MyConfig::default()
     }
 }
 ```
 
 ### Deferred actions
 
-For plugins that need to perform setup after state construction, use `DeferredAction`:
+For plugins that need to perform setup after state construction, use `DeferredAction` via the context:
 
 ```rust
-use r2e::plugin::{DeferredAction, DeferredContext};
-use r2e::{PreStatePlugin, AppBuilder};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
+use r2e::plugin::DeferredContext;
+use r2e::type_list::TNil;
 
 impl PreStatePlugin for MyPlugin {
     type Provided = MyToken;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, ctx: &mut PluginInstallContext) -> MyToken {
         let token = MyToken::new();
-        app.provide(token).add_deferred(DeferredAction::new("my-plugin", |ctx: &mut DeferredContext| {
-            ctx.add_layer(Box::new(|router| router));
-            ctx.on_serve(|_tasks, _token| { /* run when server starts */ });
-            ctx.on_shutdown(|| { /* run when server stops */ });
-        })).with_updated_types()
+        let t = token.clone();
+        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
+            dctx.add_layer(Box::new(|router| router));
+            dctx.on_serve(|_tasks, _token| { /* run when server starts */ });
+            dctx.on_shutdown(move || { t.cancel(); });
+        }));
+        token
     }
 }
 ```
@@ -155,3 +149,32 @@ impl PreStatePlugin for MyPlugin {
 - `store_data()` — store data in the builder
 - `on_serve()` — register a serve hook
 - `on_shutdown()` — register a shutdown hook
+
+### Pre-state plugins (advanced path)
+
+For plugins that need to provide **multiple** beans or need full builder access,
+implement `RawPreStatePlugin`:
+
+```rust
+use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
+use r2e::builder::NoState;
+use r2e::type_list::{TAppend, TCons, TNil};
+
+pub struct MultiProvider;
+
+impl RawPreStatePlugin for MultiProvider {
+    type Provisions = TCons<TokenA, TCons<TokenB, TNil>>;
+    type Required = TNil;
+
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
+        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    where
+        P: TAppend<Self::Provisions>,
+        R: TAppend<Self::Required>,
+    {
+        app.provide(TokenA::new())
+           .provide(TokenB::new())
+           .with_updated_types()
+    }
+}
+```

@@ -12,7 +12,7 @@ description = "Prometheus metrics plugin for R2E - HTTP request tracking and /me
 
 [dependencies]
 r2e-core = { path = "../r2e-core", version = "0.1.0" }
-prometheus = "0.13"
+prometheus = "0.14"
 tower = "0.5"
 pin-project-lite = "0.2"
 http = "1"

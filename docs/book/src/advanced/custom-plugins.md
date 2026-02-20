@@ -1,6 +1,6 @@
 # Custom Plugins
 
-Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin`).
+Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin` / `RawPreStatePlugin`).
 
 ## Post-state plugins
 
@@ -53,14 +53,13 @@ impl Plugin for NormalizePathPlugin {
 }
 ```
 
-## Pre-state plugins
+## Pre-state plugins (simple path)
 
-Install before `build_state()` with `.plugin(plugin)`. They provide beans to the DI graph:
+Install before `build_state()` with `.plugin(plugin)`. Implement `PreStatePlugin` — no builder generics needed:
 
 ```rust
-use r2e::{PreStatePlugin, AppBuilder};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::type_list::TNil;
 
 pub struct MyPlugin {
     config: MyPluginConfig,
@@ -70,11 +69,8 @@ impl PreStatePlugin for MyPlugin {
     type Provided = MyPluginConfig;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
-        app.provide(self.config).with_updated_types()
+    fn install(self, _ctx: &mut PluginInstallContext) -> MyPluginConfig {
+        self.config
     }
 }
 ```
@@ -94,10 +90,9 @@ AppBuilder::new()
 For plugins that need to set up infrastructure after state is built but during serve:
 
 ```rust
-use r2e::{PreStatePlugin, AppBuilder};
-use r2e::plugin::{DeferredAction, DeferredContext};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
+use r2e::plugin::DeferredContext;
+use r2e::type_list::TNil;
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
@@ -106,30 +101,30 @@ impl PreStatePlugin for MyPlugin {
     type Provided = CancellationToken;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, ctx: &mut PluginInstallContext) -> CancellationToken {
         let token = CancellationToken::new();
 
-        app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &mut DeferredContext| {
+        let t = token.clone();
+        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
             // Add a Tower layer
-            ctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
+            dctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
 
             // Store data for later access
-            ctx.store_data(MyPluginHandle::new());
+            dctx.store_data(MyPluginHandle::new());
 
             // Hook into server lifecycle
-            let t = token.clone();
-            ctx.on_serve(move |_tasks, _cancel_token| {
+            let t2 = t.clone();
+            dctx.on_serve(move |_tasks, _cancel_token| {
                 tracing::info!("Plugin started");
             });
 
-            ctx.on_shutdown(move || {
-                t.cancel();
+            dctx.on_shutdown(move || {
+                t2.cancel();
                 tracing::info!("Plugin shutting down");
             });
-        })).with_updated_types()
+        }));
+
+        token
     }
 }
 ```
@@ -142,6 +137,62 @@ impl PreStatePlugin for MyPlugin {
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | Store a value keyed by type for later retrieval |
 | `on_serve` | `(&mut self, FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken))` | Run when the server starts listening |
 | `on_shutdown` | `(&mut self, FnOnce())` | Run during graceful shutdown |
+
+## Pre-state plugins (advanced path)
+
+For plugins that need to provide **multiple** beans or need full builder access,
+implement `RawPreStatePlugin` instead of `PreStatePlugin`:
+
+```rust
+use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
+use r2e::builder::NoState;
+use r2e::type_list::{TAppend, TCons, TNil};
+use tokio_util::sync::CancellationToken;
+
+pub struct MyAdvancedPlugin;
+
+impl RawPreStatePlugin for MyAdvancedPlugin {
+    // Provides two beans: CancellationToken and MyRegistry
+    type Provisions = TCons<CancellationToken, TCons<MyRegistry, TNil>>;
+    type Required = TNil;
+
+    fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
+        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    where
+        P: TAppend<Self::Provisions>,
+        R: TAppend<Self::Required>,
+    {
+        let token = CancellationToken::new();
+        let registry = MyRegistry::new();
+
+        app.provide(token)
+           .provide(registry)
+           .add_deferred(DeferredAction::new("my-advanced-plugin", |ctx| {
+               ctx.on_shutdown(|| { tracing::info!("Shutting down"); });
+           }))
+           .with_updated_types()
+    }
+}
+```
+
+Usage is the same — `.plugin()` accepts both `PreStatePlugin` and `RawPreStatePlugin`:
+
+```rust
+AppBuilder::new()
+    .plugin(MyAdvancedPlugin)
+    .build_state::<AppState, _, _>()
+    .await
+    // ...
+```
+
+**When to use which:**
+
+| | `PreStatePlugin` | `RawPreStatePlugin` |
+|---|---|---|
+| Provides | Single bean | Multiple beans |
+| Generics | None | `<P, R>` on `install()` |
+| Builder access | Via `PluginInstallContext` | Full `AppBuilder` |
+| `with_updated_types()` | Not needed (handled automatically) | Required when `Required = TNil` |
 
 ## Step-by-step: Request ID plugin
 
@@ -194,10 +245,9 @@ AppBuilder::new()
 A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.
 
 ```rust
-use r2e::{PreStatePlugin, AppBuilder};
-use r2e::plugin::{DeferredAction, DeferredContext};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
+use r2e::plugin::DeferredContext;
+use r2e::type_list::TNil;
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -210,20 +260,17 @@ impl PreStatePlugin for HealthChecker {
     type Provided = CancellationToken;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, ctx: &mut PluginInstallContext) -> CancellationToken {
         let token = CancellationToken::new();
         let interval = self.interval;
         let url = self.url;
+        let t = token.clone();
 
-        app.provide(token.clone()).add_deferred(DeferredAction::new("health-checker", move |ctx: &mut DeferredContext| {
-            let t = token.clone();
+        ctx.add_deferred(DeferredAction::new("health-checker", move |dctx: &mut DeferredContext| {
+            let t2 = t.clone();
 
             // Start the checker when the server begins serving
-            ctx.on_serve(move |_tasks, _cancel_token| {
-                let t = t.clone();
+            dctx.on_serve(move |_tasks, _cancel_token| {
                 tokio::spawn(async move {
                     loop {
                         tokio::select! {
@@ -233,7 +280,7 @@ impl PreStatePlugin for HealthChecker {
                                     Err(e) => tracing::warn!("Health check failed: {}", e),
                                 }
                             }
-                            _ = t.cancelled() => {
+                            _ = t2.cancelled() => {
                                 tracing::info!("Health checker stopped");
                                 break;
                             }
@@ -243,10 +290,12 @@ impl PreStatePlugin for HealthChecker {
             });
 
             // Cancel the checker on shutdown
-            ctx.on_shutdown(move || {
-                token.cancel();
+            dctx.on_shutdown(move || {
+                t.cancel();
             });
-        })).with_updated_types()
+        }));
+
+        token
     }
 }
 ```

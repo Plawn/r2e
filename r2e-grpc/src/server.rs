@@ -1,6 +1,5 @@
-use r2e_core::builder::NoState;
-use r2e_core::type_list::{TAppend, TCons, TNil};
-use r2e_core::{AppBuilder, DeferredAction, PreStatePlugin};
+use r2e_core::type_list::TNil;
+use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::GrpcServiceRegistry;
@@ -62,42 +61,35 @@ impl GrpcServer {
 }
 
 impl PreStatePlugin for GrpcServer {
-    /// GrpcServer doesn't provide beans — it uses `()` as a placeholder.
+    /// GrpcServer doesn't provide beans — it uses `GrpcMarker` as a placeholder.
     /// The real coordination happens via `GrpcServiceRegistry` in plugin_data.
     type Provided = GrpcMarker;
     type Required = TNil;
 
-    fn install<P, R>(
-        self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, ctx: &mut PluginInstallContext) -> GrpcMarker {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport.clone();
         let cancel = CancellationToken::new();
         let cancel_for_shutdown = cancel.clone();
 
-        app.provide(GrpcMarker).add_deferred(DeferredAction::new(
-            "GrpcServer",
-            move |ctx| {
-                // Store the registry for register_grpc_service to find.
-                ctx.store_data(registry.clone());
-                // Store the transport config for the serve hook to use.
-                ctx.store_data(GrpcTransportConfig(transport));
+        ctx.add_deferred(DeferredAction::new("GrpcServer", move |dctx| {
+            // Store the registry for register_grpc_service to find.
+            dctx.store_data(registry.clone());
+            // Store the transport config for the serve hook to use.
+            dctx.store_data(GrpcTransportConfig(transport));
 
-                ctx.on_serve(move |_tasks, _token| {
-                    // The actual server startup is handled by the serve() extension
-                    // or by the builder, since we need access to the collected services.
-                    // The GrpcServiceRegistry is read during serve().
-                });
+            dctx.on_serve(move |_tasks, _token| {
+                // The actual server startup is handled by the serve() extension
+                // or by the builder, since we need access to the collected services.
+                // The GrpcServiceRegistry is read during serve().
+            });
 
-                ctx.on_shutdown(move || {
-                    cancel_for_shutdown.cancel();
-                });
-            },
-        )).with_updated_types()
+            dctx.on_shutdown(move || {
+                cancel_for_shutdown.cancel();
+            });
+        }));
+
+        GrpcMarker
     }
 }
 

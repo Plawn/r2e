@@ -67,40 +67,138 @@ pub trait Plugin: Send + 'static {
     }
 }
 
-// ── Pre-state Plugin trait ─────────────────────────────────────────────────
+// ── Pre-state Plugin traits ────────────────────────────────────────────────
 
-/// A plugin that runs in the pre-state phase and provides beans.
+/// Context passed to [`PreStatePlugin::install`] for registering deferred actions.
 ///
-/// Pre-state plugins are installed before `build_state()` is called. They can:
-/// - Provide bean instances to the bean registry
-/// - Register deferred actions (like scheduler setup) that execute after state resolution
-///
-/// The `Provided` associated type specifies the bean type this plugin provides,
-/// which becomes available for injection via `#[inject]`.
+/// This is the simplified plugin API. Instead of receiving the full `AppBuilder`,
+/// plugins create their provided value and optionally register deferred actions
+/// (layers, serve/shutdown hooks) via this context.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use r2e_core::{PreStatePlugin, DeferredAction};
+/// impl PreStatePlugin for MyPlugin {
+///     type Provided = MyConfig;
+///     type Required = TNil;
+///
+///     fn install(self, ctx: &mut PluginInstallContext) -> MyConfig {
+///         ctx.add_deferred(DeferredAction::new("MyPlugin", |dctx| {
+///             dctx.on_shutdown(|| { tracing::info!("Bye"); });
+///         }));
+///         MyConfig { /* ... */ }
+///     }
+/// }
+/// ```
+pub struct PluginInstallContext {
+    deferred: Vec<DeferredAction>,
+}
+
+impl PluginInstallContext {
+    /// Create a new empty install context.
+    pub fn new() -> Self {
+        Self {
+            deferred: Vec::new(),
+        }
+    }
+
+    /// Register a deferred action to run after state resolution.
+    pub fn add_deferred(&mut self, action: DeferredAction) {
+        self.deferred.push(action);
+    }
+
+    /// Consume the context and return the collected deferred actions.
+    pub fn into_deferred(self) -> Vec<DeferredAction> {
+        self.deferred
+    }
+}
+
+impl Default for PluginInstallContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A plugin that runs in the pre-state phase and provides a single bean.
+///
+/// This is the **simplified** plugin API — most plugins should implement this
+/// trait. The `install` method receives a [`PluginInstallContext`] for registering
+/// deferred actions and returns the provided bean value directly. No builder
+/// generics, no `with_updated_types()`.
+///
+/// For plugins that need to provide **multiple** beans or need full builder
+/// access, implement [`RawPreStatePlugin`] instead.
+///
+/// Every `PreStatePlugin` is automatically a [`RawPreStatePlugin`] via a blanket
+/// impl, so both work with `.plugin()`.
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e_core::{PreStatePlugin, PluginInstallContext, DeferredAction};
+/// use r2e_core::type_list::TNil;
+///
+/// pub struct MyPlugin { pub value: String }
+///
+/// impl PreStatePlugin for MyPlugin {
+///     type Provided = String;
+///     type Required = TNil;
+///
+///     fn install(self, _ctx: &mut PluginInstallContext) -> String {
+///         self.value
+///     }
+/// }
+/// ```
+pub trait PreStatePlugin: Send + 'static {
+    /// The bean type this plugin provides to the bean registry.
+    type Provided: Clone + Send + Sync + 'static;
+
+    /// Bean dependencies this plugin requires from the bean graph.
+    ///
+    /// Most plugins set this to `TNil` (no additional requirements).
+    type Required;
+
+    /// Install the plugin in the pre-state phase.
+    ///
+    /// Return the value to be provided to the bean registry. Optionally
+    /// register deferred actions via `ctx.add_deferred()`.
+    fn install(self, ctx: &mut PluginInstallContext) -> Self::Provided;
+}
+
+/// A pre-state plugin with full builder access (advanced API).
+///
+/// Implement this trait when your plugin needs to:
+/// - Provide **multiple** bean types (via `type Provisions = TCons<A, TCons<B, TNil>>`)
+/// - Call arbitrary builder methods (`.with_bean()`, `.with_producer()`, etc.)
+///
+/// Most plugins should implement [`PreStatePlugin`] instead — it's simpler and
+/// automatically provides a `RawPreStatePlugin` impl via a blanket implementation.
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e_core::{RawPreStatePlugin, AppBuilder, DeferredAction};
 /// use r2e_core::builder::NoState;
 /// use r2e_core::type_list::{TAppend, TCons, TNil};
 /// use tokio_util::sync::CancellationToken;
 ///
 /// pub struct Scheduler;
 ///
-/// impl PreStatePlugin for Scheduler {
-///     type Provided = CancellationToken;
+/// impl RawPreStatePlugin for Scheduler {
+///     type Provisions = TCons<CancellationToken, TCons<JobRegistry, TNil>>;
 ///     type Required = TNil;
 ///
-///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
+///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
 ///     where
+///         P: TAppend<Self::Provisions>,
 ///         R: TAppend<Self::Required>,
 ///     {
 ///         let token = CancellationToken::new();
-///         app.provide(token.clone())
-///             .add_deferred(DeferredAction::new("Scheduler", move |ctx| {
-///                 // ... setup ...
-///             }))
+///         let registry = JobRegistry::new();
+///         app.provide(token)
+///             .provide(registry)
+///             .add_deferred(DeferredAction::new("Scheduler", |ctx| { /* ... */ }))
 ///             .with_updated_types()
 ///     }
 /// }
@@ -112,39 +210,47 @@ pub trait Plugin: Send + 'static {
 /// `<R as TAppend<TNil>>::Output == R`. Since `R` is a phantom type parameter,
 /// call [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
 /// `install()` to perform the zero-cost phantom type conversion.
-///
-/// Forgetting `.with_updated_types()` produces a compile error:
-/// ```text
-/// expected AppBuilder<_, _, <R as TAppend<TNil>>::Output>
-///    found AppBuilder<_, _, R>
-/// ```
-/// The fix is always to append `.with_updated_types()` to the returned builder chain.
-pub trait PreStatePlugin: Send + 'static {
-    /// The type this plugin provides to the bean registry.
-    type Provided: Clone + Send + Sync + 'static;
+pub trait RawPreStatePlugin: Send + 'static {
+    /// The type-level list of bean types this plugin provides.
+    ///
+    /// For a single provision: `TCons<MyType, TNil>`.
+    /// For multiple: `TCons<A, TCons<B, TNil>>`.
+    type Provisions;
 
     /// Bean dependencies this plugin requires from the bean graph.
-    ///
-    /// Most plugins set this to `TNil` (no additional requirements). Plugins that
-    /// register beans via `.with_bean()` or `.with_producer()` inside `install()`
-    /// should declare their transitive dependencies here so the compile-time
-    /// provision checker can verify them at `build_state()`.
     type Required;
 
-    /// Install the plugin in the pre-state phase.
-    ///
-    /// The implementation should:
-    /// 1. Create the provided instance
-    /// 2. Call `app.provide(instance)` to register it
-    /// 3. Optionally call `app.add_deferred()` for post-state setup
-    /// 4. Call `.with_updated_types()` at the end when `Required = TNil`
-    ///    (see [trait-level docs](PreStatePlugin) for details)
+    /// Install the plugin in the pre-state phase with full builder access.
     fn install<P, R>(
         self,
         app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
+    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
     where
+        P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>;
+}
+
+// Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
+impl<T: PreStatePlugin> RawPreStatePlugin for T {
+    type Provisions = TCons<T::Provided, crate::type_list::TNil>;
+    type Required = T::Required;
+
+    fn install<P, R>(
+        self,
+        app: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    where
+        P: TAppend<Self::Provisions>,
+        R: TAppend<Self::Required>,
+    {
+        let mut ctx = PluginInstallContext::new();
+        let provided = PreStatePlugin::install(self, &mut ctx);
+        let mut builder = app;
+        for action in ctx.into_deferred() {
+            builder = builder.add_deferred(action);
+        }
+        builder.provide(provided).with_updated_types()
+    }
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────

@@ -41,9 +41,8 @@ use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
-use r2e_core::builder::{AppBuilder, NoState};
-use r2e_core::type_list::{TAppend, TCons, TNil};
-use r2e_core::{DeferredAction, PreStatePlugin};
+use r2e_core::type_list::TNil;
+use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
@@ -119,13 +118,7 @@ impl PreStatePlugin for OidcServer {
     type Provided = Arc<JwtClaimsValidator>;
     type Required = TNil;
 
-    fn install<P, R>(
-        self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    where
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
         // 1. Generate RSA-2048 key pair.
         let key_pair = Arc::new(keys::OidcKeyPair::generate(&self.config.kid));
 
@@ -153,17 +146,17 @@ impl PreStatePlugin for OidcServer {
             claims_validator: claims_validator.clone(),
         });
 
-        // 4. Provide the validator to the bean graph and register routes via deferred action.
+        // 4. Register routes via deferred action.
         let base_path = oidc_state.config.base_path.clone();
-        app.provide(claims_validator)
-            .add_deferred(DeferredAction::new("OidcServer", move |ctx| {
-                let oidc_state = oidc_state;
-                let base_path = base_path;
-                ctx.add_layer(Box::new(move |router| {
-                    router.merge(oidc_routes(oidc_state, &base_path))
-                }));
-            }))
-            .with_updated_types()
+        ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
+            let oidc_state = oidc_state;
+            let base_path = base_path;
+            dctx.add_layer(Box::new(move |router| {
+                router.merge(oidc_routes(oidc_state, &base_path))
+            }));
+        }));
+
+        claims_validator
     }
 }
 

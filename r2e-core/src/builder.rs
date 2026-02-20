@@ -4,7 +4,7 @@ use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
 #[allow(deprecated)]
-use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, PreStatePlugin};
+use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, RawPreStatePlugin};
 use crate::type_list::{AllSatisfied, BuildableFrom, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -249,9 +249,11 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self
     }
 
-    /// Install a [`PreStatePlugin`] that provides beans and optionally defers setup.
+    /// Install a pre-state plugin that provides beans and optionally defers setup.
     ///
-    /// Pre-state plugins run before `build_state()` is called. They can:
+    /// Accepts any [`PreStatePlugin`](crate::PreStatePlugin) (simple, single-provision)
+    /// or [`RawPreStatePlugin`] (advanced, multi-provision). Pre-state plugins run
+    /// before `build_state()` is called. They can:
     /// - Provide bean instances to the bean registry
     /// - Register deferred actions (like scheduler setup) that execute after state resolution
     ///
@@ -261,15 +263,16 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// use r2e_scheduler::Scheduler;
     ///
     /// AppBuilder::new()
-    ///     .plugin(Scheduler)  // Provides CancellationToken
+    ///     .plugin(Scheduler)  // Provides CancellationToken + ScheduledJobRegistry
     ///     .build_state::<Services, _, _>()
     ///     .await
     /// ```
-    pub fn plugin<Pl: PreStatePlugin>(
+    pub fn plugin<Pl: RawPreStatePlugin>(
         self,
         plugin: Pl,
-    ) -> AppBuilder<NoState, TCons<Pl::Provided, P>, <R as TAppend<Pl::Required>>::Output>
+    ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
     where
+        P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
     {
         plugin.install(self)
@@ -281,11 +284,12 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// Use [`.plugin()`](Self::plugin) instead.
     #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: PreStatePlugin>(
+    pub fn with_plugin<Pl: RawPreStatePlugin>(
         self,
         plugin: Pl,
-    ) -> AppBuilder<NoState, TCons<Pl::Provided, P>, <R as TAppend<Pl::Required>>::Output>
+    ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
     where
+        P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
     {
         plugin.install(self)

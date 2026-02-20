@@ -45,7 +45,7 @@ pub use lifecycle::LifecycleController;
 #[allow(deprecated)]
 pub use plugin::{
     DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin,
-    DeferredPluginInstaller, Plugin, PreStatePlugin,
+    DeferredPluginInstaller, Plugin, PluginInstallContext, PreStatePlugin, RawPreStatePlugin,
 };
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
 pub use meta::MetaRegistry;
