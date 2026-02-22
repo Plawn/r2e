@@ -24,7 +24,7 @@ La macro `#[controller]` genere un guard supplementaire dans le handler :
 
 ```rust
 if !user.roles.iter().any(|r| ["admin"].contains(&r.as_str())) {
-    return Err(AppError::Forbidden("Insufficient roles".into()));
+    return Err(HttpError::Forbidden("Insufficient roles".into()));
 }
 ```
 

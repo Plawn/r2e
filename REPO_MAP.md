@@ -80,7 +80,7 @@ src/
   builder.rs                AppBuilder fluent API (provide, with_bean, build_state, register_controller, serve)
   controller.rs             Controller<S> and StatefulConstruct<S> trait definitions
   beans.rs                  DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry
-  error.rs                  AppError enum (BadRequest, NotFound, Unauthorized, Forbidden, Internal)
+  error.rs                  HttpError enum (BadRequest, NotFound, Unauthorized, Forbidden, Internal)
   guards.rs                 Guard<S,I>, PreAuthGuard<S>, GuardContext, RolesGuard, PathParams
   interceptors.rs           Interceptor<R> trait, InterceptorContext, Cacheable trait
   plugin.rs                 Plugin, PreStatePlugin, DeferredAction, DeferredContext
@@ -130,7 +130,7 @@ tests/
   guards.rs                 Guard, RolesGuard, GuardContext tests
   interceptors.rs           Interceptor trait tests
   health.rs                 HealthIndicator, HealthBuilder, HealthState tests
-  error.rs                  AppError -> HTTP response tests
+  error.rs                  HttpError -> HTTP response tests
   plugin.rs                 DeferredAction, DeferredContext tests
   managed.rs                ManagedResource lifecycle tests
   request_id.rs             RequestId extraction tests

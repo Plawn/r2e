@@ -39,13 +39,13 @@ impl UploadController {
     async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
         let mut fields = Vec::new();
         while let Some(field) = multipart.next_field().await.map_err(|e| {
-            AppError::BadRequest(format!("multipart error: {e}"))
+            HttpError::BadRequest(format!("multipart error: {e}"))
         })? {
             let name = field.name().unwrap_or("unknown").to_string();
             let file_name = field.file_name().map(|s| s.to_string());
             let content_type = field.content_type().map(|s| s.to_string());
             let data = field.bytes().await.map_err(|e| {
-                AppError::Internal(format!("failed to read field: {e}"))
+                HttpError::Internal(format!("failed to read field: {e}"))
             })?;
             fields.push(serde_json::json!({
                 "name": name,

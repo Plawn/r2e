@@ -35,12 +35,12 @@ impl std::error::Error for DataError {
     }
 }
 
-impl From<DataError> for r2e_core::AppError {
+impl From<DataError> for r2e_core::HttpError {
     fn from(err: DataError) -> Self {
         match err {
-            DataError::NotFound(msg) => r2e_core::AppError::NotFound(msg),
-            DataError::Database(e) => r2e_core::AppError::Internal(e.to_string()),
-            DataError::Other(msg) => r2e_core::AppError::Internal(msg),
+            DataError::NotFound(msg) => r2e_core::HttpError::NotFound(msg),
+            DataError::Database(e) => r2e_core::HttpError::Internal(e.to_string()),
+            DataError::Other(msg) => r2e_core::HttpError::Internal(msg),
         }
     }
 }

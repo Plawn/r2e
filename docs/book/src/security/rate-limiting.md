@@ -83,7 +83,7 @@ User is identified by the `sub` claim from the JWT token.
 #[pre_guard(RateLimit::global(1000, 60))]     // 1000 total uploads/min
 #[pre_guard(RateLimit::per_ip(50, 60))]       // 50 uploads/min per IP
 #[guard(RateLimit::per_user(10, 60))]         // 10 uploads/min per user
-async fn upload(&self, body: Bytes) -> Result<(), AppError> { /* ... */ }
+async fn upload(&self, body: Bytes) -> Result<(), HttpError> { /* ... */ }
 ```
 
 ## Response on rate limit exceeded

@@ -24,10 +24,10 @@ impl UserController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> {
         self.user_service.get_by_id(id).await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("User not found".into()))
+            .ok_or_else(|| HttpError::NotFound("User not found".into()))
     }
 
     #[post("/")]
@@ -36,14 +36,14 @@ impl UserController {
     }
 
     #[put("/{id}")]
-    async fn update(&self, Path(id): Path<u64>, Json(body): Json<UpdateUserRequest>) -> Result<Json<User>, AppError> {
+    async fn update(&self, Path(id): Path<u64>, Json(body): Json<UpdateUserRequest>) -> Result<Json<User>, HttpError> {
         self.user_service.update(id, body).await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("User not found".into()))
+            .ok_or_else(|| HttpError::NotFound("User not found".into()))
     }
 
     #[delete("/{id}")]
-    async fn delete(&self, Path(id): Path<u64>) -> Result<(), AppError> {
+    async fn delete(&self, Path(id): Path<u64>) -> Result<(), HttpError> {
         self.user_service.delete(id).await
     }
 }
@@ -84,7 +84,7 @@ async fn add_comment(
     Json(body): Json<CreateCommentRequest>,  // JSON body (auto-validated if T: Validate)
     Query(params): Query<PaginationParams>,  // Query string
     headers: HeaderMap,                      // Headers
-) -> Result<Json<Comment>, AppError> {
+) -> Result<Json<Comment>, HttpError> {
     // ...
 }
 ```

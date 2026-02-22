@@ -37,7 +37,7 @@ pub use config::{
     register_section, registered_sections, validate_keys, validate_section,
 };
 pub use controller::{Controller, StatefulConstruct};
-pub use error::AppError;
+pub use error::HttpError;
 pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing};

@@ -271,16 +271,16 @@ impl ArticleController {
     async fn list(&self) -> Json<Vec<Article>> { ... }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<Article>, AppError> { ... }
+    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<Article>, HttpError> { ... }
 
     #[post("/")]
     async fn create(&self, Json(body): Json<CreateArticleRequest>) -> Json<Article> { ... }
 
     #[put("/{id}")]
-    async fn update(&self, Path(id): Path<i64>, Json(body): Json<UpdateArticleRequest>) -> Result<Json<Article>, AppError> { ... }
+    async fn update(&self, Path(id): Path<i64>, Json(body): Json<UpdateArticleRequest>) -> Result<Json<Article>, HttpError> { ... }
 
     #[delete("/{id}")]
-    async fn delete(&self, Path(id): Path<i64>) -> Result<Json<&'static str>, AppError> { ... }
+    async fn delete(&self, Path(id): Path<i64>) -> Result<Json<&'static str>, HttpError> { ... }
 }
 ```
 

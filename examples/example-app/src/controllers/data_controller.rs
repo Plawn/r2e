@@ -25,11 +25,11 @@ impl DataController {
     async fn list_paged(
         &self,
         Query(pageable): Query<Pageable>,
-    ) -> Result<Json<Page<UserEntity>>, AppError> {
+    ) -> Result<Json<Page<UserEntity>>, HttpError> {
         let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| AppError::Internal(e.to_string()))? as u64;
+            .map_err(|e| HttpError::Internal(e.to_string()))? as u64;
 
         let rows = sqlx::query_as::<_, (i64, String, String)>(
             "SELECT id, name, email FROM users ORDER BY id ASC LIMIT ? OFFSET ?",
@@ -38,7 +38,7 @@ impl DataController {
         .bind(pageable.offset() as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()
@@ -52,7 +52,7 @@ impl DataController {
     async fn search(
         &self,
         params: SearchParams,
-    ) -> Result<Json<Vec<UserEntity>>, AppError> {
+    ) -> Result<Json<Vec<UserEntity>>, HttpError> {
         let mut sql = String::from("SELECT id, name, email FROM users WHERE 1=1");
         let mut bind_name: Option<String> = None;
         let mut bind_email: Option<&str> = None;
@@ -78,7 +78,7 @@ impl DataController {
         let rows = query
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()

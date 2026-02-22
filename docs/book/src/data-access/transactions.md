@@ -15,7 +15,7 @@ async fn create(
     &self,
     body: Json<CreateUserRequest>,
     #[managed] tx: &mut Tx<'_, Sqlite>,
-) -> Result<Json<User>, AppError> {
+) -> Result<Json<User>, HttpError> {
     sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
         .bind(&body.name)
         .bind(&body.email)
@@ -55,7 +55,7 @@ For basic transaction wrapping without explicit `Tx` parameter:
 ```rust
 #[post("/")]
 #[transactional]
-async fn create(&self, body: Json<CreateUserRequest>) -> Result<Json<User>, AppError> {
+async fn create(&self, body: Json<CreateUserRequest>) -> Result<Json<User>, HttpError> {
     // self.pool is automatically wrapped in begin()/commit()
     sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
         .bind(&body.name)
@@ -85,18 +85,18 @@ where
     DB: Database,
     S: HasPool<DB> + Send + Sync,
 {
-    type Error = ManagedErr<MyAppError>;
+    type Error = ManagedErr<MyHttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
         let tx = state.pool().begin().await
-            .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+            .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         Ok(Tx(tx))
     }
 
     async fn release(self, success: bool) -> Result<(), Self::Error> {
         if success {
             self.0.commit().await
-                .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+                .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         }
         // On failure: transaction dropped → automatic rollback
         Ok(())
@@ -110,13 +110,13 @@ where
 
 ```rust
 // Your error type
-impl IntoResponse for MyAppError { /* ... */ }
+impl IntoResponse for MyHttpError { /* ... */ }
 
 // ManagedResource uses the wrapper
-type Error = ManagedErr<MyAppError>;
+type Error = ManagedErr<MyHttpError>;
 ```
 
-The chain is: `MyAppError` → `ManagedErr<MyAppError>` → `Response`.
+The chain is: `MyHttpError` → `ManagedErr<MyHttpError>` → `Response`.
 
 ## Other managed resource ideas
 

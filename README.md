@@ -102,10 +102,10 @@ impl UserController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> {
         self.user_service.get_by_id(id).await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("User not found".into()))
+            .ok_or_else(|| HttpError::NotFound("User not found".into()))
     }
 
     #[post("/")]
@@ -226,7 +226,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(AppError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
             }
         }
     }
@@ -349,7 +349,7 @@ async fn create(
     &self,
     body: Json<CreateUserRequest>,
     #[managed] tx: &mut Tx<'_, Sqlite>,  // auto begin/commit/rollback
-) -> Result<Json<User>, AppError> {
+) -> Result<Json<User>, HttpError> {
     sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
         .bind(&body.name)
         .bind(&body.email)

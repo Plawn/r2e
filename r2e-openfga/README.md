@@ -66,10 +66,10 @@ pub struct DocumentController {
 #[routes]
 impl DocumentController {
     #[get("/{id}")]
-    async fn get(&self, Path(id): Path<String>) -> Result<Json<Doc>, AppError> {
+    async fn get(&self, Path(id): Path<String>) -> Result<Json<Doc>, HttpError> {
         let allowed = self.fga.check("user:alice", "viewer", &format!("document:{id}")).await?;
         if !allowed {
-            return Err(AppError::Forbidden("Access denied".into()));
+            return Err(HttpError::Forbidden("Access denied".into()));
         }
         // ...
     }

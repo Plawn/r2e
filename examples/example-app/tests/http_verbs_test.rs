@@ -120,12 +120,12 @@ impl ItemController {
     async fn get_by_id(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<Json<Item>, AppError> {
+    ) -> Result<Json<Item>, HttpError> {
         self.item_service
             .get(id)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("Item not found".into()))
+            .ok_or_else(|| HttpError::NotFound("Item not found".into()))
     }
 
     #[put("/{id}")]
@@ -133,26 +133,26 @@ impl ItemController {
         &self,
         Path(id): Path<u64>,
         Json(body): Json<serde_json::Value>,
-    ) -> Result<Json<Item>, AppError> {
+    ) -> Result<Json<Item>, HttpError> {
         let name = body["name"]
             .as_str()
-            .ok_or_else(|| AppError::BadRequest("name required".into()))?;
+            .ok_or_else(|| HttpError::BadRequest("name required".into()))?;
         self.item_service
             .update(id, name.to_string())
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("Item not found".into()))
+            .ok_or_else(|| HttpError::NotFound("Item not found".into()))
     }
 
     #[delete("/{id}")]
     async fn delete(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<StatusCode, AppError> {
+    ) -> Result<StatusCode, HttpError> {
         if self.item_service.delete(id).await {
             Ok(StatusCode::NO_CONTENT)
         } else {
-            Err(AppError::NotFound("Item not found".into()))
+            Err(HttpError::NotFound("Item not found".into()))
         }
     }
 
@@ -161,13 +161,13 @@ impl ItemController {
         &self,
         Path(id): Path<u64>,
         Json(body): Json<serde_json::Value>,
-    ) -> Result<Json<Item>, AppError> {
+    ) -> Result<Json<Item>, HttpError> {
         let active = body["active"].as_bool();
         self.item_service
             .patch(id, active)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("Item not found".into()))
+            .ok_or_else(|| HttpError::NotFound("Item not found".into()))
     }
 }
 

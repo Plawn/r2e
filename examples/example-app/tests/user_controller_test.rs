@@ -265,10 +265,10 @@ impl TestUserController {
     async fn get_by_id(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<Json<User>, AppError> {
+    ) -> Result<Json<User>, HttpError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
-            None => Err(AppError::NotFound("User not found".into())),
+            None => Err(HttpError::NotFound("User not found".into())),
         }
     }
 
@@ -287,8 +287,8 @@ impl TestUserController {
     }
 
     #[get("/error/custom")]
-    async fn custom_error(&self) -> Result<Json<()>, AppError> {
-        Err(AppError::Custom {
+    async fn custom_error(&self) -> Result<Json<()>, HttpError> {
+        Err(HttpError::Custom {
             status: StatusCode::from_u16(418).unwrap(),
             body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
         })
@@ -307,7 +307,7 @@ impl TestUserController {
     async fn create_rate_limited(
         &self,
         Json(body): Json<CreateUserRequest>,
-    ) -> Result<Json<User>, AppError> {
+    ) -> Result<Json<User>, HttpError> {
         let user = self.user_service.create(body.name, body.email).await;
         Ok(Json(user))
     }

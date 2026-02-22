@@ -150,7 +150,7 @@ where
     // Le state doit fournir un JwtValidator
     JwtValidator: FromRef<S>,
 {
-    type Rejection = AppError;
+    type Rejection = HttpError;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -226,6 +226,6 @@ async fn test_jwt_validation() {
 
 ## Dependances entre etapes
 
-- Requiert : etape 0, etape 1 (AppError, AppState)
+- Requiert : etape 0, etape 1 (HttpError, AppState)
 - Bloque : etape 5 (example-app, pour l'integration complete)
 - Peut etre fait en parallele de l'etape 2 et 3

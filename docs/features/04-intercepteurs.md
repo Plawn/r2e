@@ -162,7 +162,7 @@ Cache le resultat de la methode. Le cache utilise le trait `Interceptor<axum::Js
 
 ### Contraintes
 
-- Le type de retour **doit** etre `axum::Json<T>` ou `T: Serialize + DeserializeOwned` (pas `Result<Json<T>, AppError>`)
+- Le type de retour **doit** etre `axum::Json<T>` ou `T: Serialize + DeserializeOwned` (pas `Result<Json<T>, HttpError>`)
 - Le cache serialise/deserialise en JSON string via `serde_json`
 - Pour `key = "params"`, les parametres de la methode doivent implementer `Debug`
 - Pour `key = "user"` ou `key = "user_params"`, le controller doit avoir un champ `#[identity]`
@@ -220,7 +220,7 @@ Pour `key = "ip"`, l'IP est extraite depuis le header `X-Forwarded-For` (premier
 ### Contraintes
 
 - Le handler genere retourne `axum::response::Response` (comme `#[roles]`) pour permettre le short-circuit 429
-- Le type de retour de la methode n'a **plus besoin** d'etre `Result<T, AppError>` — n'importe quel type `IntoResponse` fonctionne
+- Le type de retour de la methode n'a **plus besoin** d'etre `Result<T, HttpError>` — n'importe quel type `IntoResponse` fonctionne
 - Le rate limiter est un `static OnceLock<RateLimiter<String>>` par handler
 
 ### Reponse en cas de depassement
@@ -247,7 +247,7 @@ Enveloppe le corps de la methode dans une transaction SQL.
 ```rust
 #[post("/users/db")]
 #[transactional]                             // defaut: self.pool
-async fn create_in_db(&self, ...) -> Result<axum::Json<User>, r2e_core::AppError> {
+async fn create_in_db(&self, ...) -> Result<axum::Json<User>, r2e_core::HttpError> {
     sqlx::query("INSERT ...").execute(&mut *tx).await?;
     Ok(axum::Json(user))
 }
@@ -260,7 +260,7 @@ async fn read_data(&self, ...) -> Result<...> { ... }
 
 - Le controller doit avoir un champ `#[inject]` pour le pool specifie (defaut: `pool`)
 - Le corps peut utiliser `tx` (variable injectee par la macro, de type `Transaction`)
-- Le type de retour **doit** etre `Result<T, AppError>`
+- Le type de retour **doit** etre `Result<T, HttpError>`
 
 ## `#[intercept(Type)]` — Intercepteurs user-defined
 
@@ -377,7 +377,7 @@ impl UserController {
     #[post("/db")]
     #[transactional]
     async fn create_in_db(&self, axum::Json(body): axum::Json<CreateUserRequest>)
-        -> Result<axum::Json<User>, r2e_core::AppError>
+        -> Result<axum::Json<User>, r2e_core::HttpError>
     {
         sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
         Ok(axum::Json(user))

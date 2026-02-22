@@ -46,7 +46,7 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
 /// # Usage
 /// ```ignore
 /// #[intercept(DbAuditLog)]
-/// async fn create(&self, body: Json<User>) -> Result<Json<User>, AppError> { ... }
+/// async fn create(&self, body: Json<User>) -> Result<Json<User>, HttpError> { ... }
 /// ```
 pub struct DbAuditLog;
 
@@ -106,10 +106,10 @@ impl UserController {
     async fn get_by_id(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<Json<User>, AppError> {
+    ) -> Result<Json<User>, HttpError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
-            None => Err(AppError::NotFound("User not found".into())),
+            None => Err(HttpError::NotFound("User not found".into())),
         }
     }
 
@@ -129,20 +129,20 @@ impl UserController {
         &self,
         Json(body): Json<CreateUserRequest>,
         #[managed] tx: &mut Tx<'_, Sqlite>,
-    ) -> Result<Json<User>, AppError> {
+    ) -> Result<Json<User>, HttpError> {
         sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
             .bind(&body.name)
             .bind(&body.email)
             .execute(tx.as_mut())
             .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         let row = sqlx::query_as::<_, (i64, String, String)>(
             "SELECT id, name, email FROM users WHERE rowid = last_insert_rowid()",
         )
         .fetch_one(tx.as_mut())
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         Ok(Json(User {
             id: row.0 as u64,

@@ -64,7 +64,7 @@ Clears a named cache group after method execution:
 ```rust
 #[post("/")]
 #[intercept(CacheInvalidate::group("users"))]
-async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, AppError> { ... }
+async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, HttpError> { ... }
 ```
 
 ## Combining interceptors

@@ -14,7 +14,7 @@ use crate::openid::{Composite, RoleExtractor, StandardRoleExtractor};
 ///
 /// ```ignore
 /// use r2e_security::{ClaimsIdentity, AuthenticatedUser, impl_claims_identity_extractor};
-/// use r2e_core::AppError;
+/// use r2e_core::HttpError;
 ///
 /// #[derive(Clone)]
 /// pub struct DbUser {
@@ -23,7 +23,7 @@ use crate::openid::{Composite, RoleExtractor, StandardRoleExtractor};
 /// }
 ///
 /// impl ClaimsIdentity<Services> for DbUser {
-///     async fn from_jwt_claims(claims: serde_json::Value, state: &Services) -> Result<Self, AppError> {
+///     async fn from_jwt_claims(claims: serde_json::Value, state: &Services) -> Result<Self, HttpError> {
 ///         let auth = AuthenticatedUser::from_claims(claims);
 ///         let profile = fetch_profile(auth.sub(), &state.pool).await?;
 ///         Ok(DbUser { auth, profile })
@@ -36,7 +36,7 @@ pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
     fn from_jwt_claims(
         claims: serde_json::Value,
         state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::AppError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::HttpError>> + Send;
 }
 
 /// Generate `FromRequestParts` and `OptionalFromRequestParts` implementations
@@ -64,7 +64,7 @@ macro_rules! impl_claims_identity_extractor {
             Self: $crate::ClaimsIdentity<S>,
             std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
         {
-            type Rejection = $crate::__macro_support::AppError;
+            type Rejection = $crate::__macro_support::HttpError;
 
             async fn from_request_parts(
                 parts: &mut $crate::__macro_support::http::header::Parts,
@@ -81,7 +81,7 @@ macro_rules! impl_claims_identity_extractor {
             Self: $crate::ClaimsIdentity<S>,
             std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
         {
-            type Rejection = $crate::__macro_support::AppError;
+            type Rejection = $crate::__macro_support::HttpError;
 
             async fn from_request_parts(
                 parts: &mut $crate::__macro_support::http::header::Parts,

@@ -93,24 +93,24 @@ pub struct UserController {
 #[routes]
 impl UserController {
     #[get("/")]
-    async fn list(&self) -> Result<Json<Vec<User>>, AppError> {
+    async fn list(&self) -> Result<Json<Vec<User>>, HttpError> {
         let users = sqlx::query_as::<_, User>("SELECT id, name, email FROM users")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::Internal(e.to_string()))?;
         Ok(Json(users))
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<User>, HttpError> {
         let user = sqlx::query_as::<_, User>(
             "SELECT id, name, email FROM users WHERE id = ?"
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+        .map_err(|e| HttpError::Internal(e.to_string()))?
+        .ok_or_else(|| HttpError::NotFound("User not found".into()))?;
 
         Ok(Json(user))
     }

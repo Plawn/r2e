@@ -22,7 +22,7 @@
 | `jwks_fetch_error_500` | `SecurityError::JwksFetchError(msg)` → 500 |
 | `validation_failed_401` | `SecurityError::ValidationFailed(msg)` → 401 |
 | `display_formatting` | Each variant's `Display` output matches expected |
-| `into_app_error` | `SecurityError` → `AppError` conversion |
+| `into_app_error` | `SecurityError` → `HttpError` conversion |
 | `json_body_format` | Response body is JSON `{"error": "..."}` |
 
 ---

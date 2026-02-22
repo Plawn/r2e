@@ -24,8 +24,8 @@ impl AccountController {
     }
 
     #[get("/error/custom")]
-    async fn custom_error(&self) -> Result<Json<()>, AppError> {
-        Err(AppError::Custom {
+    async fn custom_error(&self) -> Result<Json<()>, HttpError> {
+        Err(HttpError::Custom {
             status: StatusCode::from_u16(418).unwrap(),
             body: serde_json::json!({ "error": "I'm a teapot", "code": 418 }),
         })

@@ -52,8 +52,8 @@
 | `data_error_other_display` | `DataError::Other(msg)` → expected message |
 | `data_error_database_source` | `.source()` returns the wrapped error |
 | `data_error_not_found_source` | `.source()` returns `None` |
-| `data_error_to_app_error_not_found` | `DataError::NotFound` → `AppError::NotFound` |
-| `data_error_to_app_error_database` | `DataError::Database` → `AppError::Internal` |
+| `data_error_to_app_error_not_found` | `DataError::NotFound` → `HttpError::NotFound` |
+| `data_error_to_app_error_database` | `DataError::Database` → `HttpError::Internal` |
 | `data_error_send_sync` | `DataError` is `Send + Sync` (compile-time check) |
 
 ---
@@ -90,6 +90,6 @@
 | Phase | Tests | Effort | Dependencies |
 |-------|-------|--------|-------------|
 | Phase 1 | 17 | 2h | None |
-| Phase 2 | 8 | 1h | r2e-core (for AppError) |
+| Phase 2 | 8 | 1h | r2e-core (for HttpError) |
 | Phase 3 | 11 | 2h | Test entity fixture |
 | **Total** | **36** | **~5h** | |

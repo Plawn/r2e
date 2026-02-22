@@ -112,7 +112,7 @@ impl UserController {
 
     #[get("/{id}")]
     #[roles("admin")]
-    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<User>, HttpError> {
         // ...
     }
 }
@@ -139,7 +139,7 @@ async fn __r2e_UserController_get_by_id(
     __uri: axum::http::Uri,
     __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
     Path(id): Path<i64>,
-) -> Result<Json<User>, AppError> {
+) -> Result<Json<User>, HttpError> {
     // Guard check runs before method body
     let __identity_ref = __r2e_meta_UserController::guard_identity(&__ctrl);
     let __guard_ctx = r2e::GuardContext::new(

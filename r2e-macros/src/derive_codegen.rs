@@ -183,7 +183,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                         Ok(v) => v,
                         Err(e) => {
                             return Err(#krate::http::response::IntoResponse::into_response(
-                                #krate::AppError::Internal(
+                                #krate::HttpError::Internal(
                                     format!(
                                         "Configuration error in {}: key '{}' — {}. \
                                          Add it to application.yaml or set env var {}.",
@@ -212,7 +212,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                         Ok(v) => v,
                         Err(e) => {
                             return Err(#krate::http::response::IntoResponse::into_response(
-                                #krate::AppError::Internal(
+                                #krate::HttpError::Internal(
                                     format!(
                                         "Configuration error in {}: failed to load {} — {}",
                                         #controller_name_str,

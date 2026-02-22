@@ -17,7 +17,7 @@ This generates and opens documentation for all R2E crates.
 | Type | Description |
 |------|-------------|
 | `AppBuilder` | Fluent application builder |
-| `AppError` | Built-in error type with HTTP status mapping |
+| `HttpError` | Built-in error type with HTTP status mapping |
 | `R2eConfig` | YAML + env var configuration |
 | `Controller` | Trait for route registration |
 | `Guard<S, I>` | Post-auth guard trait |

@@ -366,12 +366,12 @@ impl {entity_name}Controller {{
     }}
 
     #[get("/{{id}}")]
-    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<{entity_name}>, AppError> {{
+    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<{entity_name}>, HttpError> {{
         self.service
             .get_by_id(id)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("{entity_name} not found".into()))
+            .ok_or_else(|| HttpError::NotFound("{entity_name} not found".into()))
     }}
 
     #[post("/")]
@@ -384,20 +384,20 @@ impl {entity_name}Controller {{
         &self,
         Path(id): Path<i64>,
         Json(body): Json<Update{entity_name}Request>,
-    ) -> Result<Json<{entity_name}>, AppError> {{
+    ) -> Result<Json<{entity_name}>, HttpError> {{
         self.service
             .update(id, body)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("{entity_name} not found".into()))
+            .ok_or_else(|| HttpError::NotFound("{entity_name} not found".into()))
     }}
 
     #[delete("/{{id}}")]
-    async fn delete(&self, Path(id): Path<i64>) -> Result<Json<&'static str>, AppError> {{
+    async fn delete(&self, Path(id): Path<i64>) -> Result<Json<&'static str>, HttpError> {{
         if self.service.delete(id).await {{
             Ok(Json("deleted"))
         }} else {{
-            Err(AppError::NotFound("{entity_name} not found".into()))
+            Err(HttpError::NotFound("{entity_name} not found".into()))
         }}
     }}
 }}

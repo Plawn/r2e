@@ -62,7 +62,7 @@ pub trait Interceptor<R, S> {
 ///
 /// - **`Json<T>`** where `T: Serialize + DeserializeOwned` — serializes the inner value as JSON.
 /// - **`Result<T, E>`** where `T: Cacheable` — only `Ok` values are cached; errors are never
-///   stored and always pass through. This means `Result<Json<User>, AppError>` works
+///   stored and always pass through. This means `Result<Json<User>, HttpError>` works
 ///   out of the box.
 ///
 /// # Deriving

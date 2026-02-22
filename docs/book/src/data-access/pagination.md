@@ -10,7 +10,7 @@ R2E provides `Pageable` for extracting pagination parameters from query strings 
 use r2e::r2e_data::{Pageable, Page};
 
 #[get("/")]
-async fn list(&self, Query(pageable): Query<Pageable>) -> Result<Json<Page<User>>, AppError> {
+async fn list(&self, Query(pageable): Query<Pageable>) -> Result<Json<Page<User>>, HttpError> {
     // pageable.page  — page number (0-based, default: 0)
     // pageable.size  — items per page (default: 20)
     // pageable.sort  — sort field (optional)
@@ -53,14 +53,14 @@ Page::new(items, &pageable, total_count)
 async fn list(
     &self,
     Query(pageable): Query<Pageable>,
-) -> Result<Json<Page<User>>, AppError> {
+) -> Result<Json<Page<User>>, HttpError> {
     let offset = pageable.page * pageable.size;
 
     // Get total count
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::Internal(e.to_string()))?;
 
     // Get page of results
     let users = sqlx::query_as::<_, User>(
@@ -70,7 +70,7 @@ async fn list(
     .bind(offset)
     .fetch_all(&self.pool)
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .map_err(|e| HttpError::Internal(e.to_string()))?;
 
     Ok(Json(Page::new(users, &pageable, total.0)))
 }
@@ -100,7 +100,7 @@ use r2e::r2e_data::QueryBuilder;
 async fn list(
     &self,
     Query(pageable): Query<Pageable>,
-) -> Result<Json<Page<User>>, AppError> {
+) -> Result<Json<Page<User>>, HttpError> {
     let mut qb = QueryBuilder::new("users");
 
     if let Some(ref sort) = pageable.sort {

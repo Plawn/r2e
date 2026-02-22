@@ -79,7 +79,7 @@ where
     async fn from_jwt_claims(
         claims: serde_json::Value,
         state: &S,
-    ) -> Result<Self, r2e::AppError> {
+    ) -> Result<Self, r2e::HttpError> {
         let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
         let auth = AuthenticatedUser::from_claims(claims);
 
@@ -89,12 +89,12 @@ where
                 .bind(&sub)
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| r2e::AppError::Internal(format!("DB error: {e}")))?;
+                .map_err(|e| r2e::HttpError::Internal(format!("DB error: {e}")))?;
 
         let profile = row
             .map(|(id, name, email)| UserProfile { id, name, email })
             .ok_or_else(|| {
-                r2e::AppError::NotFound(format!("No user profile for sub '{sub}'"))
+                r2e::HttpError::NotFound(format!("No user profile for sub '{sub}'"))
             })?;
 
         Ok(DbUser { auth, profile })

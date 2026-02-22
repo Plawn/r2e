@@ -76,7 +76,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e-macros      → Proc-macro crate (no runtime deps). #[derive(Controller)] + #[routes] generate Axum handlers.
-r2e-core        → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct trait, AppError, Guard trait,
+r2e-core        → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct trait, HttpError, Guard trait,
                       Interceptor trait, R2eConfig, lifecycle hooks, Tower layers, dev-mode endpoints.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
 r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
@@ -242,7 +242,7 @@ where
             let pool = sqlx::SqlitePool::from_ref(state);
             // Async database check...
             sqlx::query("SELECT 1").fetch_one(&pool).await
-                .map_err(|_| AppError::Internal("DB unavailable".into()).into_response())?;
+                .map_err(|_| HttpError::Internal("DB unavailable".into()).into_response())?;
             Ok(())
         }
     }
@@ -459,7 +459,7 @@ impl UserController {
         &self,
         body: Json<User>,
         #[managed] tx: &mut Tx<'_, Sqlite>,  // Acquired before, released after
-    ) -> Result<Json<User>, MyAppError> {
+    ) -> Result<Json<User>, MyHttpError> {
         sqlx::query("INSERT INTO users ...").execute(tx.as_mut()).await?;
         Ok(Json(user))
     }
@@ -489,18 +489,18 @@ where
     DB: Database,
     S: HasPool<DB> + Send + Sync,
 {
-    type Error = ManagedErr<MyAppError>;
+    type Error = ManagedErr<MyHttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
         let tx = state.pool().begin().await
-            .map_err(|e| MyAppError::Database(e.to_string()))?;
+            .map_err(|e| MyHttpError::Database(e.to_string()))?;
         Ok(Tx(tx))
     }
 
     async fn release(self, success: bool) -> Result<(), Self::Error> {
         if success {
             self.0.commit().await
-                .map_err(|e| MyAppError::Database(e.to_string()))?;
+                .map_err(|e| MyHttpError::Database(e.to_string()))?;
         }
         // On failure: transaction dropped → automatic rollback
         Ok(())
@@ -512,16 +512,16 @@ where
 
 ### Error Handling (r2e-core)
 
-R2E provides `AppError` as a default error type, but applications can define custom error types.
+R2E provides `HttpError` as a default error type, but applications can define custom error types.
 
-**Using the built-in `AppError`:**
+**Using the built-in `HttpError`:**
 ```rust
-use r2e_core::AppError;
+use r2e_core::HttpError;
 
 #[get("/{id}")]
-async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
+async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, HttpError> {
     let user = self.service.find(id).await
-        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+        .ok_or_else(|| HttpError::NotFound("User not found".into()))?;
     Ok(Json(user))
 }
 ```
@@ -531,7 +531,7 @@ async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
 use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
 
 #[derive(Debug)]
-pub enum MyAppError {
+pub enum MyHttpError {
     NotFound(String),
     Database(String),
     Validation(String),
@@ -539,13 +539,13 @@ pub enum MyAppError {
 }
 
 // Required: convert to HTTP response
-impl IntoResponse for MyAppError {
+impl IntoResponse for MyHttpError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            MyAppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            MyAppError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            MyAppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
-            MyAppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            MyHttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            MyHttpError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            MyHttpError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            MyHttpError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         let body = serde_json::json!({ "error": message });
         (status, Json(body)).into_response()
@@ -553,9 +553,9 @@ impl IntoResponse for MyAppError {
 }
 
 // Optional: automatic conversion from other error types
-impl From<sqlx::Error> for MyAppError {
+impl From<sqlx::Error> for MyHttpError {
     fn from(err: sqlx::Error) -> Self {
-        MyAppError::Database(err.to_string())
+        MyHttpError::Database(err.to_string())
     }
 }
 ```
@@ -564,18 +564,18 @@ impl From<sqlx::Error> for MyAppError {
 
 The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. R2E provides two wrappers:
 
-- `ManagedError` — wraps the built-in `AppError`
+- `ManagedError` — wraps the built-in `HttpError`
 - `ManagedErr<E>` — generic wrapper for any error type implementing `IntoResponse`
 
 ```rust
 use r2e_core::{ManagedResource, ManagedErr};
 
 impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
-    type Error = ManagedErr<MyAppError>;  // Use your custom error
+    type Error = ManagedErr<MyHttpError>;  // Use your custom error
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
         let tx = state.pool().begin().await
-            .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+            .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         Ok(Tx(tx))
     }
     // ...
@@ -587,7 +587,7 @@ impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
 Rust's orphan rules prevent implementing foreign traits (`Into`) for foreign types (`Response`). `ManagedErr<E>` is a local newtype that bridges the gap:
 
 ```
-MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response (axum type)
+MyHttpError (your type)     →  ManagedErr<MyHttpError> (r2e type)  →  Response (axum type)
          impl IntoResponse              impl Into<Response>
 ```
 
@@ -596,7 +596,7 @@ MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response
 **`use r2e::prelude::*`** provides everything a developer needs — no direct `axum` imports should be necessary. The prelude includes:
 
 - **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `Cacheable`, `FromMultipart` (multipart feature)
-- **Core types:** `AppBuilder`, `AppError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`
+- **Core types:** `AppBuilder`, `HttpError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`
 - **Plugins:** `Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
 - **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
 - **Extractors:** `Path`, `Query`, `Form`, `State`, `Request`, `FromRef`, `FromRequest`, `FromRequestParts`, `ConnectInfo`, `DefaultBodyLimit`, `MatchedPath`, `OriginalUri`

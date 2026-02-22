@@ -127,10 +127,10 @@ impl UserController {
     }
 
     #[get("/users/:id")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, r2e_core::AppError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, r2e_core::HttpError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
-            None => Err(r2e_core::AppError::NotFound("User not found".into())),
+            None => Err(r2e_core::HttpError::NotFound("User not found".into())),
         }
     }
 

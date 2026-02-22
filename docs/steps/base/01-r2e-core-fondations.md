@@ -85,7 +85,7 @@ use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::header::StatusCode;
 
 /// Erreur applicative standard
-pub enum AppError {
+pub enum HttpError {
     NotFound(String),
     Unauthorized(String),
     Forbidden(String),
@@ -93,14 +93,14 @@ pub enum AppError {
     Internal(String),
 }
 
-impl IntoResponse for AppError {
+impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AppError::NotFound(msg)     => (StatusCode::NOT_FOUND, msg),
-            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
-            AppError::Forbidden(msg)    => (StatusCode::FORBIDDEN, msg),
-            AppError::BadRequest(msg)   => (StatusCode::BAD_REQUEST, msg),
-            AppError::Internal(msg)     => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            HttpError::NotFound(msg)     => (StatusCode::NOT_FOUND, msg),
+            HttpError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            HttpError::Forbidden(msg)    => (StatusCode::FORBIDDEN, msg),
+            HttpError::BadRequest(msg)   => (StatusCode::BAD_REQUEST, msg),
+            HttpError::Internal(msg)     => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
         let body = serde_json::json!({ "error": message });
@@ -134,7 +134,7 @@ pub mod controller;
 
 pub use state::AppState;
 pub use builder::AppBuilder;
-pub use error::AppError;
+pub use error::HttpError;
 pub use controller::Controller;
 ```
 

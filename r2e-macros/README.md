@@ -39,7 +39,7 @@ impl UserController {
 
     #[post("/")]
     #[roles("admin")]
-    async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, AppError> { ... }
+    async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, HttpError> { ... }
 }
 ```
 

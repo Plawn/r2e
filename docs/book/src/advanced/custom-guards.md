@@ -7,7 +7,7 @@ Guards run authorization checks before the handler body. R2E supports two guard 
 Post-auth guards run after JWT validation and have access to the identity:
 
 ```rust
-use r2e::prelude::*; // Guard, GuardContext, Identity, AppError, IntoResponse, Response
+use r2e::prelude::*; // Guard, GuardContext, Identity, HttpError, IntoResponse, Response
 
 struct TenantGuard;
 
@@ -24,7 +24,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
 
             match (tenant_id, user_tenant) {
                 (Some(path_tenant), Some(jwt_tenant)) if path_tenant == jwt_tenant => Ok(()),
-                _ => Err(AppError::Forbidden("Tenant mismatch".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Tenant mismatch".into()).into_response()),
             }
         }
     }
@@ -44,7 +44,7 @@ async fn get_tenant_data(&self) -> Json<Data> { /* ... */ }
 Pre-auth guards run before JWT validation — useful for checks that don't need identity:
 
 ```rust
-use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, AppError, StatusCode
+use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, HttpError, StatusCode
 
 struct MaintenanceGuard;
 
@@ -56,7 +56,7 @@ impl<S: Send + Sync> PreAuthGuard<S> for MaintenanceGuard {
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
             if is_maintenance_mode() {
-                Err(AppError::Custom {
+                Err(HttpError::Custom {
                     status: StatusCode::SERVICE_UNAVAILABLE,
                     body: serde_json::json!({"error": "Under maintenance"}),
                 }.into_response())
@@ -98,11 +98,11 @@ where
             .bind(sub)
             .fetch_optional(&pool)
             .await
-            .map_err(|_| AppError::Internal("DB error".into()).into_response())?;
+            .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
 
             match active {
                 Some(true) => Ok(()),
-                _ => Err(AppError::Forbidden("Account suspended".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Account suspended".into()).into_response()),
             }
         }
     }

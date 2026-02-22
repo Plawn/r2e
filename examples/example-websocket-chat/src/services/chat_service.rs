@@ -19,14 +19,14 @@ impl ChatService {
         room: &str,
         username: &str,
         text: &str,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), HttpError> {
         sqlx::query("INSERT INTO messages (room, username, text) VALUES (?, ?, ?)")
             .bind(room)
             .bind(username)
             .bind(text)
             .execute(&self.pool)
             .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::Internal(e.to_string()))?;
         Ok(())
     }
 
@@ -34,7 +34,7 @@ impl ChatService {
         &self,
         room: &str,
         limit: i64,
-    ) -> Result<Vec<StoredMessage>, AppError> {
+    ) -> Result<Vec<StoredMessage>, HttpError> {
         let messages = sqlx::query_as::<_, StoredMessage>(
             "SELECT id, room, username, text FROM messages WHERE room = ? \
              ORDER BY id DESC LIMIT ?",
@@ -43,17 +43,17 @@ impl ChatService {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         Ok(messages.into_iter().rev().collect())
     }
 
-    pub async fn list_rooms(&self) -> Result<Vec<String>, AppError> {
+    pub async fn list_rooms(&self) -> Result<Vec<String>, HttpError> {
         let rooms: Vec<(String,)> =
             sqlx::query_as("SELECT DISTINCT room FROM messages ORDER BY room")
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| AppError::Internal(e.to_string()))?;
+                .map_err(|e| HttpError::Internal(e.to_string()))?;
 
         Ok(rooms.into_iter().map(|(r,)| r).collect())
     }

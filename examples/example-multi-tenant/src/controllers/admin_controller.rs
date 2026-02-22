@@ -21,7 +21,7 @@ impl AdminController {
     async fn list_tenants(
         &self,
         #[inject(identity)] _user: TenantUser,
-    ) -> Result<Json<Vec<TenantInfo>>, AppError> {
+    ) -> Result<Json<Vec<TenantInfo>>, HttpError> {
         let tenants = self.project_service.list_tenants().await?;
         Ok(Json(tenants))
     }

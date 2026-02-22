@@ -41,7 +41,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(AppError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
             }
         }
     }
@@ -90,7 +90,7 @@ pub trait Identity: Send + Sync {
 For authorization that doesn't need identity (e.g., IP allowlisting), use `PreAuthGuard`:
 
 ```rust
-use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, AppError, IntoResponse, Response
+use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, HttpError, IntoResponse, Response
 
 struct IpAllowlistGuard;
 
@@ -105,7 +105,7 @@ impl<S: Send + Sync> PreAuthGuard<S> for IpAllowlistGuard {
                 .and_then(|v| v.to_str().ok());
             match ip {
                 Some("10.0.0.1") => Ok(()),
-                _ => Err(AppError::Forbidden("IP not allowed".into()).into_response()),
+                _ => Err(HttpError::Forbidden("IP not allowed".into()).into_response()),
             }
         }
     }
@@ -142,11 +142,11 @@ where
             .bind(ctx.identity_sub().unwrap_or(""))
             .fetch_optional(&pool)
             .await
-            .map_err(|_| AppError::Internal("DB error".into()).into_response())?;
+            .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
 
             match allowed {
                 Some(true) => Ok(()),
-                _ => Err(AppError::Forbidden("Account suspended".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Account suspended".into()).into_response()),
             }
         }
     }

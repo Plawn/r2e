@@ -55,8 +55,8 @@ impl IntoResponse for SecurityError {
     }
 }
 
-impl From<SecurityError> for r2e_core::AppError {
+impl From<SecurityError> for r2e_core::HttpError {
     fn from(err: SecurityError) -> Self {
-        r2e_core::AppError::Unauthorized(err.public_message().to_string())
+        r2e_core::HttpError::Unauthorized(err.public_message().to_string())
     }
 }

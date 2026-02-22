@@ -6,19 +6,19 @@ Fournir un systeme d'erreurs structure qui convertit automatiquement les erreurs
 
 ## Concepts cles
 
-### AppError
+### HttpError
 
-`AppError` est l'enum centrale qui represente toutes les erreurs applicatives. Chaque variant correspond a un code HTTP specifique.
+`HttpError` est l'enum centrale qui represente toutes les erreurs applicatives. Chaque variant correspond a un code HTTP specifique.
 
 ### map_error!
 
-Macro pour generer des implementations `From<E> for AppError` en une ligne.
+Macro pour generer des implementations `From<E> for HttpError` en une ligne.
 
 ### Catch panic
 
 Layer Tower qui capture les panics dans les handlers et les convertit en reponses 500.
 
-## Variants d'AppError
+## Variants d'HttpError
 
 | Variant | Code HTTP | Usage |
 |---------|-----------|-------|
@@ -39,10 +39,10 @@ Layer Tower qui capture les panics dans les handlers et les convertit en reponse
 async fn get_by_id(
     &self,
     Path(id): Path<u64>,
-) -> Result<axum::Json<User>, r2e_core::AppError> {
+) -> Result<axum::Json<User>, r2e_core::HttpError> {
     match self.user_service.get_by_id(id).await {
         Some(user) => Ok(axum::Json(user)),
-        None => Err(r2e_core::AppError::NotFound("User not found".into())),
+        None => Err(r2e_core::HttpError::NotFound("User not found".into())),
     }
 }
 ```
@@ -62,8 +62,8 @@ Le variant `Custom` permet de retourner n'importe quel code HTTP avec un body JS
 
 ```rust
 #[get("/error/custom")]
-async fn custom_error(&self) -> Result<axum::Json<()>, r2e_core::AppError> {
-    Err(r2e_core::AppError::Custom {
+async fn custom_error(&self) -> Result<axum::Json<()>, r2e_core::HttpError> {
+    Err(r2e_core::HttpError::Custom {
         status: axum::http::StatusCode::from_u16(418).unwrap(),
         body: serde_json::json!({
             "error": "I'm a teapot",
@@ -84,14 +84,14 @@ Content-Type: application/json
 
 ### 3. Conversions automatiques avec `From`
 
-`AppError` implemente `From` pour les types d'erreur courants, ce qui permet l'usage de `?` :
+`HttpError` implemente `From` pour les types d'erreur courants, ce qui permet l'usage de `?` :
 
 ```rust
 // Inclus par defaut
-impl From<std::io::Error> for AppError { ... }
+impl From<std::io::Error> for HttpError { ... }
 
 // Inclus avec le feature flag "sqlx"
-impl From<sqlx::Error> for AppError { ... }
+impl From<sqlx::Error> for HttpError { ... }
 ```
 
 ### 4. Macro `map_error!`
@@ -108,14 +108,14 @@ r2e_core::map_error! {
 Cela genere :
 
 ```rust
-impl From<serde_json::Error> for AppError {
+impl From<serde_json::Error> for HttpError {
     fn from(err: serde_json::Error) -> Self {
-        AppError::Internal(err.to_string())
+        HttpError::Internal(err.to_string())
     }
 }
 ```
 
-**Note** : `map_error!` genere des `impl From` — les deux types (erreur source et `AppError`) doivent respecter la regle de coherence (orphan rule). Utilisez-le uniquement pour des types d'erreurs definis dans votre crate, ou dans la crate ou `AppError` est defini.
+**Note** : `map_error!` genere des `impl From` — les deux types (erreur source et `HttpError`) doivent respecter la regle de coherence (orphan rule). Utilisez-le uniquement pour des types d'erreurs definis dans votre crate, ou dans la crate ou `HttpError` est defini.
 
 ### 5. Catch panic (layer Tower)
 
@@ -141,7 +141,7 @@ Content-Type: application/json
 
 ### Avec Validation (#2)
 
-Quand le feature flag `validation` est actif, `AppError::Validation` fournit une reponse 400 structuree avec le detail par champ :
+Quand le feature flag `validation` est actif, `HttpError::Validation` fournit une reponse 400 structuree avec le detail par champ :
 
 ```json
 {
@@ -159,7 +159,7 @@ Les erreurs dans un bloc transactionnel provoquent un rollback automatique de la
 ```rust
 #[post("/users/db")]
 #[transactional]
-async fn create_in_db(&self, ...) -> Result<Json<User>, AppError> {
+async fn create_in_db(&self, ...) -> Result<Json<User>, HttpError> {
     // Si une erreur survient ici, tx.rollback() est appele automatiquement
     sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
     Ok(...)

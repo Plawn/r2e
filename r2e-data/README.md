@@ -65,14 +65,14 @@ use r2e::r2e_data::{Page, Pageable};
 
 // Pageable is extracted from query string: ?page=0&size=20&sort=name,asc
 #[get("/")]
-async fn list(&self, pageable: Pageable) -> Result<Json<Page<User>>, AppError> {
+async fn list(&self, pageable: Pageable) -> Result<Json<Page<User>>, HttpError> {
     Ok(Json(self.service.list(pageable).await?))
 }
 ```
 
 ### DataError
 
-Standard error type for data layer operations, bridged to `AppError` for HTTP responses.
+Standard error type for data layer operations, bridged to `HttpError` for HTTP responses.
 
 ## License
 

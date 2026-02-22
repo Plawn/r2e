@@ -45,11 +45,11 @@ where
     async fn from_jwt_claims(
         claims: serde_json::Value,
         _state: &S,
-    ) -> Result<Self, r2e::AppError> {
+    ) -> Result<Self, r2e::HttpError> {
         let tenant_id = claims["tenant_id"]
             .as_str()
             .ok_or_else(|| {
-                r2e::AppError::Unauthorized("Missing tenant_id claim in JWT".into())
+                r2e::HttpError::Unauthorized("Missing tenant_id claim in JWT".into())
             })?
             .to_owned();
 

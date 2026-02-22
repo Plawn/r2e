@@ -25,7 +25,7 @@ impl OrderService {
         self.orders.read().await.clone()
     }
 
-    pub async fn create(&self, req: CreateOrderRequest) -> Result<Order, AppError> {
+    pub async fn create(&self, req: CreateOrderRequest) -> Result<Order, HttpError> {
         // Validate product exists by fetching from product service
         let product = self.product_client.get_product(req.product_id).await?;
 
@@ -36,14 +36,14 @@ impl OrderService {
             .await?;
 
         if !availability.available {
-            return Err(AppError::BadRequest(format!(
+            return Err(HttpError::BadRequest(format!(
                 "Product '{}' is out of stock",
                 product.name
             )));
         }
 
         if availability.stock < req.quantity {
-            return Err(AppError::BadRequest(format!(
+            return Err(HttpError::BadRequest(format!(
                 "Insufficient stock for '{}': requested {}, available {}",
                 product.name, req.quantity, availability.stock
             )));

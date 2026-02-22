@@ -57,12 +57,15 @@ pub use r2e_macros::ConfigProperties;
 // Cache macros
 pub use r2e_macros::Cacheable;
 
+// Error macros
+pub use r2e_macros::ApiError;
+
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
 pub use crate::builder::AppBuilder;
 pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;
-pub use crate::error::AppError;
+pub use crate::error::HttpError;
 pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext};
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};

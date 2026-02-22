@@ -59,7 +59,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///     Arc<JwtClaimsValidator>: FromRef<S>,
 ///     SqlitePool: FromRef<S>,
 /// {
-///     type Rejection = r2e_core::AppError;
+///     type Rejection = r2e_core::HttpError;
 ///
 ///     async fn from_request_parts(
 ///         parts: &mut Parts,
@@ -77,7 +77,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///         let profile = sqlx::query_as!(UserProfile, "SELECT * FROM users WHERE sub = ?", sub)
 ///             .fetch_one(&pool)
 ///             .await
-///             .map_err(|e| r2e_core::AppError::internal(e.to_string()))?;
+///             .map_err(|e| r2e_core::HttpError::internal(e.to_string()))?;
 ///
 ///         Ok(DbUser { claims: authenticated, profile })
 ///     }
@@ -100,7 +100,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 pub async fn extract_jwt_claims<S>(
     parts: &Parts,
     state: &S,
-) -> Result<serde_json::Value, r2e_core::AppError>
+) -> Result<serde_json::Value, r2e_core::HttpError>
 where
     S: Send + Sync,
     Arc<JwtClaimsValidator>: FromRef<S>,
@@ -110,7 +110,7 @@ where
 
     let claims = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
-        r2e_core::AppError::from(e)
+        r2e_core::HttpError::from(e)
     })?;
 
     debug!(uri = %parts.uri, "JWT claims extracted");
@@ -135,7 +135,7 @@ where
 ///     S: Send + Sync,
 ///     Arc<JwtValidator<MyIdentityBuilder>>: FromRef<S>,
 /// {
-///     type Rejection = r2e_core::AppError;
+///     type Rejection = r2e_core::HttpError;
 ///
 ///     async fn from_request_parts(
 ///         parts: &mut Parts,
@@ -148,7 +148,7 @@ where
 pub async fn extract_jwt_identity<S, B>(
     parts: &Parts,
     state: &S,
-) -> Result<B::Identity, r2e_core::AppError>
+) -> Result<B::Identity, r2e_core::HttpError>
 where
     S: Send + Sync,
     B: IdentityBuilder + 'static,
@@ -159,7 +159,7 @@ where
 
     let identity = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
-        r2e_core::AppError::from(e)
+        r2e_core::HttpError::from(e)
     })?;
 
     debug!(uri = %parts.uri, "Authenticated request");
@@ -188,7 +188,7 @@ where
     S: Send + Sync,
     Arc<JwtClaimsValidator>: FromRef<S>,
 {
-    type Rejection = r2e_core::AppError;
+    type Rejection = r2e_core::HttpError;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -206,7 +206,7 @@ where
 ///
 /// - No `Authorization` header → `Ok(None)`
 /// - Valid JWT → `Ok(Some(user))`
-/// - Invalid/expired JWT → `Err(AppError::Unauthorized)`
+/// - Invalid/expired JWT → `Err(HttpError::Unauthorized)`
 ///
 /// # Example
 ///
@@ -227,7 +227,7 @@ where
     S: Send + Sync,
     Arc<JwtClaimsValidator>: FromRef<S>,
 {
-    type Rejection = r2e_core::AppError;
+    type Rejection = r2e_core::HttpError;
 
     async fn from_request_parts(
         parts: &mut Parts,

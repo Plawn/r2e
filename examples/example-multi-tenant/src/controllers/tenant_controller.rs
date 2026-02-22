@@ -25,7 +25,7 @@ impl TenantController {
         &self,
         Path(tenant_id): Path<String>,
         #[inject(identity)] _user: TenantUser,
-    ) -> Result<Json<Vec<Project>>, AppError> {
+    ) -> Result<Json<Vec<Project>>, HttpError> {
         let projects = self.project_service.list_by_tenant(&tenant_id).await?;
         Ok(Json(projects))
     }
@@ -39,7 +39,7 @@ impl TenantController {
         Path(tenant_id): Path<String>,
         #[inject(identity)] _user: TenantUser,
         Json(body): Json<CreateProjectRequest>,
-    ) -> Result<Json<Project>, AppError> {
+    ) -> Result<Json<Project>, HttpError> {
         let project = self.project_service.create(&tenant_id, body).await?;
         Ok(Json(project))
     }

@@ -112,7 +112,7 @@ use r2e::prelude::*; // Query, Pageable, Page
 async fn list(
     &self,
     Query(pageable): Query<Pageable>,
-) -> Result<Json<Page<UserEntity>>, AppError> {
+) -> Result<Json<Page<UserEntity>>, HttpError> {
     let qb = QueryBuilder::new("users")
         .order_by("id", true)
         .limit(pageable.size)
@@ -174,7 +174,7 @@ struct SearchParams {
 async fn search(
     &self,
     Query(params): Query<SearchParams>,
-) -> Result<axum::Json<Vec<UserEntity>>, r2e_core::AppError> {
+) -> Result<axum::Json<Vec<UserEntity>>, r2e_core::HttpError> {
     let mut qb = QueryBuilder::new("users");
 
     if let Some(ref name) = params.name {

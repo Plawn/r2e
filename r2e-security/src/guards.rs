@@ -29,7 +29,7 @@ impl<S: Send + Sync, I: RoleBasedIdentity> Guard<S, I> for RolesGuard {
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         let result = (|| {
             let identity = ctx.identity.ok_or_else(|| {
-                r2e_core::AppError::Forbidden("No identity available for role check".into())
+                r2e_core::HttpError::Forbidden("No identity available for role check".into())
                     .into_response()
             })?;
             let roles = identity.roles();
@@ -40,7 +40,7 @@ impl<S: Send + Sync, I: RoleBasedIdentity> Guard<S, I> for RolesGuard {
             if has_role {
                 Ok(())
             } else {
-                Err(r2e_core::AppError::Forbidden("Insufficient roles".into()).into_response())
+                Err(r2e_core::HttpError::Forbidden("Insufficient roles".into()).into_response())
             }
         })();
         std::future::ready(result)

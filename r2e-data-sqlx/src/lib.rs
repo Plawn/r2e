@@ -46,7 +46,7 @@
 //!     &self,
 //!     body: Json<CreateUser>,
 //!     #[managed] tx: &mut Tx<'_, Sqlite>,
-//! ) -> Result<Json<User>, AppError> {
+//! ) -> Result<Json<User>, HttpError> {
 //!     sqlx::query("INSERT INTO users (name) VALUES (?)")
 //!         .bind(&body.name)
 //!         .execute(tx.as_mut())

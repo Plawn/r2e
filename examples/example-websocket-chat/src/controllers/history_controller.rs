@@ -16,7 +16,7 @@ pub struct HistoryController {
 impl HistoryController {
     /// List rooms that have messages.
     #[get("/")]
-    async fn list_rooms(&self) -> Result<Json<Vec<String>>, AppError> {
+    async fn list_rooms(&self) -> Result<Json<Vec<String>>, HttpError> {
         let rooms = self.chat_service.list_rooms().await?;
         Ok(Json(rooms))
     }
@@ -26,7 +26,7 @@ impl HistoryController {
     async fn room_history(
         &self,
         Path(room): Path<String>,
-    ) -> Result<Json<Vec<StoredMessage>>, AppError> {
+    ) -> Result<Json<Vec<StoredMessage>>, HttpError> {
         let messages = self.chat_service.get_history(&room, 50).await?;
         Ok(Json(messages))
     }

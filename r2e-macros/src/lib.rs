@@ -22,6 +22,7 @@ pub(crate) mod types;
 pub(crate) mod grpc_codegen;
 pub(crate) mod grpc_routes_parsing;
 pub(crate) mod params_derive;
+pub(crate) mod api_error_derive;
 
 /// Derive macro for declaring a R2E controller struct.
 ///
@@ -182,7 +183,7 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// // Direct type (equivalent)
 /// #[get("/users/{id}")]
-/// async fn get(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> { ... }
+/// async fn get(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> { ... }
 ///
 /// // Any response type
 /// #[get("/health")]
@@ -290,13 +291,13 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The macro injects a `tx` variable (of type `sqlx::Transaction`) into
 /// the method body. The transaction is committed on `Ok`, rolled back on
-/// `Err`. The return type **must** be `Result<T, AppError>`.
+/// `Err`. The return type **must** be `Result<T, HttpError>`.
 ///
 /// ```ignore
 /// #[post("/users/db")]
 /// #[transactional]                       // uses self.pool
 /// async fn create_in_db(&self, Json(body): Json<CreateUser>)
-///     -> Result<Json<User>, AppError>
+///     -> Result<Json<User>, HttpError>
 /// {
 ///     sqlx::query("INSERT INTO users (name) VALUES (?)")
 ///         .bind(&body.name)
@@ -306,7 +307,7 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 ///
 /// #[transactional(pool = "read_db")]     // custom pool field
-/// async fn read(&self) -> Result<Json<Data>, AppError> { ... }
+/// async fn read(&self) -> Result<Json<Data>, HttpError> { ... }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
@@ -553,7 +554,7 @@ pub fn raw(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     &self,
 ///     body: Json<CreateUser>,
 ///     #[managed] tx: &mut Tx<Sqlite>,
-/// ) -> Result<Json<User>, AppError> {
+/// ) -> Result<Json<User>, HttpError> {
 ///     sqlx::query("INSERT INTO users (name) VALUES (?)")
 ///         .bind(&body.name)
 ///         .execute(&mut **tx)
@@ -889,5 +890,64 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Params, attributes(path, query, header, param, params))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     params_derive::expand(input)
+}
+
+/// Derive macro for ergonomic HTTP error types.
+///
+/// Generates `impl Display`, `impl IntoResponse`, `impl Error`, and
+/// `impl From<T>` (for `#[from]` fields) from a simple enum declaration.
+///
+/// # Variant attributes
+///
+/// Each variant **must** have an `#[error(...)]` attribute:
+///
+/// | Form | Description |
+/// |------|-------------|
+/// | `#[error(status = NOT_FOUND, message = "...")]` | Explicit status + message |
+/// | `#[error(status = NOT_FOUND)]` | Status only — message is inferred |
+/// | `#[error(status = 429)]` | Numeric status code |
+/// | `#[error(transparent)]` | Delegate to inner type's `IntoResponse` |
+///
+/// # Field attributes
+///
+/// | Attribute | Description |
+/// |-----------|-------------|
+/// | `#[from]` | Generate `From<T>` impl and use source for `Error::source()` |
+///
+/// # Message inference (when `message` is omitted)
+///
+/// 1. Single `String` field → uses the field value
+/// 2. `#[from]` field → `source.to_string()`
+/// 3. Unit variant → humanized name (`AlreadyExists` → `"Already exists"`)
+///
+/// # Message interpolation
+///
+/// - `{0}`, `{1}` for tuple fields
+/// - `{field_name}` for named fields
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Debug, ApiError)]
+/// pub enum MyError {
+///     #[error(status = NOT_FOUND, message = "User not found: {0}")]
+///     NotFound(String),
+///
+///     #[error(status = INTERNAL_SERVER_ERROR, message = "Database error")]
+///     Database(#[from] sqlx::Error),
+///
+///     #[error(status = BAD_REQUEST)]
+///     Validation(String),           // no message → uses field value
+///
+///     #[error(status = CONFLICT)]
+///     AlreadyExists,                // unit variant → "Already exists"
+///
+///     #[error(transparent)]
+///     Inner(#[from] HttpError),      // delegates to inner IntoResponse
+/// }
+/// ```
+#[proc_macro_derive(ApiError, attributes(error, from))]
+pub fn derive_api_error(input: TokenStream) -> TokenStream {
+    api_error_derive::expand(input)
 }
 

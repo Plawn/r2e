@@ -10,18 +10,18 @@
 
 ## Phase 1: Error Handling & Types (Quick Wins)
 
-### 1.1 `AppError` Response Mapping
+### 1.1 `HttpError` Response Mapping
 
 **File**: `src/error.rs` — add `#[cfg(test)] mod tests`
 
 | Test | Description |
 |------|-------------|
-| `app_error_not_found_status` | `AppError::NotFound` → 404 |
-| `app_error_bad_request_status` | `AppError::BadRequest` → 400 |
-| `app_error_unauthorized_status` | `AppError::Unauthorized` → 401 |
-| `app_error_forbidden_status` | `AppError::Forbidden` → 403 |
-| `app_error_internal_status` | `AppError::Internal` → 500 |
-| `app_error_custom_status` | `AppError::Custom(code, msg)` → custom code |
+| `app_error_not_found_status` | `HttpError::NotFound` → 404 |
+| `app_error_bad_request_status` | `HttpError::BadRequest` → 400 |
+| `app_error_unauthorized_status` | `HttpError::Unauthorized` → 401 |
+| `app_error_forbidden_status` | `HttpError::Forbidden` → 403 |
+| `app_error_internal_status` | `HttpError::Internal` → 500 |
+| `app_error_custom_status` | `HttpError::Custom(code, msg)` → custom code |
 | `app_error_json_body_format` | Response body is `{"error": "..."}` JSON |
 | `app_error_display_formatting` | `Display` trait produces expected strings |
 
@@ -31,7 +31,7 @@
 
 | Test | Description |
 |------|-------------|
-| `managed_error_into_response` | `ManagedError(AppError::...)` converts to correct HTTP response |
+| `managed_error_into_response` | `ManagedError(HttpError::...)` converts to correct HTTP response |
 | `managed_err_wraps_custom_error` | `ManagedErr(MyError)` delegates to `IntoResponse` |
 | `managed_err_preserves_status` | Status code is preserved through the wrapper |
 

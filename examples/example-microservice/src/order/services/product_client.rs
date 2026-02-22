@@ -19,7 +19,7 @@ impl ProductClient {
         }
     }
 
-    pub async fn get_product(&self, id: u64) -> Result<ProductInfo, AppError> {
+    pub async fn get_product(&self, id: u64) -> Result<ProductInfo, HttpError> {
         let url = format!("{}/products/{}", self.base_url, id);
 
         let resp = self
@@ -27,14 +27,14 @@ impl ProductClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| AppError::Internal(format!("Product service unavailable: {}", e)))?;
+            .map_err(|e| HttpError::Internal(format!("Product service unavailable: {}", e)))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(AppError::NotFound(format!("Product {} not found", id)));
+            return Err(HttpError::NotFound(format!("Product {} not found", id)));
         }
 
         if !resp.status().is_success() {
-            return Err(AppError::Internal(format!(
+            return Err(HttpError::Internal(format!(
                 "Product service returned {}",
                 resp.status()
             )));
@@ -42,10 +42,10 @@ impl ProductClient {
 
         resp.json::<ProductInfo>()
             .await
-            .map_err(|e| AppError::Internal(format!("Invalid product response: {}", e)))
+            .map_err(|e| HttpError::Internal(format!("Invalid product response: {}", e)))
     }
 
-    pub async fn check_availability(&self, id: u64) -> Result<AvailabilityResponse, AppError> {
+    pub async fn check_availability(&self, id: u64) -> Result<AvailabilityResponse, HttpError> {
         let url = format!("{}/products/{}/availability", self.base_url, id);
 
         let resp = self
@@ -53,14 +53,14 @@ impl ProductClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| AppError::Internal(format!("Product service unavailable: {}", e)))?;
+            .map_err(|e| HttpError::Internal(format!("Product service unavailable: {}", e)))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(AppError::NotFound(format!("Product {} not found", id)));
+            return Err(HttpError::NotFound(format!("Product {} not found", id)));
         }
 
         if !resp.status().is_success() {
-            return Err(AppError::Internal(format!(
+            return Err(HttpError::Internal(format!(
                 "Product service returned {}",
                 resp.status()
             )));
@@ -68,6 +68,6 @@ impl ProductClient {
 
         resp.json::<AvailabilityResponse>()
             .await
-            .map_err(|e| AppError::Internal(format!("Invalid availability response: {}", e)))
+            .map_err(|e| HttpError::Internal(format!("Invalid availability response: {}", e)))
     }
 }

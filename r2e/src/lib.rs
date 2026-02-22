@@ -89,7 +89,7 @@ pub use r2e_observability;
 pub mod types {
     pub use r2e_core::types::*;
 
-    /// Paginated JSON result — `Result<Json<Page<T>>, AppError>`.
+    /// Paginated JSON result — `Result<Json<Page<T>>, HttpError>`.
     ///
     /// Available when the `data` feature is enabled.
     ///
@@ -101,7 +101,7 @@ pub mod types {
     /// ```
     #[cfg(feature = "data")]
     pub type PagedResult<T> =
-        Result<r2e_core::http::Json<r2e_data::Page<T>>, r2e_core::AppError>;
+        Result<r2e_core::http::Json<r2e_data::Page<T>>, r2e_core::HttpError>;
 }
 
 /// Unified prelude — import everything with `use r2e::prelude::*`.

@@ -24,7 +24,7 @@ R2E fournit 13 fonctionnalites principales, chacune documentee dans un fichier d
 
 ```
 r2e-macros       Proc-macro. #[derive(Controller)] + #[routes] generent le code Axum.
-r2e-core         Runtime. AppBuilder, Controller, AppError, config, validation, cache, rate limiter.
+r2e-core         Runtime. AppBuilder, Controller, HttpError, config, validation, cache, rate limiter.
 r2e-security     JWT/JWKS, AuthenticatedUser, #[roles].
 r2e-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.
 r2e-events       EventBus in-process (pub/sub type).

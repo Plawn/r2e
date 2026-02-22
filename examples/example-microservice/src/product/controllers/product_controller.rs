@@ -19,23 +19,23 @@ impl ProductController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<ProductInfo>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<ProductInfo>, HttpError> {
         self.product_service
             .get_by_id(id)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound(format!("Product {} not found", id)))
+            .ok_or_else(|| HttpError::NotFound(format!("Product {} not found", id)))
     }
 
     #[get("/{id}/availability")]
     async fn check_availability(
         &self,
         Path(id): Path<u64>,
-    ) -> Result<Json<AvailabilityResponse>, AppError> {
+    ) -> Result<Json<AvailabilityResponse>, HttpError> {
         self.product_service
             .check_availability(id)
             .await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound(format!("Product {} not found", id)))
+            .ok_or_else(|| HttpError::NotFound(format!("Product {} not found", id)))
     }
 }

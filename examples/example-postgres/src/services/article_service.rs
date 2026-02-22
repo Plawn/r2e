@@ -2,7 +2,7 @@ use r2e::prelude::*;
 use r2e::r2e_data::{Page, Pageable};
 use sqlx::PgPool;
 
-use crate::error::AppError;
+use crate::error::HttpError;
 use crate::models::{Article, CreateArticleRequest, UpdateArticleRequest};
 
 #[derive(Clone)]
@@ -16,7 +16,7 @@ impl ArticleService {
         Self { pool }
     }
 
-    pub async fn list(&self, pageable: &Pageable) -> Result<Page<Article>, AppError> {
+    pub async fn list(&self, pageable: &Pageable) -> Result<Page<Article>, HttpError> {
         let offset = pageable.offset();
 
         let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM articles")
@@ -35,7 +35,7 @@ impl ArticleService {
         Ok(Page::new(articles, pageable, total.0 as u64))
     }
 
-    pub async fn get_by_id(&self, id: i64) -> Result<Article, AppError> {
+    pub async fn get_by_id(&self, id: i64) -> Result<Article, HttpError> {
         sqlx::query_as::<_, Article>(
             "SELECT id, title, body, published, created_at, updated_at \
              FROM articles WHERE id = $1",
@@ -43,10 +43,10 @@ impl ArticleService {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Article {} not found", id)))
+        .ok_or_else(|| HttpError::NotFound(format!("Article {} not found", id)))
     }
 
-    pub async fn create(&self, req: CreateArticleRequest) -> Result<Article, AppError> {
+    pub async fn create(&self, req: CreateArticleRequest) -> Result<Article, HttpError> {
         let article = sqlx::query_as::<_, Article>(
             "INSERT INTO articles (title, body, published) VALUES ($1, $2, $3) \
              RETURNING id, title, body, published, created_at, updated_at",
@@ -60,7 +60,7 @@ impl ArticleService {
         Ok(article)
     }
 
-    pub async fn update(&self, id: i64, req: UpdateArticleRequest) -> Result<Article, AppError> {
+    pub async fn update(&self, id: i64, req: UpdateArticleRequest) -> Result<Article, HttpError> {
         let existing = self.get_by_id(id).await?;
 
         let title = req.title.unwrap_or(existing.title);
@@ -82,14 +82,14 @@ impl ArticleService {
         Ok(article)
     }
 
-    pub async fn delete(&self, id: i64) -> Result<(), AppError> {
+    pub async fn delete(&self, id: i64) -> Result<(), HttpError> {
         let result = sqlx::query("DELETE FROM articles WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::NotFound(format!("Article {} not found", id)));
+            return Err(HttpError::NotFound(format!("Article {} not found", id)));
         }
 
         Ok(())

@@ -12,7 +12,7 @@ pub struct FieldError {
     pub code: String,
 }
 
-/// Container for validation errors, used as the payload of `AppError::Validation`.
+/// Container for validation errors, used as the payload of `HttpError::Validation`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidationErrorResponse {
     pub errors: Vec<FieldError>,

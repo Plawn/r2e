@@ -3,7 +3,7 @@
 //! Provides [`Tx`], [`HasPool`], and a blanket [`ManagedResource`] implementation
 //! so that `#[managed]` handler parameters "just work" for database transactions.
 
-use r2e_core::error::AppError;
+use r2e_core::error::HttpError;
 use r2e_core::managed::{ManagedError, ManagedResource};
 use sqlx::{Database, Pool, Transaction};
 use std::ops::{Deref, DerefMut};
@@ -42,13 +42,13 @@ pub trait HasPool<DB: Database> {
 ///     &self,
 ///     body: Json<CreateUser>,
 ///     #[managed] tx: &mut Tx<'_, Sqlite>,
-/// ) -> Result<Json<User>, AppError> {
+/// ) -> Result<Json<User>, HttpError> {
 ///     sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
 ///         .bind(&body.name)
 ///         .bind(&body.email)
 ///         .execute(tx.as_mut())
 ///         .await
-///         .map_err(|e| AppError::Internal(e.to_string()))?;
+///         .map_err(|e| HttpError::Internal(e.to_string()))?;
 ///     Ok(Json(user))
 /// }
 /// ```
@@ -97,7 +97,7 @@ where
             .pool()
             .begin()
             .await
-            .map_err(|e| ManagedError(AppError::Internal(e.to_string())))?;
+            .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
         Ok(Tx(tx))
     }
 
@@ -106,7 +106,7 @@ where
             self.into_inner()
                 .commit()
                 .await
-                .map_err(|e| ManagedError(AppError::Internal(e.to_string())))?;
+                .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
         }
         // If !success, the transaction is dropped and automatically rolled back
         Ok(())

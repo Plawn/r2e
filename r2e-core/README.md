@@ -98,7 +98,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(AppError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
             }
         }
     }
@@ -177,10 +177,10 @@ pub struct DatabaseConfig {
 
 ## Error handling
 
-Built-in `AppError` with HTTP status mapping:
+Built-in `HttpError` with HTTP status mapping:
 
 ```rust
-pub enum AppError {
+pub enum HttpError {
     NotFound(String),      // → 404
     Unauthorized(String),  // → 401
     Forbidden(String),     // → 403
@@ -191,9 +191,9 @@ pub enum AppError {
 ```
 
 Convenience type aliases:
-- `ApiResult<T>` = `Result<T, AppError>`
-- `JsonResult<T>` = `Result<Json<T>, AppError>`
-- `StatusResult` = `Result<StatusCode, AppError>`
+- `ApiResult<T>` = `Result<T, HttpError>`
+- `JsonResult<T>` = `Result<Json<T>, HttpError>`
+- `StatusResult` = `Result<StatusCode, HttpError>`
 
 ## Managed resources
 
@@ -207,11 +207,11 @@ pub trait ManagedResource<S>: Sized {
 }
 ```
 
-`success` is `true` if the handler returned `Ok`, `false` on `Err`. Error wrappers: `ManagedError` (wraps `AppError`), `ManagedErr<E>` (wraps any `E: IntoResponse`).
+`success` is `true` if the handler returned `Ok`, `false` on `Err`. Error wrappers: `ManagedError` (wraps `HttpError`), `ManagedErr<E>` (wraps any `E: IntoResponse`).
 
 ```rust
 #[post("/")]
-async fn create(&self, body: Json<User>, #[managed] tx: &mut Tx<'_, Sqlite>) -> Result<Json<User>, AppError> {
+async fn create(&self, body: Json<User>, #[managed] tx: &mut Tx<'_, Sqlite>) -> Result<Json<User>, HttpError> {
     // tx acquired before handler, committed/rolled back after
 }
 ```

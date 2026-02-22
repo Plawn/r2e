@@ -21,7 +21,7 @@
 //! The `ManagedResource` trait requires an error type that implements `Into<Response>`.
 //! This module provides two error wrappers:
 //!
-//! - [`ManagedError`] - Wraps the framework's `AppError`
+//! - [`ManagedError`] - Wraps the framework's `HttpError`
 //! - [`ManagedErr<E>`] - Generic wrapper for any error type implementing `IntoResponse`
 //!
 //! # Examples
@@ -33,31 +33,31 @@
 //!
 //! // Your custom app error
 //! #[derive(Debug)]
-//! pub enum MyAppError {
+//! pub enum MyHttpError {
 //!     Database(String),
 //!     Internal(String),
 //! }
 //!
-//! impl IntoResponse for MyAppError {
+//! impl IntoResponse for MyHttpError {
 //!     fn into_response(self) -> Response {
 //!         // ... convert to HTTP response
 //!     }
 //! }
 //!
-//! // Use ManagedErr<MyAppError> as the error type
+//! // Use ManagedErr<MyHttpError> as the error type
 //! impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
-//!     type Error = ManagedErr<MyAppError>;
+//!     type Error = ManagedErr<MyHttpError>;
 //!
 //!     async fn acquire(state: &S) -> Result<Self, Self::Error> {
 //!         let tx = state.pool().begin().await
-//!             .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+//!             .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
 //!         Ok(Tx(tx))
 //!     }
 //!
 //!     async fn release(self, success: bool) -> Result<(), Self::Error> {
 //!         if success {
 //!             self.0.commit().await
-//!                 .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+//!                 .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
 //!         }
 //!         Ok(())
 //!     }
@@ -67,7 +67,7 @@
 //! ## Request-scoped Audit Context
 //!
 //! ```ignore
-//! use r2e_core::{ManagedResource, ManagedError, AppError};
+//! use r2e_core::{ManagedResource, ManagedError, HttpError};
 //!
 //! pub struct AuditContext {
 //!     entries: Vec<String>,
@@ -100,7 +100,7 @@
 //! ## Database Transaction Wrapper
 //!
 //! ```ignore
-//! use r2e_core::{ManagedResource, ManagedError, AppError};
+//! use r2e_core::{ManagedResource, ManagedError, HttpError};
 //! use sqlx::{Database, Pool, Transaction};
 //!
 //! /// Transaction wrapper for managed lifecycle
@@ -120,14 +120,14 @@
 //!
 //!     async fn acquire(state: &S) -> Result<Self, Self::Error> {
 //!         let tx = state.pool().begin().await
-//!             .map_err(|e| ManagedError(AppError::Internal(e.to_string())))?;
+//!             .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
 //!         Ok(Tx(tx))
 //!     }
 //!
 //!     async fn release(self, success: bool) -> Result<(), Self::Error> {
 //!         if success {
 //!             self.0.commit().await
-//!                 .map_err(|e| ManagedError(AppError::Internal(e.to_string())))?;
+//!                 .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
 //!         }
 //!         // On failure, transaction is dropped and rolled back
 //!         Ok(())
@@ -135,7 +135,7 @@
 //! }
 //! ```
 
-use crate::error::AppError;
+use crate::error::HttpError;
 use crate::http::response::{IntoResponse, Response};
 use std::future::Future;
 
@@ -150,7 +150,7 @@ use std::future::Future;
 /// # Implementing for Custom Resources
 ///
 /// ```ignore
-/// use r2e_core::{ManagedResource, ManagedError, AppError};
+/// use r2e_core::{ManagedResource, ManagedError, HttpError};
 ///
 /// pub struct MyResource {
 ///     // ... fields
@@ -201,21 +201,21 @@ pub trait ManagedResource<S>: Sized {
     fn release(self, success: bool) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-/// Error wrapper for managed resource operations using `AppError`.
+/// Error wrapper for managed resource operations using `HttpError`.
 ///
-/// This is a convenience wrapper for use with the framework's built-in `AppError` type.
+/// This is a convenience wrapper for use with the framework's built-in `HttpError` type.
 /// For custom error types, use [`ManagedErr<E>`] instead.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use r2e_core::{ManagedResource, ManagedError, AppError};
+/// use r2e_core::{ManagedResource, ManagedError, HttpError};
 ///
 /// impl<S: Send + Sync> ManagedResource<S> for MyResource {
 ///     type Error = ManagedError;
 ///
 ///     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
-///         Err(ManagedError(AppError::Internal("failed to acquire".into())))
+///         Err(ManagedError(HttpError::Internal("failed to acquire".into())))
 ///     }
 ///
 ///     async fn release(self, _success: bool) -> Result<(), Self::Error> {
@@ -223,10 +223,10 @@ pub trait ManagedResource<S>: Sized {
 ///     }
 /// }
 /// ```
-pub struct ManagedError(pub AppError);
+pub struct ManagedError(pub HttpError);
 
-impl From<AppError> for ManagedError {
-    fn from(err: AppError) -> Self {
+impl From<HttpError> for ManagedError {
+    fn from(err: HttpError) -> Self {
         ManagedError(err)
     }
 }
@@ -262,12 +262,12 @@ impl std::fmt::Debug for ManagedError {
 ///
 /// // Your custom error type
 /// #[derive(Debug)]
-/// pub enum MyAppError {
+/// pub enum MyHttpError {
 ///     Database(String),
 ///     NotFound(String),
 /// }
 ///
-/// impl IntoResponse for MyAppError {
+/// impl IntoResponse for MyHttpError {
 ///     fn into_response(self) -> Response {
 ///         // ... convert to HTTP response
 ///     }
@@ -275,10 +275,10 @@ impl std::fmt::Debug for ManagedError {
 ///
 /// // Use with ManagedResource
 /// impl<S: Send + Sync> ManagedResource<S> for MyResource {
-///     type Error = ManagedErr<MyAppError>;
+///     type Error = ManagedErr<MyHttpError>;
 ///
 ///     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
-///         Err(ManagedErr(MyAppError::Database("connection failed".into())))
+///         Err(ManagedErr(MyHttpError::Database("connection failed".into())))
 ///     }
 ///
 ///     async fn release(self, _success: bool) -> Result<(), Self::Error> {
@@ -293,11 +293,11 @@ impl std::fmt::Debug for ManagedError {
 ///
 /// ```ignore
 /// let tx = state.pool().begin().await
-///     .map_err(|e| ManagedErr(MyAppError::Database(e.to_string())))?;
+///     .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
 ///
 /// // Or with From impl:
 /// let tx = state.pool().begin().await
-///     .map_err(|e| MyAppError::Database(e.to_string()))?;  // if From<MyAppError> for ManagedErr<MyAppError>
+///     .map_err(|e| MyHttpError::Database(e.to_string()))?;  // if From<MyHttpError> for ManagedErr<MyHttpError>
 /// ```
 pub struct ManagedErr<E>(pub E);
 

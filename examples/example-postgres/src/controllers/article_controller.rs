@@ -2,7 +2,7 @@ use r2e::prelude::*;
 use r2e::r2e_data::{Page, Pageable};
 use r2e::r2e_utils::interceptors::Logged;
 
-use crate::error::AppError;
+use crate::error::HttpError;
 use crate::models::{Article, CreateArticleRequest, UpdateArticleRequest};
 use crate::services::ArticleService;
 use crate::state::AppState;
@@ -21,13 +21,13 @@ impl ArticleController {
     async fn list(
         &self,
         Query(pageable): Query<Pageable>,
-    ) -> Result<Json<Page<Article>>, AppError> {
+    ) -> Result<Json<Page<Article>>, HttpError> {
         let page = self.article_service.list(&pageable).await?;
         Ok(Json(page))
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<Article>, AppError> {
+    async fn get_by_id(&self, Path(id): Path<i64>) -> Result<Json<Article>, HttpError> {
         let article = self.article_service.get_by_id(id).await?;
         Ok(Json(article))
     }
@@ -36,7 +36,7 @@ impl ArticleController {
     async fn create(
         &self,
         Json(body): Json<CreateArticleRequest>,
-    ) -> Result<Json<Article>, AppError> {
+    ) -> Result<Json<Article>, HttpError> {
         let article = self.article_service.create(body).await?;
         Ok(Json(article))
     }
@@ -46,13 +46,13 @@ impl ArticleController {
         &self,
         Path(id): Path<i64>,
         Json(body): Json<UpdateArticleRequest>,
-    ) -> Result<Json<Article>, AppError> {
+    ) -> Result<Json<Article>, HttpError> {
         let article = self.article_service.update(id, body).await?;
         Ok(Json(article))
     }
 
     #[delete("/{id}")]
-    async fn delete(&self, Path(id): Path<i64>) -> Result<(), AppError> {
+    async fn delete(&self, Path(id): Path<i64>) -> Result<(), HttpError> {
         self.article_service.delete(id).await
     }
 }

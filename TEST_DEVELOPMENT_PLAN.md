@@ -39,7 +39,7 @@ No external dependencies, no async, no I/O. Highest ROI.
 
 | Crate | What | Tests | Effort |
 |-------|------|-------|--------|
-| r2e-core | AppError response mapping | 11 | 1h |
+| r2e-core | HttpError response mapping | 11 | 1h |
 | r2e-core | GuardContext, PathParams, NoIdentity | 14 | 2h |
 | r2e-data | Pageable offset, Page total_pages, DataError | 25 | 3h |
 | r2e-security | SecurityError, bearer token extraction, AuthenticatedUser helpers | 34 | 4h |
@@ -132,7 +132,7 @@ Concurrency tests, mocking infrastructure, stress tests, CLI integration.
 If only implementing a subset, prioritize in this order:
 
 1. **r2e-data Pageable/Page** — pure math, catches real bugs, 30 min
-2. **r2e-core AppError** — verifies HTTP status codes, 1h
+2. **r2e-core HttpError** — verifies HTTP status codes, 1h
 3. **r2e-security bearer extraction + AuthenticatedUser** — pure logic, 2h
 4. **r2e-data-sqlx Tx lifecycle** — critical path, 3h
 5. **r2e-scheduler interval execution** — verify tasks actually run, 3h

@@ -1,12 +1,12 @@
 use r2e_core::managed::{ManagedErr, ManagedError};
-use r2e_core::AppError;
+use r2e_core::HttpError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use http_body_util::BodyExt;
 
 #[tokio::test]
 async fn managed_error_into_response() {
-    let err = ManagedError(AppError::NotFound("gone".into()));
+    let err = ManagedError(HttpError::NotFound("gone".into()));
     let resp: Response = err.into();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body = resp.into_body().collect().await.unwrap().to_bytes();

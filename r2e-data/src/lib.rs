@@ -44,8 +44,8 @@
 //! crates can wrap their driver errors without leaking types. Use
 //! [`DataError::database()`] to construct from any error type.
 //!
-//! `DataError` converts into [`r2e_core::AppError`] automatically, so you can
-//! use `?` in handler return types of `Result<_, AppError>`.
+//! `DataError` converts into [`r2e_core::HttpError`] automatically, so you can
+//! use `?` in handler return types of `Result<_, HttpError>`.
 
 pub mod entity;
 pub mod error;

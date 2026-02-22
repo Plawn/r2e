@@ -32,7 +32,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for DenyGuard {
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async {
-            Err(AppError::Forbidden("Access denied by DenyGuard".into()).into_response())
+            Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into_response())
         }
     }
 }
@@ -51,7 +51,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for SubCheckGuard {
         async move {
             match sub {
                 Some(s) if s == "allowed-user" => Ok(()),
-                _ => Err(AppError::Forbidden("Wrong user".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Wrong user".into()).into_response()),
             }
         }
     }
@@ -72,7 +72,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for HeaderCheckGuard {
             if has_header {
                 Ok(())
             } else {
-                Err(AppError::BadRequest("Missing x-custom-token header".into()).into_response())
+                Err(HttpError::BadRequest("Missing x-custom-token header".into()).into_response())
             }
         }
     }
@@ -93,7 +93,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for PathCheckGuard {
             if path.contains("path-check") {
                 Ok(())
             } else {
-                Err(AppError::Forbidden("Invalid path".into()).into_response())
+                Err(HttpError::Forbidden("Invalid path".into()).into_response())
             }
         }
     }
@@ -110,7 +110,7 @@ impl<S: Send + Sync> PreAuthGuard<S> for DenyPreAuthGuard {
         _ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async {
-            Err(AppError::Forbidden("Pre-auth denied".into()).into_response())
+            Err(HttpError::Forbidden("Pre-auth denied".into()).into_response())
         }
     }
 }
@@ -135,7 +135,7 @@ impl<S: Send + Sync> PreAuthGuard<S> for ApiKeyPreAuthGuard {
             if has_key {
                 Ok(())
             } else {
-                Err(AppError::Unauthorized("Missing or invalid API key".into()).into_response())
+                Err(HttpError::Unauthorized("Missing or invalid API key".into()).into_response())
             }
         }
     }

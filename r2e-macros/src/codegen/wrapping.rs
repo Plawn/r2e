@@ -100,12 +100,12 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
         body = quote! {
             {
                 let mut tx = self.#pool_field.begin().await
-                    .map_err(|__e| #krate::AppError::Internal(__e.to_string()))?;
+                    .map_err(|__e| #krate::HttpError::Internal(__e.to_string()))?;
                 let __tx_result = #body;
                 match __tx_result {
                     Ok(__val) => {
                         tx.commit().await
-                            .map_err(|__e| #krate::AppError::Internal(__e.to_string()))?;
+                            .map_err(|__e| #krate::HttpError::Internal(__e.to_string()))?;
                         Ok(__val)
                     }
                     Err(__err) => Err(__err),

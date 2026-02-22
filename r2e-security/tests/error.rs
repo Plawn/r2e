@@ -95,9 +95,9 @@ fn display_formatting() {
 #[test]
 fn into_app_error() {
     let sec_err = SecurityError::InvalidToken("bad".into());
-    let app_err: r2e_core::AppError = sec_err.into();
+    let app_err: r2e_core::HttpError = sec_err.into();
     match app_err {
-        r2e_core::AppError::Unauthorized(msg) => {
+        r2e_core::HttpError::Unauthorized(msg) => {
             assert_eq!(msg, "Unauthorized");
         }
         other => panic!("expected Unauthorized, got {other}"),
