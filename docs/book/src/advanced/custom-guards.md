@@ -7,8 +7,7 @@ Guards run authorization checks before the handler body. R2E supports two guard 
 Post-auth guards run after JWT validation and have access to the identity:
 
 ```rust
-use r2e_core::{Guard, GuardContext, Identity, AppError};
-use axum::response::{IntoResponse, Response};
+use r2e::prelude::*; // Guard, GuardContext, Identity, AppError, IntoResponse, Response
 
 struct TenantGuard;
 
@@ -45,7 +44,7 @@ async fn get_tenant_data(&self) -> Json<Data> { /* ... */ }
 Pre-auth guards run before JWT validation — useful for checks that don't need identity:
 
 ```rust
-use r2e_core::{PreAuthGuard, PreAuthGuardContext};
+use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, AppError, StatusCode
 
 struct MaintenanceGuard;
 

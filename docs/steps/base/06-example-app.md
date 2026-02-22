@@ -105,12 +105,10 @@ impl HealthController {
 ### User controller (`controllers/user_controller.rs`)
 
 ```rust
-use r2e_macros::{controller, inject, identity, get, post};
-use r2e_security::AuthenticatedUser;
+use r2e::prelude::*; // Controller, get, post, Json, Path
+use r2e::r2e_security::AuthenticatedUser;
 use crate::services::UserService;
 use crate::models::User;
-use axum::Json;
-use axum::extract::Path;
 
 pub struct UserController;
 

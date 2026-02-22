@@ -528,9 +528,7 @@ async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, AppError> {
 
 **Defining a custom error type:**
 ```rust
-use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
-use axum::Json;
+use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
 
 #[derive(Debug)]
 pub enum MyAppError {
@@ -592,6 +590,24 @@ Rust's orphan rules prevent implementing foreign traits (`Into`) for foreign typ
 MyAppError (your type)     →  ManagedErr<MyAppError> (r2e type)  →  Response (axum type)
          impl IntoResponse              impl Into<Response>
 ```
+
+### Prelude & HTTP Re-exports (r2e-core)
+
+**`use r2e::prelude::*`** provides everything a developer needs — no direct `axum` imports should be necessary. The prelude includes:
+
+- **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `Cacheable`, `FromMultipart` (multipart feature)
+- **Core types:** `AppBuilder`, `AppError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`
+- **Plugins:** `Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
+- **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
+- **Extractors:** `Path`, `Query`, `Form`, `State`, `Request`, `FromRef`, `FromRequest`, `FromRequestParts`, `ConnectInfo`, `DefaultBodyLimit`, `MatchedPath`, `OriginalUri`
+- **Headers:** `HeaderName`, `HeaderValue`, `Method`, plus constants: `ACCEPT`, `AUTHORIZATION`, `CACHE_CONTROL`, `CONTENT_LENGTH`, `CONTENT_TYPE`, `COOKIE`, `HOST_HEADER`, `LOCATION`, `ORIGIN`, `REFERER`, `SET_COOKIE`, `USER_AGENT`
+- **Response:** `IntoResponse`, `Response`, `Redirect`, `Html`, `Sse`, `SseEvent`, `SseKeepAlive`, `SseBroadcaster`
+- **Middleware:** `from_fn`, `Next`
+- **Type aliases:** `ApiResult`, `JsonResult`, `StatusResult`
+- **Multipart** (feature `multipart`): `Multipart`, `TypedMultipart`, `UploadedFile`, `FromMultipart`
+- **WebSocket** (feature `ws`): `WebSocket`, `WebSocketUpgrade`, `Message`, `CloseFrame`, `WsStream`, `WsHandler`, `WsBroadcaster`, `WsRooms`
+
+Additional types are available via `r2e::http::*` submodules for advanced use (e.g., `r2e::http::routing::{get, post, ...}`, `r2e::http::body::Body`).
 
 ### Feature Flags
 

@@ -19,7 +19,8 @@ Today, all HTTP endpoints go through `#[derive(Controller)]` + `#[routes]`. If a
 ### Proposed API
 
 ```rust
-use axum::{Router, routing::get, response::IntoResponse};
+use r2e::prelude::*; // Router, IntoResponse
+use r2e::http::routing::get;
 
 async fn raw_handler() -> impl IntoResponse {
     "This is a raw Axum handler"

@@ -81,8 +81,7 @@ AppBuilder::new()
 Implement the `Plugin` trait for plugins that install after `build_state()`:
 
 ```rust
-use r2e_core::plugin::Plugin;
-use axum::Router;
+use r2e::prelude::*; // Plugin, Router
 
 pub struct MyPlugin;
 

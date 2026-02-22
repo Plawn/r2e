@@ -106,14 +106,13 @@ let (sql, params) = QueryBuilder::new("users")
 `Pageable` s'extrait depuis les query params :
 
 ```rust
-use axum::extract::Query;
-use r2e_data::{Pageable, Page};
+use r2e::prelude::*; // Query, Pageable, Page
 
 #[get("/data/users")]
 async fn list(
     &self,
     Query(pageable): Query<Pageable>,
-) -> Result<axum::Json<Page<UserEntity>>, r2e_core::AppError> {
+) -> Result<Json<Page<UserEntity>>, AppError> {
     let qb = QueryBuilder::new("users")
         .order_by("id", true)
         .limit(pageable.size)

@@ -80,8 +80,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 ## 3. Error handling (`error.rs`)
 
 ```rust
-use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
+// Note: these types are re-exported via r2e::prelude::*
+use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::header::StatusCode;
 
 /// Erreur applicative standard
 pub enum AppError {

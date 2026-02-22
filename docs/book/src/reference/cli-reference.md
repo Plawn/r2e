@@ -147,8 +147,7 @@ r2e generate controller UserController
 **Creates:** `src/controllers/user_controller.rs`
 
 ```rust
-use axum::Json;
-use r2e_core::prelude::*;
+use r2e::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Controller)]

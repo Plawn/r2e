@@ -76,7 +76,7 @@ Use `#[transactional(pool = "custom_pool")]` if your pool field has a different 
 Implement `ManagedResource<S>` for any type that needs acquire/release lifecycle:
 
 ```rust
-use r2e_core::ManagedResource;
+use r2e::prelude::*; // ManagedResource, ManagedErr
 
 pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
 

@@ -28,8 +28,7 @@ If the user doesn't have the required role, a 403 Forbidden response is returned
 Custom post-auth guards implement `Guard<S, I>`:
 
 ```rust
-use r2e_core::{Guard, GuardContext, Identity};
-use axum::response::{IntoResponse, Response};
+use r2e::prelude::*; // Guard, GuardContext, Identity, IntoResponse, Response
 
 struct TenantGuard;
 
@@ -91,7 +90,7 @@ pub trait Identity: Send + Sync {
 For authorization that doesn't need identity (e.g., IP allowlisting), use `PreAuthGuard`:
 
 ```rust
-use r2e_core::{PreAuthGuard, PreAuthGuardContext};
+use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, AppError, IntoResponse, Response
 
 struct IpAllowlistGuard;
 

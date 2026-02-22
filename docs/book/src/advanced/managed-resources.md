@@ -40,7 +40,7 @@ async fn create(
 ## Implementing for transactions
 
 ```rust
-use r2e_core::{ManagedResource, ManagedErr};
+use r2e::prelude::*; // ManagedResource, ManagedErr
 use r2e::r2e_data_sqlx::HasPool;
 use sqlx::{Database, Transaction, Pool};
 

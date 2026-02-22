@@ -7,7 +7,7 @@ R2E provides a built-in `AppError` type and supports custom error types that int
 `AppError` maps common error cases to HTTP status codes:
 
 ```rust
-use r2e_core::AppError;
+use r2e::prelude::*; // AppError, Json, Path
 
 #[get("/{id}")]
 async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> {
@@ -48,9 +48,7 @@ async fn create(&self, body: Json<Request>) -> Result<Json<Response>, AppError> 
 For production applications, define your own error type:
 
 ```rust
-use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
-use axum::Json;
+use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
 
 #[derive(Debug)]
 pub enum MyAppError {

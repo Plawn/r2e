@@ -97,7 +97,7 @@ When multiple interceptors are applied, they wrap in this order (outermost to in
 Implement the `Interceptor<R>` trait:
 
 ```rust
-use r2e_core::interceptors::{Interceptor, InterceptorContext};
+use r2e::prelude::*; // Interceptor, InterceptorContext
 use std::future::Future;
 
 pub struct AuditLog;

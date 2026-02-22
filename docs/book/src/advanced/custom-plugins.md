@@ -199,10 +199,8 @@ AppBuilder::new()
 A post-state plugin that adds a unique `X-Request-Id` header to every response.
 
 ```rust
-use r2e::{Plugin, AppBuilder};
-use axum::http::{Request, HeaderValue};
-use axum::middleware::{self, Next};
-use axum::response::Response;
+use r2e::prelude::*; // Plugin, AppBuilder, Request, Next, Response
+use r2e::http::header::HeaderValue;
 use uuid::Uuid;
 
 pub struct RequestId;
@@ -216,7 +214,7 @@ impl Plugin for RequestId {
 }
 
 async fn request_id_middleware(
-    request: Request<axum::body::Body>,
+    request: Request<Body>,
     next: Next,
 ) -> Response {
     let request_id = Uuid::new_v4().to_string();
@@ -333,9 +331,8 @@ Post-state plugins (`Plugin::install`) receive `AppBuilder<T>` and can call:
 ## Example: Metrics plugin
 
 ```rust
-use r2e::{Plugin, AppBuilder};
-use axum::routing::get;
-use axum::Router;
+use r2e::prelude::*; // Plugin, AppBuilder, Router
+use r2e::http::routing::get;
 
 pub struct MetricsPlugin {
     endpoint: String,

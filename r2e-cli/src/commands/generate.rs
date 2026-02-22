@@ -24,8 +24,7 @@ pub fn controller(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let content = format!(
-        r#"use axum::Json;
-use r2e_core::prelude::*;
+        r#"use r2e::prelude::*;
 use serde::{{Deserialize, Serialize}};
 
 // TODO: import your state type

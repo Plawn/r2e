@@ -140,14 +140,15 @@ impl JwtValidator {
 ## 5. Extracteur Axum (`extractor.rs`)
 
 ```rust
-use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
+// Note: these types are re-exported via r2e::prelude::*
+use r2e_core::http::extract::{FromRequestParts, FromRef};
+use r2e_core::http::header::Parts;
 
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
     // Le state doit fournir un JwtValidator
-    JwtValidator: axum::extract::FromRef<S>,
+    JwtValidator: FromRef<S>,
 {
     type Rejection = AppError;
 
