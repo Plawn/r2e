@@ -6,13 +6,13 @@ use quote::{format_ident, quote};
 use crate::crate_path::{r2e_core_path, r2e_grpc_path, r2e_security_path};
 use crate::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 
-/// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc_<Name>`.
+/// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc<Name>`.
 pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let krate = r2e_core_path();
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
-    let wrapper_name = format_ident!("__R2eGrpc_{}", controller_name);
+    let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
 
     let method_impls: Vec<TokenStream> = def

@@ -12,7 +12,7 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
-    let wrapper_name = format_ident!("__R2eGrpc_{}", controller_name);
+    let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
 
     // Derive the server type path from the trait path.

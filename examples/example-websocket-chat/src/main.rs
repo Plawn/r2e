@@ -12,10 +12,8 @@ use controllers::consumer::MessagePersistenceConsumer;
 use controllers::history_controller::HistoryController;
 use state::AppState;
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
     let event_bus = EventBus::new();
     let ws_rooms = WsRooms::new(128);

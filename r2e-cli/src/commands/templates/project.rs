@@ -132,10 +132,8 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
 
     format!(
         r#"{imports}
-#[tokio::main]
+#[r2e::main]
 async fn main() {{
-    r2e::init_tracing();
-
 {builder}
 }}
 "#

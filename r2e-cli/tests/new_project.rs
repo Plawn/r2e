@@ -70,7 +70,7 @@ fn new_creates_main_rs() {
     new_project::run("myapp", default_opts()).unwrap();
 
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
-    assert!(main.contains("#[tokio::main]"));
+    assert!(main.contains("#[r2e::main]"));
     assert!(main.contains("serve("));
     assert!(main.contains("AppBuilder"));
 }

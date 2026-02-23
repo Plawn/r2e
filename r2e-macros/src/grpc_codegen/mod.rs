@@ -2,7 +2,7 @@
 //!
 //! Generates:
 //! - The user's impl block (methods with stripped attributes)
-//! - A wrapper struct `__R2eGrpc_<Name>` that holds the state
+//! - A wrapper struct `__R2eGrpc<Name>` that holds the state
 //! - An impl of the tonic-generated trait for the wrapper
 //! - An impl of `GrpcService<T>` for the controller
 
@@ -53,7 +53,7 @@ fn generate_impl_block(def: &GrpcRoutesImplDef) -> TokenStream {
 /// the controller from state via `StatefulConstruct` for each request.
 fn generate_wrapper_struct(def: &GrpcRoutesImplDef) -> TokenStream {
     let controller_name = &def.controller_name;
-    let wrapper_name = quote::format_ident!("__R2eGrpc_{}", controller_name);
+    let wrapper_name = quote::format_ident!("__R2eGrpc{}", controller_name);
     let meta_mod = quote::format_ident!("__r2e_meta_{}", controller_name);
 
     quote! {

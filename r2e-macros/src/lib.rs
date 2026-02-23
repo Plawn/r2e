@@ -23,6 +23,7 @@ pub(crate) mod grpc_codegen;
 pub(crate) mod grpc_routes_parsing;
 pub(crate) mod params_derive;
 pub(crate) mod api_error_derive;
+pub(crate) mod main_attr;
 
 /// Derive macro for declaring a R2E controller struct.
 ///
@@ -949,5 +950,69 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(ApiError, attributes(error, from))]
 pub fn derive_api_error(input: TokenStream) -> TokenStream {
     api_error_derive::expand(input)
+}
+
+// ---------------------------------------------------------------------------
+// Entry-point macros
+// ---------------------------------------------------------------------------
+
+/// Marks an `async fn main()` as the R2E application entry point.
+///
+/// Wraps the function body in a Tokio multi-thread runtime and calls
+/// `init_tracing()` automatically (unless disabled).
+///
+/// # Optional arguments
+///
+/// | Argument | Default | Description |
+/// |----------|---------|-------------|
+/// | `tracing` | `true` | Call `init_tracing()` before the body |
+/// | `flavor` | `"multi_thread"` | Tokio runtime flavor |
+/// | `worker_threads` | Tokio default | Number of worker threads |
+///
+/// # Examples
+///
+/// ```ignore
+/// #[r2e::main]
+/// async fn main() {
+///     AppBuilder::new()
+///         .build_state::<Services, _, _>().await
+///         .serve("0.0.0.0:8080").await.unwrap();
+/// }
+///
+/// #[r2e::main(tracing = false)]
+/// async fn main() { /* no automatic tracing */ }
+///
+/// #[r2e::main(flavor = "current_thread")]
+/// async fn main() { /* single-threaded runtime */ }
+///
+/// #[r2e::main(worker_threads = 4)]
+/// async fn main() { /* 4 worker threads */ }
+/// ```
+#[proc_macro_attribute]
+pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
+    main_attr::expand_main(args, input)
+}
+
+/// Marks an `async fn` as an R2E test.
+///
+/// Wraps the function body in a Tokio **current-thread** runtime (like
+/// `#[tokio::test]`) and calls `init_tracing()` automatically.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[r2e::test]
+/// async fn test_health() {
+///     let app = TestApp::from(build_router().await);
+///     let res = app.get("/health").await;
+///     assert_eq!(res.status(), 200);
+/// }
+///
+/// #[r2e::test(tracing = false)]
+/// async fn test_no_tracing() { /* ... */ }
+/// ```
+#[proc_macro_attribute]
+pub fn test(args: TokenStream, input: TokenStream) -> TokenStream {
+    main_attr::expand_test(args, input)
 }
 

@@ -887,6 +887,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = layer_fn(app);
         }
 
+        // Always install the CatchPanicLayer as the outermost layer so that
+        // panics anywhere in the stack are caught and turned into JSON 500
+        // responses instead of crashing the process.
+        app = app.layer(crate::layers::catch_panic_layer());
+
         (
             app,
             self.startup_hooks,

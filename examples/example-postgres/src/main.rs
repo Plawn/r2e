@@ -17,10 +17,8 @@ async fn create_pool(#[config("database.url")] url: String) -> sqlx::PgPool {
         .expect("Failed to connect to PostgreSQL")
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()

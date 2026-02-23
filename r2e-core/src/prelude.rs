@@ -45,6 +45,9 @@ pub use r2e_macros::{consumer, scheduled};
 // gRPC attribute
 pub use r2e_macros::grpc_routes;
 
+// Entry-point macro (r2e::test is NOT in prelude to avoid conflict with #[test])
+pub use r2e_macros::main;
+
 // Bean / DI macros
 pub use r2e_macros::bean;
 pub use r2e_macros::producer;

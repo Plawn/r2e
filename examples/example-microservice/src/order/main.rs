@@ -16,10 +16,8 @@ mod state;
 use controllers::order_controller::OrderController;
 use state::OrderState;
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let config = R2eConfig::load("order").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()

@@ -41,10 +41,8 @@ fn generate_token(secret: &[u8], sub: &str, tenant_id: &str, roles: &[&str]) -> 
     .unwrap()
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let secret = b"multi-tenant-secret-change-in-production";
 
     // Print test tokens for curl usage

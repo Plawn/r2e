@@ -51,7 +51,7 @@ fn generate_test_token(secret: &[u8]) -> String {
     encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let secret = b"r2e-demo-secret-change-in-production";
 

@@ -56,3 +56,7 @@ pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{AllSatisfied, BuildableFrom, Contains, Here, TAppend, TCons, TNil, There};
 
+// Entry-point macros
+pub use r2e_macros::main;
+pub use r2e_macros::test;
+

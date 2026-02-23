@@ -16,10 +16,8 @@ mod state;
 use controllers::product_controller::ProductController;
 use state::ProductState;
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let config = R2eConfig::load("product").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
