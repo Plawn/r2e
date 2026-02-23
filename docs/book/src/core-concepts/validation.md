@@ -244,5 +244,13 @@ pub struct PaginationParams {
 The `#[routes]` macro generates validation calls using an autoref specialization trick:
 
 1. Deserialization via `Json<T>` / extraction via `Params` (standard Axum `FromRequest` / `FromRequestParts`)
-2. Automatic validation via `__AutoValidator` — if the type derives `Validate`, validation runs; otherwise it's a no-op (zero overhead)
-3. On failure, returns 400 with per-field error details
+2. The generated handler code calls `(&__AutoValidator(&value)).__maybe_validate()`
+3. Method resolution picks the right implementation at compile time:
+   - If `T: garde::Validate` → `__DoValidate` trait (direct match, higher priority) → runs validation
+   - Otherwise → `__SkipValidate` trait (autoref fallback, lower priority) → no-op, zero overhead
+4. On validation failure, `garde::Report` is converted directly to a 400 Bad Request response (bypassing `HttpError`):
+   - Each field error has `field` (path like `"email"` or `"users[0].name"`), `message`, and `code` (`"validation"`)
+   - Empty paths (top-level errors) become `"value"`
+5. The response is returned before the handler body runs — an invalid request never reaches your code
+
+The JSON response structure is identical to `HttpError::Validation` (see [Error Handling](./error-handling.md)), but the validation path produces the response directly without going through `HttpError`.

@@ -512,7 +512,19 @@ where
 
 ### Error Handling (r2e-core)
 
-R2E provides `HttpError` as a default error type, but applications can define custom error types.
+R2E provides `HttpError` as a default error type, `#[derive(ApiError)]` for custom error types, and automatic validation error handling.
+
+**`HttpError` variants:**
+
+| Variant | Status | Body |
+|---------|--------|------|
+| `NotFound(String)` | 404 | `{"error": "..."}` |
+| `Unauthorized(String)` | 401 | `{"error": "..."}` |
+| `Forbidden(String)` | 403 | `{"error": "..."}` |
+| `BadRequest(String)` | 400 | `{"error": "..."}` |
+| `Internal(String)` | 500 | `{"error": "..."}` |
+| `Validation(ValidationErrorResponse)` | 400 | `{"error": "Validation failed", "details": [...]}` |
+| `Custom { status, body }` | any | custom JSON body |
 
 **Using the built-in `HttpError`:**
 ```rust
@@ -526,36 +538,79 @@ async fn get(&self, Path(id): Path<i64>) -> Result<Json<User>, HttpError> {
 }
 ```
 
-**Defining a custom error type:**
+**`map_error!` macro** — bulk `From<E> for HttpError` generation:
 ```rust
-use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
+r2e_core::map_error! {
+    sqlx::Error => Internal,
+    serde_json::Error => BadRequest,
+}
+```
 
+**`#[derive(ApiError)]` — recommended for custom error types:**
+
+Generates `Display`, `IntoResponse`, and `std::error::Error` impls automatically. Available in the prelude.
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = NOT_FOUND, message = "User not found: {0}")]
+    NotFound(String),
+
+    #[error(status = INTERNAL_SERVER_ERROR)]
+    Io(#[from] std::io::Error),
+
+    #[error(status = BAD_REQUEST)]
+    Validation(String),
+
+    #[error(status = CONFLICT)]
+    AlreadyExists,
+
+    #[error(status = 429, message = "Too many requests")]
+    RateLimited,
+
+    #[error(status = BAD_REQUEST, message = "Field {field} is invalid: {reason}")]
+    InvalidField { field: String, reason: String },
+
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+```
+
+Attribute syntax on variants:
+- `#[error(status = NAME, message = "...")]` — explicit status + message with `{0}`/`{field}` interpolation
+- `#[error(status = NAME)]` — status only; message inferred (String field value, `#[from]` source `.to_string()`, or humanized variant name for units)
+- `#[error(status = 429)]` — numeric status code
+- `#[error(transparent)]` — delegates Display + IntoResponse to the inner type
+- `#[from]` on a field — generates `From<T>` impl and `Error::source()` returns that field
+
+**Key files:** `r2e-core/src/error.rs` (HttpError, `error_response()`, `map_error!`), `r2e-macros/src/api_error_derive.rs` (derive implementation), `r2e-core/tests/api_error.rs` (comprehensive tests)
+
+**Validation errors (`HttpError::Validation`):**
+
+Produced automatically by the `garde` integration. When `Json<T>` is extracted and `T: garde::Validate`, validation runs before the handler body. On failure, a 400 response is returned:
+```json
+{"error": "Validation failed", "details": [{"field": "email", "message": "not a valid email", "code": "validation"}]}
+```
+The underlying types: `ValidationErrorResponse { errors: Vec<FieldError> }` and `FieldError { field, message, code }` (in `r2e-core::validation`). The validation uses an autoref specialization trick (`__AutoValidator` / `__DoValidate` / `__SkipValidate`) so types without `Validate` have zero overhead.
+
+**Manual custom error types (without derive):**
+
+You can also implement `IntoResponse` manually:
+```rust
 #[derive(Debug)]
 pub enum MyHttpError {
     NotFound(String),
     Database(String),
-    Validation(String),
-    Internal(String),
 }
 
-// Required: convert to HTTP response
 impl IntoResponse for MyHttpError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             MyHttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             MyHttpError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            MyHttpError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
-            MyHttpError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         let body = serde_json::json!({ "error": message });
         (status, Json(body)).into_response()
-    }
-}
-
-// Optional: automatic conversion from other error types
-impl From<sqlx::Error> for MyHttpError {
-    fn from(err: sqlx::Error) -> Self {
-        MyHttpError::Database(err.to_string())
     }
 }
 ```
@@ -595,7 +650,7 @@ MyHttpError (your type)     →  ManagedErr<MyHttpError> (r2e type)  →  Respon
 
 **`use r2e::prelude::*`** provides everything a developer needs — no direct `axum` imports should be necessary. The prelude includes:
 
-- **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `Cacheable`, `FromMultipart` (multipart feature)
+- **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `Cacheable`, `ApiError`, `FromMultipart` (multipart feature)
 - **Core types:** `AppBuilder`, `HttpError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`
 - **Plugins:** `Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
 - **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`

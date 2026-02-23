@@ -1,6 +1,6 @@
 # Error Handling
 
-R2E provides a built-in `HttpError` type and supports custom error types that integrate with Axum's response system.
+R2E provides a built-in `HttpError` type, a `#[derive(ApiError)]` macro for custom error types, and automatic validation error handling via `garde`.
 
 ## Built-in `HttpError`
 
@@ -26,6 +26,7 @@ async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> 
 | `HttpError::Forbidden(msg)` | 403 | `{"error": "..."}` |
 | `HttpError::BadRequest(msg)` | 400 | `{"error": "..."}` |
 | `HttpError::Internal(msg)` | 500 | `{"error": "..."}` |
+| `HttpError::Validation(resp)` | 400 | `{"error": "Validation failed", "details": [...]}` |
 | `HttpError::Custom { status, body }` | any | custom JSON body |
 
 ### Custom status codes
@@ -43,9 +44,161 @@ async fn create(&self, body: Json<Request>) -> Result<Json<Response>, HttpError>
 }
 ```
 
-## Custom error types
+### Validation variant
 
-For production applications, define your own error type:
+`HttpError::Validation` carries a `ValidationErrorResponse` with per-field error details. This is the variant produced by automatic `garde` validation (see [Validation](./validation.md)), but you can also construct it manually:
+
+```rust
+use r2e_core::validation::{ValidationErrorResponse, FieldError};
+
+Err(HttpError::Validation(ValidationErrorResponse {
+    errors: vec![
+        FieldError { field: "email".into(), message: "already taken".into(), code: "unique".into() },
+    ],
+}))
+```
+
+The JSON response:
+
+```json
+{
+    "error": "Validation failed",
+    "details": [
+        { "field": "email", "message": "already taken", "code": "unique" }
+    ]
+}
+```
+
+### `map_error!` — bulk `From` impls for `HttpError`
+
+For mapping multiple external error types to `HttpError` variants at once:
+
+```rust
+r2e_core::map_error! {
+    sqlx::Error => Internal,
+    std::io::Error => Internal,
+    serde_json::Error => BadRequest,
+}
+```
+
+This generates `impl From<T> for HttpError` for each entry, calling `.to_string()` on the source error.
+
+## Custom error types with `#[derive(ApiError)]`
+
+For production applications, use `#[derive(ApiError)]` to generate `Display`, `IntoResponse`, and `std::error::Error` automatically:
+
+```rust
+use r2e::prelude::*; // ApiError, HttpError
+
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = NOT_FOUND, message = "User not found: {0}")]
+    NotFound(String),
+
+    #[error(status = INTERNAL_SERVER_ERROR)]
+    Io(#[from] std::io::Error),
+
+    #[error(status = BAD_REQUEST)]
+    Validation(String),
+
+    #[error(status = CONFLICT)]
+    AlreadyExists,
+}
+```
+
+Then use it in handlers:
+
+```rust
+#[get("/{id}")]
+async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, MyError> {
+    let file = std::fs::read_to_string("data.json")?; // ? converts io::Error → MyError::Io
+
+    let user = self.service.find(id).await
+        .ok_or_else(|| MyError::NotFound(format!("{id}")))?;
+
+    Ok(Json(user))
+}
+```
+
+All variants produce a JSON response `{"error": "<message>"}` with the appropriate status code.
+
+### Variant attribute: `#[error(...)]`
+
+Every variant **must** have an `#[error(...)]` attribute:
+
+| Form | Effect |
+|------|--------|
+| `#[error(status = NOT_FOUND, message = "...")]` | Explicit status + message |
+| `#[error(status = BAD_REQUEST)]` | Status only, message is inferred (see below) |
+| `#[error(status = 429, message = "...")]` | Numeric status code |
+| `#[error(transparent)]` | Delegates `Display` + `IntoResponse` to the inner type |
+
+### Message interpolation
+
+Messages support `format!`-style placeholders:
+
+```rust
+// Tuple fields: {0}, {1}, ...
+#[error(status = NOT_FOUND, message = "Resource {0} not found")]
+NotFound(String),
+
+// Named fields: {field_name}
+#[error(status = BAD_REQUEST, message = "Field {field} is invalid: {reason}")]
+InvalidField { field: String, reason: String },
+```
+
+### Message inference (when `message` is omitted)
+
+| Variant kind | Inferred message |
+|-------------|------------------|
+| Single `String` field | Uses the field value |
+| `#[from]` field | `source.to_string()` |
+| Unit variant | Humanized name (`AlreadyExists` → `"Already exists"`) |
+
+### `#[from]` — automatic `From` conversion
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = INTERNAL_SERVER_ERROR, message = "IO error")]
+    Io(#[from] std::io::Error),
+}
+
+// Now you can use: let err: MyError = io_error.into();
+// std::error::Error::source(&err) returns the inner io::Error
+```
+
+When `message` is omitted on a `#[from]` variant, the source error's `.to_string()` is used.
+
+### `#[error(transparent)]` — delegation
+
+Delegates both `Display` and `IntoResponse` to the inner type:
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum AppError {
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+
+// AppError::Http(HttpError::Forbidden("no access".into()))
+// → status 403, body {"error": "no access"}
+```
+
+`ApiError` can only be derived on enums.
+
+### Generated traits
+
+`#[derive(ApiError)]` generates:
+
+- `impl Display` — formats the error message
+- `impl IntoResponse` — converts to an HTTP response with JSON body
+- `impl std::error::Error` — `source()` returns the inner `#[from]` error if present
+- `impl From<T>` — one per `#[from]` variant
+
+## Manual custom error types
+
+You can also implement `IntoResponse` manually without the derive macro:
 
 ```rust
 use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
@@ -54,8 +207,6 @@ use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
 pub enum MyHttpError {
     NotFound(String),
     Database(String),
-    Validation(String),
-    Internal(String),
 }
 
 impl IntoResponse for MyHttpError {
@@ -63,33 +214,10 @@ impl IntoResponse for MyHttpError {
         let (status, message) = match self {
             MyHttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             MyHttpError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-            MyHttpError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
-            MyHttpError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         let body = serde_json::json!({ "error": message });
         (status, Json(body)).into_response()
     }
-}
-
-// Automatic conversion from external errors
-impl From<sqlx::Error> for MyHttpError {
-    fn from(err: sqlx::Error) -> Self {
-        MyHttpError::Database(err.to_string())
-    }
-}
-```
-
-Then use it in handlers:
-
-```rust
-#[get("/{id}")]
-async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, MyHttpError> {
-    let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = ?", id)
-        .fetch_optional(&self.pool)
-        .await?;  // ? converts sqlx::Error → MyHttpError::Database
-
-    user.map(Json)
-        .ok_or_else(|| MyHttpError::NotFound(format!("User {} not found", id)))
 }
 ```
 

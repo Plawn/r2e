@@ -32,3 +32,6 @@
 - avoir la gestion de la config required / optional + auto -> eviter les pattern de verif manuelle dans le main.rs
 - vrai hot reload
 - improve testing facilities
+- validation error tests ? -> clean strucutred ?
+
+-> optimize impl IntoResponse for HttpError {
