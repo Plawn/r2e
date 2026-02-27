@@ -12,9 +12,14 @@
 //! change, it kills the server and restarts it. Clients polling
 //! `/__r2e_dev/ping` detect the restart and refresh.
 
+use crate::http::header::{HeaderValue, CACHE_CONTROL};
+use crate::http::middleware::Next;
 use crate::http::response::IntoResponse;
 use crate::http::routing::get;
 use crate::http::Router;
+use axum::extract::Request;
+use axum::http::header::CONNECTION;
+use axum::response::Response;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
@@ -46,4 +51,22 @@ async fn status_handler() -> impl IntoResponse {
 async fn ping_handler() -> impl IntoResponse {
     let ts = boot_time();
     serde_json::json!({ "boot_time": ts, "status": "ok" }).to_string()
+}
+
+/// Middleware that adds dev-mode headers to every response:
+///
+/// - `Cache-Control: no-store` — prevents the browser from caching API
+///   responses, so Swagger UI always shows fresh data.
+/// - `Connection: close` — forces the browser to close the TCP connection
+///   after each response. Without this, HTTP keep-alive lets the browser
+///   reuse a connection bound to a *previous* server future. When subsecond
+///   hot-patches, it drops the old server and starts a new one, but the old
+///   connection handler tasks (spawned via `tokio::spawn`) keep running.
+///   The browser's keep-alive connection stays routed to stale handlers.
+pub async fn dev_headers_middleware(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(CONNECTION, HeaderValue::from_static("close"));
+    response
 }

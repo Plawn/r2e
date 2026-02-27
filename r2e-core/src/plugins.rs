@@ -190,11 +190,18 @@ impl Plugin for ErrorHandling {
 ///
 /// Adds `/__r2e_dev/status` and `/__r2e_dev/ping` endpoints for
 /// tooling and browser scripts to detect server restarts.
+///
+/// Also adds a `Cache-Control: no-store` layer to prevent browsers
+/// from caching API responses during development (which would cause
+/// stale values in Swagger UI after hot-reload).
 pub struct DevReload;
 
 impl Plugin for DevReload {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.register_routes(crate::dev::dev_routes())
+            .with_layer_fn(|router| {
+                router.layer(axum::middleware::from_fn(crate::dev::dev_headers_middleware))
+            })
     }
 }
 
