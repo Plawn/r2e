@@ -21,7 +21,8 @@ impl AccountController {
     
     #[get("/greeting")]
     async fn greeting(&self) -> Json<serde_json::Value> {
-        Json(serde_json::json!({ "greeting": 3 }))
+        println!("he3");
+        Json(serde_json::json!({ "greeting": self.greeting }))
     }
 
     #[get("/error/custom")]
