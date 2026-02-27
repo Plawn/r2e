@@ -20,7 +20,6 @@ toml_edit = "0.22"
 colored = "3"
 dialoguer = "0.11"
 chrono = "0.4"
-open = "5"
 
 [dev-dependencies]
 tempfile = "3"

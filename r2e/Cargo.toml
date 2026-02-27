@@ -34,6 +34,8 @@ observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
+# NOTE: dev-reload is intentionally NOT in `full` — never include in production builds
+dev-reload = ["dep:r2e-devtools", "r2e-core/dev-reload"]
 
 [dependencies]
 r2e-core = { path = "../r2e-core", version = "0.1.0" }
@@ -53,3 +55,4 @@ r2e-prometheus = { path = "../r2e-prometheus", version = "0.1.0", optional = tru
 r2e-openfga = { path = "../r2e-openfga", version = "0.1.0", optional = true }
 r2e-grpc = { path = "../r2e-grpc", version = "0.1.0", optional = true }
 r2e-observability = { path = "../r2e-observability", version = "0.1.0", optional = true }
+r2e-devtools = { path = "../r2e-devtools", version = "0.1.0", optional = true }

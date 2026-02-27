@@ -51,8 +51,20 @@ fn generate_test_token(secret: &[u8]) -> String {
     encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
 }
 
-#[r2e::main]
-async fn main() {
+// --- Setup: runs once, persists across hot-patches ---
+
+#[derive(Clone)]
+struct AppEnv {
+    config: R2eConfig,
+    event_bus: EventBus,
+    claims_validator: Arc<JwtClaimsValidator>,
+    pool: sqlx::Pool<sqlx::Sqlite>,
+    sse_broadcaster: r2e::sse::SseBroadcaster,
+    notification_service: NotificationService,
+    listener: Arc<std::net::TcpListener>,
+}
+
+async fn setup() -> AppEnv {
     let secret = b"r2e-demo-secret-change-in-production";
 
     // Print a test JWT for curl usage
@@ -61,21 +73,13 @@ async fn main() {
     println!("{token}");
     println!();
 
-    // --- Configuration (#1) ---
-    // load() succeeds even when application.yaml is absent (env vars still overlay),
-    // so we always ensure the required keys exist with sensible defaults.
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-
-    // --- Events (#7) ---
     let event_bus = EventBus::new();
 
-    // Build the JWT claims validator with a static HMAC key (no JWKS needed for the demo)
-    // Using JwtClaimsValidator allows multiple identity types (AuthenticatedUser, DbUser, etc.)
     let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
         .with_allowed_algorithm(jsonwebtoken::Algorithm::HS256);
     let claims_validator = JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(secret), sec_config);
 
-    // Create an in-memory SQLite pool and initialise the schema
     let pool: sqlx::Pool<sqlx::Sqlite> = SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
@@ -89,9 +93,6 @@ async fn main() {
     .await
     .unwrap();
 
-    // Seed database with sample users for data controller (#6)
-    // The first user has a `sub` matching the demo JWT token ("user-123"),
-    // allowing the DbIdentityController to resolve it from the database.
     for (name, email, sub) in [
         ("Alice", "alice@example.com", Some("user-123")),
         ("Bob", "bob@example.com", None),
@@ -105,25 +106,42 @@ async fn main() {
             .await
             .unwrap();
     }
-    // --- App assembly using bean graph ---
-    // Scheduler (#8) is installed before build_state() to provide CancellationToken
-    // SSE broadcaster for real-time events
+
     let sse_broadcaster = r2e::sse::SseBroadcaster::new(128);
     let notification_service = NotificationService::new(64);
 
+    // Bind the listener ONCE in setup — survives across hot-patches via Arc.
+    let listener = std::net::TcpListener::bind("0.0.0.0:3001").unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    AppEnv {
+        config,
+        event_bus,
+        claims_validator: Arc::new(claims_validator),
+        pool,
+        sse_broadcaster,
+        notification_service,
+        listener: Arc::new(listener),
+    }
+}
+
+// --- Server: hot-patched on every code change when dev-reload is enabled ---
+
+#[r2e::main]
+async fn main(env: AppEnv) {
     AppBuilder::new()
-        .plugin(Scheduler) // Scheduling (#8) - provides CancellationToken
-        .provide(event_bus)
-        .provide(pool)
-        .provide(config.clone())
-        .provide(Arc::new(claims_validator))
+        .plugin(Scheduler)
+        .provide(env.event_bus)
+        .provide(env.pool)
+        .provide(env.config.clone())
+        .provide(env.claims_validator)
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
-        .provide(sse_broadcaster)
-        .provide(notification_service)
+        .provide(env.sse_broadcaster)
+        .provide(env.notification_service)
         .with_bean::<UserService>()
         .build_state::<Services, _, _>()
         .await
-        .with_config(config)
+        .with_config(env.config)
         .with(Health)
         .with(Prometheus::builder()
             .endpoint("/metrics")
@@ -131,32 +149,30 @@ async fn main() {
             .exclude_path("/health")
             .exclude_path("/metrics")
             .build())
-        .with(RequestIdPlugin)  // Request ID propagation
-        .with(SecureHeaders::default()) // Security headers
+        .with(RequestIdPlugin)
+        .with(SecureHeaders::default())
         .with(Cors::permissive())
         .with(Observability::new(
             ObservabilityConfig::new("r2e-example")
                 .with_service_version("0.1.0")
                 .capture_header("x-request-id"),
         ))
-        .with(ErrorHandling) // Error handling (#3)
+        .with(ErrorHandling)
         .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
             r2e::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
-        )) // Global Tower layer
-        .with(DevReload) // Dev mode (#9)
+        ))
+        .with(DevReload)
         .with(OpenApiPlugin::new(
-            OpenApiConfig::new("R2E Example API", "0.1.0")
+            OpenApiConfig::new("R2E Example API", "0.1.1")
                 .with_description("Demo application showcasing all R2E features")
                 .with_docs_ui(true),
-        )) // OpenAPI (#5)
+        ))
         .on_start(|_state| async move {
-            // Lifecycle hook (#10)
             tracing::info!("R2E example-app startup hook executed");
             Ok(())
         })
         .on_stop(|| async {
-            // Lifecycle hook (#10)
             tracing::info!("R2E example-app shutdown hook executed");
         })
         .register_controller::<UserController>()
@@ -171,8 +187,12 @@ async fn main() {
         .register_controller::<WsEchoController>()
         .register_controller::<NotificationController>()
         .register_controller::<UploadController>()
-        .with(NormalizePath) // Trailing-slash normalization (can be installed anywhere)
-        .serve("0.0.0.0:3001")
+        .with(NormalizePath)
+        .prepare("0.0.0.0:3001")
+        .run_with_listener(
+            tokio::net::TcpListener::from_std(env.listener.try_clone().unwrap()).unwrap()
+        )
         .await
+        .inspect_err(|e| eprintln!("=== SERVE ERROR: {e} ==="))
         .unwrap();
 }

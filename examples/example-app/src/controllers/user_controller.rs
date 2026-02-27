@@ -102,6 +102,11 @@ impl UserController {
         Json(users)
     }
 
+    #[get("/greet")]
+    async fn greet(&self) -> String {
+        return self.greeting.clone();
+    }
+
     #[get("/{id}")]
     async fn get_by_id(
         &self,

@@ -48,11 +48,14 @@ enum Commands {
         /// Extension name (e.g. security, data, openapi, events, scheduler)
         extension: String,
     },
-    /// Start the dev server with hot-reload
+    /// Start the dev server with Subsecond hot-reload
     Dev {
-        /// Open browser automatically
+        /// Server port (forwarded as R2E_PORT env var)
         #[arg(long)]
-        open: bool,
+        port: Option<u16>,
+        /// Extra Cargo features to enable
+        #[arg(long, num_args = 1..)]
+        features: Vec<String>,
     },
     /// Check project health
     Doctor,
@@ -128,7 +131,7 @@ fn main() {
             GenerateKind::GrpcService { name, package } => generate::grpc_service(&name, &package),
         },
         Commands::Add { extension } => add::run(&extension),
-        Commands::Dev { open } => dev::run(open),
+        Commands::Dev { port, features } => dev::run(port, features),
         Commands::Doctor => doctor::run(),
         Commands::Routes => routes::run(),
     };

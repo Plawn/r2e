@@ -32,61 +32,77 @@ GET /__r2e_dev/ping → {"boot_time": 1234567890123, "status": "ok"}
 
 Returns the server's boot timestamp (milliseconds since epoch). Use to detect server restarts.
 
-## Hot-reload workflow
+## Subsecond hot-reload (recommended)
 
-1. Use `cargo watch` (or `r2e dev`) to auto-restart on file changes
-2. Client-side JavaScript polls `/__r2e_dev/ping`
-3. When `boot_time` changes, a restart occurred → refresh the page
+R2E supports **Subsecond hot-patching** via Dioxus 0.7. Instead of killing and restarting the server, Subsecond recompiles only the changed code as a dynamic library and patches it into the running process — typically in under 500ms.
+
+### Setup
+
+1. Install the Dioxus CLI: `cargo install dioxus-cli`
+2. Add `dev-reload` feature to your app:
+
+```toml
+[features]
+dev-reload = ["r2e/dev-reload"]
+```
+
+3. Structure your app with setup/server split:
+
+```rust
+#[derive(Clone)]
+struct AppEnv {
+    pool: PgPool,
+    config: R2eConfig,
+}
+
+async fn setup() -> AppEnv {
+    // runs once, persists across hot-patches
+    let pool = PgPool::connect("...").await.unwrap();
+    AppEnv { pool, config: R2eConfig::load("dev").unwrap() }
+}
+
+#[r2e::main]
+async fn main(env: AppEnv) {
+    // this body is hot-patched on every code change
+    AppBuilder::new()
+        .provide(env.pool)
+        .build_state::<MyState, _, _>().await
+        .serve("0.0.0.0:3000").await.unwrap();
+}
+```
+
+The `#[r2e::main]` macro auto-detects the parameter and generates two `#[cfg]`-gated code paths: normal execution and Subsecond hot-patching.
+
+4. Run with: `r2e dev`
+
+### How it works
 
 ```
 Source code change
-    → cargo-watch detects change
-    → kills server process
-    → rebuilds and restarts
-    → new boot_time
-    → client detects → page refresh
+    → dx detects change
+    → recompiles ONLY the server closure as a dynamic library
+    → patches it into the running process (setup state preserved)
+    → ~200-500ms turnaround
 ```
 
-### Client-side polling example
+## Legacy polling (DevReload plugin)
 
-```javascript
-let lastBootTime = null;
-
-setInterval(async () => {
-    try {
-        const res = await fetch('/__r2e_dev/ping');
-        const data = await res.json();
-
-        if (lastBootTime === null) {
-            lastBootTime = data.boot_time;
-        } else if (data.boot_time !== lastBootTime) {
-            location.reload();
-        }
-    } catch {
-        // Server is restarting, wait for next poll
-    }
-}, 1000);
-```
+The `DevReload` plugin exposes `/__r2e_dev/ping` for restart detection. This is still available for tools that poll for server restarts.
 
 ## Using `r2e dev`
 
-The CLI provides a convenient wrapper:
+The CLI starts the Subsecond hot-reload dev server:
 
 ```bash
 r2e dev
+r2e dev --port 8080
+r2e dev --features openapi scheduler
 ```
 
 This:
-- Sets `R2E_PROFILE=dev`
-- Watches `src/`, `application.yaml`, `application-dev.yaml`, `migrations/`
-- Prints discovered routes
-- Auto-restarts on changes
-
-Add `--open` to auto-open the browser:
-
-```bash
-r2e dev --open
-```
+- Checks that `dx` CLI is installed (prints instructions if missing)
+- Generates a `Dioxus.toml` config if absent
+- Runs `dx serve --hot-patch` with the `dev-reload` feature enabled
 
 ## Production note
 

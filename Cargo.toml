@@ -16,6 +16,7 @@ members = [
     "r2e-openfga",
     "r2e-grpc",
     "r2e-oidc",
+    "r2e-devtools",
     "r2e-cli",
     "r2e-test",
     "r2e-utils",

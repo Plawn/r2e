@@ -904,11 +904,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         )
     }
 
-    /// Build the application and start serving on the given address.
+    /// Build the application without starting the server.
     ///
-    /// Runs startup hooks before listening, and shutdown hooks after
-    /// graceful shutdown completes.
-    pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// Returns a [`PreparedApp`] that holds the assembled router, state,
+    /// hooks, and address. Call [`.run()`](PreparedApp::run) on it to
+    /// start listening, or inspect the router for testing.
+    ///
+    /// Separating preparation from serving enables hot-reload:
+    /// - `prepare()` can be called inside the hot-patched closure
+    /// - The setup that produces beans/config stays outside
+    pub fn prepare(self, addr: &str) -> PreparedApp<T> {
         let (
             app,
             startup_hooks,
@@ -920,52 +925,132 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             state,
         ) = self.build_inner();
 
+        PreparedApp {
+            router: app,
+            state,
+            addr: addr.to_string(),
+            startup_hooks,
+            shutdown_hooks,
+            consumer_registrations: consumer_regs,
+            serve_hooks,
+            plugin_shutdown_hooks,
+            plugin_data,
+        }
+    }
+
+    /// Build the application and start serving on the given address.
+    ///
+    /// Runs startup hooks before listening, and shutdown hooks after
+    /// graceful shutdown completes. Equivalent to `.prepare(addr).run().await`.
+    pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.prepare(addr).run().await
+    }
+}
+
+/// A fully configured R2E app ready to be served.
+///
+/// Created by [`AppBuilder::prepare()`]. Holds the assembled router, state,
+/// lifecycle hooks, and bind address.
+///
+/// # Hot-reload
+///
+/// This type enables the Subsecond hot-reload workflow: build the app inside
+/// the hot-patched closure with [`AppBuilder::prepare()`], then call
+/// [`.run()`](Self::run) to start serving.
+pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
+    router: crate::http::Router,
+    state: T,
+    addr: String,
+    startup_hooks: Vec<StartupHook<T>>,
+    shutdown_hooks: Vec<ShutdownHook>,
+    consumer_registrations: Vec<ConsumerReg<T>>,
+    serve_hooks: Vec<ServeHook>,
+    plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
+    plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
+    /// Access the assembled router for inspection or testing.
+    pub fn router(&self) -> &crate::http::Router {
+        &self.router
+    }
+
+    /// Mutable access to the router (e.g., for adding test-only routes).
+    pub fn router_mut(&mut self) -> &mut crate::http::Router {
+        &mut self.router
+    }
+
+    /// The application state.
+    pub fn state(&self) -> &T {
+        &self.state
+    }
+
+    /// The bind address.
+    pub fn addr(&self) -> &str {
+        &self.addr
+    }
+
+    /// Start listening and serving requests.
+    ///
+    /// Registers event consumers, runs startup hooks, binds the TCP listener,
+    /// and serves with graceful shutdown. After shutdown, runs plugin and user
+    /// shutdown hooks.
+    pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind(&self.addr).await?;
+        self.run_with_listener(listener).await
+    }
+
+    /// Like [`run()`](Self::run) but with a pre-bound listener.
+    ///
+    /// This is useful for hot-reload: bind the listener once in setup,
+    /// and reuse it across hot-patches so we never fight port conflicts.
+    pub async fn run_with_listener(
+        self,
+        listener: tokio::net::TcpListener,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Register event consumers
-        for reg in consumer_regs {
-            reg(state.clone()).await;
+        for reg in self.consumer_registrations {
+            reg(self.state.clone()).await;
         }
 
         // Call serve hooks (e.g., scheduler starts tasks).
-        // Serve hooks should run even if no scheduler is installed.
-        let mut boxed_tasks = plugin_data
+        let mut boxed_tasks = self.plugin_data
             .get(&TypeId::of::<TaskRegistryHandle>())
             .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
             .map(|registry| registry.take_all())
             .unwrap_or_default();
-        for hook in serve_hooks {
-            // Tasks are single-consumer; only the first hook receives them.
+        for hook in self.serve_hooks {
             let tasks_for_hook = if boxed_tasks.is_empty() {
                 Vec::new()
             } else {
                 std::mem::take(&mut boxed_tasks)
             };
-            // The token is captured in the hook closure
             hook(tasks_for_hook, CancellationToken::new());
         }
 
         // Run startup hooks
-        for hook in startup_hooks {
-            hook(state.clone())
+        for hook in self.startup_hooks {
+            hook(self.state.clone())
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error> { e })?;
         }
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        info!(%addr, "R2E server listening");
+        info!(addr = %self.addr, "R2E server listening");
         crate::http::serve(
             listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            self.router
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
         // Run plugin shutdown hooks (e.g., cancel scheduler)
-        for hook in plugin_shutdown_hooks {
+        for hook in self.plugin_shutdown_hooks {
             hook();
         }
 
         // Run user shutdown hooks
-        for hook in shutdown_hooks {
+        for hook in self.shutdown_hooks {
             hook().await;
         }
 
@@ -1006,6 +1091,40 @@ impl TaskRegistryHandle {
 impl Default for TaskRegistryHandle {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Subsecond hot-reload ─────────────────────────────────────────────────
+
+#[cfg(feature = "dev-reload")]
+impl AppBuilder<NoState, TNil, TNil> {
+    /// Start the app with Subsecond hot-reloading.
+    ///
+    /// * `env` — Pre-computed environment (DB pool, config, etc.) that persists
+    ///   across hot-patches.
+    /// * `build_and_serve` — Closure that builds and serves the app.
+    ///   This closure (and all functions it calls in the tip crate) will be
+    ///   hot-patched when source files change.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use r2e_core::AppBuilder;
+    /// # #[derive(Clone)]
+    /// # struct AppEnv;
+    /// AppBuilder::serve_hot(env, |env| async move {
+    ///     AppBuilder::new()
+    ///         // ... build and serve
+    ///         .serve("0.0.0.0:3000").await.unwrap();
+    /// }).await;
+    /// ```
+    pub async fn serve_hot<Env, F, Fut>(env: Env, build_and_serve: F)
+    where
+        Env: Clone + Send + Sync + 'static,
+        F: Fn(Env) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + 'static,
+    {
+        r2e_devtools::serve_with_hotreload_env(env, build_and_serve).await;
     }
 }
 

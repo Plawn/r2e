@@ -1,7 +1,7 @@
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::{SdkTracerProvider, Sampler};
 use opentelemetry_sdk::Resource;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 
 use crate::config::{LogFormat, ObservabilityConfig};
 
@@ -70,11 +70,14 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
                 .with_file(false)
                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
 
-            Registry::default()
+            let subscriber = Registry::default()
                 .with(env_filter)
                 .with(fmt_layer)
-                .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                .init();
+                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+            if tracing::subscriber::set_global_default(subscriber).is_err() {
+                tracing::warn!("A global tracing subscriber was already set (e.g. by dioxus-devtools). Observability tracing layer skipped.");
+            }
         }
         LogFormat::Pretty => {
             let fmt_layer = tracing_subscriber::fmt::layer()
@@ -83,11 +86,14 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
                 .with_file(false)
                 .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
 
-            Registry::default()
+            let subscriber = Registry::default()
                 .with(env_filter)
                 .with(fmt_layer)
-                .with(tracing_opentelemetry::layer().with_tracer(tracer))
-                .init();
+                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+            if tracing::subscriber::set_global_default(subscriber).is_err() {
+                tracing::warn!("A global tracing subscriber was already set (e.g. by dioxus-devtools). Observability tracing layer skipped.");
+            }
         }
     }
 

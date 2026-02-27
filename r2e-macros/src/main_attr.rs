@@ -2,13 +2,25 @@
 //!
 //! These wrap the user's `async fn main()` / `async fn test_*()` in a Tokio
 //! runtime and optionally call `init_tracing()`.
+//!
+//! # Hot-reload support
+//!
+//! When a setup function is specified, the macro generates two code paths
+//! gated by `#[cfg(feature = "dev-reload")]`:
+//!
+//! ```ignore
+//! #[r2e::main(setup)]
+//! async fn main(env: AppEnv) {
+//!     // ... body is hot-patched when dev-reload is enabled
+//! }
+//! ```
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Expr, ExprLit, ItemFn, Lit, Meta};
+use syn::{parse_macro_input, Expr, ExprLit, FnArg, ItemFn, Lit, Meta};
 
-use crate::crate_path::r2e_core_path;
+use crate::crate_path::{r2e_core_path, r2e_devtools_path};
 
 // ── Argument parsing ─────────────────────────────────────────────────────
 
@@ -17,6 +29,8 @@ struct MainArgs {
     tracing: bool,
     worker_threads: Option<usize>,
     flavor: Option<bool>,
+    /// Optional setup function path for hot-reload support.
+    setup_fn: Option<syn::Path>,
 }
 
 impl Default for MainArgs {
@@ -25,6 +39,7 @@ impl Default for MainArgs {
             tracing: true,
             worker_threads: None,
             flavor: None,
+            setup_fn: None,
         }
     }
 }
@@ -111,10 +126,20 @@ impl MainArgs {
                         }
                     }
                 }
+                // Bare path (e.g. `setup`) → setup function name
+                Meta::Path(path) => {
+                    if this.setup_fn.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            path,
+                            "setup function already specified",
+                        ));
+                    }
+                    this.setup_fn = Some(path.clone());
+                }
                 other => {
                     return Err(syn::Error::new_spanned(
                         other,
-                        "expected `key = value` arguments",
+                        "expected a setup function name or `key = value` arguments",
                     ));
                 }
             }
@@ -179,6 +204,76 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         quote! {}
     };
 
+    // ── Hot-reload path: function has a parameter ─────────────────────────
+    //
+    // If main takes a parameter (e.g. `env: AppEnv`), we generate two cfg-gated
+    // code paths: one that calls the setup function directly, and one that wraps
+    // it with `serve_with_hotreload` for Subsecond hot-patching.
+    //
+    // The setup function is either explicitly specified via `#[r2e::main(my_setup)]`
+    // or defaults to `setup` by convention.
+    if let Some(FnArg::Typed(param)) = sig.inputs.first() {
+        let setup_fn: syn::Path = args.setup_fn.unwrap_or_else(|| {
+            syn::parse_str("setup").unwrap()
+        });
+
+        let env_pat = &param.pat;
+        let env_ty = &param.ty;
+        let body_stmts = &body.stmts;
+        let devtools = r2e_devtools_path();
+
+        return quote! {
+            // Named function in the tip crate — Subsecond can discover and patch it.
+            #[cfg(feature = "dev-reload")]
+            async fn __r2e_server(#env_pat: #env_ty) {
+                #(#body_stmts)*
+            }
+
+            #(#attrs)*
+            #test_attr
+            #vis fn #fn_name() #ret {
+                #tracing_init
+                #builder_fn
+                    #worker_threads
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime")
+                    .block_on(async {
+                        #[cfg(not(feature = "dev-reload"))]
+                        {
+                            let #env_pat: #env_ty = #setup_fn().await;
+                            #(#body_stmts)*
+                        }
+                        #[cfg(feature = "dev-reload")]
+                        {
+                            let __r2e_env: #env_ty = #setup_fn().await;
+                            // On each patch, the old server future is dropped and
+                            // __r2e_server is called again with the latest code.
+                            // The closure must remain non-capturing (ZST) so that
+                            // subsecond's HotFn dispatches through the jump table
+                            // correctly — pointer-sized closures trigger the wrong
+                            // call_as_ptr path.
+                            #devtools::serve_with_hotreload_env(
+                                __r2e_env,
+                                |__r2e_arg| __r2e_server(__r2e_arg),
+                            ).await;
+                        }
+                    })
+            }
+        };
+    }
+
+    // setup_fn specified but no parameter on main → error
+    if args.setup_fn.is_some() {
+        return syn::Error::new_spanned(
+            sig,
+            "#[r2e::main(setup_fn)] requires a parameter, e.g.: \
+             async fn main(env: AppEnv) { ... }",
+        )
+        .to_compile_error();
+    }
+
+    // ── Standard path: no setup function ─────────────────────────────────
     quote! {
         #(#attrs)*
         #test_attr

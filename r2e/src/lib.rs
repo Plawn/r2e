@@ -27,7 +27,8 @@
 //! | `prometheus`  | no      | `r2e-prometheus`          |
 //! | `openfga`     | no      | `r2e-openfga`             |
 //! | `validation`  | no      | `r2e-core/validation`     |
-//! | `full`        | no      | All of the above          |
+//! | `dev-reload`  | no      | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
+//! | `full`        | no      | All of the above (except `dev-reload`) |
 
 // Re-export sub-crates as public modules so they're accessible as
 // `r2e::r2e_core`, `r2e::r2e_events`, etc.
@@ -84,6 +85,11 @@ pub use r2e_grpc;
 
 #[cfg(feature = "observability")]
 pub use r2e_observability;
+
+#[cfg(feature = "dev-reload")]
+pub mod devtools {
+    pub use r2e_devtools::*;
+}
 
 /// Convenience type aliases that depend on types from optional sub-crates.
 pub mod types {

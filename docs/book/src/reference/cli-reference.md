@@ -385,31 +385,35 @@ message ListUserResponse {
 
 ## `r2e dev`
 
-Start development server with hot-reload.
+Start development server with Subsecond hot-reload.
 
 ```
 r2e dev [options]
 
 Options:
-  --open    Open browser at http://localhost:8080 after a 5-second delay
+  --port <PORT>          Server port (forwarded as R2E_PORT env var)
+  --features <FEAT>...   Extra Cargo features to enable
 ```
 
 **Behavior:**
 
-1. Checks that `cargo-watch` is installed (errors if not)
-2. Prints discovered routes via `r2e routes`
-3. Spawns `cargo watch` with:
-   - Watched paths: `src/`, `application.yaml`, `application-dev.yaml`, `migrations/`
-   - Ignored: `target/`
-   - Command: `cargo run`
-4. Sets `R2E_PROFILE=dev` environment variable
-5. Waits for the process (Ctrl+C to stop)
+1. Checks that `dx` (Dioxus CLI) is installed (errors with instructions if not)
+2. Generates a `Dioxus.toml` config file if missing (reads project name from `Cargo.toml`)
+3. Runs `dx serve --hot-patch` with the `dev-reload` feature enabled
+4. Code changes are hot-patched into the running process (~200-500ms turnaround)
 
 **Prerequisite:**
 
 ```bash
-cargo install cargo-watch
+cargo install dioxus-cli
 ```
+
+**How hot-reload works:**
+
+Your app must use the setup/server split pattern (see [Dev Mode](../advanced/dev-mode.md)):
+- `setup()` runs once and returns persistent state (DB pools, config)
+- `#[r2e::main] async fn main(env: AppEnv)` body is hot-patched on changes
+- The `#[r2e::main]` macro auto-generates both normal and hot-reload code paths
 
 ---
 
@@ -430,7 +434,7 @@ r2e doctor
 | 3 | Configuration file | Warning | `application.yaml` exists |
 | 4 | Controllers directory | Warning | `src/controllers/` exists (counts `.rs` files) |
 | 5 | Rust toolchain | Error | `rustc --version` succeeds |
-| 6 | cargo-watch | Warning | `cargo watch --version` succeeds |
+| 6 | Dioxus CLI (dx) | Warning | `dx --version` succeeds |
 | 7 | Migrations directory | Warning | If `r2e-data` or `"data"` in Cargo.toml, checks `migrations/` |
 | 8 | Application entrypoint | Warning | `src/main.rs` contains `.serve(` |
 
@@ -449,7 +453,7 @@ R2E Doctor — Checking project health
   ✓ Configuration file — application.yaml found
   ✓ Controllers directory — 3 controller files
   ✓ Rust toolchain — rustc 1.82.0 (f6e511eec 2024-10-15)
-  ! cargo-watch (for r2e dev) — Not installed. Run: cargo install cargo-watch
+  ! Dioxus CLI (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
   ✓ Application entrypoint — serve() call found in main.rs
 

@@ -18,9 +18,10 @@ pub struct AccountController {
 
 #[routes]
 impl AccountController {
+    
     #[get("/greeting")]
     async fn greeting(&self) -> Json<serde_json::Value> {
-        Json(serde_json::json!({ "greeting": self.greeting }))
+        Json(serde_json::json!({ "greeting": 3 }))
     }
 
     #[get("/error/custom")]

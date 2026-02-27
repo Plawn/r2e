@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[features]
+dev-reload = ["r2e/dev-reload"]
+
 [dependencies]
 r2e = { path = "../../r2e", features = ["full"] }
 r2e-data-sqlx = { path = "../../r2e-data-sqlx", features = ["sqlite"] }

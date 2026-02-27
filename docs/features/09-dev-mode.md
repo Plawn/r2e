@@ -55,48 +55,69 @@ Retourne un JSON avec :
 - `boot_time` : timestamp du demarrage du processus (ms depuis epoch)
 - `status` : toujours `"ok"`
 
-## Workflow hot-reload
+## Hot-reload Subsecond (recommande)
 
-Le mode dev est prevu pour fonctionner avec `cargo-watch` ou le CLI `r2e dev` :
+R2E supporte le **hot-patching Subsecond** via Dioxus 0.7. Au lieu de tuer et relancer le serveur, Subsecond recompile uniquement le code modifie en tant que bibliotheque dynamique et le patche dans le processus en cours — typiquement en moins de 500ms.
 
-```
-1. Developpeur modifie un fichier .rs
-2. cargo-watch detecte le changement
-3. cargo-watch tue le serveur et le relance
-4. Le nouveau processus a un nouveau boot_time
-5. Un script/navigateur qui poll /__r2e_dev/ping detecte le changement
-6. Le navigateur se rafraichit automatiquement
-```
+### Configuration
 
-### Exemple de script de poll (JavaScript cote client)
+1. Installer le CLI Dioxus : `cargo install dioxus-cli`
+2. Ajouter le feature `dev-reload` a votre app :
 
-```javascript
-let lastBootTime = null;
-
-setInterval(async () => {
-    try {
-        const resp = await fetch('/__r2e_dev/ping');
-        const data = await resp.json();
-        if (lastBootTime && data.boot_time !== lastBootTime) {
-            window.location.reload();
-        }
-        lastBootTime = data.boot_time;
-    } catch {
-        // Serveur en cours de redemarrage
-    }
-}, 1000);
+```toml
+[features]
+dev-reload = ["r2e/dev-reload"]
 ```
 
-### Utilisation avec cargo-watch
+3. Structurer votre app avec le pattern setup/serveur :
 
-```bash
-cargo watch -x 'run -p example-app'
+```rust
+#[derive(Clone)]
+struct AppEnv {
+    pool: PgPool,
+    config: R2eConfig,
+}
+
+async fn setup() -> AppEnv {
+    // execute une seule fois, persiste entre les hot-patches
+    let pool = PgPool::connect("...").await.unwrap();
+    AppEnv { pool, config: R2eConfig::load("dev").unwrap() }
+}
+
+#[r2e::main]
+async fn main(env: AppEnv) {
+    // ce body est hot-patche a chaque changement de code
+    AppBuilder::new()
+        .provide(env.pool)
+        .build_state::<MyState, _, _>().await
+        .serve("0.0.0.0:3000").await.unwrap();
+}
 ```
 
-Ou avec le CLI R2E :
+La macro `#[r2e::main]` detecte automatiquement le parametre et genere deux chemins de code gates par `#[cfg]` : execution normale et hot-patching Subsecond.
+
+4. Lancer avec : `r2e dev`
+
+### Fonctionnement
+
+```
+Changement de code source
+    → dx detecte le changement
+    → recompile UNIQUEMENT la closure serveur en bibliotheque dynamique
+    → la patche dans le processus en cours (etat du setup preserve)
+    → ~200-500ms de delai
+```
+
+### Polling legacy (plugin DevReload)
+
+Le plugin `DevReload` expose `/__r2e_dev/ping` pour la detection de redemarrage. C'est toujours disponible pour les outils qui poll les redemarrages du serveur.
+
+### Utilisation avec le CLI R2E
 
 ```bash
 r2e dev
+r2e dev --port 8080
+r2e dev --features openapi scheduler
 ```
 
 ## Note sur la production

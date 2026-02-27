@@ -30,7 +30,7 @@ pub mod multipart;
 pub mod ws;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, Producer};
-pub use builder::{AppBuilder, TaskRegistryHandle};
+pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationError, ConfigValue, DefaultSecretResolver,
     FromConfigValue, MissingKeyError, PropertyMeta, R2eConfig, RegisteredSection, SecretResolver,

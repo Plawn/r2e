@@ -16,7 +16,7 @@ enum CheckResult {
 /// 3. `application.yaml` exists (Warning if missing)
 /// 4. `src/controllers/` exists and has `.rs` files (Warning if missing)
 /// 5. Rust toolchain (`rustc --version`) (Error if missing)
-/// 6. `cargo-watch` installed (Warning if missing)
+/// 6. `dx` (Dioxus CLI) installed (Warning if missing)
 /// 7. `migrations/` exists when data features are used (Warning if missing)
 /// 8. `src/main.rs` contains `.serve()` call (Warning if missing)
 ///
@@ -108,15 +108,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         &mut issues,
     );
 
-    // 6. Check cargo-watch
+    // 6. Check dx (Dioxus CLI) for hot-reload
     check(
-        "cargo-watch (for r2e dev)",
-        || match Command::new("cargo").args(["watch", "--version"]).output() {
+        "Dioxus CLI (for r2e dev)",
+        || match Command::new("dx").arg("--version").output() {
             Ok(output) if output.status.success() => {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 CheckResult::Ok(version)
             }
-            _ => CheckResult::Warning("Not installed. Run: cargo install cargo-watch".into()),
+            _ => CheckResult::Warning("Not installed. Run: cargo install dioxus-cli".into()),
         },
         &mut issues,
     );

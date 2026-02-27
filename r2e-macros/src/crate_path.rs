@@ -91,6 +91,33 @@ pub fn r2e_scheduler_path() -> TokenStream {
     }
 }
 
+/// Returns the token stream for accessing `r2e_devtools` types.
+///
+/// If the user depends on `r2e`, returns `::r2e::devtools`.
+/// Otherwise returns `::r2e_devtools`.
+pub fn r2e_devtools_path() -> TokenStream {
+    if let Ok(found) = crate_name("r2e") {
+        match found {
+            FoundCrate::Itself => quote!(crate::devtools),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident::devtools)
+            }
+        }
+    } else if let Ok(found) = crate_name("r2e-devtools") {
+        match found {
+            FoundCrate::Itself => quote!(crate),
+            FoundCrate::Name(name) => {
+                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident)
+            }
+        }
+    } else {
+        // Fallback
+        quote!(::r2e_devtools)
+    }
+}
+
 /// Returns the token stream for accessing `r2e_grpc` types.
 ///
 /// If the user depends on `r2e`, returns `::r2e::r2e_grpc`.

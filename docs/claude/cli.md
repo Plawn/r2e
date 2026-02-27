@@ -47,15 +47,21 @@ Subcommands:
 
 ## `r2e doctor` — Project health diagnostics
 
-Runs 8 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, cargo-watch, migrations, entrypoint). Reports `Ok`/`Warning`/`Error` with colored indicators.
+Runs 8 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI, migrations, entrypoint). Reports `Ok`/`Warning`/`Error` with colored indicators.
 
 ## `r2e routes` — Route listing
 
 Static source parsing of `src/controllers/*.rs` (no compilation). Extracts controller paths, HTTP methods, handler names, roles. Colored table output.
 
-## `r2e dev` — Development server
+## `r2e dev` — Development server with hot-reload
 
-Wraps `cargo watch` (watches `src/`, config files, `migrations/`). Sets `R2E_PROFILE=dev`. `--open` opens browser. Requires `cargo-watch`.
+Uses Dioxus Subsecond for instant hot-patching (no full recompile). Requires `dx` CLI (`cargo install dioxus-cli`). Generates a `Dioxus.toml` config if missing, then runs `dx serve --hot-patch` with the `dev-reload` feature enabled.
+
+**Flags:**
+- `--port <PORT>` — server port (forwarded as `R2E_PORT` env var)
+- `--features <FEAT>...` — extra Cargo features to enable
+
+**Prerequisites:** `dx` CLI installed. If missing, prints instructions.
 
 ## `r2e add <extension>` — Extension management
 
