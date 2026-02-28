@@ -22,6 +22,18 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 - `#[roles("admin")]` attribute generates a guard that checks identity roles via the `Identity` trait and returns 403 if missing.
 - Role extraction is trait-based (`RoleExtractor`) to support multiple OIDC providers; default (`DefaultRoleExtractor`) checks top-level `roles` and Keycloak's `realm_access.roles`.
 
+## Embedded OIDC (r2e-oidc)
+
+`OidcServer` — embedded OAuth 2.0 / OIDC server plugin. Generates RSA-2048 keys, issues JWT tokens, exposes standard endpoints (`/oauth/token`, `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/userinfo`). Implements `PreStatePlugin` and provides `Arc<JwtClaimsValidator>` to the bean graph.
+
+`OidcRuntime` — pre-built OIDC runtime (`Clone`). Created via `OidcServer::build()`. Holds all expensive state (`Arc`-wrapped RSA keys, user store, client registry). Reusable across hot-reload cycles — only re-registers routes without regenerating keys. Also implements `PreStatePlugin`.
+
+Two usage patterns:
+- **Simple:** `AppBuilder::new().plugin(OidcServer::new().with_user_store(users))` — generates keys on each install. Works without hot-reload.
+- **Hot-reload:** `let oidc = OidcServer::build();` in `setup()`, then `.plugin(oidc.clone())` in `main(env)`. Tokens survive hot-patches.
+
+Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`, `OidcServerConfig`.
+
 ## Events (r2e-events)
 
 `EventBus` — in-process typed pub/sub. Events are dispatched by `TypeId`. Subscribers receive `Arc<E>`.

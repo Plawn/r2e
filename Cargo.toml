@@ -27,6 +27,7 @@ members = [
     "examples/example-websocket-chat",
     "examples/example-grpc",
     "examples/example-microservice",
+    "examples/example-oidc",
     "r2e-compile-tests",
 ]
 resolver = "2"

@@ -1,0 +1,15 @@
+[package]
+name = "example-oidc"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+dev-reload = ["r2e/dev-reload"]
+
+[dependencies]
+r2e = { path = "../../r2e", features = ["security", "oidc", "openapi"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

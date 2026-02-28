@@ -52,6 +52,38 @@ C'est tout. `AuthenticatedUser` fonctionne immédiatement — pas besoin de conf
 
 Les tokens émis sont validés localement — pas de requête réseau, pas de cache JWKS.
 
+## Support du hot-reload (`OidcRuntime`)
+
+Par défaut, `OidcServer` régénère les clés RSA et reconstruit l'état interne à chaque appel de `install()`. Avec le hot-reload (`r2e dev`), `main()` est ré-exécuté à chaque patch de code, ce qui invalide tous les tokens précédemment émis et perd les données in-memory (user store, client registry).
+
+`OidcServer::build()` sépare la construction coûteuse (une seule fois) de l'enregistrement des routes (à chaque patch). Il retourne un `OidcRuntime` — un handle `Clone`-able qui préserve les clés RSA, le user store et le client registry entre les cycles de hot-reload.
+
+```rust
+use r2e::prelude::*;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+// setup() — appelé une seule fois, avant la boucle de hot-reload
+let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .with_user_store(users)
+    .build(); // retourne OidcRuntime
+
+// main(env) — appelé à chaque hot-patch
+AppBuilder::new()
+    .plugin(oidc.clone()) // réutilise les mêmes clés et le même état
+    .build_state::<Services, _, _>().await
+    .register_controller::<UserController>()
+    .serve("0.0.0.0:3000").await.unwrap();
+```
+
+**Compatibilité ascendante :** utiliser `OidcServer` directement comme plugin (sans `.build()`) fonctionne exactement comme avant. La seule différence est que les tokens ne survivront pas aux cycles de hot-reload.
+
 ## Endpoints exposés
 
 | Méthode | Chemin | Description |

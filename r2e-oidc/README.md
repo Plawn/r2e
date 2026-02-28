@@ -45,6 +45,38 @@ AppBuilder::new()
 
 No manual `JwtClaimsValidator` setup required — the plugin provides it automatically.
 
+## Hot-reload support (`OidcRuntime`)
+
+By default, `OidcServer::install()` generates RSA keys and builds internal state on every call. With hot-reload (`r2e dev`), `main()` is re-executed on each code patch, which would regenerate keys and invalidate all previously issued tokens.
+
+`OidcServer::build()` separates the expensive one-time setup from route registration. It returns an `OidcRuntime` — a `Clone`-able handle that preserves RSA keys, user store, and client registry across hot-reload cycles.
+
+```rust
+use r2e::prelude::*;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+// setup() — called once, before hot-reload loop
+let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .with_user_store(users)
+    .build(); // returns OidcRuntime
+
+// main(env) — called on each hot-patch
+AppBuilder::new()
+    .plugin(oidc.clone()) // reuses same keys and state
+    .build_state::<AppState, _, _>().await
+    .register_controller::<UserController>()
+    .serve("0.0.0.0:3000").await.unwrap();
+```
+
+**Backward compatibility:** Using `OidcServer` directly as a plugin (without `.build()`) still works exactly as before. The only difference is that tokens won't survive hot-reload cycles.
+
 ## Endpoints
 
 | Method | Path | Description |

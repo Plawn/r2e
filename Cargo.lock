@@ -986,6 +986,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-oidc"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "example-postgres"
 version = "0.1.0"
 dependencies = [
@@ -2709,6 +2720,7 @@ dependencies = [
  "axum",
  "bytes",
  "dashmap",
+ "dotenvy",
  "form_urlencoded",
  "futures-core",
  "garde",

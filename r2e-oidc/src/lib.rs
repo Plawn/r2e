@@ -3,7 +3,7 @@
 //! Provides JWT token issuance without an external identity provider.
 //! Install as a `PreStatePlugin` and `AuthenticatedUser` works out-of-the-box.
 //!
-//! # Example
+//! # Quick start
 //!
 //! ```ignore
 //! use r2e::prelude::*;
@@ -25,6 +25,25 @@
 //!     .build_state::<Services, _, _>().await
 //!     .register_controller::<UserController>()
 //!     .serve("0.0.0.0:3000").await.unwrap();
+//! ```
+//!
+//! # Hot-reload support
+//!
+//! With hot-reload (`r2e dev`), `main()` is re-executed on each code patch.
+//! Using `OidcServer` directly would regenerate RSA keys every time, invalidating
+//! all previously issued tokens.
+//!
+//! Call [`OidcServer::build()`] once in `setup()` to get an [`OidcRuntime`] — a
+//! `Clone`-able handle that preserves keys and state across hot-reload cycles:
+//!
+//! ```ignore
+//! // setup() — called once
+//! let oidc = OidcServer::new().with_user_store(users).build();
+//!
+//! // main(env) — called on each hot-patch
+//! AppBuilder::new()
+//!     .plugin(oidc.clone()) // same keys, same state
+//!     .build_state::<Services, _, _>().await
 //! ```
 
 pub mod client;
@@ -114,17 +133,17 @@ impl Default for OidcServer {
     }
 }
 
-impl PreStatePlugin for OidcServer {
-    type Provided = Arc<JwtClaimsValidator>;
-    type Required = TNil;
-
-    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
+impl OidcServer {
+    /// Build the OIDC runtime, performing expensive one-time setup (RSA keygen,
+    /// state construction). The returned `OidcRuntime` is `Clone` and can be
+    /// reused across hot-reload cycles.
+    pub fn build(self) -> OidcRuntime {
         // 1. Generate RSA-2048 key pair.
         let key_pair = Arc::new(keys::OidcKeyPair::generate(&self.config.kid));
 
         // 2. Create JwtClaimsValidator with the public key.
         let security_config = SecurityConfig::new(
-            "local", // No remote JWKS URL needed.
+            "local",
             &self.config.issuer,
             &self.config.audience,
         );
@@ -146,17 +165,60 @@ impl PreStatePlugin for OidcServer {
             claims_validator: claims_validator.clone(),
         });
 
-        // 4. Register routes via deferred action.
         let base_path = oidc_state.config.base_path.clone();
+
+        OidcRuntime {
+            state: oidc_state,
+            claims_validator,
+            base_path,
+        }
+    }
+}
+
+/// Pre-built OIDC runtime holding all expensive state (RSA keys, user store,
+/// client registry). `Clone`-able and reusable across hot-reload cycles.
+///
+/// # Usage
+///
+/// ```ignore
+/// // setup() — once
+/// let oidc = OidcServer::new().with_user_store(users).build();
+///
+/// // main(env) — hot-patched, called multiple times
+/// AppBuilder::new()
+///     .plugin(oidc.clone())
+///     .build_state::<S, _, _>().await
+/// ```
+#[derive(Clone)]
+pub struct OidcRuntime {
+    state: Arc<state::OidcState>,
+    claims_validator: Arc<JwtClaimsValidator>,
+    base_path: String,
+}
+
+impl PreStatePlugin for OidcRuntime {
+    type Provided = Arc<JwtClaimsValidator>;
+    type Required = TNil;
+
+    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
+        let oidc_state = self.state;
+        let base_path = self.base_path;
         ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
-            let oidc_state = oidc_state;
-            let base_path = base_path;
             dctx.add_layer(Box::new(move |router| {
                 router.merge(oidc_routes(oidc_state, &base_path))
             }));
         }));
 
-        claims_validator
+        self.claims_validator
+    }
+}
+
+impl PreStatePlugin for OidcServer {
+    type Provided = Arc<JwtClaimsValidator>;
+    type Required = TNil;
+
+    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
+        self.build().install(ctx)
     }
 }
 
@@ -181,5 +243,5 @@ fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Router {
 
 pub mod prelude {
     //! Re-exports of the most commonly used OIDC types.
-    pub use crate::{InMemoryUserStore, OidcServer, OidcUser, UserStore};
+    pub use crate::{InMemoryUserStore, OidcRuntime, OidcServer, OidcUser, UserStore};
 }

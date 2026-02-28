@@ -33,5 +33,7 @@
 - vrai hot reload
 - improve testing facilities
 - validation error tests ? -> clean strucutred ?
+- improve config facilities, -> make main smaller
+
 
 -> optimize impl IntoResponse for HttpError {

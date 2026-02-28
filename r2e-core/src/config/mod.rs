@@ -39,12 +39,16 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Application configuration loaded from YAML files and environment variables.
+/// Application configuration loaded from YAML files, `.env` files, and environment variables.
 ///
-/// Resolution order:
+/// Resolution order (lowest to highest priority):
 /// 1. `application.yaml` (base)
 /// 2. `application-{profile}.yaml` (profile override)
-/// 3. Environment variables (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
+/// 3. `.env` file (loaded into process environment)
+/// 4. `.env.{profile}` file (loaded into process environment)
+/// 5. Environment variables (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
+///
+/// `.env` files never overwrite already-set environment variables.
 ///
 /// Profile is determined by: `R2E_PROFILE` env var > argument > default `"dev"`.
 #[derive(Debug, Clone)]
@@ -75,10 +79,15 @@ impl R2eConfig {
         let profile_path = format!("application-{active_profile}.yaml");
         loader::load_yaml_file(Path::new(&profile_path), &mut values)?;
 
-        // 3. Resolve ${...} placeholders in string values
+        // 3. Load .env files (does NOT overwrite existing env vars)
+        let _ = dotenvy::dotenv();
+        let profile_env = format!(".env.{active_profile}");
+        let _ = dotenvy::from_filename(&profile_env);
+
+        // 4. Resolve ${...} placeholders in string values
         resolve_string_values(&mut values, resolver)?;
 
-        // 4. Overlay environment variables
+        // 5. Overlay environment variables
         // Convention: `app.database.url` <-> `APP_DATABASE_URL`
         for (env_key, env_val) in std::env::vars() {
             let config_key = env_key.to_lowercase().replace('_', ".");

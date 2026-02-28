@@ -29,6 +29,7 @@ r2e-macros = { path = "../r2e-macros", version = "0.1.0" }
 garde = { version = "0.22", features = ["derive", "email"] }
 form_urlencoded = "1"
 serde_yaml = "0.9"
+dotenvy = "0.15"
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 dashmap = { version = "6", optional = true }
