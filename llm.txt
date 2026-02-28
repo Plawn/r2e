@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `scheduler`, `cache`, `rate-limit`, `openapi`, `prometheus`, `openfga`, `multipart`, `ws`. `full` enables all. Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`. `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application
 
@@ -854,6 +854,196 @@ builder.with(OpenApiPlugin::new(
 ```
 
 Spec at `/openapi.json`. Interactive docs at `/docs` (when enabled).
+
+---
+
+## Prometheus Metrics
+
+Requires feature: `prometheus`
+
+```rust
+use r2e::r2e_prometheus::Prometheus;
+
+// Simple
+builder.with(Prometheus::new("/metrics"))
+
+// With configuration
+builder.with(Prometheus::builder()
+    .endpoint("/metrics")
+    .namespace("myapp")
+    .exclude_paths(&["/health", "/metrics"])
+    .build())
+```
+
+Tracked metrics:
+- `http_requests_total` — Counter (labels: method, path, status)
+- `http_request_duration_seconds` — Histogram (labels: method, path)
+- `http_requests_in_flight` — Gauge (concurrent requests)
+
+---
+
+## Observability (OpenTelemetry)
+
+Requires feature: `observability`
+
+Distributed tracing via OpenTelemetry. **Superset of `Tracing`** — do NOT install both.
+
+```rust
+use r2e::r2e_observability::{Observability, ObservabilityConfig};
+
+AppBuilder::new()
+    .build_state::<MyState, _, _>()
+    .await
+    // No init_tracing() call needed — the plugin handles it
+    .with(Observability::new(
+        ObservabilityConfig::new("my-service")
+            .with_service_version("1.0.0")
+            .with_endpoint("http://otel-collector:4317")
+            .capture_header("x-tenant-id"),
+    ))
+    .serve("0.0.0.0:3000")
+    .await;
+```
+
+Or from YAML config:
+```rust
+.with(Observability::from_config(&config, "my-service"))
+```
+
+| | `Tracing` | `Observability` |
+|---|---|---|
+| Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
+| Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
+| Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
+| Context propagation | No | Yes (W3C `traceparent`) |
+
+---
+
+## OIDC Server (Embedded)
+
+Requires feature: `oidc`
+
+Embedded OIDC server — no external identity provider needed. Generates RSA-2048 key pair, provides `Arc<JwtClaimsValidator>` to the bean graph, and exposes OAuth 2.0 endpoints.
+
+```rust
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        email: Some("alice@example.com".into()),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .issuer("http://localhost:3000")
+    .audience("my-app")
+    .token_ttl(3600)
+    .base_path("")               // or "/auth" for nested paths
+    .with_user_store(users);
+
+AppBuilder::new()
+    .plugin(oidc)                // PreStatePlugin — before build_state()
+    .build_state::<Services, _, _>().await
+    .register_controller::<UserController>()
+    .serve("0.0.0.0:3000").await.unwrap();
+```
+
+Exposed endpoints:
+- `POST /oauth/token` — token issuance (password + client_credentials grants)
+- `GET /.well-known/openid-configuration` — OIDC discovery
+- `GET /.well-known/jwks.json` — public keys
+- `GET /userinfo` — authenticated user info
+
+The plugin auto-provides `Arc<JwtClaimsValidator>`, so `AuthenticatedUser` works without manual JWT setup.
+
+---
+
+## gRPC
+
+Requires feature: `grpc`
+
+gRPC server support with same DX as HTTP controllers: `#[inject]`, `#[config]`, guards, interceptors, identity extraction.
+
+### Two transport modes
+
+- **Separate port**: gRPC on one port, HTTP on another.
+- **Multiplexed**: both on the same port, routed by `content-type`.
+
+### Setup
+
+```rust
+use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
+
+AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))  // separate port
+    .build_state::<Services, _, _>()
+    .await
+    .register_grpc_service::<GreeterService>()
+    .register_grpc_service::<OrderService>()
+    .serve("0.0.0.0:3000")                          // HTTP port
+    .await;
+```
+
+### Service declaration
+
+Uses `#[grpc_routes]` macro on tonic-generated traits:
+
+```rust
+use r2e_grpc::prelude::*;
+
+#[derive(Controller)]
+#[controller(state = Services)]
+pub struct GreeterService {
+    #[inject] user_service: UserService,
+}
+
+#[grpc_routes(proto::greeter_server::Greeter)]
+impl GreeterService {
+    async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloReply>, Status> {
+        Ok(Response::new(HelloReply {
+            message: format!("Hello, {}!", request.into_inner().name),
+        }))
+    }
+}
+```
+
+### gRPC Guards
+
+```rust
+use r2e_grpc::{GrpcGuard, GrpcGuardContext, GrpcRolesGuard};
+
+// Role-based access for gRPC
+#[grpc_routes(proto::admin_server::Admin)]
+#[guard(GrpcRolesGuard::new(&["admin"]))]
+impl AdminService { ... }
+```
+
+---
+
+## Additional Plugins
+
+| Plugin | Description |
+|--------|-------------|
+| `RequestIdPlugin` | X-Request-Id propagation |
+| `SecureHeaders` | Security headers (X-Content-Type-Options, X-Frame-Options, etc.) |
+| `AdvancedHealth` | `/health` + `/health/live` + `/health/ready` with custom health checks |
+
+```rust
+// Request ID
+builder.with(RequestIdPlugin)
+
+// Secure headers
+builder.with(SecureHeaders::default())
+builder.with(SecureHeaders::builder().hsts(true).build())
+
+// Advanced health checks
+builder.with(Health::builder()
+    .check(DbHealth::new(pool.clone()))
+    .check(RedisHealth::new(redis.clone()))
+    .build())
+```
 
 ---
 

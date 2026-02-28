@@ -486,6 +486,10 @@ cargo test --workspace         # run all tests
 cargo run -p example-app       # run the demo app on port 3001
 ```
 
+## For AI agents
+
+If you are an AI agent or LLM, read [llm.txt](llm.txt) for a comprehensive API reference.
+
 ## License
 
 Apache-2.0
