@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          tag=$(git tag -l 'v*' --sort=-version:refV | head -n1)
+          if [ -z "$tag" ]; then
+            echo "version=0.2.0" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          IFS='.' read -r major minor patch <<< "${{ steps.latest_tag.outputs.version }}"
+          new_patch=$((patch + 1))
+          new_version="${major}.${minor}.${new_patch}"
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          latest_tag=$(git tag -l 'v*' --sort=-version:refV | head -n1)
+          if [ -z "$latest_tag" ]; then
+            log=$(git log --pretty=format:"- %s (%h)" HEAD)
+          else
+            log=$(git log --pretty=format:"- %s (%h)" "${latest_tag}..HEAD")
+          fi
+          {
+            echo "log<<EOF"
+            echo "$log"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        run: |
+          git tag ${{ steps.bump.outputs.tag }}
+          git push origin ${{ steps.bump.outputs.tag }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.tag }}
+          name: ${{ steps.bump.outputs.tag }}
+          body: |
+            ## Changes
+
+            ${{ steps.changelog.outputs.log }}
+          generate_release_notes: false
