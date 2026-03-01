@@ -48,6 +48,8 @@ struct FieldInfo {
     default_expr: Option<TokenStream2>,
     /// The config default value as string for metadata.
     default_str: Option<String>,
+    /// Custom config key override from `#[config(key = "...")]`.
+    custom_key: Option<String>,
     /// Whether the field is Option<T>.
     is_option: bool,
     /// Doc comment text.
@@ -105,26 +107,39 @@ fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
     }
 }
 
-/// Extract `#[config(default = <expr>)]` from a field's attributes.
-fn extract_default(attrs: &[syn::Attribute]) -> syn::Result<Option<(TokenStream2, String)>> {
+/// Parsed field-level `#[config(...)]` attributes.
+struct FieldConfig {
+    default: Option<(TokenStream2, String)>,
+    key: Option<String>,
+}
+
+/// Extract `#[config(default = <expr>, key = "...")]` from a field's attributes.
+fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
+    let mut result = FieldConfig {
+        default: None,
+        key: None,
+    };
     for attr in attrs {
         if attr.path().is_ident("config") {
-            let mut default_expr = None;
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("default") {
                     let value = meta.value()?;
                     let lit: syn::Expr = value.parse()?;
                     let lit_str = quote!(#lit).to_string();
-                    default_expr = Some((quote!(#lit), lit_str));
+                    result.default = Some((quote!(#lit), lit_str));
+                    Ok(())
+                } else if meta.path.is_ident("key") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    result.key = Some(lit.value());
                     Ok(())
                 } else {
-                    Err(meta.error("expected `default` in #[config(default = ...)]"))
+                    Err(meta.error("expected `default` or `key` in #[config(...)]"))
                 }
             })?;
-            return Ok(default_expr);
         }
     }
-    Ok(None)
+    Ok(result)
 }
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -157,8 +172,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let field_type = field.ty.clone();
         let is_option = is_option_type(&field_type);
         let doc = extract_doc_comment(&field.attrs);
-        let default = extract_default(&field.attrs)?;
-        let (default_expr, default_str) = match default {
+        let field_config = extract_field_config(&field.attrs)?;
+        let (default_expr, default_str) = match field_config.default {
             Some((expr, s)) => (Some(expr), Some(s)),
             None => (None, None),
         };
@@ -168,6 +183,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ty: field_type,
             default_expr,
             default_str,
+            custom_key: field_config.key,
             is_option,
             doc,
         });
@@ -177,7 +193,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let metadata_entries: Vec<TokenStream2> = field_infos
         .iter()
         .map(|f| {
-            let key = f.name.to_string();
+            let key = match &f.custom_key {
+                Some(k) => k.clone(),
+                None => f.name.to_string(),
+            };
             let full_key = format!("{}.{}", prefix, key);
             let type_name_simple = type_name_str(&f.ty);
             let required = !f.is_option && f.default_expr.is_none();
@@ -207,7 +226,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .iter()
         .map(|f| {
             let field_name = &f.name;
-            let key_str = f.name.to_string();
+            let key_str = match &f.custom_key {
+                Some(k) => k.clone(),
+                None => f.name.to_string(),
+            };
             let full_key = format!("{}.{}", prefix, key_str);
 
             if f.is_option {
