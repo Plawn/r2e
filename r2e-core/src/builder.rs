@@ -10,6 +10,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -52,6 +53,9 @@ struct BuilderConfig {
     normalize_path: bool,
     /// Whether the DevReload plugin has been applied (prevents double-install).
     dev_reload_applied: bool,
+    /// Maximum time allowed for shutdown hooks to complete before force-exiting.
+    /// `None` means wait indefinitely (default).
+    shutdown_grace_period: Option<Duration>,
 }
 
 /// Builder for assembling a R2E application.
@@ -107,6 +111,7 @@ impl AppBuilder<NoState, TNil, TNil> {
                 last_plugin_name: None,
                 normalize_path: false,
                 dev_reload_applied: false,
+                shutdown_grace_period: None,
             },
             state: None,
             routes: Vec::new(),
@@ -690,6 +695,27 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Set a maximum grace period for shutdown.
+    ///
+    /// When a shutdown signal is received the server stops accepting new
+    /// connections and runs plugin/user shutdown hooks. If those hooks do
+    /// not complete within `duration` the process will force-exit.
+    ///
+    /// By default there is **no** grace period — the process waits
+    /// indefinitely for hooks to finish.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .shutdown_grace_period(Duration::from_secs(5))
+    ///     .serve("0.0.0.0:3000").await
+    /// ```
+    pub fn shutdown_grace_period(mut self, duration: Duration) -> Self {
+        self.shared.shutdown_grace_period = Some(duration);
+        self
+    }
+
     /// Register a raw `axum::Router` fragment to be merged into the application.
     pub fn register_routes(mut self, router: crate::http::Router<T>) -> Self {
         self.routes.push(router);
@@ -841,6 +867,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         Vec<Box<dyn FnOnce() + Send>>,
         HashMap<TypeId, Box<dyn Any + Send + Sync>>,
         T,
+        Option<Duration>,
     ) {
         let state = self
             .state
@@ -914,6 +941,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             self.plugin_shutdown_hooks,
             self.shared.plugin_data,
             state,
+            self.shared.shutdown_grace_period,
         )
     }
 
@@ -945,6 +973,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_shutdown_hooks,
             plugin_data,
             state,
+            shutdown_grace_period,
         ) = this.build_inner();
 
         PreparedApp {
@@ -957,6 +986,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks,
             plugin_shutdown_hooks,
             plugin_data,
+            shutdown_grace_period,
         }
     }
 
@@ -989,6 +1019,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    shutdown_grace_period: Option<Duration>,
 }
 
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
@@ -1069,14 +1100,28 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-        // Run plugin shutdown hooks (e.g., cancel scheduler)
-        for hook in self.plugin_shutdown_hooks {
-            hook();
-        }
+        let shutdown_phase = async {
+            // Run plugin shutdown hooks (e.g., cancel scheduler)
+            for hook in self.plugin_shutdown_hooks {
+                hook();
+            }
 
-        // Run user shutdown hooks
-        for hook in self.shutdown_hooks {
-            hook().await;
+            // Run user shutdown hooks
+            for hook in self.shutdown_hooks {
+                hook().await;
+            }
+        };
+
+        if let Some(grace) = self.shutdown_grace_period {
+            if tokio::time::timeout(grace, shutdown_phase).await.is_err() {
+                tracing::warn!(
+                    grace_secs = grace.as_secs(),
+                    "Shutdown grace period elapsed, forcing exit"
+                );
+                std::process::exit(1);
+            }
+        } else {
+            shutdown_phase.await;
         }
 
         info!("R2E server stopped");

@@ -37,8 +37,51 @@ AppBuilder::new()
 - Database connectivity checks
 - Running migrations (`sqlx::migrate!().run(&pool).await`)
 - Cache preloading
+- Data seeding
 - Configuration validation
 - JWKS key pre-warming
+
+### Example: seeding an admin user from environment variables
+
+A common pattern is seeding an initial admin user at startup. `on_start` gives you full access to the DI-resolved state, and `R2eConfig` automatically overlays environment variables (`ADMIN_EMAIL` → `admin.email`), so there's no need for manual `std::env::var()` calls or reconstructing repositories:
+
+```rust
+AppBuilder::new()
+    .build_state::<AppState, _, _>()
+    .await
+    .on_start(|state| async move {
+        // R2eConfig maps ADMIN_EMAIL → admin.email automatically
+        let email: String = state.config.get("admin.email").unwrap_or_default();
+        let password: String = state.config.get("admin.password").unwrap_or_default();
+
+        if email.is_empty() || password.is_empty() {
+            return Ok(()); // no seed requested
+        }
+
+        // user_repo is already in the state via DI — no manual construction
+        if state.user_repo.find_by_email(&email).await?.is_some() {
+            tracing::debug!("Admin seed skipped — {} already exists", email);
+            return Ok(());
+        }
+
+        let hash = hash_password(&password)?;
+        state.user_repo.create(&NewUser {
+            email: email.clone(),
+            role: Role::Admin,
+            password_hash: Some(hash),
+            ..Default::default()
+        }).await?;
+
+        tracing::info!("Admin user seeded: {}", email);
+        Ok(())
+    })
+    .serve("0.0.0.0:3000").await
+```
+
+Key points:
+- **No `std::env::var()`** — use `state.config.get()` instead. Environment variables are overlaid automatically (`ADMIN_EMAIL` → `admin.email`).
+- **No manual repository construction** — services are already available in the state via DI.
+- **Use `?` for error propagation** — `on_start` returns `Result`, so errors block server startup cleanly instead of being silently logged.
 
 ## `on_stop` — Shutdown hook
 
@@ -85,6 +128,25 @@ AppBuilder::new()
     // ...
 ```
 
+## Shutdown grace period
+
+By default, R2E waits indefinitely for shutdown hooks to complete. Use `shutdown_grace_period` to set a maximum duration — if hooks don't finish in time, the process force-exits:
+
+```rust
+use std::time::Duration;
+
+AppBuilder::new()
+    .build_state::<AppState, _, _>()
+    .await
+    .shutdown_grace_period(Duration::from_secs(5))
+    .on_stop(|| async {
+        tracing::info!("Cleaning up...");
+    })
+    .serve("0.0.0.0:3000").await
+```
+
+This replaces the common pattern of manually spawning a shutdown handler with `CancellationToken` + `tokio::signal::ctrl_c()` + `process::exit()`.
+
 ## Execution sequence
 
 ```
@@ -99,7 +161,7 @@ Stop accepting connections
 Wait for in-flight requests
     ↓
 on_stop hooks (in order)
-    ↓
+    ↓ (if grace period set and exceeded → force exit)
 Process exit
 ```
 

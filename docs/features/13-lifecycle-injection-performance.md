@@ -99,6 +99,19 @@ Le scheduler utilise un `CancellationToken` (de `tokio-util`) qui est annule dan
 
 Les requetes HTTP en cours sont completees avant la fermeture (comportement par defaut d'Axum).
 
+### 1.6 Grace period de shutdown
+
+Par defaut le processus attend indefiniment la fin des hooks de shutdown. `shutdown_grace_period(Duration)` definit un delai maximum :
+
+```rust
+AppBuilder::new()
+    .with_state(services)
+    .shutdown_grace_period(Duration::from_secs(5))
+    .serve("0.0.0.0:3000").await?;
+```
+
+Si les hooks (plugin + utilisateur) ne terminent pas dans le delai, le processus force l'arret via `process::exit(1)`. Cela garantit qu'un hook bloquant ne laisse pas le processus suspendu indefiniment.
+
 ---
 
 ## 2. Cycle de vie d'une requete HTTP

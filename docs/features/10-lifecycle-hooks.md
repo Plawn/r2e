@@ -45,6 +45,49 @@ FnOnce(T) -> Future<Output = Result<(), Box<dyn Error + Send + Sync>>>
 - Doit retourner `Ok(())` pour permettre le demarrage
 - Si retourne `Err(...)`, le serveur ne demarre pas et l'erreur est propagee
 
+### Exemple : seed d'un utilisateur admin depuis les variables d'environnement
+
+Un pattern courant consiste a creer un utilisateur admin initial au demarrage. `on_start` donne acces a l'etat complet (services DI resolus), et `R2eConfig` overlay automatiquement les variables d'environnement (`ADMIN_EMAIL` → `admin.email`) — pas besoin de `std::env::var()` ni de reconstruire les repositories manuellement :
+
+```rust
+AppBuilder::new()
+    .with_state(services)
+    .on_start(|state| async move {
+        // R2eConfig mappe ADMIN_EMAIL → admin.email automatiquement
+        let email: String = state.config.get("admin.email").unwrap_or_default();
+        let password: String = state.config.get("admin.password").unwrap_or_default();
+
+        if email.is_empty() || password.is_empty() {
+            return Ok(()); // pas de seed demande
+        }
+
+        // user_repo est deja dans le state via DI
+        if state.user_repo.find_by_email(&email).await?.is_some() {
+            tracing::debug!("Admin seed skipped — {} already exists", email);
+            return Ok(());
+        }
+
+        let hash = hash_password(&password)?;
+        state.user_repo.create(&NewUser {
+            email: email.clone(),
+            role: Role::Admin,
+            password_hash: Some(hash),
+            ..Default::default()
+        }).await?;
+
+        tracing::info!("Admin user seeded: {}", email);
+        Ok(())
+    })
+    .serve("0.0.0.0:3000")
+    .await
+    .unwrap();
+```
+
+Points cles :
+- **Pas de `std::env::var()`** — utiliser `state.config.get()`. Les variables d'environnement sont automatiquement mappees (`ADMIN_EMAIL` → `admin.email`).
+- **Pas de construction manuelle des repositories** — les services sont deja disponibles dans le state via DI.
+- **Utiliser `?` pour la propagation d'erreurs** — `on_start` retourne `Result`, donc les erreurs bloquent proprement le demarrage au lieu d'etre silencieusement loguees.
+
 ### 2. Hook d'arret
 
 ```rust
@@ -96,6 +139,26 @@ AppBuilder::new()
     .unwrap();
 ```
 
+## Grace period de shutdown
+
+Par defaut, R2E attend indefiniment que les hooks de shutdown terminent. Utilisez `shutdown_grace_period` pour definir un delai maximum — si les hooks ne finissent pas dans le temps imparti, le processus force l'arret :
+
+```rust
+use std::time::Duration;
+
+AppBuilder::new()
+    .with_state(services)
+    .shutdown_grace_period(Duration::from_secs(5))
+    .on_stop(|| async {
+        tracing::info!("Nettoyage...");
+    })
+    .serve("0.0.0.0:3000")
+    .await
+    .unwrap();
+```
+
+Cela remplace le pattern courant ou les utilisateurs spawnent manuellement un handler de shutdown avec `CancellationToken` + `tokio::signal::ctrl_c()` + `process::exit()`.
+
 ## Ordre d'execution
 
 ```
@@ -105,6 +168,7 @@ AppBuilder::new()
 4. Signal d'arret recu (Ctrl+C / SIGTERM)
 5. Arret gracieux du serveur
 6. on_stop hooks (sequentiels, dans l'ordre d'enregistrement)
+7. Si grace period definie et depassee → force exit
 ```
 
 ### Echec d'un hook de demarrage
@@ -122,6 +186,7 @@ Si un `on_start` retourne `Err`, l'execution s'arrete immediatement :
 |-------|---------|
 | Verification de connectivite | Tester la connexion DB avant d'accepter des requetes |
 | Migration de schema | Executer des migrations au demarrage |
+| Seed de donnees | Creer un admin initial depuis les variables d'environnement |
 | Chargement de cache | Pre-remplir un cache en memoire |
 | Verification de configuration | Valider que toutes les cles requises sont presentes |
 | Log informatif | Afficher la version, le profil actif, etc. |

@@ -377,7 +377,10 @@ AppBuilder::new()
     .on_stop(|| async {
         println!("Server stopped");
     })
+    .shutdown_grace_period(Duration::from_secs(5))  // force exit after 5s
 ```
+
+`shutdown_grace_period` sets a maximum time for shutdown hooks to complete. If exceeded, the process force-exits. Without it, the process waits indefinitely (default).
 
 `LifecycleController<T>` trait provides per-controller startup/shutdown hooks.
 
