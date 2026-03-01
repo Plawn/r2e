@@ -197,7 +197,11 @@ impl Plugin for ErrorHandling {
 pub struct DevReload;
 
 impl Plugin for DevReload {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+    fn install<T: Clone + Send + Sync + 'static>(self, mut app: AppBuilder<T>) -> AppBuilder<T> {
+        if app.is_dev_reload_applied() {
+            return app;
+        }
+        app.mark_dev_reload_applied();
         app.register_routes(crate::dev::dev_routes())
             .with_layer_fn(|router| {
                 router.layer(axum::middleware::from_fn(crate::dev::dev_headers_middleware))

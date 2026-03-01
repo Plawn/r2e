@@ -50,6 +50,8 @@ struct BuilderConfig {
     last_plugin_name: Option<&'static str>,
     /// Whether to install a trailing-slash normalization fallback.
     normalize_path: bool,
+    /// Whether the DevReload plugin has been applied (prevents double-install).
+    dev_reload_applied: bool,
 }
 
 /// Builder for assembling a R2E application.
@@ -104,6 +106,7 @@ impl AppBuilder<NoState, TNil, TNil> {
                 plugin_data: HashMap::new(),
                 last_plugin_name: None,
                 normalize_path: false,
+                dev_reload_applied: false,
             },
             state: None,
             routes: Vec::new(),
@@ -493,6 +496,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub(crate) fn enable_normalize_path(mut self) -> Self {
         self.shared.normalize_path = true;
         self
+    }
+
+    /// Whether the DevReload plugin has already been applied.
+    pub(crate) fn is_dev_reload_applied(&self) -> bool {
+        self.shared.dev_reload_applied
+    }
+
+    /// Mark the DevReload plugin as applied (prevents double-install).
+    pub(crate) fn mark_dev_reload_applied(&mut self) {
+        self.shared.dev_reload_applied = true;
     }
 
     // ── Plugin system ───────────────────────────────────────────────────
@@ -914,6 +927,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// - `prepare()` can be called inside the hot-patched closure
     /// - The setup that produces beans/config stays outside
     pub fn prepare(self, addr: &str) -> PreparedApp<T> {
+        #[cfg(feature = "dev-reload")]
+        let this = if !self.shared.dev_reload_applied {
+            self.with(crate::plugins::DevReload)
+        } else {
+            self
+        };
+        #[cfg(not(feature = "dev-reload"))]
+        let this = self;
+
         let (
             app,
             startup_hooks,
@@ -923,7 +945,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_shutdown_hooks,
             plugin_data,
             state,
-        ) = self.build_inner();
+        ) = this.build_inner();
 
         PreparedApp {
             router: app,
@@ -996,6 +1018,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// and serves with graceful shutdown. After shutdown, runs plugin and user
     /// shutdown hooks.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(feature = "dev-reload")]
+        let listener = crate::dev::get_or_bind_listener(&self.addr)?;
+        #[cfg(not(feature = "dev-reload"))]
         let listener = tokio::net::TcpListener::bind(&self.addr).await?;
         self.run_with_listener(listener).await
     }

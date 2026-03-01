@@ -23,6 +23,38 @@ use axum::response::Response;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+#[cfg(feature = "dev-reload")]
+use std::collections::HashMap;
+#[cfg(feature = "dev-reload")]
+use std::sync::Mutex;
+
+#[cfg(feature = "dev-reload")]
+static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
+
+/// Retrieve a cached listener for the given address, or bind a new one.
+///
+/// On first call for a given address, binds a `TcpListener`, stores it, and
+/// returns a `try_clone()`. Subsequent calls (after hot-patch) return another
+/// clone of the same listener, avoiding port conflicts.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn get_or_bind_listener(
+    addr: &str,
+) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error>> {
+    let store = LISTENER_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = store
+        .lock()
+        .map_err(|e| format!("listener store poisoned: {e}"))?;
+    if let Some(existing) = map.get(addr) {
+        Ok(tokio::net::TcpListener::from_std(existing.try_clone()?)?)
+    } else {
+        let l = std::net::TcpListener::bind(addr)?;
+        l.set_nonblocking(true)?;
+        let cloned = l.try_clone()?;
+        map.insert(addr.to_string(), l);
+        Ok(tokio::net::TcpListener::from_std(cloned)?)
+    }
+}
+
 static BOOT_TIME: OnceLock<u64> = OnceLock::new();
 
 fn boot_time() -> u64 {

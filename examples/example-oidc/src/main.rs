@@ -67,7 +67,6 @@ struct Message {
 #[derive(Clone)]
 struct AppEnv {
     oidc: OidcRuntime,
-    listener: Arc<std::net::TcpListener>,
 }
 
 /// Called once — expensive setup that survives across hot-reload cycles.
@@ -113,10 +112,6 @@ async fn setup() -> AppEnv {
         .with_client_registry(clients)
         .build();
 
-    // -- Bind listener once ---------------------------------------------------
-    let listener = std::net::TcpListener::bind("0.0.0.0:3000").unwrap();
-    listener.set_nonblocking(true).unwrap();
-
     println!("=== example-oidc ready on http://localhost:3000 ===");
     println!("Try:");
     println!("  curl -s -X POST localhost:3000/oauth/token -d 'grant_type=password&username=alice&password=password123' | jq");
@@ -125,10 +120,7 @@ async fn setup() -> AppEnv {
     println!("  curl -s localhost:3000/admin -H 'Authorization: Bearer <token>' | jq");
     println!("  curl -s -X POST localhost:3000/oauth/token -d 'grant_type=client_credentials&client_id=my-service&client_secret=service-secret' | jq");
 
-    AppEnv {
-        oidc,
-        listener: Arc::new(listener),
-    }
+    AppEnv { oidc }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,17 +137,13 @@ async fn main(env: AppEnv) {
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling)
-        .with(DevReload)
         .with(OpenApiPlugin::new(
             OpenApiConfig::new("Example OIDC API", "0.1.0")
                 .with_description("Embedded OIDC server with hot-reload support")
                 .with_docs_ui(true),
         ))
         .register_controller::<GreetingController>()
-        .prepare("0.0.0.0:3000")
-        .run_with_listener(
-            tokio::net::TcpListener::from_std(env.listener.try_clone().unwrap()).unwrap(),
-        )
+        .serve("0.0.0.0:3000")
         .await
         .inspect_err(|e| eprintln!("=== SERVE ERROR: {e} ==="))
         .unwrap();
