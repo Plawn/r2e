@@ -61,7 +61,6 @@ struct AppEnv {
     pool: sqlx::Pool<sqlx::Sqlite>,
     sse_broadcaster: r2e::sse::SseBroadcaster,
     notification_service: NotificationService,
-    listener: Arc<std::net::TcpListener>,
 }
 
 async fn setup() -> AppEnv {
@@ -110,10 +109,6 @@ async fn setup() -> AppEnv {
     let sse_broadcaster = r2e::sse::SseBroadcaster::new(128);
     let notification_service = NotificationService::new(64);
 
-    // Bind the listener ONCE in setup — survives across hot-patches via Arc.
-    let listener = std::net::TcpListener::bind("0.0.0.0:3001").unwrap();
-    listener.set_nonblocking(true).unwrap();
-
     AppEnv {
         config,
         event_bus,
@@ -121,7 +116,6 @@ async fn setup() -> AppEnv {
         pool,
         sse_broadcaster,
         notification_service,
-        listener: Arc::new(listener),
     }
 }
 
@@ -162,7 +156,6 @@ async fn main(env: AppEnv) {
             r2e::http::StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         ))
-        .with(DevReload)
         .with(OpenApiPlugin::new(
             OpenApiConfig::new("R2E Example API", "0.1.1")
                 .with_description("Demo application showcasing all R2E features")
@@ -188,10 +181,7 @@ async fn main(env: AppEnv) {
         .register_controller::<NotificationController>()
         .register_controller::<UploadController>()
         .with(NormalizePath)
-        .prepare("0.0.0.0:3001")
-        .run_with_listener(
-            tokio::net::TcpListener::from_std(env.listener.try_clone().unwrap()).unwrap()
-        )
+        .serve("0.0.0.0:3001")
         .await
         .inspect_err(|e| eprintln!("=== SERVE ERROR: {e} ==="))
         .unwrap();
