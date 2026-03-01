@@ -76,7 +76,7 @@ fn doctor_valid_project() {
     fs::write("src/controllers/hello.rs", "").unwrap();
     fs::write(
         "src/main.rs",
-        "fn main() { builder.serve(\"0.0.0.0:8080\"); }",
+        "fn main() { builder.serve(\"0.0.0.0:3000\"); }",
     )
     .unwrap();
 

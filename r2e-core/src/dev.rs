@@ -36,10 +36,37 @@ static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> =
 /// On first call for a given address, binds a `TcpListener`, stores it, and
 /// returns a `try_clone()`. Subsequent calls (after hot-patch) return another
 /// clone of the same listener, avoiding port conflicts.
+/// The default port used by the Dioxus devserver (`dx serve`).
+///
+/// When `dx serve --hot-patch` is running, it listens on this port and
+/// silently proxies/intercepts HTTP traffic. If the R2E app binds to the
+/// same port, requests never reach the real application.
+#[cfg(feature = "dev-reload")]
+const DIOXUS_DEVSERVER_PORT: u16 = 8080;
+
+/// Extract the port number from an address string like `"0.0.0.0:3000"`.
+#[cfg(feature = "dev-reload")]
+fn parse_port(addr: &str) -> Option<u16> {
+    addr.rsplit(':').next().and_then(|p| p.parse().ok())
+}
+
 #[cfg(feature = "dev-reload")]
 pub(crate) fn get_or_bind_listener(
     addr: &str,
 ) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error>> {
+    // Guard: prevent binding to the Dioxus devserver port.
+    if let Some(port) = parse_port(addr) {
+        if port == DIOXUS_DEVSERVER_PORT {
+            return Err(format!(
+                "Cannot bind to port {port} in dev-reload mode: \
+                 the Dioxus devserver (`dx serve`) uses this port. \
+                 Your requests would be silently intercepted and never reach your app. \
+                 Use a different port, e.g. .serve(\"0.0.0.0:3000\")"
+            )
+            .into());
+        }
+    }
+
     let store = LISTENER_STORE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = store
         .lock()

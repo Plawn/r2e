@@ -217,12 +217,12 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
     if opts.openapi {
         println!(
             "  API docs: {}",
-            "http://localhost:8080/docs".cyan()
+            "http://localhost:3000/docs".cyan()
         );
     }
     println!(
         "  Health:   {}",
-        "http://localhost:8080/health".cyan()
+        "http://localhost:3000/health".cyan()
     );
 
     if opts.grpc {

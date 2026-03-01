@@ -213,7 +213,7 @@ Start the development server with hot-reload.
 r2e dev [options]
 
 Options:
-  --open    Open browser at http://localhost:8080 after startup
+  --open    Open browser at http://localhost:3000 after startup
 ```
 
 Wraps [`cargo-watch`](https://github.com/watchexec/cargo-watch) with R2E defaults:

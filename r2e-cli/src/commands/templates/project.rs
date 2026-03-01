@@ -124,7 +124,7 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
     }
 
     builder_lines.push("        .register_controller::<HelloController>()".to_string());
-    builder_lines.push("        .serve(\"0.0.0.0:8080\")".to_string());
+    builder_lines.push("        .serve(\"0.0.0.0:3000\")".to_string());
     builder_lines.push("        .await".to_string());
     builder_lines.push("        .unwrap();".to_string());
 
@@ -193,7 +193,7 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
     let mut yaml = format!(
         r#"app:
   name: "{name}"
-  port: 8080
+  port: 3000
 "#
     );
 
