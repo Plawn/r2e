@@ -156,3 +156,48 @@ impl<T: FromConfigValue> FromConfigValue for Vec<T> {
         }
     }
 }
+
+// ── Integer types via i64 with range check ──────────────────────────────
+
+macro_rules! impl_from_config_int {
+    ($($ty:ty),+) => {
+        $(
+            impl FromConfigValue for $ty {
+                fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
+                    let i = i64::from_config_value(value, key)?;
+                    <$ty>::try_from(i).map_err(|_| ConfigError::TypeMismatch {
+                        key: key.to_string(),
+                        expected: stringify!($ty),
+                    })
+                }
+            }
+        )+
+    };
+}
+
+impl_from_config_int!(u8, u16, u32, u64, i8, i16, i32, usize);
+
+impl FromConfigValue for f32 {
+    fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
+        let f = f64::from_config_value(value, key)?;
+        Ok(f as f32)
+    }
+}
+
+impl<V: FromConfigValue> FromConfigValue for HashMap<String, V> {
+    fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
+        match value {
+            ConfigValue::Map(map) => map
+                .iter()
+                .map(|(k, v)| {
+                    let val = V::from_config_value(v, &format!("{key}.{k}"))?;
+                    Ok((k.clone(), val))
+                })
+                .collect(),
+            _ => Err(ConfigError::TypeMismatch {
+                key: key.to_string(),
+                expected: "HashMap<String, _>",
+            }),
+        }
+    }
+}

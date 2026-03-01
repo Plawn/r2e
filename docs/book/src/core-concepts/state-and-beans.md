@@ -13,7 +13,7 @@ use r2e::prelude::*;
 pub struct AppState {
     pub user_service: UserService,
     pub pool: SqlitePool,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub config: R2eConfig,
 }
 ```
@@ -30,12 +30,12 @@ For services with simple, synchronous initialization:
 #[derive(Clone)]
 pub struct UserService {
     pool: SqlitePool,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[bean]
 impl UserService {
-    pub fn new(pool: SqlitePool, event_bus: EventBus) -> Self {
+    pub fn new(pool: SqlitePool, event_bus: LocalEventBus) -> Self {
         Self { pool, event_bus }
     }
 }
@@ -82,13 +82,13 @@ Producer parameters can be **bean dependencies**, **config values**, or both:
 ```rust
 #[producer]
 async fn create_notifier(
-    bus: EventBus,                                // ← resolved from BeanContext
+    bus: LocalEventBus,                                // ← resolved from BeanContext
     #[config("notification.url")] url: String,    // ← resolved from R2eConfig
     #[config("notification.timeout")] timeout: i64,
 ) -> NotificationClient {
     NotificationClient::new(&url, timeout, bus).await
 }
-// Generates: CreateNotifier with deps [EventBus, R2eConfig]
+// Generates: CreateNotifier with deps [LocalEventBus, R2eConfig]
 // Register: .with_producer::<CreateNotifier>()
 ```
 
@@ -101,7 +101,7 @@ For simple structs where the constructor just clones fields from the graph:
 ```rust
 #[derive(Clone, Bean)]
 pub struct MyService {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[inject] pool: SqlitePool,
     #[config("app.name")] name: String,
 }
@@ -115,7 +115,7 @@ Use `#[config("key")]` on constructor parameters or derive fields to resolve val
 #[bean]
 impl NotificationService {
     pub fn new(
-        bus: EventBus,
+        bus: LocalEventBus,
         #[config("notification.capacity")] capacity: i64,
         #[config("notification.enabled")] enabled: bool,
     ) -> Self {
@@ -165,7 +165,7 @@ pub struct AppState {
     pub user_service: UserService,
     pub notification_service: NotificationService,
     pub pool: SqlitePool,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub config: R2eConfig,
 }
 
@@ -177,7 +177,7 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 #[tokio::main]
 async fn main() {
     let config = R2eConfig::load("dev").unwrap();
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
 
     AppBuilder::new()
         .provide(event_bus)

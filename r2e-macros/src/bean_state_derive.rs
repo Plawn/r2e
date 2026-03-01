@@ -83,6 +83,22 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
         });
+
+        // If this is R2eConfig<T> (with generic args), also generate
+        // FromRef for the raw R2eConfig (= R2eConfig<()>) so that
+        // beans and controllers can extract the untyped config via FromRef.
+        if is_typed_r2e_config(field_type) {
+            let raw_type_key = format!("{}::config::R2eConfig", quote!(#krate));
+            if seen_types.insert(raw_type_key) {
+                from_ref_impls.push(quote! {
+                    impl #krate::http::extract::FromRef<#name> for #krate::config::R2eConfig {
+                        fn from_ref(state: &#name) -> Self {
+                            state.#field_name.raw()
+                        }
+                    }
+                });
+            }
+        }
     }
 
     // Generate BuildableFrom<P, Indices> impl with index witness type params.
@@ -135,4 +151,20 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 /// Produce a stable string representation of a type for dedup purposes.
 fn type_to_string(ty: &Type) -> String {
     quote!(#ty).to_string().replace(' ', "")
+}
+
+/// Check if a type is `R2eConfig<T>` with explicit generic arguments.
+///
+/// Returns `true` for `R2eConfig<AppConfig>` but `false` for bare `R2eConfig`.
+fn is_typed_r2e_config(ty: &Type) -> bool {
+    if let Type::Path(syn::TypePath { path, .. }) = ty {
+        if let Some(seg) = path.segments.last() {
+            if seg.ident == "R2eConfig" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    return !args.args.is_empty();
+                }
+            }
+        }
+    }
+    false
 }

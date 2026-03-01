@@ -381,9 +381,22 @@ impl<P, R> AppBuilder<NoState, P, R> {
         S: BeanState + BuildableFrom<P, Idx>,
         R: AllSatisfied<P, RIdx>,
     {
+        #[cfg(feature = "dev-reload")]
+        {
+            if let Some(cached) = crate::dev::get_cached_state::<S>() {
+                tracing::debug!("dev-reload: reusing cached state, skipping bean resolution");
+                self.shared.bean_registry = BeanRegistry::new();
+                return Ok(AppBuilder::<S>::from_pre(self.shared, cached));
+            }
+        }
+
         let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
         let ctx = registry.resolve().await?;
         let state = S::from_context(&ctx);
+
+        #[cfg(feature = "dev-reload")]
+        crate::dev::cache_state(&state);
+
         Ok(AppBuilder::<S>::from_pre(self.shared, state))
     }
 
@@ -821,6 +834,30 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Register a bean's event subscriptions.
+    ///
+    /// The bean is extracted from state via `FromRef` and its
+    /// [`EventSubscriber::subscribe()`] method is called during server startup.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .build_state::<Services, _, _>().await
+    ///     .register_subscriber::<NotificationService>()
+    ///     .serve("0.0.0.0:3000").await.unwrap();
+    /// ```
+    pub fn register_subscriber<S>(mut self) -> Self
+    where
+        S: crate::EventSubscriber + axum::extract::FromRef<T>,
+    {
+        self.consumer_registrations.push(Box::new(|state| {
+            let subscriber = S::from_ref(&state);
+            subscriber.subscribe()
+        }));
+        self
+    }
+
     /// Register a typed metadata consumer.
     ///
     /// At `build()` time, the consumer receives a shared slice of all `M` items
@@ -1064,31 +1101,43 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         self,
         listener: tokio::net::TcpListener,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Register event consumers
-        for reg in self.consumer_registrations {
-            reg(self.state.clone()).await;
-        }
+        #[cfg(feature = "dev-reload")]
+        let skip_lifecycle = crate::dev::is_lifecycle_initialized();
+        #[cfg(not(feature = "dev-reload"))]
+        let skip_lifecycle = false;
 
-        // Call serve hooks (e.g., scheduler starts tasks).
-        let mut boxed_tasks = self.plugin_data
-            .get(&TypeId::of::<TaskRegistryHandle>())
-            .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
-            .map(|registry| registry.take_all())
-            .unwrap_or_default();
-        for hook in self.serve_hooks {
-            let tasks_for_hook = if boxed_tasks.is_empty() {
-                Vec::new()
-            } else {
-                std::mem::take(&mut boxed_tasks)
-            };
-            hook(tasks_for_hook, CancellationToken::new());
-        }
+        if !skip_lifecycle {
+            // Register event consumers
+            for reg in self.consumer_registrations {
+                reg(self.state.clone()).await;
+            }
 
-        // Run startup hooks
-        for hook in self.startup_hooks {
-            hook(self.state.clone())
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            // Call serve hooks (e.g., scheduler starts tasks).
+            let mut boxed_tasks = self.plugin_data
+                .get(&TypeId::of::<TaskRegistryHandle>())
+                .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
+                .map(|registry| registry.take_all())
+                .unwrap_or_default();
+            for hook in self.serve_hooks {
+                let tasks_for_hook = if boxed_tasks.is_empty() {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut boxed_tasks)
+                };
+                hook(tasks_for_hook, CancellationToken::new());
+            }
+
+            // Run startup hooks
+            for hook in self.startup_hooks {
+                hook(self.state.clone())
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            }
+
+            #[cfg(feature = "dev-reload")]
+            crate::dev::mark_lifecycle_initialized();
+        } else {
+            tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
         }
 
         info!(addr = %self.addr, "R2E server listening");
@@ -1101,12 +1150,14 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         .await?;
 
         let shutdown_phase = async {
-            // Run plugin shutdown hooks (e.g., cancel scheduler)
-            for hook in self.plugin_shutdown_hooks {
-                hook();
+            if !skip_lifecycle {
+                // Run plugin shutdown hooks (e.g., cancel scheduler)
+                for hook in self.plugin_shutdown_hooks {
+                    hook();
+                }
             }
 
-            // Run user shutdown hooks
+            // Always run user shutdown hooks
             for hook in self.shutdown_hooks {
                 hook().await;
             }

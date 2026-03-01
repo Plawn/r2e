@@ -42,7 +42,7 @@ impl r2e::r2e_data::Entity for UserEntity {
 }
 
 /// Event emitted when a new user is created.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserCreatedEvent {
     pub user_id: u64,
     pub name: String,

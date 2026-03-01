@@ -70,23 +70,68 @@ pub fn validate_keys(
 
 /// Validate a `ConfigProperties` section against an `R2eConfig`.
 ///
-/// Checks that all required keys are present. Returns a list of
-/// missing keys (empty if all present).
+/// Checks that all required keys are present. Also attempts to construct
+/// the section via `from_config` to detect type mismatches and validation
+/// errors (e.g., garde constraints).
 pub fn validate_section<C: ConfigProperties>(
     config: &R2eConfig,
 ) -> Vec<MissingKeyError> {
     let meta = C::properties_metadata();
     let prefix = C::prefix();
 
-    meta.iter()
-        .filter(|prop| prop.required)
+    let mut errors: Vec<MissingKeyError> = meta.iter()
+        .filter(|prop| prop.required && !prop.is_section)
         .filter(|prop| matches!(config.get::<String>(&prop.full_key), Err(ConfigError::NotFound(_))))
         .map(|prop| MissingKeyError {
             source: prefix.to_string(),
             key: prop.full_key.clone(),
             expected_type: prop.type_name.to_string(),
-            env_hint: prop.full_key.to_uppercase().replace('.', "_"),
+            env_hint: match &prop.env_var {
+                Some(env) => env.clone(),
+                None => prop.full_key.to_uppercase().replace('.', "_"),
+            },
             description: prop.description.clone(),
         })
-        .collect()
+        .collect();
+
+    // If no missing keys, try constructing the section to surface
+    // TypeMismatch and Validation errors.
+    if errors.is_empty() {
+        if let Err(e) = C::from_config(config) {
+            match e {
+                ConfigError::TypeMismatch { key, expected } => {
+                    errors.push(MissingKeyError {
+                        source: prefix.to_string(),
+                        key: key.clone(),
+                        expected_type: expected.to_string(),
+                        env_hint: key.to_uppercase().replace('.', "_"),
+                        description: Some(format!("type mismatch: expected {expected}")),
+                    });
+                }
+                ConfigError::Validation(details) => {
+                    for detail in details {
+                        errors.push(MissingKeyError {
+                            source: prefix.to_string(),
+                            key: detail.key.clone(),
+                            expected_type: "valid".to_string(),
+                            env_hint: detail.key.to_uppercase().replace('.', "_"),
+                            description: Some(detail.message),
+                        });
+                    }
+                }
+                ConfigError::NotFound(key) => {
+                    errors.push(MissingKeyError {
+                        source: prefix.to_string(),
+                        key: key.clone(),
+                        expected_type: "unknown".to_string(),
+                        env_hint: key.to_uppercase().replace('.', "_"),
+                        description: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    errors
 }

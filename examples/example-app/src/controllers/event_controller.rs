@@ -8,7 +8,7 @@ use r2e::prelude::*;
 #[controller(state = Services)]
 pub struct UserEventConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[routes]

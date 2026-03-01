@@ -1,13 +1,13 @@
 use r2e::prelude::*;
-use r2e::r2e_events::EventBus;
+use r2e::r2e_events::LocalEventBus;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserCreated {
     pub name: String,
 }
@@ -16,7 +16,7 @@ pub struct UserCreated {
 #[controller(state = AppState)]
 pub struct EventConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[routes]

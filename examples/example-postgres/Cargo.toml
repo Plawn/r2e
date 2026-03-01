@@ -13,5 +13,5 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "mi
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 garde = { version = "0.22", features = ["derive"] }
-schemars = "0.8"
+schemars = "1"
 chrono = { version = "0.4", features = ["serde"] }

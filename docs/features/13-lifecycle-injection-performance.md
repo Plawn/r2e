@@ -72,7 +72,7 @@ serve(addr)
     |-- 2. Enregistrement des consumers d'evenements
     |       Pour chaque controller avec #[consumer] :
     |         → Controller::register_consumers(state.clone())
-    |         → Subscribe les handlers sur l'EventBus
+    |         → Subscribe les handlers sur le bus d'evenements
     |
     |-- 3. Execution des hooks on_start (dans l'ordre d'enregistrement)
     |       Chaque hook recoit state.clone()
@@ -283,11 +283,11 @@ field_name: __state.field_name.clone()
 |------|--------------|-----------|
 | `Arc<T>` | O(1) — increment atomique du refcount | Partage immutable |
 | `SqlxPool` | O(1) — `Arc` interne | Pool de connexions |
-| `EventBus` | O(1) — `Arc<RwLock<HashMap>>` | Bus d'evenements |
+| `LocalEventBus` | O(1) — `Arc<RwLock<HashMap>>` | Bus d'evenements |
 | `RateLimitRegistry` | O(1) — `Arc` interne | Registre de limiteurs |
 | `R2eConfig` | O(n) — clone du `HashMap` | Configuration |
 
-**Bonne pratique** : envelopper les services lourds dans `Arc<T>` pour que le clone soit un simple increment de reference atomique. Le framework n'impose pas `Arc`, mais les types fournis (`SqlxPool`, `EventBus`, etc.) l'utilisent deja en interne.
+**Bonne pratique** : envelopper les services lourds dans `Arc<T>` pour que le clone soit un simple increment de reference atomique. Le framework n'impose pas `Arc`, mais les types fournis (`SqlxPool`, `LocalEventBus`, etc.) l'utilisent deja en interne.
 
 ### 3.2 `#[inject(identity)]` — Scope requete
 
@@ -345,7 +345,7 @@ field_name: {
                     │  user_service: UserService  ←── Arc interne │
                     │  pool: SqlitePool           ←── Arc interne │
                     │  jwt_validator: Arc<JwtValidator>            │
-                    │  event_bus: EventBus         ←── Arc interne │
+                    │  event_bus: LocalEventBus     ←── Arc interne │
                     │  config: R2eConfig       ←── HashMap     │
                     │  rate_limiter: RateLimitRegistry             │
                     └──────────────┬──────────────────────────────┘
@@ -503,7 +503,7 @@ Quand il n'y a pas d'identity du tout, `guard_identity` retourne `None` et le ty
 
 Le clone se fait a chaque requete pour chaque champ `#[inject]`. C'est le mecanisme d'Axum : l'extracteur `FromRequestParts` recoit une reference immutable a l'etat et doit en produire une copie locale.
 
-**Recommandation** : utiliser `Arc<T>` pour les services couteux a cloner. Le framework le fait deja pour `SqlxPool`, `EventBus`, et `RateLimitRegistry`.
+**Recommandation** : utiliser `Arc<T>` pour les services couteux a cloner. Le framework le fait deja pour `SqlxPool`, `LocalEventBus`, et `RateLimitRegistry`.
 
 ```rust
 // Bon : Arc<T> → clone O(1)

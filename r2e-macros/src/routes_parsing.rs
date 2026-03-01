@@ -239,7 +239,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         fn_item: method,
                     });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
-                    let decorators = parse_decorators(&all_attrs)?;
+                    let mut decorators = parse_decorators(&all_attrs)?;
+                    // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
+                    decorators.deprecated = crate::extract::route::is_deprecated(&all_attrs);
 
                     method.attrs = strip_known_attrs(all_attrs);
 

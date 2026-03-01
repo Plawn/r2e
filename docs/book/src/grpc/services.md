@@ -135,7 +135,7 @@ gRPC services support the same injection as HTTP controllers:
 #[controller(state = AppState)]
 pub struct UserGrpcService {
     #[inject] user_service: UserService,
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[config("app.name")] app_name: String,
 }
 ```

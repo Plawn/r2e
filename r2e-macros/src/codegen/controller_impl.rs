@@ -1,10 +1,10 @@
 //! Controller trait implementation generation.
 
 use proc_macro2::TokenStream;
-use proc_macro_crate::crate_name;
+
 use quote::{format_ident, quote};
 
-use crate::crate_path::{r2e_core_path, r2e_scheduler_path};
+use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
 use crate::routes_parsing::RoutesImplDef;
 
 /// Generate the `Controller<State>` trait implementation.
@@ -265,6 +265,31 @@ fn generate_route_metadata(
             let path_params = extract_path_params(rm, &krate);
             let handler_param_types = extract_handler_param_types(rm);
             let (body_type_token, body_schema_token) = extract_body_info(rm);
+            let (response_type_token, response_schema_token) = extract_response_info(rm);
+
+            // Extract doc comments for summary + description
+            let (doc_summary, doc_description) =
+                crate::extract::route::extract_doc_comments(&rm.fn_item.attrs);
+            let summary_token = match doc_summary {
+                Some(s) => quote! { Some(#s.to_string()) },
+                None => quote! { None },
+            };
+            let description_token = match doc_description {
+                Some(d) => quote! { Some(#d.to_string()) },
+                None => quote! { None },
+            };
+
+            // Status: #[status(N)] override > default_status_for_method
+            let status_code = rm.decorators.status_override
+                .unwrap_or_else(|| default_status_for_method(&rm.method));
+
+            let deprecated = rm.decorators.deprecated;
+            let body_required = detect_body_required(rm);
+
+            // has_auth: roles, identity param, guard fns, or struct-level identity
+            let has_roles = !rm.decorators.roles.is_empty();
+            let has_identity_param = rm.identity_param.is_some();
+            let has_guards = !rm.decorators.guard_fns.is_empty();
 
             // Autoref specialization: for each handler param type, probe for ParamsMetadata.
             // Types implementing ParamsMetadata return their param infos; others return empty vec.
@@ -289,10 +314,14 @@ fn generate_route_metadata(
                     },
                     method: #method.to_string(),
                     operation_id: #op_id.to_string(),
-                    summary: None,
+                    summary: #summary_token,
+                    description: #description_token,
                     request_body_type: #body_type_token,
                     request_body_schema: #body_schema_token,
-                    response_type: None,
+                    request_body_required: #body_required,
+                    response_type: #response_type_token,
+                    response_schema: #response_schema_token,
+                    response_status: #status_code,
                     params: {
                         let mut __p: Vec<#krate::meta::ParamInfo> = vec![#(#path_params),*];
                         #(#probe_blocks)*
@@ -306,6 +335,8 @@ fn generate_route_metadata(
                     },
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
+                    deprecated: #deprecated,
+                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
                 }
             }
         })
@@ -417,6 +448,216 @@ fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
     "string"
 }
 
+/// Determine the default HTTP status code based on the HTTP method.
+fn default_status_for_method(method: &crate::route::HttpMethod) -> u16 {
+    match method {
+        crate::route::HttpMethod::Get => 200,
+        crate::route::HttpMethod::Post => 201,
+        crate::route::HttpMethod::Put => 200,
+        crate::route::HttpMethod::Delete => 204,
+        crate::route::HttpMethod::Patch => 200,
+    }
+}
+
+/// Check if the body parameter is `Option<Json<T>>` → required: false, `Json<T>` → required: true.
+fn detect_body_required(rm: &crate::types::RouteMethod) -> bool {
+    for arg in rm.fn_item.sig.inputs.iter() {
+        if let syn::FnArg::Typed(pt) = arg {
+            if has_json_type(&pt.ty) {
+                // Check if it's wrapped in Option
+                if is_option_wrapping_json(&pt.ty) {
+                    return false;
+                }
+                return true;
+            }
+        }
+    }
+    true
+}
+
+/// Check if a type is `Option<Json<T>>`.
+fn is_option_wrapping_json(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return has_json_type(inner);
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a type contains Json (is `Json<T>` or a destructured pattern).
+fn has_json_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "Json";
+        }
+    }
+    false
+}
+
+/// Unwrap `Result<T, E>` → `T`, leaving non-Result types unchanged.
+fn unwrap_result_type(ty: &syn::Type) -> &syn::Type {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident_str = segment.ident.to_string();
+            if ident_str == "Result" || ident_str == "ApiResult" || ident_str == "JsonResult" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return inner;
+                    }
+                }
+            }
+        }
+    }
+    ty
+}
+
+/// Extract the inner type from `Json<T>` → `T`.
+fn unwrap_json_type(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Json" {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return Some(inner);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if a type is a "no body" type (StatusCode, StatusResult, ()).
+fn is_no_body_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident_str = segment.ident.to_string();
+            return matches!(ident_str.as_str(), "StatusCode" | "StatusResult");
+        }
+    }
+    if let syn::Type::Tuple(tuple) = ty {
+        return tuple.elems.is_empty(); // ()
+    }
+    false
+}
+
+/// Convert a syn::Type to an OpenAPI-friendly name string.
+fn type_to_schema_name(ty: &syn::Type) -> String {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                let inner_names: Vec<String> = args
+                    .args
+                    .iter()
+                    .filter_map(|arg| {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            Some(type_to_schema_name(inner_ty))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !inner_names.is_empty() {
+                    return format!("{}_{}", ident, inner_names.join("_"));
+                }
+            }
+            return ident;
+        }
+    }
+    quote!(#ty).to_string().replace(' ', "")
+}
+
+/// Generate a schema token for a response type, using autoref specialization
+/// so that types not implementing `JsonSchema` gracefully return `None`.
+fn response_schema_token(ty: &syn::Type) -> TokenStream {
+    if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
+        quote! {
+            {
+                // Autoref specialization: if #ty implements JsonSchema, this
+                // resolves to the inherent method returning Some(schema).
+                // Otherwise, the trait fallback returns None.
+                struct __RespProbe<T>(::core::marker::PhantomData<T>);
+                trait __NoRespSchema {
+                    fn __resp_schema(&self) -> Option<serde_json::Value> { None }
+                }
+                impl<T> __NoRespSchema for &__RespProbe<T> {}
+                impl<T: #schemars::JsonSchema> __RespProbe<T> {
+                    fn __resp_schema(&self) -> Option<serde_json::Value> {
+                        Some(serde_json::to_value(#schemars::schema_for!(T)).unwrap())
+                    }
+                }
+                let __p = __RespProbe::<#ty>(::core::marker::PhantomData);
+                use __NoRespSchema as _;
+                (&__p).__resp_schema()
+            }
+        }
+    } else {
+        quote! { None }
+    }
+}
+
+/// Resolve the inner response type from the route method.
+/// Returns `Some(ty)` if a JSON response body type is detected, `None` otherwise.
+fn resolve_response_type(rm: &crate::types::RouteMethod) -> Option<syn::Type> {
+    // #[returns(T)] override takes priority
+    if let Some(ref returns_ty) = rm.decorators.returns_type {
+        return Some(returns_ty.clone());
+    }
+
+    // Analyze return type
+    let output = &rm.fn_item.sig.output;
+    let ret_ty = match output {
+        syn::ReturnType::Default => return None,
+        syn::ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+
+    // impl Trait → no detection
+    if matches!(ret_ty, syn::Type::ImplTrait(_)) {
+        return None;
+    }
+
+    // Unwrap Result/ApiResult/JsonResult
+    let unwrapped = unwrap_result_type(ret_ty);
+
+    // Check for no-body types
+    if is_no_body_type(unwrapped) {
+        return None;
+    }
+
+    // Check for String — no schema
+    if let syn::Type::Path(type_path) = unwrapped {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "String" {
+                return None;
+            }
+        }
+    }
+
+    // Try to unwrap Json<T>
+    unwrap_json_type(unwrapped).cloned()
+}
+
+/// Extract response type information from a route method.
+/// Returns (response_type_name_token, response_schema_token).
+fn extract_response_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream) {
+    match resolve_response_type(rm) {
+        Some(inner_ty) => {
+            let name = type_to_schema_name(&inner_ty);
+            let schema_token = response_schema_token(&inner_ty);
+            (quote! { Some(#name.to_string()) }, schema_token)
+        }
+        None => (quote! { None }, quote! { None }),
+    }
+}
+
 /// Extract request body type information.
 fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream) {
     let body_info: Option<(String, syn::Type)> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
@@ -429,11 +670,10 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
 
     match &body_info {
         Some((bname, inner_ty)) => {
-            let has_schemars = crate_name("schemars").is_ok();
-            let schema_token = if has_schemars {
+            let schema_token = if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
                 quote! {
                     Some({
-                        let __schema = schemars::schema_for!(#inner_ty);
+                        let __schema = #schemars::schema_for!(#inner_ty);
                         serde_json::to_value(__schema).unwrap()
                     })
                 }
@@ -478,6 +718,7 @@ fn generate_consumer_registrations(
     }
 
     let krate = r2e_core_path();
+    let events_krate = r2e_events_path();
     let consumer_registrations: Vec<_> = def
         .consumer_methods
         .iter()
@@ -491,7 +732,7 @@ fn generate_consumer_registrations(
                 {
                     let __event_bus = __state.#bus_field.clone();
                     let __state = __state.clone();
-                    __event_bus.subscribe(move |__event: std::sync::Arc<#event_type>| {
+                    #events_krate::EventBus::subscribe(&__event_bus, move |__event: std::sync::Arc<#event_type>| {
                         let __state = __state.clone();
                         async move {
                             let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
@@ -649,6 +890,10 @@ fn generate_sse_route_metadata(
             let roles: Vec<_> = sm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
+            let has_roles = !sm.decorators.roles.is_empty();
+            let has_guards = !sm.decorators.guard_fns.is_empty();
+            let has_identity_param = sm.identity_param.is_some();
+
             quote! {
                 #krate::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
@@ -658,12 +903,18 @@ fn generate_sse_route_metadata(
                     method: "GET".to_string(),
                     operation_id: #op_id.to_string(),
                     summary: Some("SSE stream".to_string()),
+                    description: None,
                     request_body_type: None,
                     request_body_schema: None,
+                    request_body_required: true,
                     response_type: None,
+                    response_schema: None,
+                    response_status: 200,
                     params: vec![],
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
+                    deprecated: false,
+                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
                 }
             }
         })
@@ -730,6 +981,10 @@ fn generate_ws_route_metadata(
             let roles: Vec<_> = wm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
+            let has_roles = !wm.decorators.roles.is_empty();
+            let has_guards = !wm.decorators.guard_fns.is_empty();
+            let has_identity_param = wm.identity_param.is_some();
+
             quote! {
                 #krate::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
@@ -739,12 +994,18 @@ fn generate_ws_route_metadata(
                     method: "GET".to_string(),
                     operation_id: #op_id.to_string(),
                     summary: Some("WebSocket endpoint".to_string()),
+                    description: None,
                     request_body_type: None,
                     request_body_schema: None,
+                    request_body_required: true,
                     response_type: None,
+                    response_schema: None,
+                    response_status: 200,
                     params: vec![],
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
+                    deprecated: false,
+                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
                 }
             }
         })

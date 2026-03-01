@@ -32,7 +32,7 @@ Given this controller:
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 ```
 
@@ -185,7 +185,7 @@ impl r2e::Controller<AppState> for UserController {
 ```rust
 #[bean]
 impl UserService {
-    fn new(event_bus: EventBus) -> Self { Self { event_bus } }
+    fn new(event_bus: LocalEventBus) -> Self { Self { event_bus } }
 }
 ```
 
@@ -193,14 +193,14 @@ Generates:
 
 ```rust
 impl r2e::beans::Bean for UserService {
-    type Deps = r2e::type_list::TCons<EventBus, r2e::type_list::TNil>;
+    type Deps = r2e::type_list::TCons<LocalEventBus, r2e::type_list::TNil>;
 
     fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
-        vec![(std::any::TypeId::of::<EventBus>(), std::any::type_name::<EventBus>())]
+        vec![(std::any::TypeId::of::<LocalEventBus>(), std::any::type_name::<LocalEventBus>())]
     }
 
     fn build(ctx: &r2e::beans::BeanContext) -> Self {
-        let __arg_0: EventBus = ctx.get::<EventBus>();
+        let __arg_0: LocalEventBus = ctx.get::<LocalEventBus>();
         UserService::new(__arg_0)
     }
 }

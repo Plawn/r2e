@@ -1,16 +1,16 @@
-# Serveur OIDC embarqué
+# Embedded OIDC Server
 
-`r2e-oidc` fournit un serveur OIDC intégré directement dans votre application. Il émet des tokens JWT sans nécessiter de fournisseur d'identité externe (Keycloak, Auth0, etc.). Idéal pour le développement, le prototypage, et les applications monolithiques.
+`r2e-oidc` provides an OIDC server embedded directly in your application. It issues JWT tokens without requiring an external identity provider (Keycloak, Auth0, etc.). Ideal for development, prototyping, and monolithic applications.
 
 ## Installation
 
-Activez la feature `oidc` :
+Enable the `oidc` feature:
 
 ```toml
 r2e = { version = "0.1", features = ["security", "oidc"] }
 ```
 
-## Démarrage rapide
+## Quick start
 
 ```rust
 use r2e::prelude::*;
@@ -34,35 +34,35 @@ let oidc = OidcServer::new()
     .with_user_store(users);
 
 AppBuilder::new()
-    .plugin(oidc)                              // pre-state : fournit Arc<JwtClaimsValidator>
+    .plugin(oidc)                              // pre-state: provides Arc<JwtClaimsValidator>
     .build_state::<Services, _, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
 
-C'est tout. `AuthenticatedUser` fonctionne immédiatement — pas besoin de configurer manuellement un `JwtClaimsValidator`.
+That's it. `AuthenticatedUser` works immediately — no need to manually configure a `JwtClaimsValidator`.
 
-## Comment ça marche
+## How it works
 
-`OidcServer` est un `PreStatePlugin`. Lors de l'installation :
+`OidcServer` is a `PreStatePlugin`. During installation it:
 
-1. **Génère une paire de clés RSA-2048** pour signer les tokens
-2. **Crée un `JwtClaimsValidator`** avec la clé publique et l'injecte dans le graphe de beans
-3. **Enregistre les endpoints OIDC** via une action différée (après la construction du state)
+1. **Generates an RSA-2048 key pair** for signing tokens
+2. **Creates a `JwtClaimsValidator`** with the public key and injects it into the bean graph
+3. **Registers OIDC endpoints** via a deferred action (after state construction)
 
-Les tokens émis sont validés localement — pas de requête réseau, pas de cache JWKS.
+Issued tokens are validated locally — no network requests, no JWKS cache.
 
-## Support du hot-reload (`OidcRuntime`)
+## Hot-reload support (`OidcRuntime`)
 
-Par défaut, `OidcServer` régénère les clés RSA et reconstruit l'état interne à chaque appel de `install()`. Avec le hot-reload (`r2e dev`), `main()` est ré-exécuté à chaque patch de code, ce qui invalide tous les tokens précédemment émis et perd les données in-memory (user store, client registry).
+By default, `OidcServer` regenerates RSA keys and rebuilds internal state on each call to `install()`. With hot-reload (`r2e dev`), `main()` is re-executed on each code patch, which invalidates all previously issued tokens and loses in-memory data (user store, client registry).
 
-`OidcServer::build()` sépare la construction coûteuse (une seule fois) de l'enregistrement des routes (à chaque patch). Il retourne un `OidcRuntime` — un handle `Clone`-able qui préserve les clés RSA, le user store et le client registry entre les cycles de hot-reload.
+`OidcServer::build()` separates the expensive construction (once) from route registration (on each patch). It returns an `OidcRuntime` — a `Clone`-able handle that preserves RSA keys, the user store, and the client registry across hot-reload cycles.
 
 ```rust
 use r2e::prelude::*;
 use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
 
-// setup() — appelé une seule fois, avant la boucle de hot-reload
+// setup() — called once, before the hot-reload loop
 let users = InMemoryUserStore::new()
     .add_user("alice", "password123", OidcUser {
         sub: "user-1".into(),
@@ -72,28 +72,28 @@ let users = InMemoryUserStore::new()
 
 let oidc = OidcServer::new()
     .with_user_store(users)
-    .build(); // retourne OidcRuntime
+    .build(); // returns OidcRuntime
 
-// main(env) — appelé à chaque hot-patch
+// main(env) — called on each hot-patch
 AppBuilder::new()
-    .plugin(oidc.clone()) // réutilise les mêmes clés et le même état
+    .plugin(oidc.clone()) // reuses the same keys and state
     .build_state::<Services, _, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
 
-**Compatibilité ascendante :** utiliser `OidcServer` directement comme plugin (sans `.build()`) fonctionne exactement comme avant. La seule différence est que les tokens ne survivront pas aux cycles de hot-reload.
+**Backward compatibility:** using `OidcServer` directly as a plugin (without `.build()`) works exactly as before. The only difference is that tokens won't survive hot-reload cycles.
 
-## Endpoints exposés
+## Exposed endpoints
 
-| Méthode | Chemin | Description |
-|---------|--------|-------------|
-| `POST` | `/oauth/token` | Émission de tokens (password / client_credentials) |
-| `GET` | `/.well-known/openid-configuration` | Document de découverte OpenID Connect |
-| `GET` | `/.well-known/jwks.json` | Clé publique au format JWKS |
-| `GET` | `/userinfo` | Informations utilisateur (nécessite Bearer token) |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/oauth/token` | Token issuance (password / client_credentials) |
+| `GET` | `/.well-known/openid-configuration` | OpenID Connect discovery document |
+| `GET` | `/.well-known/jwks.json` | Public key in JWKS format |
+| `GET` | `/userinfo` | User information (requires Bearer token) |
 
-### Obtenir un token (password grant)
+### Obtaining a token (password grant)
 
 ```bash
 curl -X POST http://localhost:3000/oauth/token \
@@ -102,7 +102,7 @@ curl -X POST http://localhost:3000/oauth/token \
   -d "password=password123"
 ```
 
-Réponse :
+Response:
 
 ```json
 {
@@ -112,21 +112,21 @@ Réponse :
 }
 ```
 
-### Utiliser le token
+### Using the token
 
 ```bash
 curl http://localhost:3000/users/me \
   -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
 ```
 
-### Consulter le userinfo
+### Querying userinfo
 
 ```bash
 curl http://localhost:3000/userinfo \
   -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
 ```
 
-Réponse :
+Response:
 
 ```json
 {
@@ -138,18 +138,18 @@ Réponse :
 
 ## Configuration
 
-Le builder offre plusieurs options de personnalisation :
+The builder offers several customization options:
 
 ```rust
 let oidc = OidcServer::new()
-    .issuer("https://myapp.example.com")   // claim `iss` (défaut : "http://localhost:3000")
-    .audience("my-app")                     // claim `aud` (défaut : "r2e-app")
-    .token_ttl(7200)                        // durée de vie en secondes (défaut : 3600)
-    .base_path("/auth")                     // préfixe des endpoints (défaut : "")
+    .issuer("https://myapp.example.com")   // `iss` claim (default: "http://localhost:3000")
+    .audience("my-app")                     // `aud` claim (default: "r2e-app")
+    .token_ttl(7200)                        // lifetime in seconds (default: 3600)
+    .base_path("/auth")                     // endpoint prefix (default: "")
     .with_user_store(users);
 ```
 
-Avec `base_path("/auth")`, les endpoints deviennent :
+With `base_path("/auth")`, the endpoints become:
 
 - `POST /auth/oauth/token`
 - `GET /auth/.well-known/openid-configuration`
@@ -160,7 +160,7 @@ Avec `base_path("/auth")`, les endpoints deviennent :
 
 ### InMemoryUserStore
 
-Le store en mémoire fourni par défaut, adapté au développement et aux tests :
+The default in-memory store, suitable for development and testing:
 
 ```rust
 let users = InMemoryUserStore::new()
@@ -174,24 +174,24 @@ let users = InMemoryUserStore::new()
     });
 ```
 
-Les mots de passe sont hashés avec **Argon2** — les mots de passe en clair ne sont jamais stockés.
+Passwords are hashed with **Argon2** — plaintext passwords are never stored.
 
 ### OidcUser
 
 ```rust
 pub struct OidcUser {
-    pub sub: String,                                    // identifiant unique
-    pub email: Option<String>,                          // adresse email
-    pub roles: Vec<String>,                             // rôles pour l'autorisation
-    pub extra_claims: HashMap<String, serde_json::Value>, // claims supplémentaires
+    pub sub: String,                                    // unique identifier
+    pub email: Option<String>,                          // email address
+    pub roles: Vec<String>,                             // roles for authorization
+    pub extra_claims: HashMap<String, serde_json::Value>, // additional claims
 }
 ```
 
-Les `extra_claims` sont fusionnés dans le JWT. Les claims réservés (`sub`, `iss`, `aud`, `iat`, `exp`, `roles`, `email`) sont ignorés pour éviter les conflits.
+`extra_claims` are merged into the JWT. Reserved claims (`sub`, `iss`, `aud`, `iat`, `exp`, `roles`, `email`) are ignored to avoid conflicts.
 
-### User store personnalisé
+### Custom user store
 
-Implémentez le trait `UserStore` pour utiliser votre propre backend (SQLx, Redis, LDAP, etc.) :
+Implement the `UserStore` trait to use your own backend (SQLx, Redis, LDAP, etc.):
 
 ```rust
 use r2e::r2e_oidc::{UserStore, OidcUser};
@@ -253,7 +253,7 @@ impl UserStore for SqlxUserStore {
 }
 ```
 
-Puis utilisez-le :
+Then use it:
 
 ```rust
 let store = SqlxUserStore { pool: pool.clone() };
@@ -262,7 +262,7 @@ let oidc = OidcServer::new().with_user_store(store);
 
 ## Client credentials grant
 
-Pour les communications service-to-service, configurez un `ClientRegistry` :
+For service-to-service communication, configure a `ClientRegistry`:
 
 ```rust
 use r2e::r2e_oidc::ClientRegistry;
@@ -276,9 +276,9 @@ let oidc = OidcServer::new()
     .with_client_registry(clients);
 ```
 
-Les secrets clients sont aussi hashés avec Argon2.
+Client secrets are also hashed with Argon2.
 
-### Obtenir un token client
+### Obtaining a client token
 
 ```bash
 curl -X POST http://localhost:3000/oauth/token \
@@ -287,28 +287,28 @@ curl -X POST http://localhost:3000/oauth/token \
   -d "client_secret=service-secret-key"
 ```
 
-Le token émis a le `client_id` comme `sub` et un tableau `roles` vide.
+The issued token has the `client_id` as `sub` and an empty `roles` array.
 
-## Claims JWT
+## JWT claims
 
-Les tokens émis contiennent les claims suivants :
+Issued tokens contain the following claims:
 
 | Claim | Source | Description |
 |-------|--------|-------------|
-| `sub` | `OidcUser.sub` / `client_id` | Identifiant unique du sujet |
-| `iss` | Configuration | Émetteur du token |
-| `aud` | Configuration | Audience cible |
-| `iat` | Automatique | Date d'émission (timestamp) |
-| `exp` | Configuration | Date d'expiration (timestamp) |
-| `roles` | `OidcUser.roles` | Rôles de l'utilisateur |
-| `email` | `OidcUser.email` | Email (si défini) |
-| *custom* | `OidcUser.extra_claims` | Claims additionnels |
+| `sub` | `OidcUser.sub` / `client_id` | Unique subject identifier |
+| `iss` | Configuration | Token issuer |
+| `aud` | Configuration | Target audience |
+| `iat` | Automatic | Issued-at timestamp |
+| `exp` | Configuration | Expiration timestamp |
+| `roles` | `OidcUser.roles` | User roles |
+| `email` | `OidcUser.email` | Email (if set) |
+| *custom* | `OidcUser.extra_claims` | Additional claims |
 
-L'algorithme de signature est **RS256** (RSA + SHA-256).
+The signing algorithm is **RS256** (RSA + SHA-256).
 
-## Gestion des erreurs
+## Error handling
 
-Les réponses d'erreur suivent la RFC 6749 (OAuth 2.0) :
+Error responses follow RFC 6749 (OAuth 2.0):
 
 ```json
 {
@@ -317,16 +317,16 @@ Les réponses d'erreur suivent la RFC 6749 (OAuth 2.0) :
 }
 ```
 
-| Code d'erreur | HTTP | Cause |
-|--------------|------|-------|
-| `invalid_request` | 400 | Paramètre manquant ou invalide |
-| `invalid_grant` | 400 | Identifiants invalides (password grant) |
-| `unsupported_grant_type` | 400 | Grant type non supporté |
-| `invalid_client` | 401 | Identifiants client invalides |
-| `unauthorized` | 401 | Token manquant ou invalide (userinfo) |
-| `server_error` | 500 | Erreur interne |
+| Error code | HTTP | Cause |
+|------------|------|-------|
+| `invalid_request` | 400 | Missing or invalid parameter |
+| `invalid_grant` | 400 | Invalid credentials (password grant) |
+| `unsupported_grant_type` | 400 | Unsupported grant type |
+| `invalid_client` | 401 | Invalid client credentials |
+| `unauthorized` | 401 | Missing or invalid token (userinfo) |
+| `server_error` | 500 | Internal error |
 
-## Exemple complet
+## Full example
 
 ```rust
 use r2e::prelude::*;
@@ -350,7 +350,7 @@ pub struct ApiController {
 impl ApiController {
     #[get("/public")]
     async fn public_data(&self) -> Json<&'static str> {
-        Json("accessible à tous")
+        Json("accessible to everyone")
     }
 
     #[get("/me")]
@@ -361,7 +361,7 @@ impl ApiController {
     #[get("/admin")]
     #[roles("admin")]
     async fn admin(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<&'static str> {
-        Json("données admin")
+        Json("admin data")
     }
 }
 
@@ -394,9 +394,9 @@ async fn main() {
 }
 ```
 
-## Tests
+## Testing
 
-`r2e-oidc` s'intègre naturellement avec `r2e-test`. Utilisez `OidcServer` dans vos tests d'intégration :
+`r2e-oidc` integrates naturally with `r2e-test`. Use `OidcServer` in your integration tests:
 
 ```rust
 use r2e_test::TestApp;
@@ -419,7 +419,7 @@ let app = AppBuilder::new()
 
 let client = TestApp::new(app);
 
-// 1. Obtenir un token
+// 1. Obtain a token
 let token_resp = client.post("/oauth/token")
     .form(&[
         ("grant_type", "password"),
@@ -431,24 +431,24 @@ assert_eq!(token_resp.status(), 200);
 let token: serde_json::Value = token_resp.json().await;
 let access_token = token["access_token"].as_str().unwrap();
 
-// 2. Utiliser le token
+// 2. Use the token
 let resp = client.get("/api/me")
     .header("Authorization", format!("Bearer {access_token}"))
     .await;
 assert_eq!(resp.status(), 200);
 ```
 
-> **Astuce :** Pour les tests simples ne nécessitant pas le flow OAuth complet, `TestJwt` (voir [TestJwt](../testing/test-jwt.md)) reste l'option la plus rapide pour générer des tokens de test.
+> **Tip:** For simple tests that don't need the full OAuth flow, `TestJwt` (see [TestJwt](../testing/test-jwt.md)) remains the fastest way to generate test tokens.
 
-## Quand utiliser r2e-oidc vs un provider externe
+## When to use r2e-oidc vs an external provider
 
-| Scénario | Recommandation |
+| Scenario | Recommendation |
 |----------|---------------|
-| Développement local | `r2e-oidc` — aucune infrastructure externe |
-| Tests d'intégration | `r2e-oidc` ou `TestJwt` |
-| Prototypage / MVP | `r2e-oidc` — déploiement simplifié |
-| Application monolithique sans SSO | `r2e-oidc` — gestion des utilisateurs intégrée |
-| Production avec SSO | Provider externe (Keycloak, Auth0, etc.) |
-| Multi-applications / fédération | Provider externe |
+| Local development | `r2e-oidc` — no external infrastructure needed |
+| Integration tests | `r2e-oidc` or `TestJwt` |
+| Prototyping / MVP | `r2e-oidc` — simplified deployment |
+| Monolithic app without SSO | `r2e-oidc` — built-in user management |
+| Production with SSO | External provider (Keycloak, Auth0, etc.) |
+| Multi-app / federation | External provider |
 
-La migration vers un provider externe est transparente : vos contrôleurs utilisent `AuthenticatedUser` dans les deux cas. Seule la configuration dans `main.rs` change.
+Migrating to an external provider is transparent: your controllers use `AuthenticatedUser` in both cases. Only the configuration in `main.rs` changes.

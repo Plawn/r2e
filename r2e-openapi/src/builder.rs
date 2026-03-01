@@ -1,32 +1,19 @@
 use r2e_core::meta::{ParamLocation, RouteInfo};
 use serde_json::{json, Map, Value};
 
-/// Recursively sanitize a JSON Schema value for OpenAPI 3.0.3 compatibility.
+/// Recursively rewrite `$ref` paths from schemars format to OpenAPI components format.
 ///
-/// OpenAPI UI tools (wti-element, Swagger UI, etc.) may not handle boolean schemas
-/// from JSON Schema Draft 7. This function:
-/// - Replaces `"additionalProperties": true` → removes the key (true is the default)
-/// - Replaces `"additionalProperties": false` → `"additionalProperties": {}`-equivalent (kept as false, most tools handle it)
-/// - Rewrites `$ref` paths from `#/definitions/X` to `#/components/schemas/X`
+/// schemars 1.x generates JSON Schema Draft 2020-12 using `$defs` and
+/// `$ref: "#/$defs/X"`. OpenAPI 3.1.0 expects schemas under `#/components/schemas/X`.
 fn sanitize_schema(value: &mut Value) {
     match value {
         Value::Object(obj) => {
-            // Rewrite $ref from schemars format to OpenAPI format
             if let Some(Value::String(ref_str)) = obj.get_mut("$ref") {
-                if ref_str.starts_with("#/definitions/") {
-                    *ref_str = ref_str.replace("#/definitions/", "#/components/schemas/");
+                if ref_str.starts_with("#/$defs/") {
+                    *ref_str = ref_str.replace("#/$defs/", "#/components/schemas/");
                 }
             }
 
-            // Replace boolean additionalProperties with schema objects
-            if let Some(ap) = obj.get("additionalProperties") {
-                if ap.as_bool() == Some(true) {
-                    obj.remove("additionalProperties");
-                }
-                // Note: `false` is kept as-is since most tools handle it correctly
-            }
-
-            // Recurse into all object values
             for (_, v) in obj.iter_mut() {
                 sanitize_schema(v);
             }
@@ -37,6 +24,31 @@ fn sanitize_schema(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Insert a schema into the schemas map, promoting `$defs` to top-level components.
+fn insert_schema(
+    schemas: &mut Map<String, Value>,
+    extra_definitions: &mut Vec<(String, Value)>,
+    type_name: &str,
+    root_schema: &Option<Value>,
+) {
+    if let Some(ref root) = root_schema {
+        let mut schema = root.clone();
+        if let Some(obj) = schema.as_object_mut() {
+            obj.remove("$schema");
+            // schemars 1.x uses "$defs" (Draft 2020-12)
+            if let Some(Value::Object(defs)) = obj.remove("$defs") {
+                for (def_name, def_schema) in defs {
+                    extra_definitions.push((def_name, def_schema));
+                }
+            }
+        }
+        sanitize_schema(&mut schema);
+        schemas.insert(type_name.to_string(), schema);
+    } else {
+        schemas.insert(type_name.to_string(), json!({ "type": "object" }));
     }
 }
 
@@ -69,7 +81,7 @@ impl OpenApiConfig {
     }
 }
 
-/// Build an OpenAPI 3.0 JSON spec from config and route metadata.
+/// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
 pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
     let mut paths: Map<String, Value> = Map::new();
 
@@ -111,12 +123,22 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
             operation.insert("parameters".into(), json!(params));
         }
 
+        // Description
+        if let Some(ref description) = route.description {
+            operation.insert("description".into(), json!(description));
+        }
+
+        // Deprecated
+        if route.deprecated {
+            operation.insert("deprecated".into(), json!(true));
+        }
+
         // Request body
         if let Some(ref body_type) = route.request_body_type {
             operation.insert(
                 "requestBody".into(),
                 json!({
-                    "required": true,
+                    "required": route.request_body_required,
                     "content": {
                         "application/json": {
                             "schema": { "$ref": format!("#/components/schemas/{body_type}") }
@@ -127,20 +149,40 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         }
 
         // Responses
-        operation.insert(
-            "responses".into(),
-            json!({
-                "200": {
-                    "description": "Successful response"
-                },
-                "401": {
-                    "description": "Unauthorized"
-                },
-                "403": {
-                    "description": "Forbidden"
-                }
-            }),
-        );
+        let status_key = route.response_status.to_string();
+        let status_desc = match route.response_status {
+            201 => "Created",
+            204 => "No content",
+            _ => "Successful response",
+        };
+        let mut responses: Map<String, Value> = Map::new();
+
+        if route.response_status == 204 {
+            // 204 No Content — no response body
+            responses.insert(status_key, json!({ "description": status_desc }));
+        } else if let Some(ref resp_type) = route.response_type {
+            responses.insert(
+                status_key,
+                json!({
+                    "description": status_desc,
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": format!("#/components/schemas/{resp_type}") }
+                        }
+                    }
+                }),
+            );
+        } else {
+            responses.insert(status_key, json!({ "description": status_desc }));
+        }
+
+        // Conditional 401/403 only when route has auth
+        if route.has_auth {
+            responses.insert("401".into(), json!({ "description": "Unauthorized" }));
+            responses.insert("403".into(), json!({ "description": "Forbidden" }));
+        }
+
+        operation.insert("responses".into(), Value::Object(responses));
 
         // Security
         if !route.roles.is_empty() {
@@ -166,44 +208,33 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         info.insert("description".into(), json!(desc));
     }
 
-    // Collect all referenced body types into components/schemas.
+    // Collect all referenced types (request body + response) into components/schemas.
     // If the route carries a schemars-generated schema, use it;
     // otherwise fall back to a generic object.
     //
-    // schemars generates JSON Schema Draft 7 which needs adaptation for OpenAPI 3.0.3:
-    // - `$schema` and `definitions` keys are stripped from the root
-    // - `definitions` entries are promoted to components/schemas
-    // - `$ref` paths are rewritten from `#/definitions/X` to `#/components/schemas/X`
-    // - boolean `additionalProperties` values are cleaned up
+    // schemars 1.x generates JSON Schema Draft 2020-12 (aligned with OpenAPI 3.1.0).
+    // We strip `$schema`, promote `$defs` entries to components/schemas,
+    // and rewrite `$ref` paths from `#/$defs/X` to `#/components/schemas/X`.
     let mut schemas: Map<String, Value> = Map::new();
     let mut extra_definitions: Vec<(String, Value)> = Vec::new();
 
     for route in routes {
+        // Collect request body schemas
         if let Some(ref body_type) = route.request_body_type {
-            if schemas.contains_key(body_type) {
-                continue;
+            if !schemas.contains_key(body_type) {
+                insert_schema(&mut schemas, &mut extra_definitions, body_type, &route.request_body_schema);
             }
-            if let Some(ref root_schema) = route.request_body_schema {
-                let mut schema = root_schema.clone();
-                if let Some(obj) = schema.as_object_mut() {
-                    obj.remove("$schema");
-                    // Extract schemars `definitions` and promote them to
-                    // components/schemas so that $ref links resolve correctly.
-                    if let Some(Value::Object(defs)) = obj.remove("definitions") {
-                        for (def_name, def_schema) in defs {
-                            extra_definitions.push((def_name, def_schema));
-                        }
-                    }
-                }
-                sanitize_schema(&mut schema);
-                schemas.insert(body_type.clone(), schema);
-            } else {
-                schemas.insert(body_type.clone(), json!({ "type": "object" }));
+        }
+
+        // Collect response schemas
+        if let Some(ref resp_type) = route.response_type {
+            if !schemas.contains_key(resp_type) {
+                insert_schema(&mut schemas, &mut extra_definitions, resp_type, &route.response_schema);
             }
         }
     }
 
-    // Merge promoted definitions from schemars into components/schemas.
+    // Merge promoted $defs from schemars into components/schemas.
     for (def_name, mut def_schema) in extra_definitions {
         sanitize_schema(&mut def_schema);
         schemas.entry(def_name).or_insert(def_schema);
@@ -225,7 +256,7 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
     }
 
     json!({
-        "openapi": "3.0.3",
+        "openapi": "3.1.0",
         "info": info,
         "paths": paths,
         "components": components

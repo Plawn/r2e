@@ -1,19 +1,23 @@
-use r2e_events::{EventBus, DEFAULT_MAX_CONCURRENCY};
+use r2e_events::{EventBus, LocalEventBus, DEFAULT_MAX_CONCURRENCY};
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Serialize, Deserialize)]
 struct TestEvent {
     value: usize,
 }
 
+#[derive(Serialize, Deserialize)]
 struct OtherEvent;
 
+#[derive(Serialize, Deserialize)]
 struct SlowEvent;
 
 #[tokio::test]
 async fn test_emit_and_subscribe() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -31,7 +35,7 @@ async fn test_emit_and_subscribe() {
 
 #[tokio::test]
 async fn test_multiple_subscribers() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     for _ in 0..3 {
@@ -51,7 +55,7 @@ async fn test_multiple_subscribers() {
 
 #[tokio::test]
 async fn test_no_cross_type_dispatch() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -70,7 +74,7 @@ async fn test_no_cross_type_dispatch() {
 #[tokio::test]
 async fn test_backpressure_limits_concurrency() {
     // Create a bus with max 3 concurrent handlers
-    let bus = EventBus::with_concurrency(3);
+    let bus = LocalEventBus::with_concurrency(3);
     let active = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
@@ -116,7 +120,7 @@ async fn test_backpressure_limits_concurrency() {
 
 #[tokio::test]
 async fn test_unbounded_mode() {
-    let bus = EventBus::unbounded();
+    let bus = LocalEventBus::unbounded();
     assert!(bus.concurrency_limit().is_none());
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -135,7 +139,7 @@ async fn test_unbounded_mode() {
 
 #[tokio::test]
 async fn test_with_concurrency_constructor() {
-    let bus = EventBus::with_concurrency(100);
+    let bus = LocalEventBus::with_concurrency(100);
     // The limit should be reported (though we can't check exact value easily)
     assert!(bus.concurrency_limit().is_some());
 
@@ -157,7 +161,7 @@ async fn test_with_concurrency_constructor() {
 
 #[tokio::test]
 async fn test_handler_panic_does_not_crash_emit() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
 
     bus.subscribe(move |_: Arc<TestEvent>| async move {
         panic!("boom");
@@ -185,7 +189,7 @@ async fn test_handler_panic_does_not_crash_emit() {
 
 #[tokio::test]
 async fn test_handler_panic_does_not_crash_emit_and_wait() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
 
     bus.subscribe(move |_: Arc<TestEvent>| async move {
         panic!("boom in emit_and_wait");
@@ -212,7 +216,7 @@ async fn test_handler_panic_does_not_crash_emit_and_wait() {
 
 #[tokio::test]
 async fn test_panic_releases_permit() {
-    let bus = EventBus::with_concurrency(1);
+    let bus = LocalEventBus::with_concurrency(1);
 
     // First handler panics, which should release the single permit
     bus.subscribe(move |_: Arc<TestEvent>| async move {
@@ -240,7 +244,7 @@ async fn test_panic_releases_permit() {
 
 #[tokio::test]
 async fn test_multiple_handlers_one_panics_others_run() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -272,7 +276,7 @@ async fn test_multiple_handlers_one_panics_others_run() {
 
 #[tokio::test]
 async fn test_err_result_in_handler() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -294,7 +298,7 @@ async fn test_err_result_in_handler() {
 
 #[tokio::test]
 async fn test_late_subscriber_misses_event() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     bus.emit_and_wait(TestEvent { value: 1 }).await;
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -313,7 +317,7 @@ async fn test_late_subscriber_misses_event() {
 
 #[tokio::test]
 async fn test_concurrent_subscribes() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let mut handles = Vec::new();
@@ -340,7 +344,7 @@ async fn test_concurrent_subscribes() {
 
 #[tokio::test]
 async fn test_subscribe_during_emit() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
 
     // Slow handler that holds processing for a while
     bus.subscribe(move |_: Arc<SlowEvent>| async move {
@@ -368,7 +372,7 @@ async fn test_subscribe_during_emit() {
 
 #[tokio::test]
 async fn test_subscribe_same_event_type_multiple() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     for _ in 0..5 {
@@ -390,22 +394,22 @@ async fn test_subscribe_same_event_type_multiple() {
 
 #[tokio::test]
 async fn test_emit_no_subscribers() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     // Should not panic when emitting with no subscribers
     bus.emit(TestEvent { value: 1 }).await;
 }
 
 #[tokio::test]
 async fn test_emit_and_wait_no_subscribers() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     // Should return instantly with no subscribers, no panic
     bus.emit_and_wait(TestEvent { value: 1 }).await;
 }
 
 #[tokio::test]
 async fn test_default_eventbus() {
-    let default_bus = EventBus::default();
-    let new_bus = EventBus::new();
+    let default_bus = LocalEventBus::default();
+    let new_bus = LocalEventBus::new();
     assert_eq!(
         default_bus.concurrency_limit(),
         new_bus.concurrency_limit(),
@@ -415,19 +419,19 @@ async fn test_default_eventbus() {
 
 #[tokio::test]
 async fn test_concurrency_limit_bounded() {
-    let bus = EventBus::with_concurrency(5);
+    let bus = LocalEventBus::with_concurrency(5);
     assert_eq!(bus.concurrency_limit(), Some(5));
 }
 
 #[tokio::test]
 async fn test_concurrency_limit_unbounded() {
-    let bus = EventBus::unbounded();
+    let bus = LocalEventBus::unbounded();
     assert_eq!(bus.concurrency_limit(), None);
 }
 
 #[tokio::test]
 async fn test_clone_shares_state() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -449,7 +453,7 @@ async fn test_clone_shares_state() {
 
 #[tokio::test]
 async fn test_drop_bus_with_active_handlers() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let f = flag.clone();
@@ -475,7 +479,7 @@ async fn test_drop_bus_with_active_handlers() {
 
 #[tokio::test]
 async fn test_handler_with_long_sleep() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let f = flag.clone();
@@ -499,7 +503,7 @@ async fn test_handler_with_long_sleep() {
 
 #[tokio::test]
 async fn test_emit_and_wait_waits_for_slow() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let f = flag.clone();
@@ -519,7 +523,7 @@ async fn test_emit_and_wait_waits_for_slow() {
 
 #[tokio::test]
 async fn test_handler_spawns_nested_emit() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     // Handler for TestEvent emits an OtherEvent
@@ -550,7 +554,7 @@ async fn test_handler_spawns_nested_emit() {
 
 #[tokio::test]
 async fn test_handler_shared_state_mutation() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let data = Arc::new(tokio::sync::Mutex::new(Vec::<i32>::new()));
 
     for i in 1..=3 {
@@ -575,7 +579,7 @@ async fn test_handler_shared_state_mutation() {
 
 #[tokio::test]
 async fn test_stress_many_events() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -595,7 +599,7 @@ async fn test_stress_many_events() {
 
 #[tokio::test]
 async fn test_stress_many_subscribers() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     for _ in 0..50 {
@@ -615,7 +619,7 @@ async fn test_stress_many_subscribers() {
 
 #[tokio::test]
 async fn test_stress_concurrent_emit() {
-    let bus = EventBus::new();
+    let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
@@ -645,7 +649,7 @@ async fn test_stress_concurrent_emit() {
 
 #[tokio::test]
 async fn test_backpressure_high_load() {
-    let bus = EventBus::with_concurrency(2);
+    let bus = LocalEventBus::with_concurrency(2);
     let active = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
@@ -680,4 +684,14 @@ async fn test_backpressure_high_load() {
         max_seen.load(Ordering::SeqCst)
     );
     assert_eq!(completed.load(Ordering::SeqCst), 20);
+}
+
+// --- Phase 6: EventBus trait compliance ---
+
+#[tokio::test]
+async fn test_local_event_bus_implements_trait() {
+    // Verify LocalEventBus can be used where EventBus trait is expected
+    fn assert_event_bus<T: EventBus>(_bus: &T) {}
+    let bus = LocalEventBus::new();
+    assert_event_bus(&bus);
 }

@@ -4,6 +4,7 @@ pub mod config;
 pub mod controller;
 pub mod dev;
 pub mod error;
+pub mod event_subscriber;
 pub mod guards;
 pub mod health;
 pub mod http;
@@ -32,9 +33,10 @@ pub mod ws;
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, Producer};
 pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
 pub use config::{
-    ConfigError, ConfigProperties, ConfigValidationError, ConfigValue, DefaultSecretResolver,
-    FromConfigValue, MissingKeyError, PropertyMeta, R2eConfig, RegisteredSection, SecretResolver,
-    register_section, registered_sections, validate_keys, validate_section,
+    ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
+    DefaultSecretResolver, FromConfigValue, MissingKeyError, PropertyMeta, R2eConfig,
+    RegisteredSection, SecretResolver, register_section, registered_sections, validate_keys,
+    validate_section,
 };
 pub use controller::{Controller, StatefulConstruct};
 pub use error::HttpError;
@@ -47,6 +49,7 @@ pub use plugin::{
     DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin,
     DeferredPluginInstaller, Plugin, PluginInstallContext, PreStatePlugin, RawPreStatePlugin,
 };
+pub use event_subscriber::EventSubscriber;
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
 pub use meta::MetaRegistry;
 pub use plugins::AdvancedHealth;
@@ -55,6 +58,10 @@ pub use secure_headers::SecureHeaders;
 pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{AllSatisfied, BuildableFrom, Contains, Here, TAppend, TCons, TNil, There};
+
+// Dev-reload helpers
+#[cfg(feature = "dev-reload")]
+pub use dev::invalidate_state_cache;
 
 // Entry-point macros
 pub use r2e_macros::main;

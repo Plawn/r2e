@@ -10,7 +10,7 @@ pub struct ChatController {
     #[inject]
     ws_rooms: WsRooms,
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[routes]

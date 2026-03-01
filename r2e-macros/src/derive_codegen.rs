@@ -110,6 +110,8 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         }
     };
 
+    let has_struct_identity = !def.identity_fields.is_empty();
+
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -117,6 +119,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             use super::*;
             pub type State = #state_type;
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
+            pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
             #guard_identity_fn
             #validate_fn

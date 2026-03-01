@@ -36,13 +36,21 @@ Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`,
 
 ## Events (r2e-events)
 
-`EventBus` — in-process typed pub/sub. Events are dispatched by `TypeId`. Subscribers receive `Arc<E>`.
+`EventBus` — pluggable event bus **trait**. `LocalEventBus` — default in-process implementation. Events are dispatched by `TypeId`. Subscribers receive `Arc<E>`.
 
-- `bus.subscribe(|event: Arc<MyEvent>| async { ... })` — register a handler.
-- `bus.emit(event)` — fire-and-forget (spawns handlers as concurrent tasks).
+- `bus.subscribe(|event: Arc<MyEvent>| async { ... })` — register a handler. Requires `E: DeserializeOwned`.
+- `bus.emit(event)` — fire-and-forget (spawns handlers as concurrent tasks). Requires `E: Serialize`.
 - `bus.emit_and_wait(event)` — waits for all handlers to complete.
 
-**Declarative consumers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. The controller must not have `#[inject(identity)]` struct fields (requires `StatefulConstruct`). Consumers are registered automatically by `AppBuilder::register_controller`.
+Event types must derive `Serialize + Deserialize` (required by the trait for backend compatibility; `LocalEventBus` never actually serializes — zero overhead).
+
+Custom backends (Kafka, Redis, NATS) can implement the `EventBus` trait.
+
+**Declarative consumers on controllers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. The controller must not have `#[inject(identity)]` struct fields (requires `StatefulConstruct`). Consumers are registered automatically by `AppBuilder::register_controller`.
+
+**Declarative consumers on beans** via `#[consumer(bus = "field_name")]` in a `#[bean]` impl block. The `#[bean]` macro generates an `EventSubscriber` impl. Register via `AppBuilder::register_subscriber::<T>()`.
+
+**Multiple buses** — both controllers and beans can use multiple bus fields of different types. Each `#[consumer(bus = "field")]` references a specific field.
 
 ## Scheduling (r2e-scheduler)
 
@@ -88,11 +96,20 @@ Controllers with `#[inject(identity)]` struct fields cannot be used for scheduli
 
 ## OpenAPI (r2e-openapi)
 
+- Generates **OpenAPI 3.1.0** specs. Uses **schemars 1.x** (JSON Schema Draft 2020-12) for schema generation.
 - `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page.
-- `AppBuilderOpenApiExt::with_openapi(config)` — registers OpenAPI routes.
+- `OpenApiPlugin` — registers OpenAPI routes. Use `.with(OpenApiPlugin::new(config))` on the builder.
 - `SchemaRegistry` / `SchemaProvider` — JSON Schema collection for request/response types.
-- Route metadata is collected from `Controller::route_metadata()` during `register_controller`.
+- Route metadata is collected from `Controller::route_metadata()` via `RouteInfo` (in `r2e-core/src/meta.rs`).
 - Always serves the spec at `/openapi.json`. When `docs_ui` is enabled, also serves an interactive API documentation UI at `/docs`.
+- **Users must add `schemars = "1"` to their Cargo.toml** and derive `JsonSchema` on request/response types. This is required because `schemars_derive` generates code referencing `schemars::` by crate name (same pattern as serde).
+- Request body schemas: auto-detected from `Json<T>` params. `Option<Json<T>>` → `required: false`.
+- Response schemas: auto-detected from return types (`Json<T>`, `JsonResult<T>`, `Result<Json<T>, _>`). Uses autoref specialization to gracefully skip types missing `JsonSchema`.
+- Status codes: smart defaults (GET→200, POST→201, DELETE→204). Override with `#[status(N)]`.
+- `#[returns(T)]` — explicit response type for opaque returns (`impl IntoResponse`).
+- `#[deprecated]` — standard Rust attribute, reflected in spec.
+- Doc comments: first `///` line → `summary`, remaining → `description`.
+- 401/403 responses: only emitted when route has auth (`#[roles]`, `#[inject(identity)]`, guards).
 
 ## StatefulConstruct (r2e-core)
 
@@ -127,6 +144,7 @@ AppBuilder::new()
     .register_controller::<UserController>()
     .register_controller::<AccountController>()
     .register_controller::<ScheduledJobs>() // auto-discovers #[scheduled] methods
+    .register_subscriber::<NotificationService>() // bean event subscribers
     .build()                               // → axum::Router
     // or .serve("0.0.0.0:3000").await     // build + listen + graceful shutdown
 ```

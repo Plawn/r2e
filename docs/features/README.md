@@ -27,7 +27,7 @@ r2e-macros       Proc-macro. #[derive(Controller)] + #[routes] generent le code 
 r2e-core         Runtime. AppBuilder, Controller, HttpError, config, validation, cache, rate limiter.
 r2e-security     JWT/JWKS, AuthenticatedUser, #[roles].
 r2e-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.
-r2e-events       EventBus in-process (pub/sub type).
+r2e-events       EventBus trait + LocalEventBus (pub/sub type).
 r2e-scheduler    Taches planifiees (intervalle, cron) avec CancellationToken.
 r2e-openapi      Generation de spec OpenAPI 3.0.3 + Swagger UI.
 r2e-test         TestApp (client HTTP in-process) + TestJwt.

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 mod common {
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use r2e::r2e_events::EventBus;
+    use r2e::r2e_events::{EventBus, LocalEventBus};
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct User {
@@ -30,7 +30,7 @@ mod common {
         pub email: String,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     pub struct UserCreatedEvent {
         pub user_id: u64,
         pub name: String,
@@ -40,11 +40,11 @@ mod common {
     #[derive(Clone)]
     pub struct UserService {
         users: Arc<RwLock<Vec<User>>>,
-        event_bus: EventBus,
+        event_bus: LocalEventBus,
     }
 
     impl UserService {
-        pub fn new(event_bus: EventBus) -> Self {
+        pub fn new(event_bus: LocalEventBus) -> Self {
             let users = vec![
                 User { id: 1, name: "Alice".into(), email: "alice@example.com".into() },
                 User { id: 2, name: "Bob".into(), email: "bob@example.com".into() },
@@ -88,14 +88,14 @@ mod common {
 }
 
 use common::*;
-use r2e::r2e_events::EventBus;
+use r2e::r2e_events::LocalEventBus;
 
 #[derive(Clone)]
 struct TestServices {
     user_service: UserService,
     jwt_validator: Arc<JwtClaimsValidator>,
     pool: sqlx::SqlitePool,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     config: R2eConfig,
     #[allow(dead_code)]
     cancel: CancellationToken,
@@ -120,7 +120,7 @@ impl r2e::http::extract::FromRef<TestServices> for R2eConfig {
     }
 }
 
-impl r2e::http::extract::FromRef<TestServices> for EventBus {
+impl r2e::http::extract::FromRef<TestServices> for LocalEventBus {
     fn from_ref(state: &TestServices) -> Self {
         state.event_bus.clone()
     }
@@ -328,7 +328,7 @@ impl TestUserController {
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
 
     let mut config = R2eConfig::empty();
     config.set(
@@ -589,7 +589,7 @@ async fn test_openapi_json_endpoint() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await.assert_ok();
     let spec: serde_json::Value = resp.json();
-    assert_eq!(spec["openapi"], "3.0.3");
+    assert_eq!(spec["openapi"], "3.1.0");
     assert_eq!(spec["info"]["title"], "Test API");
     assert!(spec["paths"].is_object());
 }

@@ -34,7 +34,7 @@ pub use r2e_macros::routes;
 pub use r2e_macros::{delete, get, patch, post, put};
 
 // Route-level attributes
-pub use r2e_macros::{guard, intercept, layer, managed, middleware, pre_guard, roles, transactional};
+pub use r2e_macros::{guard, intercept, layer, managed, middleware, pre_guard, returns, roles, status, transactional};
 
 // SSE & WebSocket attributes
 pub use r2e_macros::{sse, ws};
@@ -66,7 +66,7 @@ pub use r2e_macros::ApiError;
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
 pub use crate::builder::{AppBuilder, PreparedApp};
-pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, FromConfigValue};
+pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::HttpError;
 pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext};
@@ -77,6 +77,7 @@ pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, Normal
 pub use crate::request_id::{RequestId, RequestIdPlugin};
 pub use crate::secure_headers::SecureHeaders;
 pub use crate::controller::StatefulConstruct;
+pub use crate::event_subscriber::EventSubscriber;
 
 // ── Type aliases ──────────────────────────────────────────────────────────
 
@@ -123,3 +124,6 @@ pub use crate::http::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 
 #[cfg(feature = "ws")]
 pub use crate::ws::{WsStream, WsHandler, WsBroadcaster, WsBroadcastReceiver, WsRooms, WsError};
+
+#[cfg(feature = "dev-reload")]
+pub use crate::dev::invalidate_state_cache;

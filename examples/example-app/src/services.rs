@@ -11,12 +11,12 @@ use crate::models::{User, UserCreatedEvent};
 #[derive(Clone)]
 pub struct UserService {
     users: Arc<RwLock<Vec<User>>>,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[bean]
 impl UserService {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: LocalEventBus) -> Self {
         let users = vec![
             User { id: 1, name: "Alice".into(), email: "alice@example.com".into() },
             User { id: 2, name: "Bob".into(), email: "bob@example.com".into() },

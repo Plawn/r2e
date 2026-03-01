@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
 
     let app = TestApp::from_builder(
         AppBuilder::new()
@@ -134,7 +134,7 @@ async fn test_rate_limiting() {
 ```rust
 #[tokio::test]
 async fn test_event_emission() {
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
     let received = Arc::new(AtomicBool::new(false));
     let received_clone = received.clone();
 

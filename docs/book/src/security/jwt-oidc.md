@@ -175,6 +175,6 @@ security:
     jwks-url: "https://auth.example.com/.well-known/jwks.json"
 ```
 
-## Serveur OIDC embarqué
+## Embedded OIDC server
 
-Pour émettre des tokens JWT directement depuis votre application — sans provider externe — consultez le [Serveur OIDC embarqué](./embedded-oidc.md).
+To issue JWT tokens directly from your application — without an external provider — see the [Embedded OIDC Server](./embedded-oidc.md).

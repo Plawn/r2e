@@ -7,7 +7,7 @@ use crate::services::ChatService;
 pub struct AppState {
     pub chat_service: ChatService,
     pub ws_rooms: WsRooms,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub pool: sqlx::SqlitePool,
     pub config: R2eConfig,
 }

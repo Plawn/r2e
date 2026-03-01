@@ -66,6 +66,11 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Add the dependency as a simple version string
     deps.insert(crate_name, toml_edit::value(format!("0.1")));
 
+    // Add companion dependencies for extensions that require them
+    if extension == "openapi" && !deps.contains_key("schemars") {
+        deps.insert("schemars", toml_edit::value("1"));
+    }
+
     std::fs::write(cargo_path, doc.to_string())?;
 
     println!(
@@ -73,6 +78,13 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
         "✓".green(),
         crate_name.cyan()
     );
+    if extension == "openapi" {
+        println!(
+            "{} Also added {} (required for #[derive(JsonSchema)])",
+            "✓".green(),
+            "schemars".cyan()
+        );
+    }
     println!("  Run `cargo build` to fetch the new dependency.");
 
     Ok(())

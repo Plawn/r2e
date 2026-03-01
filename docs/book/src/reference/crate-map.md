@@ -9,7 +9,7 @@ r2e              Facade crate — re-exports everything, feature-gated
 r2e-core         Runtime: AppBuilder, Controller, guards, interceptors, config, plugins
 r2e-macros       Proc macros: #[derive(Controller)], #[routes], #[bean], #[producer]
 r2e-security     JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
-r2e-events       In-process typed EventBus with pub/sub
+r2e-events       EventBus trait + LocalEventBus (in-process typed pub/sub)
 r2e-scheduler    Background task scheduling (interval, cron)
 r2e-data         Database: Entity, Repository, QueryBuilder, Pageable/Page
 r2e-data-sqlx    SQLx backend: SqlxRepository, Tx, HasPool, migrations

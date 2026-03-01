@@ -66,7 +66,8 @@ This generates and opens documentation for all R2E crates.
 
 | Type | Description |
 |------|-------------|
-| `EventBus` | Typed in-process pub/sub |
+| `EventBus` | Pluggable event bus trait |
+| `LocalEventBus` | Default in-process pub/sub implementation |
 
 ### r2e-scheduler
 

@@ -77,7 +77,7 @@ async fn main() {
 }
 ```
 
-With `--full`, additional plugins are added automatically: `Scheduler`, `GrpcServer`, `OpenApiPlugin`, and the state includes `SqlitePool`, `EventBus`, and `JwtClaimsValidator`.
+With `--full`, additional plugins are added automatically: `Scheduler`, `GrpcServer`, `OpenApiPlugin`, and the state includes `SqlitePool`, `LocalEventBus`, and `JwtClaimsValidator`.
 
 ### Generated `application.yaml`
 

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e::prelude::*;
-use r2e::r2e_events::EventBus;
+use r2e::r2e_events::LocalEventBus;
 // Import the Controller trait explicitly (prelude exports the derive macro with the same name)
 use r2e::Controller as ControllerTrait;
 
 // ─── Test event type ───
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct TestConsumerEvent {
     pub message: String,
 }
@@ -18,12 +18,12 @@ struct TestConsumerEvent {
 
 #[derive(Clone)]
 struct ConsumerTestState {
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub counter: Arc<AtomicUsize>,
     pub received: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
-impl r2e::http::extract::FromRef<ConsumerTestState> for EventBus {
+impl r2e::http::extract::FromRef<ConsumerTestState> for LocalEventBus {
     fn from_ref(state: &ConsumerTestState) -> Self {
         state.event_bus.clone()
     }
@@ -43,7 +43,7 @@ impl r2e::http::extract::FromRef<ConsumerTestState> for Arc<tokio::sync::Mutex<O
 
 fn make_state() -> ConsumerTestState {
     ConsumerTestState {
-        event_bus: EventBus::new(),
+        event_bus: LocalEventBus::new(),
         counter: Arc::new(AtomicUsize::new(0)),
         received: Arc::new(tokio::sync::Mutex::new(None)),
     }
@@ -55,7 +55,7 @@ fn make_state() -> ConsumerTestState {
 #[controller(state = ConsumerTestState)]
 pub struct CountingConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     #[inject]
     counter: Arc<AtomicUsize>,
 }
@@ -72,7 +72,7 @@ impl CountingConsumer {
 #[controller(state = ConsumerTestState)]
 pub struct DataCapturingConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     #[inject]
     received: Arc<tokio::sync::Mutex<Option<String>>>,
 }
@@ -89,7 +89,7 @@ impl DataCapturingConsumer {
 #[controller(state = ConsumerTestState)]
 pub struct SecondCountingConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     #[inject]
     counter: Arc<AtomicUsize>,
 }

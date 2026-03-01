@@ -24,9 +24,13 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 #[cfg(feature = "dev-reload")]
+use std::any::Any;
+#[cfg(feature = "dev-reload")]
 use std::collections::HashMap;
 #[cfg(feature = "dev-reload")]
 use std::sync::Mutex;
+#[cfg(feature = "dev-reload")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "dev-reload")]
 static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
@@ -81,6 +85,71 @@ pub(crate) fn get_or_bind_listener(
         Ok(tokio::net::TcpListener::from_std(cloned)?)
     }
 }
+
+// ── State cache for dev-reload ──────────────────────────────────────────────
+
+#[cfg(feature = "dev-reload")]
+static STATE_CACHE: OnceLock<Mutex<Option<Box<dyn Any + Send + Sync>>>> = OnceLock::new();
+
+#[cfg(feature = "dev-reload")]
+static LIFECYCLE_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Retrieve a previously cached application state, if any.
+///
+/// Returns `Some(T)` on subsequent dev-reload cycles (hot-patches) so beans
+/// are not re-resolved. Returns `None` on the very first run.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn get_cached_state<T: Clone + Send + Sync + 'static>() -> Option<T> {
+    let store = STATE_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    guard
+        .as_ref()
+        .and_then(|boxed| boxed.downcast_ref::<T>())
+        .cloned()
+}
+
+/// Cache the application state for future dev-reload cycles.
+///
+/// Only stores the state on the first call; subsequent calls are no-ops
+/// (the cached state is reused until [`invalidate_state_cache`] is called).
+#[cfg(feature = "dev-reload")]
+pub(crate) fn cache_state<T: Clone + Send + Sync + 'static>(state: &T) {
+    let store = STATE_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().expect("state cache poisoned");
+    if guard.is_none() {
+        *guard = Some(Box::new(state.clone()));
+    }
+}
+
+/// Returns `true` if lifecycle hooks (consumers, serve hooks, startup hooks)
+/// have already been executed in a previous dev-reload cycle.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn is_lifecycle_initialized() -> bool {
+    LIFECYCLE_INITIALIZED.load(Ordering::Acquire)
+}
+
+/// Mark lifecycle hooks as having been executed.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn mark_lifecycle_initialized() {
+    LIFECYCLE_INITIALIZED.store(true, Ordering::Release);
+}
+
+/// Force the next dev-reload cycle to rebuild the application state from
+/// scratch (re-resolve all beans).
+///
+/// Call this when you've changed a bean's constructor or initial state and
+/// need the change to take effect without a full process restart.
+#[cfg(feature = "dev-reload")]
+pub fn invalidate_state_cache() {
+    if let Some(store) = STATE_CACHE.get() {
+        if let Ok(mut guard) = store.lock() {
+            *guard = None;
+        }
+    }
+    LIFECYCLE_INITIALIZED.store(false, Ordering::Release);
+}
+
+// ── Boot time ───────────────────────────────────────────────────────────────
 
 static BOOT_TIME: OnceLock<u64> = OnceLock::new();
 

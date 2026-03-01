@@ -15,7 +15,7 @@ use state::AppState;
 #[r2e::main]
 async fn main() {
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
     let ws_rooms = WsRooms::new(128);
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();

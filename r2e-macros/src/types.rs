@@ -51,6 +51,9 @@ pub struct MethodDecorators {
     pub pre_auth_guard_fns: Vec<syn::Expr>,
     pub middleware_fns: Vec<syn::Path>,
     pub layer_exprs: Vec<syn::Expr>,
+    pub status_override: Option<u16>,
+    pub returns_type: Option<syn::Type>,
+    pub deprecated: bool,
 }
 
 pub struct IdentityParam {

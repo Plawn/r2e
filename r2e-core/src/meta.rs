@@ -73,12 +73,18 @@ pub struct RouteInfo {
     pub method: String,
     pub operation_id: String,
     pub summary: Option<String>,
+    pub description: Option<String>,
     pub request_body_type: Option<String>,
     pub request_body_schema: Option<Value>,
+    pub request_body_required: bool,
     pub response_type: Option<String>,
+    pub response_schema: Option<Value>,
+    pub response_status: u16,
     pub params: Vec<ParamInfo>,
     pub roles: Vec<String>,
     pub tag: Option<String>,
+    pub deprecated: bool,
+    pub has_auth: bool,
 }
 
 /// Metadata about a route parameter.

@@ -6,9 +6,11 @@ Fournir un bus d'evenements in-process avec pub/sub type. Permet de decoupler le
 
 ## Concepts cles
 
-### EventBus
+### EventBus (trait) et LocalEventBus
 
-Le bus d'evenements central. Il est `Clone` et peut etre partage entre threads. Le dispatch est base sur le `TypeId` — chaque type d'evenement a ses propres abonnes.
+`EventBus` est un trait definissant l'interface d'un bus d'evenements. `LocalEventBus` est l'implementation par defaut (in-process). Il est `Clone` et peut etre partage entre threads. Le dispatch est base sur le `TypeId` — chaque type d'evenement a ses propres abonnes.
+
+On peut implementer le trait `EventBus` pour des backends custom (Kafka, Redis, NATS, etc.).
 
 ### Typage fort
 
@@ -26,7 +28,7 @@ r2e-events = { path = "../r2e-events" }
 ### 2. Definir un type d'evenement
 
 ```rust
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserCreatedEvent {
     pub user_id: u64,
     pub name: String,
@@ -34,15 +36,15 @@ pub struct UserCreatedEvent {
 }
 ```
 
-Le type doit etre `Send + Sync + 'static`. Pas besoin d'implementer de trait special.
+Le type doit etre `Send + Sync + Serialize + DeserializeOwned + 'static`. Les bounds serde sont requis par le trait `EventBus` (pour la compatibilite avec les backends distants), mais `LocalEventBus` ne serialise jamais — zero overhead.
 
 ### 3. Creer le bus et s'abonner
 
 ```rust
 use std::sync::Arc;
-use r2e_events::EventBus;
+use r2e_events::{EventBus, LocalEventBus};
 
-let event_bus = EventBus::new();
+let event_bus = LocalEventBus::new();
 
 // S'abonner a un type d'evenement
 event_bus
@@ -107,17 +109,17 @@ event_bus.emit_and_wait(UserCreatedEvent {
 
 ### 5. Integration dans un service
 
-Typiquement, le `EventBus` est injecte dans les services :
+Typiquement, le `LocalEventBus` est injecte dans les services :
 
 ```rust
 #[derive(Clone)]
 pub struct UserService {
     users: Arc<RwLock<Vec<User>>>,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 impl UserService {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: LocalEventBus) -> Self {
         Self {
             users: Arc::new(RwLock::new(vec![/* ... */])),
             event_bus,
@@ -153,11 +155,11 @@ impl UserService {
 #[derive(Clone)]
 pub struct Services {
     pub user_service: UserService,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     // ...
 }
 
-impl axum::extract::FromRef<Services> for EventBus {
+impl axum::extract::FromRef<Services> for LocalEventBus {
     fn from_ref(state: &Services) -> Self {
         state.event_bus.clone()
     }

@@ -6,6 +6,7 @@ pub mod validation;
 pub mod value;
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::Path;
 
 pub use secrets::{DefaultSecretResolver, SecretResolver};
@@ -13,6 +14,13 @@ pub use registry::{register_section, registered_sections, RegisteredSection};
 pub use typed::{ConfigProperties, PropertyMeta};
 pub use validation::{validate_keys, validate_section, ConfigValidationError, MissingKeyError};
 pub use value::{ConfigValue, FromConfigValue};
+
+/// A single validation error detail from typed config validation (e.g., garde).
+#[derive(Debug, Clone)]
+pub struct ConfigValidationDetail {
+    pub key: String,
+    pub message: String,
+}
 
 /// Error type for configuration operations.
 #[derive(Debug)]
@@ -23,6 +31,8 @@ pub enum ConfigError {
     TypeMismatch { key: String, expected: &'static str },
     /// An I/O or YAML parsing error occurred while loading config files.
     Load(String),
+    /// Validation errors from typed config (e.g., garde constraints).
+    Validation(Vec<ConfigValidationDetail>),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -33,6 +43,13 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "Config type mismatch for '{key}': expected {expected}")
             }
             ConfigError::Load(msg) => write!(f, "Config load error: {msg}"),
+            ConfigError::Validation(details) => {
+                write!(f, "Config validation errors:")?;
+                for detail in details {
+                    write!(f, "\n  - {}: {}", detail.key, detail.message)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -40,6 +57,9 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Application configuration loaded from YAML files, `.env` files, and environment variables.
+///
+/// `R2eConfig` (= `R2eConfig<()>`) provides raw key-value access only.
+/// `R2eConfig<T>` adds typed access to a validated config struct via `Deref<Target = T>`.
 ///
 /// Resolution order (lowest to highest priority):
 /// 1. `application.yaml` (base)
@@ -52,10 +72,13 @@ impl std::error::Error for ConfigError {}
 ///
 /// Profile is determined by: `R2E_PROFILE` env var > argument > default `"dev"`.
 #[derive(Debug, Clone)]
-pub struct R2eConfig {
+pub struct R2eConfig<T = ()> {
     values: HashMap<String, ConfigValue>,
     profile: String,
+    typed: T,
 }
+
+// ── Constructors — only on R2eConfig (= R2eConfig<()>) ─────────────────
 
 impl R2eConfig {
     /// Load configuration for the given profile with a custom secret resolver.
@@ -97,6 +120,7 @@ impl R2eConfig {
         Ok(R2eConfig {
             values,
             profile: active_profile,
+            typed: (),
         })
     }
 
@@ -115,6 +139,7 @@ impl R2eConfig {
         Ok(R2eConfig {
             values,
             profile: profile.to_string(),
+            typed: (),
         })
     }
 
@@ -123,31 +148,8 @@ impl R2eConfig {
         R2eConfig {
             values: HashMap::new(),
             profile: "test".to_string(),
+            typed: (),
         }
-    }
-
-    /// The active profile name.
-    pub fn profile(&self) -> &str {
-        &self.profile
-    }
-
-    /// Get a typed value for the given dot-separated key.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ConfigError::NotFound` if the key does not exist, or
-    /// `ConfigError::TypeMismatch` if the value cannot be converted.
-    pub fn get<T: FromConfigValue>(&self, key: &str) -> Result<T, ConfigError> {
-        let value = self
-            .values
-            .get(key)
-            .ok_or_else(|| ConfigError::NotFound(key.to_string()))?;
-        T::from_config_value(value, key)
-    }
-
-    /// Get a typed value, returning a default if the key is missing.
-    pub fn get_or<T: FromConfigValue>(&self, key: &str, default: T) -> T {
-        self.get(key).unwrap_or(default)
     }
 
     /// Set a value programmatically.
@@ -155,9 +157,76 @@ impl R2eConfig {
         self.values.insert(key.to_string(), value);
     }
 
+    /// Upgrade to a typed config by constructing `T` from the raw values.
+    ///
+    /// ```ignore
+    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>()?;
+    /// config.name  // typed field access via Deref
+    /// config.get::<String>("app.name")  // raw access still works
+    /// ```
+    pub fn with_typed<C: ConfigProperties>(self) -> Result<R2eConfig<C>, ConfigError> {
+        let typed = C::from_config(&self)?;
+        Ok(R2eConfig {
+            values: self.values,
+            profile: self.profile,
+            typed,
+        })
+    }
+}
+
+// ── Methods available on all R2eConfig<T> ───────────────────────────────
+
+impl<T> R2eConfig<T> {
+    /// Get a typed value for the given dot-separated key (raw access).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError::NotFound` if the key does not exist, or
+    /// `ConfigError::TypeMismatch` if the value cannot be converted.
+    pub fn get<V: FromConfigValue>(&self, key: &str) -> Result<V, ConfigError> {
+        let value = self
+            .values
+            .get(key)
+            .ok_or_else(|| ConfigError::NotFound(key.to_string()))?;
+        V::from_config_value(value, key)
+    }
+
+    /// Get a typed value, returning a default if the key is missing.
+    pub fn get_or<V: FromConfigValue>(&self, key: &str, default: V) -> V {
+        self.get(key).unwrap_or(default)
+    }
+
     /// Check whether a key exists in the config.
     pub fn contains_key(&self, key: &str) -> bool {
         self.values.contains_key(key)
+    }
+
+    /// The active profile name.
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// Get a reference to the typed config layer.
+    pub fn typed(&self) -> &T {
+        &self.typed
+    }
+
+    /// Downgrade to a raw (untyped) config, discarding the typed layer.
+    pub fn raw(&self) -> R2eConfig {
+        R2eConfig {
+            values: self.values.clone(),
+            profile: self.profile.clone(),
+            typed: (),
+        }
+    }
+}
+
+// ── Deref for ergonomic typed field access ──────────────────────────────
+
+impl<T> Deref for R2eConfig<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.typed
     }
 }
 

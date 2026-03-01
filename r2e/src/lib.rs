@@ -23,7 +23,7 @@
 //! | `scheduler`   | no      | `r2e-scheduler`           |
 //! | `cache`       | no      | `r2e-cache`               |
 //! | `rate-limit`  | no      | `r2e-rate-limit`          |
-//! | `openapi`     | no      | `r2e-openapi`             |
+//! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
 //! | `openfga`     | no      | `r2e-openfga`             |
 //! | `validation`  | no      | `r2e-core/validation`     |
@@ -143,4 +143,7 @@ pub mod prelude {
 
     #[cfg(feature = "grpc")]
     pub use r2e_grpc::prelude::*;
+
+    #[cfg(feature = "openapi")]
+    pub use r2e_openapi::schemars::JsonSchema;
 }

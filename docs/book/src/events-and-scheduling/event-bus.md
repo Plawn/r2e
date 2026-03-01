@@ -1,6 +1,8 @@
 # Event Bus
 
-R2E provides an in-process typed pub/sub event bus for decoupling components. Events are dispatched by `TypeId` — no string-based routing, no downcasting, fully type-safe at compile time.
+R2E provides a pluggable event bus for decoupling components. The `EventBus` trait defines the interface; `LocalEventBus` is the default in-process implementation. Events are dispatched by `TypeId` — no string-based routing, no downcasting, fully type-safe at compile time.
+
+Custom backends (Kafka, Redis, NATS) can implement the `EventBus` trait for remote event transport.
 
 ## Setup
 
@@ -12,30 +14,30 @@ r2e = { version = "0.1", features = ["events"] }
 
 ## Defining events
 
-Events are plain Rust types. No trait implementation needed — just `Send + Sync + 'static`:
+Events must implement `Serialize + DeserializeOwned + Send + Sync + 'static`. The serde bounds are required by the `EventBus` trait for backend compatibility. `LocalEventBus` never actually serializes — zero overhead.
 
 ```rust
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserCreatedEvent {
     pub user_id: u64,
     pub name: String,
     pub email: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OrderPlacedEvent {
     pub order_id: u64,
     pub total: f64,
 }
 ```
 
-## Creating the EventBus
+## Creating a LocalEventBus
 
 ```rust
-use r2e::r2e_events::EventBus;
+use r2e::r2e_events::{EventBus, LocalEventBus};
 
 // Default: 1024 concurrent handlers max
-let event_bus = EventBus::new();
+let event_bus = LocalEventBus::new();
 ```
 
 Add it to your state:
@@ -43,12 +45,12 @@ Add it to your state:
 ```rust
 #[derive(Clone, BeanState)]
 pub struct AppState {
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     // ...
 }
 ```
 
-The `EventBus` is `Clone` — all clones share the same subscriber list.
+`LocalEventBus` is `Clone` — all clones share the same subscriber list.
 
 ## Subscribing to events
 
@@ -111,13 +113,13 @@ Both methods respect the [concurrency limit](#concurrency-and-backpressure).
 
 ## Concurrency and backpressure
 
-By default, `EventBus::new()` limits concurrently executing handlers to **1024** (the value of `DEFAULT_MAX_CONCURRENCY`). When the limit is reached, `emit()` blocks until a handler slot becomes available. This prevents unbounded memory growth under heavy load.
+By default, `LocalEventBus::new()` limits concurrently executing handlers to **1024** (the value of `DEFAULT_MAX_CONCURRENCY`). When the limit is reached, `emit()` blocks until a handler slot becomes available. This prevents unbounded memory growth under heavy load.
 
 ### Custom concurrency limit
 
 ```rust
 // Allow at most 50 concurrent handlers
-let bus = EventBus::with_concurrency(50);
+let bus = LocalEventBus::with_concurrency(50);
 ```
 
 Choose a limit based on what your handlers do:
@@ -131,7 +133,7 @@ Choose a limit based on what your handlers do:
 ### Unbounded mode
 
 ```rust
-let bus = EventBus::unbounded();
+let bus = LocalEventBus::unbounded();
 ```
 
 Disables backpressure entirely. Every handler is spawned immediately regardless of load. Use with caution — if events are emitted faster than handlers can process them, memory usage grows without bound.
@@ -157,13 +159,13 @@ This means a single misbehaving handler cannot bring down the event bus.
 ```rust
 #[derive(Clone)]
 pub struct UserService {
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     // ...
 }
 
 #[bean]
 impl UserService {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: LocalEventBus) -> Self {
         Self { event_bus }
     }
 
@@ -184,23 +186,50 @@ impl UserService {
 
 ## API reference
 
-| Constructor | Description |
-|-------------|-------------|
-| `EventBus::new()` | Default concurrency limit (1024) |
-| `EventBus::with_concurrency(n)` | Custom concurrency limit |
-| `EventBus::unbounded()` | No concurrency limit (legacy) |
+### `EventBus` trait
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `subscribe` | `async fn subscribe<E, F, Fut>(&self, handler: F)` | Register a handler for event type `E` |
 | `emit` | `async fn emit<E>(&self, event: E)` | Fire-and-forget: spawn handlers, return immediately |
 | `emit_and_wait` | `async fn emit_and_wait<E>(&self, event: E)` | Spawn handlers, wait for all to complete |
-| `concurrency_limit` | `fn concurrency_limit() -> Option<usize>` | Current limit, or `None` if unbounded |
+| `clear` | `async fn clear(&self)` | Remove all subscribers |
 
 **Type constraints:**
-- Event `E`: `Send + Sync + 'static`
+- `subscribe`: `E: DeserializeOwned + Send + Sync + 'static`
+- `emit`/`emit_and_wait`: `E: Serialize + Send + Sync + 'static`
 - Handler `F`: `Fn(Arc<E>) -> Fut + Send + Sync + 'static`
 - Future `Fut`: `Future<Output = ()> + Send + 'static`
+
+### `LocalEventBus` (default implementation)
+
+| Constructor | Description |
+|-------------|-------------|
+| `LocalEventBus::new()` | Default concurrency limit (1024) |
+| `LocalEventBus::with_concurrency(n)` | Custom concurrency limit |
+| `LocalEventBus::unbounded()` | No concurrency limit |
+| `concurrency_limit()` | Current limit, or `None` if unbounded |
+
+### Custom backends
+
+Implement the `EventBus` trait for remote transport:
+
+```rust
+#[derive(Clone)]
+pub struct KafkaEventBus { /* ... */ }
+
+impl EventBus for KafkaEventBus {
+    fn subscribe<E, F, Fut>(&self, handler: F) -> impl Future<Output = ()> + Send
+    where E: DeserializeOwned + Send + Sync + 'static, /* ... */
+    { /* consume from Kafka topic, deserialize, dispatch */ }
+
+    fn emit<E>(&self, event: E) -> impl Future<Output = ()> + Send
+    where E: Serialize + Send + Sync + 'static
+    { /* serialize and produce to Kafka topic */ }
+
+    // ...
+}
+```
 
 ## Next steps
 

@@ -89,7 +89,7 @@ Missing required keys (non-`Option`) panic at request time with a descriptive me
 #[bean]
 impl NotificationService {
     pub fn new(
-        bus: EventBus,
+        bus: LocalEventBus,
         #[config("notification.capacity")] capacity: i64,
     ) -> Self {
         Self { bus, capacity: capacity as usize }

@@ -47,6 +47,12 @@ pub fn cargo_toml(opts: &ProjectOptions) -> String {
         None => "",
     };
 
+    let openapi_dep = if opts.openapi {
+        "\nschemars = \"1\""
+    } else {
+        ""
+    };
+
     let grpc_deps = if opts.grpc {
         r#"
 tonic = "~0.12"
@@ -78,7 +84,7 @@ tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tracing = "0.1"
-tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}{grpc_deps}
+tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}{openapi_dep}{grpc_deps}
 {grpc_build_deps}"#
     )
 }
@@ -163,8 +169,8 @@ pub fn state_rs(opts: &ProjectOptions) -> String {
     }
 
     if opts.events {
-        extra_imports.push_str("use r2e::r2e_events::EventBus;\n");
-        fields.push_str("    pub event_bus: EventBus,\n");
+        extra_imports.push_str("use r2e::r2e_events::LocalEventBus;\n");
+        fields.push_str("    pub event_bus: LocalEventBus,\n");
     }
 
     if opts.auth {

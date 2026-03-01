@@ -222,6 +222,7 @@ fn new_with_openapi() {
 
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
     assert!(cargo.contains("openapi"));
+    assert!(cargo.contains("schemars"), "Expected schemars dependency when openapi is enabled");
 
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
     assert!(main.contains("OpenApiPlugin"));
@@ -279,7 +280,7 @@ fn new_full() {
 
     let state = fs::read_to_string("myapp/src/state.rs").unwrap();
     assert!(state.contains("SqlitePool"));
-    assert!(state.contains("EventBus"));
+    assert!(state.contains("LocalEventBus"));
     assert!(state.contains("JwtClaimsValidator"));
 
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();

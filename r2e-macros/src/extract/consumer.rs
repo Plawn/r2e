@@ -27,7 +27,7 @@ pub fn extract_consumer(attrs: &[syn::Attribute]) -> syn::Result<Option<String>>
             if bus_field.is_empty() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[consumer] requires `bus` — the name of the EventBus field on the controller:\n\
+                    "#[consumer] requires `bus` — the name of the event bus field on the controller:\n\
                      \n  #[consumer(bus = \"event_bus\")]\n  async fn on_event(&self, event: Arc<MyEvent>) { }",
                 ));
             }

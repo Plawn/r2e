@@ -56,7 +56,7 @@ fn generate_test_token(secret: &[u8]) -> String {
 #[derive(Clone)]
 struct AppEnv {
     config: R2eConfig,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     claims_validator: Arc<JwtClaimsValidator>,
     pool: sqlx::Pool<sqlx::Sqlite>,
     sse_broadcaster: r2e::sse::SseBroadcaster,
@@ -73,7 +73,7 @@ async fn setup() -> AppEnv {
     println!();
 
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
 
     let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
         .with_allowed_algorithm(jsonwebtoken::Algorithm::HS256);

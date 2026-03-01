@@ -183,6 +183,90 @@ pub fn extract_sse_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(String,
     Ok(None)
 }
 
+/// Extract `#[status(N)]` — override default HTTP status code.
+pub fn extract_status(attrs: &[syn::Attribute]) -> syn::Result<Option<u16>> {
+    for attr in attrs {
+        if attr.path().is_ident("status") {
+            let lit: syn::LitInt = attr.parse_args()?;
+            return Ok(Some(lit.base10_parse()?));
+        }
+    }
+    Ok(None)
+}
+
+/// Extract `#[returns(T)]` — explicit response type for custom wrappers.
+pub fn extract_returns(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Type>> {
+    for attr in attrs {
+        if attr.path().is_ident("returns") {
+            let ty: syn::Type = attr.parse_args()?;
+            return Ok(Some(ty));
+        }
+    }
+    Ok(None)
+}
+
+/// Extract `///` doc comments from attributes.
+/// Rustc desugars `/// text` into `#[doc = "text"]`.
+/// Returns (summary, description): first non-empty line → summary, remaining → description.
+pub fn extract_doc_comments(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>) {
+    let doc_lines: Vec<String> = attrs
+        .iter()
+        .filter_map(|attr| {
+            if attr.path().is_ident("doc") {
+                if let syn::Meta::NameValue(nv) = &attr.meta {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) = &nv.value
+                    {
+                        return Some(lit_str.value());
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+
+    if doc_lines.is_empty() {
+        return (None, None);
+    }
+
+    // First non-empty trimmed line is the summary
+    let mut summary = None;
+    let mut desc_start = 0;
+    for (i, line) in doc_lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            summary = Some(trimmed.to_string());
+            desc_start = i + 1;
+            break;
+        }
+    }
+
+    // Skip empty lines between summary and description
+    while desc_start < doc_lines.len() && doc_lines[desc_start].trim().is_empty() {
+        desc_start += 1;
+    }
+
+    // Remaining non-empty lines form the description
+    let desc_lines: Vec<&str> = doc_lines[desc_start..]
+        .iter()
+        .map(|l| l.trim())
+        .collect();
+    let description = if desc_lines.is_empty() || desc_lines.iter().all(|l| l.is_empty()) {
+        None
+    } else {
+        Some(desc_lines.join("\n").trim().to_string())
+    };
+
+    (summary, description)
+}
+
+/// Detect standard `#[deprecated]` attribute.
+pub fn is_deprecated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("deprecated"))
+}
+
 /// Extract `#[ws("/path")]`. Returns the path if found.
 pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
     for attr in attrs {

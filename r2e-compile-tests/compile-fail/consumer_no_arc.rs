@@ -1,9 +1,9 @@
 use r2e::prelude::*;
-use r2e::r2e_events::EventBus;
+use r2e::r2e_events::LocalEventBus;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
 }
 
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub struct MyEvent;
 #[controller(state = AppState)]
 pub struct MyConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[routes]

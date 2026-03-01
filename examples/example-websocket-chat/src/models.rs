@@ -26,7 +26,7 @@ pub enum WsOutgoing {
 }
 
 /// Event emitted when a message is sent, consumed for persistence.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageSentEvent {
     pub room: String,
     pub username: String,

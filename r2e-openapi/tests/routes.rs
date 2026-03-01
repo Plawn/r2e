@@ -15,12 +15,18 @@ fn simple_route(method: &str, path: &str, op: &str) -> RouteInfo {
         method: method.to_string(),
         operation_id: op.to_string(),
         summary: None,
+        description: None,
         request_body_type: None,
         request_body_schema: None,
+        request_body_required: true,
         response_type: None,
+        response_schema: None,
+        response_status: 200,
         params: vec![],
         roles: vec![],
         tag: None,
+        deprecated: false,
+        has_auth: false,
     }
 }
 
@@ -60,7 +66,7 @@ async fn openapi_json_endpoint() {
     assert_eq!(status, http::StatusCode::OK);
 
     let spec: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(spec["openapi"], "3.0.3");
+    assert_eq!(spec["openapi"], "3.1.0");
     assert!(spec["paths"]["/users"]["get"].is_object());
 }
 
@@ -172,5 +178,5 @@ async fn openapi_json_always_served_regardless_of_docs_ui() {
     let (status, body, _) = get_response(router, "/openapi.json").await;
     assert_eq!(status, http::StatusCode::OK);
     let spec: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(spec["openapi"], "3.0.3");
+    assert_eq!(spec["openapi"], "3.1.0");
 }

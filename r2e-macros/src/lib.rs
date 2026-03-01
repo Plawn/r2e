@@ -389,16 +389,17 @@ pub fn pre_guard(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Mark a method as an **event consumer** — called when an event is emitted
-/// on the specified `EventBus`.
+/// on the specified event bus.
 ///
 /// The controller must have an `#[inject]` field for the bus, and **must
 /// not** have `#[identity]` fields (consumers run outside HTTP context).
+/// The bus field type must implement the [`EventBus`](r2e_events::EventBus) trait.
 ///
 /// ```ignore
 /// #[derive(Controller)]
 /// #[controller(state = Services)]
 /// pub struct UserEventConsumer {
-///     #[inject] event_bus: EventBus,
+///     #[inject] event_bus: LocalEventBus,
 /// }
 ///
 /// #[routes]
@@ -514,6 +515,44 @@ pub fn sse(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn ws(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Override the default HTTP status code for a route.
+///
+/// By default, GET/PUT/PATCH return 200, POST returns 201, and DELETE returns 204.
+/// Use this attribute to specify a custom status code.
+///
+/// ```ignore
+/// #[post("/users")]
+/// #[status(201)]
+/// async fn create(&self, body: Json<CreateUser>) -> JsonResult<User> { ... }
+///
+/// #[delete("/users/{id}")]
+/// #[status(200)]
+/// async fn delete(&self, Path(id): Path<u64>) -> JsonResult<DeleteResult> { ... }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn status(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Specify the response type explicitly for OpenAPI documentation.
+///
+/// Use this when the return type is an opaque wrapper (e.g., `impl IntoResponse`)
+/// and the macro cannot auto-detect the response schema.
+///
+/// ```ignore
+/// #[get("/widgets/{id}")]
+/// #[returns(Widget)]
+/// async fn get_widget(&self, Path(id): Path<u64>) -> impl IntoResponse { ... }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn returns(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 

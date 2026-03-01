@@ -1,14 +1,14 @@
 # Declarative Consumers
 
-Instead of manually calling `event_bus.subscribe()`, use `#[consumer]` for declarative event handling within a controller. Consumers are auto-discovered and registered — no manual wiring needed.
+Instead of manually calling `event_bus.subscribe()`, use `#[consumer]` for declarative event handling within controllers and beans. Consumers are auto-discovered and registered — no manual wiring needed.
 
-## Defining a consumer
+## Controller consumers
 
 ```rust
 #[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserEventConsumer {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 
 #[routes]
@@ -34,16 +34,16 @@ The `bus = "event_bus"` attribute refers to the **field name** on the controller
 
 ## How it works
 
-1. `#[consumer(bus = "event_bus")]` tells R2E which `EventBus` field to subscribe to
+1. `#[consumer(bus = "event_bus")]` tells R2E which event bus field to subscribe to
 2. The event type is inferred from the parameter type (`Arc<UserCreatedEvent>`)
 3. `register_controller::<UserEventConsumer>()` auto-discovers all `#[consumer]` methods
 4. At runtime, the controller is constructed from state via `StatefulConstruct` and each consumer method is subscribed to its event type
 
-Under the hood, the `#[routes]` macro generates a `consumers()` method on the `Controller` trait impl. When `register_controller()` is called, it invokes `consumers()` and subscribes each returned closure to the appropriate bus.
+Under the hood, the `#[routes]` macro generates a `register_consumers()` method on the `Controller` trait impl. When `register_controller()` is called, it invokes this and subscribes each handler via `EventBus::subscribe()` (UFCS).
 
 ## Requirements
 
-- The controller must have an `EventBus` field (named in the `bus = "..."` attribute)
+- The controller must have a field implementing `EventBus` (named in the `bus = "..."` attribute)
 - The controller must **not** have struct-level `#[inject(identity)]` fields (consumers need `StatefulConstruct`)
 - The consumer method must take `&self` and `Arc<EventType>`
 - Consumer controllers don't need a `path` in `#[controller]`
@@ -71,7 +71,7 @@ A controller can have both HTTP routes and consumers. This is common when a feat
 #[derive(Controller)]
 #[controller(path = "/notifications", state = AppState)]
 pub struct NotificationController {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[inject] notification_service: NotificationService,
 }
 
@@ -102,7 +102,7 @@ Consumer methods have access to all `#[inject]` fields on the controller, just l
 #[derive(Controller)]
 #[controller(state = AppState)]
 pub struct OrderConsumer {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[inject] inventory_service: InventoryService,
     #[inject] notification_service: NotificationService,
 }
@@ -134,16 +134,80 @@ async fn on_order_placed(&self, event: Arc<OrderPlacedEvent>) {
 
 If a handler panics, the panic is caught by the Tokio runtime. Other handlers for the same event continue running, and the bus remains operational. See [Panic isolation](./event-bus.md#panic-isolation).
 
+## Bean consumers
+
+Beans can also declare `#[consumer]` methods using the same syntax. This avoids creating a controller just for event handling:
+
+```rust
+#[derive(Clone)]
+pub struct NotificationService {
+    event_bus: LocalEventBus,
+    mailer: Mailer,
+}
+
+#[bean]
+impl NotificationService {
+    pub fn new(event_bus: LocalEventBus, mailer: Mailer) -> Self {
+        Self { event_bus, mailer }
+    }
+
+    #[consumer(bus = "event_bus")]
+    async fn on_user_created(&self, event: Arc<UserCreatedEvent>) {
+        self.mailer.send_welcome(&event.email).await;
+    }
+}
+```
+
+The `#[bean]` macro generates an `EventSubscriber` impl when `#[consumer]` methods are present. Register it with `register_subscriber`:
+
+```rust
+AppBuilder::new()
+    .provide(event_bus)
+    .with_bean::<NotificationService>()
+    .build_state::<AppState, _, _>()
+    .await
+    .register_subscriber::<NotificationService>()
+    // ...
+```
+
+Bean consumers capture `self` directly (no `StatefulConstruct` reconstruction per event), making them slightly more efficient than controller consumers.
+
+## Multiple buses
+
+Both controllers and beans support multiple event bus fields of different types. Each `#[consumer]` references a specific field by name:
+
+```rust
+#[bean]
+impl NotificationService {
+    pub fn new(local_bus: LocalEventBus, kafka_bus: KafkaEventBus, mailer: Mailer) -> Self {
+        Self { local_bus, kafka_bus, mailer }
+    }
+
+    #[consumer(bus = "local_bus")]
+    async fn on_user_created(&self, event: Arc<UserCreatedEvent>) {
+        self.mailer.send_welcome(&event.email).await;
+    }
+
+    #[consumer(bus = "kafka_bus")]
+    async fn on_order_placed(&self, event: Arc<OrderPlacedEvent>) {
+        self.mailer.send_receipt(&event.order_id).await;
+    }
+}
+```
+
+The generated code calls `EventBus::subscribe()` via UFCS on each field — fully monomorphized per bus type, zero dynamic dispatch.
+
 ## Consumers vs manual subscribe
 
-| | `#[consumer]` | `bus.subscribe()` |
-|-|--------------|-------------------|
-| Wiring | Automatic via `register_controller()` | Manual at startup |
-| Access to services | Via `#[inject]` fields | Must capture in closure |
-| Discovery | Declarative, visible in code structure | Scattered across init code |
-| Identity access | No (requires `StatefulConstruct`) | No (no HTTP context) |
+| | Controller `#[consumer]` | Bean `#[consumer]` | `bus.subscribe()` |
+|-|-------------------------|--------------------|--------------------|
+| Wiring | `register_controller()` | `register_subscriber()` | Manual at startup |
+| Access to services | Via `#[inject]` fields | Via struct fields | Must capture in closure |
+| Reconstruction | Per-event (from state) | None (self captured) | N/A |
+| Discovery | Declarative | Declarative | Scattered across init code |
+| Identity access | No (`StatefulConstruct`) | No | No (no HTTP context) |
 
-Use `#[consumer]` for standard application event handling. Use manual `subscribe()` when you need to register handlers dynamically or outside of a controller context.
+Use `#[consumer]` on **beans** for services that primarily handle events. Use `#[consumer]` on **controllers** when you need both HTTP routes and event handlers on the same type. Use manual `subscribe()` when you need to register handlers dynamically.
 
 ## Limitations
 

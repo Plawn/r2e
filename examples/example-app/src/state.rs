@@ -14,7 +14,7 @@ pub struct Services {
     pub user_service: UserService,
     pub claims_validator: Arc<JwtClaimsValidator>,
     pub pool: sqlx::SqlitePool,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub config: R2eConfig,
     pub cancel: CancellationToken,
     pub rate_limiter: RateLimitRegistry,

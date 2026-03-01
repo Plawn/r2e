@@ -3,15 +3,23 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ReturnType, Type};
 
-use crate::crate_path::r2e_core_path;
+use crate::crate_path::{r2e_core_path, r2e_events_path};
+use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
 use crate::type_list_gen::build_tcons_type;
+
+/// Parsed consumer method data from a `#[bean]` impl block.
+struct BeanConsumerMethod {
+    bus_field: String,
+    event_type: syn::Type,
+    fn_name: syn::Ident,
+}
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item_impl = parse_macro_input!(input as ItemImpl);
     match generate(&item_impl) {
         Ok(bean_impl) => {
-            // Emit the original impl with #[config] attrs stripped from constructor params
-            let cleaned_impl = strip_config_attrs_from_constructor(&item_impl);
+            // Emit the original impl with #[config] and #[consumer] attrs stripped
+            let cleaned_impl = strip_attrs_from_impl(&item_impl);
             let output = quote! {
                 #cleaned_impl
                 #bean_impl
@@ -116,9 +124,13 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         }
     };
 
-    if is_async {
+    // Scan for #[consumer] methods
+    let consumer_methods = scan_consumer_methods(item_impl)?;
+    let subscriber_impl = generate_event_subscriber_impl(self_ty, &consumer_methods)?;
+
+    let bean_impl = if is_async {
         // Generate AsyncBean impl
-        Ok(quote! {
+        quote! {
             impl #krate::beans::AsyncBean for #self_ty {
                 type Deps = #deps_type;
 
@@ -134,10 +146,10 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     Self::#fn_name(#(#arg_forwards),*).await
                 }
             }
-        })
+        }
     } else {
         // Generate Bean impl
-        Ok(quote! {
+        quote! {
             impl #krate::beans::Bean for #self_ty {
                 type Deps = #deps_type;
 
@@ -153,8 +165,104 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     Self::#fn_name(#(#arg_forwards),*)
                 }
             }
-        })
+        }
+    };
+
+    Ok(quote! {
+        #bean_impl
+        #subscriber_impl
+    })
+}
+
+/// Scan all `&self` methods in the impl block for `#[consumer(bus = "...")]` attributes.
+fn scan_consumer_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanConsumerMethod>> {
+    let mut consumers = Vec::new();
+
+    for item in &item_impl.items {
+        if let ImplItem::Fn(method) = item {
+            // Only consider methods with &self receiver
+            let has_self = method
+                .sig
+                .inputs
+                .iter()
+                .any(|arg| matches!(arg, FnArg::Receiver(_)));
+            if !has_self {
+                continue;
+            }
+
+            if let Some(bus_field) = extract_consumer(&method.attrs)? {
+                // Find the event parameter (first typed param after &self)
+                let event_param = method
+                    .sig
+                    .inputs
+                    .iter()
+                    .find_map(|arg| match arg {
+                        FnArg::Typed(pt) => Some(pt),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[consumer] method must have an event parameter typed as Arc<EventType>:\n\
+                             \n  #[consumer(bus = \"event_bus\")]\n\
+                             \n  async fn on_event(&self, event: Arc<MyEvent>) { }",
+                        )
+                    })?;
+                let event_type = extract_event_type_from_arc(&event_param.ty)?;
+
+                consumers.push(BeanConsumerMethod {
+                    bus_field,
+                    event_type,
+                    fn_name: method.sig.ident.clone(),
+                });
+            }
+        }
     }
+
+    Ok(consumers)
+}
+
+/// Generate `EventSubscriber` impl if any consumer methods are found.
+fn generate_event_subscriber_impl(
+    self_ty: &syn::Type,
+    consumers: &[BeanConsumerMethod],
+) -> syn::Result<TokenStream2> {
+    if consumers.is_empty() {
+        return Ok(quote! {});
+    }
+
+    let krate = r2e_core_path();
+    let events_krate = r2e_events_path();
+
+    let subscribe_blocks: Vec<_> = consumers
+        .iter()
+        .map(|cm| {
+            let bus_field = syn::Ident::new(&cm.bus_field, proc_macro2::Span::call_site());
+            let event_type = &cm.event_type;
+            let fn_name = &cm.fn_name;
+
+            quote! {
+                {
+                    let __bus = self.#bus_field.clone();
+                    let __this = self.clone();
+                    #events_krate::EventBus::subscribe(&__bus, move |__event: std::sync::Arc<#event_type>| {
+                        let __this = __this.clone();
+                        async move { __this.#fn_name(__event).await; }
+                    }).await;
+                }
+            }
+        })
+        .collect();
+
+    Ok(quote! {
+        impl #krate::EventSubscriber for #self_ty {
+            fn subscribe(self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                Box::pin(async move {
+                    #(#subscribe_blocks)*
+                })
+            }
+        }
+    })
 }
 
 /// Find the constructor method in the impl block.
@@ -209,8 +317,9 @@ fn returns_self(ret: &ReturnType, self_ty: &Type) -> bool {
     }
 }
 
-/// Strip `#[config(...)]` attributes from the constructor parameters in the emitted impl block.
-fn strip_config_attrs_from_constructor(item_impl: &ItemImpl) -> TokenStream2 {
+/// Strip `#[config(...)]` attributes from the constructor parameters and
+/// `#[consumer(...)]` attributes from methods in the emitted impl block.
+fn strip_attrs_from_impl(item_impl: &ItemImpl) -> TokenStream2 {
     let mut items: Vec<TokenStream2> = Vec::new();
 
     for item in &item_impl.items {
@@ -247,7 +356,15 @@ fn strip_config_attrs_from_constructor(item_impl: &ItemImpl) -> TokenStream2 {
                     #vis #sig_asyncness fn #sig_ident(#(#clean_params),*) #sig_output #body
                 });
             } else {
-                items.push(quote! { #method });
+                // Strip #[consumer] attrs from methods
+                let cleaned_attrs = strip_consumer_attrs(method.attrs.clone());
+                let vis = &method.vis;
+                let sig = &method.sig;
+                let body = &method.block;
+                items.push(quote! {
+                    #(#cleaned_attrs)*
+                    #vis #sig #body
+                });
             }
         } else {
             items.push(quote! { #item });

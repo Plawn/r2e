@@ -7,8 +7,8 @@
 
 use crate::extract::route::{
     extract_guard_fns, extract_intercept_fns, extract_layer_exprs, extract_middleware_fns,
-    extract_pre_guard_fns, extract_roles, extract_transactional, is_route_attr, is_sse_attr,
-    is_ws_attr, roles_guard_expr,
+    extract_pre_guard_fns, extract_returns, extract_roles, extract_status, extract_transactional,
+    is_route_attr, is_sse_attr, is_ws_attr, roles_guard_expr,
 };
 use crate::types::MethodDecorators;
 
@@ -138,6 +138,36 @@ impl RoutePlugin for LayerPlugin {
     }
 }
 
+struct StatusPlugin;
+impl RoutePlugin for StatusPlugin {
+    fn attr_names(&self) -> &'static [&'static str] {
+        &["status"]
+    }
+    fn parse(
+        &self,
+        attrs: &[syn::Attribute],
+        decorators: &mut MethodDecorators,
+    ) -> syn::Result<()> {
+        decorators.status_override = extract_status(attrs)?;
+        Ok(())
+    }
+}
+
+struct ReturnsPlugin;
+impl RoutePlugin for ReturnsPlugin {
+    fn attr_names(&self) -> &'static [&'static str] {
+        &["returns"]
+    }
+    fn parse(
+        &self,
+        attrs: &[syn::Attribute],
+        decorators: &mut MethodDecorators,
+    ) -> syn::Result<()> {
+        decorators.returns_type = extract_returns(attrs)?;
+        Ok(())
+    }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────
 
 /// Ordered registry of all decorator plugins for HTTP/SSE/WS routes.
@@ -151,6 +181,8 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
     &InterceptPlugin,
     &MiddlewarePlugin,
     &LayerPlugin,
+    &StatusPlugin,
+    &ReturnsPlugin,
 ];
 
 /// Decorator plugins allowed for gRPC routes.

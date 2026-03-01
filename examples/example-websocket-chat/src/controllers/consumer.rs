@@ -11,7 +11,7 @@ use crate::state::AppState;
 #[controller(state = AppState)]
 pub struct MessagePersistenceConsumer {
     #[inject]
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     #[inject]
     chat_service: ChatService,
 }

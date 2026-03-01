@@ -22,7 +22,7 @@
 # Security
 
 - [JWT / OIDC Authentication](./security/jwt-oidc.md)
-- [Serveur OIDC embarqué](./security/embedded-oidc.md)
+- [Embedded OIDC Server](./security/embedded-oidc.md)
 - [Guards and Roles](./security/guards-and-roles.md)
 - [Rate Limiting](./security/rate-limiting.md)
 

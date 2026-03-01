@@ -68,7 +68,7 @@ The state struct holds all app-scoped dependencies. `BeanState` derives `FromRef
 pub struct AppState {
     pub user_service: UserService,
     pub pool: SqlitePool,
-    pub event_bus: EventBus,
+    pub event_bus: LocalEventBus,
     pub config: R2eConfig,
 }
 ```

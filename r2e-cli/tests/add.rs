@@ -130,6 +130,20 @@ fn add_multiple_extensions() {
 
 #[test]
 #[serial]
+fn add_openapi_includes_schemars() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+
+    add::run("openapi").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert!(cargo.contains("r2e-openapi"));
+    assert!(cargo.contains("schemars"), "Expected schemars companion dependency");
+}
+
+#[test]
+#[serial]
 fn add_all_known_extensions() {
     let known = [
         "security",
@@ -164,4 +178,6 @@ fn add_all_known_extensions() {
             crate_name
         );
     }
+    // openapi should also add schemars as a companion dependency
+    assert!(cargo.contains("schemars"), "Expected schemars companion dependency for openapi");
 }
