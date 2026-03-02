@@ -160,13 +160,15 @@ let timeout: i64 = config.get_or("app.timeout", 30);
 
 ```rust
 #[derive(ConfigProperties)]
-#[config(prefix = "app.database")]
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: i64,
     #[config(default = "5")]
     pub min_connections: i64,
 }
+
+// Prefix is provided at call-site:
+let db = DatabaseConfig::from_config(&config, Some("app.database"))?;
 ```
 
 ### Secret resolution

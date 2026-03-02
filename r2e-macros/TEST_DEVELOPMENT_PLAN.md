@@ -35,7 +35,7 @@
 
 | Test File | Description |
 |-----------|-------------|
-| `config_properties_basic.rs` | `#[config(prefix = "db")]` with typed fields |
+| `config_properties_basic.rs` | Basic `#[derive(ConfigProperties)]` with typed fields |
 | `config_properties_defaults.rs` | `#[config(default = 10)]` on fields |
 | `config_properties_optional.rs` | `Option<T>` fields |
 | `config_properties_nested.rs` | Nested config sections |

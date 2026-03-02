@@ -153,7 +153,6 @@ Permettre de déclarer des sections de configuration comme des structs typées,
 ### API utilisateur cible
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app.database")]
 pub struct DatabaseConfig {
     /// Database connection URL
     pub url: String,
@@ -184,26 +183,23 @@ app:
 #[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct ApiController {
-    #[config_section]   // Nouveau attribut, résolu comme #[config] mais pour une section entière
+    #[config_section(prefix = "app.database")]
     db_config: DatabaseConfig,
 }
 
-// OU usage directe
-let db_config = DatabaseConfig::from_config(&config)?;
+// OU usage directe (le préfixe est un paramètre runtime)
+let db_config = DatabaseConfig::from_config(&config, Some("app.database"))?;
 ```
 
 ### Trait ConfigProperties
 ```rust
 // r2e-core/src/config/typed.rs
 pub trait ConfigProperties: Sized {
-    /// Le préfixe de configuration (ex: "app.database")
-    fn prefix() -> &'static str;
-
     /// Les propriétés attendues avec leurs défauts et descriptions
-    fn properties_metadata() -> Vec<PropertyMeta>;
+    fn properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta>;
 
-    /// Construire depuis une R2eConfig
-    fn from_config(config: &R2eConfig) -> Result<Self, ConfigError>;
+    /// Construire depuis une R2eConfig avec un préfixe runtime
+    fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError>;
 }
 
 #[derive(Debug, Clone)]
@@ -221,49 +217,36 @@ pub struct PropertyMeta {
 **Fichier** : `r2e-macros/src/config_derive.rs`
 
 La macro doit :
-1. Lire `#[config(prefix = "...")]` sur la struct
-2. Pour chaque champ, lire l'éventuel `#[config(default = ...)]` et le doc comment
-3. Générer `impl ConfigProperties` :
-   - `prefix()` → retourne le préfixe
-   - `properties_metadata()` → retourne la liste des PropertyMeta
-   - `from_config()` → appelle `config.get::<T>("prefix.field")` pour chaque champ, avec gestion des défauts et des `Option`
-4. Les champs `Option<T>` sont automatiquement optionnels
-5. Les champs sans `#[config(default = ...)]` et sans `Option` sont requis
+1. Pour chaque champ, lire l'éventuel `#[config(default = ...)]` et le doc comment
+2. Générer `impl ConfigProperties` :
+   - `properties_metadata(prefix)` → retourne la liste des PropertyMeta (full_key calculé à partir du préfixe runtime)
+   - `from_config(config, prefix)` → appelle `config.get::<T>("prefix.field")` pour chaque champ, avec gestion des défauts et des `Option`
+3. Les champs `Option<T>` sont automatiquement optionnels
+4. Les champs sans `#[config(default = ...)]` et sans `Option` sont requis
 
 ### Code généré attendu (pour DatabaseConfig)
 ```rust
 impl ConfigProperties for DatabaseConfig {
-    fn prefix() -> &'static str { "app.database" }
-
-    fn properties_metadata() -> Vec<PropertyMeta> {
+    fn properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta> {
         vec![
             PropertyMeta {
                 key: "url".into(),
-                full_key: "app.database.url".into(),
+                full_key: match prefix { Some(p) => format!("{}.url", p), None => "url".into() },
                 type_name: "String",
                 required: true,
                 default_value: None,
                 description: Some("Database connection URL".into()),
             },
-            PropertyMeta {
-                key: "pool_size".into(),
-                full_key: "app.database.pool_size".into(),
-                type_name: "i64",
-                required: false,
-                default_value: Some("10".into()),
-                description: Some("Connection pool size (default: 10)".into()),
-            },
             // ...
         ]
     }
 
-    fn from_config(config: &R2eConfig) -> Result<Self, ConfigError> {
+    fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError> {
         Ok(Self {
-            url: config.get::<String>("app.database.url")?,
-            pool_size: config.get_or::<i64>("app.database.pool_size", 10),
-            log_queries: config.get_or::<bool>("app.database.log_queries", false),
-            timeout: config.get::<Option<i64>>("app.database.timeout")
-                .unwrap_or(None),
+            url: config.get::<String>(&match prefix { Some(p) => format!("{}.url", p), None => "url".into() })?,
+            pool_size: { /* try config key, fallback to default 10 */ },
+            log_queries: { /* try config key, fallback to default false */ },
+            timeout: { /* try config key, fallback to None */ },
         })
     }
 }
@@ -272,10 +255,10 @@ impl ConfigProperties for DatabaseConfig {
 ### Intégration avec les macros existantes
 **Fichier** : `r2e-macros/src/codegen/handlers.rs`
 
-Ajouter la reconnaissance de `#[config_section]` sur un champ de controller.
-Si le champ est annoté `#[config_section]`, le code généré dans le handler fait :
+Ajouter la reconnaissance de `#[config_section(prefix = "...")]` sur un champ de controller.
+Si le champ est annoté `#[config_section(prefix = "app.database")]`, le code généré dans le handler fait :
 ```rust
-let db_config = DatabaseConfig::from_config(&state.config)
+let db_config = DatabaseConfig::from_config(&state.config, Some("app.database"))
     .expect("Failed to load DatabaseConfig from config");
 ```
 
@@ -287,7 +270,6 @@ let db_config = DatabaseConfig::from_config(&state.config)
 ### Tests
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "test.section")]
 struct TestConfig {
     pub name: String,
     #[config(default = 42)]
@@ -300,7 +282,7 @@ fn test_typed_config() {
     let mut config = R2eConfig::empty();
     config.set("test.section.name", ConfigValue::String("hello".into()));
 
-    let tc = TestConfig::from_config(&config).unwrap();
+    let tc = TestConfig::from_config(&config, Some("test.section")).unwrap();
     assert_eq!(tc.name, "hello");
     assert_eq!(tc.count, 42); // default
     assert!(tc.optional_val.is_none());
@@ -309,7 +291,7 @@ fn test_typed_config() {
 #[test]
 fn test_typed_config_missing_required() {
     let config = R2eConfig::empty();
-    let result = TestConfig::from_config(&config);
+    let result = TestConfig::from_config(&config, Some("test.section"));
     assert!(result.is_err()); // "name" is required
 }
 ```
@@ -393,8 +375,8 @@ impl std::fmt::Display for ConfigValidationError {
 }
 
 /// Validate a config against its metadata.
-pub fn validate_section<C: ConfigProperties>(config: &R2eConfig) -> Result<(), ConfigValidationError> {
-    let meta = C::properties_metadata();
+pub fn validate_section<C: ConfigProperties>(config: &R2eConfig, prefix: Option<&str>) -> Result<(), ConfigValidationError> {
+    let meta = C::properties_metadata(prefix);
     let mut errors = Vec::new();
 
     for prop in &meta {
@@ -416,7 +398,7 @@ pub fn validate_section<C: ConfigProperties>(config: &R2eConfig) -> Result<(), C
         Ok(())
     } else {
         Err(ConfigValidationError {
-            section: C::prefix().to_string(),
+            section: prefix.unwrap_or("<root>").to_string(),
             errors,
         })
     }
@@ -613,10 +595,10 @@ pub struct RegisteredSection {
 }
 
 /// Register a config section's metadata in the global registry.
-pub fn register_section<C: ConfigProperties>() {
+pub fn register_section<C: ConfigProperties>(prefix: Option<&str>) {
     let section = RegisteredSection {
-        prefix: C::prefix().to_string(),
-        properties: C::properties_metadata(),
+        prefix: prefix.unwrap_or("").to_string(),
+        properties: C::properties_metadata(prefix),
     };
     CONFIG_REGISTRY.lock().unwrap().push(section);
 }
@@ -682,7 +664,6 @@ cargo run -p example-app  # Vérifier que rien ne casse
 1. Créer une `AppConfig` typée dans l'example-app :
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     /// Application name
     pub name: String,
@@ -695,7 +676,7 @@ pub struct AppConfig {
 ```
 
 2. Utiliser `validate_config::<AppConfig>()` dans le builder
-3. Injecter `AppConfig` via `#[config_section]` dans le `ConfigController`
+3. Injecter `AppConfig` via `#[config_section(prefix = "app")]` dans le `ConfigController`
 
 ### Validation
 ```bash
