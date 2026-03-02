@@ -1,7 +1,6 @@
 use r2e::prelude::*;
 
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "server")]
 pub struct ServerConfig {
     pub host: String,
     #[config(default = 8080)]

@@ -145,13 +145,12 @@ pub struct UserController {
 
 Values are resolved at request time from the `R2eConfig` stored in app state. Missing required keys (non-`Option`) panic with a descriptive message that includes the expected env var name.
 
-### Typed sections with `#[config_section]`
+### Typed sections with `#[config_section(prefix = "...")]`
 
-For groups of related settings, use `#[derive(ConfigProperties)]` to define a typed config struct, then inject it with `#[config_section]`:
+For groups of related settings, use `#[derive(ConfigProperties)]` to define a typed config struct, then inject it with `#[config_section(prefix = "...")]`:
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     /// Application name
     pub name: String,
@@ -167,7 +166,7 @@ pub struct AppConfig {
 #[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
-    #[config_section]
+    #[config_section(prefix = "app")]
     app_config: AppConfig,
 }
 
@@ -185,13 +184,12 @@ impl ConfigController {
 
 ## Typed configuration with `ConfigProperties`
 
-The `#[derive(ConfigProperties)]` macro generates a strongly-typed configuration section from a struct. It maps YAML keys to struct fields, supports defaults, optional fields, custom key mapping, env var overrides, and nested sections.
+The `#[derive(ConfigProperties)]` macro generates a strongly-typed configuration section from a struct. The prefix is provided at runtime when calling `from_config`. It maps YAML keys to struct fields, supports defaults, optional fields, custom key mapping, env var overrides, and nested sections.
 
 ### Basic usage
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app.database")]
 pub struct DatabaseConfig {
     /// Database connection URL
     pub url: String,
@@ -211,6 +209,10 @@ With this YAML:
 app:
   database:
     url: "postgres://localhost/mydb"
+```
+
+```rust
+let db = DatabaseConfig::from_config(&config, Some("app.database"))?;
 ```
 
 - `url` is required — missing it produces a startup error
@@ -233,15 +235,14 @@ When the YAML hierarchy doesn't match the Rust field name:
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "oidc")]
 pub struct OidcConfig {
     pub issuer: Option<String>,
 
     #[config(key = "jwks.url")]
-    pub jwks_url: Option<String>,          // reads from "oidc.jwks.url"
+    pub jwks_url: Option<String>,          // reads from "<prefix>.jwks.url"
 
     #[config(key = "client.id", default = "my-app")]
-    pub client_id: String,                  // reads from "oidc.client.id"
+    pub client_id: String,                  // reads from "<prefix>.client.id"
 }
 ```
 
@@ -251,7 +252,6 @@ Compose config structs hierarchically with `#[config(section)]`:
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app.database")]
 pub struct DatabaseConfig {
     pub url: String,
     #[config(default = 10)]
@@ -259,14 +259,15 @@ pub struct DatabaseConfig {
 }
 
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     pub name: String,
 
     #[config(section)]
-    pub database: DatabaseConfig,  // reads from "app.database.*"
+    pub database: DatabaseConfig,  // reads from "<prefix>.database.*"
 }
 ```
+
+When called with `AppConfig::from_config(&config, Some("app"))`, the nested `DatabaseConfig` automatically receives `Some("app.database")` as its prefix.
 
 ### Doc comments as descriptions
 
@@ -274,7 +275,6 @@ Doc comments on fields become property descriptions, used in validation error me
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     /// The display name of the application
     pub name: String,
@@ -289,7 +289,7 @@ You can upgrade an `R2eConfig` to carry a typed layer via `Deref`:
 
 ```rust
 let config = R2eConfig::load("dev")?
-    .with_typed::<AppConfig>()?;
+    .with_typed::<AppConfig>(Some("app"))?;
 
 // Typed field access via Deref
 println!("{}", config.name);
@@ -393,7 +393,7 @@ let first: String = config.get("app.allowed-origins.0").unwrap();
 
 ## Startup validation
 
-R2E validates configuration at startup. When a controller is registered with `AppBuilder`, all `#[config("key")]` fields and `#[config_section]` fields are checked. If required keys are missing, the application panics with a clear error:
+R2E validates configuration at startup. When a controller is registered with `AppBuilder`, all `#[config("key")]` fields and `#[config_section(prefix = "...")]` fields are checked. If required keys are missing, the application panics with a clear error:
 
 ```
 === CONFIGURATION ERRORS (controller: MyController) ===

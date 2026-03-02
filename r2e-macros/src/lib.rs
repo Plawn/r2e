@@ -793,17 +793,19 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 /// Derive macro for strongly-typed configuration sections.
 ///
 /// Generates a [`ConfigProperties`](r2e_core::config::typed::ConfigProperties)
-/// impl that maps a YAML config prefix to struct fields.
+/// impl that maps config keys (under a runtime prefix) to struct fields.
 ///
-/// # Struct-level attribute
-///
-/// `#[config(prefix = "...")]` sets the config key prefix.
+/// The prefix is provided at call-site (`from_config(&config, Some("app.database"))`),
+/// not on the struct itself.
 ///
 /// # Field attributes
 ///
 /// | Attribute | Description |
 /// |-----------|-------------|
 /// | `#[config(default = <expr>)]` | Default value if key is missing |
+/// | `#[config(key = "nested.key")]` | Override the config key path |
+/// | `#[config(env = "VAR")]` | Explicit env var fallback |
+/// | `#[config(section)]` | Nested `ConfigProperties` struct |
 /// | `Option<T>` field type | Automatically optional (returns `None` if missing) |
 /// | No attribute + non-Option | Required — `from_config()` returns error if missing |
 ///
@@ -813,7 +815,6 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[derive(ConfigProperties, Clone, Debug)]
-/// #[config(prefix = "app.database")]
 /// pub struct DatabaseConfig {
 ///     /// Database connection URL
 ///     pub url: String,
@@ -827,7 +828,7 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 /// }
 ///
 /// // Usage:
-/// let db_config = DatabaseConfig::from_config(&config)?;
+/// let db_config = DatabaseConfig::from_config(&config, Some("app.database"))?;
 /// ```
 #[proc_macro_derive(ConfigProperties, attributes(config))]
 pub fn derive_config_properties(input: TokenStream) -> TokenStream {

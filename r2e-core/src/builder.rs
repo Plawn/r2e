@@ -1217,37 +1217,6 @@ impl Default for TaskRegistryHandle {
 
 // ── Subsecond hot-reload ─────────────────────────────────────────────────
 
-#[cfg(feature = "dev-reload")]
-impl AppBuilder<NoState, TNil, TNil> {
-    /// Start the app with Subsecond hot-reloading.
-    ///
-    /// * `env` — Pre-computed environment (DB pool, config, etc.) that persists
-    ///   across hot-patches.
-    /// * `build_and_serve` — Closure that builds and serves the app.
-    ///   This closure (and all functions it calls in the tip crate) will be
-    ///   hot-patched when source files change.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use r2e_core::AppBuilder;
-    /// # #[derive(Clone)]
-    /// # struct AppEnv;
-    /// AppBuilder::serve_hot(env, |env| async move {
-    ///     AppBuilder::new()
-    ///         // ... build and serve
-    ///         .serve("0.0.0.0:3000").await.unwrap();
-    /// }).await;
-    /// ```
-    pub async fn serve_hot<Env, F, Fut>(env: Env, build_and_serve: F)
-    where
-        Env: Clone + Send + Sync + 'static,
-        F: Fn(Env) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = ()> + 'static,
-    {
-        r2e_devtools::serve_with_hotreload_env(env, build_and_serve).await;
-    }
-}
 
 /// Wait for a shutdown signal (Ctrl-C or SIGTERM on Unix).
 async fn shutdown_signal() {

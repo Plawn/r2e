@@ -95,7 +95,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         let inject_attr = field.attrs.iter().find(|a| a.path().is_ident("inject"));
         let legacy_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
-        let config_section_attr = field.attrs.iter().any(|a| a.path().is_ident("config_section"));
+        let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
 
         if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {
@@ -132,10 +132,33 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                 ty: field_type,
                 key: key.value(),
             });
-        } else if config_section_attr {
+        } else if let Some(cs_attr) = config_section_attr {
+            // Parse #[config_section(prefix = "...")]
+            let mut section_prefix: Option<String> = None;
+            if let syn::Meta::List(_) = &cs_attr.meta {
+                cs_attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("prefix") {
+                        let value = meta.value()?;
+                        let lit: syn::LitStr = value.parse()?;
+                        section_prefix = Some(lit.value());
+                        Ok(())
+                    } else {
+                        Err(meta.error(
+                            "expected `prefix` in #[config_section(prefix = \"...\")]"
+                        ))
+                    }
+                })?;
+            }
+            let prefix = section_prefix.ok_or_else(|| {
+                syn::Error::new_spanned(
+                    cs_attr,
+                    "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
+                )
+            })?;
             config_section_fields.push(ConfigSectionField {
                 name: field_name,
                 ty: field_type,
+                prefix,
             });
         } else {
             return Err(syn::Error::new(
@@ -144,7 +167,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                  \n  #[inject]              — clone from app state\n\
                  \n  #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)\n\
                  \n  #[config(\"app.key\")]   — resolve from R2eConfig\n\
-                 \n  #[config_section]      — resolve typed config section via ConfigProperties",
+                 \n  #[config_section(prefix = \"...\")]  — resolve typed config section via ConfigProperties",
             ));
         }
     }

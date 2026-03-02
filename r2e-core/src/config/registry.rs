@@ -12,10 +12,10 @@ pub struct RegisteredSection {
 }
 
 /// Register a config section's metadata in the global registry.
-pub fn register_section<C: ConfigProperties>() {
+pub fn register_section<C: ConfigProperties>(prefix: Option<&str>) {
     let section = RegisteredSection {
-        prefix: C::prefix().to_string(),
-        properties: C::properties_metadata(),
+        prefix: prefix.unwrap_or("").to_string(),
+        properties: C::properties_metadata(prefix),
     };
     CONFIG_REGISTRY.lock().unwrap().push(section);
 }

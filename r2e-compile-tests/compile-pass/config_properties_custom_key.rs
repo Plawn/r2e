@@ -1,7 +1,6 @@
 use r2e::prelude::*;
 
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "oidc")]
 pub struct OidcConfig {
     pub issuer: Option<String>,
     #[config(key = "jwks.url")]

@@ -19,6 +19,7 @@ pub struct ConfigField {
 pub struct ConfigSectionField {
     pub name: syn::Ident,
     pub ty: syn::Type,
+    pub prefix: String,
 }
 
 pub struct ConsumerMethod {

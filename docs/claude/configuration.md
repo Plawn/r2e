@@ -23,7 +23,7 @@ Central configuration store. `R2eConfig<()>` = raw key-value; `R2eConfig<T: Conf
 ### Methods (on `R2eConfig<()>` only)
 
 - `set("key", ConfigValue::...)` — insert/overwrite.
-- `with_typed::<C: ConfigProperties>()` → `Result<R2eConfig<C>, ConfigError>` — upgrade to typed.
+- `with_typed::<C: ConfigProperties>(prefix)` → `Result<R2eConfig<C>, ConfigError>` — upgrade to typed. `prefix` is `Option<&str>`.
 
 ## Resolution order (lowest → highest priority)
 
@@ -63,7 +63,7 @@ Syntax in YAML string values:
 
 ## ConfigProperties (typed sections)
 
-Derive macro: `#[derive(ConfigProperties)]`. Struct-level: `#[config(prefix = "...")]`.
+Derive macro: `#[derive(ConfigProperties)]`. No struct-level attribute required — the prefix is a runtime parameter.
 
 Field attributes:
 - `#[config(default = value)]` — fallback if key missing
@@ -74,17 +74,15 @@ Field attributes:
 - Doc comments → `PropertyMeta::description` (shown in validation errors)
 
 Generated trait methods:
-- `prefix() -> &'static str`
-- `properties_metadata() -> Vec<PropertyMeta>`
-- `from_config(config) -> Result<Self, ConfigError>`
-- `from_config_prefixed(config, prefix) -> Result<Self, ConfigError>`
+- `properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta>`
+- `from_config(config, prefix: Option<&str>) -> Result<Self, ConfigError>`
 
 ### PropertyMeta
 
 ```rust
 struct PropertyMeta {
     key: String,             // relative
-    full_key: String,        // absolute
+    full_key: String,        // absolute (computed from runtime prefix)
     type_name: &'static str,
     required: bool,
     default_value: Option<String>,
@@ -99,7 +97,7 @@ struct PropertyMeta {
 ### In controllers
 
 - `#[config("app.key")] field: T` — raw key, `T: FromConfigValue`, resolved per-request from state
-- `#[config_section] field: C` — `C: ConfigProperties`, loaded per-request
+- `#[config_section(prefix = "app")] field: C` — `C: ConfigProperties`, loaded per-request with given prefix
 
 ### In beans/producers
 
@@ -109,15 +107,15 @@ struct PropertyMeta {
 
 `AppBuilder::register_controller` calls `C::validate_config(config)`:
 - Checks all `#[config("key")]` fields exist
-- Calls `validate_section::<T>()` for `#[config_section]` fields
+- Calls `validate_section::<T>(config, Some(prefix))` for `#[config_section(prefix = "...")]` fields
 - Panics with formatted error listing missing keys, expected types, env var hints, and descriptions
 
 `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKeyError>` — manual validation.
-`validate_section::<C>(config)` → `Vec<MissingKeyError>` — validates a ConfigProperties section.
+`validate_section::<C>(config, prefix)` → `Vec<MissingKeyError>` — validates a ConfigProperties section.
 
 ## Registry
 
-`register_section::<C: ConfigProperties>()` — global registry for introspection.
+`register_section::<C: ConfigProperties>(prefix)` — global registry for introspection. `prefix` is `Option<&str>`.
 `registered_sections()` → `Vec<RegisteredSection { prefix, properties }>`.
 
 ## ConfigError

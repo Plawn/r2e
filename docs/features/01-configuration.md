@@ -111,13 +111,12 @@ impl MyController {
 }
 ```
 
-### 5. Typed config sections with `#[config_section]`
+### 5. Typed config sections with `#[config_section(prefix = "...")]`
 
 For groups of related settings, define a typed config struct and inject it as a whole:
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     /// Application name
     pub name: String,
@@ -133,7 +132,7 @@ pub struct AppConfig {
 #[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
-    #[config_section]
+    #[config_section(prefix = "app")]
     app_config: AppConfig,
 }
 ```
@@ -193,7 +192,7 @@ Conversion: lowercase, replace `_` with `.`.
 
 ## Startup validation
 
-When a controller is registered with `AppBuilder`, all `#[config]` and `#[config_section]` fields are validated. Missing required keys cause a panic with a clear error message including the expected env var name.
+When a controller is registered with `AppBuilder`, all `#[config]` and `#[config_section(prefix = "...")]` fields are validated. Missing required keys cause a panic with a clear error message including the expected env var name.
 
 ## Testing
 

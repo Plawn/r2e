@@ -55,8 +55,8 @@ pub async fn serve_with_hotreload<Env, SetupFut, ServerFn, ServerFut>(
 /// Run an R2E app with Subsecond hot-reloading, using a pre-built environment.
 ///
 /// Like [`serve_with_hotreload`], but takes a pre-built `Env` directly instead
-/// of a setup closure. This is the core implementation that both
-/// `serve_with_hotreload` and `AppBuilder::serve_hot` delegate to.
+/// of a setup closure. This is the core implementation that
+/// `serve_with_hotreload` and the `#[r2e::main]` macro delegate to.
 ///
 /// # Important
 ///

@@ -72,8 +72,9 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         .iter()
         .map(|f| {
             let field_type = &f.ty;
+            let prefix = &f.prefix;
             quote! {
-                __errors.extend(#krate::config::validation::validate_section::<#field_type>(__config));
+                __errors.extend(#krate::config::validation::validate_section::<#field_type>(__config, Some(#prefix)));
             }
         })
         .collect();
@@ -201,25 +202,26 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
-    // Config section field initializers (#[config_section])
+    // Config section field initializers (#[config_section(prefix = "...")])
     let config_section_inits: Vec<TokenStream> = def
         .config_section_fields
         .iter()
         .map(|f| {
             let field_name = &f.name;
             let field_type = &f.ty;
+            let prefix = &f.prefix;
             quote! {
                 #field_name: {
                     let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    match <#field_type as #krate::ConfigProperties>::from_config(&__cfg) {
+                    match <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix)) {
                         Ok(v) => v,
                         Err(e) => {
                             return Err(#krate::http::response::IntoResponse::into_response(
                                 #krate::HttpError::Internal(
                                     format!(
-                                        "Configuration error in {}: failed to load {} — {}",
+                                        "Configuration error in {}: failed to load section '{}' — {}",
                                         #controller_name_str,
-                                        <#field_type as #krate::ConfigProperties>::prefix(),
+                                        #prefix,
                                         e,
                                     )
                                 )
@@ -311,14 +313,15 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         .map(|f| {
             let field_name = &f.name;
             let field_type = &f.ty;
+            let prefix = &f.prefix;
             quote! {
                 #field_name: {
                     let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    <#field_type as #krate::ConfigProperties>::from_config(&__cfg)
+                    <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix))
                         .unwrap_or_else(|e| panic!(
-                            "Configuration error in `{}`: failed to load {} — {}",
+                            "Configuration error in `{}`: failed to load section '{}' — {}",
                             #sc_controller_name_str,
-                            <#field_type as #krate::ConfigProperties>::prefix(),
+                            #prefix,
                             e,
                         ))
                 }

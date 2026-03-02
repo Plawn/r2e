@@ -6,7 +6,7 @@ error: every controller field must be annotated with one of:
 
          #[config("app.key")]   — resolve from R2eConfig
 
-         #[config_section]      — resolve typed config section via ConfigProperties
+         #[config_section(prefix = "...")]  — resolve typed config section via ConfigProperties
   --> compile-fail/unannotated_field.rs:11:5
    |
 11 |     name: String,

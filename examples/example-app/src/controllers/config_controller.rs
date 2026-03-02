@@ -2,7 +2,6 @@ use crate::state::Services;
 use r2e::prelude::*;
 
 #[derive(ConfigProperties, Clone, Debug)]
-#[config(prefix = "app")]
 pub struct AppConfig {
     /// Application name
     pub name: String,
@@ -18,7 +17,7 @@ pub struct AppConfig {
 #[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
-    #[config_section]
+    #[config_section(prefix = "app")]
     app_config: AppConfig,
 }
 

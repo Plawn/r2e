@@ -26,7 +26,7 @@ Le `boot_time` est un timestamp (millisecondes depuis l'epoch Unix) capture une 
 ```rust
 AppBuilder::new()
     .with_state(services)
-    .with_dev_reload()  // Active les endpoints /__r2e_dev/*
+    .with(DevReload)  // Active les endpoints /__r2e_dev/*
     // ...
     .serve("0.0.0.0:3000")
     .await
@@ -122,15 +122,15 @@ r2e dev --features openapi scheduler
 
 ## Note sur la production
 
-Les endpoints `/__r2e_dev/*` ne doivent **pas** etre actives en production. Ne pas appeler `.with_dev_reload()` dans le profil de production :
+Les endpoints `/__r2e_dev/*` ne doivent **pas** etre actives en production. Ne pas appeler `.with(DevReload)` dans le profil de production :
 
 ```rust
 let mut builder = AppBuilder::new()
     .with_state(services)
-    .with_health();
+    .with(Health);
 
 if is_dev {
-    builder = builder.with_dev_reload();
+    builder = builder.with(DevReload);
 }
 
 builder.serve("0.0.0.0:3000").await.unwrap();

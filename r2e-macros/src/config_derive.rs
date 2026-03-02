@@ -13,33 +13,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Extract the `#[config(prefix = "...")]` attribute from the struct.
-fn extract_prefix(input: &DeriveInput) -> syn::Result<String> {
-    for attr in &input.attrs {
-        if attr.path().is_ident("config") {
-            let mut prefix = None;
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("prefix") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    prefix = Some(lit.value());
-                    Ok(())
-                } else {
-                    Err(meta.error("expected `prefix` in #[config(prefix = \"...\")]"))
-                }
-            })?;
-            if let Some(p) = prefix {
-                return Ok(p);
-            }
-        }
-    }
-    Err(syn::Error::new_spanned(
-        &input.ident,
-        "#[derive(ConfigProperties)] requires #[config(prefix = \"...\")]\n\
-         \n  example:\n  #[derive(ConfigProperties)]\n  #[config(prefix = \"app.database\")]\n  pub struct DatabaseConfig { ... }",
-    ))
-}
-
 /// Parsed information about a single field in a ConfigProperties struct.
 struct FieldInfo {
     name: syn::Ident,
@@ -172,9 +145,29 @@ fn has_validate_attr(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("validate"))
 }
 
+/// Consume and ignore a `#[config(prefix = "...")]` attribute if present (for backwards compat).
+/// Returns Ok(()) whether or not the attribute is present.
+fn consume_prefix_attr(input: &DeriveInput) -> syn::Result<()> {
+    for attr in &input.attrs {
+        if attr.path().is_ident("config") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("prefix") {
+                    let value = meta.value()?;
+                    let _lit: syn::LitStr = value.parse()?;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `prefix` in #[config(prefix = \"...\")]"))
+                }
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
-    let prefix = extract_prefix(input)?;
+    // Consume (and ignore) any #[config(prefix = "...")] for backwards compat
+    consume_prefix_attr(input)?;
     let krate = r2e_core_path();
 
     let fields = match &input.data {
@@ -243,7 +236,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 Some(k) => k.clone(),
                 None => f.name.to_string(),
             };
-            let full_key = format!("{}.{}", prefix, key);
             let type_name_simple = type_name_str(&f.ty);
             let required = !f.is_option && f.default_expr.is_none() && !f.is_section;
             let default_val = match &f.default_str {
@@ -260,21 +252,27 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             };
             let is_section = f.is_section;
             quote! {
-                #krate::config::typed::PropertyMeta {
-                    key: #key.to_string(),
-                    full_key: #full_key.to_string(),
-                    type_name: #type_name_simple,
-                    required: #required,
-                    default_value: #default_val,
-                    description: #desc,
-                    env_var: #env_var_tok,
-                    is_section: #is_section,
+                {
+                    let __full_key = match __prefix {
+                        Some(__p) => format!("{}.{}", __p, #key),
+                        None => #key.to_string(),
+                    };
+                    #krate::config::typed::PropertyMeta {
+                        key: #key.to_string(),
+                        full_key: __full_key,
+                        type_name: #type_name_simple,
+                        required: #required,
+                        default_value: #default_val,
+                        description: #desc,
+                        env_var: #env_var_tok,
+                        is_section: #is_section,
+                    }
                 }
             }
         })
         .collect();
 
-    // Generate from_config_prefixed field initializers
+    // Generate from_config field initializers
     let field_inits: Vec<TokenStream2> = field_infos
         .iter()
         .map(|f| {
@@ -284,7 +282,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 None => f.name.to_string(),
             };
 
-            // Section fields delegate to ConfigProperties::from_config_prefixed
+            // Section fields delegate to ConfigProperties::from_config
             if f.is_section {
                 let section_ty = if f.is_option {
                     option_inner_type(&f.ty).unwrap()
@@ -292,9 +290,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     &f.ty
                 };
                 let section_init = quote! {
-                    <#section_ty as #krate::config::ConfigProperties>::from_config_prefixed(
+                    <#section_ty as #krate::config::ConfigProperties>::from_config(
                         __config,
-                        &format!("{}.{}", __prefix, #key_str),
+                        Some(&match __prefix {
+                            Some(__p) => format!("{}.{}", __p, #key_str),
+                            None => #key_str.to_string(),
+                        }),
                     )
                 };
                 if f.is_option {
@@ -312,7 +313,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
 
             // Build the key expression using runtime prefix
-            let key_expr = quote! { &format!("{}.{}", __prefix, #key_str) };
+            let key_expr = quote! {
+                &match __prefix {
+                    Some(__p) => format!("{}.{}", __p, #key_str),
+                    None => #key_str.to_string(),
+                }
+            };
 
             // Helper: generate env var fallback block that converts the
             // env string to the target type via FromConfigValue.
@@ -470,11 +476,19 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             {
                 use garde::Validate as _;
                 let __ctx = <#name as garde::Validate>::Context::default();
+                let __prefix_str = __prefix.unwrap_or("");
                 __instance.validate(&__ctx).map_err(|__report| {
                     let __details = __report.iter()
-                        .map(|(path, error)| #krate::config::ConfigValidationDetail {
-                            key: format!("{}.{}", __prefix, path),
-                            message: error.message().to_string(),
+                        .map(|(path, error)| {
+                            let __key = if __prefix_str.is_empty() {
+                                format!("{}", path)
+                            } else {
+                                format!("{}.{}", __prefix_str, path)
+                            };
+                            #krate::config::ConfigValidationDetail {
+                                key: __key,
+                                message: error.message().to_string(),
+                            }
                         })
                         .collect();
                     #krate::config::ConfigError::Validation(__details)
@@ -487,19 +501,15 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #krate::config::typed::ConfigProperties for #name {
-            fn prefix() -> &'static str {
-                #prefix
-            }
-
-            fn properties_metadata() -> Vec<#krate::config::typed::PropertyMeta> {
+            fn properties_metadata(__prefix: Option<&str>) -> Vec<#krate::config::typed::PropertyMeta> {
                 vec![
                     #(#metadata_entries,)*
                 ]
             }
 
-            fn from_config_prefixed(
+            fn from_config(
                 __config: &#krate::config::R2eConfig,
-                __prefix: &str,
+                __prefix: Option<&str>,
             ) -> Result<Self, #krate::config::ConfigError> {
                 let __instance = Self {
                     #(#field_inits,)*

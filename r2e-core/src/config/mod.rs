@@ -160,12 +160,12 @@ impl R2eConfig {
     /// Upgrade to a typed config by constructing `T` from the raw values.
     ///
     /// ```ignore
-    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>()?;
+    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(Some("app"))?;
     /// config.name  // typed field access via Deref
     /// config.get::<String>("app.name")  // raw access still works
     /// ```
-    pub fn with_typed<C: ConfigProperties>(self) -> Result<R2eConfig<C>, ConfigError> {
-        let typed = C::from_config(&self)?;
+    pub fn with_typed<C: ConfigProperties>(self, prefix: Option<&str>) -> Result<R2eConfig<C>, ConfigError> {
+        let typed = C::from_config(&self, prefix)?;
         Ok(R2eConfig {
             values: self.values,
             profile: self.profile,

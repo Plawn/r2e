@@ -75,15 +75,16 @@ pub fn validate_keys(
 /// errors (e.g., garde constraints).
 pub fn validate_section<C: ConfigProperties>(
     config: &R2eConfig,
+    prefix: Option<&str>,
 ) -> Vec<MissingKeyError> {
-    let meta = C::properties_metadata();
-    let prefix = C::prefix();
+    let meta = C::properties_metadata(prefix);
+    let source = prefix.unwrap_or("<root>");
 
     let mut errors: Vec<MissingKeyError> = meta.iter()
         .filter(|prop| prop.required && !prop.is_section)
         .filter(|prop| matches!(config.get::<String>(&prop.full_key), Err(ConfigError::NotFound(_))))
         .map(|prop| MissingKeyError {
-            source: prefix.to_string(),
+            source: source.to_string(),
             key: prop.full_key.clone(),
             expected_type: prop.type_name.to_string(),
             env_hint: match &prop.env_var {
@@ -97,11 +98,11 @@ pub fn validate_section<C: ConfigProperties>(
     // If no missing keys, try constructing the section to surface
     // TypeMismatch and Validation errors.
     if errors.is_empty() {
-        if let Err(e) = C::from_config(config) {
+        if let Err(e) = C::from_config(config, prefix) {
             match e {
                 ConfigError::TypeMismatch { key, expected } => {
                     errors.push(MissingKeyError {
-                        source: prefix.to_string(),
+                        source: source.to_string(),
                         key: key.clone(),
                         expected_type: expected.to_string(),
                         env_hint: key.to_uppercase().replace('.', "_"),
@@ -111,7 +112,7 @@ pub fn validate_section<C: ConfigProperties>(
                 ConfigError::Validation(details) => {
                     for detail in details {
                         errors.push(MissingKeyError {
-                            source: prefix.to_string(),
+                            source: source.to_string(),
                             key: detail.key.clone(),
                             expected_type: "valid".to_string(),
                             env_hint: detail.key.to_uppercase().replace('.', "_"),
@@ -121,7 +122,7 @@ pub fn validate_section<C: ConfigProperties>(
                 }
                 ConfigError::NotFound(key) => {
                     errors.push(MissingKeyError {
-                        source: prefix.to_string(),
+                        source: source.to_string(),
                         key: key.clone(),
                         expected_type: "unknown".to_string(),
                         env_hint: key.to_uppercase().replace('.', "_"),
