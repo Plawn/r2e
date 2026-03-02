@@ -118,6 +118,7 @@ impl UserController {
 
 ## Detailed Reference (see linked files)
 
+- **[Configuration](docs/claude/configuration.md)** — R2eConfig, ConfigProperties, secrets, profiles, validation, FromConfigValue, typed sections, registry
 - **[Guards & Interceptors](docs/claude/guards-interceptors.md)** — Guard/PreAuthGuard traits, GuardContext, Identity, RolesGuard, RateLimitGuard, interceptor wrapping order, configurable syntax
 - **[Error Handling & Managed Resources](docs/claude/error-handling.md)** — HttpError variants, `#[derive(ApiError)]`, `map_error!`, validation, ManagedResource trait, `#[managed]`
 - **[Beans & Dependency Injection](docs/claude/beans-di.md)** — Bean/AsyncBean/Producer traits, `#[bean]`, `#[producer]`, `#[config]` in beans, `build_state()`

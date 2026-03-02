@@ -30,6 +30,6 @@
 - improve testing facilities
 - validation error tests ? -> clean strucutred ?
 - improve config facilities, -> make main smaller
-
+- add warning when return body could not automatticaaly be added top openapi
 
 -> optimize impl IntoResponse for HttpError {
