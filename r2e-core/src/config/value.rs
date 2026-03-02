@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::ConfigError;
 
@@ -181,6 +182,12 @@ impl FromConfigValue for f32 {
     fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
         let f = f64::from_config_value(value, key)?;
         Ok(f as f32)
+    }
+}
+
+impl FromConfigValue for PathBuf {
+    fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
+        String::from_config_value(value, key).map(PathBuf::from)
     }
 }
 
