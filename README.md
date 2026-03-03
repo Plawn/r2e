@@ -43,8 +43,12 @@ impl UserController {
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI at `/docs`
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
+- **OpenTelemetry** — Distributed tracing and context propagation via OTLP exporter
+- **gRPC** — Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports
+- **Embedded OIDC** — Built-in OIDC server issuing JWTs (password + client_credentials grants) without an external IdP
 - **Configuration** — YAML + env var overlay with profile support (`R2E_PROFILE=prod`)
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
+- **Multipart** — Multipart form/file upload support
 - **Testing** — `TestApp` HTTP client wrapper and `TestJwt` token generator for integration tests
 - **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate` for scaffolding
 
@@ -118,10 +122,8 @@ impl UserController {
 Wire it up in `main.rs`:
 
 ```rust
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    r2e::init_tracing();
-
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
@@ -408,7 +410,7 @@ AppBuilder::new()
 ```rust
 use r2e_test::{TestApp, TestJwt};
 
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users() {
     let jwt = TestJwt::new();
     let app = TestApp::from_builder(
@@ -453,29 +455,59 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 | `SecureHeaders` | Security headers (X-Content-Type-Options, etc.) |
 | `OpenApiPlugin` | OpenAPI spec + docs UI |
 | `Prometheus` | Prometheus metrics at `/metrics` |
+| `Observability` | OpenTelemetry distributed tracing (OTLP exporter) |
+| `GrpcServer` | gRPC server on a dedicated port (install via `.plugin()` before `build_state()`) |
+| `OidcServer` | Embedded OIDC server (`/oauth/token`, JWKS endpoints) |
+| `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
 | `Scheduler` | Background task scheduling (install via `.plugin()` before `build_state()`) |
 
 ## Crate map
 
 ```
-r2e              Facade crate — re-exports everything, feature-gated
-r2e-core         Runtime: AppBuilder, Controller, guards, interceptors, config, plugins
-r2e-macros       Proc macros: #[derive(Controller)], #[routes], #[bean]
-r2e-security     JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
-r2e-events       In-process typed EventBus with pub/sub
-r2e-scheduler    Background task scheduling (interval, cron)
-r2e-data         Database: Entity, Repository, QueryBuilder, Pageable/Page
-r2e-cache        TTL cache with pluggable backends
-r2e-rate-limit   Token-bucket rate limiting with pluggable backends
-r2e-openapi      OpenAPI 3.0.3 spec generation + docs UI
-r2e-prometheus   Prometheus metrics middleware
-r2e-openfga      OpenFGA integration
-r2e-utils        Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
-r2e-test         TestApp, TestJwt for integration testing
-r2e-cli          CLI scaffolding tool
+r2e               Facade crate — re-exports everything, feature-gated
+r2e-core          Runtime: AppBuilder, Controller, guards, interceptors, config, plugins, SSE, WS
+r2e-macros        Proc macros: #[derive(Controller)], #[routes], #[bean]
+r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
+r2e-events        In-process typed EventBus with pub/sub
+r2e-scheduler     Background task scheduling (interval, cron)
+r2e-data          Database: Entity, Repository, QueryBuilder, Pageable/Page
+r2e-data-sqlx     SQLx backend: SqlxRepository, Tx, HasPool (sqlite/postgres/mysql)
+r2e-data-diesel   Diesel backend (skeleton): DieselRepository (sqlite/postgres/mysql)
+r2e-cache         TTL cache with pluggable backends
+r2e-rate-limit    Token-bucket rate limiting with pluggable backends
+r2e-openapi       OpenAPI 3.0.3 spec generation + docs UI
+r2e-prometheus    Prometheus metrics middleware
+r2e-observability OpenTelemetry distributed tracing + context propagation (OTLP)
+r2e-grpc          gRPC server support via Tonic, multiplexed with HTTP
+r2e-oidc          Embedded OIDC server: JWT issuance, password + client_credentials grants
+r2e-openfga       OpenFGA fine-grained authorization (Zanzibar-style)
+r2e-utils         Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
+r2e-test          TestApp, TestJwt for integration testing
+r2e-devtools      Subsecond hot-reload (dev-reload feature only, not for production)
+r2e-cli           CLI scaffolding tool
 ```
 
 For a detailed file-by-file breakdown of every crate, see [REPO_MAP.md](REPO_MAP.md).
+
+## Examples
+
+The `examples/` directory contains runnable demo apps:
+
+| Example | Description |
+|---------|-------------|
+| `example-app` | Kitchen-sink demo exercising all features |
+| `example-postgres` | CRUD with PostgreSQL, SQLx migrations, OpenAPI docs |
+| `example-multi-tenant` | JWT-based tenant isolation with custom `TenantGuard` |
+| `example-websocket-chat` | Real-time chat using `WsRooms` and event-driven persistence |
+| `example-grpc` | HTTP + gRPC multiplexing on separate ports |
+| `example-microservice` | Two services with inter-service HTTP calls and shared types |
+| `example-oidc` | Embedded OIDC server with password and client_credentials grants |
+
+```bash
+cargo run -p example-app             # port 3000
+cargo run -p example-postgres        # requires a running PostgreSQL
+cargo run -p example-grpc            # HTTP :3000, gRPC :50051
+```
 
 ## Building
 
