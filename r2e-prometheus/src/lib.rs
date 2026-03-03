@@ -1,6 +1,7 @@
 //! Prometheus metrics plugin for R2E.
 //!
 //! Provides automatic HTTP request tracking and a `/metrics` endpoint.
+//! Installs as a pre-state plugin so the registry is available for DI.
 //!
 //! # Usage
 //!
@@ -9,12 +10,33 @@
 //! use r2e_prometheus::Prometheus;
 //!
 //! AppBuilder::new()
+//!     .plugin(Prometheus::new("/metrics"))
 //!     .build_state::<MyState, _, _>()
 //!     .await
-//!     .with(Prometheus::new("/metrics"))
 //!     .serve("0.0.0.0:3000")
 //!     .await;
 //! ```
+//!
+//! # Custom Metrics
+//!
+//! Register custom collectors at build time:
+//!
+//! ```rust,ignore
+//! use r2e_prometheus::prometheus::IntCounter;
+//!
+//! let my_counter = IntCounter::new("my_counter", "A custom counter").unwrap();
+//! AppBuilder::new()
+//!     .plugin(Prometheus::builder()
+//!         .namespace("myapp")
+//!         .register(Box::new(my_counter.clone()))
+//!         .build())
+//!     .build_state::<MyState, _, _>()
+//!     .await
+//!     .serve("0.0.0.0:3000")
+//!     .await;
+//! ```
+//!
+//! Or inject `PrometheusRegistry` into services for runtime registration.
 //!
 //! # Metrics
 //!
@@ -28,37 +50,79 @@ mod handler;
 mod layer;
 mod metrics;
 
-pub use metrics::MetricsConfig;
+pub use metrics::{encode_metrics, init_metrics, is_initialized, metrics, registry, MetricsConfig};
+pub use prometheus;
 
 use handler::metrics_handler;
 use layer::PrometheusLayer;
-use metrics::init_metrics;
 use r2e_core::http::routing::get;
-use r2e_core::http::Router;
-use r2e_core::Plugin;
+use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+
+/// A handle to the shared Prometheus metrics registry.
+///
+/// Clone is cheap (`prometheus::Registry` uses `Arc` internally).
+/// Inject this into services to register custom metrics at runtime.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(Bean)]
+/// pub struct MyService {
+///     #[inject] registry: PrometheusRegistry,
+/// }
+///
+/// impl MyService {
+///     fn setup(&self) {
+///         let counter = prometheus::IntCounter::new("my_counter", "help").unwrap();
+///         self.registry.register(Box::new(counter)).unwrap();
+///     }
+/// }
+/// ```
+#[derive(Clone)]
+pub struct PrometheusRegistry {
+    inner: prometheus::Registry,
+}
+
+impl PrometheusRegistry {
+    /// Register a custom Prometheus collector (counter, gauge, histogram, etc.).
+    pub fn register(
+        &self,
+        collector: Box<dyn prometheus::core::Collector>,
+    ) -> prometheus::Result<()> {
+        self.inner.register(collector)
+    }
+
+    /// Access the underlying `prometheus::Registry`.
+    pub fn inner(&self) -> &prometheus::Registry {
+        &self.inner
+    }
+}
 
 /// Prometheus metrics plugin.
 ///
-/// Adds:
-/// - A `/metrics` endpoint (configurable path)
-/// - Request tracking middleware (duration, count, status)
+/// Installs as a [`PreStatePlugin`], providing a [`PrometheusRegistry`] bean
+/// for dependency injection. The `/metrics` endpoint and tracking middleware
+/// are installed via a deferred action after state resolution.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Simple usage
-/// .with(Prometheus::new("/metrics"))
+/// .plugin(Prometheus::new("/metrics"))
 ///
 /// // With configuration
-/// .with(Prometheus::builder()
+/// .plugin(Prometheus::builder()
 ///     .endpoint("/metrics")
 ///     .namespace("myapp")
-///     .exclude_paths(&["/health", "/metrics"])
+///     .exclude_path("/health")
+///     .exclude_path("/metrics")
+///     .register(Box::new(my_custom_counter))
 ///     .build())
 /// ```
 pub struct Prometheus {
     endpoint: String,
     config: MetricsConfig,
+    collectors: Vec<Box<dyn prometheus::core::Collector>>,
 }
 
 impl Prometheus {
@@ -67,6 +131,7 @@ impl Prometheus {
         Self {
             endpoint: endpoint.to_string(),
             config: MetricsConfig::default(),
+            collectors: Vec::new(),
         }
     }
 
@@ -76,18 +141,38 @@ impl Prometheus {
     }
 }
 
-impl Plugin for Prometheus {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: r2e_core::AppBuilder<T>) -> r2e_core::AppBuilder<T> {
-        // Initialize global metrics
-        let config = self.config.clone();
-        init_metrics(&config);
+impl PreStatePlugin for Prometheus {
+    type Provided = PrometheusRegistry;
+    type Required = r2e_core::type_list::TNil;
 
-        let endpoint = self.endpoint.clone();
+    fn install(self, ctx: &mut PluginInstallContext) -> Self::Provided {
+        // Initialize global metrics singleton
+        let m = init_metrics(&self.config);
 
-        // Register the /metrics endpoint
-        app.register_routes(Router::new().route(&endpoint, get(metrics_handler)))
-            // Add the metrics tracking layer
-            .with_layer_fn(move |router| router.layer(PrometheusLayer::new(config.clone())))
+        // Register user-supplied collectors
+        for collector in self.collectors {
+            m.registry
+                .register(collector)
+                .expect("Failed to register custom Prometheus collector");
+        }
+
+        // Create the injectable handle (cheap Arc clone)
+        let handle = PrometheusRegistry {
+            inner: m.registry.clone(),
+        };
+
+        // Defer layer + route installation to post-state phase
+        let config = self.config;
+        let endpoint = self.endpoint;
+        ctx.add_deferred(DeferredAction::new("Prometheus", move |dctx| {
+            dctx.add_layer(Box::new(move |router| {
+                router
+                    .route(&endpoint, get(metrics_handler))
+                    .layer(PrometheusLayer::new(config))
+            }));
+        }));
+
+        handle
     }
 }
 
@@ -98,6 +183,7 @@ pub struct PrometheusBuilder {
     namespace: Option<String>,
     buckets: Option<Vec<f64>>,
     exclude_paths: Vec<String>,
+    collectors: Vec<Box<dyn prometheus::core::Collector>>,
 }
 
 impl PrometheusBuilder {
@@ -131,6 +217,15 @@ impl PrometheusBuilder {
         self
     }
 
+    /// Register a custom Prometheus collector that will be added to the shared registry.
+    ///
+    /// Collectors are registered during plugin installation, so they appear
+    /// alongside built-in HTTP metrics on the `/metrics` endpoint.
+    pub fn register(mut self, collector: Box<dyn prometheus::core::Collector>) -> Self {
+        self.collectors.push(collector);
+        self
+    }
+
     /// Build the Prometheus plugin.
     pub fn build(self) -> Prometheus {
         let mut config = MetricsConfig::default();
@@ -148,6 +243,7 @@ impl PrometheusBuilder {
         Prometheus {
             endpoint: self.endpoint.unwrap_or_else(|| "/metrics".to_string()),
             config,
+            collectors: self.collectors,
         }
     }
 }

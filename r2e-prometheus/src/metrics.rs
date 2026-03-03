@@ -93,12 +93,23 @@ pub fn init_metrics(config: &MetricsConfig) -> &'static Metrics {
     METRICS.get_or_init(|| Metrics::new(config))
 }
 
+/// Returns `true` if metrics have been initialized.
+pub fn is_initialized() -> bool {
+    METRICS.get().is_some()
+}
+
 /// Get the global metrics instance.
 /// Panics if metrics haven't been initialized.
 pub fn metrics() -> &'static Metrics {
     METRICS
         .get()
         .expect("Metrics not initialized. Call init_metrics() first.")
+}
+
+/// Get the global prometheus Registry.
+/// Panics if metrics haven't been initialized.
+pub fn registry() -> &'static Registry {
+    &metrics().registry
 }
 
 /// Encode all metrics to Prometheus text format.
