@@ -49,21 +49,35 @@ Ces declarations no-op existent pour trois raisons :
 Les intercepteurs s'appliquent dans un ordre fixe, de l'exterieur vers l'interieur :
 
 ```
-Niveau handler (avant le controller, dans generate_single_handler) :
-  → rate_limited (si present) — short-circuit 429
-  → roles (si present) — short-circuit 403
+Niveau pre-auth middleware (avant extraction JWT) :
+  → pre_guard (RateLimit::global, RateLimit::per_ip, custom PreAuthGuard)
 
-Niveau body (trait Interceptor::around, dans generate_wrapped_method) :
-  → logged
-  → timed
-  → intercepteurs user-defined (#[intercept(...)]) dans l'ordre de declaration
-  → cached
+Niveau handler (apres extraction, avant le body) :
+  → guard (RateLimit::per_user, custom Guard)
+  → roles — short-circuit 403
+
+Niveau body (trait Interceptor::around) :
+  → intercepteurs controller-level (ordre de declaration)
+  → intercepteurs method-level (ordre de declaration)
 
 Codegen pur (wrapping inline) :
-  → cache_invalidate (apres le body)
   → transactional (injection de tx)
   → corps de la methode
 ```
+
+**Invariant de design :** Les intercepteurs voient toujours le **type de retour brut** du handler (`Json<T>`, `Result<Json<T>, E>`, etc.), jamais `Response`. La conversion `IntoResponse::into_response()` est appliquee *apres* l'intercepteur le plus externe. Les guards short-circuitent *avant* les intercepteurs et n'affectent pas le type vu par les intercepteurs.
+
+### Combinaison intercepteurs + guards/roles
+
+`#[intercept(Cache)]` + `#[roles]` (ou tout `#[guard]`) fonctionne correctement :
+```rust
+#[get("/admin/users")]
+#[roles("admin")]
+#[intercept(Cache::ttl(30).group("admin_users"))]
+async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
+```
+
+**Limitation connue :** `#[managed]` + `#[intercept(Cache)]` ne fonctionne PAS — le lifecycle de la managed resource (acquire/release avec gestion d'erreur) wrappe `into_response` a l'interieur du closure de l'intercepteur, donc `Cache` voit `Response` au lieu du type brut. Workaround : utiliser `cache_backend()` manuellement dans le body du handler.
 
 ## Le trait `Interceptor<R>`
 
@@ -162,8 +176,11 @@ Cache le resultat de la methode. Le cache utilise le trait `Interceptor<axum::Js
 
 ### Contraintes
 
-- Le type de retour **doit** etre `axum::Json<T>` ou `T: Serialize + DeserializeOwned` (pas `Result<Json<T>, HttpError>`)
-- Le cache serialise/deserialise en JSON string via `serde_json`
+- Le type de retour doit implementer `Cacheable` :
+  - `Json<T>` ou `T: Serialize + DeserializeOwned + Send`
+  - `Result<T, E>` ou `T: Cacheable, E: Send` (seules les valeurs `Ok` sont cachees)
+  - Types avec `#[derive(Cacheable)]`
+- Le cache serialise/deserialise en JSON via `serde_json`
 - Pour `key = "params"`, les parametres de la methode doivent implementer `Debug`
 - Pour `key = "user"` ou `key = "user_params"`, le controller doit avoir un champ `#[identity]`
 

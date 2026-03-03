@@ -73,16 +73,36 @@ Handler level (after extraction, before controller body):
 2. `roles` — short-circuits with 403
 3. `guard(CustomGuard)` — custom guards, short-circuit with custom error
 
-Method body level (trait-based, via `Interceptor::around`, in `generate_wrapped_method`):
-4. `logged`
-5. `timed`
-6. User-defined interceptors (`#[intercept(...)]`)
-7. `cached`
+Method body level (trait-based, via `Interceptor::around`):
+4. Controller-level interceptors (declaration order)
+5. Method-level interceptors (declaration order)
 
 Inline codegen (no trait):
-8. `cache_invalidate` (after body)
-9. `transactional` (wraps body in tx begin/commit)
-10. Original method body
+6. `transactional` (wraps body in tx begin/commit)
+7. Original method body
+
+**Design invariant:** Interceptors always see the handler's **raw return type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The `IntoResponse::into_response()` conversion happens *after* the outermost interceptor. Guards short-circuit *before* interceptors, so they don't affect the type interceptors see.
+
+### `Cache` interceptor type constraints
+
+`Cache` requires `R: Cacheable`. Built-in `Cacheable` impls:
+- `Json<T>` where `T: Serialize + DeserializeOwned + Send`
+- `Result<T, E>` where `T: Cacheable, E: Send` (only caches `Ok` values)
+- Types deriving `#[derive(Cacheable)]`
+
+Other built-in interceptors (`Logged`, `Timed`, `CacheInvalidate`, `Counted`, `MetricTimed`) only require `R: Send` and work with any return type.
+
+### Combining interceptors with guards/roles
+
+`#[intercept(Cache)]` + `#[roles]` (or any `#[guard]`) works correctly — guards run first, then interceptors see the raw type:
+```rust
+#[get("/admin/users")]
+#[roles("admin")]
+#[intercept(Cache::ttl(30).group("admin_users"))]
+async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
+```
+
+**Known limitation:** `#[managed]` + `#[intercept(Cache)]` does NOT work — the managed resource lifecycle (acquire/release with error handling) wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: use `cache_backend()` manually in the handler body.
 
 ### Configurable syntax
 

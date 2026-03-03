@@ -85,12 +85,24 @@ impl UserController {
 
 When multiple interceptors are applied, they wrap in this order (outermost to innermost):
 
-1. `Logged` (controller-level, then method-level)
-2. `Timed`
-3. User-defined interceptors (`#[intercept(...)]`)
-4. `Cache`
-5. Method body
-6. `CacheInvalidate` (after body)
+1. Controller-level interceptors (declaration order)
+2. Method-level interceptors (declaration order)
+3. Method body
+
+Interceptors always see the handler's **raw return type** (`Json<T>`, `Result<Json<T>, E>`, etc.). The `IntoResponse` conversion to `Response` happens after the outermost interceptor.
+
+## Combining with guards and roles
+
+`#[intercept(...)]` works alongside `#[roles]`, `#[guard]`, and `#[pre_guard]`. Guards run before the interceptor chain and short-circuit independently — they don't affect the return type that interceptors see:
+
+```rust
+#[get("/admin/users")]
+#[roles("admin")]                                  // Guard: 403 if not admin
+#[intercept(Cache::ttl(30).group("admin_users"))]  // Cache: sees Json<Vec<User>>, not Response
+async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
+```
+
+> **Known limitation:** `#[managed]` parameters combined with type-constrained interceptors (e.g., `Cache`) don't work because the managed resource lifecycle wraps `into_response` inside the interceptor closure. Workaround: use `cache_backend()` manually in the handler body.
 
 ## Writing custom interceptors
 

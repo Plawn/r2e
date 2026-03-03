@@ -174,3 +174,16 @@ async fn create(&self, body: Json<Request>) -> Json<Response> {
     // Only reached if ALL guards pass
 }
 ```
+
+## Combining guards with interceptors
+
+Guards and interceptors work together. Guards run first and short-circuit independently; interceptors see the handler's raw return type, not `Response`:
+
+```rust
+#[get("/admin/users")]
+#[roles("admin")]
+#[intercept(Cache::ttl(30).group("admin_users"))]
+async fn admin_list(&self) -> Json<Vec<User>> {
+    // Cache interceptor sees Json<Vec<User>>, roles guard runs before
+}
+```

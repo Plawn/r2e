@@ -368,6 +368,31 @@ fn generate_managed_acquire_ref(rm: &RouteMethod, meta_mod: &syn::Ident, krate: 
 }
 
 /// Generate a single Axum handler function.
+///
+/// # Case matrix
+///
+/// The handler shape depends on which features are active:
+///
+/// | Case | Guards/Managed | Interceptors | Validation | Return type      |
+/// |------|----------------|--------------|------------|------------------|
+/// | 1a   | No             | No           | No         | Handler's own    |
+/// | 1b   | No             | No           | Yes        | Response         |
+/// | 2a   | No             | Yes          | No         | Handler's own    |
+/// | 2b   | No             | Yes          | Yes        | Response         |
+/// | 3    | Yes            | Optional     | Optional   | Response         |
+///
+/// # Design invariant
+///
+/// When interceptors are present, they **always wrap the raw handler call** — the
+/// `IntoResponse::into_response()` conversion is applied *after* the outermost
+/// interceptor. This ensures interceptors see the handler's native type (`Json<T>`,
+/// `Result<Json<T>, E>`, etc.) and type-constrained interceptors like `Cache`
+/// (which requires `R: Cacheable`) work correctly alongside guards/roles.
+///
+/// **Exception:** when `#[managed]` params are present with interceptors (Case 3,
+/// `has_managed` branch), the managed lifecycle wraps `into_response` inside the
+/// interceptor closure because release errors must convert to `Response`. This means
+/// type-constrained interceptors don't work with `#[managed]` params.
 fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
     let ctx = HandlerContext::new(def, rm);
@@ -459,17 +484,19 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         }
     } else if has_intercepts && !needs_response && has_validation {
         // Case 2b: Interceptors + validation — returns Response
-        let inner_call = quote! {
-            #krate::http::response::IntoResponse::into_response(#call_expr)
-        };
+        // Apply into_response AFTER the interceptor chain so interceptors
+        // see the handler's raw return type (e.g. Json<T>), not Response.
         let interceptor_body = wrap_with_handler_interceptors(
-            inner_call,
+            call_expr.clone(),
             fn_name_str,
             controller_name_str,
             def,
             &rm.decorators.intercept_fns,
             &krate,
         );
+        let interceptor_body = quote! {
+            #krate::http::response::IntoResponse::into_response(#interceptor_body)
+        };
 
         quote! {
             #[allow(non_snake_case)]
@@ -525,17 +552,20 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     &krate,
                 )
             } else {
-                let wrapped_call = quote! {
-                    #krate::http::response::IntoResponse::into_response(#call_expr)
-                };
-                wrap_with_handler_interceptors(
-                    wrapped_call,
+                // Apply into_response AFTER the interceptor chain so interceptors
+                // see the handler's raw return type (e.g. Json<T>), not Response.
+                // This fixes #[intercept(Cache)] + #[roles] (or any guard) combinations.
+                let interceptor_body = wrap_with_handler_interceptors(
+                    call_expr.clone(),
                     fn_name_str,
                     controller_name_str,
                     def,
                     &rm.decorators.intercept_fns,
                     &krate,
-                )
+                );
+                quote! {
+                    #krate::http::response::IntoResponse::into_response(#interceptor_body)
+                }
             }
         } else {
             // No interceptors — original behavior

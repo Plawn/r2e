@@ -323,6 +323,17 @@ impl TestUserController {
         let users = self.user_service.list().await;
         Json(users)
     }
+
+    // Regression test: #[intercept(Cache)] + #[roles] must compile and work.
+    // Previously, #[roles] caused into_response to wrap before the interceptor
+    // chain, so Cache saw Response instead of Json<T> → "Cacheable not satisfied".
+    #[get("/admin/users/cached")]
+    #[roles("admin")]
+    #[intercept(Cache::ttl(30).group("admin_users"))]
+    async fn admin_cached_list(&self) -> Json<Vec<User>> {
+        let users = self.user_service.list().await;
+        Json(users)
+    }
 }
 
 async fn setup() -> (TestApp, TestJwt) {
@@ -443,6 +454,31 @@ async fn test_admin_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     app.get("/admin/users")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_forbidden();
+}
+
+#[tokio::test]
+async fn test_admin_cached_endpoint_with_admin_role() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("admin-1", &["admin"]);
+    let resp = app
+        .get("/admin/users/cached")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok();
+    let users: Vec<User> = resp.json();
+    assert_eq!(users.len(), 2);
+}
+
+#[tokio::test]
+async fn test_admin_cached_endpoint_without_admin_role() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["user"]);
+    app.get("/admin/users/cached")
         .bearer(&token)
         .send()
         .await
