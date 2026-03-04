@@ -131,9 +131,9 @@ async fn main(env: AppEnv) {
             .exclude_path("/health")
             .exclude_path("/metrics")
             .build())
+        .with_config(env.config)
         .provide(env.event_bus)
         .provide(env.pool)
-        .provide(env.config.clone())
         .provide(env.claims_validator)
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(env.sse_broadcaster)
@@ -141,7 +141,6 @@ async fn main(env: AppEnv) {
         .with_bean::<UserService>()
         .build_state::<Services, _, _>()
         .await
-        .with_config(env.config)
         .with(Health)
         .with(RequestIdPlugin)
         .with(SecureHeaders::default())
@@ -165,7 +164,7 @@ async fn main(env: AppEnv) {
             tracing::info!("R2E example-app startup hook executed");
             Ok(())
         })
-        .on_stop(|| async {
+        .on_stop(|_| async {
             tracing::info!("R2E example-app shutdown hook executed");
         })
         .register_controller::<UserController>()

@@ -1,6 +1,8 @@
 use std::any::{type_name, TypeId};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, Producer};
+use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
 use r2e_core::type_list::TNil;
 
 #[derive(Clone)]
@@ -262,4 +264,105 @@ async fn producer_as_dependency() {
 
     let repo: RepoService = ctx.get();
     assert_eq!(repo.pool.url, "sqlite::memory:");
+}
+
+// ── PostConstruct tests ────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct InitTracker {
+    initialized: Arc<AtomicBool>,
+}
+
+impl Bean for InitTracker {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> Self {
+        Self {
+            initialized: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    fn after_register(registry: &mut BeanRegistry) {
+        registry.register_post_construct::<Self>();
+    }
+}
+
+impl PostConstruct for InitTracker {
+    fn post_construct(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            self.initialized.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn post_construct_is_called() {
+    let mut reg = BeanRegistry::new();
+    reg.register::<InitTracker>();
+    let ctx = reg.resolve().await.unwrap();
+
+    let tracker: InitTracker = ctx.get();
+    assert!(tracker.initialized.load(Ordering::SeqCst));
+}
+
+#[derive(Clone)]
+struct FailingBean;
+
+impl Bean for FailingBean {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> Self {
+        Self
+    }
+    fn after_register(registry: &mut BeanRegistry) {
+        registry.register_post_construct::<Self>();
+    }
+}
+
+impl PostConstruct for FailingBean {
+    fn post_construct(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
+    > {
+        Box::pin(async move { Err("init failed".into()) })
+    }
+}
+
+#[tokio::test]
+async fn post_construct_error_propagates() {
+    let mut reg = BeanRegistry::new();
+    reg.register::<FailingBean>();
+    let err = reg.resolve().await.unwrap_err();
+    match &err {
+        BeanError::PostConstruct(msg) => {
+            assert!(msg.contains("init failed"), "error: {msg}");
+        }
+        _ => panic!("expected PostConstruct error, got {:?}", err),
+    }
+}
+
+#[tokio::test]
+async fn post_construct_with_dependencies() {
+    // InitTracker depends on nothing, ServiceA depends on Dep.
+    // Verify post_construct runs after the full graph is resolved.
+    let mut reg = BeanRegistry::new();
+    reg.provide(Dep { value: 42 });
+    reg.register::<ServiceA>();
+    reg.register::<InitTracker>();
+    let ctx = reg.resolve().await.unwrap();
+
+    let tracker: InitTracker = ctx.get();
+    assert!(tracker.initialized.load(Ordering::SeqCst));
+
+    let a: ServiceA = ctx.get();
+    assert_eq!(a.dep.value, 42);
 }

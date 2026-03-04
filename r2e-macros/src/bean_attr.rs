@@ -14,6 +14,13 @@ struct BeanConsumerMethod {
     fn_name: syn::Ident,
 }
 
+/// Parsed post-construct method data from a `#[bean]` impl block.
+struct BeanPostConstructMethod {
+    fn_name: syn::Ident,
+    is_async: bool,
+    returns_result: bool,
+}
+
 pub fn expand(input: TokenStream) -> TokenStream {
     let item_impl = parse_macro_input!(input as ItemImpl);
     match generate(&item_impl) {
@@ -128,6 +135,19 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
     let consumer_methods = scan_consumer_methods(item_impl)?;
     let subscriber_impl = generate_event_subscriber_impl(self_ty, &consumer_methods)?;
 
+    // Scan for #[post_construct] methods
+    let pc_methods = scan_post_construct_methods(item_impl)?;
+    let post_construct_impl = generate_post_construct_impl(self_ty, &pc_methods);
+    let after_register_fn = if !pc_methods.is_empty() {
+        quote! {
+            fn after_register(registry: &mut #krate::beans::BeanRegistry) {
+                registry.register_post_construct::<Self>();
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let bean_impl = if is_async {
         // Generate AsyncBean impl
         quote! {
@@ -145,6 +165,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     #(#build_args)*
                     Self::#fn_name(#(#arg_forwards),*).await
                 }
+
+                #after_register_fn
             }
         }
     } else {
@@ -164,12 +186,15 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                     #(#build_args)*
                     Self::#fn_name(#(#arg_forwards),*)
                 }
+
+                #after_register_fn
             }
         }
     };
 
     Ok(quote! {
         #bean_impl
+        #post_construct_impl
         #subscriber_impl
     })
 }
@@ -265,6 +290,96 @@ fn generate_event_subscriber_impl(
     })
 }
 
+/// Scan all `&self` methods in the impl block for `#[post_construct]` attributes.
+fn scan_post_construct_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanPostConstructMethod>> {
+    let mut methods = Vec::new();
+
+    for item in &item_impl.items {
+        if let ImplItem::Fn(method) = item {
+            let has_self = method
+                .sig
+                .inputs
+                .iter()
+                .any(|arg| matches!(arg, FnArg::Receiver(_)));
+            if !has_self {
+                continue;
+            }
+
+            let has_attr = method
+                .attrs
+                .iter()
+                .any(|a| a.path().is_ident("post_construct"));
+            if !has_attr {
+                continue;
+            }
+
+            // Validate: no extra params beyond &self
+            let param_count = method.sig.inputs.len();
+            if param_count > 1 {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "#[post_construct] method must take only `&self` — no additional parameters",
+                ));
+            }
+
+            let is_async = method.sig.asyncness.is_some();
+
+            // Check if return type is Result<(), ...>
+            let returns_result = match &method.sig.output {
+                ReturnType::Default => false,
+                ReturnType::Type(_, ty) => {
+                    let ty_str = quote!(#ty).to_string();
+                    ty_str.starts_with("Result")
+                }
+            };
+
+            methods.push(BeanPostConstructMethod {
+                fn_name: method.sig.ident.clone(),
+                is_async,
+                returns_result,
+            });
+        }
+    }
+
+    Ok(methods)
+}
+
+/// Generate `PostConstruct` impl if any post-construct methods are found.
+fn generate_post_construct_impl(
+    self_ty: &syn::Type,
+    methods: &[BeanPostConstructMethod],
+) -> TokenStream2 {
+    if methods.is_empty() {
+        return quote! {};
+    }
+
+    let krate = r2e_core_path();
+
+    let calls: Vec<TokenStream2> = methods
+        .iter()
+        .map(|m| {
+            let fn_name = &m.fn_name;
+            match (m.is_async, m.returns_result) {
+                (true, true) => quote! { self.#fn_name().await?; },
+                (true, false) => quote! { self.#fn_name().await; },
+                (false, true) => quote! { self.#fn_name()?; },
+                (false, false) => quote! { self.#fn_name(); },
+            }
+        })
+        .collect();
+
+    quote! {
+        impl #krate::beans::PostConstruct for #self_ty {
+            fn post_construct(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>> {
+                Box::pin(async move {
+                    #(#calls)*
+                    Ok(())
+                })
+            }
+        }
+    }
+}
+
 /// Find the constructor method in the impl block.
 ///
 /// The constructor is the first associated function (no `self` receiver)
@@ -356,8 +471,11 @@ fn strip_attrs_from_impl(item_impl: &ItemImpl) -> TokenStream2 {
                     #vis #sig_asyncness fn #sig_ident(#(#clean_params),*) #sig_output #body
                 });
             } else {
-                // Strip #[consumer] attrs from methods
-                let cleaned_attrs = strip_consumer_attrs(method.attrs.clone());
+                // Strip #[consumer] and #[post_construct] attrs from methods
+                let cleaned_attrs: Vec<_> = strip_consumer_attrs(method.attrs.clone())
+                    .into_iter()
+                    .filter(|a| !a.path().is_ident("post_construct"))
+                    .collect();
                 let vis = &method.vis;
                 let sig = &method.sig;
                 let body = &method.block;

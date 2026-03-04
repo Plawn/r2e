@@ -124,13 +124,11 @@ Wire it up in `main.rs`:
 ```rust
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-
     AppBuilder::new()
+        .load_config::<()>("dev")
         .with_bean::<UserService>()
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         .with(Health)           // GET /health
         .with(Cors::permissive())
         .with(Tracing)

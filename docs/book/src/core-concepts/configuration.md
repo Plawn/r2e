@@ -346,6 +346,9 @@ config.set("app.key", ConfigValue::String("value".into()));
 
 // Active profile
 println!("Profile: {}", config.profile());
+
+// Serde-based sub-tree extraction
+let db: DatabaseConfig = config.get_section("app.database").unwrap();
 ```
 
 ## Supported types
@@ -408,20 +411,36 @@ For `ConfigProperties` sections, validation also catches type mismatches and gar
 
 ## Providing config to the app
 
-Pass the config to `AppBuilder` so controllers and extractors can access it:
+Pass the config to `AppBuilder` so controllers, beans, and extractors can access it. Both methods are **pre-state** — call them before `.build_state()` or `.with_state()`.
+
+### Option 1: `load_config` (recommended)
+
+Load from YAML files in a single call:
 
 ```rust
-let config = R2eConfig::load("dev").unwrap();
-
+// Raw config only:
 AppBuilder::new()
-    .provide(config.clone())
-    .build_state::<AppState, _, _>()
-    .await
-    .with_config(config)  // makes it available for #[config] fields
-    .register_controller::<UserController>()
-    .serve("0.0.0.0:3000")
-    .await;
+    .load_config::<()>("dev")
+    .build_state::<AppState, _, _>().await
+
+// With typed config struct:
+AppBuilder::new()
+    .load_config::<AppConfig>("dev")   // also provides R2eConfig<AppConfig>
+    .build_state::<AppState, _, _>().await
 ```
+
+### Option 2: `with_config` (pre-loaded)
+
+Use when you already have a config instance (tests, hot-reload, custom loading):
+
+```rust
+let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+AppBuilder::new()
+    .with_config(config)
+    .build_state::<AppState, _, _>().await
+```
+
+Both methods store the raw config in the builder (for `serve_auto`, `with_config_section`, etc.) and provide `R2eConfig` in the bean registry so it's injectable by beans via `#[config("key")]`.
 
 Your state type must implement `FromRef` for `R2eConfig`:
 
@@ -432,6 +451,62 @@ impl axum::extract::FromRef<AppState> for R2eConfig {
     }
 }
 ```
+
+## Config sections as beans
+
+If you have a config section that multiple beans or controllers need, you can deserialize it and register it as a bean in one step with `with_config_section()`:
+
+```rust
+#[derive(Deserialize, Clone)]
+pub struct MatchingConfig {
+    pub threshold: f64,
+    pub max_results: usize,
+}
+```
+
+```yaml
+matching:
+  threshold: 0.85
+  max_results: 100
+```
+
+```rust
+AppBuilder::new()
+    .with_config(config)
+    .with_config_section::<MatchingConfig>("matching")
+    // MatchingConfig is now available as an injectable bean
+    .with_bean::<SearchService>()  // can depend on MatchingConfig
+    .build_state::<AppState, _, _>()
+    .await
+    // ...
+```
+
+This is simpler than manually calling `from_config()` + `provide()`. The struct only needs `#[derive(Deserialize, Clone)]` — no `ConfigProperties` derive required. However, you lose field-level attributes like `#[config(default)]` or `#[config(env)]`. Use `ConfigProperties` when you need those features.
+
+## `serve_auto()`
+
+Instead of hardcoding the listen address, you can read it from configuration:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8080
+```
+
+```rust
+AppBuilder::new()
+    // ... build state, register controllers ...
+    .serve_auto()  // reads server.host and server.port from config
+    .await
+    .unwrap();
+```
+
+| Config key | Type | Default |
+|---|---|---|
+| `server.host` | String | `"0.0.0.0"` |
+| `server.port` | u16 | `3000` |
+
+If either key is missing, the default is used. If no config is loaded at all, the full default `0.0.0.0:3000` applies. This replaces `.serve("0.0.0.0:3000")` for production setups where the address should be configurable per environment.
 
 ## Testing
 

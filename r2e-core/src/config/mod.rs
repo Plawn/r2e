@@ -211,6 +211,46 @@ impl<T> R2eConfig<T> {
         &self.typed
     }
 
+    /// Extract a sub-section of the config as a deserialized struct.
+    ///
+    /// Collects all keys starting with `"{path}."`, strips the prefix,
+    /// rebuilds a nested JSON object, and deserializes it into `V`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let matching: CveMatchingConfig = config.get_section("cve.matching")?;
+    /// ```
+    pub fn get_section<V: serde::de::DeserializeOwned>(&self, path: &str) -> Result<V, ConfigError> {
+        let prefix = format!("{path}.");
+        let mut root = serde_json::Value::Object(serde_json::Map::new());
+
+        for (key, value) in &self.values {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                insert_nested(&mut root, suffix, value.to_json_value());
+            }
+        }
+
+        // Also check if there's an exact match (e.g., the key itself holds a Map value)
+        if let Some(value) = self.values.get(path) {
+            if matches!(value, ConfigValue::Map(_)) {
+                // Merge map entries into root
+                if let serde_json::Value::Object(map) = value.to_json_value() {
+                    if let serde_json::Value::Object(ref mut root_map) = root {
+                        for (k, v) in map {
+                            root_map.entry(k).or_insert(v);
+                        }
+                    }
+                }
+            }
+        }
+
+        serde_json::from_value::<V>(root).map_err(|e| ConfigError::TypeMismatch {
+            key: path.to_string(),
+            expected: Box::leak(format!("section deserializable as {}: {e}", std::any::type_name::<V>()).into_boxed_str()),
+        })
+    }
+
     /// Downgrade to a raw (untyped) config, discarding the typed layer.
     pub fn raw(&self) -> R2eConfig {
         R2eConfig {
@@ -227,6 +267,50 @@ impl<T> Deref for R2eConfig<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.typed
+    }
+}
+
+/// Insert a value into a nested JSON object using a dot-separated path.
+fn insert_nested(obj: &mut serde_json::Value, dotted_path: &str, value: serde_json::Value) {
+    let parts: Vec<&str> = dotted_path.splitn(2, '.').collect();
+    match parts.as_slice() {
+        [key] => {
+            if let serde_json::Value::Object(map) = obj {
+                map.insert((*key).to_string(), value);
+            }
+        }
+        [key, rest] => {
+            if let serde_json::Value::Object(map) = obj {
+                let child = map
+                    .entry((*key).to_string())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                insert_nested(child, rest, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── LoadableConfig trait ─────────────────────────────────────────────────
+
+/// Trait that enables `AppBuilder::with_config::<C>(profile)`.
+///
+/// Implemented for `()` (raw config only) and for any `T: ConfigProperties`
+/// (raw + typed config).
+pub trait LoadableConfig: Clone + Send + Sync + 'static {
+    /// Load config for the given profile and produce `R2eConfig<Self>`.
+    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<Self>, ConfigError>;
+}
+
+impl LoadableConfig for () {
+    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<()>, ConfigError> {
+        Ok(raw)
+    }
+}
+
+impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
+    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<T>, ConfigError> {
+        raw.with_typed::<T>(None)
     }
 }
 

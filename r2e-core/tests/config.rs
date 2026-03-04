@@ -1,4 +1,5 @@
 use r2e_core::config::{ConfigError, ConfigProperties, ConfigValue, R2eConfig};
+use serde::Deserialize;
 
 #[test]
 fn test_empty_config() {
@@ -632,4 +633,91 @@ fn test_config_properties_u16_default() {
     let config = R2eConfig::empty();
     let srv = PortConfig::from_config(&config, Some("server")).unwrap();
     assert_eq!(srv.port, 3000);
+}
+
+// =========================================================================
+// get_section — serde-based extraction of config sub-trees
+// =========================================================================
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct MatchingSection {
+    threshold: f64,
+    max_results: u32,
+}
+
+#[test]
+fn test_get_section_nested() {
+    let yaml = r#"
+cve:
+  matching:
+    threshold: 0.85
+    max_results: 100
+"#;
+    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let section: MatchingSection = config.get_section("cve.matching").unwrap();
+    assert!((section.threshold - 0.85).abs() < f64::EPSILON);
+    assert_eq!(section.max_results, 100);
+}
+
+#[test]
+fn test_get_section_missing() {
+    let config = R2eConfig::empty();
+    // An empty section should deserialize to a struct with no required fields
+    let result = config.get_section::<MatchingSection>("cve.matching");
+    assert!(result.is_err());
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct OptionalSection {
+    #[serde(default)]
+    enabled: bool,
+    name: Option<String>,
+}
+
+#[test]
+fn test_get_section_with_defaults() {
+    let yaml = r#"
+app:
+  feature:
+    name: "test-feature"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let section: OptionalSection = config.get_section("app.feature").unwrap();
+    assert!(!section.enabled); // serde default
+    assert_eq!(section.name, Some("test-feature".to_string()));
+}
+
+#[test]
+fn test_get_section_type_mismatch() {
+    let yaml = r#"
+cve:
+  matching:
+    threshold: "not-a-number"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let result = config.get_section::<MatchingSection>("cve.matching");
+    assert!(result.is_err());
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct DeepNested {
+    inner: InnerConfig,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct InnerConfig {
+    value: String,
+}
+
+#[test]
+fn test_get_section_deeply_nested() {
+    let yaml = r#"
+a:
+  b:
+    inner:
+      value: "hello"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let section: DeepNested = config.get_section("a.b").unwrap();
+    assert_eq!(section.inner.value, "hello");
 }

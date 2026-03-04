@@ -160,8 +160,8 @@ impl axum::extract::FromRef<Services> for R2eConfig {
 
 ```rust
 AppBuilder::new()
+    .with_config(config)                   // pre-state: store + provide
     .with_state(services)
-    .with_config(config)
     // ...
 ```
 

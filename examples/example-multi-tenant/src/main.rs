@@ -101,13 +101,12 @@ async fn main() {
     }
 
     AppBuilder::new()
+        .with_config(config)
         .provide(pool)
-        .provide(config.clone())
         .provide(Arc::new(claims_validator))
         .with_bean::<services::ProjectService>()
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)

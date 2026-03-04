@@ -21,12 +21,11 @@ async fn main() {
     let config = R2eConfig::load("order").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
-        .provide(config.clone())
+        .with_config(config)
         .with_bean::<services::ProductClient>()
         .with_bean::<services::OrderService>()
         .build_state::<OrderState, _, _>()
         .await
-        .with_config(config)
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)

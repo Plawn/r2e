@@ -6,8 +6,8 @@ pub type StartupHook<T> =
     Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> + Send>;
 
 /// A shutdown hook that runs when the server stops.
-pub type ShutdownHook =
-    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+pub type ShutdownHook<T> =
+    Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 /// Trait for controllers that define lifecycle methods.
 ///
@@ -26,7 +26,7 @@ pub type ShutdownHook =
 ///         })
 ///     }
 ///
-///     fn on_stop() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+///     fn on_stop(_state: &Services) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
 ///         Box::pin(async {
 ///             tracing::info!("MyController shutting down");
 ///         })
@@ -46,7 +46,7 @@ pub trait LifecycleController<T: Clone + Send + Sync + 'static> {
     /// Called once after the server shuts down.
     ///
     /// Default implementation does nothing.
-    fn on_stop() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    fn on_stop(_state: &T) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
 }

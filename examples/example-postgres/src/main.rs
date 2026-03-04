@@ -22,12 +22,11 @@ async fn main() {
     let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
-        .provide(config.clone())
+        .with_config(config)
         .with_producer::<CreatePool>()
         .with_bean::<services::ArticleService>()
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)

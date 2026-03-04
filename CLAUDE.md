@@ -37,7 +37,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
-r2e-core        → Runtime foundation. AppBuilder, Controller trait, StatefulConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks.
+r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, with_config_section, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig (get_section), lifecycle hooks.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
 r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
@@ -114,14 +114,16 @@ impl UserController {
 
 **Inter-macro liaison:** Derive generates `__r2e_meta_<Name>` + `__R2eExtract_<Name>`. `#[routes]` references these by naming convention.
 
-**No-op attribute macros:** `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]`. `#[inject]`, `#[identity]`, `#[config]` are derive helper attributes.
+**No-op attribute macros:** `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]`, `#[identity]`, `#[config]` are derive helper attributes.
+
+**`#[post_construct]`** — lifecycle hook on `#[bean]` methods. Called after the entire bean graph is resolved. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates `PostConstruct` trait impl.
 
 ## Detailed Reference (see linked files)
 
 - **[Configuration](docs/claude/configuration.md)** — R2eConfig, ConfigProperties, secrets, profiles, validation, FromConfigValue, typed sections, registry
 - **[Guards & Interceptors](docs/claude/guards-interceptors.md)** — Guard/PreAuthGuard traits, GuardContext, Identity, RolesGuard, RateLimitGuard, interceptor wrapping order, configurable syntax
 - **[Error Handling & Managed Resources](docs/claude/error-handling.md)** — HttpError variants, `#[derive(ApiError)]`, `map_error!`, validation, ManagedResource trait, `#[managed]`
-- **[Beans & Dependency Injection](docs/claude/beans-di.md)** — Bean/AsyncBean/Producer traits, `#[bean]`, `#[producer]`, `#[config]` in beans, `build_state()`
+- **[Beans & Dependency Injection](docs/claude/beans-di.md)** — Bean/AsyncBean/Producer traits, `#[bean]`, `#[producer]`, `#[config]` in beans, `#[post_construct]`, `build_state()`
 - **[Subsystems](docs/claude/subsystems.md)** — Cache, Rate Limiting, Security, Events, Scheduling, Data, OpenAPI, StatefulConstruct, AppBuilder, Testing, Configuration
 - **[Prelude & Feature Flags](docs/claude/prelude-features.md)** — Full prelude listing, `use r2e::prelude::*`, validation/garde, Params, transactional
 - **[CLI](docs/claude/cli.md)** — `r2e new`, `r2e generate`, `r2e doctor`, `r2e routes`, `r2e dev`, `r2e add`, templates

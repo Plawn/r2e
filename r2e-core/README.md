@@ -14,6 +14,7 @@ Fluent two-phase API for assembling an application:
 AppBuilder::new()
     // Phase 1: pre-state (bean registration)
     .plugin(Scheduler)                     // pre-state plugin
+    .load_config::<AppConfig>("dev")       // load yaml + type + provide (or .with_config(config))
     .provide(my_pool.clone())              // pre-built instance
     .with_bean::<UserService>()            // sync bean
     .with_async_bean::<MyAsyncService>()   // async bean
@@ -21,13 +22,12 @@ AppBuilder::new()
     .build_state::<Services, _, _>().await    // resolve bean graph → phase 2
 
     // Phase 2: post-state (plugins, routes, lifecycle)
-    .with_config(config)
     .with(Health)
     .with(Cors::permissive())
     .with(Tracing)
     .with(ErrorHandling)
     .on_start(|state| async move { Ok(()) })
-    .on_stop(|| async { })
+    .on_stop(|state| async move { /* cleanup with state access */ })
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -143,7 +143,18 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for MyInterceptor {
 `R2eConfig` loads from YAML files with environment variable overlay:
 
 ```rust
-let config = R2eConfig::load("dev")?; // application.yaml + application-dev.yaml + env
+// In AppBuilder — load + provide in one call:
+AppBuilder::new()
+    .load_config::<()>("dev")              // raw config only
+    .load_config::<AppConfig>("dev")       // or: raw + typed config
+
+// Pre-loaded config (tests, hot-reload):
+let config = R2eConfig::load("dev")?;
+AppBuilder::new()
+    .with_config(config)
+
+// Manual access:
+let config = R2eConfig::load("dev")?;
 let db_url: String = config.get("app.db.url")?;
 let timeout: i64 = config.get_or("app.timeout", 30);
 ```
@@ -369,6 +380,8 @@ Register with `.spawn_service::<MyService>()`.
 
 ## Lifecycle hooks
 
+Both `on_start` and `on_stop` receive the application state:
+
 ```rust
 AppBuilder::new()
     // ...
@@ -376,7 +389,8 @@ AppBuilder::new()
         println!("Server starting");
         Ok(())
     })
-    .on_stop(|| async {
+    .on_stop(|state| async move {
+        state.pool.close().await;
         println!("Server stopped");
     })
     .shutdown_grace_period(Duration::from_secs(5))  // force exit after 5s

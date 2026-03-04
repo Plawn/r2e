@@ -126,6 +126,45 @@ impl NotificationService {
 
 When `#[config]` is used, `R2eConfig` is automatically added to the bean's dependency list. Missing keys panic with an error that includes the environment variable equivalent.
 
+## Post-construct hooks
+
+Sometimes a bean needs to perform initialization *after* the entire bean graph is resolved — for example, warming a cache, running migrations, or cleaning up stale data. Use `#[post_construct]` for this:
+
+```rust
+#[derive(Clone)]
+pub struct CacheService {
+    pool: SqlitePool,
+}
+
+#[bean]
+impl CacheService {
+    pub async fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    #[post_construct]
+    async fn warm_cache(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // pre-load frequently accessed data
+        let _rows = sqlx::query("SELECT * FROM hot_data")
+            .fetch_all(&*self.pool)
+            .await?;
+        Ok(())
+    }
+}
+```
+
+Key points:
+- Methods must take `&self` only — no additional parameters
+- Return `()` or `Result<(), Box<dyn Error + Send + Sync>>`
+- Can be `async`
+- Multiple `#[post_construct]` methods run in declaration order
+- Hooks run after **all** beans are constructed, in dependency order
+- If any hook returns an error, `build_state()` fails with `BeanError::PostConstruct`
+
+**Do** use `#[post_construct]` for: cache warming, stale data cleanup, migrations, cross-bean validation.
+
+**Don't** use it for: construction logic (belongs in the constructor), event subscriptions (`#[consumer]`), periodic work (`#[scheduled]`).
+
 ## Building state
 
 The `build_state()` method resolves the bean graph in dependency order:
@@ -137,6 +176,7 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer
     .with_async_bean::<CacheService>()     // async bean
     .with_bean::<UserService>()            // sync bean
+    .with_config_section::<MatchingConfig>("matching") // deserialize config section + provide as bean
     .build_state::<AppState, _, _>()          // resolve the graph
     .await                                 // async because graph may contain async beans
 ```
@@ -176,18 +216,16 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 
 #[tokio::main]
 async fn main() {
-    let config = R2eConfig::load("dev").unwrap();
     let event_bus = LocalEventBus::new();
 
     AppBuilder::new()
+        .load_config::<()>("dev")
         .provide(event_bus)
-        .provide(config.clone())
         .with_producer::<CreatePool>()
         .with_bean::<UserService>()
         .with_bean::<NotificationService>()
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         // ... register controllers, plugins, etc.
         .serve("0.0.0.0:3000")
         .await

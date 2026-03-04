@@ -82,7 +82,7 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     routes: Vec<crate::http::Router<T>>,
     pre_auth_guard_fns: Vec<Box<dyn FnOnce(crate::http::Router<T>, &T) -> crate::http::Router<T> + Send>>,
     startup_hooks: Vec<StartupHook<T>>,
-    shutdown_hooks: Vec<ShutdownHook>,
+    shutdown_hooks: Vec<ShutdownHook<T>>,
     meta_registry: MetaRegistry,
     meta_consumers: Vec<MetaConsumer<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
@@ -226,6 +226,107 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self.shared
             .bean_registry
             .provide_factory_with_config::<B, F>(factory);
+        self.with_updated_types()
+    }
+
+    /// Provide a pre-loaded configuration to the builder.
+    ///
+    /// In a single call:
+    /// 1. Stores the raw config in the builder (for `serve_auto`, `with_config_section`, etc.)
+    /// 2. Provides `R2eConfig` (raw) in the bean registry (injectable by beans)
+    /// 3. If `C` is not `()`, also provides `R2eConfig<C>` (typed) in the bean registry
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(None)?;
+    /// AppBuilder::new()
+    ///     .with_config(config)
+    ///     .build_state::<Services, _, _>()
+    ///     .await
+    /// ```
+    pub fn with_config<C: Clone + Send + Sync + 'static>(
+        mut self,
+        config: crate::config::R2eConfig<C>,
+    ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
+        let raw = config.raw();
+        self.shared.config = Some(raw.clone());
+        self.shared.bean_registry.provide(raw);
+        // Only provide the typed version if C is not () (avoid double-provide)
+        if std::any::TypeId::of::<C>() != std::any::TypeId::of::<()>() {
+            self.shared.bean_registry.provide(config);
+        }
+        self.with_updated_types()
+    }
+
+    /// Load configuration for the given profile and provide it to the builder.
+    ///
+    /// Combines loading, optional typed construction, and registration in one call:
+    /// 1. Loads `application.yaml` + `application-{profile}.yaml` + env overlay
+    /// 2. If `C` implements [`ConfigProperties`](crate::config::ConfigProperties),
+    ///    constructs the typed config via `with_typed::<C>(None)`
+    /// 3. Stores the raw config + provides in the bean registry (same as [`with_config`](Self::with_config))
+    ///
+    /// # Panics
+    ///
+    /// Panics if configuration loading or typed construction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Raw config only:
+    /// AppBuilder::new()
+    ///     .load_config::<()>("dev")
+    ///
+    /// // With typed config struct:
+    /// AppBuilder::new()
+    ///     .load_config::<AppConfig>("dev")
+    /// ```
+    pub fn load_config<C: crate::config::LoadableConfig>(
+        self,
+        profile: &str,
+    ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
+        let raw = crate::config::R2eConfig::load(profile)
+            .unwrap_or_else(|e| panic!("Failed to load config for profile '{profile}': {e}"));
+        let config = C::load_from_profile(raw)
+            .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
+        self.with_config(config)
+    }
+
+    /// Extract a typed sub-section from the loaded configuration and provide
+    /// it as a bean.
+    ///
+    /// The section is deserialized from all config keys under `path` (e.g.,
+    /// `"cve.matching"` collects `cve.matching.*` keys). The resulting value
+    /// is registered via [`provide`](Self::provide) so it can be injected into
+    /// other beans.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no config has been loaded (call `.provide(config)` first) or
+    /// if the section cannot be deserialized into `B`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .provide(config)
+    ///     .with_config_section::<CveMatchingConfig>("cve.matching")
+    /// ```
+    pub fn with_config_section<B: serde::de::DeserializeOwned + Clone + Send + Sync + 'static>(
+        mut self,
+        path: &str,
+    ) -> AppBuilder<NoState, TCons<B, P>, R> {
+        let config = self
+            .shared
+            .bean_registry
+            .get_provided::<crate::config::R2eConfig>()
+            .or_else(|| self.shared.config.as_ref())
+            .expect("with_config_section requires a loaded config — call .provide(config) first");
+        let section: B = config.get_section(path).unwrap_or_else(|e| {
+            panic!("Failed to deserialize config section '{path}': {e}")
+        });
+        self.shared.bean_registry.provide(section);
         self.with_updated_types()
     }
 
@@ -570,18 +671,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         plugin.install(self)
     }
 
-    // ── Configuration ───────────────────────────────────────────────────
-
-    /// Store a `R2eConfig` in the builder.
-    ///
-    /// The config is stored as an Axum extension and can be extracted via
-    /// `FromRef` if the user state implements it. This is a convenience
-    /// method — you can also embed `R2eConfig` directly in your state.
-    pub fn with_config(mut self, config: crate::config::R2eConfig) -> Self {
-        self.shared.config = Some(config);
-        self
-    }
-
     // ── Layer primitives ────────────────────────────────────────────────
 
     /// Apply a Tower layer to the entire application.
@@ -692,19 +781,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Register a shutdown hook that runs after the server stops.
     ///
+    /// The hook receives the application state, mirroring [`on_start`](Self::on_start).
+    ///
     /// # Example
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .on_stop(|| Box::pin(async { tracing::info!("Bye"); }))
+    ///     .on_stop(|_state| async { tracing::info!("Bye"); })
     /// ```
     pub fn on_stop<F, Fut>(mut self, hook: F) -> Self
     where
-        F: FnOnce() -> Fut + Send + 'static,
+        F: FnOnce(T) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.shutdown_hooks
-            .push(Box::new(move || Box::pin(hook())));
+            .push(Box::new(move |state| Box::pin(hook(state))));
         self
     }
 
@@ -898,7 +989,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ) -> (
         crate::http::Router,
         Vec<StartupHook<T>>,
-        Vec<ShutdownHook>,
+        Vec<ShutdownHook<T>>,
         Vec<ConsumerReg<T>>,
         Vec<ServeHook>,
         Vec<Box<dyn FnOnce() + Send>>,
@@ -1034,6 +1125,25 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.prepare(addr).run().await
     }
+
+    /// Build the application and start serving, reading `server.host` and
+    /// `server.port` from the configuration.
+    ///
+    /// Falls back to `0.0.0.0:3000` when no config is loaded or the keys
+    /// are absent.
+    pub async fn serve_auto(self) -> Result<(), Box<dyn std::error::Error>> {
+        let addr = match &self.shared.config {
+            Some(config) => {
+                let host = config
+                    .get::<String>("server.host")
+                    .unwrap_or_else(|_| "0.0.0.0".into());
+                let port = config.get::<u16>("server.port").unwrap_or(3000);
+                format!("{host}:{port}")
+            }
+            None => "0.0.0.0:3000".into(),
+        };
+        self.prepare(&addr).run().await
+    }
 }
 
 /// A fully configured R2E app ready to be served.
@@ -1051,7 +1161,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     state: T,
     addr: String,
     startup_hooks: Vec<StartupHook<T>>,
-    shutdown_hooks: Vec<ShutdownHook>,
+    shutdown_hooks: Vec<ShutdownHook<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
@@ -1159,7 +1269,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
             // Always run user shutdown hooks
             for hook in self.shutdown_hooks {
-                hook().await;
+                hook(self.state.clone()).await;
             }
         };
 

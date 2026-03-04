@@ -36,6 +36,10 @@ pub trait Bean: Clone + Send + Sync + 'static {
 
     /// Construct the bean from a fully resolved context.
     fn build(ctx: &BeanContext) -> Self;
+
+    /// Called after registration to allow post-processing (e.g., registering
+    /// post-construct hooks). The default is a no-op.
+    fn after_register(_registry: &mut BeanRegistry) {}
 }
 
 /// Trait for beans that require async initialization (e.g. DB pools, HTTP clients).
@@ -68,6 +72,10 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
 
     /// Construct the bean asynchronously from a fully resolved context.
     fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
+
+    /// Called after registration to allow post-processing (e.g., registering
+    /// post-construct hooks). The default is a no-op.
+    fn after_register(_registry: &mut BeanRegistry) {}
 }
 
 /// Trait for producer functions that create types you don't own
@@ -104,6 +112,16 @@ pub trait Producer: Send + 'static {
 
     /// Produce the output from a fully resolved context.
     fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
+}
+
+/// Lifecycle hook called after all beans have been constructed.
+///
+/// Implement this trait (typically via `#[post_construct]` on a `#[bean]`
+/// method) to run initialization logic that requires the fully assembled bean.
+pub trait PostConstruct: Clone + Send + Sync + 'static {
+    fn post_construct(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>>;
 }
 
 /// Trait for state structs that can be assembled from a [`BeanContext`].
@@ -177,6 +195,17 @@ type Factory = Box<
         > + Send,
 >;
 
+/// A post-construct callback that runs after all beans are resolved.
+/// Takes ownership of BeanContext and returns it (same pattern as Factory)
+/// to avoid lifetime issues with async closures.
+type PostConstructFn = Box<
+    dyn FnOnce(
+            BeanContext,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<BeanContext, Box<dyn std::error::Error + Send + Sync>>> + Send>,
+        > + Send,
+>;
+
 /// Builder that collects bean registrations and provided instances,
 /// resolves the dependency graph, and produces a [`BeanContext`].
 pub struct BeanRegistry {
@@ -194,6 +223,8 @@ struct BeanRegistration {
     /// (config_key, expected_type_name) for config validation.
     config_keys: Vec<(&'static str, &'static str)>,
     factory: Factory,
+    /// Optional post-construct callback, set via `register_post_construct`.
+    post_construct: Option<PostConstructFn>,
 }
 
 /// Errors that can occur during bean graph resolution.
@@ -207,6 +238,8 @@ pub enum BeanError {
     DuplicateBean { type_name: String },
     /// One or more config keys required by beans are missing.
     MissingConfigKeys(crate::config::ConfigValidationError),
+    /// A post-construct hook failed.
+    PostConstruct(String),
 }
 
 impl fmt::Display for BeanError {
@@ -233,6 +266,9 @@ impl fmt::Display for BeanError {
             BeanError::MissingConfigKeys(err) => {
                 write!(f, "{}", err)
             }
+            BeanError::PostConstruct(msg) => {
+                write!(f, "Post-construct hook failed: {}", msg)
+            }
         }
     }
 }
@@ -257,6 +293,13 @@ impl BeanRegistry {
         self
     }
 
+    /// Get a reference to a previously provided instance.
+    pub fn get_provided<T: Clone + 'static>(&self) -> Option<&T> {
+        self.provided
+            .get(&TypeId::of::<T>())
+            .and_then(|v| v.downcast_ref::<T>())
+    }
+
     /// Register a (sync) bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans or provided
@@ -273,7 +316,9 @@ impl BeanRegistry {
                     (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
                 })
             }),
+            post_construct: None,
         });
+        T::after_register(self);
         self
     }
 
@@ -292,8 +337,27 @@ impl BeanRegistry {
                     (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
                 })
             }),
+            post_construct: None,
         });
+        T::after_register(self);
         self
+    }
+
+    /// Register a post-construct hook for a previously registered bean.
+    ///
+    /// Finds the last `BeanRegistration` matching `T`'s `TypeId` and attaches
+    /// the post-construct callback. Called from generated `after_register`.
+    pub fn register_post_construct<T: PostConstruct>(&mut self) {
+        let tid = TypeId::of::<T>();
+        if let Some(reg) = self.beans.iter_mut().rev().find(|r| r.type_id == tid) {
+            reg.post_construct = Some(Box::new(|ctx: BeanContext| {
+                Box::pin(async move {
+                    let bean: T = ctx.get();
+                    bean.post_construct().await?;
+                    Ok(ctx)
+                })
+            }));
+        }
     }
 
     /// Register a bean via factory closure that receives `R2eConfig`.
@@ -322,6 +386,7 @@ impl BeanRegistry {
                     (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
                 })
             }),
+            post_construct: None,
         });
     }
 
@@ -341,6 +406,7 @@ impl BeanRegistry {
                     (ctx, Box::new(output) as Box<dyn Any + Send + Sync>)
                 })
             }),
+            post_construct: None,
         });
         self
     }
@@ -383,10 +449,25 @@ impl BeanRegistry {
         // Topological sort
         let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
 
+        // Extract post-construct fns before consuming beans
+        let pc_fns: Vec<Option<PostConstructFn>> = sorted_order
+            .iter()
+            .map(|&idx| self.beans[idx].post_construct.take())
+            .collect();
+
         // Construct beans in order (async)
         entries = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
 
-        Ok(BeanContext { entries })
+        let mut ctx = BeanContext { entries };
+
+        // Run post-construct hooks in topological order
+        for pc_fn in pc_fns.into_iter().flatten() {
+            ctx = pc_fn(ctx)
+                .await
+                .map_err(|e| BeanError::PostConstruct(e.to_string()))?;
+        }
+
+        Ok(ctx)
     }
 
     /// Deduplicate beans when overrides are enabled: last registration wins.

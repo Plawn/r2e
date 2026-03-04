@@ -41,13 +41,11 @@ The main function assembles the application using `AppBuilder`:
 async fn main() {
     r2e::init_tracing();
 
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-
     AppBuilder::new()
+        .load_config::<()>("dev")
         .with_bean::<UserService>()
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)

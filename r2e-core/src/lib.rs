@@ -30,13 +30,13 @@ pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, Producer};
+pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
 pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
-    DefaultSecretResolver, FromConfigValue, MissingKeyError, PropertyMeta, R2eConfig,
-    RegisteredSection, SecretResolver, register_section, registered_sections, validate_keys,
-    validate_section,
+    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,
+    R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
+    validate_keys, validate_section,
 };
 pub use controller::{Controller, StatefulConstruct};
 pub use error::HttpError;

@@ -672,6 +672,32 @@ pub fn derive_from_multipart(input: TokenStream) -> TokenStream {
 // Bean / DI macros
 // ---------------------------------------------------------------------------
 
+/// Mark a method as a **post-construct hook** — called after the bean
+/// graph is fully resolved.
+///
+/// The annotated method must take `&self` and return either `()` or
+/// `Result<(), Box<dyn Error + Send + Sync>>`. It may be `async`.
+/// Multiple `#[post_construct]` methods are called in declaration order.
+///
+/// ```ignore
+/// #[bean]
+/// impl CveRepository {
+///     pub fn new(pool: DbPool) -> Self { Self { pool } }
+///
+///     #[post_construct]
+///     async fn cleanup_stale_runs(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         self.fail_stale_runs().await?;
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// This attribute is consumed by [`bean`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn post_construct(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Attribute macro on an `impl` block — marks the type as a bean and
 /// generates a [`Bean`](r2e_core::beans::Bean) trait impl.
 ///

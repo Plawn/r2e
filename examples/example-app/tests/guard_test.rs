@@ -238,8 +238,8 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_state(state)
             .with_config(config)
+            .with_state(state)
             .with(ErrorHandling)
             .register_controller::<GuardTestController>(),
     );

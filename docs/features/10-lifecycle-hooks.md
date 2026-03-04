@@ -93,7 +93,7 @@ Points cles :
 ```rust
 AppBuilder::new()
     .with_state(services)
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Arret en cours...");
         // Nettoyage, flush des logs, fermeture de connexions...
         tracing::info!("Nettoyage termine");
@@ -106,10 +106,10 @@ AppBuilder::new()
 ### Signature du hook d'arret
 
 ```rust
-FnOnce() -> Future<Output = ()>
+FnOnce(T) -> Future<Output = ()>
 ```
 
-- Ne recoit pas l'etat (le serveur est deja arrete)
+- Recoit l'etat de l'application (meme signature que `on_start`)
 - Ne peut pas echouer (retourne `()`)
 
 ### 3. Plusieurs hooks
@@ -128,10 +128,10 @@ AppBuilder::new()
         tracing::info!("Hook 2 : chargement cache");
         Ok(())
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook arret 1");
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook arret 2");
     })
     .serve("0.0.0.0:3000")
@@ -149,7 +149,7 @@ use std::time::Duration;
 AppBuilder::new()
     .with_state(services)
     .shutdown_grace_period(Duration::from_secs(5))
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Nettoyage...");
     })
     .serve("0.0.0.0:3000")
@@ -213,7 +213,7 @@ impl LifecycleController<Services> for MyController {
         })
     }
 
-    fn on_stop() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    fn on_stop(_state: &Services) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {
             tracing::info!("MyController stopping");
         })

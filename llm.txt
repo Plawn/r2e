@@ -42,13 +42,11 @@ impl HelloController {
 #[tokio::main]
 async fn main() {
     r2e::init_tracing();
-    let config = R2eConfig::empty();
 
     AppBuilder::new()
-        .provide(config.clone())
+        .load_config::<()>("dev")
         .build_state::<AppState, _, _>()
         .await
-        .with_config(config)
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)
@@ -188,15 +186,14 @@ The `#[bean]` attribute generates a `Bean` trait impl. Constructor params are re
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)                     // pre-state plugins first
+    .load_config::<()>("dev")              // load yaml + env, provide R2eConfig
     .provide(event_bus)                    // provide raw values
     .provide(pool)
-    .provide(config.clone())
     .provide(Arc::new(claims_validator))
     .provide(RateLimitRegistry::default())
     .with_bean::<UserService>()            // register bean for auto-wiring
     .build_state::<Services, _, _>()          // resolve bean graph → state (async)
     .await
-    .with_config(config)                   // make config available for #[config] fields
     .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // CORS
     .with(Tracing)                         // request tracing
@@ -206,7 +203,7 @@ AppBuilder::new()
         OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true),
     ))
     .on_start(|state| async move { Ok(()) })
-    .on_stop(|| async { })
+    .on_stop(|state| async move { /* access state during shutdown */ })
     .register_controller::<UserController>()
     .with(NormalizePath)                   // MUST be last
     .serve("0.0.0.0:3000")

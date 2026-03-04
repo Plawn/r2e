@@ -115,8 +115,8 @@ async fn setup_with_option(option_value: Option<&str>) -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_state(state)
             .with_config(config)
+            .with_state(state)
             .with(ErrorHandling)
             .register_controller::<ConfigTestController>(),
     );
@@ -248,8 +248,8 @@ async fn test_config_missing_required_panics() {
     // This should panic during register_controller because the config key is missing
     let _app = TestApp::from_builder(
         AppBuilder::new()
-            .with_state(state)
             .with_config(config)
+            .with_state(state)
             .with(ErrorHandling)
             .register_controller::<MissingConfigController>(),
     );

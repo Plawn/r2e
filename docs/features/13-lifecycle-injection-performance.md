@@ -14,8 +14,8 @@ Tout commence par la construction fluide via `AppBuilder` :
 
 ```rust
 AppBuilder::new()
-    .with_state(services)           // 1. Etat applicatif
-    .with_config(config)            // 2. Configuration
+    .with_config(config)            // 1. Configuration
+    .with_state(services)           // 2. Etat applicatif
     .with_cors()                    // 3. Layers Tower
     .with_tracing()
     .with_health()
@@ -25,7 +25,7 @@ AppBuilder::new()
         s.register::<ScheduledJobs>();
     })
     .on_start(|state| async { Ok(()) })  // 6. Hooks
-    .on_stop(|| async { })
+    .on_stop(|_| async { })
     .register_controller::<UserController>()  // 7. Controllers
     .serve("0.0.0.0:3000")         // 8. Lancement
     .await?;

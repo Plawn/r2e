@@ -125,31 +125,45 @@ Fluent API for assembling a R2E application:
 
 ```rust
 AppBuilder::new()
+    // ── Pre-state phase ──
     .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
+    .load_config::<AppConfig>("dev")       // load yaml + env, construct typed config, provide all
+    // or: .with_config(config)            // provide a pre-loaded R2eConfig / R2eConfig<C>
     .provide(services.pool.clone())        // provide beans
     .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
     .with_async_bean::<MyAsyncService>()   // async bean constructor
     .with_bean::<UserService>()            // sync bean (unchanged)
+    .with_config_section::<CveMatchingConfig>("cve.matching") // deserialize + provide as bean
     .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
     .await
-    .with_config(config)
+    // ── Post-state phase ──
     .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // or Cors::new(custom_layer)
     .with(Tracing)
     .with(ErrorHandling)                   // catch panics → JSON 500
     .with(DevReload)                       // /__r2e_dev/* endpoints
-    .with(OpenApiPlugin::new(config))      // /openapi.json (+ /docs if docs_ui enabled)
+    .with(OpenApiPlugin::new(openapi_cfg)) // /openapi.json (+ /docs if docs_ui enabled)
     .on_start(|state| async move { Ok(()) })
-    .on_stop(|| async { })
+    .on_stop(|state| async move { state.pool.close().await; })
     .register_controller::<UserController>()
     .register_controller::<AccountController>()
     .register_controller::<ScheduledJobs>() // auto-discovers #[scheduled] methods
     .register_subscriber::<NotificationService>() // bean event subscribers
     .build()                               // → axum::Router
     // or .serve("0.0.0.0:3000").await     // build + listen + graceful shutdown
+    // or .serve_auto().await              // reads server.host / server.port from config (defaults: 0.0.0.0:3000)
 ```
 
-`build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks.
+**Config methods** (pre-state only):
+- `load_config::<C>(profile)` — load YAML files for `profile`, construct typed config if `C: ConfigProperties`, provide `R2eConfig` (and `R2eConfig<C>`) in the bean registry. Use `load_config::<()>("dev")` for raw only.
+- `with_config(config)` — provide a pre-loaded `R2eConfig<C>` (for tests with `R2eConfig::empty()`, hot-reload with pre-loaded configs, etc.). Same registration behavior as `load_config`.
+- `with_config_section::<B>(path)` — deserialize a config sub-tree and provide as a bean.
+
+**Lifecycle hooks** (post-state):
+- `on_start(|state| async move { Ok(()) })` — runs before the server starts listening. Receives state, returns `Result`.
+- `on_stop(|state| async move { })` — runs after graceful shutdown. Receives state, returns `()`.
+
+`build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks. `serve_auto()` does the same but reads address from config keys `server.host` (String, default `"0.0.0.0"`) and `server.port` (u16, default `3000`).
 
 `.shutdown_grace_period(Duration)` — optional maximum time for shutdown hooks to complete before force-exiting the process. Without it, the process waits indefinitely.
 
@@ -162,6 +176,13 @@ AppBuilder::new()
 ## Configuration (r2e-core)
 
 `R2eConfig` — key-value configuration store loaded from YAML files + environment variable overlay.
+
+**AppBuilder integration** (pre-state methods):
+- `load_config::<C>(profile)` — load YAML + env, optionally construct typed config (`C: ConfigProperties`), provide in bean registry. Use `load_config::<()>("dev")` for raw only.
+- `with_config(config)` — provide a pre-loaded `R2eConfig` or `R2eConfig<C>` (tests, hot-reload). Same registration behavior as `load_config`.
+- `with_config_section::<B>(path)` — deserialize a config sub-tree and provide as a bean.
+
+**Direct API:**
 - `R2eConfig::load("dev")` — load `application.yaml`, then `application-dev.yaml`, then overlay env vars. Profile overridable via `R2E_PROFILE` env var.
 - `R2eConfig::empty()` — empty config for testing.
 - `config.set("key", ConfigValue::String("value".into()))` — manual key-value setup.

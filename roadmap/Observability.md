@@ -542,7 +542,7 @@ impl Plugin for Observability {
         let app = if let Some(guard) = guard {
             let guard = std::sync::Arc::new(std::sync::Mutex::new(Some(guard)));
             let guard_clone = guard.clone();
-            app.on_stop(move || async move {
+            app.on_stop(move |_| async move {
                 // Drop the guard to trigger flush
                 let _ = guard_clone.lock().unwrap().take();
                 tracing::info!("OpenTelemetry traces flushed");

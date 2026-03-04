@@ -370,8 +370,8 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_state(services)
             .with_config(config)
+            .with_state(services)
             .with(Health)
             .with(ErrorHandling)
             .with(NormalizePath)

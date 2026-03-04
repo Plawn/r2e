@@ -87,6 +87,8 @@ The `prefix` tells the macro where to look in the YAML hierarchy. Each field is 
 | 1-2 isolated values from different sections | `#[config("full.key")]` |
 | A coherent group of settings (db, auth, app...) | `#[config_section(prefix = "...")]` |
 | Config needed outside controllers (main, beans) | `ConfigProperties::from_config()` or `with_typed()` |
+| Config section as injectable bean (one-liner) | `AppBuilder::with_config_section::<T>(path)` |
+| Serde-based sub-tree extraction (no ConfigProperties) | `config.get_section::<V>(path)` |
 
 ### Outside controllers: manual usage
 
@@ -109,6 +111,70 @@ println!("{}", config.name);
 let raw: String = config.get("app.name")?;
 ```
 
+### Providing config to AppBuilder
+
+There are **two ways** to provide configuration to the builder (both are pre-state methods):
+
+#### `with_config(config)` — provide a pre-loaded config
+
+Use when you already have an `R2eConfig` instance (hot-reload, tests, custom loading):
+
+```rust
+let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+AppBuilder::new()
+    .with_config(config)
+    .build_state::<Services, _, _>().await
+```
+
+Also works with typed configs:
+```rust
+let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(None)?;
+AppBuilder::new()
+    .with_config(config)  // provides both R2eConfig and R2eConfig<AppConfig>
+```
+
+#### `load_config::<C>(profile)` — load + type + provide in one call
+
+Use for the common case where you just want to load from YAML files:
+
+```rust
+// Raw config only:
+AppBuilder::new()
+    .load_config::<()>("dev")
+
+// With typed config struct:
+AppBuilder::new()
+    .load_config::<AppConfig>("dev")
+```
+
+`C` must implement `LoadableConfig` — satisfied by `()` (raw only) and any `T: ConfigProperties` (raw + typed). Panics if loading or typed construction fails.
+
+Both methods do the same thing under the hood:
+1. Store the raw config in the builder (for `serve_auto`, `with_config_section`, etc.)
+2. Provide `R2eConfig` in the bean registry (injectable by beans via `#[config("key")]`)
+3. If `C` is not `()`, also provide `R2eConfig<C>` in the bean registry
+
+**Important:** `with_config` / `load_config` are **pre-state** methods — call them before `.build_state()` or `.with_state()`.
+
+### `with_config_section()` — config section as injectable bean
+
+Deserializes a config sub-tree and registers it as a bean in one call:
+
+```rust
+AppBuilder::new()
+    .with_config(config)  // or .load_config::<()>("dev")
+    .with_config_section::<CveMatchingConfig>("cve.matching")
+    // CveMatchingConfig is now injectable by other beans
+```
+
+Signature: `fn with_config_section<B: DeserializeOwned + Clone + Send + Sync + 'static>(self, path: &str) -> AppBuilder<...>`.
+
+Uses `config.get_section(path)` internally. Panics if config is not yet provided or deserialization fails. The resulting `B` is `provide()`d into the bean registry.
+
+**`get_section()` vs `ConfigProperties::from_config()`:**
+- `get_section::<V>(path)` — serde-based, works with any `#[derive(Deserialize)]` struct. No field-level `#[config(...)]` attributes.
+- `ConfigProperties::from_config(&config, prefix)` — macro-based, supports `#[config(default, key, env, section)]` field attributes and validation metadata.
+
 ---
 
 ## R2eConfig
@@ -126,6 +192,7 @@ Central configuration store. `R2eConfig<()>` = raw key-value; `R2eConfig<T: Conf
 
 - `get::<V: FromConfigValue>("key")` → `Result<V, ConfigError>` — typed retrieval.
 - `get_or("key", default)` → `V` — with fallback.
+- `get_section::<V: DeserializeOwned>("path")` → `Result<V, ConfigError>` — collects all keys under `path.*`, rebuilds a nested JSON object, and deserializes via serde. Use for extracting an entire sub-tree into a struct without `ConfigProperties`.
 - `contains_key("key")` → `bool`.
 - `profile()` → `&str` — active profile name.
 - `typed()` → `&T` — reference to typed layer.

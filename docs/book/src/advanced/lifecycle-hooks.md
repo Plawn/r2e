@@ -85,16 +85,16 @@ Key points:
 
 ## `on_stop` — Shutdown hook
 
-Runs after the server stops accepting connections and all in-flight requests complete:
+Runs after the server stops accepting connections and all in-flight requests complete. Receives the application state (same as `on_start`):
 
 ```rust
-.on_stop(|| async {
-    tracing::info!("Shutdown in progress");
-    // Flush logs, close connections, notify monitoring
+.on_stop(|state| async move {
+    state.pool.close().await;
+    tracing::info!("Shutdown complete");
 })
 ```
 
-Shutdown hooks don't return `Result` — there's no meaningful way to handle errors during shutdown.
+Shutdown hooks don't return `Result` — there's no meaningful way to handle errors during shutdown. Use `|_state|` if you don't need the state.
 
 ### Common use cases
 
@@ -119,10 +119,10 @@ AppBuilder::new()
         tracing::info!("Hook 2: warm cache");
         Ok(())
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook 1: flush logs");
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook 2: close connections");
     })
     // ...
@@ -139,7 +139,7 @@ AppBuilder::new()
     .build_state::<AppState, _, _>()
     .await
     .shutdown_grace_period(Duration::from_secs(5))
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Cleaning up...");
     })
     .serve("0.0.0.0:3000").await

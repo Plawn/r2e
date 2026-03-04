@@ -65,9 +65,9 @@ When `#[config]` is used, `R2eConfig` is automatically added to the dependency l
 
 ## Key files
 
-- `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `BeanContext`, `BeanRegistry`
+- `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/builder.rs` — `with_bean()`, `with_async_bean()`, `with_producer()`, async `build_state()`
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `#[consumer]` scanning + `EventSubscriber` generation)
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)
@@ -99,3 +99,57 @@ impl NotificationService {
 When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventSubscriber` impl. Register via `register_subscriber::<NotificationService>()` on the builder.
 
 Multiple buses of different types are supported — each `#[consumer]` references a different field by name.
+
+## `#[post_construct]`
+
+Lifecycle hooks called **after the entire bean graph is resolved**. All dependencies are available when hooks fire.
+
+### Constraints
+
+- Method signature: `fn name(&self)` or `async fn name(&self)` — no extra parameters.
+- Return type: `()` or `Result<(), Box<dyn Error + Send + Sync>>`.
+- Multiple `#[post_construct]` methods on a single bean are called in **declaration order**.
+- Execution order across beans: **topological order** (same as construction order).
+- If a hook returns `Err`, `build_state()` returns `BeanError::PostConstruct(String)`.
+
+### Example
+
+```rust
+#[derive(Clone)]
+pub struct CacheService {
+    pool: SqlitePool,
+}
+
+#[bean]
+impl CacheService {
+    pub async fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    #[post_construct]
+    async fn warm_cache(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // load frequently accessed data into memory
+        Ok(())
+    }
+
+    #[post_construct]
+    fn log_ready(&self) {
+        tracing::info!("CacheService ready");
+    }
+}
+```
+
+### Generated code
+
+The `#[bean]` macro generates:
+1. `impl PostConstruct for CacheService` — wraps all `#[post_construct]` methods into a single async future, calling them in declaration order.
+2. `fn after_register(registry)` on the `Bean`/`AsyncBean` impl — calls `registry.register_post_construct::<Self>()`.
+
+### When to use
+
+| Use `#[post_construct]` for | Don't use for |
+|---|---|
+| Cache warming | Construction logic (use the constructor) |
+| Stale data cleanup | Registering event listeners (use `#[consumer]`) |
+| Database migrations | Periodic tasks (use `#[scheduled]`) |
+| Validation that needs other beans | Simple field init |
