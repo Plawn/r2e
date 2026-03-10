@@ -23,6 +23,7 @@ pub(crate) mod grpc_codegen;
 pub(crate) mod grpc_routes_parsing;
 pub(crate) mod params_derive;
 pub(crate) mod api_error_derive;
+pub(crate) mod hash_tokens;
 pub(crate) mod main_attr;
 
 /// Derive macro for declaring a R2E controller struct.

@@ -110,15 +110,13 @@ pub(crate) fn get_cached_state<T: Clone + Send + Sync + 'static>() -> Option<T> 
 
 /// Cache the application state for future dev-reload cycles.
 ///
-/// Only stores the state on the first call; subsequent calls are no-ops
-/// (the cached state is reused until [`invalidate_state_cache`] is called).
+/// Stores (or overwrites) the cached state. Called after every successful
+/// bean resolution.
 #[cfg(feature = "dev-reload")]
 pub(crate) fn cache_state<T: Clone + Send + Sync + 'static>(state: &T) {
     let store = STATE_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = store.lock().expect("state cache poisoned");
-    if guard.is_none() {
-        *guard = Some(Box::new(state.clone()));
-    }
+    *guard = Some(Box::new(state.clone()));
 }
 
 /// Returns `true` if lifecycle hooks (consumers, serve hooks, startup hooks)
@@ -134,6 +132,19 @@ pub(crate) fn mark_lifecycle_initialized() {
     LIFECYCLE_INITIALIZED.store(true, Ordering::Release);
 }
 
+/// Clear only the monolithic state cache, without resetting lifecycle hooks.
+///
+/// Used internally when the graph fingerprint changes: beans need rebuilding
+/// but consumers, startup hooks, etc. should NOT be re-executed.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn clear_state_cache() {
+    if let Some(store) = STATE_CACHE.get() {
+        if let Ok(mut guard) = store.lock() {
+            *guard = None;
+        }
+    }
+}
+
 /// Force the next dev-reload cycle to rebuild the application state from
 /// scratch (re-resolve all beans).
 ///
@@ -146,7 +157,59 @@ pub fn invalidate_state_cache() {
             *guard = None;
         }
     }
+    invalidate_graph_fingerprint();
     LIFECYCLE_INITIALIZED.store(false, Ordering::Release);
+}
+
+/// Clear the graph fingerprint cache (used by `invalidate_state_cache`).
+#[cfg(feature = "dev-reload")]
+fn invalidate_graph_fingerprint() {
+    if let Some(store) = GRAPH_FINGERPRINT.get() {
+        if let Ok(mut guard) = store.lock() {
+            *guard = None;
+        }
+    }
+}
+
+// ── Graph fingerprint cache ─────────────────────────────────────────────────
+
+#[cfg(feature = "dev-reload")]
+static GRAPH_FINGERPRINT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+
+/// Get the cached graph fingerprint from the previous dev-reload cycle.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn get_cached_graph_fingerprint() -> Option<u64> {
+    let store = GRAPH_FINGERPRINT.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    *guard
+}
+
+/// Store the current graph fingerprint and per-bean fingerprints.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn cache_graph_fingerprint(
+    fp: u64,
+    per_bean: Vec<(std::any::TypeId, &'static str, u64)>,
+) {
+    let store = GRAPH_FINGERPRINT.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().expect("graph fingerprint cache poisoned");
+    *guard = Some(fp);
+
+    let bean_store = PER_BEAN_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut bean_guard = bean_store.lock().expect("per-bean fingerprint cache poisoned");
+    bean_guard.clear();
+    for (tid, _name, bean_fp) in per_bean {
+        bean_guard.insert(tid, bean_fp);
+    }
+}
+
+#[cfg(feature = "dev-reload")]
+static PER_BEAN_FINGERPRINTS: OnceLock<Mutex<HashMap<std::any::TypeId, u64>>> = OnceLock::new();
+
+/// Get the cached per-bean fingerprints from the previous cycle.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn get_cached_per_bean_fingerprints() -> HashMap<std::any::TypeId, u64> {
+    let store = PER_BEAN_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
+    store.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
 // ── Boot time ───────────────────────────────────────────────────────────────

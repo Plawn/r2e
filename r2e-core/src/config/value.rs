@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use super::ConfigError;
@@ -13,6 +14,35 @@ pub enum ConfigValue {
     Null,
     List(Vec<ConfigValue>),
     Map(HashMap<String, ConfigValue>),
+}
+
+impl Hash for ConfigValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            ConfigValue::String(s) => s.hash(state),
+            ConfigValue::Integer(i) => i.hash(state),
+            ConfigValue::Float(f) => f.to_bits().hash(state),
+            ConfigValue::Bool(b) => b.hash(state),
+            ConfigValue::Null => {}
+            ConfigValue::List(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
+                }
+            }
+            ConfigValue::Map(map) => {
+                // Sort keys for deterministic hashing
+                let mut pairs: Vec<_> = map.iter().collect();
+                pairs.sort_by_key(|(k, _)| *k);
+                pairs.len().hash(state);
+                for (k, v) in pairs {
+                    k.hash(state);
+                    v.hash(state);
+                }
+            }
+        }
+    }
 }
 
 impl ConfigValue {

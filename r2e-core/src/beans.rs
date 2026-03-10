@@ -2,6 +2,8 @@ use std::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+#[cfg(feature = "dev-reload")]
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 
 // ── Traits ──────────────────────────────────────────────────────────────────
@@ -33,6 +35,25 @@ pub trait Bean: Clone + Send + Sync + 'static {
     fn config_keys() -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    /// A version stamp derived from the constructor's source tokens.
+    ///
+    /// The `#[bean]` and `#[derive(Bean)]` macros hash the constructor body /
+    /// struct fields at compile time, so a code change automatically bumps this
+    /// value. Used by the dev-reload granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your constructor.
+    /// If you implement `Bean` manually and want hot-reload to pick up changes,
+    /// override this constant and bump it whenever you modify the `build` logic:
+    ///
+    /// ```ignore
+    /// impl Bean for MyService {
+    ///     const BUILD_VERSION: u64 = 2; // bump when build() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
 
     /// Construct the bean from a fully resolved context.
     fn build(ctx: &BeanContext) -> Self;
@@ -69,6 +90,24 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     fn config_keys() -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    /// A version stamp derived from the constructor's source tokens.
+    ///
+    /// The `#[bean]` macro hashes the async constructor body at compile time,
+    /// so a code change automatically bumps this value. Used by the dev-reload
+    /// granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your constructor.
+    /// Override this constant and bump it when you modify `build` logic:
+    ///
+    /// ```ignore
+    /// impl AsyncBean for MyPool {
+    ///     const BUILD_VERSION: u64 = 3; // bump when build() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
 
     /// Construct the bean asynchronously from a fully resolved context.
     fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
@@ -109,6 +148,24 @@ pub trait Producer: Send + 'static {
     fn config_keys() -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    /// A version stamp derived from the producer function's source tokens.
+    ///
+    /// The `#[producer]` macro hashes the function body at compile time,
+    /// so a code change automatically bumps this value. Used by the dev-reload
+    /// granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your producer.
+    /// Override this constant and bump it when you modify `produce` logic:
+    ///
+    /// ```ignore
+    /// impl Producer for MyProducer {
+    ///     const BUILD_VERSION: u64 = 1; // bump when produce() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
 
     /// Produce the output from a fully resolved context.
     fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
@@ -156,6 +213,11 @@ impl fmt::Debug for BeanContext {
 }
 
 impl BeanContext {
+    /// Create a new BeanContext with the given entries.
+    fn new(entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> Self {
+        Self { entries }
+    }
+
     /// Retrieve a bean by type, cloning it out of the context.
     ///
     /// # Panics
@@ -213,6 +275,12 @@ pub struct BeanRegistry {
     provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// When true, duplicate bean registrations are allowed (last wins).
     pub(crate) allow_overrides: bool,
+    /// Tracks which provided beans came from config sections.
+    /// Maps `TypeId` → config path prefix (e.g. `"cve.matching"`).
+    /// Used by the dev-reload fingerprint to detect config changes for
+    /// beans provided via [`AppBuilder::with_config_section`].
+    #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
+    provided_config_paths: HashMap<TypeId, String>,
 }
 
 struct BeanRegistration {
@@ -222,6 +290,11 @@ struct BeanRegistration {
     dependencies: Vec<(TypeId, &'static str)>,
     /// (config_key, expected_type_name) for config validation.
     config_keys: Vec<(&'static str, &'static str)>,
+    /// Hash of the constructor/producer source tokens, computed at compile time.
+    /// Changes when the bean's code is modified. Used by the dev-reload
+    /// fingerprinting system.
+    #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
+    build_version: u64,
     factory: Factory,
     /// Optional post-construct callback, set via `register_post_construct`.
     post_construct: Option<PostConstructFn>,
@@ -282,6 +355,7 @@ impl BeanRegistry {
             beans: Vec::new(),
             provided: HashMap::new(),
             allow_overrides: false,
+            provided_config_paths: HashMap::new(),
         }
     }
 
@@ -290,6 +364,22 @@ impl BeanRegistry {
     /// The instance will be available to beans that depend on type `T`.
     pub fn provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
+        self
+    }
+
+    /// Provide a bean built from a config section.
+    ///
+    /// Like [`provide`](Self::provide), but also records the config path prefix
+    /// so the dev-reload fingerprint system can detect when the underlying
+    /// config values change.
+    pub fn provide_from_section<T: Clone + Send + Sync + 'static>(
+        &mut self,
+        value: T,
+        config_path: &str,
+    ) -> &mut Self {
+        self.provided.insert(TypeId::of::<T>(), Box::new(value));
+        self.provided_config_paths
+            .insert(TypeId::of::<T>(), config_path.to_string());
         self
     }
 
@@ -310,6 +400,7 @@ impl BeanRegistry {
             type_name: type_name::<T>(),
             dependencies: T::dependencies(),
             config_keys: T::config_keys(),
+            build_version: T::BUILD_VERSION,
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let bean = T::build(&ctx);
@@ -331,6 +422,7 @@ impl BeanRegistry {
             type_name: type_name::<T>(),
             dependencies: T::dependencies(),
             config_keys: T::config_keys(),
+            build_version: T::BUILD_VERSION,
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let bean = T::build(&ctx).await;
@@ -379,6 +471,7 @@ impl BeanRegistry {
                 "R2eConfig",
             )],
             config_keys: vec![],
+            build_version: 0,
             factory: Box::new(move |ctx| {
                 Box::pin(async move {
                     let config = ctx.get::<crate::config::R2eConfig>();
@@ -400,6 +493,7 @@ impl BeanRegistry {
             type_name: type_name::<P::Output>(),
             dependencies: P::dependencies(),
             config_keys: P::config_keys(),
+            build_version: P::BUILD_VERSION,
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let output = P::produce(&ctx).await;
@@ -409,6 +503,123 @@ impl BeanRegistry {
             post_construct: None,
         });
         self
+    }
+
+    /// Compute the graph fingerprint without constructing any beans.
+    ///
+    /// Performs deduplication (when overrides are enabled), topological sorting,
+    /// and computes per-bean fingerprints from metadata only. This is cheap
+    /// and allows `build_state` to compare against the cached fingerprint
+    /// before doing the expensive construction step.
+    ///
+    /// **Note:** This does NOT validate missing dependencies or config keys.
+    /// Validation happens in [`resolve()`](Self::resolve) which is called when
+    /// the fingerprint changes and a full rebuild is needed.
+    ///
+    /// Returns `(graph_fingerprint, per_bean_fingerprints)`.
+    #[cfg(feature = "dev-reload")]
+    pub fn compute_fingerprint(&self) -> Result<(u64, Vec<(TypeId, &'static str, u64)>), BeanError> {
+        // Work on a snapshot of bean metadata to handle deduplication
+        // without mutating self (resolve() will do the real dedup later).
+        let beans: Vec<&BeanRegistration> = if self.allow_overrides {
+            // Deduplicate: keep only the last registration per TypeId
+            let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
+            for (i, reg) in self.beans.iter().enumerate() {
+                last_seen.insert(reg.type_id, i);
+            }
+            let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
+            self.beans.iter().enumerate()
+                .filter(|(i, _)| keep.contains(i))
+                .map(|(_, reg)| reg)
+                .collect()
+        } else {
+            self.beans.iter().collect()
+        };
+
+        let bean_count = beans.len();
+        if bean_count == 0 {
+            return Ok((0, Vec::new()));
+        }
+
+        // Build type index for the (possibly deduplicated) bean list
+        let id_to_idx: HashMap<TypeId, usize> = beans
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.type_id, i))
+            .collect();
+
+        // Topological sort (checks for cycles)
+        let in_degree: Vec<usize> = beans
+            .iter()
+            .map(|reg| {
+                reg.dependencies
+                    .iter()
+                    .filter(|(d, _)| id_to_idx.contains_key(d))
+                    .count()
+            })
+            .collect();
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
+        for (i, reg) in beans.iter().enumerate() {
+            for (dep_id, _) in &reg.dependencies {
+                if let Some(&dep_idx) = id_to_idx.get(dep_id) {
+                    dependents[dep_idx].push(i);
+                }
+            }
+        }
+        let mut in_degree = in_degree;
+        let mut queue: Vec<usize> = (0..bean_count)
+            .filter(|&i| in_degree[i] == 0)
+            .collect();
+        let mut sorted_order: Vec<usize> = Vec::with_capacity(bean_count);
+        while let Some(idx) = queue.pop() {
+            sorted_order.push(idx);
+            for &dep_idx in &dependents[idx] {
+                in_degree[dep_idx] -= 1;
+                if in_degree[dep_idx] == 0 {
+                    queue.push(dep_idx);
+                }
+            }
+        }
+        if sorted_order.len() != bean_count {
+            let cycle: Vec<String> = (0..bean_count)
+                .filter(|i| in_degree[*i] > 0)
+                .map(|i| beans[i].type_name.to_string())
+                .collect();
+            return Err(BeanError::CyclicDependency { cycle });
+        }
+
+        // Compute fingerprints — we need config for this
+        let config = self.provided
+            .get(&TypeId::of::<crate::config::R2eConfig>())
+            .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
+
+        let mut dep_fingerprints: HashMap<TypeId, u64> = HashMap::new();
+        let mut per_bean: Vec<(TypeId, &'static str, u64)> = Vec::new();
+        let mut graph_hasher = std::collections::hash_map::DefaultHasher::new();
+
+        // Include provided config section fingerprints in the graph hash.
+        // This ensures that changes to config values under a section path
+        // (e.g. "cve.matching.*") trigger a rebuild for beans that depend
+        // on the provided config section bean.
+        if let Some(config) = config {
+            let mut section_entries: Vec<_> = self.provided_config_paths.iter().collect();
+            section_entries.sort_by_key(|(tid, _)| *tid); // deterministic order
+            for (tid, path) in section_entries {
+                let section_fp = config.section_fingerprint(path);
+                dep_fingerprints.insert(*tid, section_fp);
+                section_fp.hash(&mut graph_hasher);
+            }
+        }
+
+        for &idx in &sorted_order {
+            let reg = beans[idx];
+            let fp = Self::compute_bean_fingerprint(reg, config, &dep_fingerprints);
+            dep_fingerprints.insert(reg.type_id, fp);
+            per_bean.push((reg.type_id, reg.type_name, fp));
+            fp.hash(&mut graph_hasher);
+        }
+
+        Ok((graph_hasher.finish(), per_bean))
     }
 
     /// Resolve the dependency graph and build all beans.
@@ -431,7 +642,7 @@ impl BeanRegistry {
 
         let bean_count = self.beans.len();
         if bean_count == 0 {
-            return Ok(BeanContext { entries });
+            return Ok(BeanContext::new(entries));
         }
 
         // Check for duplicates
@@ -458,7 +669,7 @@ impl BeanRegistry {
         // Construct beans in order (async)
         entries = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
 
-        let mut ctx = BeanContext { entries };
+        let mut ctx = BeanContext::new(entries);
 
         // Run post-construct hooks in topological order
         for pc_fn in pc_fns.into_iter().flatten() {
@@ -640,6 +851,38 @@ impl BeanRegistry {
         Ok(sorted_order)
     }
 
+    /// Compute a full fingerprint for a bean, incorporating its own config
+    /// fingerprint, its `BUILD_VERSION`, and the fingerprints of all its
+    /// dependencies (transitively).
+    #[cfg(feature = "dev-reload")]
+    fn compute_bean_fingerprint(
+        reg: &BeanRegistration,
+        config: Option<&crate::config::R2eConfig>,
+        dep_fingerprints: &HashMap<TypeId, u64>,
+    ) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+        // 1. Build version (hash of constructor source tokens)
+        reg.build_version.hash(&mut hasher);
+
+        // 2. Config values this bean depends on
+        if !reg.config_keys.is_empty() {
+            if let Some(config) = config {
+                let keys: Vec<&str> = reg.config_keys.iter().map(|(k, _)| *k).collect();
+                config.config_fingerprint(&keys).hash(&mut hasher);
+            }
+        }
+
+        // 3. Fingerprints of all bean dependencies (transitively propagated)
+        for (dep_id, _) in &reg.dependencies {
+            if let Some(&dep_fp) = dep_fingerprints.get(dep_id) {
+                dep_fp.hash(&mut hasher);
+            }
+        }
+
+        hasher.finish()
+    }
+
     /// Construct beans in topological order (async).
     async fn construct_beans_in_order(
         beans: Vec<BeanRegistration>,
@@ -656,7 +899,7 @@ impl BeanRegistry {
             let (type_id, factory) = bean_data[idx].take().unwrap();
             // Move entries into a BeanContext so the factory can call ctx.get::<T>().
             // The factory returns entries back along with the constructed bean.
-            let ctx = BeanContext { entries };
+            let ctx = BeanContext::new(entries);
             let (returned_ctx, bean_value) = factory(ctx).await;
             entries = returned_ctx.entries;
             entries.insert(type_id, bean_value);

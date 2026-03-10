@@ -326,7 +326,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
         let section: B = config.get_section(path).unwrap_or_else(|e| {
             panic!("Failed to deserialize config section '{path}': {e}")
         });
-        self.shared.bean_registry.provide(section);
+        self.shared.bean_registry.provide_from_section(section, path);
         self.with_updated_types()
     }
 
@@ -484,21 +484,67 @@ impl<P, R> AppBuilder<NoState, P, R> {
     {
         #[cfg(feature = "dev-reload")]
         {
-            if let Some(cached) = crate::dev::get_cached_state::<S>() {
-                tracing::debug!("dev-reload: reusing cached state, skipping bean resolution");
-                self.shared.bean_registry = BeanRegistry::new();
-                return Ok(AppBuilder::<S>::from_pre(self.shared, cached));
+            let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
+
+            // Phase 1: compute graph fingerprint (cheap — no bean construction)
+            let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
+            let cached_fp = crate::dev::get_cached_graph_fingerprint();
+
+            // If fingerprint matches and we have a cached state → reuse it
+            if let (Some(old_fp), Some(cached_state)) =
+                (cached_fp, crate::dev::get_cached_state::<S>())
+            {
+                if old_fp == new_fp {
+                    tracing::debug!(
+                        "dev-reload: graph fingerprint unchanged, reusing cached state"
+                    );
+                    return Ok(AppBuilder::<S>::from_pre(self.shared, cached_state));
+                }
+
+                // Fingerprint changed — log only the beans that actually changed
+                tracing::info!(
+                    "dev-reload: graph fingerprint changed ({:#018x} → {:#018x}), rebuilding all beans",
+                    old_fp,
+                    new_fp
+                );
+                let old_per_bean = crate::dev::get_cached_per_bean_fingerprints();
+                for (type_id, name, bean_fp) in &per_bean_fps {
+                    let changed = old_per_bean
+                        .get(type_id)
+                        .map(|&old| old != *bean_fp)
+                        .unwrap_or(true); // new bean = changed
+                    if changed {
+                        tracing::info!(
+                            bean = name,
+                            "dev-reload: bean changed — triggering rebuild"
+                        );
+                    }
+                }
+
+                // Clear the stale monolithic state cache (but keep lifecycle
+                // hooks initialized — we only need to rebuild beans, not
+                // re-register consumers or re-run startup hooks).
+                crate::dev::clear_state_cache();
             }
+
+            // Phase 2: full resolution (construct all beans)
+            let ctx = registry.resolve().await?;
+            let state = S::from_context(&ctx);
+
+            crate::dev::cache_state(&state);
+            crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
+
+            return Ok(AppBuilder::<S>::from_pre(self.shared, state));
         }
 
-        let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
-        let ctx = registry.resolve().await?;
-        let state = S::from_context(&ctx);
+        #[cfg(not(feature = "dev-reload"))]
+        {
+            let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
+            let ctx = registry.resolve().await?;
+            let state = S::from_context(&ctx);
 
-        #[cfg(feature = "dev-reload")]
-        crate::dev::cache_state(&state);
-
-        Ok(AppBuilder::<S>::from_pre(self.shared, state))
+            Ok(AppBuilder::<S>::from_pre(self.shared, state))
+        }
     }
 
     /// Provide a pre-built state directly (backward-compatible path).

@@ -5,6 +5,7 @@ use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ReturnType, Type};
 
 use crate::crate_path::{r2e_core_path, r2e_events_path};
 use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
+use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 
 /// Parsed consumer method data from a `#[bean]` impl block.
@@ -114,6 +115,9 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
     let krate = r2e_core_path();
     let deps_type = build_tcons_type(&dep_types, &krate);
 
+    // Compute BUILD_VERSION from the constructor body tokens
+    let build_version = hash_token_stream(&quote! { #constructor });
+
     // Extract R2eConfig once if any #[config] params are present
     let config_prelude = if has_config {
         quote! { let __r2e_config: #krate::config::R2eConfig = ctx.get::<#krate::config::R2eConfig>(); }
@@ -160,6 +164,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
 
                 #config_keys_fn
 
+                const BUILD_VERSION: u64 = #build_version;
+
                 async fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude
                     #(#build_args)*
@@ -180,6 +186,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                 }
 
                 #config_keys_fn
+
+                const BUILD_VERSION: u64 = #build_version;
 
                 fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude

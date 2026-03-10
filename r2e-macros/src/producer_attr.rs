@@ -4,6 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 
 use crate::crate_path::r2e_core_path;
+use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
@@ -132,6 +133,9 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
     let krate = r2e_core_path();
     let deps_type = build_tcons_type(&dep_types, &krate);
 
+    // Compute BUILD_VERSION from the function body tokens
+    let build_version = hash_token_stream(&quote! { #item_fn });
+
     // Extract R2eConfig once if any #[config] params are present
     let config_prelude = if has_config {
         quote! { let __r2e_config: #krate::config::R2eConfig = ctx.get::<#krate::config::R2eConfig>(); }
@@ -170,6 +174,8 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
             fn config_keys() -> Vec<(&'static str, &'static str)> {
                 vec![#(#config_key_entries),*]
             }
+
+            const BUILD_VERSION: u64 = #build_version;
 
             async fn produce(ctx: &#krate::beans::BeanContext) -> Self::Output {
                 #config_prelude

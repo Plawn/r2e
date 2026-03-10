@@ -211,6 +211,53 @@ impl<T> R2eConfig<T> {
         &self.typed
     }
 
+    /// Compute a fingerprint (hash) over a set of config keys.
+    ///
+    /// Returns a `u64` hash of the values at the given keys. Used by the
+    /// dev-reload bean cache to detect config changes.
+    pub fn config_fingerprint(&self, keys: &[&str]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for &key in keys {
+            key.hash(&mut hasher);
+            match self.values.get(key) {
+                Some(v) => {
+                    1u8.hash(&mut hasher);
+                    v.hash(&mut hasher);
+                }
+                None => {
+                    0u8.hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    /// Compute a fingerprint (hash) over all config keys under a given prefix.
+    ///
+    /// Hashes every `(key, value)` pair where the key starts with `"{prefix}."`.
+    /// Keys are sorted for deterministic ordering. Used by the dev-reload
+    /// fingerprint system to detect changes in config sections provided via
+    /// [`AppBuilder::with_config_section`].
+    pub fn section_fingerprint(&self, prefix: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let dot_prefix = format!("{prefix}.");
+        let mut keys: Vec<&String> = self
+            .values
+            .keys()
+            .filter(|k| k.starts_with(&dot_prefix) || *k == prefix)
+            .collect();
+        keys.sort();
+        for key in keys {
+            key.hash(&mut hasher);
+            if let Some(v) = self.values.get(key.as_str()) {
+                v.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
     /// Extract a sub-section of the config as a deserialized struct.
     ///
     /// Collects all keys starting with `"{path}."`, strips the prefix,
