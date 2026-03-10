@@ -14,7 +14,7 @@ Fluent two-phase API for assembling an application:
 AppBuilder::new()
     // Phase 1: pre-state (bean registration)
     .plugin(Scheduler)                     // pre-state plugin
-    .load_config::<AppConfig>("dev")       // load yaml + type + provide (or .with_config(config))
+    .load_config::<AppConfig>()             // load yaml + type + provide (or .with_config(config))
     .provide(my_pool.clone())              // pre-built instance
     .with_bean::<UserService>()            // sync bean
     .with_async_bean::<MyAsyncService>()   // async bean
@@ -145,23 +145,23 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for MyInterceptor {
 ```rust
 // In AppBuilder — load + provide in one call:
 AppBuilder::new()
-    .load_config::<()>("dev")              // raw config only
-    .load_config::<AppConfig>("dev")       // or: raw + typed config
+    .load_config::<()>()                   // raw config only
+    .load_config::<AppConfig>()            // or: raw + typed config
 
 // Pre-loaded config (tests, hot-reload):
-let config = R2eConfig::load("dev")?;
+let config = R2eConfig::load()?;
 AppBuilder::new()
     .with_config(config)
 
 // Manual access:
-let config = R2eConfig::load("dev")?;
+let config = R2eConfig::load()?;
 let db_url: String = config.get("app.db.url")?;
 let timeout: i64 = config.get_or("app.timeout", 30);
 ```
 
 **Resolution order:**
 1. `application.yaml` (base)
-2. `application-{profile}.yaml` (profile override)
+2. `.env` file (loaded via dotenvy)
 3. `${...}` placeholder resolution (env vars, files via `SecretResolver`)
 4. Environment variables (`APP_DB_URL` → `app.db.url`)
 

@@ -176,7 +176,7 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer
     .with_async_bean::<CacheService>()     // async bean
     .with_bean::<UserService>()            // sync bean
-    .with_config_section::<MatchingConfig>("matching") // deserialize config section + provide as bean
+    // config sections are injected via #[config_section(prefix = "...")] in beans
     .build_state::<AppState, _, _>()          // resolve the graph
     .await                                 // async because graph may contain async beans
 ```
@@ -219,7 +219,7 @@ async fn main() {
     let event_bus = LocalEventBus::new();
 
     AppBuilder::new()
-        .load_config::<()>("dev")
+        .load_config::<()>()
         .provide(event_bus)
         .with_producer::<CreatePool>()
         .with_bean::<UserService>()

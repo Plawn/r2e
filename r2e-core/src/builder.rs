@@ -231,41 +231,34 @@ impl<P, R> AppBuilder<NoState, P, R> {
 
     /// Provide a pre-loaded configuration to the builder.
     ///
-    /// In a single call:
-    /// 1. Stores the raw config in the builder (for `serve_auto`, `with_config_section`, etc.)
-    /// 2. Provides `R2eConfig` (raw) in the bean registry (injectable by beans)
-    /// 3. If `C` is not `()`, also provides `R2eConfig<C>` (typed) in the bean registry
+    /// Stores the config and provides `R2eConfig` in the bean registry
+    /// (injectable by beans and controllers).
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(None)?;
+    /// let config = R2eConfig::load()?;
     /// AppBuilder::new()
     ///     .with_config(config)
     ///     .build_state::<Services, _, _>()
     ///     .await
     /// ```
-    pub fn with_config<C: Clone + Send + Sync + 'static>(
+    pub fn with_config(
         mut self,
-        config: crate::config::R2eConfig<C>,
+        config: crate::config::R2eConfig,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
-        let raw = config.raw();
-        self.shared.config = Some(raw.clone());
-        self.shared.bean_registry.provide(raw);
-        // Only provide the typed version if C is not () (avoid double-provide)
-        if std::any::TypeId::of::<C>() != std::any::TypeId::of::<()>() {
-            self.shared.bean_registry.provide(config);
-        }
+        self.shared.config = Some(config.clone());
+        self.shared.bean_registry.provide(config);
         self.with_updated_types()
     }
 
-    /// Load configuration for the given profile and provide it to the builder.
+    /// Load configuration and provide it to the builder.
     ///
     /// Combines loading, optional typed construction, and registration in one call:
-    /// 1. Loads `application.yaml` + `application-{profile}.yaml` + env overlay
+    /// 1. Loads `application.yaml` + `.env` + env var overlay
     /// 2. If `C` implements [`ConfigProperties`](crate::config::ConfigProperties),
-    ///    constructs the typed config via `with_typed::<C>(None)`
-    /// 3. Stores the raw config + provides in the bean registry (same as [`with_config`](Self::with_config))
+    ///    constructs the typed config and provides it as a bean
+    /// 3. Stores the raw config + provides `R2eConfig` in the bean registry
     ///
     /// # Panics
     ///
@@ -276,58 +269,20 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```ignore
     /// // Raw config only:
     /// AppBuilder::new()
-    ///     .load_config::<()>("dev")
+    ///     .load_config::<()>()
     ///
     /// // With typed config struct:
     /// AppBuilder::new()
-    ///     .load_config::<AppConfig>("dev")
+    ///     .load_config::<AppConfig>()
     /// ```
     pub fn load_config<C: crate::config::LoadableConfig>(
-        self,
-        profile: &str,
+        mut self,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
-        let raw = crate::config::R2eConfig::load(profile)
-            .unwrap_or_else(|e| panic!("Failed to load config for profile '{profile}': {e}"));
-        let config = C::load_from_profile(raw)
+        let config = crate::config::R2eConfig::load()
+            .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+        C::register(&config, &mut self.shared.bean_registry)
             .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
         self.with_config(config)
-    }
-
-    /// Extract a typed sub-section from the loaded configuration and provide
-    /// it as a bean.
-    ///
-    /// The section is deserialized from all config keys under `path` (e.g.,
-    /// `"cve.matching"` collects `cve.matching.*` keys). The resulting value
-    /// is registered via [`provide`](Self::provide) so it can be injected into
-    /// other beans.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no config has been loaded (call `.provide(config)` first) or
-    /// if the section cannot be deserialized into `B`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// AppBuilder::new()
-    ///     .provide(config)
-    ///     .with_config_section::<CveMatchingConfig>("cve.matching")
-    /// ```
-    pub fn with_config_section<B: serde::de::DeserializeOwned + Clone + Send + Sync + 'static>(
-        mut self,
-        path: &str,
-    ) -> AppBuilder<NoState, TCons<B, P>, R> {
-        let config = self
-            .shared
-            .bean_registry
-            .get_provided::<crate::config::R2eConfig>()
-            .or_else(|| self.shared.config.as_ref())
-            .expect("with_config_section requires a loaded config — call .provide(config) first");
-        let section: B = config.get_section(path).unwrap_or_else(|e| {
-            panic!("Failed to deserialize config section '{path}': {e}")
-        });
-        self.shared.bean_registry.provide_from_section(section, path);
-        self.with_updated_types()
     }
 
     /// Enable bean override mode (useful for testing).

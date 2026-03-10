@@ -22,6 +22,7 @@ r2e-observability Structured observability (tracing, metrics)
 r2e-openfga      OpenFGA authorization integration
 r2e-oidc         Embedded OIDC server — issue JWT tokens without an external IdP
 r2e-utils        Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
+r2e-static       Embedded static file serving with SPA support (wraps rust_embed)
 r2e-devtools     Subsecond hot-reload support (wraps dioxus-devtools)
 r2e-test         TestApp, TestJwt for integration testing
 r2e-cli          CLI scaffolding tool
@@ -36,7 +37,7 @@ r2e-core (runtime foundation)
     ↑
 r2e-security / r2e-events / r2e-scheduler / r2e-data
     ↑
-r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils / r2e-devtools / r2e-test
+r2e-static / r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils / r2e-devtools / r2e-test
     ↑
 r2e (facade)
     ↑
@@ -59,6 +60,7 @@ The `r2e` facade crate gates sub-crates behind features:
 | `utils` | `r2e-utils` |
 | `oidc` | `r2e-oidc` |
 | `prometheus` | `r2e-prometheus` |
+| `static` | `r2e-static` |
 | `dev-reload` | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
 | `full` | All of the above (except `dev-reload`) |
 

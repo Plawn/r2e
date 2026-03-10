@@ -86,29 +86,16 @@ The `prefix` tells the macro where to look in the YAML hierarchy. Each field is 
 |---|---|
 | 1-2 isolated values from different sections | `#[config("full.key")]` |
 | A coherent group of settings (db, auth, app...) | `#[config_section(prefix = "...")]` |
-| Config needed outside controllers (main, beans) | `ConfigProperties::from_config()` or `with_typed()` |
-| Config section as injectable bean (one-liner) | `AppBuilder::with_config_section::<T>(path)` |
-| Serde-based sub-tree extraction (no ConfigProperties) | `config.get_section::<V>(path)` |
+| Config needed outside controllers (main, beans) | `ConfigProperties::from_config()` |
+| Config section as injectable bean | `#[config_section(prefix = "...")]` in beans/producers |
 
 ### Outside controllers: manual usage
 
 In `main()`, services, or tests — use `ConfigProperties::from_config()` directly:
 ```rust
-let config = R2eConfig::load("dev")?;
+let config = R2eConfig::load()?;
 let db = DatabaseConfig::from_config(&config, Some("app.database"))?;
 println!("url = {}", db.url);
-```
-
-Or upgrade the entire config to typed with `with_typed()` for `Deref` access:
-```rust
-let config = R2eConfig::load("dev")?
-    .with_typed::<AppConfig>(Some("app"))?;
-
-// Typed access via Deref
-println!("{}", config.name);
-
-// Raw access still works
-let raw: String = config.get("app.name")?;
 ```
 
 ### Providing config to AppBuilder
@@ -120,99 +107,93 @@ There are **two ways** to provide configuration to the builder (both are pre-sta
 Use when you already have an `R2eConfig` instance (hot-reload, tests, custom loading):
 
 ```rust
-let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 AppBuilder::new()
     .with_config(config)
     .build_state::<Services, _, _>().await
 ```
 
-Also works with typed configs:
-```rust
-let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(None)?;
-AppBuilder::new()
-    .with_config(config)  // provides both R2eConfig and R2eConfig<AppConfig>
-```
-
-#### `load_config::<C>(profile)` — load + type + provide in one call
+#### `load_config::<C>()` — load + type + provide in one call
 
 Use for the common case where you just want to load from YAML files:
 
 ```rust
 // Raw config only:
 AppBuilder::new()
-    .load_config::<()>("dev")
+    .load_config::<()>()
 
 // With typed config struct:
 AppBuilder::new()
-    .load_config::<AppConfig>("dev")
+    .load_config::<AppConfig>()
 ```
 
 `C` must implement `LoadableConfig` — satisfied by `()` (raw only) and any `T: ConfigProperties` (raw + typed). Panics if loading or typed construction fails.
 
 Both methods do the same thing under the hood:
-1. Store the raw config in the builder (for `serve_auto`, `with_config_section`, etc.)
-2. Provide `R2eConfig` in the bean registry (injectable by beans via `#[config("key")]`)
-3. If `C` is not `()`, also provide `R2eConfig<C>` in the bean registry
+1. Store the raw config in the builder (for `serve_auto`, etc.)
+2. Provide `R2eConfig` in the bean registry (injectable by beans via `#[config("key")]` and `#[config_section(prefix = "...")]`)
+3. If `C` is not `()`, also construct and provide the typed config via `ConfigProperties::from_config()`
 
 **Important:** `with_config` / `load_config` are **pre-state** methods — call them before `.build_state()` or `.with_state()`.
 
-### `with_config_section()` — config section as injectable bean
+### `#[config_section(prefix = "...")]` — config section in beans and producers
 
-Deserializes a config sub-tree and registers it as a bean in one call:
+Config sections can be injected directly into beans, producers, and `#[derive(Bean)]` structs using `#[config_section(prefix = "...")]` — the same syntax as in controllers. This replaces the former `with_config_section` builder method.
 
+In a `#[bean]` impl:
 ```rust
-AppBuilder::new()
-    .with_config(config)  // or .load_config::<()>("dev")
-    .with_config_section::<CveMatchingConfig>("cve.matching")
-    // CveMatchingConfig is now injectable by other beans
+#[bean]
+impl SearchService {
+    fn new(
+        #[config_section(prefix = "cve.matching")] matching: CveMatchingConfig,
+        other_dep: OtherDep,
+    ) -> Self { ... }
+}
 ```
 
-Signature: `fn with_config_section<B: DeserializeOwned + Clone + Send + Sync + 'static>(self, path: &str) -> AppBuilder<...>`.
+With `#[derive(Bean)]`:
+```rust
+#[derive(Clone, Bean)]
+struct SearchService {
+    #[config_section(prefix = "cve.matching")]
+    matching: CveMatchingConfig,
+}
+```
 
-Uses `config.get_section(path)` internally. Panics if config is not yet provided or deserialization fails. The resulting `B` is `provide()`d into the bean registry.
+In a `#[producer]`:
+```rust
+#[producer]
+fn create_search(#[config_section(prefix = "cve.matching")] matching: CveMatchingConfig) -> SearchService { ... }
+```
 
-**`get_section()` vs `ConfigProperties::from_config()`:**
-- `get_section::<V>(path)` — serde-based, works with any `#[derive(Deserialize)]` struct. No field-level `#[config(...)]` attributes.
-- `ConfigProperties::from_config(&config, prefix)` — macro-based, supports `#[config(default, key, env, section)]` field attributes and validation metadata.
+The struct must derive `ConfigProperties`. Field-level `#[config(default)]`, `#[config(env)]`, etc. are respected.
 
 ---
 
 ## R2eConfig
 
-Central configuration store. `R2eConfig<()>` = raw key-value; `R2eConfig<T: ConfigProperties>` = adds typed access via `Deref<Target = T>`.
+Central configuration store. Not generic — stores flat key-value pairs.
 
-### Constructors (on `R2eConfig<()>` only)
+### Constructors
 
-- `R2eConfig::load("dev")` — load `application.yaml` + `application-{profile}.yaml` + `.env` + `.env.{profile}` + env vars. Profile overridable via `R2E_PROFILE`.
-- `R2eConfig::load_with_resolver("prod", &resolver)` — same but with custom `SecretResolver`.
-- `R2eConfig::from_yaml_str(yaml, profile)` — parse a YAML string (testing).
+- `R2eConfig::load()` — load `application.yaml` + `.env` + env vars.
+- `R2eConfig::load_with_resolver(&resolver)` — same but with custom `SecretResolver`.
+- `R2eConfig::from_yaml_str(yaml)` — parse a YAML string (testing).
 - `R2eConfig::empty()` — empty config (testing).
 
-### Methods (on all `R2eConfig<T>`)
+### Methods
 
 - `get::<V: FromConfigValue>("key")` → `Result<V, ConfigError>` — typed retrieval.
 - `get_or("key", default)` → `V` — with fallback.
-- `get_section::<V: DeserializeOwned>("path")` → `Result<V, ConfigError>` — collects all keys under `path.*`, rebuilds a nested JSON object, and deserializes via serde. Use for extracting an entire sub-tree into a struct without `ConfigProperties`.
 - `contains_key("key")` → `bool`.
-- `profile()` → `&str` — active profile name.
-- `typed()` → `&T` — reference to typed layer.
-- `raw()` → `R2eConfig<()>` — downgrade to untyped.
-
-### Methods (on `R2eConfig<()>` only)
-
 - `set("key", ConfigValue::...)` — insert/overwrite.
-- `with_typed::<C: ConfigProperties>(prefix)` → `Result<R2eConfig<C>, ConfigError>` — upgrade to typed. `prefix` is `Option<&str>`.
 
 ## Resolution order (lowest → highest priority)
 
 1. `application.yaml`
-2. `application-{profile}.yaml`
-3. `.env` file (loaded via dotenvy, won't overwrite existing env vars)
-4. `.env.{profile}` file
-5. `${...}` secret placeholders resolved in string values
-6. Environment variables (`APP_DATABASE_URL` ↔ `app.database.url`)
-
-Profile: `R2E_PROFILE` env var > `load()` argument > default `"dev"`.
+2. `.env` file (loaded via dotenvy, won't overwrite existing env vars)
+3. `${...}` secret placeholders resolved in string values
+4. Environment variables (`APP_DATABASE_URL` ↔ `app.database.url`)
 
 ## ConfigValue
 
@@ -387,7 +368,21 @@ Both are resolved per-request from the `R2eConfig` stored in Axum state.
 
 ### In beans/producers
 
-- `#[config("key")] param: T` on `#[bean]` / `#[producer]` constructor parameters — single value only.
+Both attributes work on `#[bean]` / `#[producer]` constructor parameters and `#[derive(Bean)]` struct fields:
+
+- **`#[config("key")] param: T`** — single scalar value. Same as in controllers.
+- **`#[config_section(prefix = "...")] param: C`** — typed config section. `C` must implement `ConfigProperties`.
+
+```rust
+#[bean]
+impl SearchService {
+    fn new(
+        #[config("app.name")] name: String,
+        #[config_section(prefix = "cve.matching")] matching: MatchingConfig,
+        other_dep: OtherDep,
+    ) -> Self { ... }
+}
+```
 
 ## Startup validation
 

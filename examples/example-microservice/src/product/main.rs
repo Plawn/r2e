@@ -18,7 +18,7 @@ use state::ProductState;
 
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load("product").unwrap_or_else(|_| R2eConfig::empty());
+    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
         .with_config(config)

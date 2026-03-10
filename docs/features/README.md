@@ -30,6 +30,7 @@ r2e-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.
 r2e-events       EventBus trait + LocalEventBus (pub/sub type).
 r2e-scheduler    Taches planifiees (intervalle, cron) avec CancellationToken.
 r2e-openapi      Generation de spec OpenAPI 3.0.3 + Swagger UI.
+r2e-static       Fichiers statiques embarques avec support SPA (wraps rust_embed).
 r2e-test         TestApp (client HTTP in-process) + TestJwt.
 r2e-cli          CLI (r2e new, r2e dev).
 ```

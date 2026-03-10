@@ -81,7 +81,7 @@ struct AppEnv {
 
 async fn setup() -> AppEnv {
     // executed once, persists across hot-patches
-    let config = R2eConfig::load("dev").unwrap();
+    let config = R2eConfig::load().unwrap();
     let pool = PgPool::connect("...").await.unwrap();
     let event_bus = LocalEventBus::new();
     AppEnv { config, pool, event_bus }
@@ -187,15 +187,13 @@ This:
 
 ```rust
 AppBuilder::new()
-    // 1. Config first — enables #[config("key")] and with_config_section
+    // 1. Config first — enables #[config("key")] and #[config_section(prefix = "...")]
     .with_config(env.config)
     // 2. Pre-built instances from setup
     .provide(env.pool)
     .provide(env.event_bus)
     .provide(env.claims_validator)
-    // 3. Typed config sections as beans
-    .with_config_section::<NotificationConfig>("notification")
-    // 4. Bean factories (resolved from provided + config)
+    // 3. Bean factories (resolved from provided + config)
     .with_bean::<UserService>()
     .with_async_bean::<CacheService>()
     .with_producer::<CreatePool>()
@@ -213,9 +211,9 @@ AppBuilder::new()
 | Method | Purpose | When to use |
 |--------|---------|-------------|
 | `.with_config(config)` | Provide pre-loaded `R2eConfig` | Hot-reload (config loaded in setup) |
-| `.load_config::<C>(profile)` | Load YAML + env overlay in one call | Simple apps without hot-reload |
+| `.load_config::<C>()` | Load YAML + env overlay in one call | Simple apps without hot-reload |
 | `.provide(value)` | Inject a pre-built instance | Pools, event buses, validators, shared channels |
-| `.with_config_section::<T>(path)` | Deserialize config sub-tree as a bean | Typed config groups needed by multiple beans |
+| `#[config_section(prefix = "...")]` | Inject typed config section in beans/producers | Typed config groups needed by multiple beans |
 | `.with_bean::<T>()` | Register a sync bean factory | Services with `#[bean] impl T { fn new(...) }` |
 | `.with_async_bean::<T>()` | Register an async bean factory | Services needing async init |
 | `.with_producer::<T>()` | Register a producer (types you don't own) | Connection pools, external clients |
@@ -228,7 +226,7 @@ AppBuilder::new()
 // Bad
 #[r2e::main]
 async fn main(env: AppEnv) {
-    AppBuilder::new().load_config::<()>("dev") // reads disk every time
+    AppBuilder::new().load_config::<()>() // reads disk every time
 }
 
 // Good

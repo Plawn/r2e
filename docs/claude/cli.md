@@ -65,7 +65,7 @@ Uses Dioxus Subsecond for instant hot-patching (no full recompile). Requires `dx
 
 ## `r2e add <extension>` — Extension management
 
-Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `test`.
+Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `static`, `test`.
 
 ## Template system (`commands/templates/`)
 

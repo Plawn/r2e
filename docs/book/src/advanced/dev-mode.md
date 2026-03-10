@@ -58,7 +58,7 @@ struct AppEnv {
 
 async fn setup() -> AppEnv {
     // runs ONCE, persists across hot-patches
-    let config = R2eConfig::load("dev").unwrap();
+    let config = R2eConfig::load().unwrap();
     let pool = PgPool::connect("...").await.unwrap();
     let event_bus = LocalEventBus::new();
     AppEnv { pool, config, event_bus }
@@ -186,7 +186,7 @@ AppBuilder::new()
     .with_config(env.config)
 ```
 
-This stores the raw config in the builder **and** provides `R2eConfig` in the bean registry. Beans using `#[config("key")]` and `with_config_section` both work.
+This stores the raw config in the builder **and** provides `R2eConfig` in the bean registry. Beans using `#[config("key")]` and `#[config_section(prefix = "...")]` both work.
 
 ### Use `provide()` for pre-built instances
 
@@ -200,17 +200,21 @@ AppBuilder::new()
 
 `provide()` injects a pre-built value directly into the bean graph. Use it for anything constructed in `setup()` that beans or controllers depend on.
 
-### Use `with_config_section::<T>()` for typed config sub-trees
+### Use `#[config_section(prefix = "...")]` for typed config sub-trees
+
+Config sections are injected directly in beans and producers using `#[config_section(prefix = "...")]`:
 
 ```rust
-AppBuilder::new()
-    .with_config(env.config)
-    .with_config_section::<MatchingConfig>("matching")
-    // MatchingConfig is now injectable as a bean dependency
-    .with_bean::<SearchService>()
+#[bean]
+impl SearchService {
+    fn new(
+        #[config_section(prefix = "matching")] matching: MatchingConfig,
+        other_dep: OtherDep,
+    ) -> Self { ... }
+}
 ```
 
-This deserializes a YAML sub-tree into a typed struct and provides it as a bean — in one call. Requires `#[derive(Deserialize, Clone)]` on the struct.
+This requires `#[derive(ConfigProperties, Clone)]` on the config struct. Field-level `#[config(default)]`, `#[config(env)]`, etc. are respected.
 
 ### Use `with_bean` / `with_async_bean` / `with_producer` for constructed services
 
@@ -239,7 +243,7 @@ struct AppEnv {
 }
 
 async fn setup() -> AppEnv {
-    let config = R2eConfig::load("dev").unwrap();
+    let config = R2eConfig::load().unwrap();
     let pool = PgPool::connect(&config.get::<String>("database.url").unwrap())
         .await.unwrap();
     let event_bus = LocalEventBus::new();
@@ -250,15 +254,13 @@ async fn setup() -> AppEnv {
 #[r2e::main]
 async fn main(env: AppEnv) {
     AppBuilder::new()
-        // 1. Config first — enables #[config("key")] and with_config_section
+        // 1. Config first — enables #[config("key")] and #[config_section(prefix = "...")]
         .with_config(env.config)
         // 2. Provide pre-built instances from setup
         .provide(env.pool)
         .provide(env.event_bus)
         .provide(env.claims_validator)
-        // 3. Typed config sections as beans
-        .with_config_section::<NotificationConfig>("notification")
-        // 4. Bean factories (resolved from provided + config)
+        // 3. Bean factories (resolved from provided + config)
         .with_bean::<UserService>()
         .with_async_bean::<CacheService>()
         // 5. Build the state
@@ -281,7 +283,7 @@ async fn main(env: AppEnv) {
 #[r2e::main]
 async fn main(env: AppEnv) {
     AppBuilder::new()
-        .load_config::<()>("dev")  // reads disk every time
+        .load_config::<()>()  // reads disk every time
         // ...
 }
 

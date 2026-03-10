@@ -34,7 +34,7 @@ pub struct PropertyMeta {
 ///     pub timeout: Option<i64>,
 /// }
 ///
-/// let config = R2eConfig::from_yaml_str("app:\n  database:\n    url: postgres://localhost/mydb", "test").unwrap();
+/// let config = R2eConfig::from_yaml_str("app:\n  database:\n    url: postgres://localhost/mydb").unwrap();
 /// let db = DatabaseConfig::from_config(&config, Some("app.database")).unwrap();
 /// assert_eq!(db.pool_size, 10); // default applied
 /// ```

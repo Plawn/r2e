@@ -127,13 +127,13 @@ Fluent API for assembling a R2E application:
 AppBuilder::new()
     // ── Pre-state phase ──
     .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
-    .load_config::<AppConfig>("dev")       // load yaml + env, construct typed config, provide all
-    // or: .with_config(config)            // provide a pre-loaded R2eConfig / R2eConfig<C>
+    .load_config::<AppConfig>()             // load yaml + env, construct typed config, provide all
+    // or: .with_config(config)            // provide a pre-loaded R2eConfig
     .provide(services.pool.clone())        // provide beans
     .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
     .with_async_bean::<MyAsyncService>()   // async bean constructor
     .with_bean::<UserService>()            // sync bean (unchanged)
-    .with_config_section::<CveMatchingConfig>("cve.matching") // deserialize + provide as bean
+    // config sections are now injected via #[config_section(prefix = "...")] in beans
     .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
     .await
     // ── Post-state phase ──
@@ -155,9 +155,10 @@ AppBuilder::new()
 ```
 
 **Config methods** (pre-state only):
-- `load_config::<C>(profile)` — load YAML files for `profile`, construct typed config if `C: ConfigProperties`, provide `R2eConfig` (and `R2eConfig<C>`) in the bean registry. Use `load_config::<()>("dev")` for raw only.
-- `with_config(config)` — provide a pre-loaded `R2eConfig<C>` (for tests with `R2eConfig::empty()`, hot-reload with pre-loaded configs, etc.). Same registration behavior as `load_config`.
-- `with_config_section::<B>(path)` — deserialize a config sub-tree and provide as a bean.
+- `load_config::<C>()` — load YAML + env, construct typed config if `C: ConfigProperties`, provide `R2eConfig` (and the typed config) in the bean registry. Use `load_config::<()>()` for raw only.
+- `with_config(config)` — provide a pre-loaded `R2eConfig` (for tests with `R2eConfig::empty()`, hot-reload with pre-loaded configs, etc.). Same registration behavior as `load_config`.
+
+Config sections are injected directly in beans/producers via `#[config_section(prefix = "...")]` — no builder method needed.
 
 **Lifecycle hooks** (post-state):
 - `on_start(|state| async move { Ok(()) })` — runs before the server starts listening. Receives state, returns `Result`.
@@ -178,14 +179,28 @@ AppBuilder::new()
 `R2eConfig` — key-value configuration store loaded from YAML files + environment variable overlay.
 
 **AppBuilder integration** (pre-state methods):
-- `load_config::<C>(profile)` — load YAML + env, optionally construct typed config (`C: ConfigProperties`), provide in bean registry. Use `load_config::<()>("dev")` for raw only.
-- `with_config(config)` — provide a pre-loaded `R2eConfig` or `R2eConfig<C>` (tests, hot-reload). Same registration behavior as `load_config`.
-- `with_config_section::<B>(path)` — deserialize a config sub-tree and provide as a bean.
+- `load_config::<C>()` — load YAML + env, optionally construct typed config (`C: ConfigProperties`), provide in bean registry. Use `load_config::<()>()` for raw only.
+- `with_config(config)` — provide a pre-loaded `R2eConfig` (tests, hot-reload). Same registration behavior as `load_config`.
+
+Config sections are injected directly in beans/producers via `#[config_section(prefix = "...")]` — no builder method needed.
 
 **Direct API:**
-- `R2eConfig::load("dev")` — load `application.yaml`, then `application-dev.yaml`, then overlay env vars. Profile overridable via `R2E_PROFILE` env var.
+- `R2eConfig::load()` — load `application.yaml`, then `.env`, then overlay env vars.
 - `R2eConfig::empty()` — empty config for testing.
 - `config.set("key", ConfigValue::String("value".into()))` — manual key-value setup.
 - `config.get::<T>("key")` — retrieve a typed value (`T: FromConfigValue`).
 - `config.get_or("key", default)` — retrieve with fallback.
 - `#[config("app.key")]` field attribute on controllers — injected at request time from the config stored in state.
+
+## Static File Serving (r2e-static)
+
+`EmbeddedFrontend` — plugin that serves static files embedded in the binary via `rust_embed`, with SPA fallback support. Installs as a fallback handler on the Axum router.
+
+- **Quick start:** `app.with(EmbeddedFrontend::new::<Assets>())` — serves files from a `#[derive(Embed)]` struct with sensible defaults (SPA on, `api/` excluded, `assets/` immutable).
+- **Builder API:** `EmbeddedFrontend::builder::<Assets>().exclude_prefix("graphql/").spa_fallback(false).base_path("/docs").build()` for custom configuration.
+- **FileServer trait** — object-safe abstraction over `rust_embed::Embed`. `EmbedAdapter<E>` wraps any `Embed` type.
+- **Handler logic:** check excluded prefixes → exact file match → directory index (`foo/` → `foo/index.html`) → SPA fallback → 404.
+- **Cache headers:** files under `immutable_prefix` (default `assets/`) get `Cache-Control: public, max-age=31536000, immutable`. Others get `public, max-age=3600`.
+- **ETag:** SHA-256 hash from `rust_embed` metadata, served as `ETag` header.
+- **`should_be_last() = true`** — the fallback handler must be installed after all route registrations.
+- **Feature flag:** `r2e = { features = ["static"] }` or depend on `r2e-static` directly.

@@ -35,6 +35,7 @@ AppBuilder::new()
 | `SecureHeaders` | Security headers (X-Content-Type-Options, etc.) |
 | `OpenApiPlugin` | OpenAPI spec + docs UI |
 | `Prometheus` | Prometheus metrics at `/metrics` |
+| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (feature `static`) |
 
 ### Pre-state plugins
 
@@ -56,7 +57,7 @@ AppBuilder::new()
 
 Plugins are installed in registration order. Some have ordering requirements:
 
-- `NormalizePath` should be installed last (or use `should_be_last()` hint — R2E warns if plugins are added after it)
+- `NormalizePath` and `EmbeddedFrontend` should be installed last (they use `should_be_last()` hint — R2E warns if plugins are added after them)
 - `Tracing` should be early to capture all requests
 - `ErrorHandling` should be after `Tracing` but before route registration
 

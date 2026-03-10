@@ -285,7 +285,7 @@ grpc:
 And reference it in your setup:
 
 ```rust
-let config = R2eConfig::load("dev");
+let config = R2eConfig::load().unwrap();
 let grpc_port = config.get_or("grpc.port", "50051".to_string());
 let grpc_addr = format!("0.0.0.0:{grpc_port}");
 

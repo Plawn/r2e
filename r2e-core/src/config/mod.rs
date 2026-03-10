@@ -6,7 +6,6 @@ pub mod validation;
 pub mod value;
 
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::path::Path;
 
 pub use secrets::{DefaultSecretResolver, SecretResolver};
@@ -58,97 +57,68 @@ impl std::error::Error for ConfigError {}
 
 /// Application configuration loaded from YAML files, `.env` files, and environment variables.
 ///
-/// `R2eConfig` (= `R2eConfig<()>`) provides raw key-value access only.
-/// `R2eConfig<T>` adds typed access to a validated config struct via `Deref<Target = T>`.
-///
 /// Resolution order (lowest to highest priority):
-/// 1. `application.yaml` (base)
-/// 2. `application-{profile}.yaml` (profile override)
-/// 3. `.env` file (loaded into process environment)
-/// 4. `.env.{profile}` file (loaded into process environment)
-/// 5. Environment variables (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
+/// 1. `application.yaml`
+/// 2. `.env` file (loaded into process environment)
+/// 3. Environment variables (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
 ///
 /// `.env` files never overwrite already-set environment variables.
-///
-/// Profile is determined by: `R2E_PROFILE` env var > argument > default `"dev"`.
 #[derive(Debug, Clone)]
-pub struct R2eConfig<T = ()> {
+pub struct R2eConfig {
     values: HashMap<String, ConfigValue>,
-    profile: String,
-    typed: T,
 }
 
-// ── Constructors — only on R2eConfig (= R2eConfig<()>) ─────────────────
+// ── Constructors ─────────────────────────────────────────────────────────
 
 impl R2eConfig {
-    /// Load configuration for the given profile with a custom secret resolver.
+    /// Load configuration with a custom secret resolver.
     ///
-    /// Looks for `application.yaml` and `application-{profile}.yaml` in the
-    /// current working directory, resolves `${...}` placeholders in string values,
-    /// then overlays environment variables.
+    /// Looks for `application.yaml` in the current working directory,
+    /// resolves `${...}` placeholders in string values, then overlays
+    /// environment variables.
     pub fn load_with_resolver(
-        profile: &str,
         resolver: &dyn SecretResolver,
     ) -> Result<Self, ConfigError> {
-        let active_profile =
-            std::env::var("R2E_PROFILE").unwrap_or_else(|_| profile.to_string());
-
         let mut values = HashMap::new();
 
         // 1. Load base config
         loader::load_yaml_file(Path::new("application.yaml"), &mut values)?;
 
-        // 2. Load profile config
-        let profile_path = format!("application-{active_profile}.yaml");
-        loader::load_yaml_file(Path::new(&profile_path), &mut values)?;
-
-        // 3. Load .env files (does NOT overwrite existing env vars)
+        // 2. Load .env file (does NOT overwrite existing env vars)
         let _ = dotenvy::dotenv();
-        let profile_env = format!(".env.{active_profile}");
-        let _ = dotenvy::from_filename(&profile_env);
 
-        // 4. Resolve ${...} placeholders in string values
+        // 3. Resolve ${...} placeholders in string values
         resolve_string_values(&mut values, resolver)?;
 
-        // 5. Overlay environment variables
+        // 4. Overlay environment variables
         // Convention: `app.database.url` <-> `APP_DATABASE_URL`
         for (env_key, env_val) in std::env::vars() {
             let config_key = env_key.to_lowercase().replace('_', ".");
             values.insert(config_key, ConfigValue::String(env_val));
         }
 
-        Ok(R2eConfig {
-            values,
-            profile: active_profile,
-            typed: (),
-        })
+        Ok(R2eConfig { values })
     }
 
-    /// Load configuration for the given profile (default resolver: env + file).
+    /// Load configuration (default resolver: env + file).
     ///
-    /// Looks for `application.yaml` and `application-{profile}.yaml` in the
-    /// current working directory, then overlays environment variables.
-    pub fn load(profile: &str) -> Result<Self, ConfigError> {
-        Self::load_with_resolver(profile, &DefaultSecretResolver)
+    /// Looks for `application.yaml` in the current working directory,
+    /// then overlays environment variables.
+    pub fn load() -> Result<Self, ConfigError> {
+        Self::load_with_resolver(&DefaultSecretResolver)
     }
 
     /// Create a config from a YAML string (useful for testing).
-    pub fn from_yaml_str(yaml: &str, profile: &str) -> Result<Self, ConfigError> {
+    pub fn from_yaml_str(yaml: &str) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
         loader::load_yaml_str(yaml, &mut values)?;
-        Ok(R2eConfig {
-            values,
-            profile: profile.to_string(),
-            typed: (),
-        })
+        Ok(R2eConfig { values })
     }
 
     /// Create an empty config (useful for testing).
     pub fn empty() -> Self {
         R2eConfig {
             values: HashMap::new(),
-            profile: "test".to_string(),
-            typed: (),
         }
     }
 
@@ -156,28 +126,12 @@ impl R2eConfig {
     pub fn set(&mut self, key: &str, value: ConfigValue) {
         self.values.insert(key.to_string(), value);
     }
-
-    /// Upgrade to a typed config by constructing `T` from the raw values.
-    ///
-    /// ```ignore
-    /// let config = R2eConfig::load("dev")?.with_typed::<AppConfig>(Some("app"))?;
-    /// config.name  // typed field access via Deref
-    /// config.get::<String>("app.name")  // raw access still works
-    /// ```
-    pub fn with_typed<C: ConfigProperties>(self, prefix: Option<&str>) -> Result<R2eConfig<C>, ConfigError> {
-        let typed = C::from_config(&self, prefix)?;
-        Ok(R2eConfig {
-            values: self.values,
-            profile: self.profile,
-            typed,
-        })
-    }
 }
 
-// ── Methods available on all R2eConfig<T> ───────────────────────────────
+// ── Methods ──────────────────────────────────────────────────────────────
 
-impl<T> R2eConfig<T> {
-    /// Get a typed value for the given dot-separated key (raw access).
+impl R2eConfig {
+    /// Get a typed value for the given dot-separated key.
     ///
     /// # Errors
     ///
@@ -199,16 +153,6 @@ impl<T> R2eConfig<T> {
     /// Check whether a key exists in the config.
     pub fn contains_key(&self, key: &str) -> bool {
         self.values.contains_key(key)
-    }
-
-    /// The active profile name.
-    pub fn profile(&self) -> &str {
-        &self.profile
-    }
-
-    /// Get a reference to the typed config layer.
-    pub fn typed(&self) -> &T {
-        &self.typed
     }
 
     /// Compute a fingerprint (hash) over a set of config keys.
@@ -233,131 +177,30 @@ impl<T> R2eConfig<T> {
         hasher.finish()
     }
 
-    /// Compute a fingerprint (hash) over all config keys under a given prefix.
-    ///
-    /// Hashes every `(key, value)` pair where the key starts with `"{prefix}."`.
-    /// Keys are sorted for deterministic ordering. Used by the dev-reload
-    /// fingerprint system to detect changes in config sections provided via
-    /// [`AppBuilder::with_config_section`].
-    pub fn section_fingerprint(&self, prefix: &str) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let dot_prefix = format!("{prefix}.");
-        let mut keys: Vec<&String> = self
-            .values
-            .keys()
-            .filter(|k| k.starts_with(&dot_prefix) || *k == prefix)
-            .collect();
-        keys.sort();
-        for key in keys {
-            key.hash(&mut hasher);
-            if let Some(v) = self.values.get(key.as_str()) {
-                v.hash(&mut hasher);
-            }
-        }
-        hasher.finish()
-    }
-
-    /// Extract a sub-section of the config as a deserialized struct.
-    ///
-    /// Collects all keys starting with `"{path}."`, strips the prefix,
-    /// rebuilds a nested JSON object, and deserializes it into `V`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let matching: CveMatchingConfig = config.get_section("cve.matching")?;
-    /// ```
-    pub fn get_section<V: serde::de::DeserializeOwned>(&self, path: &str) -> Result<V, ConfigError> {
-        let prefix = format!("{path}.");
-        let mut root = serde_json::Value::Object(serde_json::Map::new());
-
-        for (key, value) in &self.values {
-            if let Some(suffix) = key.strip_prefix(&prefix) {
-                insert_nested(&mut root, suffix, value.to_json_value());
-            }
-        }
-
-        // Also check if there's an exact match (e.g., the key itself holds a Map value)
-        if let Some(value) = self.values.get(path) {
-            if matches!(value, ConfigValue::Map(_)) {
-                // Merge map entries into root
-                if let serde_json::Value::Object(map) = value.to_json_value() {
-                    if let serde_json::Value::Object(ref mut root_map) = root {
-                        for (k, v) in map {
-                            root_map.entry(k).or_insert(v);
-                        }
-                    }
-                }
-            }
-        }
-
-        serde_json::from_value::<V>(root).map_err(|e| ConfigError::TypeMismatch {
-            key: path.to_string(),
-            expected: Box::leak(format!("section deserializable as {}: {e}", std::any::type_name::<V>()).into_boxed_str()),
-        })
-    }
-
-    /// Downgrade to a raw (untyped) config, discarding the typed layer.
-    pub fn raw(&self) -> R2eConfig {
-        R2eConfig {
-            values: self.values.clone(),
-            profile: self.profile.clone(),
-            typed: (),
-        }
-    }
-}
-
-// ── Deref for ergonomic typed field access ──────────────────────────────
-
-impl<T> Deref for R2eConfig<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.typed
-    }
-}
-
-/// Insert a value into a nested JSON object using a dot-separated path.
-fn insert_nested(obj: &mut serde_json::Value, dotted_path: &str, value: serde_json::Value) {
-    let parts: Vec<&str> = dotted_path.splitn(2, '.').collect();
-    match parts.as_slice() {
-        [key] => {
-            if let serde_json::Value::Object(map) = obj {
-                map.insert((*key).to_string(), value);
-            }
-        }
-        [key, rest] => {
-            if let serde_json::Value::Object(map) = obj {
-                let child = map
-                    .entry((*key).to_string())
-                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-                insert_nested(child, rest, value);
-            }
-        }
-        _ => {}
-    }
 }
 
 // ── LoadableConfig trait ─────────────────────────────────────────────────
 
-/// Trait that enables `AppBuilder::with_config::<C>(profile)`.
+/// Trait that enables `AppBuilder::load_config::<C>()`.
 ///
 /// Implemented for `()` (raw config only) and for any `T: ConfigProperties`
-/// (raw + typed config).
+/// (raw config + typed bean).
 pub trait LoadableConfig: Clone + Send + Sync + 'static {
-    /// Load config for the given profile and produce `R2eConfig<Self>`.
-    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<Self>, ConfigError>;
+    /// Optionally register additional beans derived from the config.
+    fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError>;
 }
 
 impl LoadableConfig for () {
-    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<()>, ConfigError> {
-        Ok(raw)
+    fn register(_config: &R2eConfig, _registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+        Ok(())
     }
 }
 
 impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
-    fn load_from_profile(raw: R2eConfig) -> Result<R2eConfig<T>, ConfigError> {
-        raw.with_typed::<T>(None)
+    fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+        let typed = T::from_config(config, None)?;
+        registry.provide(typed);
+        Ok(())
     }
 }
 

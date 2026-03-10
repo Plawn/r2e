@@ -19,7 +19,7 @@ async fn create_pool(#[config("database.url")] url: String) -> sqlx::PgPool {
 
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 
     AppBuilder::new()
         .with_config(config)

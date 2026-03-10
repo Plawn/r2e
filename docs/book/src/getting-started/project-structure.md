@@ -5,9 +5,7 @@ A typical R2E project follows this layout:
 ```
 my-app/
 ├── Cargo.toml
-├── application.yaml              # Base configuration
-├── application-dev.yaml          # Dev profile overrides
-├── application-prod.yaml         # Prod profile overrides
+├── application.yaml              # Configuration
 ├── migrations/                   # SQL migrations (if using data features)
 │   └── 20250101000001_init.sql
 ├── src/
@@ -42,7 +40,7 @@ async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .load_config::<()>("dev")
+        .load_config::<()>()
         .with_bean::<UserService>()
         .build_state::<AppState, _, _>()
         .await
@@ -120,18 +118,14 @@ pub struct CreateUserRequest {
 
 ### Configuration files
 
-YAML files with profile-based overrides and env var overlay:
+YAML file with env var overlay:
 
 ```yaml
-# application.yaml — base config
+# application.yaml
 app:
   name: "my-app"
 database:
   url: "sqlite:data.db"
-
-# application-dev.yaml — dev overrides
-database:
-  url: "sqlite::memory:"
 ```
 
 ## Convention over configuration
@@ -139,5 +133,5 @@ database:
 R2E follows a few conventions:
 - Controllers live in `src/controllers/` and are registered explicitly via `register_controller::<T>()`
 - Services live in `src/services/` and are registered as beans via `with_bean::<T>()`
-- Configuration is loaded from `application.yaml` (with optional profile overrides)
+- Configuration is loaded from `application.yaml` (with env var overlay)
 - The state struct uses `#[derive(BeanState)]` for automatic `FromRef` implementations

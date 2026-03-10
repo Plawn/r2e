@@ -65,7 +65,7 @@ async fn main() {
     );
     println!();
 
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 
     let sec_config = SecurityConfig::new("unused", "r2e-multi-tenant", "r2e-app")
         .with_allowed_algorithm(jsonwebtoken::Algorithm::HS256);

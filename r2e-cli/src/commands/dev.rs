@@ -17,9 +17,6 @@ pub fn run(port: Option<u16>, extra_features: Vec<String>) -> Result<(), Box<dyn
     features.extend(extra_features);
     cmd.args(["--features", &features.join(",")]);
 
-    // Set R2E_PROFILE=dev
-    cmd.env("R2E_PROFILE", "dev");
-
     // Forward port as env var
     if let Some(port) = port {
         cmd.env("R2E_PORT", port.to_string());

@@ -51,11 +51,23 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         let is_inject = field.attrs.iter().any(|a| a.path().is_ident("inject"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
+        let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
 
         if is_inject {
             dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
             dep_types.push(quote! { #field_type });
             field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
+        } else if let Some(attr) = config_section_attr {
+            let prefix_str = parse_config_section_prefix(attr)?;
+            field_inits.push(quote! {
+                #field_name: #krate::config::ConfigProperties::from_config(&__r2e_config, Some(#prefix_str)).unwrap_or_else(|e| {
+                    panic!(
+                        "Configuration error in bean `{}`: config section '{}' — {}",
+                        #name_str, #prefix_str, e
+                    )
+                })
+            });
+            has_config = true;
         } else if let Some(attr) = config_attr {
             let key: syn::LitStr = attr.parse_args()?;
             let key_str = key.value();
@@ -127,5 +139,28 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
         }
+    })
+}
+
+/// Parse `#[config_section(prefix = "...")]` and return the prefix string.
+fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String> {
+    let mut prefix: Option<String> = None;
+    if let syn::Meta::List(_) = &attr.meta {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("prefix") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                prefix = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error("expected `prefix` in #[config_section(prefix = \"...\")]"))
+            }
+        })?;
+    }
+    prefix.ok_or_else(|| {
+        syn::Error::new_spanned(
+            attr,
+            "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
+        )
     })
 }

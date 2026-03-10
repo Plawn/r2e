@@ -218,9 +218,8 @@ Options:
 
 Wraps [`cargo-watch`](https://github.com/watchexec/cargo-watch) with R2E defaults:
 
-- **Watches:** `src/`, `application.yaml`, `application-dev.yaml`, `migrations/`
+- **Watches:** `src/`, `application.yaml`, `migrations/`
 - **Ignores:** `target/`
-- **Environment:** sets `R2E_PROFILE=dev`
 - **Routes:** prints discovered routes before starting the watch loop
 
 Requires `cargo-watch`:

@@ -37,7 +37,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
-r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, with_config_section, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig (get_section), lifecycle hooks.
+r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
 r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
@@ -50,11 +50,12 @@ r2e-openapi     → OpenAPI 3.0.3 spec generation, Swagger UI at /docs.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests).
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
+r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
 example-app     → Demo binary exercising all features.
 ```
 
-Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` ← `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
 
 ### Vendored Dependencies
 
@@ -120,7 +121,7 @@ impl UserController {
 
 ## Detailed Reference (see linked files)
 
-- **[Configuration](docs/claude/configuration.md)** — R2eConfig, ConfigProperties, secrets, profiles, validation, FromConfigValue, typed sections, registry
+- **[Configuration](docs/claude/configuration.md)** — R2eConfig, ConfigProperties, secrets, validation, FromConfigValue, typed sections, registry
 - **[Guards & Interceptors](docs/claude/guards-interceptors.md)** — Guard/PreAuthGuard traits, GuardContext, Identity, RolesGuard, RateLimitGuard, interceptor wrapping order, configurable syntax
 - **[Error Handling & Managed Resources](docs/claude/error-handling.md)** — HttpError variants, `#[derive(ApiError)]`, `map_error!`, validation, ManagedResource trait, `#[managed]`
 - **[Beans & Dependency Injection](docs/claude/beans-di.md)** — Bean/AsyncBean/Producer traits, `#[bean]`, `#[producer]`, `#[config]` in beans, `#[post_construct]`, `build_state()`

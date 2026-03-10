@@ -2,26 +2,20 @@
 
 ## Goal
 
-Provide a typed configuration system loaded from YAML files and environment variables, with profile support (`dev`, `prod`, `test`), secret resolution, and strongly-typed config sections.
+Provide a typed configuration system loaded from YAML files and environment variables, with secret resolution and strongly-typed config sections.
 
 ## Key concepts
 
 ### R2eConfig
 
-`R2eConfig` is the central configuration container. It stores values as dot-separated keys (e.g., `app.database.url`). It supports an optional typed layer via `R2eConfig<T>` where `T: ConfigProperties`.
+`R2eConfig` is the central configuration container. It stores values as dot-separated keys (e.g., `app.database.url`).
 
 ### Resolution order
 
 1. `application.yaml` — base configuration
-2. `application-{profile}.yaml` — profile override
-3. `.env` file — loaded into process environment (does not overwrite existing env vars)
-4. `.env.{profile}` file — profile-specific env file
-5. `${...}` secret placeholders — resolved in string values
-6. Environment variables — final override (convention: `APP_DATABASE_URL` ↔ `app.database.url`)
-
-### Active profile
-
-Determined by: `R2E_PROFILE` env var > `load()` argument > default `"dev"`.
+2. `.env` file — loaded into process environment (does not overwrite existing env vars)
+3. `${...}` secret placeholders — resolved in string values
+4. Environment variables — final override (convention: `APP_DATABASE_URL` ↔ `app.database.url`)
 
 ## Usage
 
@@ -45,13 +39,13 @@ database:
 ```rust
 use r2e_core::config::{R2eConfig, ConfigValue};
 
-let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 ```
 
 `load()` succeeds even if the YAML file is absent (environment variables are always overlaid). To ensure required keys are present, check and set defaults:
 
 ```rust
-let mut config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+let mut config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 
 if config.get::<String>("app.name").is_err() {
     config.set("app.name", ConfigValue::String("Default App".into()));
@@ -210,7 +204,7 @@ Or parse a YAML string:
 let config = R2eConfig::from_yaml_str(r#"
 app:
   name: "test-app"
-"#, "test").unwrap();
+"#).unwrap();
 ```
 
 ## Validation criteria

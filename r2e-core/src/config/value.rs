@@ -46,27 +46,6 @@ impl Hash for ConfigValue {
 }
 
 impl ConfigValue {
-    /// Convert this value to a `serde_json::Value`.
-    pub(crate) fn to_json_value(&self) -> serde_json::Value {
-        match self {
-            ConfigValue::String(s) => serde_json::Value::String(s.clone()),
-            ConfigValue::Integer(i) => serde_json::json!(*i),
-            ConfigValue::Float(f) => serde_json::json!(*f),
-            ConfigValue::Bool(b) => serde_json::Value::Bool(*b),
-            ConfigValue::Null => serde_json::Value::Null,
-            ConfigValue::List(items) => {
-                serde_json::Value::Array(items.iter().map(|v| v.to_json_value()).collect())
-            }
-            ConfigValue::Map(map) => {
-                let obj = map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.to_json_value()))
-                    .collect();
-                serde_json::Value::Object(obj)
-            }
-        }
-    }
-
     pub(crate) fn from_yaml(value: &serde_yaml::Value) -> Self {
         match value {
             serde_yaml::Value::Bool(b) => ConfigValue::Bool(*b),

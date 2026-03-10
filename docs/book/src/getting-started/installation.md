@@ -37,6 +37,7 @@ r2e = { version = "0.1", features = ["security", "data", "openapi"] }
 | `rate-limit` | Token-bucket rate limiting (`r2e-rate-limit`) |
 | `openapi` | OpenAPI 3.0.3 spec generation (`r2e-openapi`) |
 | `utils` | Built-in interceptors: Logged, Timed, Cache (`r2e-utils`) |
+| `static` | Embedded static file serving with SPA support (`r2e-static`) |
 | `full` | Enables all features above |
 
 ## Installing the CLI (optional)

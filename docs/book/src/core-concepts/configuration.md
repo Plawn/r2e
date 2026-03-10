@@ -1,6 +1,52 @@
 # Configuration
 
-R2E uses YAML-based configuration with profile support, environment variable overlay, secret resolution, and strongly-typed config sections.
+R2E uses YAML-based configuration with environment variable overlay, secret resolution, and strongly-typed config sections.
+
+## How to choose: `#[config]` vs `#[config_section]`
+
+There are two mechanisms for injecting configuration. Pick based on how many values you need:
+
+| Situation | Use |
+|---|---|
+| 1–2 isolated values from different sections | `#[config("full.key")]` |
+| A coherent group of settings (db, auth, app…) | `#[config_section(prefix = "...")]` |
+| Config needed outside controllers (main, services) | `ConfigProperties::from_config()` |
+| Config section shared across multiple beans | `#[config_section(prefix = "...")]` in each bean |
+
+**`#[config("key")]`** — injects a single scalar value. The field type must implement `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`, `Vec<T>`, etc.). The key is the full dot-separated path into the YAML.
+
+```rust
+#[derive(Controller)]
+#[controller(state = Services)]
+pub struct GreetController {
+    #[config("app.name")]
+    name: String,                    // required — panics at startup if missing
+
+    #[config("app.max_retries")]
+    max_retries: Option<i64>,        // optional — None if missing
+}
+```
+
+**`#[config_section(prefix = "...")]`** — injects an entire typed struct. The struct must derive `ConfigProperties`. This is the idiomatic approach for anything beyond 1–2 values.
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    #[config(default = "Hello!")]
+    pub greeting: String,
+    pub version: Option<String>,
+}
+
+#[derive(Controller)]
+#[controller(state = Services)]
+pub struct ConfigController {
+    #[config_section(prefix = "app")]
+    app_config: AppConfig,
+}
+```
+
+Both attributes work in **controllers**, **`#[bean]` constructors**, **`#[derive(Bean)]` fields**, and **`#[producer]` parameters**.
 
 ## Configuration files
 
@@ -25,50 +71,21 @@ server:
 Configuration values are resolved in order of increasing priority — later sources override earlier ones:
 
 1. `application.yaml` — base configuration
-2. `application-{profile}.yaml` — profile-specific overrides
-3. `.env` file — loaded into process environment (does **not** overwrite already-set env vars)
-4. `.env.{profile}` file — profile-specific env file
-5. `${...}` secret placeholders — resolved in string values (see [Secrets](#secrets))
-6. Environment variables — highest priority (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
-
-### Active profile
-
-The active profile is determined by (in order of priority):
-
-1. `R2E_PROFILE` environment variable
-2. Argument passed to `R2eConfig::load("dev")`
-3. Default: `"dev"`
-
-### Profile overrides
-
-Create profile-specific files that merge on top of the base config:
-
-```yaml
-# application-dev.yaml
-database:
-  url: "sqlite::memory:"
-
-# application-prod.yaml
-database:
-  url: "${DATABASE_URL}"
-server:
-  port: 80
-```
+2. `.env` file — loaded into process environment (does **not** overwrite already-set env vars)
+3. `${...}` secret placeholders — resolved in string values (see [Secrets](#secrets))
+4. Environment variables — highest priority (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
 
 ## Loading configuration
 
 ```rust
-// Load base + profile overrides + env vars
-let config = R2eConfig::load("dev").unwrap();
-
-// R2E_PROFILE=prod overrides the "dev" argument
-let config = R2eConfig::load("dev").unwrap();
+// Load application.yaml + .env + env vars
+let config = R2eConfig::load().unwrap();
 
 // From a YAML string (useful in tests)
 let config = R2eConfig::from_yaml_str(r#"
 app:
   name: "test-app"
-"#, "test").unwrap();
+"#).unwrap();
 
 // Empty config (useful in tests)
 let config = R2eConfig::empty();
@@ -123,7 +140,7 @@ impl SecretResolver for VaultResolver {
     }
 }
 
-let config = R2eConfig::load_with_resolver("prod", &VaultResolver { /* ... */ }).unwrap();
+let config = R2eConfig::load_with_resolver(&VaultResolver { /* ... */ }).unwrap();
 ```
 
 ## Using configuration in controllers
@@ -283,19 +300,14 @@ pub struct AppConfig {
 
 If `app.name` is missing, the error message includes: `-- The display name of the application`.
 
-### Typed config on `R2eConfig`
+### Constructing typed config manually
 
-You can upgrade an `R2eConfig` to carry a typed layer via `Deref`:
+Use `ConfigProperties::from_config()` to build a typed config struct from an `R2eConfig`:
 
 ```rust
-let config = R2eConfig::load("dev")?
-    .with_typed::<AppConfig>(Some("app"))?;
-
-// Typed field access via Deref
-println!("{}", config.name);
-
-// Raw access still works
-let raw: String = config.get("app.name")?;
+let config = R2eConfig::load()?;
+let app_config = AppConfig::from_config(&config, Some("app"))?;
+println!("{}", app_config.name);
 ```
 
 ## Using configuration in beans and producers
@@ -326,7 +338,7 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 ## Programmatic access
 
 ```rust
-let config = R2eConfig::load("dev").unwrap();
+let config = R2eConfig::load().unwrap();
 
 // Typed retrieval
 let name: String = config.get("app.name").unwrap();
@@ -343,12 +355,6 @@ if config.contains_key("feature.flag") {
 // Manual set
 let mut config = config;
 config.set("app.key", ConfigValue::String("value".into()));
-
-// Active profile
-println!("Profile: {}", config.profile());
-
-// Serde-based sub-tree extraction
-let db: DatabaseConfig = config.get_section("app.database").unwrap();
 ```
 
 ## Supported types
@@ -420,12 +426,12 @@ Load from YAML files in a single call:
 ```rust
 // Raw config only:
 AppBuilder::new()
-    .load_config::<()>("dev")
+    .load_config::<()>()
     .build_state::<AppState, _, _>().await
 
 // With typed config struct:
 AppBuilder::new()
-    .load_config::<AppConfig>("dev")   // also provides R2eConfig<AppConfig>
+    .load_config::<AppConfig>()          // also provides AppConfig as a bean
     .build_state::<AppState, _, _>().await
 ```
 
@@ -434,13 +440,13 @@ AppBuilder::new()
 Use when you already have a config instance (tests, hot-reload, custom loading):
 
 ```rust
-let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 AppBuilder::new()
     .with_config(config)
     .build_state::<AppState, _, _>().await
 ```
 
-Both methods store the raw config in the builder (for `serve_auto`, `with_config_section`, etc.) and provide `R2eConfig` in the bean registry so it's injectable by beans via `#[config("key")]`.
+Both methods store the raw config in the builder (for `serve_auto`, etc.) and provide `R2eConfig` in the bean registry so it's injectable by beans via `#[config("key")]` and `#[config_section(prefix = "...")]`.
 
 Your state type must implement `FromRef` for `R2eConfig`:
 
@@ -454,12 +460,13 @@ impl axum::extract::FromRef<AppState> for R2eConfig {
 
 ## Config sections as beans
 
-If you have a config section that multiple beans or controllers need, you can deserialize it and register it as a bean in one step with `with_config_section()`:
+If you have a config section that multiple beans or controllers need, you can inject it directly using `#[config_section(prefix = "...")]` in beans, producers, and `#[derive(Bean)]` structs:
 
 ```rust
-#[derive(Deserialize, Clone)]
+#[derive(ConfigProperties, Clone)]
 pub struct MatchingConfig {
     pub threshold: f64,
+    #[config(default = 100)]
     pub max_results: usize,
 }
 ```
@@ -470,18 +477,33 @@ matching:
   max_results: 100
 ```
 
+In a `#[bean]` impl:
 ```rust
-AppBuilder::new()
-    .with_config(config)
-    .with_config_section::<MatchingConfig>("matching")
-    // MatchingConfig is now available as an injectable bean
-    .with_bean::<SearchService>()  // can depend on MatchingConfig
-    .build_state::<AppState, _, _>()
-    .await
-    // ...
+#[bean]
+impl SearchService {
+    fn new(
+        #[config_section(prefix = "matching")] matching: MatchingConfig,
+        other_dep: OtherDep,
+    ) -> Self { ... }
+}
 ```
 
-This is simpler than manually calling `from_config()` + `provide()`. The struct only needs `#[derive(Deserialize, Clone)]` — no `ConfigProperties` derive required. However, you lose field-level attributes like `#[config(default)]` or `#[config(env)]`. Use `ConfigProperties` when you need those features.
+With `#[derive(Bean)]`:
+```rust
+#[derive(Clone, Bean)]
+struct SearchService {
+    #[config_section(prefix = "matching")]
+    matching: MatchingConfig,
+}
+```
+
+In a `#[producer]`:
+```rust
+#[producer]
+fn create_search(#[config_section(prefix = "matching")] matching: MatchingConfig) -> SearchService { ... }
+```
+
+The struct must derive `ConfigProperties` — field-level attributes like `#[config(default)]` and `#[config(env)]` are fully respected.
 
 ## `serve_auto()`
 
@@ -519,7 +541,7 @@ let config = R2eConfig::from_yaml_str(r#"
 app:
   name: "test-app"
   greeting: "hi"
-"#, "test").unwrap();
+"#).unwrap();
 
 // Programmatic setup
 let mut config = R2eConfig::empty();

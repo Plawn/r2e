@@ -26,6 +26,7 @@
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
 //! | `openfga`     | no      | `r2e-openfga`             |
+//! | `static`      | no      | `r2e-static` (embedded static file serving + SPA fallback) |
 //! | `validation`  | no      | `r2e-core/validation`     |
 //! | `dev-reload`  | no      | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
 //! | `full`        | no      | All of the above (except `dev-reload`) |
@@ -82,6 +83,9 @@ pub use r2e_openfga;
 
 #[cfg(feature = "grpc")]
 pub use r2e_grpc;
+
+#[cfg(feature = "static")]
+pub use r2e_static;
 
 #[cfg(feature = "observability")]
 pub use r2e_observability;

@@ -46,9 +46,10 @@ impl UserController {
 - **OpenTelemetry** — Distributed tracing and context propagation via OTLP exporter
 - **gRPC** — Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports
 - **Embedded OIDC** — Built-in OIDC server issuing JWTs (password + client_credentials grants) without an external IdP
-- **Configuration** — YAML + env var overlay with profile support (`R2E_PROFILE=prod`)
+- **Configuration** — YAML + env var overlay with typed `ConfigProperties` sections
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
 - **Multipart** — Multipart form/file upload support
+- **Static file serving** — Embed frontend assets in the binary with SPA fallback via `EmbeddedFrontend` plugin
 - **Testing** — `TestApp` HTTP client wrapper and `TestJwt` token generator for integration tests
 - **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate` for scaffolding
 
@@ -125,7 +126,7 @@ Wire it up in `main.rs`:
 #[r2e::main]
 async fn main() {
     AppBuilder::new()
-        .load_config::<()>("dev")
+        .load_config::<()>()
         .with_bean::<UserService>()
         .build_state::<AppState, _, _>()
         .await
@@ -361,23 +362,18 @@ async fn create(
 
 ## Configuration
 
-YAML-based with profile support and environment variable overlay:
+YAML-based with environment variable overlay:
 
 ```yaml
 # application.yaml
 app:
   greeting: "Hello"
   max-retries: 3
-
-# application-prod.yaml (overrides for prod profile)
-app:
-  greeting: "Welcome"
 ```
 
 ```rust
-let config = R2eConfig::load("dev").unwrap(); // loads application.yaml + application-dev.yaml
+let config = R2eConfig::load().unwrap(); // loads application.yaml + .env + env vars
 
-// Override via env: R2E_PROFILE=prod
 // Access in controllers via #[config("app.greeting")]
 ```
 
@@ -457,6 +453,7 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 | `GrpcServer` | gRPC server on a dedicated port (install via `.plugin()` before `build_state()`) |
 | `OidcServer` | Embedded OIDC server (`/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
+| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install last) |
 | `Scheduler` | Background task scheduling (install via `.plugin()` before `build_state()`) |
 
 ## Crate map
@@ -482,6 +479,7 @@ r2e-openfga       OpenFGA fine-grained authorization (Zanzibar-style)
 r2e-utils         Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
 r2e-test          TestApp, TestJwt for integration testing
 r2e-devtools      Subsecond hot-reload (dev-reload feature only, not for production)
+r2e-static        Embedded static file serving with SPA support (wraps rust_embed)
 r2e-cli           CLI scaffolding tool
 ```
 

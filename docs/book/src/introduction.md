@@ -47,6 +47,7 @@ If you've used Java's Quarkus, Spring Boot, or C#'s ASP.NET, this should feel fa
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI
 - **Configuration** — YAML + env var overlay with profile support
+- **Static file serving** — Embed frontend assets in the binary with SPA fallback via `EmbeddedFrontend` plugin
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
 - **Testing** — `TestApp` HTTP client wrapper and `TestJwt` token generator
 - **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate` for scaffolding

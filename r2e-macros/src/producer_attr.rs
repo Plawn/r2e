@@ -72,13 +72,29 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                 let arg_name =
                     syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
 
-                // Check for #[config("key")] attribute
+                // Check for #[config("key")] or #[config_section(prefix = "...")] attribute
                 let config_attr = pat_type
                     .attrs
                     .iter()
                     .find(|a| a.path().is_ident("config"));
+                let config_section_attr = pat_type
+                    .attrs
+                    .iter()
+                    .find(|a| a.path().is_ident("config_section"));
 
-                if let Some(attr) = config_attr {
+                if let Some(attr) = config_section_attr {
+                    let prefix_str = parse_config_section_prefix(attr)?;
+                    let krate = r2e_core_path();
+                    build_args.push(quote! {
+                        let #arg_name: #ty = #krate::config::ConfigProperties::from_config(&__r2e_config, Some(#prefix_str)).unwrap_or_else(|e| {
+                            panic!(
+                                "Configuration error in producer `{}`: config section '{}' — {}",
+                                #struct_name, #prefix_str, e
+                            )
+                        });
+                    });
+                    has_config = true;
+                } else if let Some(attr) = config_attr {
                     let key: syn::LitStr = attr.parse_args()?;
                     let key_str = key.value();
                     let env_hint = key_str.replace('.', "_").to_uppercase();
@@ -106,7 +122,7 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                 let non_config_attrs: Vec<_> = pat_type
                     .attrs
                     .iter()
-                    .filter(|a| !a.path().is_ident("config"))
+                    .filter(|a| !a.path().is_ident("config") && !a.path().is_ident("config_section"))
                     .collect();
                 clean_params.push(quote! { #(#non_config_attrs)* #pat: #ty });
             }
@@ -183,6 +199,29 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                 #call
             }
         }
+    })
+}
+
+/// Parse `#[config_section(prefix = "...")]` and return the prefix string.
+fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String> {
+    let mut prefix: Option<String> = None;
+    if let syn::Meta::List(_) = &attr.meta {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("prefix") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                prefix = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error("expected `prefix` in #[config_section(prefix = \"...\")]"))
+            }
+        })?;
+    }
+    prefix.ok_or_else(|| {
+        syn::Error::new_spanned(
+            attr,
+            "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
+        )
     })
 }
 

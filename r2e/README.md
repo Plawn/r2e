@@ -63,6 +63,7 @@ async fn main() {
 | `prometheus`    | no      | `r2e-prometheus` — metrics endpoint  |
 | `openfga`       | no      | `r2e-openfga` — Zanzibar authz       |
 | `observability` | no      | `r2e-observability` — OpenTelemetry  |
+| `static`        | no      | `r2e-static` — embedded static files + SPA |
 | `validation`    | no      | Input validation via `validator`     |
 | `ws`            | no      | WebSocket support                    |
 | `multipart`     | no      | File upload support                  |
@@ -87,6 +88,7 @@ async fn main() {
 | [`r2e-observability`](../r2e-observability) | OpenTelemetry distributed tracing |
 | [`r2e-openfga`](../r2e-openfga) | OpenFGA fine-grained authorization |
 | [`r2e-utils`](../r2e-utils) | Built-in interceptors (Logged, Timed, Cache) |
+| [`r2e-static`](../r2e-static) | Embedded static file serving with SPA support |
 | [`r2e-test`](../r2e-test) | Test helpers — TestApp, TestJwt |
 | [`r2e-cli`](../r2e-cli) | CLI tool — scaffolding, codegen, dev server |
 

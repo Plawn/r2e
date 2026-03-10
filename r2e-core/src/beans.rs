@@ -275,12 +275,6 @@ pub struct BeanRegistry {
     provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// When true, duplicate bean registrations are allowed (last wins).
     pub(crate) allow_overrides: bool,
-    /// Tracks which provided beans came from config sections.
-    /// Maps `TypeId` → config path prefix (e.g. `"cve.matching"`).
-    /// Used by the dev-reload fingerprint to detect config changes for
-    /// beans provided via [`AppBuilder::with_config_section`].
-    #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
-    provided_config_paths: HashMap<TypeId, String>,
 }
 
 struct BeanRegistration {
@@ -355,7 +349,6 @@ impl BeanRegistry {
             beans: Vec::new(),
             provided: HashMap::new(),
             allow_overrides: false,
-            provided_config_paths: HashMap::new(),
         }
     }
 
@@ -364,22 +357,6 @@ impl BeanRegistry {
     /// The instance will be available to beans that depend on type `T`.
     pub fn provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
-        self
-    }
-
-    /// Provide a bean built from a config section.
-    ///
-    /// Like [`provide`](Self::provide), but also records the config path prefix
-    /// so the dev-reload fingerprint system can detect when the underlying
-    /// config values change.
-    pub fn provide_from_section<T: Clone + Send + Sync + 'static>(
-        &mut self,
-        value: T,
-        config_path: &str,
-    ) -> &mut Self {
-        self.provided.insert(TypeId::of::<T>(), Box::new(value));
-        self.provided_config_paths
-            .insert(TypeId::of::<T>(), config_path.to_string());
         self
     }
 
@@ -597,19 +574,6 @@ impl BeanRegistry {
         let mut per_bean: Vec<(TypeId, &'static str, u64)> = Vec::new();
         let mut graph_hasher = std::collections::hash_map::DefaultHasher::new();
 
-        // Include provided config section fingerprints in the graph hash.
-        // This ensures that changes to config values under a section path
-        // (e.g. "cve.matching.*") trigger a rebuild for beans that depend
-        // on the provided config section bean.
-        if let Some(config) = config {
-            let mut section_entries: Vec<_> = self.provided_config_paths.iter().collect();
-            section_entries.sort_by_key(|(tid, _)| *tid); // deterministic order
-            for (tid, path) in section_entries {
-                let section_fp = config.section_fingerprint(path);
-                dep_fingerprints.insert(*tid, section_fp);
-                section_fp.hash(&mut graph_hasher);
-            }
-        }
 
         for &idx in &sorted_order {
             let reg = beans[idx];

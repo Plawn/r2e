@@ -2,7 +2,7 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `data`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
 
 ---
 
@@ -105,7 +105,7 @@ src/
 
   config/
     mod.rs                  R2eConfig, ConfigValue, FromConfigValue, ConfigError — public API
-    loader.rs               YAML file loader with profile support (application.yaml + application-{profile}.yaml)
+    loader.rs               YAML file loader (application.yaml + .env + env vars)
     registry.rs             Config section registry (register_section, validate_section)
     secrets.rs              SecretResolver trait, DefaultSecretResolver (env var interpolation)
     typed.rs                Typed config value extraction
@@ -364,6 +364,21 @@ src/
 ```
 src/
   lib.rs                    pub use r2e_core::*; feature-gated re-exports of all sub-crates
+```
+
+---
+
+## r2e-static — Embedded static files
+
+Embedded static file serving with SPA support. Wraps `rust_embed` with caching, MIME detection, and SPA fallback.
+
+```
+src/
+  lib.rs                    FileServer trait, EmbedAdapter, EmbeddedFrontend plugin + builder, handler logic
+
+tests/
+  embedded.rs               Static file serving tests (exact match, SPA fallback, base path, cache headers)
+  fixtures/                 Test HTML, CSS, and JS files
 ```
 
 ---

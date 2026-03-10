@@ -1,5 +1,4 @@
 use r2e_core::config::{ConfigError, ConfigProperties, ConfigValue, R2eConfig};
-use serde::Deserialize;
 
 #[test]
 fn test_empty_config() {
@@ -44,7 +43,7 @@ app:
     pool_size: 10
   name: "test"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
 
     assert_eq!(
         config.get::<String>("app.database.url").unwrap(),
@@ -62,7 +61,7 @@ app:
     - "http://localhost"
     - "https://prod.com"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let origins: Vec<String> = config.get("app.origins").unwrap();
     assert_eq!(origins, vec!["http://localhost", "https://prod.com"]);
 }
@@ -75,7 +74,7 @@ app:
     - "openapi"
     - "prometheus"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     assert_eq!(
         config.get::<String>("app.features.0").unwrap(),
         "openapi"
@@ -119,7 +118,7 @@ app:
   database:
     url: "postgres://localhost/mydb"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let db = DatabaseConfig::from_config(&config, Some("app.database")).unwrap();
 
     assert_eq!(db.url, "postgres://localhost/mydb");
@@ -136,7 +135,7 @@ app:
     pool_size: 50
     timeout: 30
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let db = DatabaseConfig::from_config(&config, Some("app.database")).unwrap();
 
     assert_eq!(db.url, "postgres://localhost/mydb");
@@ -153,10 +152,6 @@ fn test_config_properties_basic_missing_required() {
 }
 
 // --- ConfigProperties: #[config(key = "...")] custom key mapping ---
-//
-// When env vars like OIDC_JWKS_URL produce config key "oidc.jwks.url",
-// but the Rust field is named `jwks_url` (which would generate "oidc.jwks_url"),
-// use #[config(key = "jwks.url")] to override the generated key.
 
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
 struct OidcTestConfig {
@@ -171,9 +166,6 @@ struct OidcTestConfig {
 
 #[test]
 fn test_config_properties_custom_key() {
-    // YAML nesting matches the dotted key, not the Rust field name:
-    //   oidc.jwks.url  → oidc: { jwks: { url: ... } }
-    //   oidc.client.id → oidc: { client: { id: ... } }
     let yaml = r#"
 oidc:
   issuer: "https://auth.example.com"
@@ -182,7 +174,7 @@ oidc:
   client:
     id: "custom-client"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let oidc = OidcTestConfig::from_config(&config, Some("oidc")).unwrap();
 
     assert_eq!(oidc.issuer.as_deref(), Some("https://auth.example.com"));
@@ -196,7 +188,6 @@ oidc:
 
 #[test]
 fn test_config_properties_custom_key_defaults() {
-    // All fields optional or defaulted → works with empty config
     let config = R2eConfig::empty();
     let oidc = OidcTestConfig::from_config(&config, Some("oidc")).unwrap();
 
@@ -208,7 +199,6 @@ fn test_config_properties_custom_key_defaults() {
 
 #[test]
 fn test_config_properties_custom_key_metadata() {
-    // Metadata reflects custom keys, not Rust field names
     let meta = OidcTestConfig::properties_metadata(Some("oidc"));
 
     let jwks_meta = meta.iter().find(|m| m.full_key == "oidc.jwks.url").unwrap();
@@ -219,94 +209,6 @@ fn test_config_properties_custom_key_metadata() {
     assert_eq!(client_meta.key, "client.id");
     assert!(!client_meta.required); // has default
     assert!(client_meta.default_value.is_some());
-}
-
-// =========================================================================
-// R2eConfig<T> — typed config with Deref access
-// =========================================================================
-
-// Re-use DatabaseConfig from above for typed config tests.
-
-#[test]
-fn test_with_typed_basic() {
-    let yaml = r#"
-app:
-  database:
-    url: "postgres://localhost/mydb"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test")
-        .unwrap()
-        .with_typed::<DatabaseConfig>(Some("app.database"))
-        .unwrap();
-
-    // Typed access via Deref
-    assert_eq!(config.url, "postgres://localhost/mydb");
-    assert_eq!(config.pool_size, 10); // default
-    assert!(config.timeout.is_none());
-
-    // Raw access still works
-    assert_eq!(
-        config.get::<String>("app.database.url").unwrap(),
-        "postgres://localhost/mydb"
-    );
-}
-
-#[test]
-fn test_with_typed_profile() {
-    let yaml = r#"
-app:
-  database:
-    url: "postgres://localhost/mydb"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "staging")
-        .unwrap()
-        .with_typed::<DatabaseConfig>(Some("app.database"))
-        .unwrap();
-
-    assert_eq!(config.profile(), "staging");
-}
-
-#[test]
-fn test_with_typed_missing_required() {
-    let config = R2eConfig::empty();
-    let result = config.with_typed::<DatabaseConfig>(Some("app.database"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_raw_downgrade() {
-    let yaml = r#"
-app:
-  database:
-    url: "postgres://localhost/mydb"
-"#;
-    let typed_config = R2eConfig::from_yaml_str(yaml, "test")
-        .unwrap()
-        .with_typed::<DatabaseConfig>(Some("app.database"))
-        .unwrap();
-
-    let raw = typed_config.raw();
-    assert_eq!(
-        raw.get::<String>("app.database.url").unwrap(),
-        "postgres://localhost/mydb"
-    );
-    assert_eq!(raw.profile(), "test");
-}
-
-#[test]
-fn test_typed_accessor() {
-    let yaml = r#"
-app:
-  database:
-    url: "postgres://localhost/mydb"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test")
-        .unwrap()
-        .with_typed::<DatabaseConfig>(Some("app.database"))
-        .unwrap();
-
-    let db: &DatabaseConfig = config.typed();
-    assert_eq!(db.url, "postgres://localhost/mydb");
 }
 
 // =========================================================================
@@ -366,7 +268,6 @@ fn test_from_config_value_f32() {
 #[test]
 fn test_from_config_value_hashmap() {
     use std::collections::HashMap;
-    // YAML loader flattens maps to dotted keys, so we set a Map value directly.
     let mut inner = HashMap::new();
     inner.insert("env".to_string(), ConfigValue::String("production".into()));
     inner.insert("region".to_string(), ConfigValue::String("us-east".into()));
@@ -405,7 +306,7 @@ app:
     url: "postgres://localhost/mydb"
     pool_size: 20
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let app = AppConfig::from_config(&config, Some("app")).unwrap();
 
     assert_eq!(app.name, "my-app");
@@ -421,7 +322,7 @@ app:
   database:
     url: "postgres://localhost/mydb"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let app = AppConfig::from_config(&config, Some("app")).unwrap();
 
     assert_eq!(app.database.pool_size, 5); // default from NestedDbConfig
@@ -429,35 +330,15 @@ app:
 
 #[test]
 fn test_config_section_standalone() {
-    // NestedDbConfig can be used standalone with any prefix
     let yaml = r#"
 database:
   url: "sqlite::memory:"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let db = NestedDbConfig::from_config(&config, Some("database")).unwrap();
 
     assert_eq!(db.url, "sqlite::memory:");
     assert_eq!(db.pool_size, 5);
-}
-
-#[test]
-fn test_config_section_with_typed() {
-    let yaml = r#"
-app:
-  name: "my-app"
-  database:
-    url: "postgres://localhost/mydb"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test")
-        .unwrap()
-        .with_typed::<AppConfig>(Some("app"))
-        .unwrap();
-
-    // Typed access via Deref
-    assert_eq!(config.name, "my-app");
-    assert_eq!(config.database.url, "postgres://localhost/mydb");
-    assert_eq!(config.database.pool_size, 5);
 }
 
 // =========================================================================
@@ -486,7 +367,7 @@ server:
     cert: "/path/to/cert.pem"
     key: "/path/to/key.pem"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let srv = ServerConfig::from_config(&config, Some("server")).unwrap();
 
     assert_eq!(srv.host, "0.0.0.0");
@@ -501,7 +382,7 @@ fn test_config_optional_section_absent() {
 server:
   host: "0.0.0.0"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let srv = ServerConfig::from_config(&config, Some("server")).unwrap();
 
     assert_eq!(srv.host, "0.0.0.0");
@@ -522,7 +403,6 @@ struct DbEnvConfig {
 
 #[test]
 fn test_config_env_override() {
-    // Set the env var
     std::env::set_var("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
 
     let config = R2eConfig::empty();
@@ -534,14 +414,13 @@ fn test_config_env_override() {
 
 #[test]
 fn test_config_env_override_yaml_takes_priority() {
-    // If the key is in the config, env var is not used
     std::env::set_var("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
 
     let yaml = r#"
 db:
   url: "postgres://from-yaml/mydb"
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let db = DbEnvConfig::from_config(&config, Some("db")).unwrap();
     assert_eq!(db.url, "postgres://from-yaml/mydb");
 
@@ -598,8 +477,7 @@ custom:
     url: "postgres://custom/mydb"
     pool_size: 42
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
-    // Use a different prefix than the typical one
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let db = NestedDbConfig::from_config(&config, Some("custom.prefix")).unwrap();
 
     assert_eq!(db.url, "postgres://custom/mydb");
@@ -623,7 +501,7 @@ fn test_config_properties_u16() {
 server:
   port: 8080
 "#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let srv = PortConfig::from_config(&config, Some("server")).unwrap();
     assert_eq!(srv.port, 8080);
 }
@@ -633,91 +511,4 @@ fn test_config_properties_u16_default() {
     let config = R2eConfig::empty();
     let srv = PortConfig::from_config(&config, Some("server")).unwrap();
     assert_eq!(srv.port, 3000);
-}
-
-// =========================================================================
-// get_section — serde-based extraction of config sub-trees
-// =========================================================================
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct MatchingSection {
-    threshold: f64,
-    max_results: u32,
-}
-
-#[test]
-fn test_get_section_nested() {
-    let yaml = r#"
-cve:
-  matching:
-    threshold: 0.85
-    max_results: 100
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
-    let section: MatchingSection = config.get_section("cve.matching").unwrap();
-    assert!((section.threshold - 0.85).abs() < f64::EPSILON);
-    assert_eq!(section.max_results, 100);
-}
-
-#[test]
-fn test_get_section_missing() {
-    let config = R2eConfig::empty();
-    // An empty section should deserialize to a struct with no required fields
-    let result = config.get_section::<MatchingSection>("cve.matching");
-    assert!(result.is_err());
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct OptionalSection {
-    #[serde(default)]
-    enabled: bool,
-    name: Option<String>,
-}
-
-#[test]
-fn test_get_section_with_defaults() {
-    let yaml = r#"
-app:
-  feature:
-    name: "test-feature"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
-    let section: OptionalSection = config.get_section("app.feature").unwrap();
-    assert!(!section.enabled); // serde default
-    assert_eq!(section.name, Some("test-feature".to_string()));
-}
-
-#[test]
-fn test_get_section_type_mismatch() {
-    let yaml = r#"
-cve:
-  matching:
-    threshold: "not-a-number"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
-    let result = config.get_section::<MatchingSection>("cve.matching");
-    assert!(result.is_err());
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct DeepNested {
-    inner: InnerConfig,
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct InnerConfig {
-    value: String,
-}
-
-#[test]
-fn test_get_section_deeply_nested() {
-    let yaml = r#"
-a:
-  b:
-    inner:
-      value: "hello"
-"#;
-    let config = R2eConfig::from_yaml_str(yaml, "test").unwrap();
-    let section: DeepNested = config.get_section("a.b").unwrap();
-    assert_eq!(section.inner.value, "hello");
 }

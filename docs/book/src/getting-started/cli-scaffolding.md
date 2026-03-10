@@ -280,8 +280,7 @@ r2e dev
 ```
 
 Wraps `cargo watch` with R2E defaults:
-- Watches `src/`, `application.yaml`, `application-dev.yaml`, `migrations/`
-- Sets `R2E_PROFILE=dev`
+- Watches `src/`, `application.yaml`, `migrations/`
 - Prints discovered routes before starting
 
 Use `--open` to auto-open the browser:

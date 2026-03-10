@@ -12,7 +12,7 @@ pub mod add;
 /// Development server — `r2e dev`.
 ///
 /// Wraps `cargo watch` with R2E-specific defaults (watched paths,
-/// `R2E_PROFILE=dev`, route listing before start).
+/// route listing before start).
 pub mod dev;
 
 /// Project diagnostics — `r2e doctor`.

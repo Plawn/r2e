@@ -72,7 +72,7 @@ async fn setup() -> AppEnv {
     println!("{token}");
     println!();
 
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
+    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
     let event_bus = LocalEventBus::new();
 
     let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
