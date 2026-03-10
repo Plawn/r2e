@@ -130,9 +130,11 @@ pub struct UserController {
 | Request | `#[inject(identity)]` | Per request | Extracted from request parts. Must implement `Identity`. |
 | Config | `#[config("key")]` | Per request | Looked up from `R2eConfig`. |
 
+**Important:** Struct-level `#[inject(identity)]` means **all** endpoints require authentication. For mixed public/protected controllers, use param-level injection instead (see below).
+
 ## Mixed controllers (param-level identity)
 
-When only some endpoints need authentication, use param-level `#[inject(identity)]` instead of struct-level:
+When only some endpoints need authentication, use param-level `#[inject(identity)]` instead of struct-level. This is the **recommended pattern** for most controllers:
 
 ```rust
 #[derive(Controller)]

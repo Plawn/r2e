@@ -41,17 +41,25 @@ async fn test_validation_errors() {
     let token = jwt.token("user-1", &["admin"]);
 
     // Missing required field
-    let resp = app.post_json_authenticated("/users", &serde_json::json!({
-        "email": "alice@example.com"
-    }), &token).await;
-    resp.assert_bad_request();
+    app.post("/users")
+        .json(&serde_json::json!({
+            "email": "alice@example.com"
+        }))
+        .bearer(&token)
+        .send()
+        .await
+        .assert_bad_request();
 
     // Invalid email
-    let resp = app.post_json_authenticated("/users", &serde_json::json!({
-        "name": "Alice",
-        "email": "not-an-email"
-    }), &token).await;
-    resp.assert_bad_request();
+    app.post("/users")
+        .json(&serde_json::json!({
+            "name": "Alice",
+            "email": "not-an-email"
+        }))
+        .bearer(&token)
+        .send()
+        .await
+        .assert_bad_request();
 }
 ```
 
@@ -63,8 +71,11 @@ async fn test_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
 
-    let resp = app.get_authenticated("/users/99999", &token).await;
-    resp.assert_status(StatusCode::NOT_FOUND);
+    let resp = app.get("/users/99999")
+        .bearer(&token)
+        .send()
+        .await;
+    resp.assert_not_found();
 
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"], "User not found");
@@ -117,13 +128,17 @@ async fn test_rate_limiting() {
 
     // Make requests up to the limit
     for _ in 0..5 {
-        app.get_authenticated("/api/data", &token)
+        app.get("/api/data")
+            .bearer(&token)
+            .send()
             .await
             .assert_ok();
     }
 
     // Next request should be rate limited
-    app.get_authenticated("/api/data", &token)
+    app.get("/api/data")
+        .bearer(&token)
+        .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
 }
@@ -158,10 +173,15 @@ async fn test_event_emission() {
     );
 
     let token = jwt.token("admin-1", &["admin"]);
-    app.post_json_authenticated("/users", &serde_json::json!({
-        "name": "Alice",
-        "email": "alice@test.com"
-    }), &token).await.assert_ok();
+    app.post("/users")
+        .json(&serde_json::json!({
+            "name": "Alice",
+            "email": "alice@test.com"
+        }))
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok();
 
     // Give async event handlers time to run
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -177,12 +197,16 @@ async fn test_public_and_protected() {
     let (app, jwt) = setup().await;
 
     // Public endpoint works without auth
-    app.get("/api/public").await.assert_ok();
+    app.get("/api/public").send().await.assert_ok();
 
     // Protected endpoint requires auth
-    app.get("/api/me").await.assert_unauthorized();
+    app.get("/api/me").send().await.assert_unauthorized();
 
     let token = jwt.token("user-1", &["user"]);
-    app.get_authenticated("/api/me", &token).await.assert_ok();
+    app.get("/api/me")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok();
 }
 ```

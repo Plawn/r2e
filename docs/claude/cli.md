@@ -2,11 +2,6 @@
 
 The `r2e` binary provides project scaffolding, code generation, diagnostics, and development tooling.
 
-**Key files:**
-- `r2e-cli/src/main.rs` — CLI entry point (clap `Commands` + `GenerateKind` enums)
-- `r2e-cli/src/commands/` — one module per command
-- `r2e-cli/src/commands/templates/` — code generation templates (project, middleware)
-
 ## `r2e new <name>` — Project scaffolding
 
 Creates a new R2E project with optional feature selection.
@@ -55,7 +50,7 @@ Static source parsing of `src/controllers/*.rs` (no compilation). Extracts contr
 
 ## `r2e dev` — Development server with hot-reload
 
-Uses Dioxus Subsecond for instant hot-patching (no full recompile). Requires `dx` CLI (`cargo install dioxus-cli`). Generates a `Dioxus.toml` config if missing, then runs `dx serve --hot-patch` with the `dev-reload` feature enabled.
+Uses Dioxus Subsecond for instant hot-patching — recompiles only changed code as a dynamic library and patches it into the running process (~200-500ms). Requires `dx` CLI (`cargo install dioxus-cli`). Generates a `Dioxus.toml` config if missing, then runs `dx serve --hot-patch` with the `dev-reload` feature enabled.
 
 **Flags:**
 - `--port <PORT>` — server port (forwarded as `R2E_PORT` env var)
@@ -70,3 +65,9 @@ Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, 
 ## Template system (`commands/templates/`)
 
 Helpers in `templates/mod.rs`: `to_snake_case`, `to_pascal_case`, `pluralize`, `render(template, &[("key", "value")])`.
+
+## Key files
+
+- `r2e-cli/src/main.rs` — CLI entry point (clap `Commands` + `GenerateKind` enums)
+- `r2e-cli/src/commands/` — one module per command
+- `r2e-cli/src/commands/templates/` — code generation templates (project, middleware)

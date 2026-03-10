@@ -1,8 +1,34 @@
 # Guards and Identity
 
-> **Status:** The guard and identity types described on this page are implemented in `r2e-grpc` but not yet enabled in the `#[grpc_routes]` macro. Currently, only `#[intercept]` is supported as a method decorator. The `#[roles]`, `#[guard]`, and `#[inject(identity)]` attributes will be enabled in a future release. This page documents the API design and the runtime types that are already available.
+> **Status:** The guard and identity infrastructure is implemented in `r2e-grpc` as runtime types, but **not yet wired into the `#[grpc_routes]` macro**. Currently, only `#[intercept]` is supported as a method decorator. `#[roles]`, `#[guard]`, and `#[inject(identity)]` will be enabled in a future release.
 
-## Runtime types
+## Manual identity extraction (available now)
+
+While `#[inject(identity)]` is not yet available as a macro decorator, you can extract identity manually using the runtime functions:
+
+```rust
+use r2e::r2e_grpc::{extract_bearer_token, GrpcIdentityExtractor};
+
+#[grpc_routes(proto::greeter_server::Greeter)]
+impl GreeterService {
+    async fn say_hello(
+        &self,
+        request: tonic::Request<HelloRequest>,
+    ) -> Result<tonic::Response<HelloReply>, tonic::Status> {
+        let metadata = request.metadata();
+        let claims = GrpcIdentityExtractor::extract_claims(metadata, &self.jwt_validator).await?;
+        let sub = claims["sub"].as_str().unwrap_or("unknown");
+
+        Ok(tonic::Response::new(HelloReply {
+            message: format!("Hello {}!", sub),
+        }))
+    }
+}
+```
+
+This requires the controller to have `#[inject] jwt_validator: Arc<JwtClaimsValidator>`.
+
+## Runtime types (available now)
 
 The following types are exported by `r2e-grpc` and ready for use:
 
@@ -15,7 +41,27 @@ The following types are exported by `r2e-grpc` and ready for use:
 | `GrpcIdentityExtractor` | JWT extraction from gRPC metadata |
 | `JwtClaimsValidatorLike` | Trait abstracting JWT validation (blanket impl for `Arc<T>`) |
 
-## Identity extraction (design)
+### Guard context
+
+`GrpcGuardContext` provides access to service metadata and identity:
+
+| Field/Method | Type | Description |
+|---|---|---|
+| `service_name` | `&str` | Proto service name |
+| `method_name` | `&str` | RPC method name |
+| `metadata` | `&MetadataMap` | gRPC request metadata |
+| `identity` | `Option<&I>` | Authenticated identity (if extracted) |
+| `identity_sub()` | `Option<&str>` | Subject from identity |
+| `identity_email()` | `Option<&str>` | Email from identity |
+| `identity_claims()` | `Option<&Value>` | Raw JWT claims |
+
+---
+
+The following sections document the **planned API** for when macro support is enabled. The runtime types above already support these patterns — only the macro integration is pending.
+
+---
+
+## Identity extraction (planned)
 
 `#[inject(identity)]` on method parameters will extract authenticated identity from gRPC metadata:
 
@@ -37,7 +83,7 @@ impl GreeterService {
 
 Identity is extracted from the `authorization` metadata key using the `Bearer` scheme, then validated with `JwtClaimsValidator` — the same validator used for HTTP requests.
 
-### Optional identity
+### Optional identity (planned)
 
 Use `Option<AuthenticatedUser>` for methods that work with or without authentication:
 
@@ -55,7 +101,7 @@ async fn say_hello(
 }
 ```
 
-### How it works
+### How extraction works
 
 The extraction pipeline (implemented in `r2e_grpc::identity`):
 
@@ -66,30 +112,7 @@ The extraction pipeline (implemented in `r2e_grpc::identity`):
 
 If validation fails, the method returns `Status::unauthenticated` before the handler body runs.
 
-### Manual identity extraction
-
-While `#[inject(identity)]` is not yet available as a macro decorator, you can extract identity manually in your handler using the runtime functions:
-
-```rust
-use r2e::r2e_grpc::{extract_bearer_token, GrpcIdentityExtractor};
-
-async fn say_hello(
-    &self,
-    request: tonic::Request<HelloRequest>,
-) -> Result<tonic::Response<HelloReply>, tonic::Status> {
-    let metadata = request.metadata();
-    let claims = GrpcIdentityExtractor::extract_claims(metadata, &self.jwt_validator).await?;
-    let sub = claims["sub"].as_str().unwrap_or("unknown");
-
-    Ok(tonic::Response::new(HelloReply {
-        message: format!("Hello {}!", sub),
-    }))
-}
-```
-
-This requires the controller to have `#[inject] jwt_validator: Arc<JwtClaimsValidator>`.
-
-## Role-based guards (design)
+## Role-based guards (planned)
 
 `#[roles("...")]` will restrict methods to specific roles:
 
@@ -111,7 +134,7 @@ impl GreeterService {
 
 The built-in `GrpcRolesGuard` checks roles via the `GrpcRoleBasedIdentity` trait. If the caller lacks the required role, the guard returns `Status::permission_denied("Insufficient roles")`.
 
-## Custom guards (design)
+## Custom guards (planned)
 
 Implement the `GrpcGuard` trait for custom authorization logic:
 
@@ -155,7 +178,7 @@ async fn create_user(
 }
 ```
 
-### Guards with state access
+### Guards with state access (planned)
 
 Guards receive the application state, enabling database lookups:
 
@@ -192,21 +215,7 @@ where
 }
 ```
 
-## Guard context
-
-`GrpcGuardContext` provides access to service metadata and identity:
-
-| Field/Method | Type | Description |
-|--------------|------|-------------|
-| `service_name` | `&str` | Proto service name |
-| `method_name` | `&str` | RPC method name |
-| `metadata` | `&MetadataMap` | gRPC request metadata |
-| `identity` | `Option<&I>` | Authenticated identity (if extracted) |
-| `identity_sub()` | `Option<&str>` | Subject from identity |
-| `identity_email()` | `Option<&str>` | Email from identity |
-| `identity_claims()` | `Option<&Value>` | Raw JWT claims |
-
-## Combining guards (design)
+### Combining guards (planned)
 
 Guards will be stackable and execute in order:
 
@@ -254,7 +263,7 @@ pub struct AppState {
 
 The gRPC identity extractor uses `JwtClaimsValidatorLike`, a trait that `Arc<JwtClaimsValidator>` implements automatically via a blanket impl. No additional setup needed beyond what HTTP authentication already requires.
 
-## GrpcRoleBasedIdentity
+### GrpcRoleBasedIdentity
 
 For role-based guards, your identity type must implement `GrpcRoleBasedIdentity`:
 

@@ -39,11 +39,6 @@ For authorization checks that don't require identity (e.g., IP-based rate limiti
 - `PreAuthRateLimitGuard` — pre-auth rate limiter for global/IP keys
 - Apply custom pre-auth guards via `#[pre_guard(MyPreAuthGuard)]`
 
-### Rate-limiting key classification
-
-- `RateLimit::global()` / `RateLimit::per_ip()` → use with `#[pre_guard(...)]` (runs before JWT validation)
-- `RateLimit::per_user()` → use with `#[guard(...)]` (runs after JWT validation, needs identity)
-
 ### Custom guards
 
 - Post-auth: implement `Guard<S, I: Identity>` (async via RPITIT) and apply via `#[guard(MyGuard)]`
@@ -64,7 +59,9 @@ Cross-cutting concerns (logging, timing, caching) are implemented via a generic 
 - `Cache` — caches `Json<T>` responses via the global `CacheStore`. Supports TTL and named groups.
 - `CacheInvalidate` — clears a named cache group after method execution.
 
-### Interceptor wrapping order (outermost → innermost)
+## Execution order (outermost → innermost)
+
+This is the full pipeline for a request hitting a guarded, intercepted handler:
 
 Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
 0. `pre_guard(RateLimit::global(...))` / `pre_guard(RateLimit::per_ip(...))` — pre-auth rate limiting
@@ -85,7 +82,7 @@ Inline codegen (no trait):
 
 **Design invariant:** Interceptors always see the handler's **raw return type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The `IntoResponse::into_response()` conversion happens *after* the outermost interceptor. Guards short-circuit *before* interceptors, so they don't affect the type interceptors see.
 
-### `Cache` interceptor type constraints
+## Cache interceptor type constraints
 
 `Cache` requires `R: Cacheable`. Built-in `Cacheable` impls:
 - `Json<T>` where `T: Serialize + DeserializeOwned + Send`
@@ -94,6 +91,7 @@ Inline codegen (no trait):
 
 Other built-in interceptors (`Logged`, `Timed`, `CacheInvalidate`, `Counted`, `MetricTimed`) only require `R: Send` and work with any return type.
 
+<<<<<<< HEAD
 ```rust
 #[intercept(Counted::new("user_list_total"))]           // count invocations
 #[intercept(MetricTimed::new("user_list_duration"))]    // record duration as named metric
@@ -101,6 +99,9 @@ async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
 ### Combining interceptors with guards/roles
+=======
+## Combining interceptors with guards/roles
+>>>>>>> ddb4ccb (documentation update)
 
 `#[intercept(Cache)]` + `#[roles]` (or any `#[guard]`) works correctly — guards run first, then interceptors see the raw type:
 ```rust
@@ -112,7 +113,7 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 
 **Known limitation:** `#[managed]` + `#[intercept(Cache)]` does NOT work — the managed resource lifecycle (acquire/release with error handling) wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: use `cache_backend()` manually in the handler body.
 
-### Configurable syntax
+## Configurable syntax
 
 ```rust
 #[transactional]                             // uses self.pool
