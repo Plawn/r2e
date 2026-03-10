@@ -131,5 +131,5 @@ impl UserController {
 
 ## Language & Documentation
 
-The project's plan (`plan.md`) and step-by-step docs (`docs/steps/`) are written in French. Code, comments, and API surfaces are in English.
+All documentation, code, comments, and API surfaces are in English.
 

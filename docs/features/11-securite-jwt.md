@@ -1,36 +1,36 @@
-# Feature 11 — Securite JWT / Roles
+# Feature 11 — JWT Security / Roles
 
-## Objectif
+## Goal
 
-Fournir une authentification JWT complete avec validation de tokens, extraction automatique de l'identite utilisateur, et controle d'acces base sur les roles — le tout integre au systeme de controllers via les attributs `#[identity]` et `#[roles]`.
+Provide complete JWT authentication with token validation, automatic user identity extraction, and role-based access control — all integrated into the controller system via the `#[identity]` and `#[roles]` attributes.
 
-## Concepts cles
+## Key Concepts
 
 ### AuthenticatedUser
 
-Struct representant l'utilisateur authentifie, extraite automatiquement du header `Authorization: Bearer <token>`. Implemente `FromRequestParts` d'Axum.
+Struct representing the authenticated user, automatically extracted from the `Authorization: Bearer <token>` header. Implements Axum's `FromRequestParts`.
 
 ### JwtValidator
 
-Valide les tokens JWT — supporte les cles statiques (tests, HMAC) et les endpoints JWKS (production, RSA/ECDSA).
+Validates JWT tokens — supports static keys (tests, HMAC) and JWKS endpoints (production, RSA/ECDSA).
 
 ### SecurityConfig
 
-Configuration de la validation : URL JWKS, issuer attendu, audience attendue.
+Validation configuration: JWKS URL, expected issuer, expected audience.
 
 ### #[identity]
 
-Attribut du `#[derive(Controller)]` qui marque un champ comme extrait de la requete (scope requete). Le champ est automatiquement peuple par l'extracteur `FromRequestParts` correspondant.
+`#[derive(Controller)]` attribute that marks a field as extracted from the request (request scope). The field is automatically populated by the corresponding `FromRequestParts` extractor.
 
 ### #[roles("...")]
 
-Attribut de methode qui restreint l'acces aux utilisateurs ayant au moins un des roles specifies.
+Method attribute that restricts access to users having at least one of the specified roles.
 
-## Utilisation
+## Usage
 
-### 1. Configuration du JwtValidator
+### 1. Configuring JwtValidator
 
-#### Mode test (cle statique HMAC)
+#### Test mode (static HMAC key)
 
 ```rust
 use r2e_security::{JwtValidator, SecurityConfig};
@@ -44,7 +44,7 @@ let validator = JwtValidator::new_with_static_key(
 );
 ```
 
-#### Mode production (JWKS endpoint)
+#### Production mode (JWKS endpoint)
 
 ```rust
 let config = SecurityConfig::new(
@@ -55,9 +55,9 @@ let config = SecurityConfig::new(
 let validator = JwtValidator::new(config).await?;
 ```
 
-Le `JwksCache` telecharge et cache les cles publiques, avec rafraichissement automatique.
+The `JwksCache` downloads and caches public keys, with automatic refresh.
 
-### 2. Stocker dans l'etat applicatif
+### 2. Storing in the Application State
 
 ```rust
 use std::sync::Arc;
@@ -75,7 +75,7 @@ impl axum::extract::FromRef<Services> for Arc<JwtValidator> {
 }
 ```
 
-### 3. Utiliser `#[identity]` dans un controller
+### 3. Using `#[identity]` in a Controller
 
 ```rust
 use r2e_core::prelude::*;
@@ -97,11 +97,11 @@ impl UserController {
 }
 ```
 
-`AuthenticatedUser` est extrait automatiquement de chaque requete :
-- Si le header `Authorization` est absent ou le token invalide → reponse 401
-- Si le token est valide → le champ `user` est peuple
+`AuthenticatedUser` is automatically extracted from each request:
+- If the `Authorization` header is missing or the token is invalid -> 401 response
+- If the token is valid -> the `user` field is populated
 
-### 4. Structure d'AuthenticatedUser
+### 4. AuthenticatedUser Structure
 
 ```rust
 pub struct AuthenticatedUser {
@@ -112,15 +112,15 @@ pub struct AuthenticatedUser {
 }
 ```
 
-### Extraction des roles
+### Role Extraction
 
-Les roles sont cherches dans cet ordre :
-1. Claim `roles` (tableau de strings)
-2. Claim `realm_access.roles` (format Keycloak)
+Roles are looked up in the following order:
+1. `roles` claim (array of strings)
+2. `realm_access.roles` claim (Keycloak format)
 
-Le trait `RoleExtractor` peut etre implemente pour supporter d'autres formats.
+The `RoleExtractor` trait can be implemented to support other formats.
 
-### 5. Controle d'acces avec `#[roles]`
+### 5. Access Control with `#[roles]`
 
 ```rust
 #[get("/admin/users")]
@@ -131,7 +131,7 @@ async fn admin_list(&self) -> axum::Json<Vec<User>> {
 }
 ```
 
-Si l'utilisateur n'a pas le role `"admin"`, le handler retourne 403 :
+If the user does not have the `"admin"` role, the handler returns 403:
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -140,15 +140,15 @@ Content-Type: application/json
 {"error": "Insufficient roles"}
 ```
 
-#### Roles multiples
+#### Multiple Roles
 
 ```rust
 #[roles("admin", "manager")]
 ```
 
-L'utilisateur doit avoir **au moins un** des roles specifies (OR, pas AND).
+The user must have **at least one** of the specified roles (OR, not AND).
 
-### 6. Methodes utilitaires
+### 6. Utility Methods
 
 ```rust
 // Verifier un role
@@ -158,7 +158,7 @@ user.has_role("admin");  // → bool
 user.has_any_role(&["admin", "manager"]);  // → bool
 ```
 
-## Flux d'authentification
+## Authentication Flow
 
 ```
 1. Client envoie: Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
@@ -172,19 +172,19 @@ user.has_any_role(&["admin", "manager"]);  // → bool
 4. Si invalide → 401 retourne, handler jamais execute
 ```
 
-### Erreurs possibles
+### Possible Errors
 
-| Cas | Code HTTP | Message |
-|-----|-----------|---------|
-| Header absent | 401 | Missing Authorization header |
-| Schema != Bearer | 401 | Invalid authorization scheme |
-| Token invalide | 401 | Invalid token |
-| Token expire | 401 | Token expired |
-| Issuer/audience invalide | 401 | Token validation failed |
+| Case | HTTP Code | Message |
+|------|-----------|---------|
+| Missing header | 401 | Missing Authorization header |
+| Scheme != Bearer | 401 | Invalid authorization scheme |
+| Invalid token | 401 | Invalid token |
+| Expired token | 401 | Token expired |
+| Invalid issuer/audience | 401 | Token validation failed |
 
-## Code genere par la macro
+## Code Generated by the Macro
 
-Pour un controller avec `#[identity] user: AuthenticatedUser`, les macros generent un extractor `__R2eExtract_UserController` qui implemente `FromRequestParts` et construit le controller automatiquement :
+For a controller with `#[identity] user: AuthenticatedUser`, the macros generate an extractor `__R2eExtract_UserController` that implements `FromRequestParts` and constructs the controller automatically:
 
 ```rust
 // Genere (simplifie)
@@ -196,7 +196,7 @@ async fn __r2e_UserController_me(
 }
 ```
 
-## Critere de validation
+## Validation Criteria
 
 ```bash
 # Sans token → 401

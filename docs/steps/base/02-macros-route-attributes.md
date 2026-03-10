@@ -1,20 +1,20 @@
-# Etape 2 — r2e-macros : attributs de route
+# Step 2 — r2e-macros: Route Attributes
 
-## Objectif
+## Goal
 
-Implementer les macros d'attribut `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`. Ces macros ne transforment pas le code elles-memes — elles **marquent** les methodes pour que la macro `#[controller]` (etape 3) puisse les identifier et generer les handlers Axum.
+Implement the attribute macros `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`. These macros do not transform the code themselves — they **mark** methods so that the `#[controller]` macro (step 3) can identify them and generate the Axum handlers.
 
-## Fichiers a creer/modifier
+## Files to Create/Modify
 
 ```
 r2e-macros/src/
-  lib.rs             # Point d'entree proc-macro, declare les attributs
-  route.rs           # Parsing des attributs de route
+  lib.rs             # Proc-macro entry point, declares the attributes
+  route.rs           # Route attribute parsing
 ```
 
-## 1. Attributs de route (`route.rs`)
+## 1. Route Attributes (`route.rs`)
 
-Chaque attribut de route capture le **path HTTP** et le **method HTTP**.
+Each route attribute captures the **HTTP path** and the **HTTP method**.
 
 ### Parsing
 
@@ -33,19 +33,19 @@ pub enum HttpMethod {
 }
 ```
 
-Le path est extrait depuis les arguments de l'attribut :
+The path is extracted from the attribute arguments:
 
 ```rust
 // #[get("/users/:id")]  →  RouteAttribute { method: Get, path: "/users/:id" }
 ```
 
-### Implementation des macros
+### Macro Implementation
 
-Chaque macro (`#[get]`, `#[post]`, etc.) est un **attribute proc-macro** qui :
+Each macro (`#[get]`, `#[post]`, etc.) is an **attribute proc-macro** that:
 
-1. Parse le path depuis `TokenStream` d'arguments
-2. Annote la methode avec un attribut custom reconnaissable (par ex. `#[r2e_route(method = "GET", path = "/users")]`)
-3. Retourne la methode inchangee (la transformation reelle est faite par `#[controller]`)
+1. Parses the path from the `TokenStream` arguments
+2. Annotates the method with a recognizable custom attribute (e.g., `#[r2e_route(method = "GET", path = "/users")]`)
+3. Returns the method unchanged (the actual transformation is done by `#[controller]`)
 
 ```rust
 #[proc_macro_attribute]
@@ -58,18 +58,18 @@ pub fn post(args: TokenStream, input: TokenStream) -> TokenStream {
     route_attribute(HttpMethod::Post, args, input)
 }
 
-// ... idem pour put, delete, patch
+// ... same for put, delete, patch
 ```
 
-### Strategie d'annotation
+### Annotation Strategy
 
-**Option A** — Attribut inerte : les macros `#[get]` etc. re-emettent la methode avec un attribut `#[doc(hidden)]` contenant le metadata route encodee. La macro `#[controller]` lit ensuite cet attribut.
+**Option A** — Inert attribute: the `#[get]` etc. macros re-emit the method with a `#[doc(hidden)]` attribute containing the encoded route metadata. The `#[controller]` macro then reads this attribute.
 
-**Option B (recommandee)** — Pas de transformation : les macros `#[get]` etc. sont des **no-op** purs. La macro `#[controller]` parse directement les attributs `get`, `post`, etc. sur les methodes du `impl` block.
+**Option B (recommended)** — No transformation: the `#[get]` etc. macros are pure **no-ops**. The `#[controller]` macro directly parses the `get`, `post`, etc. attributes on the methods of the `impl` block.
 
-L'option B est plus simple car `#[controller]` recoit le `impl` block complet avec tous les attributs intact.
+Option B is simpler because `#[controller]` receives the complete `impl` block with all attributes intact.
 
-## 2. Point d'entree (`lib.rs`)
+## 2. Entry Point (`lib.rs`)
 
 ```rust
 extern crate proc_macro;
@@ -79,8 +79,8 @@ mod route;
 
 #[proc_macro_attribute]
 pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
-    // No-op : retourne input tel quel
-    // Le path est lu par #[controller]
+    // No-op: returns input as-is
+    // The path is read by #[controller]
     input
 }
 
@@ -105,9 +105,9 @@ pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 ```
 
-> **Note** : Si les macros sont des no-op, elles doivent quand meme exister comme proc-macro attributes pour que le compilateur ne rejette pas `#[get("/path")]` comme attribut inconnu.
+> **Note**: Even if the macros are no-ops, they must still exist as proc-macro attributes so the compiler does not reject `#[get("/path")]` as an unknown attribute.
 
-## Critere de validation
+## Validation Criteria
 
 ```rust
 use r2e_macros::get;
@@ -122,9 +122,9 @@ impl Foo {
 }
 ```
 
-Compile sans erreur (l'attribut est accepte et ne modifie pas la methode).
+Compiles without errors (the attribute is accepted and does not modify the method).
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-- Requiert : etape 0
-- Bloque : etape 3 (macro controller)
+- Requires: step 0
+- Blocks: step 3 (controller macro)

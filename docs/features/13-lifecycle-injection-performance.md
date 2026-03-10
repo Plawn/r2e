@@ -1,16 +1,16 @@
-# Feature 13 — Cycle de vie, injection de dependances et implications de performance
+# Feature 13 — Lifecycle, Dependency Injection, and Performance Implications
 
-## Vue d'ensemble
+## Overview
 
-Ce document decrit le cycle de vie complet d'une application R2E — du demarrage a l'arret — ainsi que le fonctionnement interne de l'injection de dependances et ses implications sur la performance.
+This document describes the complete lifecycle of an R2E application — from startup to shutdown — as well as the internals of dependency injection and its performance implications.
 
 ---
 
-## 1. Cycle de vie de l'application
+## 1. Application Lifecycle
 
-### 1.1 Phase d'assemblage (`AppBuilder`)
+### 1.1 Assembly Phase (`AppBuilder`)
 
-Tout commence par la construction fluide via `AppBuilder` :
+Everything starts with the fluent construction via `AppBuilder`:
 
 ```rust
 AppBuilder::new()
@@ -31,22 +31,22 @@ AppBuilder::new()
     .await?;
 ```
 
-`AppBuilder` accumule les elements sans rien executer. L'assemblage se fait lors de l'appel a `build()` ou `serve()`.
+`AppBuilder` accumulates elements without executing anything. Assembly happens when `build()` or `serve()` is called.
 
-### 1.2 Construction interne (`build_inner`)
+### 1.2 Internal Construction (`build_inner`)
 
-La methode `build_inner()` produit un tuple `(Router, StartupHooks, ShutdownHooks, ConsumerRegs, State)` :
+The `build_inner()` method produces a tuple `(Router, StartupHooks, ShutdownHooks, ConsumerRegs, State)`:
 
-1. **Creation du Router Axum** — un `Router<T>` vide
-2. **Fusion des routes** — chaque controller enregistre ses routes via `Controller::routes()`
-3. **OpenAPI** (si active) — invocation du builder OpenAPI avec les metadonnees collectees, ajout des routes `/openapi.json` et `/docs`
-4. **Routes systeme** — `/health` et `/__r2e_dev/*` si actives
-5. **Application de l'etat** — `router.with_state(state.clone())` : un seul clone a la construction
-6. **Empilement des layers** — appliques dans l'ordre inverse de declaration (le dernier ajoute est le plus externe)
+1. **Axum Router creation** — an empty `Router<T>`
+2. **Route merging** — each controller registers its routes via `Controller::routes()`
+3. **OpenAPI** (if enabled) — invocation of the OpenAPI builder with collected metadata, adding `/openapi.json` and `/docs` routes
+4. **System routes** — `/health` and `/__r2e_dev/*` if enabled
+5. **State application** — `router.with_state(state.clone())`: a single clone at construction time
+6. **Layer stacking** — applied in reverse declaration order (the last added is the outermost)
 
-### 1.3 Ordre des layers Tower
+### 1.3 Tower Layer Order
 
-Les layers s'empilent de l'interieur vers l'exterieur. A l'execution, la requete les traverse dans l'ordre inverse :
+Layers stack from inside to outside. At runtime, the request traverses them in reverse order:
 
 ```
 Requete HTTP entrante
@@ -60,9 +60,9 @@ Requete HTTP entrante
    Handler Axum
 ```
 
-**Implication** : `TraceLayer` voit toutes les requetes, y compris celles rejetees par CORS. Les panics dans le handler sont capturees par `CatchPanicLayer` et converties en reponse JSON 500 propre.
+**Implication**: `TraceLayer` sees all requests, including those rejected by CORS. Panics in the handler are caught by `CatchPanicLayer` and converted into a clean JSON 500 response.
 
-### 1.4 Sequence de demarrage (`serve`)
+### 1.4 Startup Sequence (`serve`)
 
 ```
 serve(addr)
@@ -93,15 +93,15 @@ serve(addr)
     └-- 8. Arret
 ```
 
-### 1.5 Arret gracieux
+### 1.5 Graceful Shutdown
 
-Le scheduler utilise un `CancellationToken` (de `tokio-util`) qui est annule dans un hook `on_stop` enregistre par `with_scheduler`. Chaque tache planifiee surveille ce token via `tokio::select!` et s'arrete proprement.
+The scheduler uses a `CancellationToken` (from `tokio-util`) that is cancelled in an `on_stop` hook registered by `with_scheduler`. Each scheduled task watches this token via `tokio::select!` and stops cleanly.
 
-Les requetes HTTP en cours sont completees avant la fermeture (comportement par defaut d'Axum).
+In-flight HTTP requests are completed before closing (default Axum behavior).
 
-### 1.6 Grace period de shutdown
+### 1.6 Shutdown Grace Period
 
-Par defaut le processus attend indefiniment la fin des hooks de shutdown. `shutdown_grace_period(Duration)` definit un delai maximum :
+By default, the process waits indefinitely for shutdown hooks to complete. `shutdown_grace_period(Duration)` sets a maximum delay:
 
 ```rust
 AppBuilder::new()
@@ -110,13 +110,13 @@ AppBuilder::new()
     .serve("0.0.0.0:3000").await?;
 ```
 
-Si les hooks (plugin + utilisateur) ne terminent pas dans le delai, le processus force l'arret via `process::exit(1)`. Cela garantit qu'un hook bloquant ne laisse pas le processus suspendu indefiniment.
+If the hooks (plugin + user) do not finish within the delay, the process forces shutdown via `process::exit(1)`. This guarantees that a blocking hook does not leave the process hanging indefinitely.
 
 ---
 
-## 2. Cycle de vie d'une requete HTTP
+## 2. HTTP Request Lifecycle
 
-### 2.1 Vue d'ensemble
+### 2.1 Overview
 
 ```
 Requete HTTP
@@ -175,11 +175,11 @@ Requete HTTP
 Reponse HTTP
 ```
 
-### 2.2 Extraction du controller
+### 2.2 Controller Extraction
 
-L'extracteur genere `__R2eExtract_<Name>` implemente `FromRequestParts<State>`. Il construit le controller en trois phases :
+The generated extractor `__R2eExtract_<Name>` implements `FromRequestParts<State>`. It constructs the controller in three phases:
 
-**Phase 1 — Identity (async, faillible)**
+**Phase 1 — Identity (async, fallible)**
 
 ```rust
 let user = <AuthenticatedUser as FromRequestParts<State>>
@@ -188,24 +188,24 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
     .map_err(IntoResponse::into_response)?;
 ```
 
-C'est la seule phase asynchrone. Pour `AuthenticatedUser`, cela implique :
-- Extraction du header `Authorization: Bearer <token>`
-- Validation JWT (signature cryptographique)
-- Lookup JWKS si la cle n'est pas en cache (potentiellement un appel reseau)
-- Construction de l'objet `AuthenticatedUser`
+This is the only asynchronous phase. For `AuthenticatedUser`, this involves:
+- Extracting the `Authorization: Bearer <token>` header
+- JWT validation (cryptographic signature verification)
+- JWKS lookup if the key is not cached (potentially a network call)
+- Constructing the `AuthenticatedUser` object
 
-Si l'extraction echoue, la requete est immediatement rejetee (401).
+If extraction fails, the request is immediately rejected (401).
 
-**Phase 2 — Inject (sync, infaillible)**
+**Phase 2 — Inject (sync, infallible)**
 
 ```rust
 user_service: state.user_service.clone(),
 pool: state.pool.clone(),
 ```
 
-Chaque champ `#[inject]` est clone depuis l'etat. Operation purement synchrone.
+Each `#[inject]` field is cloned from the state. Purely synchronous operation.
 
-**Phase 3 — Config (sync, panic si absent)**
+**Phase 3 — Config (sync, panics if missing)**
 
 ```rust
 greeting: {
@@ -214,11 +214,11 @@ greeting: {
 }
 ```
 
-Extraction de `R2eConfig` depuis l'etat via `FromRef`, puis lookup dans le `HashMap`.
+Extraction of `R2eConfig` from the state via `FromRef`, then a `HashMap` lookup.
 
-### 2.3 Deux modes de handler
+### 2.3 Two Handler Modes
 
-**Mode simple** (sans guards) — le handler retourne directement le type de la methode :
+**Simple mode** (without guards) — the handler directly returns the method's return type:
 
 ```rust
 async fn __r2e_UserController_list(
@@ -230,7 +230,7 @@ async fn __r2e_UserController_list(
 }
 ```
 
-**Mode guarde** (avec `#[roles]`, `#[rate_limited]`, `#[guard]`) — le handler retourne `Response` pour permettre le short-circuit :
+**Guarded mode** (with `#[roles]`, `#[rate_limited]`, `#[guard]`) — the handler returns `Response` to allow short-circuiting:
 
 ```rust
 async fn __r2e_UserController_admin_list(
@@ -255,52 +255,52 @@ async fn __r2e_UserController_admin_list(
 }
 ```
 
-**Implications** : en mode guarde, Axum extrait aussi `State` et `HeaderMap` en plus de l'extracteur du controller. L'extraction de l'etat est un clone supplementaire (mais cheap — c'est un clone de `Arc` interne).
+**Implications**: in guarded mode, Axum also extracts `State` and `HeaderMap` in addition to the controller extractor. State extraction is an additional clone (but cheap — it is an internal `Arc` clone).
 
 ---
 
-## 3. Injection de dependances : les trois scopes
+## 3. Dependency Injection: The Three Scopes
 
-### 3.1 `#[inject]` — Scope applicatif
+### 3.1 `#[inject]` — Application Scope
 
-| Propriete | Valeur |
-|-----------|--------|
+| Property | Value |
+|----------|-------|
 | Resolution | Compile-time (codegen) |
-| Moment | A chaque requete |
+| Timing | On each request |
 | Operation | `state.field.clone()` |
-| Prerequis | `Clone + Send + Sync` |
-| Faillible | Non |
-| Async | Non |
+| Prerequisite | `Clone + Send + Sync` |
+| Fallible | No |
+| Async | No |
 
-**Code genere :**
+**Generated code:**
 ```rust
 field_name: __state.field_name.clone()
 ```
 
-**Patterns courants :**
+**Common patterns:**
 
-| Type | Cout du clone | Mecanisme |
-|------|--------------|-----------|
-| `Arc<T>` | O(1) — increment atomique du refcount | Partage immutable |
-| `SqlxPool` | O(1) — `Arc` interne | Pool de connexions |
-| `LocalEventBus` | O(1) — `Arc<RwLock<HashMap>>` | Bus d'evenements |
-| `RateLimitRegistry` | O(1) — `Arc` interne | Registre de limiteurs |
-| `R2eConfig` | O(n) — clone du `HashMap` | Configuration |
+| Type | Clone cost | Mechanism |
+|------|-----------|-----------|
+| `Arc<T>` | O(1) — atomic refcount increment | Immutable sharing |
+| `SqlxPool` | O(1) — internal `Arc` | Connection pool |
+| `LocalEventBus` | O(1) — `Arc<RwLock<HashMap>>` | Event bus |
+| `RateLimitRegistry` | O(1) — internal `Arc` | Rate limiter registry |
+| `R2eConfig` | O(n) — `HashMap` clone | Configuration |
 
-**Bonne pratique** : envelopper les services lourds dans `Arc<T>` pour que le clone soit un simple increment de reference atomique. Le framework n'impose pas `Arc`, mais les types fournis (`SqlxPool`, `LocalEventBus`, etc.) l'utilisent deja en interne.
+**Best practice**: wrap heavy services in `Arc<T>` so that cloning is a simple atomic reference increment. The framework does not require `Arc`, but the provided types (`SqlxPool`, `LocalEventBus`, etc.) already use it internally.
 
-### 3.2 `#[inject(identity)]` — Scope requete
+### 3.2 `#[inject(identity)]` — Request Scope
 
-| Propriete | Valeur |
-|-----------|--------|
+| Property | Value |
+|----------|-------|
 | Resolution | Compile-time (codegen) |
-| Moment | A chaque requete |
+| Timing | On each request |
 | Operation | `FromRequestParts::from_request_parts()` |
-| Prerequis | `FromRequestParts<State>` + `Identity` |
-| Faillible | Oui (reponse d'erreur) |
-| Async | Oui |
+| Prerequisite | `FromRequestParts<State>` + `Identity` |
+| Fallible | Yes (error response) |
+| Async | Yes |
 
-**Code genere :**
+**Generated code:**
 ```rust
 let user = <AuthenticatedUser as FromRequestParts<State>>
     ::from_request_parts(__parts, __state)
@@ -308,25 +308,25 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
     .map_err(IntoResponse::into_response)?;
 ```
 
-**Deux emplacements possibles :**
+**Two possible locations:**
 
-- **Sur le struct** — le controller requiert toujours l'identity. Pas de `StatefulConstruct`.
-- **Sur un parametre handler** — seuls les handlers annotes requierent l'identity. `StatefulConstruct` est genere.
+- **On the struct** — the controller always requires the identity. No `StatefulConstruct`.
+- **On a handler parameter** — only annotated handlers require the identity. `StatefulConstruct` is generated.
 
-**Cout** : c'est le scope le plus cher. Pour `AuthenticatedUser`, chaque requete implique une validation JWT avec verification de signature cryptographique.
+**Cost**: this is the most expensive scope. For `AuthenticatedUser`, each request involves JWT validation with cryptographic signature verification.
 
-### 3.3 `#[config("key")]` — Scope applicatif (lookup)
+### 3.3 `#[config("key")]` — Application Scope (lookup)
 
-| Propriete | Valeur |
-|-----------|--------|
+| Property | Value |
+|----------|-------|
 | Resolution | Compile-time (codegen) |
-| Moment | A chaque requete |
+| Timing | On each request |
 | Operation | `FromRef` + `HashMap::get()` |
-| Prerequis | `FromConfigValue` |
-| Faillible | Panic si cle absente |
-| Async | Non |
+| Prerequisite | `FromConfigValue` |
+| Fallible | Panics if key is missing |
+| Async | No |
 
-**Code genere :**
+**Generated code:**
 ```rust
 field_name: {
     let __cfg = <R2eConfig as FromRef<State>>::from_ref(__state);
@@ -334,9 +334,9 @@ field_name: {
 }
 ```
 
-**Attention** : la config est clonee depuis l'etat (via `FromRef`), puis une lookup HashMap est effectuee. Si la cle n'existe pas, le handler **panic** (et `CatchPanicLayer` convertit en 500).
+**Note**: the config is cloned from the state (via `FromRef`), then a HashMap lookup is performed. If the key does not exist, the handler **panics** (and `CatchPanicLayer` converts it to a 500).
 
-### 3.4 Schema recapitulatif
+### 3.4 Summary Diagram
 
 ```
                     ┌─────────────────────────────────────────────┐
@@ -365,11 +365,11 @@ field_name: {
 
 ---
 
-## 4. Construction hors contexte HTTP : `StatefulConstruct`
+## 4. Construction Outside HTTP Context: `StatefulConstruct`
 
-Le trait `StatefulConstruct<S>` permet de construire un controller depuis l'etat seul, sans requete HTTP. Il est genere automatiquement par `#[derive(Controller)]` **uniquement** quand le struct n'a pas de champ `#[inject(identity)]`.
+The `StatefulConstruct<S>` trait allows constructing a controller from the state alone, without an HTTP request. It is automatically generated by `#[derive(Controller)]` **only** when the struct has no `#[inject(identity)]` field.
 
-### 4.1 Utilisation par les consumers
+### 4.1 Usage by Consumers
 
 ```rust
 // Code genere par #[routes] pour #[consumer(bus = "event_bus")]
@@ -382,7 +382,7 @@ event_bus.subscribe(move |event: Arc<UserCreatedEvent>| {
 }).await;
 ```
 
-### 4.2 Utilisation par les taches planifiees
+### 4.2 Usage by Scheduled Tasks
 
 ```rust
 // Code genere par #[routes] pour #[scheduled(every = 30)]
@@ -398,9 +398,9 @@ scheduler.add_task(ScheduledTask {
 });
 ```
 
-### 4.3 Le pattern controller mixte
+### 4.3 The Mixed Controller Pattern
 
-Avec `#[inject(identity)]` sur les **parametres** handler (et non sur le struct), le controller conserve `StatefulConstruct` tout en permettant des endpoints proteges :
+With `#[inject(identity)]` on handler **parameters** (not on the struct), the controller retains `StatefulConstruct` while still allowing protected endpoints:
 
 ```rust
 #[derive(Controller)]
@@ -427,7 +427,7 @@ impl MixedController {
 
 ---
 
-## 5. Guards et le trait `Identity`
+## 5. Guards and the `Identity` Trait
 
 ### 5.1 Architecture
 
@@ -450,13 +450,13 @@ pub trait Guard<S, I: Identity>: Send + Sync {
 }
 ```
 
-Le trait `Identity` decouple les guards du type concret `AuthenticatedUser`. Les guards built-in (`RolesGuard`, `RateLimitGuard`) sont generiques sur `I: Identity`.
+The `Identity` trait decouples guards from the concrete `AuthenticatedUser` type. Built-in guards (`RolesGuard`, `RateLimitGuard`) are generic over `I: Identity`.
 
-### 5.2 Source de l'identity pour les guards
+### 5.2 Identity Source for Guards
 
-Deux cas dans le code genere :
+Two cases in generated code:
 
-**Cas A** — Identity sur un parametre handler :
+**Case A** — Identity on a handler parameter:
 
 ```rust
 // Le param est deja extrait par Axum
@@ -466,7 +466,7 @@ let guard_ctx = GuardContext {
 };
 ```
 
-**Cas B** — Identity sur le struct (ou absente) :
+**Case B** — Identity on the struct (or absent):
 
 ```rust
 // Appel a la fonction du meta-module
@@ -476,34 +476,34 @@ let guard_ctx = GuardContext {
 };
 ```
 
-Quand il n'y a pas d'identity du tout, `guard_identity` retourne `None` et le type est `NoIdentity`. Un guard comme `RolesGuard` retourne alors 403 "No identity available for role check".
+When there is no identity at all, `guard_identity` returns `None` and the type is `NoIdentity`. A guard like `RolesGuard` then returns 403 "No identity available for role check".
 
 ---
 
-## 6. Implications de performance
+## 6. Performance Implications
 
-### 6.1 Cout par requete — decomposition
+### 6.1 Per-Request Cost — Breakdown
 
-| Etape | Type | Cout typique | Notes |
-|-------|------|-------------|-------|
-| Layers Tower | Sync | ~1 us | Tracing, CORS, error handling |
-| Routage Axum | Sync | ~1 us | Radix tree matching |
-| **Clone des champs `#[inject]`** | Sync | **~10-50 ns par champ** | Si types `Arc` (refcount atomique) |
-| **Lookup config** | Sync | **~50 ns par champ** | HashMap lookup + type conversion |
-| **Validation JWT** | Async | **~10-50 us** | Verification de signature cryptographique |
-| **Lookup JWKS (cache miss)** | Async | **~50-200 ms** | Appel HTTP au provider OIDC |
-| Guard rate limit | Sync | ~100 ns | Token bucket check |
-| Guard roles | Sync | ~50 ns | Iteration sur le tableau de roles |
-| Intercepteurs | Async | ~100 ns d'overhead | Monomorphises, zero vtable |
-| Logique metier | Async | Variable | I/O database, services externes |
+| Step | Type | Typical Cost | Notes |
+|------|------|-------------|-------|
+| Tower layers | Sync | ~1 us | Tracing, CORS, error handling |
+| Axum routing | Sync | ~1 us | Radix tree matching |
+| **`#[inject]` field cloning** | Sync | **~10-50 ns per field** | With `Arc` types (atomic refcount) |
+| **Config lookup** | Sync | **~50 ns per field** | HashMap lookup + type conversion |
+| **JWT validation** | Async | **~10-50 us** | Cryptographic signature verification |
+| **JWKS lookup (cache miss)** | Async | **~50-200 ms** | HTTP call to the OIDC provider |
+| Rate limit guard | Sync | ~100 ns | Token bucket check |
+| Roles guard | Sync | ~50 ns | Iteration over the roles array |
+| Interceptors | Async | ~100 ns overhead | Monomorphized, zero vtable |
+| Business logic | Async | Variable | Database I/O, external services |
 
-### 6.2 Les operations critiques en detail
+### 6.2 Critical Operations in Detail
 
-#### Clone de l'etat (`#[inject]`)
+#### State Cloning (`#[inject]`)
 
-Le clone se fait a chaque requete pour chaque champ `#[inject]`. C'est le mecanisme d'Axum : l'extracteur `FromRequestParts` recoit une reference immutable a l'etat et doit en produire une copie locale.
+Cloning happens on every request for each `#[inject]` field. This is the Axum mechanism: the `FromRequestParts` extractor receives an immutable reference to the state and must produce a local copy.
 
-**Recommandation** : utiliser `Arc<T>` pour les services couteux a cloner. Le framework le fait deja pour `SqlxPool`, `LocalEventBus`, et `RateLimitRegistry`.
+**Recommendation**: use `Arc<T>` for expensive-to-clone services. The framework already does this for `SqlxPool`, `LocalEventBus`, and `RateLimitRegistry`.
 
 ```rust
 // Bon : Arc<T> → clone O(1)
@@ -517,38 +517,38 @@ pub struct Services {
 // Mauvais : si UserService contenait Vec<User> directement → clone O(n) par requete
 ```
 
-**Anti-pattern** : stocker `R2eConfig` comme champ `#[inject]` plutot que via `#[config]`. Le `R2eConfig` est un `HashMap<String, ConfigValue>` — son clone copie l'integralite de la map a chaque requete. Preferer `#[config("key")]` qui ne clone que la valeur demandee, ou stocker la config comme `Arc<R2eConfig>`.
+**Anti-pattern**: storing `R2eConfig` as an `#[inject]` field instead of via `#[config]`. `R2eConfig` is a `HashMap<String, ConfigValue>` — its clone copies the entire map on every request. Prefer `#[config("key")]` which only clones the requested value, or store the config as `Arc<R2eConfig>`.
 
-#### Validation JWT (`#[inject(identity)]`)
+#### JWT Validation (`#[inject(identity)]`)
 
-C'est generalement l'operation la plus couteuse de l'extraction. Elle comprend :
+This is generally the most expensive extraction operation. It includes:
 
-1. **Parsing du header** — O(1), negligeable
-2. **Decode du JWT** — parsing base64 + JSON, ~1 us
-3. **Verification de signature** — RSA/ECDSA, ~10-50 us selon l'algorithme
-4. **Lookup de la cle** (JWKS mode) :
-   - Cache hit : lecture RwLock, ~100 ns
-   - Cache miss : requete HTTP au JWKS endpoint, ~50-200 ms
-5. **Construction d'`AuthenticatedUser`** — allocation, negligeable
+1. **Header parsing** — O(1), negligible
+2. **JWT decoding** — base64 + JSON parsing, ~1 us
+3. **Signature verification** — RSA/ECDSA, ~10-50 us depending on algorithm
+4. **Key lookup** (JWKS mode):
+   - Cache hit: RwLock read, ~100 ns
+   - Cache miss: HTTP request to the JWKS endpoint, ~50-200 ms
+5. **`AuthenticatedUser` construction** — allocation, negligible
 
-**Optimisations possibles** :
+**Possible optimizations**:
 
-- **Pre-rechauffer le cache JWKS** dans un hook `on_start` (premiere requete sans latence)
-- **Cle statique en dev** (`JwtValidator::new_with_static_key`) evite le JWKS entierement
-- **Le cache JWKS est partage** via `Arc<RwLock>` — un seul refresh meme sous charge
+- **Pre-warm the JWKS cache** in an `on_start` hook (first request without latency)
+- **Static key in dev** (`JwtValidator::new_with_static_key`) avoids JWKS entirely
+- **The JWKS cache is shared** via `Arc<RwLock>` — a single refresh even under load
 
-**Struct-level vs param-level** : quand l'identity est sur le struct, elle est extraite pour **toutes** les requetes vers ce controller, meme les endpoints qui n'en ont pas besoin. Le pattern param-level (`#[inject(identity)]` sur le param) permet d'eviter cette extraction pour les endpoints publics.
+**Struct-level vs param-level**: when the identity is on the struct, it is extracted for **all** requests to that controller, even endpoints that do not need it. The param-level pattern (`#[inject(identity)]` on the param) avoids this extraction for public endpoints.
 
-#### Lookup de configuration (`#[config]`)
+#### Configuration Lookup (`#[config]`)
 
-Chaque champ `#[config("key")]` effectue :
+Each `#[config("key")]` field performs:
 
-1. `FromRef` extraction de `R2eConfig` — clone du `HashMap`, O(n) ou n = nombre de cles
-2. `config.get(key)` — O(1) lookup + conversion de type
+1. `FromRef` extraction of `R2eConfig` — clone of the `HashMap`, O(n) where n = number of keys
+2. `config.get(key)` — O(1) lookup + type conversion
 
-**Le clone de la config est le point d'attention**. Si la config contient 100 cles, c'est 100 allocations par champ `#[config]` par requete.
+**The config clone is the point of concern**. If the config contains 100 keys, that is 100 allocations per `#[config]` field per request.
 
-**Recommandation** : pour les controllers a forte charge, preferer injecter les valeurs de config dans l'etat au demarrage plutot que via `#[config]` :
+**Recommendation**: for high-throughput controllers, prefer injecting config values into the state at startup rather than via `#[config]`:
 
 ```rust
 // Plutot que :
@@ -558,9 +558,9 @@ Chaque champ `#[config("key")]` effectue :
 #[inject] greeting: Arc<String>,  // pre-construit dans l'etat
 ```
 
-### 6.3 Intercepteurs : zero-cost abstraction
+### 6.3 Interceptors: Zero-Cost Abstraction
 
-Les intercepteurs utilisent le trait `Interceptor<R>` qui est **monomorphise** par le compilateur Rust :
+Interceptors use the `Interceptor<R>` trait which is **monomorphized** by the Rust compiler:
 
 ```rust
 pub trait Interceptor<R> {
@@ -572,48 +572,48 @@ pub trait Interceptor<R> {
 }
 ```
 
-- **Pas de `dyn` dispatch** — le type concret de l'intercepteur est connu au compile-time
-- **Imbrication en closures** — LLVM optimise les closures nested en code lineaire
-- **`InterceptorContext` est `Copy`** — capture par valeur dans chaque closure async
+- **No `dyn` dispatch** — the concrete interceptor type is known at compile time
+- **Nested closure inlining** — LLVM optimizes nested closures into linear code
+- **`InterceptorContext` is `Copy`** — captured by value in each async closure
 
-Le cout reel des intercepteurs est celui de leur **logique metier** (logging, timing, cache lookup), pas du mecanisme d'`around`.
+The real cost of interceptors is that of their **business logic** (logging, timing, cache lookup), not the `around` mechanism.
 
-### 6.4 Guards : execution synchrone
+### 6.4 Guards: Synchronous Execution
 
-Les guards sont executes de maniere synchrone dans un handler async. Ils ne bloquent pas le runtime Tokio car ils sont typiquement O(1) :
+Guards are executed synchronously within an async handler. They do not block the Tokio runtime because they are typically O(1):
 
-- `RolesGuard` — iteration sur un petit slice de roles
-- `RateLimitGuard` — acces a un `DashMap` (lock-free pour les lectures)
+- `RolesGuard` — iteration over a small roles slice
+- `RateLimitGuard` — access to a `DashMap` (lock-free for reads)
 
-**Attention** : un guard custom qui ferait de l'I/O bloquerait le runtime. Les guards doivent rester rapides et synchrones.
+**Warning**: a custom guard that performs I/O would block the runtime. Guards must remain fast and synchronous.
 
-### 6.5 Comparaison struct-level vs param-level identity
+### 6.5 Struct-Level vs Param-Level Identity Comparison
 
 | Aspect | Struct-level `#[inject(identity)]` | Param-level `#[inject(identity)]` |
 |--------|-----------------------------------|----------------------------------|
-| Extraction JWT | A chaque requete, tous endpoints | Seulement endpoints annotes |
-| `StatefulConstruct` | Non genere | Genere |
+| JWT extraction | On every request, all endpoints | Only annotated endpoints |
+| `StatefulConstruct` | Not generated | Generated |
 | Consumers / Schedulers | Impossible | Possible |
-| Acces identity dans self | `self.user` (toujours disponible) | Non disponible dans self |
-| Guard context | Via `guard_identity(&ctrl)` | Via reference au param |
-| Overhead endpoint public | Validation JWT inutile | Aucun overhead JWT |
+| Identity access in self | `self.user` (always available) | Not available in self |
+| Guard context | Via `guard_identity(&ctrl)` | Via reference to param |
+| Public endpoint overhead | Unnecessary JWT validation | No JWT overhead |
 
-**Recommandation** : utiliser le pattern param-level pour les controllers qui melangent endpoints publics et proteges. Reserver le struct-level pour les controllers entierement proteges ou l'identity est utilisee dans la majorite des methodes.
+**Recommendation**: use the param-level pattern for controllers that mix public and protected endpoints. Reserve struct-level for fully protected controllers where the identity is used in most methods.
 
-### 6.6 Taches planifiees : cout de construction
+### 6.6 Scheduled Tasks: Construction Cost
 
-Chaque execution d'une tache planifiee appelle `StatefulConstruct::from_state`, qui clone les champs `#[inject]` et lookup les champs `#[config]`. Pour les taches a haute frequence (e.g., `every = 1`), ce cout est identique a celui d'une requete HTTP (moins l'extraction identity).
+Each scheduled task execution calls `StatefulConstruct::from_state`, which clones `#[inject]` fields and looks up `#[config]` fields. For high-frequency tasks (e.g., `every = 1`), this cost is identical to that of an HTTP request (minus identity extraction).
 
-**Recommandation** : pour les taches a tres haute frequence, reduire le nombre de champs injectes au minimum necessaire.
+**Recommendation**: for very high-frequency tasks, reduce the number of injected fields to the minimum necessary.
 
 ---
 
-## 7. Resume des regles d'or
+## 7. Summary of Golden Rules
 
-1. **Envelopper les services dans `Arc<T>`** — le clone par requete devient un simple increment atomique
-2. **Preferer `#[inject(identity)]` param-level** pour les controllers mixtes — evite la validation JWT sur les endpoints publics
-3. **Limiter le nombre de champs `#[config]`** — chaque champ clone l'ensemble de `R2eConfig`
-4. **Pre-rechauffer le cache JWKS** au demarrage si le temps de premiere requete compte
-5. **Les intercepteurs sont gratuits** en termes d'overhead de dispatch — le cout est dans leur logique interne
-6. **Les guards doivent rester synchrones et O(1)** — pas d'I/O dans un guard
-7. **Un controller par responsabilite** — evite d'injecter des dependances inutiles qui sont clonees a chaque requete
+1. **Wrap services in `Arc<T>`** — per-request cloning becomes a simple atomic increment
+2. **Prefer param-level `#[inject(identity)]`** for mixed controllers — avoids JWT validation on public endpoints
+3. **Limit the number of `#[config]` fields** — each field clones the entire `R2eConfig`
+4. **Pre-warm the JWKS cache** at startup if first-request latency matters
+5. **Interceptors are free** in terms of dispatch overhead — the cost is in their internal logic
+6. **Guards must remain synchronous and O(1)** — no I/O in a guard
+7. **One controller per responsibility** — avoids injecting unnecessary dependencies that are cloned on every request

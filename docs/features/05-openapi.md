@@ -1,33 +1,33 @@
 # Feature 5 — OpenAPI
 
-## Objectif
+## Objective
 
-Generer automatiquement une specification OpenAPI 3.0.3 a partir des metadonnees de route des controllers, et servir une interface de documentation API integree (WTI).
+Automatically generate an OpenAPI 3.0.3 specification from controller route metadata, and serve a built-in API documentation interface (WTI).
 
-## Concepts cles
+## Key Concepts
 
 ### Route metadata
 
-Chaque controller annote avec `#[derive(Controller)]` + `#[routes]` implemente `Controller::route_metadata()` qui retourne la liste des `RouteInfo` — chemin, methode HTTP, parametres, roles requis.
+Each controller annotated with `#[derive(Controller)]` + `#[routes]` implements `Controller::route_metadata()`, which returns a list of `RouteInfo` — path, HTTP method, parameters, required roles.
 
 ### OpenApiConfig
 
-Configuration de la specification : titre, version, description, activation de l'interface de documentation.
+Configuration for the specification: title, version, description, and whether to enable the documentation interface.
 
 ### openapi_routes()
 
-Fonction qui prend un `OpenApiConfig` et les metadonnees de tous les controllers, et retourne un `Router` avec les endpoints `/openapi.json` et `/docs`.
+A function that takes an `OpenApiConfig` and the metadata from all controllers, and returns a `Router` with the `/openapi.json` and `/docs` endpoints.
 
-## Utilisation
+## Usage
 
-### 1. Ajouter la dependance
+### 1. Add the dependency
 
 ```toml
 [dependencies]
 r2e-openapi = { path = "../r2e-openapi" }
 ```
 
-### 2. Configurer et enregistrer
+### 2. Configure and register
 
 ```rust
 use r2e_core::Controller;
@@ -51,22 +51,22 @@ AppBuilder::new()
     .register_controller::<UserController>()
     .register_controller::<ConfigController>()
     .register_controller::<DataController>()
-    .register_routes(openapi)  // Ajoute /openapi.json et /docs
+    .register_routes(openapi)  // Adds /openapi.json and /docs
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
 ```
 
-### 3. Endpoints generes
+### 3. Generated endpoints
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /openapi.json` | Specification OpenAPI 3.0.3 en JSON |
-| `GET /docs` | Interface de documentation API (WTI) |
-| `GET /docs/wti-element.css` | Stylesheet WTI (embarque) |
-| `GET /docs/wti-element.js` | Script WTI (embarque) |
+| `GET /openapi.json` | OpenAPI 3.0.3 specification in JSON |
+| `GET /docs` | API documentation interface (WTI) |
+| `GET /docs/wti-element.css` | WTI stylesheet (embedded) |
+| `GET /docs/wti-element.js` | WTI script (embedded) |
 
-### 4. Exemple de spec generee
+### 4. Example of generated spec
 
 ```json
 {
@@ -111,52 +111,52 @@ AppBuilder::new()
 }
 ```
 
-## Metadonnees collectees
+## Collected metadata
 
-La macro `#[routes]` genere automatiquement un `RouteInfo` pour chaque methode de route :
+The `#[routes]` macro automatically generates a `RouteInfo` for each route method:
 
 ```rust
 pub struct RouteInfo {
-    pub path: String,           // ex: "/users/{id}"
-    pub method: String,         // ex: "GET"
-    pub operation_id: String,   // ex: "UserController_get_by_id"
+    pub path: String,           // e.g.: "/users/{id}"
+    pub method: String,         // e.g.: "GET"
+    pub operation_id: String,   // e.g.: "UserController_get_by_id"
     pub summary: Option<String>,
     pub request_body_type: Option<String>,
     pub response_type: Option<String>,
-    pub params: Vec<ParamInfo>, // Parametres de chemin detectes
-    pub roles: Vec<String>,     // Roles requis (#[roles("admin")])
+    pub params: Vec<ParamInfo>, // Detected path parameters
+    pub roles: Vec<String>,     // Required roles (#[roles("admin")])
 }
 ```
 
-Les parametres de chemin (ex: `Path(id): Path<u64>`) sont automatiquement detectes et inclus dans la spec.
+Path parameters (e.g.: `Path(id): Path<u64>`) are automatically detected and included in the spec.
 
-Les roles declares via `#[roles("admin")]` apparaissent dans les metadonnees, permettant a l'interface de documentation de les afficher.
+Roles declared via `#[roles("admin")]` appear in the metadata, allowing the documentation interface to display them.
 
 ## OpenApiConfig
 
 ```rust
 let config = OpenApiConfig::new("Titre", "1.0.0")
     .with_description("Description optionnelle")
-    .with_docs_ui(true);   // Active /docs (defaut: false)
+    .with_docs_ui(true);   // Enables /docs (default: false)
 ```
 
-## Interface de documentation (WTI)
+## Documentation interface (WTI)
 
-Quand `.with_docs_ui(true)` est active, l'endpoint `/docs` sert une page HTML contenant l'interface WTI, configuree pour charger `/openapi.json`. Les assets CSS et JS sont embarques dans le binaire via `include_str!` et servis sur `/docs/wti-element.css` et `/docs/wti-element.js`.
+When `.with_docs_ui(true)` is enabled, the `/docs` endpoint serves an HTML page containing the WTI interface, configured to load `/openapi.json`. The CSS and JS assets are embedded in the binary via `include_str!` and served at `/docs/wti-element.css` and `/docs/wti-element.js`.
 
-L'interface permet de :
-- Parcourir tous les endpoints
-- Voir les parametres et types
-- Tester les endpoints directement depuis le navigateur
+The interface allows you to:
+- Browse all endpoints
+- View parameters and types
+- Test endpoints directly from the browser
 
-## Critere de validation
+## Validation criteria
 
 ```bash
-# Spec OpenAPI
+# OpenAPI spec
 curl http://localhost:3000/openapi.json | jq .info.title
 # → "Mon API"
 
 # Documentation UI
 curl http://localhost:3000/docs | grep "wti-element"
-# → HTML contenant wti-element
+# → HTML containing wti-element
 ```

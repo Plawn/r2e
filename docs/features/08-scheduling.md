@@ -1,33 +1,33 @@
 # Feature 8 — Scheduling
 
-## Objectif
+## Objective
 
-Executer des taches de fond de maniere periodique (intervalle fixe ou expression cron), avec arret propre via `CancellationToken`.
+Execute background tasks periodically (fixed interval or cron expression), with graceful shutdown via `CancellationToken`.
 
-## Concepts cles
+## Key Concepts
 
 ### Scheduler
 
-Le gestionnaire de taches planifiees. Il collecte les taches puis les demarre comme des taches Tokio en arriere-plan.
+The scheduled task manager. It collects tasks and then starts them as background Tokio tasks.
 
 ### ScheduledTask
 
-Une tache individuelle avec un nom, un type de planification (`Schedule`), et une closure async qui recoit l'etat applicatif.
+An individual task with a name, a scheduling type (`Schedule`), and an async closure that receives the application state.
 
 ### Schedule
 
-Enum definissant quand la tache s'execute :
-- `Every(Duration)` — intervalle fixe
-- `EveryDelay { interval, initial_delay }` — intervalle avec delai initial
-- `Cron(String)` — expression cron
+An enum defining when the task executes:
+- `Every(Duration)` — fixed interval
+- `EveryDelay { interval, initial_delay }` — interval with initial delay
+- `Cron(String)` — cron expression
 
 ### CancellationToken
 
-Token de `tokio-util` permettant d'arreter proprement les taches planifiees (typiquement a l'arret du serveur).
+A token from `tokio-util` that allows graceful shutdown of scheduled tasks (typically when the server stops).
 
-## Utilisation
+## Usage
 
-### 1. Ajouter les dependances
+### 1. Add the dependencies
 
 ```toml
 [dependencies]
@@ -35,7 +35,7 @@ r2e-scheduler = { path = "../r2e-scheduler" }
 tokio-util = { version = "0.7", features = ["rt"] }
 ```
 
-### 2. Creer un Scheduler et ajouter des taches
+### 2. Create a Scheduler and add tasks
 
 ```rust
 use std::time::Duration;
@@ -45,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 let cancel = CancellationToken::new();
 let mut scheduler = Scheduler::new();
 
-// Tache executee toutes les 30 secondes
+// Task executed every 30 seconds
 scheduler.add_task(ScheduledTask {
     name: "user-count".to_string(),
     schedule: Schedule::Every(Duration::from_secs(30)),
@@ -58,23 +58,23 @@ scheduler.add_task(ScheduledTask {
 });
 ```
 
-### 3. Demarrer le scheduler
+### 3. Start the scheduler
 
 ```rust
-// Demarre toutes les taches en arriere-plan
+// Start all tasks in the background
 scheduler.start(services.clone(), cancel.clone());
 ```
 
-Les taches tournent jusqu'a ce que le `CancellationToken` soit annule.
+Tasks run until the `CancellationToken` is cancelled.
 
-### 4. Arreter le scheduler
+### 4. Stop the scheduler
 
 ```rust
-// A l'arret de l'application
+// When the application shuts down
 cancel.cancel();
 ```
 
-Typiquement place apres `AppBuilder::serve()` :
+Typically placed after `AppBuilder::serve()`:
 
 ```rust
 AppBuilder::new()
@@ -84,46 +84,46 @@ AppBuilder::new()
     .await
     .unwrap();
 
-// Le serveur s'est arrete → arreter le scheduler
+// The server has stopped → stop the scheduler
 cancel.cancel();
 ```
 
-## Types de planification
+## Schedule types
 
 ### Schedule::Every
 
-Execute la tache a intervalle fixe, immediatement au demarrage puis a chaque tick :
+Executes the task at a fixed interval, immediately at startup then at each tick:
 
 ```rust
-Schedule::Every(Duration::from_secs(60))  // Toutes les 60 secondes
+Schedule::Every(Duration::from_secs(60))  // Every 60 seconds
 ```
 
 ### Schedule::EveryDelay
 
-Comme `Every`, mais avec un delai avant la premiere execution :
+Like `Every`, but with a delay before the first execution:
 
 ```rust
 Schedule::EveryDelay {
     interval: Duration::from_secs(60),
-    initial_delay: Duration::from_secs(10),  // Attendre 10s avant de commencer
+    initial_delay: Duration::from_secs(10),  // Wait 10s before starting
 }
 ```
 
 ### Schedule::Cron
 
-Expression cron (6 champs : sec min hour day month weekday) :
+Cron expression (6 fields: sec min hour day month weekday):
 
 ```rust
-Schedule::Cron("0 */5 * * * *".to_string())  // Toutes les 5 minutes
-Schedule::Cron("0 0 * * * *".to_string())     // Toutes les heures
-Schedule::Cron("0 0 2 * * *".to_string())     // Tous les jours a 2h
+Schedule::Cron("0 */5 * * * *".to_string())  // Every 5 minutes
+Schedule::Cron("0 0 * * * *".to_string())     // Every hour
+Schedule::Cron("0 0 2 * * *".to_string())     // Every day at 2am
 ```
 
-**Note** : le cron utilise la crate `cron` avec 6 champs (les secondes en premier).
+**Note**: the cron uses the `cron` crate with 6 fields (seconds first).
 
-## Acces a l'etat
+## State access
 
-Chaque tache recoit une copie de l'etat applicatif (`T: Clone`). Cela signifie que les taches ont acces aux services, au pool de base de donnees, au bus d'evenements, etc. :
+Each task receives a copy of the application state (`T: Clone`). This means tasks have access to services, the database pool, the event bus, etc.:
 
 ```rust
 scheduler.add_task(ScheduledTask {
@@ -142,7 +142,7 @@ scheduler.add_task(ScheduledTask {
 
 ## Logs
 
-Le scheduler log automatiquement le demarrage et l'arret de chaque tache :
+The scheduler automatically logs the start and stop of each task:
 
 ```
 INFO task="user-count" "Scheduled task started"
@@ -150,18 +150,18 @@ DEBUG task="user-count" "Executing scheduled task"
 INFO task="user-count" "Scheduled task stopped"
 ```
 
-## Critere de validation
+## Validation criteria
 
-Lancer l'application :
+Start the application:
 
 ```bash
 cargo run -p example-app
 ```
 
-Dans les logs, toutes les 30 secondes :
+In the logs, every 30 seconds:
 
 ```
 INFO count=2 "Scheduled user count"
 ```
 
-A l'arret (Ctrl+C), le scheduler s'arrete proprement via le `CancellationToken`.
+On shutdown (Ctrl+C), the scheduler stops gracefully via the `CancellationToken`.

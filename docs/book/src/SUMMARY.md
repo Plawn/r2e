@@ -23,6 +23,7 @@
 
 - [JWT / OIDC Authentication](./security/jwt-oidc.md)
 - [Embedded OIDC Server](./security/embedded-oidc.md)
+- [Optional Identity](./security/optional-identity.md)
 - [Guards and Roles](./security/guards-and-roles.md)
 - [Rate Limiting](./security/rate-limiting.md)
 
@@ -39,6 +40,11 @@
 - [Declarative Consumers](./events-and-scheduling/consumers.md)
 - [Scheduling](./events-and-scheduling/scheduling.md)
 
+# Real-Time
+
+- [Server-Sent Events (SSE)](./real-time/sse.md)
+- [WebSocket](./real-time/websocket.md)
+
 # gRPC
 
 - [gRPC Services](./grpc/services.md)
@@ -53,7 +59,13 @@
 - [Managed Resources](./advanced/managed-resources.md)
 - [Lifecycle Hooks](./advanced/lifecycle-hooks.md)
 - [Dev Mode](./advanced/dev-mode.md)
+- [Route Attributes](./advanced/route-attributes.md)
 - [OpenAPI](./advanced/openapi.md)
+- [Health Checks](./advanced/health-checks.md)
+- [Secure Headers](./advanced/secure-headers.md)
+- [Static Files](./advanced/static-files.md)
+- [Multipart File Uploads](./advanced/multipart.md)
+- [Observability](./advanced/observability.md)
 - [Performance Guide](./advanced/performance.md)
 
 # Testing

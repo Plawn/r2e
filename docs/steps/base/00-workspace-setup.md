@@ -1,10 +1,10 @@
-# Etape 0 — Setup du workspace Cargo
+# Step 0 — Cargo Workspace Setup
 
-## Objectif
+## Goal
 
-Transformer le projet en **workspace Cargo** multi-crates avec la structure cible.
+Transform the project into a multi-crate **Cargo workspace** with the target structure.
 
-## Structure finale
+## Final Structure
 
 ```
 r2e/
@@ -23,9 +23,9 @@ r2e/
     src/main.rs
 ```
 
-## Taches
+## Tasks
 
-### 1. Convertir le `Cargo.toml` racine en workspace
+### 1. Convert the root `Cargo.toml` into a workspace
 
 ```toml
 [workspace]
@@ -38,9 +38,9 @@ members = [
 resolver = "2"
 ```
 
-Supprimer le `src/main.rs` racine existant (le code applicatif ira dans `example-app`).
+Remove the existing root `src/main.rs` (the application code will go into `example-app`).
 
-### 2. Creer `r2e-macros`
+### 2. Create `r2e-macros`
 
 ```toml
 [package]
@@ -57,9 +57,9 @@ quote = "1"
 proc-macro2 = "1"
 ```
 
-`src/lib.rs` : fichier vide avec `extern crate proc_macro;`
+`src/lib.rs`: empty file with `extern crate proc_macro;`
 
-### 3. Creer `r2e-core`
+### 3. Create `r2e-core`
 
 ```toml
 [package]
@@ -77,7 +77,7 @@ serde_json = "1"
 r2e-macros = { path = "../r2e-macros" }
 ```
 
-### 4. Creer `r2e-security`
+### 4. Create `r2e-security`
 
 ```toml
 [package]
@@ -94,7 +94,7 @@ tokio = { version = "1", features = ["sync"] }
 r2e-core = { path = "../r2e-core" }
 ```
 
-### 5. Creer `example-app`
+### 5. Create `example-app`
 
 ```toml
 [package]
@@ -112,14 +112,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-## Critere de validation
+## Validation Criteria
 
 ```bash
 cargo check --workspace
 ```
 
-Doit compiler sans erreur (crates vides mais valides).
+Must compile without errors (empty but valid crates).
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-Aucune — c'est l'etape initiale.
+None — this is the initial step.

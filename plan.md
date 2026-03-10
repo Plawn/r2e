@@ -1,54 +1,54 @@
-# 📐 Plan d’implémentation – Surcouche Quarkus-like pour Rust (Axum)
+# Implementation Plan – Quarkus-like Layer for Rust (Axum)
 
-## 🎯 Objectif
+## Goal
 
-Créer une **surcouche ergonomique au-dessus d’Axum** qui offre une DX proche de Quarkus :
+Create an **ergonomic layer on top of Axum** that provides a DX close to Quarkus:
 
-* Controllers déclaratifs via macros
-* Injection compile-time (pas de DI runtime)
-* Séparation claire app‑scoped / request‑scoped
-* Support JWT / OIDC avec injection d’identité
-* Zéro réflexion, zéro coût runtime inutile
+* Declarative controllers via macros
+* Compile-time injection (no runtime DI)
+* Clear separation between app-scoped and request-scoped
+* JWT / OIDC support with identity injection
+* Zero reflection, zero unnecessary runtime cost
 
-Ce document est destiné à être **fourni tel quel à Claude Code** pour implémentation.
+This document is intended to be **provided as-is to Claude Code** for implementation.
 
 ---
 
-## 🧱 Architecture globale
+## Overall Architecture
 
-### Organisation en crates
+### Crate Organization
 
 ```
 r2e/
  ├─ r2e-macros/       # Proc-macros (controller, inject, routes…)
- ├─ r2e-core/         # Runtime minimal + Axum glue + AppBuilder + config + guards + intercepteurs
+ ├─ r2e-core/         # Minimal runtime + Axum glue + AppBuilder + config + guards + interceptors
  ├─ r2e-security/     # JWT / Identity / OIDC / JWKS
- ├─ r2e-events/       # EventBus pub/sub typé
- ├─ r2e-scheduler/    # Tâches planifiées (interval, cron, delay)
+ ├─ r2e-events/       # Typed pub/sub EventBus
+ ├─ r2e-scheduler/    # Scheduled tasks (interval, cron, delay)
  ├─ r2e-data/         # Entity, QueryBuilder, Repository, Pageable/Page
  ├─ r2e-cache/        # TtlCache, CacheStore trait, InMemoryStore
- ├─ r2e-rate-limit/   # RateLimiter token-bucket, RateLimitRegistry
- ├─ r2e-openapi/      # Génération OpenAPI 3.0.3 + Swagger UI
- ├─ r2e-utils/        # Intercepteurs built-in (Logged, Timed, Cache, CacheInvalidate)
- ├─ r2e-test/         # TestApp, TestJwt pour tests d'intégration
- ├─ r2e-cli/          # CLI : r2e new/add/dev/generate
- └─ example-app/          # Application démo complète
+ ├─ r2e-rate-limit/   # Token-bucket RateLimiter, RateLimitRegistry
+ ├─ r2e-openapi/      # OpenAPI 3.0.3 generation + Swagger UI
+ ├─ r2e-utils/        # Built-in interceptors (Logged, Timed, Cache, CacheInvalidate)
+ ├─ r2e-test/         # TestApp, TestJwt for integration tests
+ ├─ r2e-cli/          # CLI: r2e new/add/dev/generate
+ └─ example-app/          # Complete demo application
 ```
 
 ---
 
-## 🧠 Concepts clés
+## Key Concepts
 
 ### Scopes
 
-| Scope          | Description                                         |
-| -------------- | --------------------------------------------------- |
-| app-scoped     | Singletons applicatifs (services, repos, clients)   |
-| request-scoped | Données dérivées de la requête (identity, headers…) |
+| Scope          | Description                                              |
+| -------------- | -------------------------------------------------------- |
+| app-scoped     | Application singletons (services, repos, clients)        |
+| request-scoped | Data derived from the request (identity, headers, etc.)  |
 
 ---
 
-## 🎨 API publique cible (DX)
+## Target Public API (DX)
 
 ### Application
 
@@ -57,9 +57,9 @@ r2e/
 struct MyApp;
 ```
 
-* Marqueur logique
-* Déclenche la génération de l’`AppState`
-* Point d’entrée du wiring global
+* Logical marker
+* Triggers `AppState` generation
+* Entry point for global wiring
 
 ---
 
@@ -84,7 +84,7 @@ impl UserResource {
 
 ---
 
-### Routes supportées
+### Supported Routes
 
 ```rust
 #[get("/path")]
@@ -96,32 +96,32 @@ impl UserResource {
 
 ---
 
-## 🧩 Macro `#[controller]`
+## `#[controller]` Macro
 
-### Responsabilités
+### Responsibilities
 
-* Parser un `impl` block
-* Identifier :
+* Parse an `impl` block
+* Identify:
 
-  * champs `#[inject]`
-  * champs `#[identity]`
-  * méthodes annotées (`#[get]`, `#[post]`, …)
-* Générer :
+  * `#[inject]` fields
+  * `#[identity]` fields
+  * Annotated methods (`#[get]`, `#[post]`, etc.)
+* Generate:
 
-  * handlers Axum
-  * extraction `State` + extracteurs request‑scoped
-  * construction du controller
+  * Axum handlers
+  * `State` extraction + request-scoped extractors
+  * Controller construction
 
-### Génération conceptuelle
+### Conceptual Generation
 
-Pour :
+For:
 
 ```rust
 #[get("/users")]
 async fn list(&self) -> Json<Vec<User>>
 ```
 
-Générer :
+Generate:
 
 ```rust
 async fn list_handler(
@@ -139,31 +139,31 @@ async fn list_handler(
 
 ---
 
-## 🔌 `#[inject]` – App‑scoped
+## `#[inject]` – App-scoped
 
-### Règles
+### Rules
 
-* Type : `Clone + Send + Sync`
-* Résolu depuis `AppState`
-* Injecté lors de la construction du controller
+* Type: `Clone + Send + Sync`
+* Resolved from `AppState`
+* Injected during controller construction
 
-### Implémentation
+### Implementation
 
-* `AppState` contient explicitement tous les services
-* Pas de lookup dynamique
-* Pas de map / type-id
+* `AppState` explicitly contains all services
+* No dynamic lookup
+* No map / type-id
 
 ---
 
-## 👤 `#[identity]` – Request‑scoped
+## `#[identity]` – Request-scoped
 
-### Règles
+### Rules
 
-* Type implémente `FromRequestParts`
-* Injecté comme paramètre du handler Axum
-* Durée de vie = requête HTTP
+* Type implements `FromRequestParts`
+* Injected as an Axum handler parameter
+* Lifetime = HTTP request
 
-### Exemple
+### Example
 
 ```rust
 pub struct AuthenticatedUser {
@@ -175,29 +175,29 @@ pub struct AuthenticatedUser {
 
 ---
 
-## 🔐 Sécurité – JWT / OIDC
+## Security – JWT / OIDC
 
-### Flux
+### Flow
 
 ```
 HTTP Request
  → Authorization: Bearer <jwt>
  → Extractor AuthenticatedUser
- → Vérification signature JWT
- → Validation claims
- → Injection dans controller
+ → JWT signature verification
+ → Claims validation
+ → Injection into controller
 ```
 
-### Implémentation
+### Implementation
 
 * Crate `r2e-security`
-* JWKS cache (kid → clé publique)
-* Rafraîchissement async
-* Mapping claims → `AuthenticatedUser`
+* JWKS cache (kid → public key)
+* Async refresh
+* Claims mapping → `AuthenticatedUser`
 
 ---
 
-## 🏗️ AppState & Application Builder
+## AppState & Application Builder
 
 ### AppState
 
@@ -221,20 +221,20 @@ let app = AppBuilder::new()
 
 ---
 
-## 🌐 Router final
+## Final Router
 
-* Routes générées automatiquement par les controllers
-* Assemblées dans un `axum::Router`
-* `.with_state(AppState)` appliqué globalement
+* Routes automatically generated by controllers
+* Assembled into an `axum::Router`
+* `.with_state(AppState)` applied globally
 
 ---
 
-## ⚠️ Error handling
+## Error Handling
 
-* Handlers retournent :
+* Handlers return:
 
-  * `impl IntoResponse` ou `Result<T, E>`
-* Mapping standard :
+  * `impl IntoResponse` or `Result<T, E>`
+* Standard mapping:
 
   * 401 Unauthorized
   * 403 Forbidden
@@ -243,26 +243,26 @@ let app = AppBuilder::new()
 
 ---
 
-## 🔮 Extensions futures (non bloquantes)
+## Future Extensions (Non-blocking)
 
-*Toutes implémentées :*
+*All implemented:*
 
-* ✅ `#[roles("admin")]` — guard de rôles (r2e-security + r2e-macros)
-* ✅ `#[transactional]` — wrapping SQL transaction automatique (r2e-macros)
-* ✅ `#[config("key")]` — injection de configuration (r2e-core + r2e-macros)
-* ✅ OpenAPI auto — génération spec 3.0.3 + Swagger UI (r2e-openapi)
-* ✅ Dev mode / hot reload — endpoints `/__r2e_dev/*` (r2e-core)
+* ✅ `#[roles("admin")]` — role guard (r2e-security + r2e-macros)
+* ✅ `#[transactional]` — automatic SQL transaction wrapping (r2e-macros)
+* ✅ `#[config("key")]` — configuration injection (r2e-core + r2e-macros)
+* ✅ OpenAPI auto — spec 3.0.3 generation + Swagger UI (r2e-openapi)
+* ✅ Dev mode / hot reload — `/__r2e_dev/*` endpoints (r2e-core)
 
-*Ajouts supplémentaires réalisés :*
+*Additional features completed:*
 
-* ✅ `#[rate_limited]` — rate limiting par token bucket (r2e-rate-limit)
-* ✅ `#[intercept(...)]` — intercepteurs (Logged, Timed, Cache, CacheInvalidate + custom)
-* ✅ `#[guard(...)]` — guards custom (r2e-core)
-* ✅ `#[consumer(bus = "...")]` — consommateurs d'événements (r2e-events)
-* ✅ `#[scheduled(every/cron)]` — tâches planifiées (r2e-scheduler)
-* ✅ `#[middleware(...)]` — middleware Tower par route
+* ✅ `#[rate_limited]` — token bucket rate limiting (r2e-rate-limit)
+* ✅ `#[intercept(...)]` — interceptors (Logged, Timed, Cache, CacheInvalidate + custom)
+* ✅ `#[guard(...)]` — custom guards (r2e-core)
+* ✅ `#[consumer(bus = "...")]` — event consumers (r2e-events)
+* ✅ `#[scheduled(every/cron)]` — scheduled tasks (r2e-scheduler)
+* ✅ `#[middleware(...)]` — per-route Tower middleware
 * ✅ Data/Repository — Entity, QueryBuilder, Pageable, Page (r2e-data)
-* ✅ Cache pluggable — CacheStore trait + InMemoryStore (r2e-cache)
+* ✅ Pluggable cache — CacheStore trait + InMemoryStore (r2e-cache)
 * ✅ Test helpers — TestApp, TestJwt (r2e-test)
 * ✅ CLI — r2e new/add/dev/generate (r2e-cli)
 * ✅ Lifecycle hooks — on_start / on_stop (r2e-core)
@@ -270,17 +270,17 @@ let app = AppBuilder::new()
 
 ---
 
-## ⛔ Contraintes explicites
+## Explicit Constraints
 
-* ❌ Pas de DI runtime
-* ❌ Pas de réflexion
-* ❌ Pas de macros opaques
-* ✅ Génération lisible
-* ✅ Erreurs de compilation exploitables
+* No runtime DI
+* No reflection
+* No opaque macros
+* ✅ Readable generation
+* ✅ Actionable compilation errors
 
 ---
 
-## 📦 Dépendances recommandées
+## Recommended Dependencies
 
 ```toml
 axum
@@ -299,22 +299,22 @@ proc-macro2
 
 ---
 
-## 📦 Livrables attendus
+## Expected Deliverables
 
-*Tous livrés :*
+*All delivered:*
 
-* ✅ `r2e-macros` — `#[derive(Controller)]` + `#[routes]` avec tous les attributs
+* ✅ `r2e-macros` — `#[derive(Controller)]` + `#[routes]` with all attributes
 * ✅ `r2e-core` — AppBuilder, Controller, Guard, Interceptor, config, lifecycle, dev-mode
 * ✅ `r2e-security` — JWT/JWKS, AuthenticatedUser, RoleExtractor
-* ✅ `r2e-events` — EventBus typé avec consumers déclaratifs
-* ✅ `r2e-scheduler` — Tâches planifiées (interval, cron) avec shutdown gracieux
+* ✅ `r2e-events` — Typed EventBus with declarative consumers
+* ✅ `r2e-scheduler` — Scheduled tasks (interval, cron) with graceful shutdown
 * ✅ `r2e-data` — Entity, QueryBuilder, Repository, pagination
-* ✅ `r2e-cache` — TtlCache + CacheStore pluggable
-* ✅ `r2e-rate-limit` — Rate limiting token-bucket pluggable
-* ✅ `r2e-openapi` — Spec OpenAPI 3.0.3 + Swagger UI
-* ✅ `r2e-utils` — Intercepteurs built-in (Logged, Timed, Cache, CacheInvalidate)
+* ✅ `r2e-cache` — TtlCache + pluggable CacheStore
+* ✅ `r2e-rate-limit` — Pluggable token-bucket rate limiting
+* ✅ `r2e-openapi` — OpenAPI 3.0.3 spec + Swagger UI
+* ✅ `r2e-utils` — Built-in interceptors (Logged, Timed, Cache, CacheInvalidate)
 * ✅ `r2e-test` — TestApp + TestJwt
-* ✅ `r2e-cli` — Scaffold et dev-mode
-* ✅ `example-app` — Démo complète avec JWT, CRUD, events, scheduling, intercepteurs, rate limiting, transactions
+* ✅ `r2e-cli` — Scaffold and dev-mode
+* ✅ `example-app` — Complete demo with JWT, CRUD, events, scheduling, interceptors, rate limiting, transactions
 
 ---

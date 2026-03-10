@@ -1,19 +1,19 @@
-# Etape 4 — r2e-security : JWT et identite
+# Step 4 — r2e-security: JWT and Identity
 
-## Objectif
+## Goal
 
-Implementer le module securite : validation JWT, cache JWKS, et l'extracteur `AuthenticatedUser` compatible avec Axum (`FromRequestParts`).
+Implement the security module: JWT validation, JWKS cache, and the `AuthenticatedUser` extractor compatible with Axum (`FromRequestParts`).
 
-## Fichiers a creer
+## Files to Create
 
 ```
 r2e-security/src/
   lib.rs              # Re-exports
-  identity.rs         # Struct AuthenticatedUser
-  jwt.rs              # Validation JWT, decodage claims
-  jwks.rs             # Cache JWKS (cles publiques OIDC)
-  extractor.rs        # impl FromRequestParts pour AuthenticatedUser
-  config.rs           # Configuration securite (issuer, audience, JWKS URL)
+  identity.rs         # AuthenticatedUser struct
+  jwt.rs              # JWT validation, claims decoding
+  jwks.rs             # JWKS cache (OIDC public keys)
+  extractor.rs        # impl FromRequestParts for AuthenticatedUser
+  config.rs           # Security configuration (issuer, audience, JWKS URL)
 ```
 
 ## 1. Configuration (`config.rs`)
@@ -21,59 +21,59 @@ r2e-security/src/
 ```rust
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
-    /// URL du endpoint JWKS (ex: https://auth.example.com/.well-known/jwks.json)
+    /// JWKS endpoint URL (e.g., https://auth.example.com/.well-known/jwks.json)
     pub jwks_url: String,
 
-    /// Issuer attendu dans le claim "iss"
+    /// Expected issuer in the "iss" claim
     pub issuer: String,
 
-    /// Audience attendue dans le claim "aud"
+    /// Expected audience in the "aud" claim
     pub audience: String,
 
-    /// Duree de cache JWKS en secondes (defaut: 3600)
+    /// JWKS cache duration in seconds (default: 3600)
     pub jwks_cache_ttl_secs: u64,
 }
 ```
 
-Le `SecurityConfig` sera stocke dans l'`AppState` pour etre accessible aux extracteurs.
+The `SecurityConfig` will be stored in the `AppState` to be accessible to extractors.
 
 ## 2. AuthenticatedUser (`identity.rs`)
 
 ```rust
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AuthenticatedUser {
-    /// Subject (claim "sub")
+    /// Subject ("sub" claim)
     pub sub: String,
 
-    /// Email (claim "email", optionnel)
+    /// Email ("email" claim, optional)
     pub email: Option<String>,
 
-    /// Roles extraits des claims
+    /// Roles extracted from claims
     pub roles: Vec<String>,
 
-    /// Claims bruts pour acces avance
+    /// Raw claims for advanced access
     pub claims: serde_json::Value,
 }
 ```
 
-### Extraction des roles
+### Role Extraction
 
-Les roles peuvent venir de differents emplacements selon le provider OIDC :
+Roles can come from different locations depending on the OIDC provider:
 
-- Keycloak : `realm_access.roles` ou `resource_access.<client>.roles`
-- Auth0 : claim custom `https://example.com/roles`
-- Generique : claim `roles`
+- Keycloak: `realm_access.roles` or `resource_access.<client>.roles`
+- Auth0: custom claim `https://example.com/roles`
+- Generic: `roles` claim
 
-Fournir un trait `RoleExtractor` configurable, avec une implementation par defaut qui cherche dans `roles`, `realm_access.roles`.
+Provide a configurable `RoleExtractor` trait with a default implementation that looks in `roles`, `realm_access.roles`.
 
 ## 3. JWKS Cache (`jwks.rs`)
 
-### Responsabilites
+### Responsibilities
 
-1. Telecharger les cles publiques depuis le JWKS endpoint
-2. Indexer par `kid` (Key ID)
-3. Cacher les cles avec un TTL configurable
-4. Rafraichir en arriere-plan quand le TTL expire
+1. Download public keys from the JWKS endpoint
+2. Index by `kid` (Key ID)
+3. Cache keys with a configurable TTL
+4. Refresh in the background when the TTL expires
 
 ### Implementation
 
@@ -92,22 +92,22 @@ pub struct JwksCache {
 impl JwksCache {
     pub async fn new(config: SecurityConfig) -> Result<Self, SecurityError> { ... }
 
-    /// Recupere la cle de decodage pour un kid donne.
-    /// Rafraichit le cache si le kid est inconnu.
+    /// Retrieves the decoding key for a given kid.
+    /// Refreshes the cache if the kid is unknown.
     pub async fn get_key(&self, kid: &str) -> Result<DecodingKey, SecurityError> { ... }
 
-    /// Force le rafraichissement du cache.
+    /// Forces a cache refresh.
     async fn refresh(&self) -> Result<(), SecurityError> { ... }
 }
 ```
 
-### Strategie de rafraichissement
+### Refresh Strategy
 
-1. Si `kid` trouve en cache → retourner directement
-2. Si `kid` inconnu → rafraichir le cache puis re-chercher
-3. Si toujours inconnu apres refresh → erreur `UnknownKeyId`
+1. If `kid` is found in cache → return directly
+2. If `kid` is unknown → refresh the cache then search again
+3. If still unknown after refresh → error `UnknownKeyId`
 
-## 4. Validation JWT (`jwt.rs`)
+## 4. JWT Validation (`jwt.rs`)
 
 ```rust
 pub struct JwtValidator {
@@ -116,28 +116,28 @@ pub struct JwtValidator {
 }
 
 impl JwtValidator {
-    /// Valide un token JWT et retourne un AuthenticatedUser
+    /// Validates a JWT token and returns an AuthenticatedUser
     pub async fn validate(&self, token: &str) -> Result<AuthenticatedUser, SecurityError> {
-        // 1. Decoder le header pour extraire le kid
-        // 2. Recuperer la cle depuis le JWKS cache
-        // 3. Valider la signature
-        // 4. Valider les claims (iss, aud, exp, nbf)
-        // 5. Mapper les claims vers AuthenticatedUser
+        // 1. Decode the header to extract the kid
+        // 2. Retrieve the key from the JWKS cache
+        // 3. Validate the signature
+        // 4. Validate claims (iss, aud, exp, nbf)
+        // 5. Map claims to AuthenticatedUser
         ...
     }
 }
 ```
 
-### Claims valides
+### Validated Claims
 
 | Claim | Validation |
 |-------|-----------|
-| `iss` | Doit correspondre a `config.issuer` |
-| `aud` | Doit contenir `config.audience` |
-| `exp` | Doit etre dans le futur |
-| `nbf` | Doit etre dans le passe (si present) |
+| `iss` | Must match `config.issuer` |
+| `aud` | Must contain `config.audience` |
+| `exp` | Must be in the future |
+| `nbf` | Must be in the past (if present) |
 
-## 5. Extracteur Axum (`extractor.rs`)
+## 5. Axum Extractor (`extractor.rs`)
 
 ```rust
 // Note: these types are re-exported via r2e::prelude::*
@@ -147,7 +147,7 @@ use r2e_core::http::header::Parts;
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
-    // Le state doit fournir un JwtValidator
+    // The state must provide a JwtValidator
     JwtValidator: FromRef<S>,
 {
     type Rejection = HttpError;
@@ -156,36 +156,36 @@ where
         parts: &mut Parts,
         state: &S,
     ) -> Result<Self, Self::Rejection> {
-        // 1. Extraire le header Authorization
-        // 2. Verifier le schema "Bearer"
-        // 3. Extraire le token
-        // 4. Valider via JwtValidator
-        // 5. Retourner AuthenticatedUser ou 401
+        // 1. Extract the Authorization header
+        // 2. Verify the "Bearer" scheme
+        // 3. Extract the token
+        // 4. Validate via JwtValidator
+        // 5. Return AuthenticatedUser or 401
         ...
     }
 }
 ```
 
-### Extraction du token
+### Token Extraction
 
 ```
 Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
                       ^^^^^^^^^^^^^^^^^^^^^^^^^
-                      token extrait ici
+                      token extracted here
 ```
 
-### Erreurs possibles
+### Possible Errors
 
-| Cas | Code HTTP | Message |
-|-----|-----------|---------|
-| Header absent | 401 | Missing Authorization header |
-| Schema != Bearer | 401 | Invalid authorization scheme |
-| Token invalide | 401 | Invalid token |
-| Token expire | 401 | Token expired |
-| Kid inconnu | 401 | Unknown signing key |
-| Issuer/audience invalide | 401 | Token validation failed |
+| Case | HTTP Code | Message |
+|------|-----------|---------|
+| Missing header | 401 | Missing Authorization header |
+| Scheme != Bearer | 401 | Invalid authorization scheme |
+| Invalid token | 401 | Invalid token |
+| Expired token | 401 | Token expired |
+| Unknown kid | 401 | Unknown signing key |
+| Invalid issuer/audience | 401 | Token validation failed |
 
-## 6. Erreurs securite
+## 6. Security Errors
 
 ```rust
 pub enum SecurityError {
@@ -199,19 +199,19 @@ pub enum SecurityError {
 }
 ```
 
-Implementer `IntoResponse` pour `SecurityError` → toutes mappees en 401.
+Implement `IntoResponse` for `SecurityError` → all mapped to 401.
 
-## 7. Integration avec AppState
+## 7. Integration with AppState
 
-Pour que l'extracteur fonctionne, le `JwtValidator` doit etre accessible depuis l'etat Axum. Deux approches :
+For the extractor to work, the `JwtValidator` must be accessible from the Axum state. Two approaches:
 
-**Approche A** — `FromRef` : l'utilisateur implemente `FromRef<AppState<T>>` pour `JwtValidator`
+**Approach A** — `FromRef`: the user implements `FromRef<AppState<T>>` for `JwtValidator`
 
-**Approche B (recommandee)** — Extension Axum : stocker le `JwtValidator` dans les extensions du `Router` via une layer Tower.
+**Approach B (recommended)** — Axum extension: store the `JwtValidator` in the `Router` extensions via a Tower layer.
 
-## Critere de validation
+## Validation Criteria
 
-Test unitaire avec un JWT signe localement (cle RSA generee en test) :
+Unit test with a locally signed JWT (RSA key generated in test):
 
 ```rust
 #[tokio::test]
@@ -224,8 +224,8 @@ async fn test_jwt_validation() {
 }
 ```
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-- Requiert : etape 0, etape 1 (HttpError, AppState)
-- Bloque : etape 5 (example-app, pour l'integration complete)
-- Peut etre fait en parallele de l'etape 2 et 3
+- Requires: step 0, step 1 (HttpError, AppState)
+- Blocks: step 5 (example-app, for full integration)
+- Can be done in parallel with steps 2 and 3

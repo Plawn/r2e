@@ -1,53 +1,53 @@
-# Plan d'implementation R2E — Index des etapes
+# R2E Implementation Plan — Step Index
 
-## Vue d'ensemble
+## Overview
 
-| Etape | Fichier | Description |
-|-------|---------|-------------|
-| 0 | [00-workspace-setup.md](./00-workspace-setup.md) | Setup du workspace Cargo multi-crates |
-| 1 | [01-r2e-core-fondations.md](./01-r2e-core-fondations.md) | AppState, AppBuilder, error handling, trait Controller |
-| 2 | [02-macros-route-attributes.md](./02-macros-route-attributes.md) | Macros `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` |
-| 3 | [03-macros-controller.md](./03-macros-controller.md) | Macro `#[controller]` — parsing + generation de code |
-| 4 | [04-r2e-security.md](./04-r2e-security.md) | JWT, JWKS cache, extracteur `AuthenticatedUser` |
-| 5 | [05-router-assembly.md](./05-router-assembly.md) | Assemblage du router, layers Tower, serve helper |
-| 6 | [06-example-app.md](./06-example-app.md) | Application de demonstration complete |
-| 7 | [07-extensions-futures.md](./07-extensions-futures.md) | Extensions hors scope v0.1 |
+| Step | File | Description |
+|------|------|-------------|
+| 0 | [00-workspace-setup.md](./00-workspace-setup.md) | Cargo multi-crate workspace setup |
+| 1 | [01-r2e-core-fondations.md](./01-r2e-core-fondations.md) | AppState, AppBuilder, error handling, Controller trait |
+| 2 | [02-macros-route-attributes.md](./02-macros-route-attributes.md) | `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` macros |
+| 3 | [03-macros-controller.md](./03-macros-controller.md) | `#[controller]` macro — parsing + code generation |
+| 4 | [04-r2e-security.md](./04-r2e-security.md) | JWT, JWKS cache, `AuthenticatedUser` extractor |
+| 5 | [05-router-assembly.md](./05-router-assembly.md) | Router assembly, Tower layers, serve helper |
+| 6 | [06-example-app.md](./06-example-app.md) | Complete demo application |
+| 7 | [07-extensions-futures.md](./07-extensions-futures.md) | Extensions outside v0.1 scope |
 
-## Graphe de dependances
+## Dependency Graph
 
 ```
-Etape 0 (Workspace)
+Step 0 (Workspace)
   │
-  ├──→ Etape 1 (Core)
+  ├──→ Step 1 (Core)
   │       │
-  │       ├──→ Etape 5 (Router assembly)
+  │       ├──→ Step 5 (Router assembly)
   │       │       │
-  │       └──→ Etape 4 (Security) ──→ Etape 6 (Example app)
+  │       └──→ Step 4 (Security) ──→ Step 6 (Example app)
   │                                       ↑
-  ├──→ Etape 2 (Route attributes)         │
+  ├──→ Step 2 (Route attributes)          │
   │       │                               │
-  │       └──→ Etape 3 (Controller) ──────┘
+  │       └──→ Step 3 (Controller) ───────┘
   │
-  └──→ Etape 7 (Extensions futures — post v0.1)
+  └──→ Step 7 (Future extensions — post v0.1)
 ```
 
-## Parallelisation possible
+## Possible Parallelization
 
-Apres l'etape 0 :
+After step 0:
 
-- **Branche A** : Etape 1 → Etape 5
-- **Branche B** : Etape 2 → Etape 3
-- **Branche C** : Etape 1 → Etape 4
+- **Branch A**: Step 1 → Step 5
+- **Branch B**: Step 2 → Step 3
+- **Branch C**: Step 1 → Step 4
 
-Les branches A, B et C peuvent avancer en parallele. L'etape 6 (example-app) requiert la convergence des trois branches.
+Branches A, B, and C can progress in parallel. Step 6 (example-app) requires the convergence of all three branches.
 
-## Critere de validation global
+## Overall Validation Criteria
 
-L'example-app compile et repond correctement :
+The example-app compiles and responds correctly:
 
 ```bash
 cargo run -p example-app
-# Dans un autre terminal :
+# In another terminal:
 curl http://localhost:3000/health          # → "OK"
 curl -H "Authorization: Bearer <jwt>" \
      http://localhost:3000/users           # → [...users...]

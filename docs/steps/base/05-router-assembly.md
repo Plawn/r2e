@@ -1,29 +1,29 @@
-# Etape 5 — Assemblage du router et wiring
+# Step 5 — Router Assembly and Wiring
 
-## Objectif
+## Goal
 
-Completer le `AppBuilder` pour qu'il assemble automatiquement les routes des controllers, configure les layers Tower (CORS, tracing, securite), et produise un serveur Axum fonctionnel.
+Complete the `AppBuilder` so that it automatically assembles controller routes, configures Tower layers (CORS, tracing, security), and produces a functional Axum server.
 
-## Fichiers a modifier/creer
+## Files to Modify/Create
 
 ```
 r2e-core/src/
-  builder.rs          # Enrichir AppBuilder
-  layers.rs           # Configuration des layers Tower
+  builder.rs          # Enhance AppBuilder
+  layers.rs           # Tower layer configuration
   lib.rs              # Re-export layers
 ```
 
-## 1. AppBuilder enrichi (`builder.rs`)
+## 1. Enhanced AppBuilder (`builder.rs`)
 
-### API finale
+### Final API
 
 ```rust
 let app = AppBuilder::new()
     .with_state(services)
     .with_security(security_config)        // Configure JWT/OIDC
     .with_cors(cors_config)                // Configure CORS
-    .with_tracing()                        // Active le tracing Tower
-    .register_controller::<UserResource>() // Enregistre un controller
+    .with_tracing()                        // Enable Tower tracing
+    .register_controller::<UserResource>() // Register a controller
     .register_controller::<HealthResource>()
     .build();
 ```
@@ -37,9 +37,9 @@ pub fn register_controller<C: Controller<T>>(mut self) -> Self {
 }
 ```
 
-Utilise le trait `Controller<T>` implemente par les macros.
+Uses the `Controller<T>` trait implemented by the macros.
 
-### `build()` — assemblage final
+### `build()` — Final Assembly
 
 ```rust
 pub fn build(self) -> axum::Router {
@@ -47,22 +47,22 @@ pub fn build(self) -> axum::Router {
 
     let mut router = axum::Router::new();
 
-    // Merge toutes les routes des controllers
+    // Merge all controller routes
     for r in self.routes {
         router = router.merge(r);
     }
 
-    // Appliquer le state
+    // Apply the state
     let router = router.with_state(state);
 
-    // Appliquer les layers (ordre important : dernier ajoute = premier execute)
+    // Apply layers (order matters: last added = first executed)
     let router = self.apply_layers(router);
 
     router
 }
 ```
 
-## 2. Layers Tower (`layers.rs`)
+## 2. Tower Layers (`layers.rs`)
 
 ### CORS
 
@@ -77,7 +77,7 @@ pub fn default_cors() -> CorsLayer {
 }
 ```
 
-Permettre aussi une configuration custom via `CorsConfig`.
+Also allow custom configuration via `CorsConfig`.
 
 ### Tracing
 
@@ -91,23 +91,23 @@ pub fn default_trace() -> TraceLayer<...> {
 
 ### Security Layer
 
-Optionnel — si `with_security()` est appele, injecter le `JwtValidator` dans les extensions de requete ou dans le state.
+Optional — if `with_security()` is called, inject the `JwtValidator` into request extensions or into the state.
 
-## 3. Route de healthcheck
+## 3. Health Check Route
 
-Fournir un controller built-in optionnel :
+Provide an optional built-in controller:
 
 ```rust
-// Dans r2e-core
+// In r2e-core
 pub async fn health_handler() -> &'static str {
     "OK"
 }
 
-// Enregistre par defaut si active
+// Registered by default if enabled
 router = router.route("/health", axum::routing::get(health_handler));
 ```
 
-## 4. Serve helper
+## 4. Serve Helper
 
 ```rust
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
@@ -121,17 +121,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 }
 ```
 
-## 5. Macro `#[application]` (optionnelle)
+## 5. `#[application]` Macro (optional)
 
-Si implementee, `#[application]` pourrait :
+If implemented, `#[application]` could:
 
-1. Generer un `main()` qui construit l'AppBuilder
-2. Scanner les controllers declares dans le meme crate
-3. Appeler `.serve()` automatiquement
+1. Generate a `main()` that builds the AppBuilder
+2. Scan the controllers declared in the same crate
+3. Call `.serve()` automatically
 
-Pour la v0.1, cette macro est **optionnelle**. L'utilisateur peut ecrire le `main()` manuellement.
+For v0.1, this macro is **optional**. The user can write the `main()` manually.
 
-## Critere de validation
+## Validation Criteria
 
 ```rust
 #[tokio::main]
@@ -147,7 +147,7 @@ async fn main() {
 // curl http://localhost:3000/hello → 200 OK
 ```
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-- Requiert : etape 1 (AppBuilder base), etape 3 (trait Controller implemente)
-- Bloque : etape 6 (example-app)
+- Requires: step 1 (base AppBuilder), step 3 (Controller trait implemented)
+- Blocks: step 6 (example-app)

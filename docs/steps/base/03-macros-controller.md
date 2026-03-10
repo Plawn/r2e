@@ -1,26 +1,26 @@
-# Etape 3 — r2e-macros : macro `#[controller]`
+# Step 3 — r2e-macros: `#[controller]` Macro
 
-## Objectif
+## Goal
 
-Implementer la macro `#[controller]` — la piece maitresse du framework. Elle transforme un `impl` block annote en handlers Axum complets avec extraction de state et de donnees request-scoped.
+Implement the `#[controller]` macro — the centerpiece of the framework. It transforms an annotated `impl` block into complete Axum handlers with state extraction and request-scoped data.
 
-## Fichiers a creer/modifier
+## Files to Create/Modify
 
 ```
 r2e-macros/src/
-  lib.rs              # Ajout de #[controller]
-  controller.rs       # Logique principale de la macro
-  parsing.rs          # Extraction des champs inject/identity et des methodes routes
-  codegen.rs          # Generation de code (handlers + impl Controller)
+  lib.rs              # Add #[controller]
+  controller.rs       # Main macro logic
+  parsing.rs          # Extraction of inject/identity fields and route methods
+  codegen.rs          # Code generation (handlers + impl Controller)
 ```
 
-## 1. Vue d'ensemble du pipeline
+## 1. Pipeline Overview
 
 ```
 Input:                              Output:
-#[controller]                       1. Struct originale (inchangee)
-impl UserResource {                 2. impl UserResource { methodes originales }
-    #[inject]                       3. Handlers Axum libres (fonctions async)
+#[controller]                       1. Original struct (unchanged)
+impl UserResource {                 2. impl UserResource { original methods }
+    #[inject]                       3. Free-standing Axum handlers (async functions)
     user_service: UserService,      4. impl Controller<Services> for UserResource
                                     5. fn routes() -> Router
     #[identity]
@@ -31,29 +31,29 @@ impl UserResource {                 2. impl UserResource { methodes originales }
 }
 ```
 
-## 2. Phase de parsing (`parsing.rs`)
+## 2. Parsing Phase (`parsing.rs`)
 
-### Entree
+### Input
 
-La macro recoit un `impl` block complet via `syn::parse`.
+The macro receives a complete `impl` block via `syn::parse`.
 
-### Donnees a extraire
+### Data to Extract
 
 ```rust
 pub struct ControllerDef {
-    /// Nom du type (ex: UserResource)
+    /// Type name (e.g., UserResource)
     pub name: syn::Ident,
 
-    /// Champs #[inject] — app-scoped
+    /// #[inject] fields — app-scoped
     pub injected_fields: Vec<InjectedField>,
 
-    /// Champs #[identity] — request-scoped
+    /// #[identity] fields — request-scoped
     pub identity_fields: Vec<IdentityField>,
 
-    /// Methodes annotees avec un attribut de route
+    /// Methods annotated with a route attribute
     pub route_methods: Vec<RouteMethod>,
 
-    /// Methodes non-annotees (helpers prives, etc.)
+    /// Non-annotated methods (private helpers, etc.)
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -74,21 +74,21 @@ pub struct RouteMethod {
 }
 ```
 
-### Logique de parsing
+### Parsing Logic
 
-1. **Identifier le type** : extraire `Self` type du `impl` block
-2. **Classifier les items** :
-   - Item avec `#[inject]` → `InjectedField`
-   - Item avec `#[identity]` → `IdentityField`
-   - Methode avec `#[get(...)]` / `#[post(...)]` / etc. → `RouteMethod`
-   - Autre methode → `other_methods`
+1. **Identify the type**: extract the `Self` type from the `impl` block
+2. **Classify items**:
+   - Item with `#[inject]` → `InjectedField`
+   - Item with `#[identity]` → `IdentityField`
+   - Method with `#[get(...)]` / `#[post(...)]` / etc. → `RouteMethod`
+   - Other method → `other_methods`
 
-### Gestion des champs dans un `impl` block
+### Handling Fields in an `impl` Block
 
-Probleme : Rust standard ne permet pas de declarer des champs dans un `impl` block. Deux strategies :
+Problem: Standard Rust does not allow declaring fields in an `impl` block. Two strategies:
 
-**Strategie A** — Syntaxe custom dans le `impl` block :
-La macro parse des declarations `field: Type` dans le bloc et les retire du code genere. L'utilisateur ecrit :
+**Strategy A** — Custom syntax in the `impl` block:
+The macro parses `field: Type` declarations in the block and removes them from the generated code. The user writes:
 
 ```rust
 #[controller]
@@ -99,10 +99,10 @@ impl UserResource {
 }
 ```
 
-La macro doit parser ces items manuellement car `syn` ne les reconnaitra pas comme des `ImplItem` valides. Utiliser `syn::parse::Parse` custom.
+The macro must parse these items manually since `syn` will not recognize them as valid `ImplItem`s. Use a custom `syn::parse::Parse`.
 
-**Strategie B (alternative)** — Struct separee + attributs :
-L'utilisateur definit la struct normalement et `#[controller]` s'applique sur le `impl`. Les injections sont declarees sur la struct :
+**Strategy B (alternative)** — Separate struct + attributes:
+The user defines the struct normally and `#[controller]` is applied to the `impl`. Injections are declared on the struct:
 
 ```rust
 #[injectable]
@@ -120,41 +120,41 @@ impl UserResource {
 }
 ```
 
-> **Recommandation** : Strategie A pour rester fidele a la DX cible du plan, meme si elle requiert un parsing custom.
+> **Recommendation**: Strategy A to stay true to the target DX from the plan, even though it requires custom parsing.
 
-## 3. Phase de generation de code (`codegen.rs`)
+## 3. Code Generation Phase (`codegen.rs`)
 
-### Pour chaque `RouteMethod`, generer un handler Axum
+### For each `RouteMethod`, generate an Axum handler
 
-Entree :
+Input:
 ```rust
 #[get("/users")]
 async fn list(&self) -> Json<Vec<User>>
 ```
 
-Sortie :
+Output:
 ```rust
 async fn __r2e_handler_list(
     axum::extract::State(state): axum::extract::State<AppState<Services>>,
-    user: AuthenticatedUser,    // chaque #[identity] field
+    user: AuthenticatedUser,    // each #[identity] field
 ) -> impl axum::response::IntoResponse {
     let controller = UserResource {
-        user_service: state.get().user_service.clone(),  // chaque #[inject] field
-        user,                                             // chaque #[identity] field
+        user_service: state.get().user_service.clone(),  // each #[inject] field
+        user,                                             // each #[identity] field
     };
     controller.list().await
 }
 ```
 
-### Regles de generation
+### Generation Rules
 
-| Source | Dans le handler |
+| Source | In the handler |
 |--------|----------------|
 | `#[inject] foo: Foo` | `foo: state.get().foo.clone()` |
-| `#[identity] bar: Bar` | Parametre d'extraction : `bar: Bar` |
-| Parametres de la methode (hors `&self`) | Parametres d'extraction supplementaires (ex: `Path(id): Path<u64>`, `Json(body): Json<T>`) |
+| `#[identity] bar: Bar` | Extraction parameter: `bar: Bar` |
+| Method parameters (besides `&self`) | Additional extraction parameters (e.g., `Path(id): Path<u64>`, `Json(body): Json<T>`) |
 
-### Generer `impl Controller<T>` + `fn routes()`
+### Generate `impl Controller<T>` + `fn routes()`
 
 ```rust
 impl Controller<Services> for UserResource {
@@ -167,32 +167,32 @@ impl Controller<Services> for UserResource {
 }
 ```
 
-### Le type `Services` (AppState inner)
+### The `Services` Type (AppState inner)
 
-Le type concret de l'AppState inner doit etre connu par la macro. Deux options :
+The concrete type of the AppState inner must be known by the macro. Two options:
 
-**Option 1** — Parametre de la macro : `#[controller(state = Services)]`
-**Option 2** — Convention de nommage / type alias global
-**Option 3** — Inference depuis les champs `#[inject]` (complexe)
+**Option 1** — Macro parameter: `#[controller(state = Services)]`
+**Option 2** — Naming convention / global type alias
+**Option 3** — Inference from `#[inject]` fields (complex)
 
-> **Recommandation** : Option 1 pour la clarte.
+> **Recommendation**: Option 1 for clarity.
 
-## 4. Gestion des parametres de methode
+## 4. Handling Method Parameters
 
-Les methodes de controller peuvent avoir des parametres au-dela de `&self` :
+Controller methods can have parameters beyond `&self`:
 
 ```rust
 #[get("/users/:id")]
 async fn get_by_id(&self, Path(id): Path<u64>) -> Json<User>
 ```
 
-Ces parametres doivent etre **transferes tels quels** comme parametres du handler Axum genere. La macro doit :
+These parameters must be **forwarded as-is** as parameters of the generated Axum handler. The macro must:
 
-1. Retirer `&self` de la liste des parametres
-2. Conserver tous les autres parametres comme parametres du handler
-3. Ajouter les parametres d'extraction identity en plus
+1. Remove `&self` from the parameter list
+2. Keep all other parameters as handler parameters
+3. Add identity extraction parameters as well
 
-## 5. Integration dans `lib.rs`
+## 5. Integration in `lib.rs`
 
 ```rust
 mod controller;
@@ -204,21 +204,21 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     controller::expand(args, input)
 }
 
-// Macros auxiliaires
+// Auxiliary macros
 #[proc_macro_attribute]
 pub fn inject(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input // no-op, lu par #[controller]
+    input // no-op, read by #[controller]
 }
 
 #[proc_macro_attribute]
 pub fn identity(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input // no-op, lu par #[controller]
+    input // no-op, read by #[controller]
 }
 ```
 
-## Critere de validation
+## Validation Criteria
 
-Test de compilation end-to-end (sans serveur) :
+End-to-end compilation test (without a server):
 
 ```rust
 use r2e_macros::{controller, inject, identity, get};
@@ -242,11 +242,11 @@ impl HelloController {
     }
 }
 
-// Verifie que Controller est implemente
+// Verify that Controller is implemented
 let router = HelloController::routes();
 ```
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-- Requiert : etape 0, etape 1 (AppState, Controller trait), etape 2 (attributs de route)
-- Bloque : etape 5 (example-app)
+- Requires: step 0, step 1 (AppState, Controller trait), step 2 (route attributes)
+- Blocks: step 5 (example-app)

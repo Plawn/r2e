@@ -1,22 +1,22 @@
 # Feature 2 — Validation
 
-## Objectif
+## Goal
 
-Valider automatiquement les corps de requete JSON avec des regles declaratives, et retourner des reponses 400 structurees en cas d'echec.
+Automatically validate JSON request bodies with declarative rules, and return structured 400 responses on failure.
 
-## Concepts cles
+## Key concepts
 
-### Validation automatique
+### Automatic validation
 
-R2E valide automatiquement les parametres de handler qui derivent `garde::Validate`. Il suffit de deriver `Validate` sur le type et d'utiliser `Json<T>` — la validation se fait de maniere transparente dans le code genere.
+R2E automatically validates handler parameters that derive `garde::Validate`. Simply derive `Validate` on the type and use `Json<T>` — validation is performed transparently in the generated code.
 
-### Crate garde
+### The garde crate
 
-R2E utilise la crate `garde` pour declarer les regles de validation sur les structs. Garde offre une verification compile-time des regles et un systeme de contexte type.
+R2E uses the `garde` crate to declare validation rules on structs. Garde provides compile-time rule verification and a typed context system.
 
-## Utilisation
+## Usage
 
-### 1. Definir un modele avec des regles de validation
+### 1. Define a model with validation rules
 
 ```rust
 use serde::Deserialize;
@@ -32,21 +32,21 @@ pub struct CreateUserRequest {
 }
 ```
 
-### Regles disponibles (crate `garde`)
+### Available rules (garde crate)
 
-| Regle | Attribut | Exemple |
-|-------|---------|---------|
-| Longueur | `#[garde(length(min=1, max=100))]` | Chaines |
-| Email | `#[garde(email)]` | Format email |
-| URL | `#[garde(url)]` | Format URL |
-| Range | `#[garde(range(min=0, max=1000))]` | Nombres |
-| Pattern | `#[garde(pattern("regex"))]` | Patterns custom |
-| Custom | `#[garde(custom(my_fn))]` | Logique arbitraire |
-| Skip | `#[garde(skip)]` | Ne pas valider ce champ |
+| Rule | Attribute | Example |
+|------|----------|---------|
+| Length | `#[garde(length(min=1, max=100))]` | Strings |
+| Email | `#[garde(email)]` | Email format |
+| URL | `#[garde(url)]` | URL format |
+| Range | `#[garde(range(min=0, max=1000))]` | Numbers |
+| Pattern | `#[garde(pattern("regex"))]` | Custom patterns |
+| Custom | `#[garde(custom(my_fn))]` | Arbitrary logic |
+| Skip | `#[garde(skip)]` | Do not validate this field |
 
-### 2. Utiliser dans un handler
+### 2. Use in a handler
 
-Utiliser `Json<T>` normalement — la validation est automatique :
+Use `Json<T>` as usual — validation is automatic:
 
 ```rust
 use r2e::prelude::*;
@@ -65,16 +65,16 @@ impl UserController {
         &self,
         Json(body): Json<CreateUserRequest>,
     ) -> Json<User> {
-        // `body` est garanti valide ici
+        // `body` is guaranteed to be valid here
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
     }
 }
 ```
 
-### 3. Reponse en cas d'erreur de validation
+### 3. Response on validation error
 
-Si la validation echoue, R2E retourne automatiquement :
+If validation fails, R2E automatically returns:
 
 ```http
 HTTP/1.1 400 Bad Request
@@ -97,9 +97,9 @@ Content-Type: application/json
 }
 ```
 
-### 4. Reponse en cas de JSON invalide
+### 4. Response on invalid JSON
 
-Si le corps n'est pas du JSON valide (erreur de deserialisation), une 400 standard est retournee :
+If the body is not valid JSON (deserialization error), a standard 400 is returned:
 
 ```json
 {
@@ -107,9 +107,9 @@ Si le corps n'est pas du JSON valide (erreur de deserialisation), une 400 standa
 }
 ```
 
-## Params — extraction agregee de parametres
+## Params — aggregated parameter extraction
 
-`#[derive(Params)]` permet de regrouper path, query et header dans un seul struct (equivalent de `@BeanParam` en JAX-RS). Combine avec `garde::Validate`, tous les parametres sont extraits **et** valides en une seule etape.
+`#[derive(Params)]` allows grouping path, query, and header into a single struct (equivalent to `@BeanParam` in JAX-RS). Combined with `garde::Validate`, all parameters are extracted **and** validated in a single step.
 
 ### Definition
 
@@ -133,49 +133,49 @@ pub struct GetUserParams {
 }
 ```
 
-### Attributs disponibles
+### Available attributes
 
-| Attribut | Source | Nom par defaut |
-|----------|--------|---------------|
-| `#[path]` | Segments du path | Nom du champ |
-| `#[path(name = "userId")]` | Segments du path | Nom custom |
-| `#[query]` | Query string | Nom du champ |
-| `#[query(name = "q")]` | Query string | Nom custom |
-| `#[header("X-Custom")]` | Headers HTTP | Nom explicite (obligatoire) |
+| Attribute | Source | Default name |
+|-----------|--------|-------------|
+| `#[path]` | Path segments | Field name |
+| `#[path(name = "userId")]` | Path segments | Custom name |
+| `#[query]` | Query string | Field name |
+| `#[query(name = "q")]` | Query string | Custom name |
+| `#[header("X-Custom")]` | HTTP headers | Explicit name (required) |
 
-- `Option<T>` → parametre optionnel (absent = `None`)
-- `T` non-Option → parametre requis (absent = 400 Bad Request)
-- `#[param(default)]` → utilise `Default::default()` si le parametre est absent
-- `#[param(default = expr)]` → utilise l'expression donnee si absent
-- Conversion via `FromStr` pour les types non-String
+- `Option<T>` → optional parameter (absent = `None`)
+- Non-Option `T` → required parameter (absent = 400 Bad Request)
+- `#[param(default)]` → uses `Default::default()` if the parameter is absent
+- `#[param(default = expr)]` → uses the given expression if absent
+- Conversion via `FromStr` for non-String types
 
-### Utilisation dans un handler
+### Usage in a handler
 
 ```rust
 #[routes]
 impl UserController {
     #[get("/{id}")]
     async fn get_user(&self, params: GetUserParams) -> Json<User> {
-        // params.id, params.page, params.tenant_id extraits et valides
+        // params.id, params.page, params.tenant_id extracted and validated
         let user = self.user_service.find(params.id).await;
         Json(user)
     }
 }
 ```
 
-### Integration OpenAPI
+### OpenAPI integration
 
-`#[derive(Params)]` genere egalement une implementation de `ParamsMetadata`, qui alimente les metadonnees de parametres (nom, emplacement, type, requis) dans la spec OpenAPI. Quand un struct `Params` est utilise comme parametre de handler, ses champs apparaissent automatiquement dans le `/openapi.json` genere — aucune annotation manuelle necessaire.
+`#[derive(Params)]` also generates a `ParamsMetadata` implementation, which feeds parameter metadata (name, location, type, required) into the OpenAPI spec. When a `Params` struct is used as a handler parameter, its fields automatically appear in the generated `/openapi.json` — no manual annotation needed.
 
-## Fonctionnement interne
+## Internal mechanism
 
-Le code genere par `#[routes]` utilise un mecanisme d'autoref specialization :
+The code generated by `#[routes]` uses an autoref specialization mechanism:
 
-1. Deserialisation via `Json<T>` (Axum standard)
-2. Validation automatique via `__AutoValidator` — si le type derive `Validate`, la validation est executee ; sinon, c'est un no-op (zero overhead)
-3. Si echec → reponse 400 avec le detail des erreurs par champ
+1. Deserialization via `Json<T>` (standard Axum)
+2. Automatic validation via `__AutoValidator` — if the type derives `Validate`, validation is performed; otherwise, it is a no-op (zero overhead)
+3. On failure → 400 response with per-field error details
 
-Les types sans `#[derive(Validate)]` fonctionnent normalement — aucune validation n'est executee.
+Types without `#[derive(Validate)]` work normally — no validation is performed.
 
 ## Dependencies
 
@@ -185,24 +185,24 @@ r2e = "0.1"
 garde = { version = "0.22", features = ["derive", "email"] }
 ```
 
-La validation est toujours disponible — plus besoin de feature flag.
+Validation is always available — no feature flag needed.
 
-## Critere de validation
+## Validation criteria
 
 ```bash
-# Requete valide → 200
+# Valid request → 200
 curl -X POST http://localhost:3000/users \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"name":"Alice","email":"alice@example.com"}'
 
-# Email invalide → 400
+# Invalid email → 400
 curl -X POST http://localhost:3000/users \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"name":"Alice","email":"not-an-email"}'
 
-# Nom vide → 400
+# Empty name → 400
 curl -X POST http://localhost:3000/users \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \

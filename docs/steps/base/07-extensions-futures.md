@@ -1,8 +1,8 @@
-# Etape 7 — Extensions futures (hors scope v0.1)
+# Step 7 — Future Extensions (outside v0.1 scope)
 
-## Objectif
+## Goal
 
-Documenter les extensions envisagees pour les versions suivantes. Ces fonctionnalites ne sont **pas bloquantes** pour le livrable initial.
+Document planned extensions for subsequent versions. These features are **not blocking** for the initial deliverable.
 
 ---
 
@@ -10,9 +10,9 @@ Documenter les extensions envisagees pour les versions suivantes. Ces fonctionna
 
 ### Description
 
-Macro d'attribut sur une methode de controller qui restreint l'acces aux utilisateurs ayant au moins un des roles specifies.
+Attribute macro on a controller method that restricts access to users having at least one of the specified roles.
 
-### Implementation envisagee
+### Planned Implementation
 
 ```rust
 #[get("/admin/users")]
@@ -20,7 +20,7 @@ Macro d'attribut sur une methode de controller qui restreint l'acces aux utilisa
 async fn admin_list(&self) -> Json<Vec<User>> { ... }
 ```
 
-La macro `#[controller]` genere un guard supplementaire dans le handler :
+The `#[controller]` macro generates an additional guard in the handler:
 
 ```rust
 if !user.roles.iter().any(|r| ["admin"].contains(&r.as_str())) {
@@ -28,9 +28,9 @@ if !user.roles.iter().any(|r| ["admin"].contains(&r.as_str())) {
 }
 ```
 
-### Complexite
+### Complexity
 
-Faible — ajout d'un attribut supplementaire a parser dans la macro controller.
+Low — adding an additional attribute to parse in the controller macro.
 
 ---
 
@@ -38,28 +38,28 @@ Faible — ajout d'un attribut supplementaire a parser dans la macro controller.
 
 ### Description
 
-Enveloppe l'execution de la methode dans une transaction SQL. Commit automatique en cas de succes, rollback en cas d'erreur.
+Wraps method execution in an SQL transaction. Automatic commit on success, rollback on error.
 
-### Prerequis
+### Prerequisites
 
-- Integration SQLx dans `r2e-core`
-- Pool de connexion dans l'AppState
-- Trait `Transactional` pour les services
+- SQLx integration in `r2e-core`
+- Connection pool in AppState
+- `Transactional` trait for services
 
-### Implementation envisagee
+### Planned Implementation
 
 ```rust
 #[post("/users")]
 #[transactional]
 async fn create(&self, Json(body): Json<CreateUser>) -> Json<User> {
-    // Tout est dans une transaction
+    // Everything runs inside a transaction
     self.user_service.create(&body).await?
 }
 ```
 
-### Complexite
+### Complexity
 
-Moyenne — necessite de passer un `Transaction` ou `&mut PgConnection` aux services.
+Medium — requires passing a `Transaction` or `&mut PgConnection` to services.
 
 ---
 
@@ -67,9 +67,9 @@ Moyenne — necessite de passer un `Transaction` ou `&mut PgConnection` aux serv
 
 ### Description
 
-Injection de valeurs de configuration au compile-time ou au runtime depuis un fichier `application.yaml` ou des variables d'environnement.
+Injection of configuration values at compile-time or runtime from an `application.yaml` file or environment variables.
 
-### Implementation envisagee
+### Planned Implementation
 
 ```rust
 #[controller(state = Services)]
@@ -84,52 +84,52 @@ impl MyController {
 }
 ```
 
-### Complexite
+### Complexity
 
-Moyenne — necessite un systeme de configuration (serde_yaml, dotenv, etc.) integre a l'AppBuilder.
-
----
-
-## 4. Generation OpenAPI automatique
-
-### Description
-
-Generer une spec OpenAPI 3.x a partir des controllers annotes.
-
-### Implementation envisagee
-
-- Extraire les routes, methodes HTTP, types de requete/reponse
-- Generer un `openapi.json` ou le servir sur `/openapi.json`
-- Integrer une interface de documentation API sur `/docs`
-
-### Complexite
-
-Elevee — necessite l'introspection des types Serde pour generer les schemas JSON.
+Medium — requires a configuration system (serde_yaml, dotenv, etc.) integrated into the AppBuilder.
 
 ---
 
-## 5. Dev mode / Hot reload
+## 4. Automatic OpenAPI Generation
 
 ### Description
 
-Recompilation et redemarrage automatique lors de modifications de fichiers source.
+Generate an OpenAPI 3.x spec from annotated controllers.
 
-### Implementation envisagee
+### Planned Implementation
 
-- Utilisation de `cargo-watch` ou `watchexec` en externe
-- Ou integration d'un watcher dans le binaire de dev
+- Extract routes, HTTP methods, request/response types
+- Generate an `openapi.json` or serve it at `/openapi.json`
+- Integrate an API documentation interface at `/docs`
 
-### Complexite
+### Complexity
 
-Faible si externe (juste de la documentation), elevee si integre.
+High — requires introspection of Serde types to generate JSON schemas.
 
 ---
 
-## 6. Middleware custom declaratif
+## 5. Dev Mode / Hot Reload
 
 ### Description
 
-Permettre de declarer des middlewares Tower via des macros :
+Automatic recompilation and restart when source files are modified.
+
+### Planned Implementation
+
+- Use `cargo-watch` or `watchexec` externally
+- Or integrate a watcher into the dev binary
+
+### Complexity
+
+Low if external (just documentation), high if integrated.
+
+---
+
+## 6. Declarative Custom Middleware
+
+### Description
+
+Allow declaring Tower middlewares via macros:
 
 ```rust
 #[middleware]
@@ -141,19 +141,19 @@ async fn log_request(req: Request, next: Next) -> Response {
 }
 ```
 
-### Complexite
+### Complexity
 
-Moyenne — wrapper autour des layers Tower.
+Medium — wrapper around Tower layers.
 
 ---
 
-## Priorite suggeree
+## Suggested Priority
 
-| Extension | Priorite | Effort |
+| Extension | Priority | Effort |
 |-----------|----------|--------|
-| `#[roles]` | Haute | Faible |
-| `#[config]` | Haute | Moyen |
-| `#[transactional]` | Moyenne | Moyen |
-| OpenAPI | Moyenne | Eleve |
-| Middleware custom | Basse | Moyen |
-| Hot reload | Basse | Faible (externe) |
+| `#[roles]` | High | Low |
+| `#[config]` | High | Medium |
+| `#[transactional]` | Medium | Medium |
+| OpenAPI | Medium | High |
+| Custom middleware | Low | Medium |
+| Hot reload | Low | Low (external) |

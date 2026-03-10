@@ -1,38 +1,38 @@
-# Feature 3 — Gestion d'erreurs
+# Feature 3 — Error Handling
 
-## Objectif
+## Goal
 
-Fournir un systeme d'erreurs structure qui convertit automatiquement les erreurs en reponses HTTP JSON coherentes, avec support pour les erreurs custom et la capture des panics.
+Provide a structured error system that automatically converts errors into consistent JSON HTTP responses, with support for custom errors and panic capture.
 
-## Concepts cles
+## Key concepts
 
 ### HttpError
 
-`HttpError` est l'enum centrale qui represente toutes les erreurs applicatives. Chaque variant correspond a un code HTTP specifique.
+`HttpError` is the central enum representing all application errors. Each variant corresponds to a specific HTTP status code.
 
 ### map_error!
 
-Macro pour generer des implementations `From<E> for HttpError` en une ligne.
+Macro to generate `From<E> for HttpError` implementations in a single line.
 
 ### Catch panic
 
-Layer Tower qui capture les panics dans les handlers et les convertit en reponses 500.
+Tower layer that captures panics in handlers and converts them into 500 responses.
 
-## Variants d'HttpError
+## HttpError variants
 
-| Variant | Code HTTP | Usage |
+| Variant | HTTP Code | Usage |
 |---------|-----------|-------|
-| `NotFound(String)` | 404 | Ressource introuvable |
-| `Unauthorized(String)` | 401 | Authentification requise/invalide |
-| `Forbidden(String)` | 403 | Droits insuffisants |
-| `BadRequest(String)` | 400 | Requete mal formee |
-| `Internal(String)` | 500 | Erreur serveur |
-| `Validation(ValidationErrorResponse)` | 400 | Echec de validation (feature `validation`) |
-| `Custom { status, body }` | Custom | Code HTTP et body JSON arbitraires |
+| `NotFound(String)` | 404 | Resource not found |
+| `Unauthorized(String)` | 401 | Authentication required/invalid |
+| `Forbidden(String)` | 403 | Insufficient permissions |
+| `BadRequest(String)` | 400 | Malformed request |
+| `Internal(String)` | 500 | Server error |
+| `Validation(ValidationErrorResponse)` | 400 | Validation failure (feature `validation`) |
+| `Custom { status, body }` | Custom | Arbitrary HTTP code and JSON body |
 
-## Utilisation
+## Usage
 
-### 1. Retourner des erreurs standard
+### 1. Returning standard errors
 
 ```rust
 #[get("/users/{id}")]
@@ -47,7 +47,7 @@ async fn get_by_id(
 }
 ```
 
-Reponse generee :
+Generated response:
 
 ```http
 HTTP/1.1 404 Not Found
@@ -56,9 +56,9 @@ Content-Type: application/json
 {"error": "User not found"}
 ```
 
-### 2. Erreurs custom avec code HTTP arbitraire
+### 2. Custom errors with arbitrary HTTP code
 
-Le variant `Custom` permet de retourner n'importe quel code HTTP avec un body JSON libre :
+The `Custom` variant allows returning any HTTP code with a free-form JSON body:
 
 ```rust
 #[get("/error/custom")]
@@ -73,7 +73,7 @@ async fn custom_error(&self) -> Result<axum::Json<()>, r2e_core::HttpError> {
 }
 ```
 
-Reponse :
+Response:
 
 ```http
 HTTP/1.1 418 I'm a Teapot
@@ -82,21 +82,21 @@ Content-Type: application/json
 {"error": "I'm a teapot", "code": 418}
 ```
 
-### 3. Conversions automatiques avec `From`
+### 3. Automatic conversions with `From`
 
-`HttpError` implemente `From` pour les types d'erreur courants, ce qui permet l'usage de `?` :
+`HttpError` implements `From` for common error types, enabling the use of `?`:
 
 ```rust
-// Inclus par defaut
+// Included by default
 impl From<std::io::Error> for HttpError { ... }
 
-// Inclus avec le feature flag "sqlx"
+// Included with the "sqlx" feature flag
 impl From<sqlx::Error> for HttpError { ... }
 ```
 
-### 4. Macro `map_error!`
+### 4. The `map_error!` macro
 
-Pour ajouter des conversions supplementaires dans votre code applicatif :
+To add additional conversions in your application code:
 
 ```rust
 r2e_core::map_error! {
@@ -105,7 +105,7 @@ r2e_core::map_error! {
 }
 ```
 
-Cela genere :
+This generates:
 
 ```rust
 impl From<serde_json::Error> for HttpError {
@@ -115,20 +115,20 @@ impl From<serde_json::Error> for HttpError {
 }
 ```
 
-**Note** : `map_error!` genere des `impl From` — les deux types (erreur source et `HttpError`) doivent respecter la regle de coherence (orphan rule). Utilisez-le uniquement pour des types d'erreurs definis dans votre crate, ou dans la crate ou `HttpError` est defini.
+**Note**: `map_error!` generates `impl From` — both types (source error and `HttpError`) must respect the coherence rule (orphan rule). Use it only for error types defined in your crate, or in the crate where `HttpError` is defined.
 
-### 5. Catch panic (layer Tower)
+### 5. Catch panic (Tower layer)
 
-Activer la capture des panics dans l'`AppBuilder` :
+Enable panic capture in the `AppBuilder`:
 
 ```rust
 AppBuilder::new()
     .with_state(services)
-    .with_error_handling()  // Active catch_panic_layer
+    .with_error_handling()  // Enables catch_panic_layer
     // ...
 ```
 
-Si un handler panique, au lieu d'un crash, le client recoit :
+If a handler panics, instead of a crash, the client receives:
 
 ```http
 HTTP/1.1 500 Internal Server Error
@@ -137,11 +137,11 @@ Content-Type: application/json
 {"error": "Internal server error"}
 ```
 
-## Combinaison avec d'autres features
+## Combination with other features
 
-### Avec Validation (#2)
+### With Validation (#2)
 
-Quand le feature flag `validation` est actif, `HttpError::Validation` fournit une reponse 400 structuree avec le detail par champ :
+When the `validation` feature flag is active, `HttpError::Validation` provides a structured 400 response with per-field details:
 
 ```json
 {
@@ -152,28 +152,28 @@ Quand le feature flag `validation` est actif, `HttpError::Validation` fournit un
 }
 ```
 
-### Avec `#[transactional]` (#4)
+### With `#[transactional]` (#4)
 
-Les erreurs dans un bloc transactionnel provoquent un rollback automatique de la transaction :
+Errors within a transactional block trigger an automatic rollback of the transaction:
 
 ```rust
 #[post("/users/db")]
 #[transactional]
 async fn create_in_db(&self, ...) -> Result<Json<User>, HttpError> {
-    // Si une erreur survient ici, tx.rollback() est appele automatiquement
+    // If an error occurs here, tx.rollback() is called automatically
     sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
     Ok(...)
 }
 ```
 
-## Critere de validation
+## Validation criteria
 
 ```bash
-# Erreur 404
+# 404 error
 curl -H "Authorization: Bearer <token>" http://localhost:3000/users/999
 # → {"error":"User not found"}
 
-# Erreur 418 custom
+# Custom 418 error
 curl -H "Authorization: Bearer <token>" http://localhost:3000/error/custom
 # → {"error":"I'm a teapot","code":418}
 ```

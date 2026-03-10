@@ -1,8 +1,8 @@
-# Etape 6 — Application exemple complete
+# Step 6 — Complete Example Application
 
-## Objectif
+## Goal
 
-Creer une application de demonstration fonctionnelle qui utilise tous les composants du framework : controllers, injection, identite JWT, routes, et serveur HTTP.
+Create a functional demo application that uses all framework components: controllers, injection, JWT identity, routes, and HTTP server.
 
 ## Structure
 
@@ -10,17 +10,17 @@ Creer une application de demonstration fonctionnelle qui utilise tous les compos
 example-app/
   Cargo.toml
   src/
-    main.rs             # Point d'entree
-    services.rs         # Services applicatifs (app-scoped)
+    main.rs             # Entry point
+    services.rs         # Application services (app-scoped)
     controllers/
       mod.rs
       user_controller.rs
       health_controller.rs
-    models.rs           # Structs de donnees
-    state.rs            # Definition de l'AppState applicatif
+    models.rs           # Data structs
+    state.rs            # Application AppState definition
 ```
 
-## 1. Modeles (`models.rs`)
+## 1. Models (`models.rs`)
 
 ```rust
 use serde::{Serialize, Deserialize};
@@ -42,7 +42,7 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct UserService {
-    // Store in-memory pour la demo
+    // In-memory store for the demo
     users: Arc<RwLock<Vec<User>>>,
 }
 
@@ -73,7 +73,7 @@ impl UserService {
 }
 ```
 
-## 3. State applicatif (`state.rs`)
+## 3. Application State (`state.rs`)
 
 ```rust
 use crate::services::UserService;
@@ -153,7 +153,7 @@ pub struct CreateUserRequest {
 }
 ```
 
-## 5. Point d'entree (`main.rs`)
+## 5. Entry Point (`main.rs`)
 
 ```rust
 use r2e_core::AppBuilder;
@@ -185,37 +185,37 @@ async fn main() {
 }
 ```
 
-## 6. Tests manuels
+## 6. Manual Tests
 
 ```bash
 # Health check
 curl http://localhost:3000/health
 # → "OK"
 
-# Liste des utilisateurs (avec JWT)
+# List users (with JWT)
 curl -H "Authorization: Bearer <jwt>" http://localhost:3000/users
 # → [{"id":1,"name":"Alice",...}, {"id":2,"name":"Bob",...}]
 
-# Utilisateur par ID
+# User by ID
 curl -H "Authorization: Bearer <jwt>" http://localhost:3000/users/1
 # → {"id":1,"name":"Alice","email":"alice@example.com"}
 
-# Creation
+# Create
 curl -X POST -H "Content-Type: application/json" \
      -H "Authorization: Bearer <jwt>" \
      -d '{"name":"Charlie","email":"charlie@example.com"}' \
      http://localhost:3000/users
 # → {"id":3,"name":"Charlie","email":"charlie@example.com"}
 
-# Identite
+# Identity
 curl -H "Authorization: Bearer <jwt>" http://localhost:3000/me
 # → {"sub":"user123","email":"test@example.com","roles":["user"]}
 ```
 
-## Critere de validation
+## Validation Criteria
 
-L'application compile et repond correctement aux requetes HTTP ci-dessus.
+The application compiles and responds correctly to the HTTP requests above.
 
-## Dependances entre etapes
+## Dependencies Between Steps
 
-- Requiert : toutes les etapes precedentes (0-5)
+- Requires: all previous steps (0-5)

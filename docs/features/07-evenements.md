@@ -1,31 +1,31 @@
-# Feature 7 — Evenements
+# Feature 7 — Events
 
-## Objectif
+## Objective
 
-Fournir un bus d'evenements in-process avec pub/sub type. Permet de decoupler les composants de l'application en emettant des evenements que d'autres parties peuvent ecouter.
+Provide an in-process event bus with typed pub/sub. Allows decoupling application components by emitting events that other parts can listen to.
 
-## Concepts cles
+## Key Concepts
 
-### EventBus (trait) et LocalEventBus
+### EventBus (trait) and LocalEventBus
 
-`EventBus` est un trait definissant l'interface d'un bus d'evenements. `LocalEventBus` est l'implementation par defaut (in-process). Il est `Clone` et peut etre partage entre threads. Le dispatch est base sur le `TypeId` — chaque type d'evenement a ses propres abonnes.
+`EventBus` is a trait defining the interface of an event bus. `LocalEventBus` is the default implementation (in-process). It is `Clone` and can be shared between threads. Dispatch is based on `TypeId` — each event type has its own subscribers.
 
-On peut implementer le trait `EventBus` pour des backends custom (Kafka, Redis, NATS, etc.).
+You can implement the `EventBus` trait for custom backends (Kafka, Redis, NATS, etc.).
 
-### Typage fort
+### Strong typing
 
-Les evenements sont dispatches par type Rust. Un abonne a `UserCreatedEvent` ne recevra jamais un `OrderPlacedEvent`. Pas de strings magiques, pas de downcasting manuel.
+Events are dispatched by Rust type. A subscriber to `UserCreatedEvent` will never receive an `OrderPlacedEvent`. No magic strings, no manual downcasting.
 
-## Utilisation
+## Usage
 
-### 1. Ajouter la dependance
+### 1. Add the dependency
 
 ```toml
 [dependencies]
 r2e-events = { path = "../r2e-events" }
 ```
 
-### 2. Definir un type d'evenement
+### 2. Define an event type
 
 ```rust
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -36,9 +36,9 @@ pub struct UserCreatedEvent {
 }
 ```
 
-Le type doit etre `Send + Sync + Serialize + DeserializeOwned + 'static`. Les bounds serde sont requis par le trait `EventBus` (pour la compatibilite avec les backends distants), mais `LocalEventBus` ne serialise jamais — zero overhead.
+The type must be `Send + Sync + Serialize + DeserializeOwned + 'static`. The serde bounds are required by the `EventBus` trait (for compatibility with remote backends), but `LocalEventBus` never serializes — zero overhead.
 
-### 3. Creer le bus et s'abonner
+### 3. Create the bus and subscribe
 
 ```rust
 use std::sync::Arc;
@@ -46,7 +46,7 @@ use r2e_events::{EventBus, LocalEventBus};
 
 let event_bus = LocalEventBus::new();
 
-// S'abonner a un type d'evenement
+// Subscribe to an event type
 event_bus
     .subscribe(|event: Arc<UserCreatedEvent>| async move {
         tracing::info!(
@@ -59,40 +59,40 @@ event_bus
     .await;
 ```
 
-**Note** : le handler recoit `Arc<E>` (pas `E` directement), car l'evenement peut etre partage entre plusieurs abonnes.
+**Note**: the handler receives `Arc<E>` (not `E` directly), because the event may be shared among multiple subscribers.
 
-### Abonnes multiples
+### Multiple subscribers
 
-Plusieurs handlers peuvent ecouter le meme type :
+Multiple handlers can listen to the same type:
 
 ```rust
-// Handler 1 : log
+// Handler 1: log
 event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
     tracing::info!("User created: {}", event.name);
 }).await;
 
-// Handler 2 : notification email
+// Handler 2: email notification
 event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
     send_welcome_email(&event.email).await;
 }).await;
 
-// Handler 3 : analytics
+// Handler 3: analytics
 event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
     track_signup(event.user_id).await;
 }).await;
 ```
 
-### 4. Emettre un evenement
+### 4. Emit an event
 
 ```rust
-// Emission fire-and-forget (les handlers tournent en taches Tokio paralleles)
+// Fire-and-forget emission (handlers run as parallel Tokio tasks)
 event_bus.emit(UserCreatedEvent {
     user_id: 42,
     name: "Alice".into(),
     email: "alice@example.com".into(),
 }).await;
 
-// Emission avec attente de completion de tous les handlers
+// Emit and wait for all handlers to complete
 event_bus.emit_and_wait(UserCreatedEvent {
     user_id: 42,
     name: "Alice".into(),
@@ -100,16 +100,16 @@ event_bus.emit_and_wait(UserCreatedEvent {
 }).await;
 ```
 
-### Difference `emit` vs `emit_and_wait`
+### Difference between `emit` and `emit_and_wait`
 
-| Methode | Comportement |
-|---------|-------------|
-| `emit()` | Spawn les handlers en taches Tokio, retourne immediatement |
-| `emit_and_wait()` | Spawn les handlers, attend que tous se terminent |
+| Method | Behavior |
+|--------|----------|
+| `emit()` | Spawns handlers as Tokio tasks, returns immediately |
+| `emit_and_wait()` | Spawns handlers, waits for all of them to complete |
 
-### 5. Integration dans un service
+### 5. Integration in a service
 
-Typiquement, le `LocalEventBus` est injecte dans les services :
+Typically, `LocalEventBus` is injected into services:
 
 ```rust
 #[derive(Clone)]
@@ -133,9 +133,9 @@ impl UserService {
             let user = User { id, name, email };
             users.push(user.clone());
             user
-        }; // Lock relache ici
+        }; // Lock released here
 
-        // Emettre l'evenement apres le lock
+        // Emit the event after releasing the lock
         self.event_bus
             .emit(UserCreatedEvent {
                 user_id: user.id,
@@ -149,7 +149,7 @@ impl UserService {
 }
 ```
 
-### 6. Partager le bus via l'etat applicatif
+### 6. Share the bus via application state
 
 ```rust
 #[derive(Clone)]
@@ -166,21 +166,21 @@ impl axum::extract::FromRef<Services> for LocalEventBus {
 }
 ```
 
-## Isolation par type
+## Isolation by type
 
-Les evenements sont completement isoles par `TypeId`. Emettre un `OtherEvent` ne declenche pas les handlers de `UserCreatedEvent` :
+Events are completely isolated by `TypeId`. Emitting an `OtherEvent` does not trigger `UserCreatedEvent` handlers:
 
 ```rust
 struct OtherEvent;
 
 bus.subscribe(|_: Arc<UserCreatedEvent>| async { println!("user!"); }).await;
 bus.emit(OtherEvent).await;
-// → rien ne se passe, le handler de UserCreatedEvent n'est pas appele
+// → nothing happens, the UserCreatedEvent handler is not called
 ```
 
-## Critere de validation
+## Validation criteria
 
-Lancer l'application et creer un utilisateur :
+Start the application and create a user:
 
 ```bash
 curl -X POST http://localhost:3000/users \
@@ -189,7 +189,7 @@ curl -X POST http://localhost:3000/users \
   -d '{"name":"Alice","email":"alice@example.com"}'
 ```
 
-Dans les logs du serveur :
+In the server logs:
 
 ```
 INFO user_id=3 name="Alice" email="alice@example.com" "User created event received"

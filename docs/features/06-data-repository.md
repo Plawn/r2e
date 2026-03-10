@@ -1,33 +1,33 @@
 # Feature 6 — Data / Repository
 
-## Objectif
+## Objective
 
-Fournir des abstractions pour l'acces aux donnees : trait `Entity` pour modeliser les tables, `QueryBuilder` pour construire des requetes SQL de maniere fluide, et `Pageable`/`Page<T>` pour la pagination.
+Provide abstractions for data access: the `Entity` trait for modeling tables, `QueryBuilder` for building SQL queries in a fluent manner, and `Pageable`/`Page<T>` for pagination.
 
-## Concepts cles
+## Key Concepts
 
 ### Entity
 
-Trait representant une entite persistee en base. Definit le nom de la table, les colonnes, et la colonne d'identifiant.
+A trait representing a persisted entity in the database. It defines the table name, columns, and the identifier column.
 
 ### QueryBuilder
 
-Builder fluide pour construire des requetes SELECT avec conditions, tri, et pagination.
+A fluent builder for constructing SELECT queries with conditions, sorting, and pagination.
 
 ### Pageable / Page\<T\>
 
-`Pageable` est un struct extractible depuis les query params pour la pagination. `Page<T>` est le conteneur de reponse paginee.
+`Pageable` is a struct extractable from query params for pagination. `Page<T>` is the paginated response container.
 
-## Utilisation
+## Usage
 
-### 1. Ajouter la dependance
+### 1. Add the dependency
 
 ```toml
 [dependencies]
 r2e-data = { path = "../r2e-data", features = ["sqlite"] }
 ```
 
-### 2. Definir une entite
+### 2. Define an entity
 
 ```rust
 use r2e_data::Entity;
@@ -60,17 +60,17 @@ impl Entity for UserEntity {
 }
 ```
 
-### 3. Utiliser QueryBuilder
+### 3. Use QueryBuilder
 
 ```rust
 use r2e_data::QueryBuilder;
 
-// Requete simple
+// Simple query
 let (sql, params) = QueryBuilder::new("users")
     .build_select("*");
 // → "SELECT * FROM users", []
 
-// Requete avec conditions
+// Query with conditions
 let (sql, params) = QueryBuilder::new("users")
     .where_eq("email", "alice@example.com")
     .where_like("name", "%ali%")
@@ -81,17 +81,17 @@ let (sql, params) = QueryBuilder::new("users")
 // → "SELECT id, name, email FROM users WHERE email = ? AND name LIKE ? ORDER BY id ASC LIMIT 10 OFFSET 20"
 // → params: ["alice@example.com", "%ali%"]
 
-// Requete COUNT
+// COUNT query
 let (sql, params) = QueryBuilder::new("users")
     .where_eq("active", "true")
     .build_count();
 // → "SELECT COUNT(*) FROM users WHERE active = ?"
 ```
 
-### Methodes de condition disponibles
+### Available condition methods
 
-| Methode | SQL genere | Exemple |
-|---------|-----------|---------|
+| Method | Generated SQL | Example |
+|--------|--------------|---------|
 | `where_eq(col, val)` | `col = ?` | `.where_eq("status", "active")` |
 | `where_not_eq(col, val)` | `col != ?` | `.where_not_eq("role", "admin")` |
 | `where_like(col, pat)` | `col LIKE ?` | `.where_like("name", "%alice%")` |
@@ -101,9 +101,9 @@ let (sql, params) = QueryBuilder::new("users")
 | `where_null(col)` | `col IS NULL` | `.where_null("deleted_at")` |
 | `where_not_null(col)` | `col IS NOT NULL` | `.where_not_null("email")` |
 
-### 4. Pagination avec Pageable et Page\<T\>
+### 4. Pagination with Pageable and Page\<T\>
 
-`Pageable` s'extrait depuis les query params :
+`Pageable` is extracted from query params:
 
 ```rust
 use r2e::prelude::*; // Query, Pageable, Page
@@ -132,21 +132,21 @@ async fn list(
 }
 ```
 
-### Parametres de Pageable
+### Pageable parameters
 
-| Parametre | Type | Defaut | Description |
-|-----------|------|--------|-------------|
-| `page` | `u64` | `0` | Numero de page (commence a 0) |
-| `size` | `u64` | `20` | Nombre d'elements par page |
-| `sort` | `Option<String>` | `None` | Champ de tri (optionnel) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | `u64` | `0` | Page number (starts at 0) |
+| `size` | `u64` | `20` | Number of elements per page |
+| `sort` | `Option<String>` | `None` | Sort field (optional) |
 
-### Exemple de requete HTTP
+### HTTP request example
 
 ```bash
 curl "http://localhost:3000/data/users?page=0&size=10"
 ```
 
-### Reponse Page\<T\>
+### Page\<T\> response
 
 ```json
 {
@@ -161,7 +161,7 @@ curl "http://localhost:3000/data/users?page=0&size=10"
 }
 ```
 
-### 5. Recherche avec QueryBuilder
+### 5. Search with QueryBuilder
 
 ```rust
 #[derive(serde::Deserialize)]
@@ -196,18 +196,18 @@ async fn search(
 }
 ```
 
-## Critere de validation
+## Validation criteria
 
 ```bash
-# Liste paginee
+# Paginated list
 curl "http://localhost:3000/data/users?page=0&size=2"
 # → {"content":[...],"page":0,"size":2,"total_elements":3,"total_pages":2}
 
-# Recherche par nom
+# Search by name
 curl "http://localhost:3000/data/users/search?name=Alice"
 # → [{"id":1,"name":"Alice","email":"alice@example.com"}]
 
-# Recherche par email exact
+# Search by exact email
 curl "http://localhost:3000/data/users/search?email=bob@example.com"
 # → [{"id":2,"name":"Bob","email":"bob@example.com"}]
 ```

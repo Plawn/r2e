@@ -106,6 +106,129 @@ async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
 
 Errors are logged but don't stop the scheduler — the task runs again at the next interval.
 
+## SchedulerHandle
+
+The `SchedulerHandle` is an Axum extractor that gives HTTP handlers access to the scheduler runtime. Use it to check scheduler status or trigger cancellation from an endpoint.
+
+### Extracting SchedulerHandle
+
+Add `SchedulerHandle` as a parameter to any handler method:
+
+```rust
+use r2e::r2e_scheduler::SchedulerHandle;
+
+#[derive(Controller)]
+#[controller(path = "/admin", state = AppState)]
+pub struct AdminController {
+    #[inject] some_service: SomeService,
+}
+
+#[routes]
+impl AdminController {
+    #[get("/scheduler/status")]
+    async fn scheduler_status(&self, scheduler: SchedulerHandle) -> Json<bool> {
+        Json(scheduler.is_cancelled())
+    }
+
+    #[post("/scheduler/stop")]
+    async fn stop_scheduler(&self, scheduler: SchedulerHandle) -> StatusCode {
+        scheduler.cancel();
+        StatusCode::OK
+    }
+}
+```
+
+### SchedulerHandle methods
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `is_cancelled()` | `bool` | Check if the scheduler has been cancelled |
+| `cancel()` | `()` | Cancel the scheduler and all running tasks |
+| `token()` | `CancellationToken` | Get the underlying `CancellationToken` |
+
+> **Note:** `SchedulerHandle` requires the `Scheduler` plugin to be installed. If it is missing, extraction returns a `500 Internal Server Error` with a descriptive message.
+
+## ScheduledJobRegistry
+
+The `ScheduledJobRegistry` provides runtime introspection of all registered scheduled jobs. Unlike `SchedulerHandle` (which is an Axum extractor), the registry is a bean that you inject via `#[inject]` on a controller field.
+
+### Injecting the registry
+
+```rust
+use r2e::r2e_scheduler::{ScheduledJobRegistry, ScheduledJobInfo};
+
+#[derive(Controller)]
+#[controller(path = "/admin", state = AppState)]
+pub struct JobAdminController {
+    #[inject] jobs: ScheduledJobRegistry,
+}
+
+#[routes]
+impl JobAdminController {
+    #[get("/jobs")]
+    async fn list_jobs(&self) -> Json<Vec<ScheduledJobInfo>> {
+        Json(self.jobs.list_jobs())
+    }
+}
+```
+
+### ScheduledJobInfo fields
+
+Each entry returned by `list_jobs()` is a `ScheduledJobInfo` with:
+
+| Field | Type | Description | Example value |
+|-------|------|-------------|---------------|
+| `name` | `String` | The name of the scheduled task | `"count_users"` |
+| `schedule` | `String` | Human-readable schedule description | `"every 30s"`, `"every 60s (delay 10s)"`, `"cron: 0 */5 * * * *"` |
+
+### ScheduledJobRegistry methods
+
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `list_jobs()` | `Vec<ScheduledJobInfo>` | Returns a snapshot of all registered jobs |
+| `register(info)` | `()` | Register a job (used internally by the scheduler) |
+
+### Combining SchedulerHandle and ScheduledJobRegistry
+
+You can use both together to build a full admin dashboard:
+
+```rust
+use r2e::r2e_scheduler::{SchedulerHandle, ScheduledJobRegistry, ScheduledJobInfo};
+
+#[derive(Controller)]
+#[controller(path = "/admin/scheduler", state = AppState)]
+pub struct SchedulerAdminController {
+    #[inject] jobs: ScheduledJobRegistry,
+}
+
+#[routes]
+impl SchedulerAdminController {
+    #[get("/jobs")]
+    async fn list_jobs(&self) -> Json<Vec<ScheduledJobInfo>> {
+        Json(self.jobs.list_jobs())
+    }
+
+    #[get("/status")]
+    async fn status(&self, handle: SchedulerHandle) -> Json<serde_json::Value> {
+        let jobs = self.jobs.list_jobs();
+        Json(serde_json::json!({
+            "cancelled": handle.is_cancelled(),
+            "job_count": jobs.len(),
+            "jobs": jobs.iter().map(|j| serde_json::json!({
+                "name": j.name,
+                "schedule": j.schedule,
+            })).collect::<Vec<_>>(),
+        }))
+    }
+
+    #[post("/cancel")]
+    async fn cancel(&self, handle: SchedulerHandle) -> StatusCode {
+        handle.cancel();
+        StatusCode::OK
+    }
+}
+```
+
 ## Mixed controllers
 
 A controller can have both HTTP routes and scheduled tasks:
