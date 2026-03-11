@@ -64,7 +64,9 @@ Syntax in YAML string values:
 | Pattern | Source |
 |---|---|
 | `${VAR}` | Env var (shorthand) |
+| `${VAR:default}` | Env var with fallback value |
 | `${env:VAR}` | Env var (explicit) |
+| `${env:VAR:default}` | Explicit env var with fallback |
 | `${file:/path}` | File contents (trimmed) |
 
 Custom resolvers implement `SecretResolver`: `fn resolve(&self, reference: &str) -> Result<String, ConfigError>`.

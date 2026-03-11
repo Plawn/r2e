@@ -76,12 +76,15 @@ database:
   url: "${DATABASE_URL}"              # env var (default)
   password: "${env:DB_PASSWORD}"      # explicit env var
   api_key: "${file:/run/secrets/key}" # read from file (trimmed)
+  kind: "${DB_KIND:postgres}"         # env var with default value
 ```
 
 | Syntax | Resolution |
 |---|---|
 | `${VAR}` | `std::env::var("VAR")` |
+| `${VAR:default}` | Env var, falls back to `default` if unset |
 | `${env:VAR}` | Explicit env var lookup |
+| `${env:VAR:default}` | Explicit env var with fallback |
 | `${file:/path}` | Read file contents, trimmed |
 
 ### Custom secret resolver

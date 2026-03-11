@@ -53,3 +53,37 @@ fn test_file_resolution() {
     let result = resolve_placeholders(&ref_str, &resolver).unwrap();
     assert_eq!(result, "my-secret-value");
 }
+
+#[test]
+fn test_default_value_when_var_missing() {
+    // Ensure the var does not exist
+    unsafe { std::env::remove_var("TEST_R2E_MISSING_VAR") };
+    let resolver = DefaultSecretResolver;
+    let result = resolve_placeholders("${TEST_R2E_MISSING_VAR:fallback}", &resolver).unwrap();
+    assert_eq!(result, "fallback");
+}
+
+#[test]
+fn test_default_value_not_used_when_var_exists() {
+    unsafe { std::env::set_var("TEST_R2E_EXISTS_VAR", "real-value") };
+    let resolver = DefaultSecretResolver;
+    let result = resolve_placeholders("${TEST_R2E_EXISTS_VAR:fallback}", &resolver).unwrap();
+    assert_eq!(result, "real-value");
+    unsafe { std::env::remove_var("TEST_R2E_EXISTS_VAR") };
+}
+
+#[test]
+fn test_default_value_with_env_prefix() {
+    unsafe { std::env::remove_var("TEST_R2E_ENV_DEF") };
+    let resolver = DefaultSecretResolver;
+    let result = resolve_placeholders("${env:TEST_R2E_ENV_DEF:env-default}", &resolver).unwrap();
+    assert_eq!(result, "env-default");
+}
+
+#[test]
+fn test_default_value_empty_string() {
+    unsafe { std::env::remove_var("TEST_R2E_EMPTY_DEF") };
+    let resolver = DefaultSecretResolver;
+    let result = resolve_placeholders("${TEST_R2E_EMPTY_DEF:}", &resolver).unwrap();
+    assert_eq!(result, "");
+}

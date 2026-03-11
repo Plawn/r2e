@@ -168,7 +168,10 @@ database:
   url: "${DATABASE_URL}"              # env var (default)
   password: "${env:DB_PASSWORD}"      # explicit env var
   api_key: "${file:/run/secrets/key}" # read from file (trimmed)
+  kind: "${DB_KIND:postgres}"         # env var with default value
 ```
+
+Default values are supported with `${VAR:default}` syntax. If the variable is not set, the value after `:` is used. This also works with the explicit prefix: `${env:VAR:default}`. File references (`${file:...}`) do not support defaults.
 
 Custom backends can implement the `SecretResolver` trait and pass it via `R2eConfig::load_with_resolver()`.
 

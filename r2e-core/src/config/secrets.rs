@@ -31,6 +31,11 @@ impl SecretResolver for DefaultSecretResolver {
 }
 
 /// Resolve `${...}` placeholders in a string value.
+///
+/// Supports default values with `${VAR:default}` syntax.
+/// If the resolver cannot find `VAR`, the `default` is used instead.
+/// The colon-default is only recognized for plain and `env:` references,
+/// not for `file:` references (where `:` is part of the path syntax).
 pub fn resolve_placeholders(
     value: &str,
     resolver: &dyn SecretResolver,
@@ -42,8 +47,47 @@ pub fn resolve_placeholders(
             .find('}')
             .ok_or_else(|| ConfigError::Load(format!("Unclosed placeholder in: {}", value)))?;
         let reference = &result[start + 2..start + end];
-        let resolved = resolver.resolve(reference)?;
+
+        let resolved = match resolve_with_default(reference, resolver) {
+            Ok(val) => val,
+            Err(e) => return Err(e),
+        };
+
         result = format!("{}{}{}", &result[..start], resolved, &result[start + end + 1..]);
     }
     Ok(result)
+}
+
+/// Try to resolve a reference, supporting `VAR:default` and `env:VAR:default` syntax.
+fn resolve_with_default(
+    reference: &str,
+    resolver: &dyn SecretResolver,
+) -> Result<String, ConfigError> {
+    // file: references don't support default values (colon is part of path)
+    if reference.starts_with("file:") {
+        return resolver.resolve(reference);
+    }
+
+    // Try resolving as-is first
+    match resolver.resolve(reference) {
+        Ok(val) => return Ok(val),
+        Err(ConfigError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+
+    // Check for `:default` syntax
+    // For `env:VAR:default`, skip the first colon (the `env:` prefix)
+    let search_from = if reference.starts_with("env:") { 4 } else { 0 };
+    if let Some(colon_pos) = reference[search_from..].find(':') {
+        let colon_pos = search_from + colon_pos;
+        let var_ref = &reference[..colon_pos];
+        let default = &reference[colon_pos + 1..];
+        match resolver.resolve(var_ref) {
+            Ok(val) => Ok(val),
+            Err(ConfigError::NotFound(_)) => Ok(default.to_string()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Err(ConfigError::NotFound(reference.trim().to_string()))
+    }
 }
