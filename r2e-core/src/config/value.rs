@@ -4,6 +4,38 @@ use std::path::PathBuf;
 
 use super::ConfigError;
 
+/// Convert a `ConfigValue` to a `serde_json::Value` for serde deserialization.
+fn to_json_value(cv: &ConfigValue) -> serde_json::Value {
+    match cv {
+        ConfigValue::String(s) => serde_json::Value::String(s.clone()),
+        ConfigValue::Integer(i) => serde_json::json!(i),
+        ConfigValue::Float(f) => serde_json::json!(f),
+        ConfigValue::Bool(b) => serde_json::Value::Bool(*b),
+        ConfigValue::Null => serde_json::Value::Null,
+        ConfigValue::List(items) => {
+            serde_json::Value::Array(items.iter().map(to_json_value).collect())
+        }
+        ConfigValue::Map(map) => {
+            let obj = map.iter().map(|(k, v)| (k.clone(), to_json_value(v))).collect();
+            serde_json::Value::Object(obj)
+        }
+    }
+}
+
+/// Deserialize any `T: DeserializeOwned` from a `ConfigValue` via serde.
+///
+/// This is the runtime helper used by `#[derive(FromConfigValue)]`.
+pub fn deserialize_value<T: serde::de::DeserializeOwned>(
+    value: &ConfigValue,
+    key: &str,
+) -> Result<T, ConfigError> {
+    let json = to_json_value(value);
+    serde_json::from_value(json).map_err(|e| ConfigError::Deserialize {
+        key: key.to_string(),
+        message: e.to_string(),
+    })
+}
+
 /// A single configuration value that can be converted to various types.
 #[derive(Debug, Clone)]
 pub enum ConfigValue {

@@ -119,15 +119,26 @@ impl UserController {
 
 **`#[post_construct]`** — lifecycle hook on `#[bean]` methods. Called after the entire bean graph is resolved. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates `PostConstruct` trait impl.
 
-## Detailed Reference (see linked files)
+## Detailed Reference — Read Before You Code
 
-- **[Configuration](docs/claude/configuration.md)** — R2eConfig, ConfigProperties, secrets, validation, FromConfigValue, typed sections, registry
-- **[Guards & Interceptors](docs/claude/guards-interceptors.md)** — Guard/PreAuthGuard traits, GuardContext, Identity, RolesGuard, RateLimitGuard, interceptor wrapping order, configurable syntax
-- **[Error Handling & Managed Resources](docs/claude/error-handling.md)** — HttpError variants, `#[derive(ApiError)]`, `map_error!`, validation, ManagedResource trait, `#[managed]`
-- **[Beans & Dependency Injection](docs/claude/beans-di.md)** — Bean/AsyncBean/Producer traits, `#[bean]`, `#[producer]`, `#[config]` in beans, `#[post_construct]`, `build_state()`
-- **[Subsystems](docs/claude/subsystems.md)** — Cache, Rate Limiting, Security, Events, Scheduling, Data, OpenAPI, StatefulConstruct, AppBuilder, Testing, Configuration
-- **[Prelude & Feature Flags](docs/claude/prelude-features.md)** — Full prelude listing, `use r2e::prelude::*`, validation/garde, Params, transactional
-- **[CLI](docs/claude/cli.md)** — `r2e new`, `r2e generate`, `r2e doctor`, `r2e routes`, `r2e dev`, `r2e add`, templates
+**DO NOT guess APIs or patterns. Match your task to the keyword table below and READ only the matching file(s).** Each file is the authoritative source for its subsystem. Reading all files wastes context — be selective.
+
+### Keyword → Doc routing table
+
+| If your task involves… | Read this file |
+|---|---|
+| `R2eConfig`, `ConfigProperties`, `ConfigValue`, `FromConfigValue`, `#[config(...)]`, `load_config`, `with_config`, secrets (`${...}`), YAML config, typed sections, `#[config(section)]`, env overlay, `serve_auto` | `docs/claude/configuration.md` |
+| `Guard`, `PreAuthGuard`, `GuardContext`, `#[guard]`, `#[roles]`, `Identity`, `RolesGuard`, `RateLimitGuard`, `Interceptor`, `#[intercept]`, `Logged`, `Timed`, middleware ordering | `docs/claude/guards-interceptors.md` |
+| `HttpError`, `ApiError`, `#[derive(ApiError)]`, `map_error!`, validation, `garde`, `ManagedResource`, `#[managed]`, error responses | `docs/claude/error-handling.md` |
+| `Bean`, `AsyncBean`, `Producer`, `#[bean]`, `#[producer]`, `#[inject]`, `#[post_construct]`, `BeanRegistry`, `BeanContext`, `build_state`, dependency injection, bean graph | `docs/claude/beans-di.md` |
+| `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, `Repository`, `Entity`, `OpenAPI`, `StatefulConstruct`, `AppBuilder`, `TestApp`, `TestJwt` | `docs/claude/subsystems.md` |
+| `prelude`, `use r2e::prelude::*`, feature flags, `Params`, `#[transactional]`, re-exports, what's available by default | `docs/claude/prelude-features.md` |
+| `r2e new`, `r2e dev`, `r2e generate`, `r2e add`, `r2e doctor`, `r2e routes`, CLI templates, scaffolding | `docs/claude/cli.md` |
+
+**Rules:**
+1. Match keywords from your task to the left column. Read **only** the matched file(s).
+2. If your task spans two subsystems (e.g., config + beans), read both — but no more.
+3. If nothing matches, you probably don't need a reference doc. Proceed with the code.
 
 ## Language & Documentation
 

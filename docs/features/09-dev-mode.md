@@ -187,7 +187,7 @@ This:
 
 ```rust
 AppBuilder::new()
-    // 1. Config first — enables #[config("key")] and #[config_section(prefix = "...")]
+    // 1. Config first — enables #[config("key")] and auto-registers typed sections
     .with_config(env.config)
     // 2. Pre-built instances from setup
     .provide(env.pool)
@@ -213,7 +213,7 @@ AppBuilder::new()
 | `.with_config(config)` | Provide pre-loaded `R2eConfig` | Hot-reload (config loaded in setup) |
 | `.load_config::<C>()` | Load YAML + env overlay in one call | Simple apps without hot-reload |
 | `.provide(value)` | Inject a pre-built instance | Pools, event buses, validators, shared channels |
-| `#[config_section(prefix = "...")]` | Inject typed config section in beans/producers | Typed config groups needed by multiple beans |
+| `.load_config::<Root>()` | Load config + auto-register children as beans | Typed config sections needed by controllers/beans |
 | `.with_bean::<T>()` | Register a sync bean factory | Services with `#[bean] impl T { fn new(...) }` |
 | `.with_async_bean::<T>()` | Register an async bean factory | Services needing async init |
 | `.with_producer::<T>()` | Register a producer (types you don't own) | Connection pools, external clients |

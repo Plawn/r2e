@@ -8,13 +8,13 @@ Central orchestrator for assembling an R2E application. Two phases: pre-state an
 AppBuilder::new()
     // ── Pre-state phase ──
     .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
-    .load_config::<AppConfig>()             // load yaml + env, construct typed config, provide all
-    // or: .with_config(config)            // provide a pre-loaded R2eConfig
+    .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children
+    // or: .with_config(config)            // provide a pre-loaded R2eConfig (no child auto-registration)
     .provide(services.pool.clone())        // provide beans
     .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
     .with_async_bean::<MyAsyncService>()   // async bean constructor
     .with_bean::<UserService>()            // sync bean (unchanged)
-    // config sections are now injected via #[config_section(prefix = "...")] in beans
+    // config sections are auto-registered as beans by load_config (inject with #[inject])
     .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
     .await
     // ── Post-state phase ──
@@ -56,10 +56,10 @@ Controllers with `#[inject(identity)]` struct fields do NOT get this impl. Attem
 See [configuration.md](./configuration.md) for the full reference.
 
 **AppBuilder integration** (pre-state methods):
-- `load_config::<C>()` (recommended) — load YAML + env, optionally construct typed config (`C: ConfigProperties`), provide in bean registry. Use `load_config::<()>()` for raw only.
-- `with_config(config)` — provide a pre-loaded `R2eConfig` (tests, hot-reload). Same registration behavior.
+- `load_config::<C>()` (recommended) — load YAML + env, construct typed config (`C: ConfigProperties`), **auto-register all nested `#[config(section)]` children as beans**, provide both `C` and `R2eConfig` in the type list. Use `load_config::<()>()` for raw only.
+- `with_config(config)` — provide a pre-loaded `R2eConfig` (tests, hot-reload). Does not auto-register typed config children.
 
-Config sections are injected directly in beans/producers via `#[config_section(prefix = "...")]` — no builder method needed.
+Config sections registered via `load_config` are available as bean dependencies and for `#[inject]` in controllers.
 
 ## Security (r2e-security)
 

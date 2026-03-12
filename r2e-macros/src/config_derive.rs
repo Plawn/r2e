@@ -499,6 +499,28 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
+    // Generate register_children body for section fields
+    let register_children_stmts: Vec<TokenStream2> = field_infos
+        .iter()
+        .filter(|f| f.is_section)
+        .map(|f| {
+            let field_name = &f.name;
+            if f.is_option {
+                quote! {
+                    if let Some(ref __child) = self.#field_name {
+                        __registry.provide(__child.clone());
+                        __child.register_children(__registry);
+                    }
+                }
+            } else {
+                quote! {
+                    __registry.provide(self.#field_name.clone());
+                    self.#field_name.register_children(__registry);
+                }
+            }
+        })
+        .collect();
+
     Ok(quote! {
         impl #krate::config::typed::ConfigProperties for #name {
             fn properties_metadata(__prefix: Option<&str>) -> Vec<#krate::config::typed::PropertyMeta> {
@@ -516,6 +538,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 };
                 #validation_call
                 Ok(__instance)
+            }
+
+            fn register_children(&self, __registry: &mut #krate::beans::BeanRegistry) {
+                #(#register_children_stmts)*
             }
         }
     })

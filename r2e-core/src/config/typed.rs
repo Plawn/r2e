@@ -78,4 +78,11 @@ pub trait ConfigProperties: Sized {
     /// - `Some("app.database")` — keys are resolved as `"app.database.<field>"`.
     /// - `None` — keys are resolved at root level (`"<field>"`).
     fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError>;
+
+    /// Register nested `#[config(section)]` children as beans in the registry.
+    ///
+    /// The default implementation is a no-op. The `#[derive(ConfigProperties)]`
+    /// macro generates an override that calls `registry.provide(child)` for each
+    /// section field and recursively calls `register_children` on them.
+    fn register_children(&self, _registry: &mut crate::beans::BeanRegistry) {}
 }

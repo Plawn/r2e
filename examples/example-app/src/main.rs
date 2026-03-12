@@ -55,7 +55,6 @@ fn generate_test_token(secret: &[u8]) -> String {
 
 #[derive(Clone)]
 struct AppEnv {
-    config: R2eConfig,
     event_bus: LocalEventBus,
     claims_validator: Arc<JwtClaimsValidator>,
     pool: sqlx::Pool<sqlx::Sqlite>,
@@ -72,7 +71,6 @@ async fn setup() -> AppEnv {
     println!("{token}");
     println!();
 
-    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
     let event_bus = LocalEventBus::new();
 
     let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
@@ -110,7 +108,6 @@ async fn setup() -> AppEnv {
     let notification_service = NotificationService::new(64);
 
     AppEnv {
-        config,
         event_bus,
         claims_validator: Arc::new(claims_validator),
         pool,
@@ -131,7 +128,7 @@ async fn main(env: AppEnv) {
             .exclude_path("/health")
             .exclude_path("/metrics")
             .build())
-        .with_config(env.config)
+        .load_config::<controllers::config_controller::RootConfig>()
         .provide(env.event_bus)
         .provide(env.pool)
         .provide(env.claims_validator)

@@ -149,9 +149,8 @@ pub fn r2e_devtools_path() -> TokenStream {
 /// Resolution order:
 /// 1. Direct `schemars` dependency → `::schemars`
 /// 2. Direct `r2e-openapi` dependency → `::r2e_openapi::schemars`
-/// 3. `r2e` facade → `::r2e::r2e_openapi::schemars`
 ///
-/// Returns `None` if no path is found.
+/// Returns `None` if no path is found (i.e. user hasn't opted into OpenAPI).
 pub fn r2e_schemars_path() -> Option<TokenStream> {
     // Direct schemars dep
     if let Ok(found) = crate_name("schemars") {
@@ -172,18 +171,6 @@ pub fn r2e_schemars_path() -> Option<TokenStream> {
             FoundCrate::Name(name) => {
                 let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
                 quote!(::#ident::schemars)
-            }
-        };
-        return Some(p);
-    }
-
-    // Through r2e facade (assumes openapi feature is enabled)
-    if let Ok(found) = crate_name("r2e") {
-        let p = match found {
-            FoundCrate::Itself => quote!(crate::r2e_openapi::schemars),
-            FoundCrate::Name(name) => {
-                let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-                quote!(::#ident::r2e_openapi::schemars)
             }
         };
         return Some(p);

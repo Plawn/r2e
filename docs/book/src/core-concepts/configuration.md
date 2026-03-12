@@ -167,6 +167,43 @@ The `FromConfigValue` trait converts raw `ConfigValue` to Rust types:
 | `Option<T>` | Null → `None`, other → `Some(T)` | |
 | `Vec<T>` | List → mapped items, single value → `vec![T]` | |
 | `HashMap<String, V>` | Map → mapped entries | |
+| Custom enum/struct | Via `#[derive(FromConfigValue)]` | Requires `serde::Deserialize` |
+
+### Custom types with `#[derive(FromConfigValue)]`
+
+For enums and other types, derive both `serde::Deserialize` and `FromConfigValue`:
+
+```rust
+#[derive(serde::Deserialize, FromConfigValue, Clone, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum AppMode {
+    Development,
+    Production,
+    Staging,
+}
+```
+
+```yaml
+app:
+  mode: "production"
+```
+
+```rust
+let mode: AppMode = config.get("app.mode").unwrap();
+// mode == AppMode::Production
+```
+
+Use as a field in `ConfigProperties` structs with `Option<T>`:
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    pub mode: Option<AppMode>,  // None if absent, deserialized via serde if present
+}
+```
+
+The derive works with any `Deserialize` type — enums, structs, or newtypes.
 
 ### Lists and maps
 
@@ -290,6 +327,8 @@ app:
 
 `#[config(section)]` is required because the derive macro operates on tokens only — it cannot tell whether a field implements `FromConfigValue` (scalar) or `ConfigProperties` (nested struct). The attribute tells the macro to generate `T::from_config(...)` instead of `config.get::<T>(...)`.
 
+When using `load_config::<Root>()`, all `#[config(section)]` children are **automatically registered as beans** — available for `#[inject]` in controllers and as dependencies in `#[bean]` constructors. This happens recursively, so grandchild sections are also registered.
+
 ### Doc comments as descriptions
 
 Doc comments on fields become property descriptions, used in validation error messages:
@@ -306,39 +345,37 @@ If `app.name` is missing, the error includes: `-- The display name of the applic
 
 ## Injection
 
-`#[config]` and `#[config_section]` work **identically** in controllers, beans, and producers. Use them wherever you need configuration.
-
 ### How to choose
 
 | Situation | Use |
 |---|---|
 | 1–2 isolated values from different sections | `#[config("full.key")]` |
-| Coherent group of settings (db, auth, app…) | `#[config_section(prefix = "...")]` |
+| Typed config struct (registered via `load_config`) | `#[inject]` on the config type |
 | Config needed outside DI (main, tests) | `ConfigProperties::from_config()` |
 
 ### In controllers
+
+With `load_config::<RootConfig>()`, config types are auto-registered as beans. Inject them with `#[inject]`:
 
 ```rust
 #[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
+    #[inject]
+    root_config: RootConfig,          // auto-registered by load_config
+
     #[config("app.name")]
-    name: String,
-
-    #[config("app.max_retries")]
-    max_retries: Option<i64>,
-
-    #[config_section(prefix = "app")]
-    app_config: AppConfig,
+    name: String,                     // single scalar value
 }
 
 #[routes]
 impl ConfigController {
     #[get("/config")]
     async fn config_info(&self) -> Json<serde_json::Value> {
+        let app = &self.root_config.app;
         Json(serde_json::json!({
-            "app_name": self.app_config.name,
-            "greeting": self.app_config.greeting,
+            "app_name": app.name,
+            "greeting": app.greeting,
         }))
     }
 }
@@ -346,23 +383,18 @@ impl ConfigController {
 
 ### In beans
 
+Nested config sections are available as bean dependencies:
+
 ```rust
 #[bean]
 impl NotificationService {
     pub fn new(
         bus: LocalEventBus,
         #[config("notification.capacity")] capacity: i64,
-        #[config_section(prefix = "matching")] matching: MatchingConfig,
+        matching: MatchingConfig,           // auto-registered config child from BeanContext
     ) -> Self {
         Self { bus, capacity: capacity as usize, matching }
     }
-}
-
-// Also works with #[derive(Bean)]:
-#[derive(Clone, Bean)]
-struct SearchService {
-    #[config_section(prefix = "matching")]
-    matching: MatchingConfig,
 }
 ```
 
@@ -373,11 +405,6 @@ struct SearchService {
 async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
     SqlitePool::connect(&url).await.unwrap()
 }
-
-#[producer]
-fn create_search(#[config_section(prefix = "matching")] m: MatchingConfig) -> SearchService {
-    SearchService { matching: m }
-}
 ```
 
 ## AppBuilder integration
@@ -386,14 +413,33 @@ Two pre-state methods to provide config — call before `.build_state()` or `.wi
 
 ### `load_config::<C>()` (recommended)
 
-The idiomatic way to set up configuration. Loads YAML + env, stores the raw config in the builder, and provides `R2eConfig` in the bean registry. If `C` is not `()`, also constructs and provides the typed config.
+The idiomatic way to set up configuration. Loads YAML + env, stores the raw config, provides `R2eConfig` in the bean registry, and when `C` is not `()`:
+- Constructs the typed config via `C::from_config()`
+- **Auto-registers all `#[config(section)]` children as beans** (recursively)
+- Adds both `C` and `R2eConfig` to the compile-time type list
 
 ```rust
 AppBuilder::new().load_config::<()>()           // raw config only
-AppBuilder::new().load_config::<AppConfig>()    // raw + typed (preferred)
+AppBuilder::new().load_config::<RootConfig>()   // raw + typed + children (preferred)
 ```
 
 `C` must implement `LoadableConfig` — satisfied by `()` (raw only) and any `T: ConfigProperties`.
+
+Example with nested sections:
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct RootConfig {
+    #[config(section)]
+    pub app: AppConfig,           // auto-registered as a bean
+    #[config(section)]
+    pub database: DatabaseConfig, // auto-registered as a bean
+}
+
+AppBuilder::new()
+    .load_config::<RootConfig>()  // RootConfig, AppConfig, DatabaseConfig all available
+    // ...
+```
 
 ### `with_config(config)` (pre-loaded)
 
@@ -418,7 +464,7 @@ impl axum::extract::FromRef<AppState> for R2eConfig {
 
 ## Startup validation
 
-R2E validates configuration at startup. When a controller is registered, all `#[config("key")]` and `#[config_section(prefix = "...")]` fields are checked. Missing required keys cause a panic with a clear error:
+R2E validates configuration at startup. When a controller is registered, all `#[config("key")]` fields are checked. Missing required keys cause a panic with a clear error:
 
 ```
 === CONFIGURATION ERRORS (controller: MyController) ===

@@ -7,6 +7,7 @@ use r2e::r2e_security::JwtClaimsValidator;
 use sqlx::{Pool, Sqlite};
 use tokio_util::sync::CancellationToken;
 
+use crate::controllers::config_controller::RootConfig;
 use crate::services::{NotificationService, UserService};
 
 #[derive(Clone, BeanState)]
@@ -20,6 +21,7 @@ pub struct Services {
     pub rate_limiter: RateLimitRegistry,
     pub sse_broadcaster: r2e::sse::SseBroadcaster,
     pub notification_service: NotificationService,
+    pub root_config: RootConfig,
 }
 
 impl HasPool<Sqlite> for Services {

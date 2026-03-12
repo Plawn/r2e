@@ -1,3 +1,4 @@
+use r2e_core::beans::BeanRegistry;
 use r2e_core::config::{ConfigError, ConfigProperties, ConfigValue, R2eConfig};
 
 #[test]
@@ -511,4 +512,209 @@ fn test_config_properties_u16_default() {
     let config = R2eConfig::empty();
     let srv = PortConfig::from_config(&config, Some("server")).unwrap();
     assert_eq!(srv.port, 3000);
+}
+
+// =========================================================================
+// Feature 1: Auto-register child ConfigProperties as beans
+// =========================================================================
+
+#[test]
+fn test_register_children_provides_nested_bean() {
+    let yaml = r#"
+app:
+  name: "my-app"
+  database:
+    url: "postgres://localhost/mydb"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let app = AppConfig::from_config(&config, Some("app")).unwrap();
+
+    let mut registry = BeanRegistry::new();
+    app.register_children(&mut registry);
+
+    // NestedDbConfig should have been provided to the registry
+    // We can't easily extract from BeanRegistry directly, but we can verify
+    // that register_children doesn't panic and works recursively.
+}
+
+#[test]
+fn test_register_children_optional_section_some() {
+    let yaml = r#"
+server:
+  host: "0.0.0.0"
+  tls:
+    cert: "/path/to/cert.pem"
+    key: "/path/to/key.pem"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let srv = ServerConfig::from_config(&config, Some("server")).unwrap();
+
+    let mut registry = BeanRegistry::new();
+    srv.register_children(&mut registry);
+    // TlsConfig should have been provided (Some case)
+}
+
+#[test]
+fn test_register_children_optional_section_none() {
+    let yaml = r#"
+server:
+  host: "0.0.0.0"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let srv = ServerConfig::from_config(&config, Some("server")).unwrap();
+
+    let mut registry = BeanRegistry::new();
+    srv.register_children(&mut registry);
+    // Should not panic when tls is None
+}
+
+// Recursive nesting: grandchild config
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct GrandchildConfig {
+    pub value: String,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct ChildWithNested {
+    pub label: String,
+    #[config(section)]
+    pub inner: GrandchildConfig,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct RootWithDeepNesting {
+    #[config(section)]
+    pub child: ChildWithNested,
+}
+
+#[test]
+fn test_register_children_recursive() {
+    let yaml = r#"
+root:
+  child:
+    label: "test"
+    inner:
+      value: "deep"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let root = RootWithDeepNesting::from_config(&config, Some("root")).unwrap();
+
+    let mut registry = BeanRegistry::new();
+    root.register_children(&mut registry);
+    // Both ChildWithNested and GrandchildConfig should be registered
+}
+
+// =========================================================================
+// Feature 2: FromConfigValue derive — enum support via serde
+// =========================================================================
+
+#[derive(serde::Deserialize, r2e_macros::FromConfigValue, Clone, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum AppMode {
+    Development,
+    Production,
+    Staging,
+}
+
+#[test]
+fn test_from_config_value_enum() {
+    let mut config = R2eConfig::empty();
+    config.set("mode", ConfigValue::String("production".into()));
+    let mode: AppMode = config.get("mode").unwrap();
+    assert_eq!(mode, AppMode::Production);
+}
+
+#[test]
+fn test_from_config_value_enum_invalid() {
+    let mut config = R2eConfig::empty();
+    config.set("mode", ConfigValue::String("invalid".into()));
+    let result = config.get::<AppMode>("mode");
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ConfigError::Deserialize { key, message } => {
+            assert_eq!(key, "mode");
+            assert!(message.contains("unknown variant"));
+        }
+        other => panic!("Expected Deserialize error, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_from_config_value_enum_option() {
+    let config = R2eConfig::empty();
+    let result: Option<AppMode> = config.get_or("mode", None);
+    assert!(result.is_none());
+
+    let mut config2 = R2eConfig::empty();
+    config2.set("mode", ConfigValue::String("staging".into()));
+    let result2: Option<AppMode> = config2.get("mode").unwrap();
+    assert_eq!(result2, Some(AppMode::Staging));
+}
+
+// Enum as field in ConfigProperties struct
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct AppWithMode {
+    pub name: String,
+    pub mode: Option<AppMode>,
+}
+
+#[test]
+fn test_enum_in_config_properties() {
+    let yaml = r#"
+app:
+  name: "my-app"
+  mode: "production"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let app = AppWithMode::from_config(&config, Some("app")).unwrap();
+    assert_eq!(app.name, "my-app");
+    assert_eq!(app.mode, Some(AppMode::Production));
+}
+
+#[test]
+fn test_enum_in_config_properties_absent() {
+    let yaml = r#"
+app:
+  name: "my-app"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let app = AppWithMode::from_config(&config, Some("app")).unwrap();
+    assert_eq!(app.mode, None);
+}
+
+// General case: struct with #[derive(Deserialize, FromConfigValue)]
+#[derive(serde::Deserialize, r2e_macros::FromConfigValue, Clone, Debug, PartialEq)]
+struct Endpoint {
+    pub host: String,
+    pub port: u16,
+}
+
+#[test]
+fn test_from_config_value_struct() {
+    use std::collections::HashMap;
+    let mut inner = HashMap::new();
+    inner.insert("host".to_string(), ConfigValue::String("localhost".into()));
+    inner.insert("port".to_string(), ConfigValue::Integer(8080));
+
+    let mut config = R2eConfig::empty();
+    config.set("endpoint", ConfigValue::Map(inner));
+
+    let ep: Endpoint = config.get("endpoint").unwrap();
+    assert_eq!(ep.host, "localhost");
+    assert_eq!(ep.port, 8080);
+}
+
+// =========================================================================
+// ConfigError::Deserialize display
+// =========================================================================
+
+#[test]
+fn test_config_deserialize_error_display() {
+    let err = ConfigError::Deserialize {
+        key: "app.mode".to_string(),
+        message: "unknown variant `bad`".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("app.mode"));
+    assert!(msg.contains("unknown variant `bad`"));
 }

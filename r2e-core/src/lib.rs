@@ -35,6 +35,7 @@ pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
     DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,
+    deserialize_value,
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,
 };

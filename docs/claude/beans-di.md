@@ -42,6 +42,21 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+## Auto-registered config beans
+
+When using `load_config::<RootConfig>()`, all `#[config(section)]` children in the root config are auto-registered as beans via `register_children`. This means beans can depend on nested config types directly:
+
+```rust
+#[bean]
+impl SearchService {
+    fn new(matching: MatchingConfig) -> Self {  // MatchingConfig from BeanContext (auto-registered)
+        Self { matching }
+    }
+}
+```
+
+No manual `.provide()` or `#[config_section]` needed — `load_config` handles it.
+
 ## `#[config("key")]` in beans
 
 Resolve values from `R2eConfig` instead of the bean graph:

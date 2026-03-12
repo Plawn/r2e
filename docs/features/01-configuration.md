@@ -75,6 +75,21 @@ let timeout: i64 = config.get_or("app.timeout", 30);
 | `Option<T>` | `Null` → `None`, other → `Some(T)` | Recursive |
 | `Vec<T>` | `List` → mapped items, single value → `vec![T]` | Recursive |
 | `HashMap<String, V>` | `Map` → mapped entries | Recursive |
+| Custom enum/struct | Via `#[derive(FromConfigValue)]` | Requires `serde::Deserialize` |
+
+### Custom types via `#[derive(FromConfigValue)]`
+
+For enums and other types, derive `FromConfigValue` alongside `serde::Deserialize`:
+
+```rust
+#[derive(serde::Deserialize, FromConfigValue, Clone, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum AppMode {
+    Development,
+    Production,
+    Staging,
+}
+```
 
 ### 4. Injection in a controller via `#[config]`
 
@@ -105,9 +120,9 @@ impl MyController {
 }
 ```
 
-### 5. Typed config sections with `#[config_section(prefix = "...")]`
+### 5. Typed config sections
 
-For groups of related settings, define a typed config struct and inject it as a whole:
+For groups of related settings, define typed config structs. Use `load_config::<RootConfig>()` to auto-register all nested sections as beans:
 
 ```rust
 #[derive(ConfigProperties, Clone, Debug)]
@@ -123,11 +138,17 @@ pub struct AppConfig {
     pub version: Option<String>,
 }
 
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct RootConfig {
+    #[config(section)]
+    pub app: AppConfig,
+}
+
 #[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
-    #[config_section(prefix = "app")]
-    app_config: AppConfig,
+    #[inject]
+    root_config: RootConfig,     // auto-registered by load_config
 }
 ```
 
@@ -153,9 +174,14 @@ impl axum::extract::FromRef<Services> for R2eConfig {
 ### 6. Registering config in AppBuilder
 
 ```rust
+// Recommended: load + auto-register typed config + children
 AppBuilder::new()
-    .with_config(config)                   // pre-state: store + provide
-    .with_state(services)
+    .load_config::<RootConfig>()           // loads YAML + env, provides RootConfig + children
+    // ...
+
+// Alternative: provide pre-loaded config (no child auto-registration)
+AppBuilder::new()
+    .with_config(config)
     // ...
 ```
 
@@ -189,7 +215,7 @@ Conversion: lowercase, replace `_` with `.`.
 
 ## Startup validation
 
-When a controller is registered with `AppBuilder`, all `#[config]` and `#[config_section(prefix = "...")]` fields are validated. Missing required keys cause a panic with a clear error message including the expected env var name.
+When a controller is registered with `AppBuilder`, all `#[config]` fields are validated. Missing required keys cause a panic with a clear error message including the expected env var name.
 
 ## Testing
 

@@ -12,7 +12,7 @@ pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use registry::{register_section, registered_sections, RegisteredSection};
 pub use typed::{ConfigProperties, PropertyMeta};
 pub use validation::{validate_keys, validate_section, ConfigValidationError, MissingKeyError};
-pub use value::{ConfigValue, FromConfigValue};
+pub use value::{ConfigValue, FromConfigValue, deserialize_value};
 
 /// A single validation error detail from typed config validation (e.g., garde).
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub enum ConfigError {
     TypeMismatch { key: String, expected: &'static str },
     /// An I/O or YAML parsing error occurred while loading config files.
     Load(String),
+    /// Serde deserialization failed (used by `deserialize_value` / `FromConfigValue` derive).
+    Deserialize { key: String, message: String },
     /// Validation errors from typed config (e.g., garde constraints).
     Validation(Vec<ConfigValidationDetail>),
 }
@@ -42,6 +44,9 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "Config type mismatch for '{key}': expected {expected}")
             }
             ConfigError::Load(msg) => write!(f, "Config load error: {msg}"),
+            ConfigError::Deserialize { key, message } => {
+                write!(f, "Config deserialization error for '{key}': {message}")
+            }
             ConfigError::Validation(details) => {
                 write!(f, "Config validation errors:")?;
                 for detail in details {
@@ -199,6 +204,7 @@ impl LoadableConfig for () {
 impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
     fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
         let typed = T::from_config(config, None)?;
+        typed.register_children(registry);
         registry.provide(typed);
         Ok(())
     }

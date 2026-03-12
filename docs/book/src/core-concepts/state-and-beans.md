@@ -176,7 +176,7 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer
     .with_async_bean::<CacheService>()     // async bean
     .with_bean::<UserService>()            // sync bean
-    // config sections are injected via #[config_section(prefix = "...")] in beans
+    // config sections are auto-registered by load_config (available as bean deps)
     .build_state::<AppState, _, _>()          // resolve the graph
     .await                                 // async because graph may contain async beans
 ```

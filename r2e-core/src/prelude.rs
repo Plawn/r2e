@@ -56,6 +56,7 @@ pub use r2e_macros::BeanState;
 
 // Config macros
 pub use r2e_macros::ConfigProperties;
+pub use r2e_macros::FromConfigValue;
 
 // Cache macros
 pub use r2e_macros::Cacheable;

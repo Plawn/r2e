@@ -3,6 +3,7 @@ use proc_macro::TokenStream;
 
 pub(crate) mod cacheable_derive;
 pub(crate) mod config_derive;
+pub(crate) mod from_config_value_derive;
 pub(crate) mod crate_path;
 pub(crate) mod extract;
 pub(crate) mod from_multipart;
@@ -860,6 +861,30 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(ConfigProperties, attributes(config))]
 pub fn derive_config_properties(input: TokenStream) -> TokenStream {
     config_derive::expand(input)
+}
+
+/// Derive macro that generates a [`FromConfigValue`] impl via serde deserialization.
+///
+/// The type must also implement `serde::Deserialize`. This is useful for enums
+/// and other types where manual `FromConfigValue` would be tedious.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(serde::Deserialize, FromConfigValue, Clone, Debug)]
+/// #[serde(rename_all = "lowercase")]
+/// pub enum AppMode {
+///     Development,
+///     Production,
+///     Staging,
+/// }
+/// ```
+///
+/// The generated impl delegates to [`deserialize_value`](r2e_core::config::deserialize_value),
+/// which converts the `ConfigValue` to JSON and uses serde to deserialize.
+#[proc_macro_derive(FromConfigValue)]
+pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
+    from_config_value_derive::expand(input)
 }
 
 // ---------------------------------------------------------------------------
