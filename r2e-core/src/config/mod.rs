@@ -191,17 +191,27 @@ impl R2eConfig {
 /// Implemented for `()` (raw config only) and for any `T: ConfigProperties`
 /// (raw config + typed bean).
 pub trait LoadableConfig: Clone + Send + Sync + 'static {
+    /// Type-level list of all child config types registered by this config.
+    ///
+    /// For `()`, this is `TNil`. For `T: ConfigProperties`, this is `T::Children`.
+    /// Used by `load_config` to add children to the compile-time provision list.
+    type Children;
+
     /// Optionally register additional beans derived from the config.
     fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError>;
 }
 
 impl LoadableConfig for () {
+    type Children = crate::type_list::TNil;
+
     fn register(_config: &R2eConfig, _registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
         Ok(())
     }
 }
 
 impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
+    type Children = T::Children;
+
     fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
         let typed = T::from_config(config, None)?;
         typed.register_children(registry);

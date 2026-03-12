@@ -521,8 +521,41 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    // Build `type Children` — a type-level list of all non-Option section types
+    // plus their own Children, recursively flattened.
+    //
+    // For each non-Option section field of type `T`:
+    //   TCons<T, <T as ConfigProperties>::Children as TAppend<...rest...>>::Output>
+    //
+    // For leaf configs (no sections), Children = TNil.
+    let non_option_sections: Vec<&syn::Type> = field_infos
+        .iter()
+        .filter(|f| f.is_section && !f.is_option)
+        .map(|f| &f.ty)
+        .collect();
+
+    let children_type = if non_option_sections.is_empty() {
+        quote! { #krate::type_list::TNil }
+    } else {
+        // Fold right-to-left: last section's children come first in the tail
+        let mut acc = quote! { #krate::type_list::TNil };
+        for ty in non_option_sections.iter().rev() {
+            // TCons<T, <<T as ConfigProperties>::Children as TAppend<acc>>::Output>
+            acc = quote! {
+                #krate::type_list::TCons<
+                    #ty,
+                    <<#ty as #krate::config::ConfigProperties>::Children
+                        as #krate::type_list::TAppend<#acc>>::Output
+                >
+            };
+        }
+        acc
+    };
+
     Ok(quote! {
         impl #krate::config::typed::ConfigProperties for #name {
+            type Children = #children_type;
+
             fn properties_metadata(__prefix: Option<&str>) -> Vec<#krate::config::typed::PropertyMeta> {
                 vec![
                     #(#metadata_entries,)*

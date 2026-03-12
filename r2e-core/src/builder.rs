@@ -277,7 +277,10 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```
     pub fn load_config<C: crate::config::LoadableConfig>(
         mut self,
-    ) -> AppBuilder<NoState, TCons<C, TCons<crate::config::R2eConfig, P>>, R> {
+    ) -> AppBuilder<NoState, TCons<C, TCons<crate::config::R2eConfig, <C::Children as TAppend<P>>::Output>>, R>
+    where
+        C::Children: TAppend<P>,
+    {
         let config = crate::config::R2eConfig::load()
             .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
         C::register(&config, &mut self.shared.bean_registry)
