@@ -59,8 +59,8 @@ fn generate_wrapper_struct(def: &GrpcRoutesImplDef) -> TokenStream {
     quote! {
         #[doc(hidden)]
         #[derive(Clone)]
-        pub struct #wrapper_name {
-            state: #meta_mod::State,
+        pub struct #wrapper_name<__S> {
+            state: __S,
         }
     }
 }

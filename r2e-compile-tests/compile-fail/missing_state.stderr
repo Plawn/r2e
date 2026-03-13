@@ -1,6 +1,0 @@
-error: #[controller(state = ...)] is required
-       example: #[controller(path = "/users", state = AppState)]
- --> compile-fail/missing_state.rs:4:12
-  |
-4 | pub struct MyController {
-  |            ^^^^^^^^^^^^

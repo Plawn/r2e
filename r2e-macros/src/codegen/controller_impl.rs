@@ -13,15 +13,38 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let name = &def.controller_name;
     let meta_mod = format_ident!("__r2e_meta_{}", name);
 
-    let route_registrations = generate_route_registrations(def, name);
-    let sse_route_registrations = generate_sse_route_registrations(def, name);
-    let ws_route_registrations = generate_ws_route_registrations(def, name);
+    // In generic mode: handlers have <__S>, Controller impl is generic, turbofish needed.
+    // In concrete mode: handlers are monomorphic, Controller impl is concrete, no turbofish.
+    let (turbofish, state_token, impl_head) = if def.is_generic {
+        (
+            quote! { ::<__S> },
+            quote! { __S },
+            quote! {
+                impl<__S> #krate::Controller<__S> for #name
+                where
+                    __S: Clone + Send + Sync + 'static,
+                    (): #meta_mod::StateConstraint<__S>,
+            },
+        )
+    } else {
+        (
+            quote! {},
+            quote! { #meta_mod::State },
+            quote! {
+                impl #krate::Controller<#meta_mod::State> for #name
+            },
+        )
+    };
+
+    let route_registrations = generate_route_registrations(def, name, &turbofish);
+    let sse_route_registrations = generate_sse_route_registrations(def, name, &turbofish);
+    let ws_route_registrations = generate_ws_route_registrations(def, name, &turbofish);
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
-    let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
-    let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
-    let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
+    let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod, &state_token);
+    let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod, &state_token);
+    let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod, &turbofish, &state_token);
 
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
@@ -53,8 +76,9 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     };
 
     quote! {
-        impl #krate::Controller<#meta_mod::State> for #name {
-            fn routes() -> #krate::http::Router<#meta_mod::State> {
+        #impl_head
+        {
+            fn routes() -> #krate::http::Router<#state_token> {
                 #router_body
             }
 
@@ -87,6 +111,8 @@ fn generate_pre_auth_guards(
     def: &RoutesImplDef,
     name: &syn::Ident,
     meta_mod: &syn::Ident,
+    turbofish: &TokenStream,
+    state_token: &TokenStream,
 ) -> TokenStream {
     let has_pre_auth = def
         .route_methods
@@ -172,7 +198,7 @@ fn generate_pre_auth_guards(
                     };
                     __router = __router.route(
                         &__full_path,
-                        #krate::http::routing::#method_fn(#handler_name)
+                        #krate::http::routing::#method_fn(#handler_name #turbofish)
                             #(#middleware_layers)*
                             #(#direct_layers)*
                             .layer(#krate::http::middleware::from_fn(__pre_auth_mw))
@@ -184,9 +210,9 @@ fn generate_pre_auth_guards(
 
     quote! {
         fn apply_pre_auth_guards(
-            mut __router: #krate::http::Router<#meta_mod::State>,
-            __state: &#meta_mod::State,
-        ) -> #krate::http::Router<#meta_mod::State> {
+            mut __router: #krate::http::Router<#state_token>,
+            __state: &#state_token,
+        ) -> #krate::http::Router<#state_token> {
             #(#pre_auth_routes)*
             __router
         }
@@ -195,7 +221,7 @@ fn generate_pre_auth_guards(
 
 /// Generate route registration expressions for the router.
 /// Routes with pre-auth guards are excluded here and registered in `apply_pre_auth_guards` instead.
-fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
+fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident, turbofish: &TokenStream) -> Vec<TokenStream> {
     let krate = r2e_core_path();
 
     def.route_methods
@@ -210,7 +236,7 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
 
             if !has_layers {
                 quote! {
-                    .route(#path, #krate::http::routing::#method_fn(#handler_name))
+                    .route(#path, #krate::http::routing::#method_fn(#handler_name #turbofish))
                 }
             } else {
                 let middleware_layers: Vec<_> = rm
@@ -234,7 +260,7 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
                 quote! {
                     .route(
                         #path,
-                        #krate::http::routing::#method_fn(#handler_name)
+                        #krate::http::routing::#method_fn(#handler_name #turbofish)
                             #(#middleware_layers)*
                             #(#direct_layers)*
                     )
@@ -712,6 +738,7 @@ fn generate_consumer_registrations(
     def: &RoutesImplDef,
     _name: &syn::Ident,
     meta_mod: &syn::Ident,
+    state_token: &TokenStream,
 ) -> TokenStream {
     if def.consumer_methods.is_empty() {
         return quote! {};
@@ -723,19 +750,19 @@ fn generate_consumer_registrations(
         .consumer_methods
         .iter()
         .map(|cm| {
-            let bus_field = format_ident!("{}", cm.bus_field);
+            let inject_method = format_ident!("__inject_{}", cm.bus_field);
             let event_type = &cm.event_type;
             let fn_name = &cm.fn_item.sig.ident;
             let controller_name = &def.controller_name;
 
             quote! {
                 {
-                    let __event_bus = __state.#bus_field.clone();
+                    let __event_bus = <() as #meta_mod::StateConstraint<#state_token>>::#inject_method(&__state);
                     let __state = __state.clone();
                     #events_krate::EventBus::subscribe(&__event_bus, move |__event: std::sync::Arc<#event_type>| {
                         let __state = __state.clone();
                         async move {
-                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#state_token>>::from_state(&__state);
                             __ctrl.#fn_name(__event).await;
                         }
                     }).await;
@@ -746,7 +773,7 @@ fn generate_consumer_registrations(
 
     quote! {
         fn register_consumers(
-            __state: #meta_mod::State,
+            __state: #state_token,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
             Box::pin(async move {
                 #(#consumer_registrations)*
@@ -769,7 +796,8 @@ fn generate_consumer_registrations(
 fn generate_scheduled_tasks(
     def: &RoutesImplDef,
     name: &syn::Ident,
-    meta_mod: &syn::Ident,
+    _meta_mod: &syn::Ident,
+    state_token: &TokenStream,
 ) -> TokenStream {
     if def.scheduled_methods.is_empty() {
         return quote! {};
@@ -805,9 +833,9 @@ fn generate_scheduled_tasks(
                         name: #task_name.to_string(),
                         schedule: #schedule_expr,
                         state: __state.clone(),
-                        task: Box::new(move |__state: #meta_mod::State| {
+                        task: Box::new(move |__state: #state_token| {
                             Box::pin(async move {
-                                let __ctrl = <#name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                                let __ctrl = <#name as #krate::StatefulConstruct<#state_token>>::from_state(&__state);
                                 #sched_krate::ScheduledResult::log_if_err(
                                     #call_expr,
                                     #task_name,
@@ -824,7 +852,7 @@ fn generate_scheduled_tasks(
         .collect();
 
     quote! {
-        fn scheduled_tasks_boxed(__state: &#meta_mod::State) -> Vec<Box<dyn std::any::Any + Send>> {
+        fn scheduled_tasks_boxed(__state: &#state_token) -> Vec<Box<dyn std::any::Any + Send>> {
             vec![#(#task_defs),*]
         }
     }
@@ -832,7 +860,7 @@ fn generate_scheduled_tasks(
 
 // ── SSE route registration ──────────────────────────────────────────────
 
-fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
+fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident, turbofish: &TokenStream) -> Vec<TokenStream> {
     let krate = r2e_core_path();
 
     def.sse_methods
@@ -846,7 +874,7 @@ fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> V
 
             if !has_layers {
                 quote! {
-                    .route(#path, #krate::http::routing::get(#handler_name))
+                    .route(#path, #krate::http::routing::get(#handler_name #turbofish))
                 }
             } else {
                 let middleware_layers: Vec<_> = sm
@@ -864,7 +892,7 @@ fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> V
                 quote! {
                     .route(
                         #path,
-                        #krate::http::routing::get(#handler_name)
+                        #krate::http::routing::get(#handler_name #turbofish)
                             #(#middleware_layers)*
                             #(#direct_layers)*
                     )
@@ -923,7 +951,7 @@ fn generate_sse_route_metadata(
 
 // ── WS route registration ───────────────────────────────────────────────
 
-fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
+fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident, turbofish: &TokenStream) -> Vec<TokenStream> {
     let krate = r2e_core_path();
 
     def.ws_methods
@@ -937,7 +965,7 @@ fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Ve
 
             if !has_layers {
                 quote! {
-                    .route(#path, #krate::http::routing::get(#handler_name))
+                    .route(#path, #krate::http::routing::get(#handler_name #turbofish))
                 }
             } else {
                 let middleware_layers: Vec<_> = wm
@@ -955,7 +983,7 @@ fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Ve
                 quote! {
                     .route(
                         #path,
-                        #krate::http::routing::get(#handler_name)
+                        #krate::http::routing::get(#handler_name #turbofish)
                             #(#middleware_layers)*
                             #(#direct_layers)*
                     )

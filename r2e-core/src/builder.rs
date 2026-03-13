@@ -347,6 +347,39 @@ impl<P, R> AppBuilder<NoState, P, R> {
         plugin.install(self)
     }
 
+    /// Register a [`Bundle`](crate::bundle::Bundle)'s beans into the pre-state builder.
+    ///
+    /// This is the first half of the bundle workflow. After `build_state()`,
+    /// call [`.bundle_routes::<B>()`](AppBuilder::bundle_routes) to register
+    /// the bundle's controllers.
+    ///
+    /// # Compile-time checking
+    ///
+    /// The bundle's `Provisions` are added to the builder's provision list and
+    /// its `Required` are added to the requirement list. Both are validated at
+    /// `build_state()` time.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .bundle_beans::<UserBundle>()
+    ///     .bundle_beans::<AccountBundle>()
+    ///     .build_state::<Services, _, _>().await
+    ///     .bundle_routes::<UserBundle>()
+    ///     .bundle_routes::<AccountBundle>()
+    ///     .serve("0.0.0.0:3000").await;
+    /// ```
+    pub fn bundle_beans<B: crate::bundle::Bundle>(
+        self,
+    ) -> AppBuilder<NoState, <P as TAppend<B::Provisions>>::Output, <R as TAppend<B::Required>>::Output>
+    where
+        P: TAppend<B::Provisions>,
+        R: TAppend<B::Required>,
+    {
+        B::beans(self)
+    }
+
     /// Alias for [`.plugin()`](Self::plugin) for pre-state plugins.
     ///
     /// # Deprecated
@@ -929,6 +962,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
 
         self
+    }
+
+    /// Register a [`BundleRoutes`](crate::bundle::BundleRoutes) into the post-state builder.
+    ///
+    /// This is the second half of the bundle workflow. Call after `build_state()`
+    /// to register the bundle's controllers. The `BundleRoutes<T>` bound is
+    /// checked at compile time — if the state type `T` doesn't satisfy the
+    /// controllers' requirements, you get a compilation error here.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// app.bundle_routes::<UserBundle>()
+    ///    .bundle_routes::<AccountBundle>()
+    /// ```
+    pub fn bundle_routes<B: crate::bundle::BundleRoutes<T>>(self) -> Self {
+        B::routes(self)
     }
 
     /// Register a bean's event subscriptions.

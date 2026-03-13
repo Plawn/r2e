@@ -150,8 +150,8 @@ pub fn derive_controller(input: TokenStream) -> TokenStream {
 /// - `impl Controller<State> for Name` — route registration, metadata,
 ///   consumer registration, and scheduled task definitions.
 #[proc_macro_attribute]
-pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
-    routes_attr::expand(input)
+pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    routes_attr::expand(args, input)
 }
 
 // ---------------------------------------------------------------------------

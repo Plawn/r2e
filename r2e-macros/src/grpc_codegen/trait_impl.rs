@@ -23,7 +23,11 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef) -> TokenStream {
 
     quote! {
         #[#grpc_krate::tonic::async_trait]
-        impl #service_trait for #wrapper_name {
+        impl<__S> #service_trait for #wrapper_name<__S>
+        where
+            __S: Clone + Send + Sync + 'static,
+            (): #meta_mod::StateConstraint<__S>,
+        {
             #(#method_impls)*
         }
     }
@@ -89,7 +93,7 @@ fn generate_method_impl(
 
     // Build the controller construction
     let construct_controller = quote! {
-        let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&self.state);
+        let __ctrl = <#controller_name as #krate::StatefulConstruct<__S>>::from_state(&self.state);
     };
 
     // Build the method call

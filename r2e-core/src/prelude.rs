@@ -73,6 +73,7 @@ pub use crate::error::HttpError;
 pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext};
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
+pub use crate::bundle::{Bundle, BundleRoutes};
 pub use crate::plugin::Plugin;
 pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
 pub use crate::request_id::{RequestId, RequestIdPlugin};

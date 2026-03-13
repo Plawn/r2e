@@ -12,6 +12,9 @@ pub struct RoutesImplDef {
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
+    /// When true, handlers and Controller impl are generic over `__S`.
+    /// When false (default), they use the concrete `#meta_mod::State` type.
+    pub is_generic: bool,
 }
 
 /// Try to unwrap `Option<T>` → `Some(T)`, or `None` if not an Option.
@@ -123,7 +126,7 @@ fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
     Ok(ws_param)
 }
 
-pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
+pub fn parse(item: syn::ItemImpl, is_generic: bool) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
         syn::Type::Path(ref type_path) => type_path
@@ -294,5 +297,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         consumer_methods,
         scheduled_methods,
         other_methods,
+        is_generic,
     })
 }

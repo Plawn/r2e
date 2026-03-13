@@ -3,7 +3,9 @@ use crate::types::*;
 /// Parsed representation of a `#[derive(Controller)]` struct.
 pub struct ControllerStructDef {
     pub name: syn::Ident,
-    pub state_type: syn::Path,
+    /// Concrete state type from `#[controller(state = X)]`.
+    /// `None` means the controller is generic over its state type.
+    pub state_type: Option<syn::Path>,
     pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
@@ -51,13 +53,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
         }
     }
 
-    let state_type = state_type.ok_or_else(|| {
-        syn::Error::new(
-            name.span(),
-            "#[controller(state = ...)] is required\n\
-             example: #[controller(path = \"/users\", state = AppState)]",
-        )
-    })?;
+    // state_type is now optional — when omitted, the controller is generic over state.
 
     // Parse fields
     let (fields, is_unit_struct) = match input.data {

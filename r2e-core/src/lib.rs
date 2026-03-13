@@ -1,5 +1,6 @@
 pub mod beans;
 pub mod builder;
+pub mod bundle;
 pub mod config;
 pub mod controller;
 pub mod dev;
@@ -32,6 +33,7 @@ pub mod ws;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
 pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
+pub use bundle::{Bundle, BundleRoutes};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
     DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,

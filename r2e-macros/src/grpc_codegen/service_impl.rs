@@ -28,12 +28,16 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef) -> TokenStream {
         .unwrap_or_default();
 
     quote! {
-        impl #grpc_krate::GrpcService<#meta_mod::State> for #controller_name {
+        impl<__S> #grpc_krate::GrpcService<__S> for #controller_name
+        where
+            __S: Clone + Send + Sync + 'static,
+            (): #meta_mod::StateConstraint<__S>,
+        {
             fn service_name() -> &'static str {
                 #service_name
             }
 
-            fn into_router(state: &#meta_mod::State) -> #grpc_krate::tonic::transport::server::Router {
+            fn into_router(state: &__S) -> #grpc_krate::tonic::transport::server::Router {
                 let wrapper = #wrapper_name { state: state.clone() };
                 #grpc_krate::tonic::transport::Server::builder()
                     .add_service(#server_path::new(wrapper))

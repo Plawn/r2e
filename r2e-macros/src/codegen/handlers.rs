@@ -216,14 +216,14 @@ fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod, krate: &TokenS
 }
 
 /// Generate managed resource acquisition statements.
-fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
+fn generate_managed_acquire(rm: &RouteMethod, krate: &TokenStream, state_type: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
             quote! {
-                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<#state_type>>::acquire(&__state).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -233,7 +233,7 @@ fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &Tok
 }
 
 /// Generate managed resource release statements (in reverse order).
-fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
+fn generate_managed_release(rm: &RouteMethod, krate: &TokenStream, state_type: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .rev()
@@ -241,7 +241,7 @@ fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &Tok
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
             quote! {
-                if let Err(__e) = <#ty as #krate::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
+                if let Err(__e) = <#ty as #krate::ManagedResource<#state_type>>::release(#arg_name, __success).await {
                     return __e.into();
                 }
             }
@@ -283,6 +283,32 @@ fn generate_body_and_release(
 /// Check if a route method has interceptors (method-level or controller-level).
 fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
     !rm.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
+}
+
+/// Generate extra where-clause bounds for a generic handler.
+///
+/// Managed resource params need `Ty: ManagedResource<__S>`.
+/// Identity params need `Ty: FromRequestParts<__S>` + rejection bound.
+fn generate_extra_bounds(rm: &RouteMethod, krate: &TokenStream) -> Vec<TokenStream> {
+    let mut bounds = Vec::new();
+
+    // Managed resources
+    for mp in &rm.managed_params {
+        let ty = &mp.ty;
+        bounds.push(quote! { #ty: #krate::ManagedResource<__S> });
+    }
+
+    // Identity param (handler-level)
+    if let Some(ref id_param) = rm.identity_param {
+        let id_ty = &id_param.ty;
+        bounds.push(quote! { #id_ty: #krate::http::extract::FromRequestParts<__S> });
+        bounds.push(quote! {
+            <#id_ty as #krate::http::extract::FromRequestParts<__S>>::Rejection:
+                #krate::http::response::IntoResponse
+        });
+    }
+
+    bounds
 }
 
 /// Wrap a body expression with the interceptor chain at handler level.
@@ -351,14 +377,14 @@ fn wrap_with_handler_interceptors(
 }
 
 /// Generate managed resource acquisition using `__state_ref` (for use inside interceptor closures).
-fn generate_managed_acquire_ref(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
+fn generate_managed_acquire_ref(rm: &RouteMethod, krate: &TokenStream, state_type: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
             quote! {
-                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(__state_ref).await {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<#state_type>>::acquire(__state_ref).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -435,14 +461,38 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     );
     let has_validation = !validation_calls.is_empty();
 
+    // When generic: handlers use `__S` and add extra bounds.
+    // When concrete: handlers use `#meta_mod::State`.
+    let (generic_param, state_type, where_clause) = if def.is_generic {
+        let extra_bounds = generate_extra_bounds(rm, &krate);
+        (
+            quote! { <__S> },
+            quote! { __S },
+            quote! {
+                where
+                    __S: Clone + Send + Sync + 'static,
+                    (): #meta_mod::StateConstraint<__S>,
+                    #(#extra_bounds,)*
+            },
+        )
+    } else {
+        (
+            quote! {},
+            quote! { #meta_mod::State },
+            quote! {},
+        )
+    };
+
     if !needs_state && !has_validation {
         // Case 1a: Simple handler — no guards, no managed, no interceptors, no validation
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
+            async fn #handler_name #generic_param(
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) #return_type {
+            ) #return_type
+            #where_clause
+            {
                 let __ctrl = __ctrl_ext.0;
                 #call_expr
             }
@@ -451,10 +501,12 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         // Case 1b: Simple handler with validation — returns Response
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
+            async fn #handler_name #generic_param(
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 #(#validation_calls)*
                 let __ctrl = __ctrl_ext.0;
                 #krate::http::response::IntoResponse::into_response(#call_expr)
@@ -473,11 +525,13 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            async fn #handler_name #generic_param(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#state_type>,
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) #return_type {
+            ) #return_type
+            #where_clause
+            {
                 let __ctrl = __ctrl_ext.0;
                 #interceptor_body
             }
@@ -500,11 +554,13 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            async fn #handler_name #generic_param(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#state_type>,
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 #(#validation_calls)*
                 let __ctrl = __ctrl_ext.0;
                 #interceptor_body
@@ -535,8 +591,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             // Inside the interceptor closure, use __state_ref for acquire.
             let is_result = is_result_type(return_type);
             if has_managed {
-                let managed_acquire_ref = generate_managed_acquire_ref(rm, meta_mod, &krate);
-                let managed_release = generate_managed_release(rm, meta_mod, &krate);
+                let managed_acquire_ref = generate_managed_acquire_ref(rm, &krate, &state_type);
+                let managed_release = generate_managed_release(rm, &krate, &state_type);
                 let body_and_release =
                     generate_body_and_release(&call_expr, &managed_release, true, is_result, &krate);
                 let managed_body = quote! {
@@ -569,8 +625,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         } else {
             // No interceptors — original behavior
-            let managed_acquire = generate_managed_acquire(rm, meta_mod, &krate);
-            let managed_release = generate_managed_release(rm, meta_mod, &krate);
+            let managed_acquire = generate_managed_acquire(rm, &krate, &state_type);
+            let managed_release = generate_managed_release(rm, &krate, &state_type);
             let is_result = is_result_type(return_type);
             let body_and_release =
                 generate_body_and_release(&call_expr, &managed_release, has_managed, is_result, &krate);
@@ -582,12 +638,14 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            async fn #handler_name #generic_param(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#state_type>,
                 #guard_params
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 #guard_context_construction
                 #(#guard_checks)*
                 #(#validation_calls)*
@@ -684,13 +742,41 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 
     let has_guards = !sm.decorators.guard_fns.is_empty();
 
+    // Compute generic/concrete tokens
+    let (generic_param, state_type, where_clause) = if def.is_generic {
+        let mut extra_bounds = vec![];
+        if let Some(ref id_param) = sm.identity_param {
+            let id_ty = &id_param.ty;
+            extra_bounds.push(quote! { #id_ty: #krate::http::extract::FromRequestParts<__S> });
+            extra_bounds.push(quote! { <#id_ty as #krate::http::extract::FromRequestParts<__S>>::Rejection: #krate::http::response::IntoResponse });
+        }
+        (
+            quote! { <__S> },
+            quote! { __S },
+            quote! {
+                where
+                    __S: Clone + Send + Sync + 'static,
+                    (): #meta_mod::StateConstraint<__S>,
+                    #(#extra_bounds,)*
+            },
+        )
+    } else {
+        (
+            quote! {},
+            quote! { #meta_mod::State },
+            quote! {},
+        )
+    };
+
     if !has_guards {
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
+            async fn #handler_name #generic_param(
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> impl #krate::http::response::IntoResponse {
+            ) -> impl #krate::http::response::IntoResponse
+            #where_clause
+            {
                 let __ctrl = __ctrl_ext.0;
                 let __stream = #call_expr;
                 #keep_alive_expr
@@ -733,14 +819,16 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            async fn #handler_name #generic_param(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#state_type>,
                 __headers: #krate::http::HeaderMap,
                 __uri: #krate::http::Uri,
                 __raw_path_params: #krate::http::extract::RawPathParams,
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 #guard_context
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
@@ -792,6 +880,32 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         .collect();
 
     let has_guards = !wm.decorators.guard_fns.is_empty();
+
+    // Compute generic/concrete tokens
+    let (generic_param, state_type, where_clause) = if def.is_generic {
+        let mut extra_bounds = vec![];
+        if let Some(ref id_param) = wm.identity_param {
+            let id_ty = &id_param.ty;
+            extra_bounds.push(quote! { #id_ty: #krate::http::extract::FromRequestParts<__S> });
+            extra_bounds.push(quote! { <#id_ty as #krate::http::extract::FromRequestParts<__S>>::Rejection: #krate::http::response::IntoResponse });
+        }
+        (
+            quote! { <__S> },
+            quote! { __S },
+            quote! {
+                where
+                    __S: Clone + Send + Sync + 'static,
+                    (): #meta_mod::StateConstraint<__S>,
+                    #(#extra_bounds,)*
+            },
+        )
+    } else {
+        (
+            quote! {},
+            quote! { #meta_mod::State },
+            quote! {},
+        )
+    };
 
     // Build the on_upgrade closure body
     let upgrade_body = if let Some(ref ws_p) = wm.ws_param {
@@ -853,11 +967,13 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     if !has_guards {
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
+            async fn #handler_name #generic_param(
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
                 __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 __ws_upgrade.on_upgrade(move |__socket| async move {
                     let __ctrl = __ctrl_ext.0;
                     #upgrade_body
@@ -901,15 +1017,17 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         quote! {
             #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            async fn #handler_name #generic_param(
+                #krate::http::extract::State(__state): #krate::http::extract::State<#state_type>,
                 __headers: #krate::http::HeaderMap,
                 __uri: #krate::http::Uri,
                 __raw_path_params: #krate::http::extract::RawPathParams,
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
                 __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-            ) -> #krate::http::response::Response {
+            ) -> #krate::http::response::Response
+            #where_clause
+            {
                 #guard_context
                 #(#guard_checks)*
                 __ws_upgrade.on_upgrade(move |__socket| async move {

@@ -1,15 +1,8 @@
-
-
 - macro de service vs uniquement controller
-- merge route controller et route methode -> WIP
-- audit la partie data pour faire plus de reuse et du clean
-- audit de performance
 - audit de responsabilities boundaries 
-- cli ?
 - gestion de bean ? -> injection ? -> graph de dependance ? @ApplicationScoped ?
 - gestion d'un inject generique dans le body pour faire transactionnal plus clean
 - injecter l'identity dans les params handler et pas au niveau controller -> OK
-- update doc -> DONE
 - derive Service et pas que controller ?
 - ecosystem tower ? quid ? ya quoi ? ça marche comment ? -> OK
 - ecosstems de middleware ? -> OK
@@ -33,3 +26,7 @@
 - add warning when return body could not automatticaaly be added top openapi
 
 -> optimize impl IntoResponse for HttpError {
+- better grpc/proto automagic setup, auto compile, auto build.rs + etc
+- ensure event bus high performance
+- add support for apache iggy
+- add supporrt for apache pulsar
