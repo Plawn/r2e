@@ -178,8 +178,44 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
 
         // Conditional 401/403 only when route has auth
         if route.has_auth {
-            responses.insert("401".into(), json!({ "description": "Unauthorized" }));
-            responses.insert("403".into(), json!({ "description": "Forbidden" }));
+            responses.insert("401".into(), json!({
+                "description": "Unauthorized",
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                    }
+                }
+            }));
+            responses.insert("403".into(), json!({
+                "description": "Forbidden",
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                    }
+                }
+            }));
+        }
+
+        // Default 500 response
+        responses.insert("500".into(), json!({
+            "description": "Internal server error",
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                }
+            }
+        }));
+
+        // If route has a request body, it may return 400
+        if route.request_body_type.is_some() {
+            responses.entry("400".to_string()).or_insert_with(|| json!({
+                "description": "Bad request / Validation error",
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" }
+                    }
+                }
+            }));
         }
 
         operation.insert("responses".into(), Value::Object(responses));
@@ -239,6 +275,49 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         sanitize_schema(&mut def_schema);
         schemas.entry(def_name).or_insert(def_schema);
     }
+
+    // Insert standard error schemas
+    schemas.entry("ErrorResponse".to_string()).or_insert_with(|| {
+        json!({
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "description": "A human-readable error message"
+                }
+            },
+            "required": ["error"]
+        })
+    });
+    schemas.entry("ValidationErrorResponse".to_string()).or_insert_with(|| {
+        json!({
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "description": "Always \"Validation failed\""
+                },
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/FieldError"
+                    }
+                }
+            },
+            "required": ["error", "details"]
+        })
+    });
+    schemas.entry("FieldError".to_string()).or_insert_with(|| {
+        json!({
+            "type": "object",
+            "properties": {
+                "field": { "type": "string" },
+                "message": { "type": "string" },
+                "code": { "type": "string" }
+            },
+            "required": ["field", "message", "code"]
+        })
+    });
 
     let mut components: Map<String, Value> = Map::new();
     components.insert(

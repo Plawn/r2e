@@ -203,19 +203,18 @@ pub trait ManagedResource<S>: Sized {
 
 /// Error wrapper for managed resource operations using `HttpError`.
 ///
-/// This is a convenience wrapper for use with the framework's built-in `HttpError` type.
-/// For custom error types, use [`ManagedErr<E>`] instead.
+/// **Deprecated:** Use `ManagedErr<HttpError>` instead, which is functionally identical.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use r2e_core::{ManagedResource, ManagedError, HttpError};
+/// use r2e_core::{ManagedResource, ManagedErr, HttpError};
 ///
 /// impl<S: Send + Sync> ManagedResource<S> for MyResource {
-///     type Error = ManagedError;
+///     type Error = ManagedErr<HttpError>;
 ///
 ///     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
-///         Err(ManagedError(HttpError::Internal("failed to acquire".into())))
+///         Err(HttpError::internal("failed to acquire").into())
 ///     }
 ///
 ///     async fn release(self, _success: bool) -> Result<(), Self::Error> {
@@ -223,6 +222,7 @@ pub trait ManagedResource<S>: Sized {
 ///     }
 /// }
 /// ```
+#[deprecated(since = "0.2.0", note = "use `ManagedErr<HttpError>` instead")]
 pub struct ManagedError(pub HttpError);
 
 impl From<HttpError> for ManagedError {

@@ -26,7 +26,7 @@ impl ChatService {
             .bind(text)
             .execute(&self.pool)
             .await
-            .map_err(|e| HttpError::Internal(e.to_string()))?;
+            .map_err(|e| HttpError::internal(e.to_string()))?;
         Ok(())
     }
 
@@ -43,7 +43,7 @@ impl ChatService {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
         Ok(messages.into_iter().rev().collect())
     }
@@ -53,7 +53,7 @@ impl ChatService {
             sqlx::query_as("SELECT DISTINCT room FROM messages ORDER BY room")
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| HttpError::Internal(e.to_string()))?;
+                .map_err(|e| HttpError::internal(e.to_string()))?;
 
         Ok(rooms.into_iter().map(|(r,)| r).collect())
     }

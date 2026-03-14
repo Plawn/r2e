@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 
 mod controllers;
 mod db_identity;
+mod error;
 mod models;
 mod services;
 mod state;

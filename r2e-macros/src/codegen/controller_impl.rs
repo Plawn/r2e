@@ -732,13 +732,17 @@ fn generate_consumer_registrations(
                 {
                     let __event_bus = __state.#bus_field.clone();
                     let __state = __state.clone();
-                    #events_krate::EventBus::subscribe(&__event_bus, move |__event: std::sync::Arc<#event_type>| {
+                    let __handle = #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
                         let __state = __state.clone();
                         async move {
                             let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            __ctrl.#fn_name(__event).await;
+                            __ctrl.#fn_name(__envelope.event).await;
+                            #events_krate::HandlerResult::Ack
                         }
                     }).await;
+                    if let Err(__e) = __handle {
+                        eprintln!("[r2e] Failed to subscribe consumer: {__e}");
+                    }
                 }
             }
         })

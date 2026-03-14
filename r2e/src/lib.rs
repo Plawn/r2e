@@ -51,6 +51,9 @@ pub use r2e_security;
 #[cfg(feature = "events")]
 pub use r2e_events;
 
+#[cfg(feature = "events-iggy")]
+pub use r2e_events_iggy;
+
 #[cfg(feature = "utils")]
 pub use r2e_utils;
 
@@ -135,6 +138,9 @@ pub mod prelude {
 
     #[cfg(feature = "events")]
     pub use r2e_events::prelude::*;
+
+    #[cfg(feature = "events-iggy")]
+    pub use r2e_events_iggy::prelude::*;
 
     #[cfg(feature = "utils")]
     pub use r2e_utils::prelude::*;

@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static"]
+full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static", "events-iggy"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -23,6 +23,7 @@ data-diesel = ["data", "dep:r2e-data-diesel"]
 sqlite = ["data-sqlx", "r2e-data-sqlx/sqlite"]
 postgres = ["data-sqlx", "r2e-data-sqlx/postgres"]
 mysql = ["data-sqlx", "r2e-data-sqlx/mysql"]
+events-iggy = ["events", "dep:r2e-events-iggy"]
 scheduler = ["dep:r2e-scheduler"]
 cache = ["dep:r2e-cache"]
 rate-limit = ["dep:r2e-rate-limit"]
@@ -57,4 +58,5 @@ r2e-openfga = { path = "../r2e-openfga", version = "0.1.0", optional = true }
 r2e-grpc = { path = "../r2e-grpc", version = "0.1.0", optional = true }
 r2e-static = { path = "../r2e-static", version = "0.1.0", optional = true }
 r2e-observability = { path = "../r2e-observability", version = "0.1.0", optional = true }
+r2e-events-iggy = { path = "../r2e-events-iggy", version = "0.1.0", optional = true }
 r2e-devtools = { path = "../r2e-devtools", version = "0.1.0", optional = true }

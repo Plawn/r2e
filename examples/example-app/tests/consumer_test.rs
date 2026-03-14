@@ -112,7 +112,7 @@ async fn test_consumer_method_invoked() {
     <CountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(state.clone()).await;
 
     // Emit event
-    state.event_bus.emit(TestConsumerEvent {
+    let _ = state.event_bus.emit(TestConsumerEvent {
         message: "hello".into(),
     }).await;
 
@@ -128,7 +128,7 @@ async fn test_consumer_receives_correct_data() {
 
     <DataCapturingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(state.clone()).await;
 
-    state.event_bus.emit(TestConsumerEvent {
+    let _ = state.event_bus.emit(TestConsumerEvent {
         message: "important payload".into(),
     }).await;
 
@@ -147,7 +147,7 @@ async fn test_consumer_with_injected_deps() {
 
     // Emit multiple events to verify injected state is correctly shared
     for _ in 0..5 {
-        state.event_bus.emit(TestConsumerEvent {
+        let _ = state.event_bus.emit(TestConsumerEvent {
             message: "tick".into(),
         }).await;
     }
@@ -166,7 +166,7 @@ async fn test_multiple_consumers_same_event() {
     <CountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(state.clone()).await;
     <SecondCountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(state.clone()).await;
 
-    state.event_bus.emit(TestConsumerEvent {
+    let _ = state.event_bus.emit(TestConsumerEvent {
         message: "broadcast".into(),
     }).await;
 

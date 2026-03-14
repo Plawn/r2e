@@ -21,7 +21,7 @@ impl ProjectService {
         .bind(tenant_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
         Ok(projects)
     }
@@ -40,7 +40,7 @@ impl ProjectService {
         .bind(&req.description)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
         Ok(project)
     }
@@ -52,7 +52,7 @@ impl ProjectService {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
         Ok(tenants
             .into_iter()

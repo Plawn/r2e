@@ -49,7 +49,7 @@ where
         let tenant_id = claims["tenant_id"]
             .as_str()
             .ok_or_else(|| {
-                r2e::HttpError::Unauthorized("Missing tenant_id claim in JWT".into())
+                r2e::HttpError::unauthorized("Missing tenant_id claim in JWT")
             })?
             .to_owned();
 

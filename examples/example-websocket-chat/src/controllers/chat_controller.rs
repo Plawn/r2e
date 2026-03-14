@@ -69,7 +69,7 @@ impl ChatController {
                             let _ = ws.send_json(&outgoing).await;
 
                             // Emit event for persistence (fire-and-forget)
-                            event_bus.emit(MessageSentEvent {
+                            let _ = event_bus.emit(MessageSentEvent {
                                 room: room.clone(),
                                 username: username.clone(),
                                 text,

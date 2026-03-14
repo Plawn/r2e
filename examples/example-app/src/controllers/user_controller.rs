@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use crate::state::Services;
@@ -134,20 +135,18 @@ impl UserController {
         &self,
         Json(body): Json<CreateUserRequest>,
         #[managed] tx: &mut Tx<'_, Sqlite>,
-    ) -> Result<Json<User>, HttpError> {
+    ) -> Result<Json<User>, AppError> {
         sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
             .bind(&body.name)
             .bind(&body.email)
             .execute(tx.as_mut())
-            .await
-            .map_err(|e| HttpError::Internal(e.to_string()))?;
+            .await?;
 
         let row = sqlx::query_as::<_, (i64, String, String)>(
             "SELECT id, name, email FROM users WHERE rowid = last_insert_rowid()",
         )
         .fetch_one(tx.as_mut())
-        .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .await?;
 
         Ok(Json(User {
             id: row.0 as u64,

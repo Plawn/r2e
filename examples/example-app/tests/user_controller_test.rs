@@ -71,7 +71,7 @@ mod common {
                 users.push(user.clone());
                 user
             };
-            self.event_bus
+            let _ = self.event_bus
                 .emit(UserCreatedEvent {
                     user_id: user.id,
                     name: user.name.clone(),

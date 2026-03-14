@@ -11,8 +11,9 @@ categories = ["asynchronous"]
 description = "In-process typed event bus for R2E - publish/subscribe with async handlers"
 
 [dependencies]
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { version = "1", features = ["sync", "rt", "time"] }
 serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }

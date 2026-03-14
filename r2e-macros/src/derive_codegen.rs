@@ -192,7 +192,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                                         "Configuration error in {}: key '{}' — {}. \
                                          Add it to application.yaml or set env var {}.",
                                         #controller_name_str, #key, e, #env_hint
-                                    )
+                                    ).into()
                                 )
                             ));
                         }
@@ -223,7 +223,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                                         #controller_name_str,
                                         #prefix,
                                         e,
-                                    )
+                                    ).into()
                                 )
                             ));
                         }

@@ -97,7 +97,7 @@ where
             .pool()
             .begin()
             .await
-            .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
+            .map_err(|e| ManagedError(HttpError::internal(e.to_string())))?;
         Ok(Tx(tx))
     }
 
@@ -106,7 +106,7 @@ where
             self.into_inner()
                 .commit()
                 .await
-                .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
+                .map_err(|e| ManagedError(HttpError::internal(e.to_string())))?;
         }
         // If !success, the transaction is dropped and automatically rolled back
         Ok(())

@@ -16,7 +16,7 @@ impl Guard<AppState, TenantUser> for TenantGuard {
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         async move {
             let identity = ctx.identity.ok_or_else(|| {
-                HttpError::Unauthorized("Authentication required".into()).into_response()
+                HttpError::unauthorized("Authentication required").into_response()
             })?;
 
             // Super-admins can access any tenant
@@ -35,7 +35,7 @@ impl Guard<AppState, TenantUser> for TenantGuard {
             if path_tenant == identity.tenant_id {
                 Ok(())
             } else {
-                Err(HttpError::Forbidden(format!(
+                Err(HttpError::forbidden(format!(
                     "You don't have access to tenant '{}'",
                     path_tenant
                 ))

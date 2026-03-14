@@ -240,6 +240,12 @@ fn parse_status_expr(expr: &syn::Expr) -> syn::Result<StatusExpr> {
             lit: Lit::Int(lit), ..
         }) => {
             let val: u16 = lit.base10_parse()?;
+            if !(100..=599).contains(&val) {
+                return Err(syn::Error::new_spanned(
+                    lit,
+                    format!("invalid HTTP status code {val}: must be between 100 and 599"),
+                ));
+            }
             Ok(StatusExpr::Numeric(val))
         }
         _ => Err(syn::Error::new_spanned(

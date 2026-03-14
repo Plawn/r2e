@@ -89,12 +89,12 @@ where
                 .bind(&sub)
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| r2e::HttpError::Internal(format!("DB error: {e}")))?;
+                .map_err(|e| r2e::HttpError::internal(format!("DB error: {e}")))?;
 
         let profile = row
             .map(|(id, name, email)| UserProfile { id, name, email })
             .ok_or_else(|| {
-                r2e::HttpError::NotFound(format!("No user profile for sub '{sub}'"))
+                r2e::HttpError::not_found(format!("No user profile for sub '{sub}'"))
             })?;
 
         Ok(DbUser { auth, profile })

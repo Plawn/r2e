@@ -36,14 +36,14 @@ impl OrderService {
             .await?;
 
         if !availability.available {
-            return Err(HttpError::BadRequest(format!(
+            return Err(HttpError::bad_request(format!(
                 "Product '{}' is out of stock",
                 product.name
             )));
         }
 
         if availability.stock < req.quantity {
-            return Err(HttpError::BadRequest(format!(
+            return Err(HttpError::bad_request(format!(
                 "Insufficient stock for '{}': requested {}, available {}",
                 product.name, req.quantity, availability.stock
             )));

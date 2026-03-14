@@ -38,9 +38,13 @@ impl std::error::Error for DataError {
 impl From<DataError> for r2e_core::HttpError {
     fn from(err: DataError) -> Self {
         match err {
-            DataError::NotFound(msg) => r2e_core::HttpError::NotFound(msg),
-            DataError::Database(e) => r2e_core::HttpError::Internal(e.to_string()),
-            DataError::Other(msg) => r2e_core::HttpError::Internal(msg),
+            DataError::NotFound(msg) => r2e_core::HttpError::NotFound(msg.into()),
+            DataError::Database(e) => r2e_core::HttpError::WithSource {
+                status: r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
+                message: "Database error".into(),
+                source: e,
+            },
+            DataError::Other(msg) => r2e_core::HttpError::Internal(msg.into()),
         }
     }
 }

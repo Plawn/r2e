@@ -1,0 +1,29 @@
+[package]
+name = "r2e-events-iggy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["events", "pubsub", "iggy", "streaming"]
+categories = ["asynchronous"]
+description = "Apache Iggy event bus backend for R2E — persistent distributed event streaming"
+
+[features]
+default = []
+integration = []
+
+[dependencies]
+r2e-events = { path = "../r2e-events", version = "0.1.0" }
+iggy = "0.9"
+tokio = { version = "1", features = ["sync", "rt", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+bytes = "1"
+futures-util = "0.3"
+tokio-util = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

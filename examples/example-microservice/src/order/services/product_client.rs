@@ -27,14 +27,14 @@ impl ProductClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| HttpError::Internal(format!("Product service unavailable: {}", e)))?;
+            .map_err(|e| HttpError::internal(format!("Product service unavailable: {}", e)))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(HttpError::NotFound(format!("Product {} not found", id)));
+            return Err(HttpError::not_found(format!("Product {} not found", id)));
         }
 
         if !resp.status().is_success() {
-            return Err(HttpError::Internal(format!(
+            return Err(HttpError::internal(format!(
                 "Product service returned {}",
                 resp.status()
             )));
@@ -42,7 +42,7 @@ impl ProductClient {
 
         resp.json::<ProductInfo>()
             .await
-            .map_err(|e| HttpError::Internal(format!("Invalid product response: {}", e)))
+            .map_err(|e| HttpError::internal(format!("Invalid product response: {}", e)))
     }
 
     pub async fn check_availability(&self, id: u64) -> Result<AvailabilityResponse, HttpError> {
@@ -53,14 +53,14 @@ impl ProductClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| HttpError::Internal(format!("Product service unavailable: {}", e)))?;
+            .map_err(|e| HttpError::internal(format!("Product service unavailable: {}", e)))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(HttpError::NotFound(format!("Product {} not found", id)));
+            return Err(HttpError::not_found(format!("Product {} not found", id)));
         }
 
         if !resp.status().is_success() {
-            return Err(HttpError::Internal(format!(
+            return Err(HttpError::internal(format!(
                 "Product service returned {}",
                 resp.status()
             )));
@@ -68,6 +68,6 @@ impl ProductClient {
 
         resp.json::<AvailabilityResponse>()
             .await
-            .map_err(|e| HttpError::Internal(format!("Invalid availability response: {}", e)))
+            .map_err(|e| HttpError::internal(format!("Invalid availability response: {}", e)))
     }
 }

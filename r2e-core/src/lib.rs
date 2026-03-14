@@ -40,8 +40,8 @@ pub use config::{
     validate_keys, validate_section,
 };
 pub use controller::{Controller, StatefulConstruct};
-pub use error::HttpError;
-pub use guards::{Guard, GuardContext, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
+pub use error::{HttpError, HttpErrorExt};
+pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing};
 pub use lifecycle::LifecycleController;

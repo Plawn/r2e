@@ -83,11 +83,24 @@ Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`,
 
 ## Events (r2e-events)
 
-`EventBus` — pluggable event bus **trait**. `LocalEventBus` — default in-process implementation. Events are dispatched by `TypeId`. Subscribers receive `Arc<E>`.
+`EventBus` — pluggable event bus **trait**. `LocalEventBus` — default in-process implementation. Events are dispatched by `TypeId`. Subscribers receive `EventEnvelope<E>` containing `Arc<E>` + `EventMetadata`.
 
-- `bus.subscribe(|event: Arc<MyEvent>| async { ... })` — register a handler. Requires `E: DeserializeOwned`.
-- `bus.emit(event)` — fire-and-forget (spawns handlers as concurrent tasks). Requires `E: Serialize`.
-- `bus.emit_and_wait(event)` — waits for all handlers to complete.
+**Core types:**
+- `EventEnvelope<E>` — wraps `event: Arc<E>` + `metadata: EventMetadata`.
+- `EventMetadata` — auto-generated per emit: `event_id`, `timestamp`, optional `correlation_id`, `partition_key`, `headers: HashMap<String, String>`.
+- `HandlerResult` — `Ack` or `Nack(String)`. Implements `From<()>` and `From<Result<(), E>>`.
+- `SubscriptionHandle` — returned by `subscribe()`, supports `unsubscribe()`.
+- `EventBusError` — `Serialization`, `Connection`, `Shutdown`, `Other`.
+- `Event` trait — opt-in trait with `fn topic() -> &'static str` for distributed backends.
+
+**EventBus trait methods:**
+- `bus.subscribe(|envelope: EventEnvelope<MyEvent>| async { HandlerResult::Ack })` → `Result<SubscriptionHandle, EventBusError>`. Requires `E: DeserializeOwned`.
+- `bus.emit(event)` → `Result<(), EventBusError>`. Fire-and-forget. Requires `E: Serialize`.
+- `bus.emit_with(event, metadata)` → `Result<(), EventBusError>`. Emit with explicit metadata.
+- `bus.emit_and_wait(event)` → `Result<(), EventBusError>`. Waits for all handlers.
+- `bus.emit_and_wait_with(event, metadata)` → `Result<(), EventBusError>`. Waits with explicit metadata.
+- `bus.shutdown(timeout)` → `Result<(), EventBusError>`. Graceful shutdown: rejects new emits, waits for in-flight handlers.
+- `bus.clear()` — remove all handlers.
 
 Event types must derive `Serialize + Deserialize` (required by the trait for backend compatibility; `LocalEventBus` never actually serializes — zero overhead).
 
@@ -98,6 +111,39 @@ Custom backends (Kafka, Redis, NATS) can implement the `EventBus` trait.
 **Declarative consumers on beans** via `#[consumer(bus = "field_name")]` in a `#[bean]` impl block. The `#[bean]` macro generates an `EventSubscriber` impl. Register via `AppBuilder::register_subscriber::<T>()`.
 
 **Multiple buses** — both controllers and beans can use multiple bus fields of different types. Each `#[consumer(bus = "field")]` references a specific field.
+
+### IggyEventBus (r2e-events-iggy)
+
+`IggyEventBus` — distributed `EventBus` implementation backed by [Apache Iggy](https://iggy.apache.org/). Publishes events as JSON to Iggy topics; background pollers consume and dispatch to local handlers.
+
+**Setup:**
+```rust
+let config = IggyConfig::builder()
+    .address("127.0.0.1:8090")
+    .stream_name("my-app")
+    .consumer_group("my-group")
+    .build();
+
+let bus = IggyEventBus::builder(config)
+    .topic::<UserCreated>("user-created")   // explicit topic name
+    .topic::<OrderPlaced>("order-placed")
+    .connect()
+    .await?;
+```
+
+**Key types:**
+- `IggyConfig` — connection settings (address, transport, stream name, consumer group, poll interval, auto-create).
+- `Transport` — `Tcp` (default) | `Quic` | `Http`.
+- `IggyEventBusBuilder` — pre-register topic names, then `.connect().await` to create the bus.
+
+**Behavior:**
+- `subscribe<E>()` — registers a local handler; on first subscriber for a type, spawns a background poller that creates/joins an Iggy consumer group.
+- `emit()` / `emit_with()` — serializes to JSON, maps `EventMetadata` to Iggy headers (`r2e-event-id`, `r2e-correlation-id`, `r2e-timestamp`, `r2e-h-*`), publishes to Iggy.
+- `emit_and_wait()` — publishes to Iggy AND waits for **local** handlers. Cannot wait for remote consumers (documented limitation).
+- `shutdown(timeout)` — cancels pollers, drains in-flight handlers, disconnects client.
+- Topic names default to sanitized `type_name` (`::` → `.`) unless explicitly registered via builder.
+
+**Feature flag:** `r2e = { features = ["events-iggy"] }` or depend on `r2e-events-iggy` directly.
 
 ## Scheduling (r2e-scheduler)
 

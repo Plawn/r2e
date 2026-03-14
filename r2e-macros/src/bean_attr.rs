@@ -291,10 +291,16 @@ fn generate_event_subscriber_impl(
                 {
                     let __bus = self.#bus_field.clone();
                     let __this = self.clone();
-                    #events_krate::EventBus::subscribe(&__bus, move |__event: std::sync::Arc<#event_type>| {
+                    let __handle = #events_krate::EventBus::subscribe(&__bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
                         let __this = __this.clone();
-                        async move { __this.#fn_name(__event).await; }
+                        async move {
+                            __this.#fn_name(__envelope.event).await;
+                            #events_krate::HandlerResult::Ack
+                        }
                     }).await;
+                    if let Err(__e) = __handle {
+                        eprintln!("[r2e] Failed to subscribe consumer: {__e}");
+                    }
                 }
             }
         })

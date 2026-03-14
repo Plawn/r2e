@@ -24,7 +24,7 @@ impl ProductController {
             .get_by_id(id)
             .await
             .map(Json)
-            .ok_or_else(|| HttpError::NotFound(format!("Product {} not found", id)))
+            .ok_or_else(|| HttpError::not_found(format!("Product {} not found", id)))
     }
 
     #[get("/{id}/availability")]
@@ -36,6 +36,6 @@ impl ProductController {
             .check_availability(id)
             .await
             .map(Json)
-            .ok_or_else(|| HttpError::NotFound(format!("Product {} not found", id)))
+            .ok_or_else(|| HttpError::not_found(format!("Product {} not found", id)))
     }
 }

@@ -198,6 +198,55 @@ impl<'a> PreAuthGuardContext<'a> {
     }
 }
 
+// ── GuardError helper ─────────────────────────────────────────────────
+
+/// A convenient error type for guard implementations.
+///
+/// Instead of constructing `Response` manually, guards can return
+/// `GuardError` and convert it with `.into()`.
+///
+/// # Example
+/// ```ignore
+/// use r2e_core::guards::GuardError;
+///
+/// async fn check(&self, _state: &S, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+///     if ctx.identity.is_none() {
+///         return Err(GuardError::new(StatusCode::FORBIDDEN, "access denied").into());
+///     }
+///     Ok(())
+/// }
+/// ```
+pub struct GuardError {
+    pub status: crate::http::StatusCode,
+    pub message: String,
+}
+
+impl GuardError {
+    /// Create a new guard error with the given status and message.
+    pub fn new(status: crate::http::StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    /// 401 Unauthorized guard error.
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(crate::http::StatusCode::UNAUTHORIZED, message)
+    }
+
+    /// 403 Forbidden guard error.
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(crate::http::StatusCode::FORBIDDEN, message)
+    }
+}
+
+impl From<GuardError> for Response {
+    fn from(err: GuardError) -> Self {
+        crate::error::error_response(err.status, err.message)
+    }
+}
+
 /// Guard that runs **before** authentication (JWT extraction).
 ///
 /// Use this for checks that don't need identity (e.g., global or IP-based rate limiting).
