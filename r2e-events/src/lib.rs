@@ -177,6 +177,63 @@ impl<E: fmt::Display> From<Result<(), E>> for HandlerResult {
     }
 }
 
+// ── EventFilter ───────────────────────────────────────────────────────
+
+/// A predicate that decides whether a handler should process a given event.
+///
+/// Receives the event's metadata and returns `true` to process, `false` to skip.
+pub type EventFilter = Arc<dyn Fn(&EventMetadata) -> bool + Send + Sync>;
+
+// ── RetryPolicy ───────────────────────────────────────────────────────
+
+/// Configuration for automatic retry and dead-letter handling.
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts (default: 3).
+    pub max_retries: u32,
+    /// Delay between retries (default: 1 second).
+    pub retry_delay: std::time::Duration,
+    /// Whether to use exponential backoff (default: true).
+    pub exponential_backoff: bool,
+    /// Optional dead-letter topic name. Events that exhaust all retries are
+    /// published here. If `None`, failed events are dropped.
+    pub dead_letter_topic: Option<String>,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            retry_delay: std::time::Duration::from_secs(1),
+            exponential_backoff: true,
+            dead_letter_topic: None,
+        }
+    }
+}
+
+impl RetryPolicy {
+    pub fn new(max_retries: u32) -> Self {
+        Self {
+            max_retries,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_dlq(mut self, topic: impl Into<String>) -> Self {
+        self.dead_letter_topic = Some(topic.into());
+        self
+    }
+}
+
+// ── DlqPublisher ──────────────────────────────────────────────────────
+
+/// Callback for publishing failed events to a dead-letter topic.
+pub type DlqPublisher = Arc<
+    dyn Fn(String, Vec<u8>, EventMetadata) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
 // ── Event trait ────────────────────────────────────────────────────────
 
 /// Opt-in trait for events that need explicit topic names.
@@ -201,6 +258,28 @@ pub trait Event: Serialize + DeserializeOwned + Send + Sync + 'static {
 /// for remote transport. In-memory backends (like [`LocalEventBus`]) are
 /// free to ignore serialization — the bounds exist only for trait compatibility.
 pub trait EventBus: Clone + Send + Sync + 'static {
+    /// Register a topic name for event type `E` at runtime.
+    ///
+    /// Distributed backends write to their topic registry; `LocalEventBus` is a no-op.
+    /// This is used by the `#[consumer(topic = "...")]` macro attribute.
+    fn register_topic<E: 'static>(&self, _topic: &str) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    /// Configure filter and retry policy on a handler after subscription.
+    ///
+    /// This is called by generated code to attach filter/retry policies to
+    /// a handler identified by its subscription ID. The type parameter `E`
+    /// enables O(1) lookup by TypeId instead of scanning all handler maps.
+    fn configure_handler<E: 'static>(
+        &self,
+        _handler_id: SubscriptionId,
+        _filter: Option<EventFilter>,
+        _retry_policy: Option<RetryPolicy>,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
     /// Subscribe to events of type `E`.
     ///
     /// The handler receives an [`EventEnvelope<E>`] and returns a [`HandlerResult`].
@@ -213,6 +292,26 @@ pub trait EventBus: Clone + Send + Sync + 'static {
         E: DeserializeOwned + Send + Sync + 'static,
         F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HandlerResult> + Send + 'static;
+
+    /// Subscribe with a custom deserializer for non-JSON formats.
+    ///
+    /// Use this when consuming events from external systems that use Protobuf,
+    /// Avro, MessagePack, or other binary formats. The `deserializer` converts
+    /// raw bytes into `Arc<dyn Any + Send + Sync>`.
+    ///
+    /// Note: `E` does NOT need to implement `DeserializeOwned` when using this method.
+    fn subscribe_with_deserializer<E, F, Fut>(
+        &self,
+        _deserializer: backend::DeserializerFn,
+        _handler: F,
+    ) -> impl Future<Output = Result<SubscriptionHandle, EventBusError>> + Send
+    where
+        E: Send + Sync + 'static,
+        F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult> + Send + 'static,
+    {
+        async { Err(EventBusError::Other("subscribe_with_deserializer not supported by this backend".to_string())) }
+    }
 
     /// Emit an event, spawning all subscribers as concurrent tasks.
     ///
@@ -261,8 +360,9 @@ pub trait EventBus: Clone + Send + Sync + 'static {
 
 pub mod prelude {
     //! Re-exports of the most commonly used event types.
+    pub use crate::backend::DeserializerFn;
     pub use crate::{
-        Event, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
-        LocalEventBus, SubscriptionHandle, SubscriptionId,
+        Event, EventBus, EventBusError, EventEnvelope, EventFilter, EventMetadata, HandlerResult,
+        LocalEventBus, RetryPolicy, SubscriptionHandle, SubscriptionId,
     };
 }

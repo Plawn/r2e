@@ -181,6 +181,27 @@ impl RabbitMqEventBus {
 }
 
 impl EventBus for RabbitMqEventBus {
+    fn register_topic<E: 'static>(&self, topic: &str) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        let topic = topic.to_string();
+        async move {
+            let type_id = TypeId::of::<E>();
+            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+        }
+    }
+
+    fn configure_handler<E: 'static>(
+        &self,
+        handler_id: r2e_events::SubscriptionId,
+        filter: Option<r2e_events::EventFilter>,
+        retry_policy: Option<r2e_events::RetryPolicy>,
+    ) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        async move {
+            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+        }
+    }
+
     fn subscribe<E, F, Fut>(
         &self,
         handler: F,
@@ -207,6 +228,55 @@ impl EventBus for RabbitMqEventBus {
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
             // If this is the first subscriber for this type, set up the consumer
+            if is_first {
+                let queue_name = bus.ensure_queue(&topic_name).await?;
+
+                let cancel = CancellationToken::new();
+                inner
+                    .state
+                    .poller_cancels
+                    .lock()
+                    .await
+                    .insert(type_id, cancel.clone());
+
+                let inner_clone = bus.inner.clone();
+                let queue_clone = queue_name.clone();
+
+                tokio::spawn(async move {
+                    run_consumer(inner_clone, type_id, queue_clone, cancel).await;
+                });
+            }
+
+            Ok(inner.state.build_unsubscribe_handle(type_id, id))
+        }
+    }
+
+    fn subscribe_with_deserializer<E, F, Fut>(
+        &self,
+        deserializer: r2e_events::backend::DeserializerFn,
+        handler: F,
+    ) -> impl Future<Output = Result<SubscriptionHandle, EventBusError>> + Send
+    where
+        E: Send + Sync + 'static,
+        F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult> + Send + 'static,
+    {
+        let inner = self.inner.clone();
+        let bus = self.clone();
+        async move {
+            inner.state.check_shutdown()?;
+
+            let type_id = TypeId::of::<E>();
+            let topic_name = bus.resolve_topic::<E>().await;
+
+            let h: Handler = Arc::new(move |any, metadata| {
+                let event = any.downcast::<E>().expect("event type mismatch");
+                let envelope = EventEnvelope { event, metadata };
+                Box::pin(handler(envelope))
+            });
+
+            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+
             if is_first {
                 let queue_name = bus.ensure_queue(&topic_name).await?;
 
@@ -354,19 +424,51 @@ impl EventBus for RabbitMqEventBus {
     }
 }
 
-/// Background consumer loop for a single queue/topic.
+/// Background consumer loop for a single queue/topic with automatic reconnection.
 async fn run_consumer(
     inner: Arc<RabbitMqInner>,
     type_id: TypeId,
     queue_name: String,
     cancel: CancellationToken,
 ) {
+    let max_backoff = inner.config.reconnect_max_backoff;
+    let reconnect = inner.config.reconnect;
+    let mut backoff = std::time::Duration::from_secs(1);
+
+    loop {
+        let start = std::time::Instant::now();
+        run_consumer_inner(&inner, type_id, &queue_name, &cancel).await;
+
+        if cancel.is_cancelled() || !reconnect {
+            break;
+        }
+
+        // Reset backoff if the consumer ran successfully for a while
+        if start.elapsed() > backoff * 4 {
+            backoff = std::time::Duration::from_secs(1);
+        }
+
+        tracing::warn!(queue = %queue_name, "RabbitMQ consumer disconnected, reconnecting in {backoff:?}");
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(backoff) => {},
+        }
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
+async fn run_consumer_inner(
+    inner: &Arc<RabbitMqInner>,
+    type_id: TypeId,
+    queue_name: &str,
+    cancel: &CancellationToken,
+) {
     // Start consuming from the queue
     let consumer_tag = format!("r2e-{}", queue_name);
     let consumer = match inner
         .channel
         .basic_consume(
-            &queue_name,
+            queue_name,
             &consumer_tag,
             BasicConsumeOptions::default(),
             FieldTable::default(),
@@ -395,29 +497,49 @@ async fn run_consumer(
                         let metadata = extract_metadata_from_delivery(&delivery);
                         let payload = delivery.data.as_slice();
 
+                        // Skip if this event was already dispatched locally by emit_and_wait.
+                        if inner.state.locally_dispatched.lock().await.remove(metadata.event_id) {
+                            if let Err(e) = delivery.ack(BasicAckOptions::default()).await {
+                                tracing::error!(queue = %queue_name, "failed to ack deduped delivery: {e}");
+                            }
+                            continue;
+                        }
+
                         // Attempt to dispatch to local handlers
                         let map = inner.state.handlers.read().await;
                         let dispatch_ok = if let Some(topic_handlers) = map.get(&type_id) {
                             match (topic_handlers.deserializer)(payload) {
                                 Ok(event) => {
-                                    // Dispatch to all handlers
+                                    // Dispatch to all handlers, respecting filters + retry
                                     let mut tasks = Vec::new();
                                     for entry in &topic_handlers.entries {
+                                        // Check filter
+                                        if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
+                                            continue;
+                                        }
                                         let h = entry.handler.clone();
                                         let e = event.clone();
                                         let m = metadata.clone();
+                                        let retry_policy = entry.retry_policy.clone();
 
                                         inner.state.in_flight.fetch_add(1, Ordering::SeqCst);
 
                                         let state = inner.state.clone();
                                         tasks.push(tokio::spawn(async move {
-                                            let result = h(e, m).await;
+                                            let result = if let Some(ref policy) = retry_policy {
+                                                r2e_events::backend::BackendState::invoke_with_retry(&h, &e, &m, policy).await
+                                            } else {
+                                                h(e, m).await
+                                            };
                                             if state.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
                                                 state.in_flight_zero.notify_waiters();
                                             }
                                             result
                                         }));
                                     }
+
+                                    // Collect DLQ info before dropping map
+                                    let dlq_payload = payload.to_vec();
                                     drop(map);
 
                                     // Wait for all handler tasks and check results
@@ -435,6 +557,24 @@ async fn run_consumer(
                                             }
                                         }
                                     }
+
+                                    // Publish to DLQ on final failure if configured
+                                    if !all_ack {
+                                        if let Some(ref publisher) = inner.state.dlq_publisher {
+                                            // Re-read handlers to find DLQ topics
+                                            let map = inner.state.handlers.read().await;
+                                            if let Some(th) = map.get(&type_id) {
+                                                for entry in &th.entries {
+                                                    if let Some(ref policy) = entry.retry_policy {
+                                                        if let Some(ref dlq_topic) = policy.dead_letter_topic {
+                                                            publisher(dlq_topic.clone(), dlq_payload.clone(), metadata.clone()).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     all_ack
                                 }
                                 Err(err) => {

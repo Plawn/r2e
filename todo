@@ -31,3 +31,15 @@
 - add support for apache iggy
 - add supporrt for apache pulsarwh
 - tracing subscriber en json ?
+
+
+--- event bus
+-> clean code add warning here
+
+  The LocallyDispatchedSet uses a bounded ring buffer — it has a fixed capacity (default 8192 entries). The GC strategy is simple eviction on overflow:                                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                                                                                                                                                                        
+  How it works:
+  - HashSet<u64> for O(1) lookup + VecDeque<u64> for insertion order tracking                                                                                                                                                                                                                                                                                                                                           
+  - Each entry is 8 bytes (u64 event_id), so 8192 entries = ~128KB total (set + deque)
+  - When insert() is called and len >= capacity: pop the oldest entry from the front of the VecDeque, remove it from the HashSet, then insert the new one
+  - Memory usage is constant — it never grows beyond capacity

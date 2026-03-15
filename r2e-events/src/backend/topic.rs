@@ -13,6 +13,11 @@ impl TopicRegistry {
         self.map.insert(TypeId::of::<E>(), topic.into());
     }
 
+    /// Register a topic name by raw `TypeId` (for runtime registration).
+    pub fn register_by_type_id(&mut self, type_id: TypeId, topic: impl Into<String>) {
+        self.map.insert(type_id, topic.into());
+    }
+
     /// Resolve the topic name for a given `TypeId`.
     ///
     /// Returns the registered name, or falls back to a sanitized `type_name`.

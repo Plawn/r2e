@@ -24,6 +24,10 @@ pub struct RabbitMqConfig {
     pub heartbeat: u16,
     /// Optional connection name shown in the RabbitMQ management UI.
     pub connection_name: Option<String>,
+    /// Whether to automatically reconnect when the consumer disconnects (default: true).
+    pub reconnect: bool,
+    /// Maximum backoff between reconnection attempts (default: 60s).
+    pub reconnect_max_backoff: std::time::Duration,
 }
 
 impl Default for RabbitMqConfig {
@@ -40,6 +44,8 @@ impl Default for RabbitMqConfig {
             dead_letter_exchange: None,
             heartbeat: 60,
             connection_name: None,
+            reconnect: true,
+            reconnect_max_backoff: std::time::Duration::from_secs(60),
         }
     }
 }
@@ -110,6 +116,16 @@ impl RabbitMqConfigBuilder {
 
     pub fn connection_name(mut self, name: impl Into<String>) -> Self {
         self.config.connection_name = Some(name.into());
+        self
+    }
+
+    pub fn reconnect(mut self, enable: bool) -> Self {
+        self.config.reconnect = enable;
+        self
+    }
+
+    pub fn reconnect_max_backoff(mut self, duration: std::time::Duration) -> Self {
+        self.config.reconnect_max_backoff = duration;
         self
     }
 

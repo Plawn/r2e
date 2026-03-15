@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::{EventMetadata, HandlerResult};
+use crate::{EventFilter, EventMetadata, HandlerResult, RetryPolicy};
 
 /// Type-erased async handler function.
 pub type Handler = Arc<
@@ -20,6 +20,12 @@ pub type DeserializerFn =
 pub struct HandlerEntry {
     pub id: u64,
     pub handler: Handler,
+    /// Optional filter predicate — when set, the handler is skipped if the
+    /// filter returns `false` for the event's metadata.
+    pub filter: Option<EventFilter>,
+    /// Optional retry policy — when set, failed handlers are retried
+    /// according to this policy before being sent to the DLQ.
+    pub retry_policy: Option<RetryPolicy>,
 }
 
 /// All handlers and the deserializer for a single event type / topic.

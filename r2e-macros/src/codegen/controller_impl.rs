@@ -728,18 +728,98 @@ fn generate_consumer_registrations(
             let fn_name = &cm.fn_item.sig.ident;
             let controller_name = &def.controller_name;
 
-            quote! {
-                {
-                    let __event_bus = __state.#bus_field.clone();
-                    let __state = __state.clone();
-                    let __handle = #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+            // Optional: register topic before subscribe
+            let register_topic = cm.topic.as_ref().map(|topic_str| {
+                quote! {
+                    #events_krate::EventBus::register_topic::<#event_type>(&__event_bus, #topic_str).await;
+                }
+            });
+
+            // Choose subscribe vs subscribe_with_deserializer
+            let subscribe_call = if let Some(ref deser_fn) = cm.deserializer {
+                let deser_ident = format_ident!("{}", deser_fn);
+                quote! {
+                    let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(#controller_name::#deser_ident);
+                    #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__event_bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
                         let __state = __state.clone();
                         async move {
                             let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            __ctrl.#fn_name(__envelope.event).await;
-                            #events_krate::HandlerResult::Ack
+                            let __result = __ctrl.#fn_name(__envelope.event).await;
+                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
                         }
-                    }).await;
+                    }).await
+                }
+            } else {
+                quote! {
+                    #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                        let __state = __state.clone();
+                        async move {
+                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                            let __result = __ctrl.#fn_name(__envelope.event).await;
+                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
+                        }
+                    }).await
+                }
+            };
+
+            // Build optional filter
+            let has_filter = cm.filter.is_some();
+            let filter_expr = if let Some(ref filter_fn) = cm.filter {
+                let filter_ident = format_ident!("{}", filter_fn);
+                quote! {
+                    Some(std::sync::Arc::new({
+                        let __state_for_filter = __state_orig.clone();
+                        move |__meta: &#events_krate::EventMetadata| -> bool {
+                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state_for_filter);
+                            __ctrl.#filter_ident(__meta)
+                        }
+                    }) as #events_krate::EventFilter)
+                }
+            } else {
+                quote! { None }
+            };
+
+            // Build optional retry policy
+            let has_retry = cm.retry.is_some();
+            let retry_expr = if let Some(max_retries) = cm.retry {
+                if let Some(ref dlq_topic) = cm.dlq {
+                    quote! {
+                        Some(#events_krate::RetryPolicy::new(#max_retries).with_dlq(#dlq_topic))
+                    }
+                } else {
+                    quote! {
+                        Some(#events_krate::RetryPolicy::new(#max_retries))
+                    }
+                }
+            } else {
+                quote! { None }
+            };
+
+            // Generate configure_handler call if needed
+            let configure_handler = if has_filter || has_retry {
+                quote! {
+                    if let Ok(ref __h) = __handle {
+                        #events_krate::EventBus::configure_handler::<#event_type>(
+                            &__event_bus_ref,
+                            __h.id(),
+                            #filter_expr,
+                            #retry_expr,
+                        ).await;
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            quote! {
+                {
+                    let __event_bus = __state.#bus_field.clone();
+                    let __event_bus_ref = __event_bus.clone();
+                    let __state_orig = __state.clone();
+                    let __state = __state.clone();
+                    #register_topic
+                    let __handle = #subscribe_call;
+                    #configure_handler
                     if let Err(__e) = __handle {
                         eprintln!("[r2e] Failed to subscribe consumer: {__e}");
                     }

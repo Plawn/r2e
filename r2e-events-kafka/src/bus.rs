@@ -110,6 +110,27 @@ impl KafkaEventBus {
 }
 
 impl EventBus for KafkaEventBus {
+    fn register_topic<E: 'static>(&self, topic: &str) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        let topic = topic.to_string();
+        async move {
+            let type_id = TypeId::of::<E>();
+            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+        }
+    }
+
+    fn configure_handler<E: 'static>(
+        &self,
+        handler_id: r2e_events::SubscriptionId,
+        filter: Option<r2e_events::EventFilter>,
+        retry_policy: Option<r2e_events::RetryPolicy>,
+    ) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        async move {
+            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+        }
+    }
+
     fn subscribe<E, F, Fut>(
         &self,
         handler: F,
@@ -136,6 +157,55 @@ impl EventBus for KafkaEventBus {
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
             // If this is the first subscriber for this type, set up the consumer
+            if is_first {
+                bus.ensure_topic(&topic_name).await?;
+
+                let cancel = CancellationToken::new();
+                inner
+                    .state
+                    .poller_cancels
+                    .lock()
+                    .await
+                    .insert(type_id, cancel.clone());
+
+                let inner_clone = bus.inner.clone();
+                let topic_clone = topic_name.clone();
+
+                tokio::spawn(async move {
+                    run_consumer(inner_clone, type_id, topic_clone, cancel).await;
+                });
+            }
+
+            Ok(inner.state.build_unsubscribe_handle(type_id, id))
+        }
+    }
+
+    fn subscribe_with_deserializer<E, F, Fut>(
+        &self,
+        deserializer: r2e_events::backend::DeserializerFn,
+        handler: F,
+    ) -> impl Future<Output = Result<SubscriptionHandle, EventBusError>> + Send
+    where
+        E: Send + Sync + 'static,
+        F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult> + Send + 'static,
+    {
+        let inner = self.inner.clone();
+        let bus = self.clone();
+        async move {
+            inner.state.check_shutdown()?;
+
+            let type_id = TypeId::of::<E>();
+            let topic_name = bus.resolve_topic::<E>().await;
+
+            let h: Handler = Arc::new(move |any, metadata| {
+                let event = any.downcast::<E>().expect("event type mismatch");
+                let envelope = EventEnvelope { event, metadata };
+                Box::pin(handler(envelope))
+            });
+
+            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+
             if is_first {
                 bus.ensure_topic(&topic_name).await?;
 
@@ -273,12 +343,44 @@ impl EventBus for KafkaEventBus {
     }
 }
 
-/// Background consumer loop for a single Kafka topic.
+/// Background consumer loop for a single Kafka topic with automatic reconnection.
 async fn run_consumer(
     inner: Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: String,
     cancel: CancellationToken,
+) {
+    let max_backoff = inner.config.reconnect_max_backoff;
+    let reconnect = inner.config.reconnect;
+    let mut backoff = Duration::from_secs(1);
+
+    loop {
+        let start = std::time::Instant::now();
+        run_consumer_inner(&inner, type_id, &topic_name, &cancel).await;
+
+        if cancel.is_cancelled() || !reconnect {
+            break;
+        }
+
+        // Reset backoff if the consumer ran successfully for a while
+        if start.elapsed() > backoff * 4 {
+            backoff = Duration::from_secs(1);
+        }
+
+        tracing::warn!(topic = %topic_name, "Kafka consumer disconnected, reconnecting in {backoff:?}");
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(backoff) => {},
+        }
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
+async fn run_consumer_inner(
+    inner: &Arc<KafkaInner>,
+    type_id: TypeId,
+    topic_name: &str,
+    cancel: &CancellationToken,
 ) {
     let consumer: StreamConsumer = match inner.config.to_consumer_client_config().create() {
         Ok(c) => c,
@@ -288,7 +390,7 @@ async fn run_consumer(
         }
     };
 
-    if let Err(e) = consumer.subscribe(&[&topic_name]) {
+    if let Err(e) = consumer.subscribe(&[topic_name]) {
         tracing::error!(topic = %topic_name, "failed to subscribe to Kafka topic: {e}");
         return;
     }

@@ -10,7 +10,7 @@ use crate::type_list_gen::build_tcons_type;
 
 /// Parsed consumer method data from a `#[bean]` impl block.
 struct BeanConsumerMethod {
-    bus_field: String,
+    config: crate::extract::consumer::ConsumerConfig,
     event_type: syn::Type,
     fn_name: syn::Ident,
 }
@@ -236,7 +236,7 @@ fn scan_consumer_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanConsumerMe
                 continue;
             }
 
-            if let Some(bus_field) = extract_consumer(&method.attrs)? {
+            if let Some(config) = extract_consumer(&method.attrs)? {
                 // Find the event parameter (first typed param after &self)
                 let event_param = method
                     .sig
@@ -257,7 +257,7 @@ fn scan_consumer_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanConsumerMe
                 let event_type = extract_event_type_from_arc(&event_param.ty)?;
 
                 consumers.push(BeanConsumerMethod {
-                    bus_field,
+                    config,
                     event_type,
                     fn_name: method.sig.ident.clone(),
                 });
@@ -283,21 +283,99 @@ fn generate_event_subscriber_impl(
     let subscribe_blocks: Vec<_> = consumers
         .iter()
         .map(|cm| {
-            let bus_field = syn::Ident::new(&cm.bus_field, proc_macro2::Span::call_site());
+            let bus_field = syn::Ident::new(&cm.config.bus_field, proc_macro2::Span::call_site());
             let event_type = &cm.event_type;
             let fn_name = &cm.fn_name;
+
+            // Optional: register topic before subscribe
+            let register_topic = cm.config.topic.as_ref().map(|topic_str| {
+                quote! {
+                    #events_krate::EventBus::register_topic::<#event_type>(&__bus, #topic_str).await;
+                }
+            });
+
+            // Choose subscribe vs subscribe_with_deserializer
+            let subscribe_call = if let Some(ref deser_fn) = cm.config.deserializer {
+                let deser_ident = syn::Ident::new(deser_fn, proc_macro2::Span::call_site());
+                quote! {
+                    let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(Self::#deser_ident);
+                    #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                        let __this = __this.clone();
+                        async move {
+                            let __result = __this.#fn_name(__envelope.event).await;
+                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
+                        }
+                    }).await
+                }
+            } else {
+                quote! {
+                    #events_krate::EventBus::subscribe(&__bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                        let __this = __this.clone();
+                        async move {
+                            let __result = __this.#fn_name(__envelope.event).await;
+                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
+                        }
+                    }).await
+                }
+            };
+
+            // Build optional filter
+            let has_filter = cm.config.filter.is_some();
+            let filter_expr = if let Some(ref filter_fn) = cm.config.filter {
+                let filter_ident = syn::Ident::new(filter_fn, proc_macro2::Span::call_site());
+                quote! {
+                    Some(std::sync::Arc::new({
+                        let __this_for_filter = __this_orig.clone();
+                        move |__meta: &#events_krate::EventMetadata| -> bool {
+                            __this_for_filter.#filter_ident(__meta)
+                        }
+                    }) as #events_krate::EventFilter)
+                }
+            } else {
+                quote! { None }
+            };
+
+            // Build optional retry policy
+            let has_retry = cm.config.retry.is_some();
+            let retry_expr = if let Some(max_retries) = cm.config.retry {
+                if let Some(ref dlq_topic) = cm.config.dlq {
+                    quote! {
+                        Some(#events_krate::RetryPolicy::new(#max_retries).with_dlq(#dlq_topic))
+                    }
+                } else {
+                    quote! {
+                        Some(#events_krate::RetryPolicy::new(#max_retries))
+                    }
+                }
+            } else {
+                quote! { None }
+            };
+
+            // Generate configure_handler call if needed
+            let configure_handler = if has_filter || has_retry {
+                quote! {
+                    if let Ok(ref __h) = __handle {
+                        #events_krate::EventBus::configure_handler::<#event_type>(
+                            &__bus_ref,
+                            __h.id(),
+                            #filter_expr,
+                            #retry_expr,
+                        ).await;
+                    }
+                }
+            } else {
+                quote! {}
+            };
 
             quote! {
                 {
                     let __bus = self.#bus_field.clone();
+                    let __bus_ref = __bus.clone();
+                    let __this_orig = self.clone();
                     let __this = self.clone();
-                    let __handle = #events_krate::EventBus::subscribe(&__bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                        let __this = __this.clone();
-                        async move {
-                            __this.#fn_name(__envelope.event).await;
-                            #events_krate::HandlerResult::Ack
-                        }
-                    }).await;
+                    #register_topic
+                    let __handle = #subscribe_call;
+                    #configure_handler
                     if let Err(__e) = __handle {
                         eprintln!("[r2e] Failed to subscribe consumer: {__e}");
                     }

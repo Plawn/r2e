@@ -49,6 +49,10 @@ pub struct PulsarConfig {
     pub auto_create: bool,
     /// Default number of partitions for topics (0 = non-partitioned).
     pub default_partitions: u32,
+    /// Whether to automatically reconnect when the consumer disconnects (default: true).
+    pub reconnect: bool,
+    /// Maximum backoff between reconnection attempts (default: 60s).
+    pub reconnect_max_backoff: std::time::Duration,
 }
 
 impl Default for PulsarConfig {
@@ -63,6 +67,8 @@ impl Default for PulsarConfig {
             batch_size: 100,
             auto_create: true,
             default_partitions: 0,
+            reconnect: true,
+            reconnect_max_backoff: std::time::Duration::from_secs(60),
         }
     }
 }
@@ -128,6 +134,16 @@ impl PulsarConfigBuilder {
 
     pub fn default_partitions(mut self, partitions: u32) -> Self {
         self.config.default_partitions = partitions;
+        self
+    }
+
+    pub fn reconnect(mut self, enable: bool) -> Self {
+        self.config.reconnect = enable;
+        self
+    }
+
+    pub fn reconnect_max_backoff(mut self, duration: std::time::Duration) -> Self {
+        self.config.reconnect_max_backoff = duration;
         self
     }
 

@@ -8,6 +8,8 @@ use tokio::sync::{Notify, RwLock, Semaphore};
 
 use crate::{EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle, SubscriptionId};
 
+use crate::EventFilter;
+
 type Handler = Arc<
     dyn Fn(Arc<dyn Any + Send + Sync>, EventMetadata)
         -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
@@ -18,6 +20,7 @@ type Handler = Arc<
 struct HandlerEntry {
     id: u64,
     handler: Handler,
+    filter: Option<EventFilter>,
 }
 
 /// Default maximum concurrent handlers.
@@ -126,6 +129,10 @@ impl LocalEventBus {
         if let Some(entries) = map.get(&type_id) {
             let mut tasks = Vec::new();
             for entry in entries {
+                // Check filter
+                if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
+                    continue;
+                }
                 let h = entry.handler.clone();
                 let e = event.clone();
                 let m = metadata.clone();
@@ -213,6 +220,7 @@ impl EventBus for LocalEventBus {
             map.entry(type_id).or_default().push(HandlerEntry {
                 id,
                 handler: h,
+                filter: None,
             });
 
             Ok(SubscriptionHandle::new(

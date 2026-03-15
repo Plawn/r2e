@@ -35,6 +35,10 @@ pub struct IggyConfig {
     pub auto_create: bool,
     /// Default number of partitions for auto-created topics.
     pub default_partitions: u32,
+    /// Whether to automatically reconnect when the consumer disconnects (default: true).
+    pub reconnect: bool,
+    /// Maximum backoff between reconnection attempts (default: 60s).
+    pub reconnect_max_backoff: Duration,
 }
 
 impl Default for IggyConfig {
@@ -50,6 +54,8 @@ impl Default for IggyConfig {
             poll_batch_size: 100,
             auto_create: true,
             default_partitions: 1,
+            reconnect: true,
+            reconnect_max_backoff: Duration::from_secs(60),
         }
     }
 }
@@ -115,6 +121,16 @@ impl IggyConfigBuilder {
 
     pub fn default_partitions(mut self, partitions: u32) -> Self {
         self.config.default_partitions = partitions;
+        self
+    }
+
+    pub fn reconnect(mut self, enable: bool) -> Self {
+        self.config.reconnect = enable;
+        self
+    }
+
+    pub fn reconnect_max_backoff(mut self, duration: Duration) -> Self {
+        self.config.reconnect_max_backoff = duration;
         self
     }
 

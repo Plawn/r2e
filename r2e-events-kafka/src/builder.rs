@@ -43,6 +43,11 @@ impl KafkaEventBusBuilder {
         self
     }
 
+    /// Register an event type using its [`Event::topic()`] name.
+    pub fn register_event<E: r2e_events::Event + 'static>(self) -> Self {
+        self.topic::<E>(E::topic())
+    }
+
     /// Connect to the Kafka cluster and return a ready-to-use [`KafkaEventBus`].
     pub async fn connect(self) -> Result<KafkaEventBus, EventBusError> {
         let producer: FutureProducer = self

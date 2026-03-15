@@ -102,6 +102,10 @@ pub struct KafkaConfig {
     pub enable_auto_commit: bool,
     /// Extra librdkafka configuration overrides.
     pub overrides: HashMap<String, String>,
+    /// Whether to automatically reconnect when the consumer disconnects (default: true).
+    pub reconnect: bool,
+    /// Maximum backoff between reconnection attempts (default: 60s).
+    pub reconnect_max_backoff: std::time::Duration,
 }
 
 impl Default for KafkaConfig {
@@ -121,6 +125,8 @@ impl Default for KafkaConfig {
             session_timeout_ms: 30000,
             enable_auto_commit: true,
             overrides: HashMap::new(),
+            reconnect: true,
+            reconnect_max_backoff: std::time::Duration::from_secs(60),
         }
     }
 }
@@ -293,6 +299,16 @@ impl KafkaConfigBuilder {
 
     pub fn override_config(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.config.overrides.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn reconnect(mut self, enable: bool) -> Self {
+        self.config.reconnect = enable;
+        self
+    }
+
+    pub fn reconnect_max_backoff(mut self, duration: std::time::Duration) -> Self {
+        self.config.reconnect_max_backoff = duration;
         self
     }
 

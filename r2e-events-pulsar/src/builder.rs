@@ -42,6 +42,11 @@ impl PulsarEventBusBuilder {
         self
     }
 
+    /// Register an event type using its [`Event::topic()`] name.
+    pub fn register_event<E: r2e_events::Event + 'static>(self) -> Self {
+        self.topic::<E>(E::topic())
+    }
+
     /// Connect to the Pulsar cluster and return a ready-to-use [`PulsarEventBus`].
     pub async fn connect(self) -> Result<PulsarEventBus, EventBusError> {
         let mut builder =

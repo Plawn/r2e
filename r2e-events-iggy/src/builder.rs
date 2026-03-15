@@ -40,6 +40,11 @@ impl IggyEventBusBuilder {
         self
     }
 
+    /// Register an event type using its [`Event::topic()`] name.
+    pub fn register_event<E: r2e_events::Event + 'static>(self) -> Self {
+        self.topic::<E>(E::topic())
+    }
+
     /// Connect to the Iggy server and return a ready-to-use [`IggyEventBus`].
     pub async fn connect(self) -> Result<IggyEventBus, EventBusError> {
         let client = build_client(&self.config).map_err(map_iggy_error)?;

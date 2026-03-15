@@ -157,7 +157,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             syn::ImplItem::Fn(mut method) => {
                 let all_attrs = std::mem::take(&mut method.attrs);
 
-                if let Some(bus_field) = extract_consumer(&all_attrs)? {
+                if let Some(config) = extract_consumer(&all_attrs)? {
                     let event_param = method
                         .sig
                         .inputs
@@ -177,7 +177,12 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     let event_type = extract_event_type_from_arc(&event_param.ty)?;
                     method.attrs = strip_consumer_attrs(all_attrs);
                     consumer_methods.push(ConsumerMethod {
-                        bus_field,
+                        bus_field: config.bus_field,
+                        topic: config.topic,
+                        deserializer: config.deserializer,
+                        filter: config.filter,
+                        retry: config.retry,
+                        dlq: config.dlq,
                         event_type,
                         fn_item: method,
                     });

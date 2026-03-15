@@ -14,5 +14,5 @@ pub use metadata_codec::{
     decode_metadata, encode_metadata, HEADER_CORRELATION_ID, HEADER_EVENT_ID,
     HEADER_PARTITION_KEY, HEADER_TIMESTAMP, HEADER_USER_PREFIX,
 };
-pub use state::BackendState;
+pub use state::{BackendState, LocallyDispatchedSet};
 pub use topic::{sanitize_topic_name, TopicRegistry};

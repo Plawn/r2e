@@ -129,6 +129,27 @@ impl PulsarEventBus {
 }
 
 impl EventBus for PulsarEventBus {
+    fn register_topic<E: 'static>(&self, topic: &str) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        let topic = topic.to_string();
+        async move {
+            let type_id = TypeId::of::<E>();
+            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+        }
+    }
+
+    fn configure_handler<E: 'static>(
+        &self,
+        handler_id: r2e_events::SubscriptionId,
+        filter: Option<r2e_events::EventFilter>,
+        retry_policy: Option<r2e_events::RetryPolicy>,
+    ) -> impl Future<Output = ()> + Send {
+        let inner = self.inner.clone();
+        async move {
+            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+        }
+    }
+
     fn subscribe<E, F, Fut>(
         &self,
         handler: F,
@@ -155,6 +176,55 @@ impl EventBus for PulsarEventBus {
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
             // If this is the first subscriber for this type, set up the consumer poller
+            if is_first {
+                let full_topic = bus.full_topic(&topic_name);
+
+                let cancel = CancellationToken::new();
+                inner
+                    .state
+                    .poller_cancels
+                    .lock()
+                    .await
+                    .insert(type_id, cancel.clone());
+
+                let inner_clone = bus.inner.clone();
+                let config = bus.inner.config.clone();
+
+                tokio::spawn(async move {
+                    run_poller(inner_clone, type_id, full_topic, config, cancel).await;
+                });
+            }
+
+            Ok(inner.state.build_unsubscribe_handle(type_id, id))
+        }
+    }
+
+    fn subscribe_with_deserializer<E, F, Fut>(
+        &self,
+        deserializer: r2e_events::backend::DeserializerFn,
+        handler: F,
+    ) -> impl Future<Output = Result<SubscriptionHandle, EventBusError>> + Send
+    where
+        E: Send + Sync + 'static,
+        F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult> + Send + 'static,
+    {
+        let inner = self.inner.clone();
+        let bus = self.clone();
+        async move {
+            inner.state.check_shutdown()?;
+
+            let type_id = TypeId::of::<E>();
+            let topic_name = bus.resolve_topic::<E>().await;
+
+            let h: Handler = Arc::new(move |any, metadata| {
+                let event = any.downcast::<E>().expect("event type mismatch");
+                let envelope = EventEnvelope { event, metadata };
+                Box::pin(handler(envelope))
+            });
+
+            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+
             if is_first {
                 let full_topic = bus.full_topic(&topic_name);
 
@@ -301,7 +371,7 @@ impl EventBus for PulsarEventBus {
     }
 }
 
-/// Background consumer loop for a single topic.
+/// Background consumer loop for a single topic with automatic reconnection.
 async fn run_poller(
     inner: Arc<PulsarInner>,
     type_id: TypeId,
@@ -309,13 +379,46 @@ async fn run_poller(
     config: PulsarConfig,
     cancel: CancellationToken,
 ) {
+    let max_backoff = config.reconnect_max_backoff;
+    let reconnect = config.reconnect;
+    let mut backoff = std::time::Duration::from_secs(1);
+
+    loop {
+        let start = std::time::Instant::now();
+        run_poller_inner(&inner, type_id, &full_topic, &config, &cancel).await;
+
+        if cancel.is_cancelled() || !reconnect {
+            break;
+        }
+
+        // Reset backoff if the poller ran successfully for a while
+        if start.elapsed() > backoff * 4 {
+            backoff = std::time::Duration::from_secs(1);
+        }
+
+        tracing::warn!(topic = %full_topic, "Pulsar poller disconnected, reconnecting in {backoff:?}");
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(backoff) => {},
+        }
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
+async fn run_poller_inner(
+    inner: &Arc<PulsarInner>,
+    type_id: TypeId,
+    full_topic: &str,
+    config: &PulsarConfig,
+    cancel: &CancellationToken,
+) {
     let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
         .pulsar
         .consumer()
-        .with_topic(&full_topic)
+        .with_topic(full_topic)
         .with_subscription(&config.subscription)
         .with_subscription_type(config.subscription_type.to_sub_type())
-        .with_consumer_name(format!("r2e-consumer-{}", &full_topic))
+        .with_consumer_name(format!("r2e-consumer-{}", full_topic))
         .build()
         .await;
 

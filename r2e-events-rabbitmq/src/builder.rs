@@ -44,6 +44,11 @@ impl RabbitMqEventBusBuilder {
         self
     }
 
+    /// Register an event type using its [`Event::topic()`] name.
+    pub fn register_event<E: r2e_events::Event + 'static>(self) -> Self {
+        self.topic::<E>(E::topic())
+    }
+
     /// Connect to the RabbitMQ broker and return a ready-to-use [`RabbitMqEventBus`].
     pub async fn connect(self) -> Result<RabbitMqEventBus, EventBusError> {
         // Build connection properties

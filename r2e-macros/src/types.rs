@@ -24,6 +24,11 @@ pub struct ConfigSectionField {
 
 pub struct ConsumerMethod {
     pub bus_field: String,
+    pub topic: Option<String>,
+    pub deserializer: Option<String>,
+    pub filter: Option<String>,
+    pub retry: Option<u32>,
+    pub dlq: Option<String>,
     pub event_type: syn::Type,
     pub fn_item: syn::ImplItemFn,
 }
