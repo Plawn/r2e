@@ -323,6 +323,12 @@ struct PropertyMeta {
 `register_section::<C: ConfigProperties>(prefix)` — global registry for introspection.
 `registered_sections()` → `Vec<RegisteredSection { prefix, properties }>`.
 
+### Built-in ConfigProperties types
+
+`TracingConfig` (in `r2e-core::tracing_config`) — configurable tracing subscriber options (filter, format, ansi, thread IDs, etc.). Used by the `ConfiguredTracing` plugin and `ObservabilityConfig`. Read from YAML under a prefix (e.g., `tracing.*` or `observability.tracing.*`).
+
+Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `close` / `active` / `full`). Both derive `FromConfigValue` via serde.
+
 ### Prelude exports
 
-`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`.
+`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `TracingConfig`, `LogFormat`, `SpanEvents`.

@@ -26,7 +26,9 @@ pub mod middleware;
 pub mod propagation;
 pub mod tracing_setup;
 
-pub use config::{LogFormat, ObservabilityConfig, OtlpProtocol, PropagationFormat};
+pub use config::{ObservabilityConfig, OtlpProtocol, PropagationFormat};
+// LogFormat is re-exported from r2e_core for backward compatibility.
+pub use r2e_core::LogFormat;
 pub use tracing_setup::OtelGuard;
 
 use r2e_core::Plugin;

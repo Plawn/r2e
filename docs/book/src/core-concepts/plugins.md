@@ -27,7 +27,9 @@ AppBuilder::new()
 | `Health` | `GET /health` returning 200 "OK" |
 | `Cors::permissive()` | Permissive CORS headers |
 | `Cors::new(layer)` | Custom CORS configuration |
-| `Tracing` | Request tracing via `tracing` + `tower-http` |
+| `Tracing` | Request tracing via `tracing` + `tower-http` (default config) |
+| `Tracing::configured(config)` | Configurable tracing (format, ansi, thread IDs, etc.) |
+| `Tracing::from_config(&r2e_config)` | Tracing configured from YAML (`tracing.*` keys) |
 | `ErrorHandling` | Catches panics, returns JSON 500 |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |

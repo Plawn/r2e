@@ -7,7 +7,8 @@
 - **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `FromConfigValue`, `Cacheable`, `ApiError`, `FromMultipart` (multipart feature)
 - **Core types:** `AppBuilder`, `HttpError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`, `EventSubscriber`
 - **Events** (feature `events`): `EventBus` (trait), `LocalEventBus` (default in-process impl)
-- **Plugins:** `Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
+- **Plugins:** `Cors`, `Tracing`, `ConfiguredTracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
+- **Tracing config:** `TracingConfig`, `LogFormat`, `SpanEvents`
 - **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
 - **Extractors:** `Path`, `Query`, `Form`, `State`, `Request`, `FromRef`, `FromRequest`, `FromRequestParts`, `ConnectInfo`, `DefaultBodyLimit`, `MatchedPath`, `OriginalUri`
 - **Headers:** `HeaderName`, `HeaderValue`, `Method`, plus constants: `ACCEPT`, `AUTHORIZATION`, `CACHE_CONTROL`, `CONTENT_LENGTH`, `CONTENT_TYPE`, `COOKIE`, `HOST_HEADER`, `LOCATION`, `ORIGIN`, `REFERER`, `SET_COOKIE`, `USER_AGENT`

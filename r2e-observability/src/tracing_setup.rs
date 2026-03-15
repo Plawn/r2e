@@ -1,9 +1,10 @@
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::{SdkTracerProvider, Sampler};
 use opentelemetry_sdk::Resource;
+use r2e_core::LogFormat;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 
-use crate::config::{LogFormat, ObservabilityConfig};
+use crate::config::ObservabilityConfig;
 
 /// Initialize the full tracing stack: console logs + OpenTelemetry export.
 ///
@@ -55,20 +56,32 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
     let provider = provider_builder.build();
     let tracer = provider.tracer("r2e");
 
-    // Build the tracing-subscriber stack.
-    // The OTel layer must be created inside each match arm because its type
-    // depends on the subscriber type (which differs for JSON vs Pretty fmt).
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,tower_http=debug"));
+    // Build the tracing-subscriber stack using TracingConfig values.
+    let tc = &config.tracing;
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&tc.filter));
 
-    match config.log_format {
+    let span_events = tc.effective_span_events();
+    let target = tc.target.unwrap_or(true);
+    let thread_ids = tc.thread_ids.unwrap_or(false);
+    let thread_names = tc.thread_names.unwrap_or(false);
+    let file = tc.file.unwrap_or(false);
+    let line_number = tc.line_number.unwrap_or(false);
+    let level = tc.level.unwrap_or(true);
+    let ansi = tc.ansi.unwrap_or(true);
+
+    match tc.effective_format() {
         LogFormat::Json => {
             let fmt_layer = tracing_subscriber::fmt::layer()
                 .json()
-                .with_target(true)
-                .with_thread_ids(false)
-                .with_file(false)
-                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+                .with_target(target)
+                .with_thread_ids(thread_ids)
+                .with_thread_names(thread_names)
+                .with_file(file)
+                .with_line_number(line_number)
+                .with_level(level)
+                .with_ansi(ansi)
+                .with_span_events(span_events);
 
             let subscriber = Registry::default()
                 .with(env_filter)
@@ -81,10 +94,14 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
         }
         LogFormat::Pretty => {
             let fmt_layer = tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_thread_ids(false)
-                .with_file(false)
-                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+                .with_target(target)
+                .with_thread_ids(thread_ids)
+                .with_thread_names(thread_names)
+                .with_file(file)
+                .with_line_number(line_number)
+                .with_level(level)
+                .with_ansi(ansi)
+                .with_span_events(span_events);
 
             let subscriber = Registry::default()
                 .with(env_filter)

@@ -22,6 +22,7 @@ pub mod secure_headers;
 pub mod sse;
 pub mod state;
 pub mod type_list;
+pub mod tracing_config;
 pub mod types;
 pub mod params;
 pub mod validation;
@@ -43,7 +44,8 @@ pub use controller::{Controller, StatefulConstruct};
 pub use error::{HttpError, HttpErrorExt};
 pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
-pub use layers::{default_cors, default_trace, init_tracing};
+pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
+pub use tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use lifecycle::LifecycleController;
 #[allow(deprecated)]
 pub use plugin::{
@@ -53,7 +55,7 @@ pub use plugin::{
 pub use event_subscriber::EventSubscriber;
 pub use managed::{ManagedErr, ManagedError, ManagedResource};
 pub use meta::MetaRegistry;
-pub use plugins::AdvancedHealth;
+pub use plugins::{AdvancedHealth, ConfiguredTracing};
 pub use request_id::{RequestId, RequestIdPlugin};
 pub use secure_headers::SecureHeaders;
 pub use service::ServiceComponent;

@@ -1,5 +1,6 @@
 use crate::http::response::IntoResponse;
 use crate::http::StatusCode;
+use crate::tracing_config::{LogFormat, TracingConfig};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -17,12 +18,55 @@ use tracing_subscriber::EnvFilter;
 ///
 /// [`Tracing`]: crate::plugins::Tracing
 pub fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=debug".parse().unwrap()),
-        )
-        .try_init();
+    init_tracing_with_config(&TracingConfig::default());
+}
+
+/// Initialise the global `tracing` subscriber from a [`TracingConfig`].
+///
+/// `RUST_LOG` env var always takes priority over `config.filter`.
+/// This function is idempotent — subsequent calls are silently ignored.
+pub fn init_tracing_with_config(config: &TracingConfig) {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| config.filter.parse().unwrap());
+
+    let span_events = config.effective_span_events();
+    let target = config.target.unwrap_or(true);
+    let thread_ids = config.thread_ids.unwrap_or(false);
+    let thread_names = config.thread_names.unwrap_or(false);
+    let file = config.file.unwrap_or(false);
+    let line_number = config.line_number.unwrap_or(false);
+    let level = config.level.unwrap_or(true);
+    let ansi = config.ansi.unwrap_or(true);
+
+    match config.effective_format() {
+        LogFormat::Json => {
+            let _ = tracing_subscriber::fmt()
+                .json()
+                .with_env_filter(env_filter)
+                .with_target(target)
+                .with_thread_ids(thread_ids)
+                .with_thread_names(thread_names)
+                .with_file(file)
+                .with_line_number(line_number)
+                .with_level(level)
+                .with_ansi(ansi)
+                .with_span_events(span_events)
+                .try_init();
+        }
+        LogFormat::Pretty => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_target(target)
+                .with_thread_ids(thread_ids)
+                .with_thread_names(thread_names)
+                .with_file(file)
+                .with_line_number(line_number)
+                .with_level(level)
+                .with_ansi(ansi)
+                .with_span_events(span_events)
+                .try_init();
+        }
+    }
 }
 
 /// Returns a permissive CORS layer that allows any origin, method, and headers.

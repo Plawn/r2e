@@ -623,6 +623,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Returns a reference to the loaded [`R2eConfig`], if any.
+    ///
+    /// This is available after [`load_config()`](AppBuilder::load_config) or
+    /// [`with_config()`](AppBuilder::with_config) has been called.
+    pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
+        self.shared.config.as_ref()
+    }
+
     /// Whether the DevReload plugin has already been applied.
     pub(crate) fn is_dev_reload_applied(&self) -> bool {
         self.shared.dev_reload_applied

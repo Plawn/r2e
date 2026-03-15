@@ -78,9 +78,37 @@ impl Plugin for Cors {
 /// ```
 pub struct Tracing;
 
+impl Tracing {
+    /// Create a tracing plugin configured from a [`TracingConfig`].
+    pub fn configured(config: crate::tracing_config::TracingConfig) -> ConfiguredTracing {
+        ConfiguredTracing(config)
+    }
+
+    /// Create a tracing plugin configured from [`R2eConfig`], reading
+    /// keys under the `tracing` prefix.
+    pub fn from_config(r2e_config: &crate::config::R2eConfig) -> ConfiguredTracing {
+        use crate::config::ConfigProperties;
+        let config = crate::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
+            .unwrap_or_default();
+        ConfiguredTracing(config)
+    }
+}
+
 impl Plugin for Tracing {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         crate::layers::init_tracing();
+        app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
+    }
+}
+
+/// Tracing plugin with explicit configuration.
+///
+/// Created via [`Tracing::configured()`] or [`Tracing::from_config()`].
+pub struct ConfiguredTracing(pub crate::tracing_config::TracingConfig);
+
+impl Plugin for ConfiguredTracing {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+        crate::layers::init_tracing_with_config(&self.0);
         app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
     }
 }

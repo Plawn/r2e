@@ -20,7 +20,9 @@ AppBuilder::new()
     // ── Post-state phase ──
     .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // or Cors::new(custom_layer)
-    .with(Tracing)
+    .with(Tracing)                         // default tracing (RUST_LOG only)
+    // or: .with(Tracing::configured(config))  // with TracingConfig (format, ansi, etc.)
+    // or: .with(Tracing::from_config(&r2e_config))  // from YAML tracing.* keys
     .with(ErrorHandling)                   // catch panics → JSON 500
     .with(DevReload)                       // /__r2e_dev/* endpoints
     .with(OpenApiPlugin::new(openapi_cfg)) // /openapi.json (+ /docs if docs_ui enabled)
@@ -42,6 +44,46 @@ AppBuilder::new()
 `build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks. `serve_auto()` does the same but reads address from config keys `server.host` (String, default `"0.0.0.0"`) and `server.port` (u16, default `3000`).
 
 `.shutdown_grace_period(Duration)` — optional maximum time for shutdown hooks to complete before force-exiting the process. Without it, the process waits indefinitely.
+
+`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()` or `with_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
+
+## TracingConfig (r2e-core)
+
+`TracingConfig` — `ConfigProperties` struct that configures the `tracing-subscriber` fmt layer. All fields except `filter` are `Option` — `None` means "use the subscriber default".
+
+**YAML** (under a configurable prefix, e.g., `tracing.*` or `observability.tracing.*`):
+```yaml
+tracing:
+  filter: "info,tower_http=debug"
+  format: json          # pretty | json
+  ansi: false
+  target: true
+  thread-ids: true
+  thread-names: false
+  file: true
+  line-number: true
+  level: true
+  span-events: full     # none | new | close | active | full
+```
+
+**Programmatic API:**
+- `TracingConfig::default()` — filter `"info,tower_http=debug"`, all other fields `None`
+- Builder methods: `.with_format()`, `.with_filter()`, `.with_target()`, `.with_thread_ids()`, `.with_thread_names()`, `.with_file()`, `.with_line_number()`, `.with_level()`, `.with_ansi()`, `.with_span_events()`
+- `effective_format()` → `LogFormat` (defaults to `Pretty`)
+- `effective_span_events()` → `FmtSpan` (defaults to `CLOSE`)
+
+**Related types:**
+- `LogFormat` — `Pretty` (default) | `Json`. Derives `serde::Deserialize` + `FromConfigValue`.
+- `SpanEvents` — `None` | `New` | `Close` (default) | `Active` | `Full`. `.to_fmt_span()` converts to `tracing_subscriber::fmt::format::FmtSpan`.
+
+**Plugin integration:**
+- `Tracing` (unit struct) — uses defaults (backward compatible)
+- `Tracing::configured(TracingConfig)` → `ConfiguredTracing` — uses explicit config
+- `Tracing::from_config(&R2eConfig)` → `ConfiguredTracing` — reads `tracing.*` keys
+- `init_tracing_with_config(&TracingConfig)` — low-level function (idempotent)
+
+**In ObservabilityConfig:**
+`ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.
 
 ## StatefulConstruct (r2e-core)
 

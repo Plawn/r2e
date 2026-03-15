@@ -1,3 +1,5 @@
+use r2e_core::TracingConfig;
+
 /// Configuration for the observability stack.
 #[derive(Debug, Clone)]
 pub struct ObservabilityConfig {
@@ -19,8 +21,8 @@ pub struct ObservabilityConfig {
     pub resource_attributes: Vec<(String, String)>,
     /// Headers to forward as span attributes.
     pub capture_headers: Vec<String>,
-    /// Log output format: Pretty (default) or Json.
-    pub log_format: LogFormat,
+    /// Tracing subscriber configuration (format, filter, etc.).
+    pub tracing: TracingConfig,
 }
 
 /// OTLP transport protocol.
@@ -40,14 +42,6 @@ pub enum PropagationFormat {
     Jaeger,
 }
 
-/// Log output format.
-#[derive(Debug, Clone, Default)]
-pub enum LogFormat {
-    #[default]
-    Pretty,
-    Json,
-}
-
 impl ObservabilityConfig {
     /// Create a new config with the given service name and sensible defaults.
     pub fn new(service_name: &str) -> Self {
@@ -61,7 +55,7 @@ impl ObservabilityConfig {
             propagation_format: PropagationFormat::W3c,
             resource_attributes: Vec::new(),
             capture_headers: Vec::new(),
-            log_format: LogFormat::Pretty,
+            tracing: TracingConfig::default(),
         }
     }
 
@@ -101,8 +95,15 @@ impl ObservabilityConfig {
         self
     }
 
-    pub fn with_log_format(mut self, format: LogFormat) -> Self {
-        self.log_format = format;
+    /// Set the tracing subscriber configuration.
+    pub fn with_tracing_config(mut self, config: TracingConfig) -> Self {
+        self.tracing = config;
+        self
+    }
+
+    /// Convenience: set the log format on the embedded tracing config.
+    pub fn with_log_format(mut self, format: r2e_core::LogFormat) -> Self {
+        self.tracing = self.tracing.with_format(format);
         self
     }
 
@@ -117,8 +118,11 @@ impl ObservabilityConfig {
     /// - `observability.otlp-endpoint`
     /// - `observability.sampling-ratio`
     /// - `observability.tracing.enabled`
-    /// - `observability.log-format`
+    ///
+    /// The embedded `TracingConfig` is loaded from `observability.tracing.*`.
     pub fn from_r2e_config(config: &r2e_core::R2eConfig, service_name: &str) -> Self {
+        use r2e_core::ConfigProperties;
+
         let mut cfg = Self::new(service_name);
         if let Ok(endpoint) = config.get::<String>("observability.otlp-endpoint") {
             cfg.otlp_endpoint = endpoint;
@@ -129,11 +133,9 @@ impl ObservabilityConfig {
         if let Ok(enabled) = config.get::<bool>("observability.tracing.enabled") {
             cfg.tracing_enabled = enabled;
         }
-        if let Ok(format) = config.get::<String>("observability.log-format") {
-            cfg.log_format = match format.to_lowercase().as_str() {
-                "json" => LogFormat::Json,
-                _ => LogFormat::Pretty,
-            };
+        // Load the tracing subscriber config from observability.tracing.*
+        if let Ok(tracing) = TracingConfig::from_config(config, Some("observability.tracing")) {
+            cfg.tracing = tracing;
         }
         cfg
     }

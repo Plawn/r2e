@@ -74,7 +74,8 @@ pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard,
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
 pub use crate::plugin::Plugin;
-pub use crate::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
+pub use crate::plugins::{Cors, Tracing, ConfiguredTracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
+pub use crate::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::request_id::{RequestId, RequestIdPlugin};
 pub use crate::secure_headers::SecureHeaders;
 pub use crate::controller::StatefulConstruct;

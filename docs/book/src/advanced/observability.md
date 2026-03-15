@@ -46,6 +46,82 @@ The `init_tracing()` function is idempotent. If you need logs before the plugin 
 r2e::init_tracing();
 ```
 
+## Configurable tracing
+
+For full control over the log subscriber format, use `TracingConfig` and the `ConfiguredTracing` plugin. This lets you configure log format, ANSI colors, thread IDs, file names, and more — either programmatically or via YAML.
+
+### YAML configuration
+
+```yaml
+tracing:
+  filter: "info,tower_http=debug,my_app=trace"
+  format: json
+  ansi: false
+  target: true
+  thread-ids: true
+  thread-names: false
+  file: true
+  line-number: true
+  level: true
+  span-events: full
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `filter` | String | `"info,tower_http=debug"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
+| `format` | `pretty` / `json` | `pretty` | Log output format |
+| `target` | bool | `true` | Print the module path in each log line |
+| `thread-ids` | bool | `false` | Print thread IDs |
+| `thread-names` | bool | `false` | Print thread names |
+| `file` | bool | `false` | Print file name where the log originated |
+| `line-number` | bool | `false` | Print line number |
+| `level` | bool | `true` | Print the log level |
+| `ansi` | bool | `true` | Enable ANSI color codes |
+| `span-events` | `none` / `new` / `close` / `active` / `full` | `close` | Which span lifecycle events to record |
+
+### Programmatic usage
+
+```rust
+use r2e::prelude::*;
+
+// Build config programmatically
+let tracing_config = TracingConfig::default()
+    .with_format(LogFormat::Json)
+    .with_ansi(false)
+    .with_thread_ids(true)
+    .with_filter("debug,hyper=warn");
+
+AppBuilder::new()
+    .build_state::<AppState, _, _>()
+    .await
+    .with(Tracing::configured(tracing_config))
+    .serve("0.0.0.0:3000")
+    .await;
+```
+
+### Loading from R2eConfig
+
+When using `load_config`, you can read `TracingConfig` directly from your YAML:
+
+```rust
+AppBuilder::new()
+    .load_config::<RootConfig>()
+    .build_state::<AppState, _, _>()
+    .await
+    .with(Tracing::from_config(&app.r2e_config().unwrap()))
+    .serve("0.0.0.0:3000")
+    .await;
+```
+
+`Tracing::from_config()` reads the `tracing.*` keys from `R2eConfig`.
+
+### Using `#[r2e::main(tracing = false)]`
+
+By default, `#[r2e::main]` calls `init_tracing()` before config is loaded — so there is no config available yet. If you want configurable tracing:
+
+1. Disable the default tracing: `#[r2e::main(tracing = false)]`
+2. Load config first, then install the configured tracing plugin
+
 ## RequestId plugin
 
 The `RequestIdPlugin` assigns a unique identifier to every request, enabling correlation across log lines and distributed systems.
@@ -175,11 +251,12 @@ use r2e::prelude::*;
 
 // Application setup
 AppBuilder::new()
+    .load_config::<RootConfig>()
     .build_state::<AppState, _, _>()
     .await
-    .with(RequestIdPlugin)   // Assign request IDs
-    .with(Tracing)           // Structured logging + HTTP traces
-    .with(Health)            // Health check endpoint
+    .with(RequestIdPlugin)                                // Assign request IDs
+    .with(Tracing::from_config(&app.r2e_config().unwrap()))  // Configurable tracing
+    .with(Health)                                         // Health check endpoint
     .register::<ApiController>()
     .serve("0.0.0.0:3000")
     .await;
@@ -223,13 +300,15 @@ This produces structured log output with:
 
 R2E offers two levels of tracing support:
 
-| | `Tracing` | `Observability` |
+| | `Tracing` / `ConfiguredTracing` | `Observability` |
 |---|---|---|
 | Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
 | Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
 | HTTP trace layer | tower-http `TraceLayer` | tower-http `TraceLayer` + `OtelTraceLayer` |
 | Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
 | Context propagation | No | Yes (W3C `traceparent`) |
-| Configuration | `RUST_LOG` only | `ObservabilityConfig` builder + YAML |
+| Configuration | `TracingConfig` (YAML + builder) | `ObservabilityConfig` (embeds `TracingConfig`) |
 
 Use `Tracing` for local development and simple services. Switch to `Observability` when you need distributed tracing across microservices. Do not install both -- `Observability` already includes the `TraceLayer` and its own log subscriber.
+
+Both `ConfiguredTracing` and `Observability` use `TracingConfig` for subscriber formatting options (format, ansi, thread IDs, etc.). The `Observability` plugin embeds a `TracingConfig` in its `ObservabilityConfig`, so YAML keys live under `observability.tracing.*` instead of `tracing.*`.

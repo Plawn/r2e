@@ -502,6 +502,37 @@ AppBuilder::new()
 
 If keys are missing, defaults are used. This replaces `.serve("0.0.0.0:3000")` for production setups where the address should be configurable per environment.
 
+## Built-in configuration types
+
+### TracingConfig
+
+R2E ships with `TracingConfig`, a `ConfigProperties` struct that configures the tracing subscriber. It is used by the `ConfiguredTracing` plugin and embedded in `ObservabilityConfig`.
+
+```yaml
+tracing:
+  filter: "info,tower_http=debug,my_app=trace"
+  format: json
+  ansi: false
+  thread-ids: true
+  span-events: full
+```
+
+```rust
+use r2e::prelude::*;
+
+// Load from R2eConfig
+let tracing = Tracing::from_config(&r2e_config);
+
+// Or build programmatically
+let tracing = Tracing::configured(
+    TracingConfig::default()
+        .with_format(LogFormat::Json)
+        .with_ansi(false)
+);
+```
+
+See the [Observability](../advanced/observability.md) chapter for the full reference.
+
 ## Testing
 
 ```rust
