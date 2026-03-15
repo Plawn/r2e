@@ -26,6 +26,9 @@
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
 //! | `openfga`     | no      | `r2e-openfga`             |
+//! | `events-kafka`    | no  | `r2e-events-kafka` (Apache Kafka backend) |
+//! | `events-pulsar`   | no  | `r2e-events-pulsar` (Apache Pulsar backend) |
+//! | `events-rabbitmq` | no  | `r2e-events-rabbitmq` (RabbitMQ/AMQP backend) |
 //! | `static`      | no      | `r2e-static` (embedded static file serving + SPA fallback) |
 //! | `validation`  | no      | `r2e-core/validation`     |
 //! | `dev-reload`  | no      | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
@@ -53,6 +56,15 @@ pub use r2e_events;
 
 #[cfg(feature = "events-iggy")]
 pub use r2e_events_iggy;
+
+#[cfg(feature = "events-kafka")]
+pub use r2e_events_kafka;
+
+#[cfg(feature = "events-pulsar")]
+pub use r2e_events_pulsar;
+
+#[cfg(feature = "events-rabbitmq")]
+pub use r2e_events_rabbitmq;
 
 #[cfg(feature = "utils")]
 pub use r2e_utils;
@@ -141,6 +153,15 @@ pub mod prelude {
 
     #[cfg(feature = "events-iggy")]
     pub use r2e_events_iggy::prelude::*;
+
+    #[cfg(feature = "events-kafka")]
+    pub use r2e_events_kafka::prelude::*;
+
+    #[cfg(feature = "events-pulsar")]
+    pub use r2e_events_pulsar::prelude::*;
+
+    #[cfg(feature = "events-rabbitmq")]
+    pub use r2e_events_rabbitmq::prelude::*;
 
     #[cfg(feature = "utils")]
     pub use r2e_utils::prelude::*;

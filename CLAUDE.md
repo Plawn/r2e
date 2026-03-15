@@ -43,8 +43,11 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
-r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe).
+r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module.
 r2e-events-iggy → Apache Iggy EventBus backend: persistent distributed event streaming.
+r2e-events-kafka → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
+r2e-events-pulsar → Apache Pulsar EventBus backend: distributed event streaming.
+r2e-events-rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
 r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError.
 r2e-data-sqlx   → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, migrations.
@@ -60,7 +63,7 @@ r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2
 example-app     → Demo binary exercising all features.
 ```
 
-Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-events-kafka` / `r2e-events-pulsar` / `r2e-events-rabbitmq` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
 
 ### Vendored Dependencies
 

@@ -1,29 +1,4 @@
-use std::any::Any;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-
-use r2e_events::{EventMetadata, HandlerResult};
-
-/// Type-erased async handler function.
-pub(crate) type Handler = Arc<
-    dyn Fn(Arc<dyn Any + Send + Sync>, EventMetadata) -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Type-erased deserializer: bytes → `Arc<dyn Any + Send + Sync>`.
-pub(crate) type DeserializerFn =
-    Arc<dyn Fn(&[u8]) -> Result<Arc<dyn Any + Send + Sync>, String> + Send + Sync>;
-
-/// A single registered handler with a unique ID.
-pub(crate) struct HandlerEntry {
-    pub id: u64,
-    pub handler: Handler,
-}
-
-/// All handlers and the deserializer for a single event type / topic.
-pub(crate) struct TopicHandlers {
-    pub entries: Vec<HandlerEntry>,
-    pub deserializer: DeserializerFn,
-}
+// Moved to r2e_events::backend::dispatch
+// This module re-exports for backward compatibility.
+#[allow(unused_imports)]
+pub use r2e_events::backend::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};

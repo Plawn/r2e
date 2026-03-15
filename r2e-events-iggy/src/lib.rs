@@ -50,7 +50,7 @@ pub use builder::IggyEventBusBuilder;
 pub use bus::IggyEventBus;
 pub use config::{IggyConfig, IggyConfigBuilder, Transport};
 pub use error::map_iggy_error;
-pub use topic::sanitize_topic_name;
+pub use r2e_events::backend::sanitize_topic_name;
 
 pub mod prelude {
     //! Re-exports of the most commonly used types.

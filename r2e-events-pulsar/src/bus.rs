@@ -4,43 +4,45 @@ use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use iggy::prelude::*;
+use pulsar::consumer::Consumer;
+use pulsar::producer::Message as ProducerMessage;
+use pulsar::{TokioExecutor, Error as PulsarError};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler, HEADER_TIMESTAMP};
+use r2e_events::backend::{decode_metadata, encode_metadata, Handler, HEADER_PARTITION_KEY};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
 
-use crate::builder::IggyEventBusBuilder;
-use crate::config::IggyConfig;
-use crate::error::map_iggy_error;
-use crate::inner::IggyInner;
+use crate::builder::PulsarEventBusBuilder;
+use crate::config::PulsarConfig;
+use crate::error::map_pulsar_error;
+use crate::inner::PulsarInner;
 
-/// Apache Iggy-backed event bus.
+/// Apache Pulsar-backed event bus.
 ///
-/// Publishes events as JSON messages to Iggy topics and consumes them
-/// via background poller tasks that dispatch to locally registered handlers.
+/// Publishes events as JSON messages to Pulsar topics and consumes them
+/// via background consumer tasks that dispatch to locally registered handlers.
 ///
-/// `IggyEventBus` is `Clone` — all clones share the same underlying connection
+/// `PulsarEventBus` is `Clone` — all clones share the same underlying connection
 /// and handler registry.
 ///
 /// # Limitations
 ///
-/// - `emit_and_wait` publishes to Iggy AND waits for **local** handlers only.
+/// - `emit_and_wait` publishes to Pulsar AND waits for **local** handlers only.
 ///   It cannot wait for handlers on remote instances.
 /// - One event type per topic (the deserializer is registered on first `subscribe`).
 #[derive(Clone)]
-pub struct IggyEventBus {
-    pub(crate) inner: Arc<IggyInner>,
+pub struct PulsarEventBus {
+    pub(crate) inner: Arc<PulsarInner>,
 }
 
-impl IggyEventBus {
-    /// Create a builder for configuring and connecting an `IggyEventBus`.
-    pub fn builder(config: IggyConfig) -> IggyEventBusBuilder {
-        IggyEventBusBuilder::new(config)
+impl PulsarEventBus {
+    /// Create a builder for configuring and connecting a `PulsarEventBus`.
+    pub fn builder(config: PulsarConfig) -> PulsarEventBusBuilder {
+        PulsarEventBusBuilder::new(config)
     }
 
     /// Resolve the topic name for an event type.
@@ -48,106 +50,85 @@ impl IggyEventBus {
         self.inner.state.resolve_topic::<E>().await
     }
 
-    /// Ensure a topic exists in Iggy (idempotent, cached).
-    async fn ensure_topic(&self, topic_name: &str) -> Result<(), EventBusError> {
-        if !self.inner.config.auto_create {
+    /// Build the full Pulsar topic name (with prefix).
+    fn full_topic(&self, topic_name: &str) -> String {
+        self.inner.config.full_topic_name(topic_name)
+    }
+
+    /// Get or create a cached producer for a topic.
+    async fn get_or_create_producer(
+        &self,
+        full_topic: &str,
+    ) -> Result<(), EventBusError> {
+        let mut producers = self.inner.producers.lock().await;
+        if producers.contains_key(full_topic) {
             return Ok(());
         }
 
-        if self.inner.state.is_topic_ensured(topic_name).await {
-            return Ok(());
-        }
-
-        let stream_id =
-            Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
-
-        match self
+        let producer = self
             .inner
-            .client
-            .create_topic(
-                &stream_id,
-                topic_name,
-                self.inner.config.default_partitions,
-                CompressionAlgorithm::default(),
-                None,
-                IggyExpiry::NeverExpire,
-                MaxTopicSize::ServerDefault,
-            )
+            .pulsar
+            .producer()
+            .with_topic(full_topic)
+            .build()
             .await
-        {
-            Ok(_) => {
-                tracing::info!(topic = %topic_name, "created Iggy topic");
-            }
-            Err(_) => {
-                // Topic likely already exists — that's fine
-            }
-        }
+            .map_err(map_pulsar_error)?;
 
-        self.inner.state.set_topic_ensured(topic_name).await;
+        producers.insert(full_topic.to_string(), producer);
         Ok(())
     }
 
-    /// Build Iggy message headers from `EventMetadata`.
-    fn build_headers(
-        metadata: &EventMetadata,
-    ) -> Result<HashMap<HeaderKey, HeaderValue>, EventBusError> {
+    /// Build message properties from `EventMetadata`.
+    fn build_properties(metadata: &EventMetadata) -> HashMap<String, String> {
         let pairs = encode_metadata(metadata);
-        let mut headers = HashMap::new();
-
-        for (k, v) in pairs {
-            // Skip partition_key — it's used for Iggy partitioning, not headers
-            if k == r2e_events::backend::HEADER_PARTITION_KEY {
-                continue;
-            }
-            headers.insert(
-                HeaderKey::try_from(k.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-                HeaderValue::try_from(v.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-            );
-        }
-
-        Ok(headers)
+        pairs.into_iter().collect()
     }
 
-    /// Publish a serialized event to Iggy.
+    /// Publish a serialized event to Pulsar.
     async fn publish(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
         metadata: &EventMetadata,
     ) -> Result<(), EventBusError> {
-        self.ensure_topic(topic_name).await?;
+        let full_topic = self.full_topic(topic_name);
 
-        let stream_id =
-            Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
-        let topic_id = Identifier::named(topic_name).map_err(map_iggy_error)?;
+        // Ensure producer exists
+        self.get_or_create_producer(&full_topic).await?;
 
-        let partitioning = match &metadata.partition_key {
-            Some(key) => Partitioning::messages_key_str(key)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?,
-            None => Partitioning::balanced(),
+        let properties = Self::build_properties(metadata);
+
+        let partition_key = metadata.partition_key.clone();
+
+        let msg = ProducerMessage {
+            payload,
+            properties,
+            partition_key,
+            ordering_key: None,
+            replicate_to: Vec::new(),
+            event_time: None,
+            schema_version: None,
+            deliver_at_time: None,
         };
 
-        let headers = Self::build_headers(metadata)?;
+        // Lock the producers and send through the cached producer
+        let mut producers = self.inner.producers.lock().await;
+        let producer = producers
+            .get_mut(&full_topic)
+            .ok_or_else(|| EventBusError::Other(format!("producer not found for {full_topic}")))?;
 
-        let msg = IggyMessage::builder()
-            .payload(bytes::Bytes::from(payload))
-            .user_headers(headers)
-            .build()
-            .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-
-        self.inner
-            .client
-            .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
+        producer
+            .send_non_blocking(msg)
             .await
-            .map_err(map_iggy_error)?;
+            .map_err(|e: PulsarError| map_pulsar_error(e))?
+            .await
+            .map_err(|e| EventBusError::Other(format!("send receipt error: {e}")))?;
 
         Ok(())
     }
 }
 
-impl EventBus for IggyEventBus {
+impl EventBus for PulsarEventBus {
     fn subscribe<E, F, Fut>(
         &self,
         handler: F,
@@ -173,9 +154,9 @@ impl EventBus for IggyEventBus {
 
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
-            // If this is the first subscriber for this type, set up the poller
+            // If this is the first subscriber for this type, set up the consumer poller
             if is_first {
-                bus.ensure_topic(&topic_name).await?;
+                let full_topic = bus.full_topic(&topic_name);
 
                 let cancel = CancellationToken::new();
                 inner
@@ -186,10 +167,10 @@ impl EventBus for IggyEventBus {
                     .insert(type_id, cancel.clone());
 
                 let inner_clone = bus.inner.clone();
-                let topic_clone = topic_name.clone();
+                let config = bus.inner.config.clone();
 
                 tokio::spawn(async move {
-                    run_poller(inner_clone, type_id, topic_clone, cancel).await;
+                    run_poller(inner_clone, type_id, full_topic, config, cancel).await;
                 });
             }
 
@@ -246,7 +227,7 @@ impl EventBus for IggyEventBus {
             let topic_name = bus.resolve_topic::<E>().await;
             let metadata = EventMetadata::new();
 
-            // Publish to Iggy
+            // Publish to Pulsar
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
 
             // Also dispatch locally and wait
@@ -274,7 +255,7 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>().await;
 
-            // Publish to Iggy
+            // Publish to Pulsar
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
 
             // Also dispatch locally and wait
@@ -311,69 +292,68 @@ impl EventBus for IggyEventBus {
             // Clear handlers
             inner.state.handlers.write().await.clear();
 
-            // Disconnect client
-            if let Err(e) = inner.client.shutdown().await {
-                tracing::warn!("error disconnecting Iggy client: {e}");
-            }
+            // Close all cached producers
+            let mut producers = inner.producers.lock().await;
+            producers.clear();
 
             Ok(())
         }
     }
 }
 
-/// Background poller loop for a single topic.
+/// Background consumer loop for a single topic.
 async fn run_poller(
-    inner: Arc<IggyInner>,
+    inner: Arc<PulsarInner>,
     type_id: TypeId,
-    topic_name: String,
+    full_topic: String,
+    config: PulsarConfig,
     cancel: CancellationToken,
 ) {
-    let consumer_result = inner.client.consumer_group(
-        &inner.config.consumer_group,
-        &inner.config.stream_name,
-        &topic_name,
-    );
+    let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
+        .pulsar
+        .consumer()
+        .with_topic(&full_topic)
+        .with_subscription(&config.subscription)
+        .with_subscription_type(config.subscription_type.to_sub_type())
+        .with_consumer_name(format!("r2e-consumer-{}", &full_topic))
+        .build()
+        .await;
 
     let mut consumer = match consumer_result {
-        Ok(builder) => builder
-            .auto_commit(AutoCommit::When(AutoCommitWhen::PollingMessages))
-            .create_consumer_group_if_not_exists()
-            .auto_join_consumer_group()
-            .polling_strategy(PollingStrategy::next())
-            .poll_interval(IggyDuration::from(inner.config.poll_interval))
-            .batch_length(inner.config.poll_batch_size)
-            .build(),
+        Ok(c) => c,
         Err(e) => {
-            tracing::error!(topic = %topic_name, "failed to create Iggy consumer: {e}");
+            tracing::error!(topic = %full_topic, "failed to create Pulsar consumer: {e}");
             return;
         }
     };
 
-    if let Err(e) = consumer.init().await {
-        tracing::error!(topic = %topic_name, "failed to init Iggy consumer: {e}");
-        return;
-    }
-
-    tracing::info!(topic = %topic_name, "poller started");
+    tracing::info!(topic = %full_topic, "poller started");
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                tracing::info!(topic = %topic_name, "poller cancelled");
+                tracing::info!(topic = %full_topic, "poller cancelled");
                 break;
             }
             msg = futures_util::StreamExt::next(&mut consumer) => {
                 match msg {
                     Some(Ok(received)) => {
-                        let metadata = extract_metadata_from_message(&received.message);
-                        inner.state.dispatch_from_poller(type_id, &received.message.payload, metadata).await;
+                        let metadata = extract_metadata_from_message(&received);
+                        let payload = &received.payload.data;
+
+                        inner.state.dispatch_from_poller(type_id, payload, metadata).await;
+
+                        // Acknowledge the message after dispatch
+                        if let Err(e) = consumer.ack(&received).await {
+                            tracing::warn!(topic = %full_topic, "failed to ack message: {e}");
+                        }
                     }
                     Some(Err(e)) => {
-                        tracing::warn!(topic = %topic_name, "poll error: {e}");
+                        tracing::warn!(topic = %full_topic, "consumer error: {e}");
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
-                        tracing::info!(topic = %topic_name, "consumer stream ended");
+                        tracing::info!(topic = %full_topic, "consumer stream ended");
                         break;
                     }
                 }
@@ -382,28 +362,21 @@ async fn run_poller(
     }
 }
 
-/// Extract `EventMetadata` from Iggy message headers.
-fn extract_metadata_from_message(message: &IggyMessage) -> EventMetadata {
+/// Extract `EventMetadata` from Pulsar message properties.
+fn extract_metadata_from_message(
+    message: &pulsar::consumer::Message<Vec<u8>>,
+) -> EventMetadata {
     let mut pairs: Vec<(String, String)> = Vec::new();
 
-    // Add the Iggy-native timestamp
-    pairs.push((HEADER_TIMESTAMP.to_string(), message.header.timestamp.to_string()));
+    // Extract properties from the message metadata
+    for kv in &message.payload.metadata.properties {
+        pairs.push((kv.key.clone(), kv.value.clone()));
+    }
 
-    if let Ok(Some(headers)) = message.user_headers_map() {
-        for (key, value) in &headers {
-            let key_str = match key.as_str() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let val_str = match value.as_str() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            // Skip timestamp from user headers — we use the Iggy native one
-            if key_str == HEADER_TIMESTAMP {
-                continue;
-            }
-            pairs.push((key_str.to_string(), val_str.to_string()));
+    // Add partition key if present
+    if let Some(ref key) = message.payload.metadata.partition_key {
+        if !key.is_empty() {
+            pairs.push((HEADER_PARTITION_KEY.to_string(), key.clone()));
         }
     }
 

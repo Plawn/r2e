@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+pub mod backend;
 mod local;
 
 pub use local::{LocalEventBus, DEFAULT_MAX_CONCURRENCY};

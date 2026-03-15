@@ -146,7 +146,7 @@ Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`,
 
 Event types must derive `Serialize + Deserialize` (required by the trait for backend compatibility; `LocalEventBus` never actually serializes — zero overhead).
 
-Custom backends (Kafka, Redis, NATS) can implement the `EventBus` trait.
+Distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) implement the `EventBus` trait. Shared backend utilities are in `r2e_events::backend` — `TopicRegistry`, `BackendState`, `encode_metadata`/`decode_metadata`.
 
 **Declarative consumers on controllers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. The controller must not have `#[inject(identity)]` struct fields (requires `StatefulConstruct`). Consumers are registered automatically by `AppBuilder::register_controller`.
 
@@ -186,6 +186,107 @@ let bus = IggyEventBus::builder(config)
 - Topic names default to sanitized `type_name` (`::` → `.`) unless explicitly registered via builder.
 
 **Feature flag:** `r2e = { features = ["events-iggy"] }` or depend on `r2e-events-iggy` directly.
+
+### KafkaEventBus (r2e-events-kafka)
+
+`KafkaEventBus` — distributed `EventBus` implementation backed by [Apache Kafka](https://kafka.apache.org/) via `rdkafka` (librdkafka binding).
+
+**Setup:**
+```rust
+let config = KafkaConfig::builder()
+    .bootstrap_servers("localhost:9092")
+    .group_id("my-group")
+    .compression(Compression::Zstd)
+    .build();
+
+let bus = KafkaEventBus::builder(config)
+    .topic::<UserCreated>("user-created")
+    .connect()
+    .await?;
+```
+
+**Key types:**
+- `KafkaConfig` — bootstrap servers, group ID, security protocol, SASL, compression, acks, auto-create, overrides.
+- `SecurityProtocol` — `Plaintext` | `Ssl` | `SaslPlaintext` | `SaslSsl`.
+- `Compression` — `None` | `Gzip` | `Snappy` | `Lz4` | `Zstd`.
+- `Acks` — `Zero` | `One` | `All`.
+
+**Behavior:**
+- Single `FutureProducer` shared via `Arc` (thread-safe, connection-pooled).
+- One `StreamConsumer` per event type, spawned on first `subscribe()`.
+- `partition_key` maps to Kafka message key (determines partition).
+- Metadata encoded as Kafka message headers.
+- Topic auto-creation via `AdminClient::create_topics()`.
+- Shutdown: cancel consumers, `producer.flush(timeout)`.
+
+**Feature flag:** `r2e = { features = ["events-kafka"] }` or depend on `r2e-events-kafka` directly. Build features: `cmake-build` (default), `dynamic-linking`.
+
+### PulsarEventBus (r2e-events-pulsar)
+
+`PulsarEventBus` — distributed `EventBus` implementation backed by [Apache Pulsar](https://pulsar.apache.org/) via the `pulsar` crate.
+
+**Setup:**
+```rust
+let config = PulsarConfig::builder()
+    .service_url("pulsar://localhost:6650")
+    .subscription("my-group")
+    .build();
+
+let bus = PulsarEventBus::builder(config)
+    .topic::<UserCreated>("user-created")
+    .connect()
+    .await?;
+```
+
+**Key types:**
+- `PulsarConfig` — service URL, subscription name, subscription type, topic prefix, auth token, batch size, auto-create.
+- `SubscriptionType` — `Shared` | `Exclusive` | `Failover` | `KeyShared`.
+
+**Behavior:**
+- Producers cached per topic behind `Mutex<HashMap<String, Producer>>`.
+- Full topic name: `{topic_prefix}{topic_name}` (default prefix: `persistent://public/default/`).
+- `partition_key` maps to Pulsar message key (`KeyShared` routing).
+- Metadata maps directly to Pulsar message properties (`HashMap<String, String>`) — zero conversion.
+- `consumer.ack()` after successful dispatch; `consumer.nack()` triggers redelivery.
+
+**Feature flag:** `r2e = { features = ["events-pulsar"] }` or depend on `r2e-events-pulsar` directly.
+
+### RabbitMqEventBus (r2e-events-rabbitmq)
+
+`RabbitMqEventBus` — distributed `EventBus` implementation backed by [RabbitMQ](https://www.rabbitmq.com/) via `lapin` (AMQP 0-9-1).
+
+**Setup:**
+```rust
+let config = RabbitMqConfig::builder()
+    .uri("amqp://guest:guest@localhost:5672/%2f")
+    .exchange("r2e-events")
+    .consumer_group("my-group")
+    .build();
+
+let bus = RabbitMqEventBus::builder(config)
+    .topic::<UserCreated>("user-created")
+    .connect()
+    .await?;
+```
+
+**Key types:**
+- `RabbitMqConfig` — URI, exchange name, consumer group, prefetch count, durable, persistent, dead letter exchange, heartbeat.
+
+**AMQP model mapping:**
+- Event bus → Topic exchange (fan-out by routing key).
+- Event type → Routing key = topic name.
+- Consumer group → Queue named `{consumer_group}.{topic_name}`.
+- Competing consumers → Multiple instances consuming the same queue.
+- `partition_key` → Stored as AMQP header only (RabbitMQ has no native partitioning).
+- Metadata → AMQP headers (`FieldTable` with `AMQPValue::LongString`).
+
+**Behavior:**
+- One `Connection` + one `Channel` shared via `Arc`.
+- On first `subscribe<E>()`: declare queue, bind to exchange, start `basic_consume()` stream.
+- `delivery.ack()` after successful dispatch; `delivery.nack(requeue: true)` on failure.
+- Messages are persistent (delivery_mode = 2) when `config.persistent` is true.
+
+**Feature flag:** `r2e = { features = ["events-rabbitmq"] }` or depend on `r2e-events-rabbitmq` directly.
 
 ## Scheduling (r2e-scheduler)
 

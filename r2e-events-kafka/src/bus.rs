@@ -1,46 +1,49 @@
 use std::any::TypeId;
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
-use iggy::prelude::*;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::message::Headers;
+use rdkafka::producer::{FutureRecord, Producer};
+use rdkafka::Message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler, HEADER_TIMESTAMP};
+use r2e_events::backend::{decode_metadata, encode_metadata, Handler};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
 
-use crate::builder::IggyEventBusBuilder;
-use crate::config::IggyConfig;
-use crate::error::map_iggy_error;
-use crate::inner::IggyInner;
+use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
+use crate::config::KafkaConfig;
+use crate::error::map_kafka_error;
+use crate::inner::KafkaInner;
 
-/// Apache Iggy-backed event bus.
+/// Apache Kafka-backed event bus.
 ///
-/// Publishes events as JSON messages to Iggy topics and consumes them
-/// via background poller tasks that dispatch to locally registered handlers.
+/// Publishes events as JSON messages to Kafka topics and consumes them
+/// via background `StreamConsumer` tasks that dispatch to locally registered handlers.
 ///
-/// `IggyEventBus` is `Clone` — all clones share the same underlying connection
+/// `KafkaEventBus` is `Clone` — all clones share the same underlying producer
 /// and handler registry.
 ///
 /// # Limitations
 ///
-/// - `emit_and_wait` publishes to Iggy AND waits for **local** handlers only.
+/// - `emit_and_wait` publishes to Kafka AND waits for **local** handlers only.
 ///   It cannot wait for handlers on remote instances.
 /// - One event type per topic (the deserializer is registered on first `subscribe`).
 #[derive(Clone)]
-pub struct IggyEventBus {
-    pub(crate) inner: Arc<IggyInner>,
+pub struct KafkaEventBus {
+    pub(crate) inner: Arc<KafkaInner>,
 }
 
-impl IggyEventBus {
-    /// Create a builder for configuring and connecting an `IggyEventBus`.
-    pub fn builder(config: IggyConfig) -> IggyEventBusBuilder {
-        IggyEventBusBuilder::new(config)
+impl KafkaEventBus {
+    /// Create a builder for configuring and connecting a `KafkaEventBus`.
+    pub fn builder(config: KafkaConfig) -> KafkaEventBusBuilder {
+        KafkaEventBusBuilder::new(config)
     }
 
     /// Resolve the topic name for an event type.
@@ -48,7 +51,7 @@ impl IggyEventBus {
         self.inner.state.resolve_topic::<E>().await
     }
 
-    /// Ensure a topic exists in Iggy (idempotent, cached).
+    /// Ensure a topic exists in Kafka (idempotent, cached).
     async fn ensure_topic(&self, topic_name: &str) -> Result<(), EventBusError> {
         if !self.inner.config.auto_create {
             return Ok(());
@@ -58,59 +61,12 @@ impl IggyEventBus {
             return Ok(());
         }
 
-        let stream_id =
-            Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
-
-        match self
-            .inner
-            .client
-            .create_topic(
-                &stream_id,
-                topic_name,
-                self.inner.config.default_partitions,
-                CompressionAlgorithm::default(),
-                None,
-                IggyExpiry::NeverExpire,
-                MaxTopicSize::ServerDefault,
-            )
-            .await
-        {
-            Ok(_) => {
-                tracing::info!(topic = %topic_name, "created Iggy topic");
-            }
-            Err(_) => {
-                // Topic likely already exists — that's fine
-            }
-        }
-
+        ensure_topic_exists(&self.inner.config, topic_name).await?;
         self.inner.state.set_topic_ensured(topic_name).await;
         Ok(())
     }
 
-    /// Build Iggy message headers from `EventMetadata`.
-    fn build_headers(
-        metadata: &EventMetadata,
-    ) -> Result<HashMap<HeaderKey, HeaderValue>, EventBusError> {
-        let pairs = encode_metadata(metadata);
-        let mut headers = HashMap::new();
-
-        for (k, v) in pairs {
-            // Skip partition_key — it's used for Iggy partitioning, not headers
-            if k == r2e_events::backend::HEADER_PARTITION_KEY {
-                continue;
-            }
-            headers.insert(
-                HeaderKey::try_from(k.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-                HeaderValue::try_from(v.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-            );
-        }
-
-        Ok(headers)
-    }
-
-    /// Publish a serialized event to Iggy.
+    /// Publish a serialized event to Kafka.
     async fn publish(
         &self,
         topic_name: &str,
@@ -119,35 +75,41 @@ impl IggyEventBus {
     ) -> Result<(), EventBusError> {
         self.ensure_topic(topic_name).await?;
 
-        let stream_id =
-            Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
-        let topic_id = Identifier::named(topic_name).map_err(map_iggy_error)?;
+        let pairs = encode_metadata(metadata);
 
-        let partitioning = match &metadata.partition_key {
-            Some(key) => Partitioning::messages_key_str(key)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?,
-            None => Partitioning::balanced(),
-        };
+        let mut record = FutureRecord::to(topic_name).payload(&payload);
 
-        let headers = Self::build_headers(metadata)?;
+        // Use partition_key as the Kafka message key
+        if let Some(ref key) = metadata.partition_key {
+            record = record.key(key);
+        }
 
-        let msg = IggyMessage::builder()
-            .payload(bytes::Bytes::from(payload))
-            .user_headers(headers)
-            .build()
-            .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+        // Encode metadata as Kafka headers
+        let header_storage: Vec<(String, Vec<u8>)> = pairs
+            .into_iter()
+            .map(|(k, v)| (k, v.into_bytes()))
+            .collect();
+
+        let mut owned_headers = rdkafka::message::OwnedHeaders::new();
+        for (k, v) in &header_storage {
+            owned_headers = owned_headers.insert(rdkafka::message::Header {
+                key: k,
+                value: Some(v),
+            });
+        }
+        record = record.headers(owned_headers);
 
         self.inner
-            .client
-            .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
+            .producer
+            .send(record, Duration::from_secs(5))
             .await
-            .map_err(map_iggy_error)?;
+            .map_err(|(e, _)| map_kafka_error(e))?;
 
         Ok(())
     }
 }
 
-impl EventBus for IggyEventBus {
+impl EventBus for KafkaEventBus {
     fn subscribe<E, F, Fut>(
         &self,
         handler: F,
@@ -173,7 +135,7 @@ impl EventBus for IggyEventBus {
 
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
-            // If this is the first subscriber for this type, set up the poller
+            // If this is the first subscriber for this type, set up the consumer
             if is_first {
                 bus.ensure_topic(&topic_name).await?;
 
@@ -189,7 +151,7 @@ impl EventBus for IggyEventBus {
                 let topic_clone = topic_name.clone();
 
                 tokio::spawn(async move {
-                    run_poller(inner_clone, type_id, topic_clone, cancel).await;
+                    run_consumer(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
 
@@ -246,10 +208,8 @@ impl EventBus for IggyEventBus {
             let topic_name = bus.resolve_topic::<E>().await;
             let metadata = EventMetadata::new();
 
-            // Publish to Iggy
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
 
-            // Also dispatch locally and wait
             bus.inner
                 .state
                 .dispatch_local(type_id, &payload, metadata)
@@ -274,10 +234,8 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>().await;
 
-            // Publish to Iggy
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
 
-            // Also dispatch locally and wait
             bus.inner
                 .state
                 .dispatch_local(type_id, &payload, metadata)
@@ -295,86 +253,71 @@ impl EventBus for IggyEventBus {
 
     fn shutdown(
         &self,
-        timeout: std::time::Duration,
+        timeout: Duration,
     ) -> impl Future<Output = Result<(), EventBusError>> + Send {
         let inner = self.inner.clone();
         async move {
-            // Set shutdown flag
             inner.state.shutdown.store(true, Ordering::SeqCst);
 
-            // Cancel all pollers
             inner.state.cancel_all_pollers().await;
 
-            // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;
 
-            // Clear handlers
             inner.state.handlers.write().await.clear();
 
-            // Disconnect client
-            if let Err(e) = inner.client.shutdown().await {
-                tracing::warn!("error disconnecting Iggy client: {e}");
-            }
+            // Flush the producer
+            inner.producer.flush(timeout).map_err(map_kafka_error)?;
 
             Ok(())
         }
     }
 }
 
-/// Background poller loop for a single topic.
-async fn run_poller(
-    inner: Arc<IggyInner>,
+/// Background consumer loop for a single Kafka topic.
+async fn run_consumer(
+    inner: Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: String,
     cancel: CancellationToken,
 ) {
-    let consumer_result = inner.client.consumer_group(
-        &inner.config.consumer_group,
-        &inner.config.stream_name,
-        &topic_name,
-    );
-
-    let mut consumer = match consumer_result {
-        Ok(builder) => builder
-            .auto_commit(AutoCommit::When(AutoCommitWhen::PollingMessages))
-            .create_consumer_group_if_not_exists()
-            .auto_join_consumer_group()
-            .polling_strategy(PollingStrategy::next())
-            .poll_interval(IggyDuration::from(inner.config.poll_interval))
-            .batch_length(inner.config.poll_batch_size)
-            .build(),
+    let consumer: StreamConsumer = match inner.config.to_consumer_client_config().create() {
+        Ok(c) => c,
         Err(e) => {
-            tracing::error!(topic = %topic_name, "failed to create Iggy consumer: {e}");
+            tracing::error!(topic = %topic_name, "failed to create Kafka consumer: {e}");
             return;
         }
     };
 
-    if let Err(e) = consumer.init().await {
-        tracing::error!(topic = %topic_name, "failed to init Iggy consumer: {e}");
+    if let Err(e) = consumer.subscribe(&[&topic_name]) {
+        tracing::error!(topic = %topic_name, "failed to subscribe to Kafka topic: {e}");
         return;
     }
 
-    tracing::info!(topic = %topic_name, "poller started");
+    tracing::info!(topic = %topic_name, "Kafka consumer started");
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                tracing::info!(topic = %topic_name, "poller cancelled");
+                tracing::info!(topic = %topic_name, "Kafka consumer cancelled");
                 break;
             }
-            msg = futures_util::StreamExt::next(&mut consumer) => {
+            msg = consumer.recv() => {
                 match msg {
-                    Some(Ok(received)) => {
-                        let metadata = extract_metadata_from_message(&received.message);
-                        inner.state.dispatch_from_poller(type_id, &received.message.payload, metadata).await;
+                    Ok(borrowed_msg) => {
+                        let payload = match borrowed_msg.payload() {
+                            Some(p) => p,
+                            None => {
+                                tracing::warn!(topic = %topic_name, "received Kafka message with no payload");
+                                continue;
+                            }
+                        };
+
+                        let metadata = extract_metadata_from_kafka(&borrowed_msg);
+                        inner.state.dispatch_from_poller(type_id, payload, metadata).await;
                     }
-                    Some(Err(e)) => {
-                        tracing::warn!(topic = %topic_name, "poll error: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
-                    None => {
-                        tracing::info!(topic = %topic_name, "consumer stream ended");
-                        break;
+                    Err(e) => {
+                        tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -382,28 +325,17 @@ async fn run_poller(
     }
 }
 
-/// Extract `EventMetadata` from Iggy message headers.
-fn extract_metadata_from_message(message: &IggyMessage) -> EventMetadata {
+/// Extract `EventMetadata` from Kafka message headers.
+fn extract_metadata_from_kafka(msg: &rdkafka::message::BorrowedMessage<'_>) -> EventMetadata {
     let mut pairs: Vec<(String, String)> = Vec::new();
 
-    // Add the Iggy-native timestamp
-    pairs.push((HEADER_TIMESTAMP.to_string(), message.header.timestamp.to_string()));
-
-    if let Ok(Some(headers)) = message.user_headers_map() {
-        for (key, value) in &headers {
-            let key_str = match key.as_str() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let val_str = match value.as_str() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            // Skip timestamp from user headers — we use the Iggy native one
-            if key_str == HEADER_TIMESTAMP {
-                continue;
+    if let Some(headers) = msg.headers() {
+        for header in headers.iter() {
+            if let Some(value) = header.value {
+                if let Ok(v) = std::str::from_utf8(value) {
+                    pairs.push((header.key.to_string(), v.to_string()));
+                }
             }
-            pairs.push((key_str.to_string(), val_str.to_string()));
         }
     }
 

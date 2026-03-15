@@ -1,17 +1,14 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
 use iggy::prelude::*;
-use tokio::sync::{Mutex, Notify, RwLock};
 
+use r2e_events::backend::{BackendState, TopicRegistry};
 use r2e_events::EventBusError;
 
 use crate::bus::IggyEventBus;
 use crate::config::{IggyConfig, Transport};
 use crate::error::map_iggy_error;
 use crate::inner::IggyInner;
-use crate::topic::TopicRegistry;
 
 /// Builder for [`IggyEventBus`].
 ///
@@ -73,14 +70,7 @@ impl IggyEventBusBuilder {
         let inner = IggyInner {
             config: self.config,
             client: Arc::new(client),
-            shutdown: AtomicBool::new(false),
-            next_id: AtomicU64::new(1),
-            handlers: RwLock::new(HashMap::new()),
-            topic_registry: RwLock::new(self.topic_registry),
-            poller_cancels: Mutex::new(HashMap::new()),
-            in_flight: AtomicUsize::new(0),
-            in_flight_zero: Notify::new(),
-            ensured_topics: Mutex::new(std::collections::HashSet::new()),
+            state: Arc::new(BackendState::new(self.topic_registry)),
         };
 
         Ok(IggyEventBus {
