@@ -143,22 +143,10 @@ impl<S: Send + Sync> PreAuthGuard<S> for ApiKeyPreAuthGuard {
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct GuardTestState {
     jwt_validator: Arc<JwtClaimsValidator>,
     config: R2eConfig,
-}
-
-impl r2e::http::extract::FromRef<GuardTestState> for Arc<JwtClaimsValidator> {
-    fn from_ref(state: &GuardTestState) -> Self {
-        state.jwt_validator.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<GuardTestState> for R2eConfig {
-    fn from_ref(state: &GuardTestState) -> Self {
-        state.config.clone()
-    }
 }
 
 // ─── Controller with various guard scenarios ───
@@ -257,8 +245,8 @@ async fn test_custom_guard_allows() {
         .get("/guarded/allow")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     assert_eq!(resp.text(), "allowed");
 }
 
@@ -283,8 +271,8 @@ async fn test_guard_receives_identity() {
         .get("/guarded/sub-check")
         .bearer(&token_allowed)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let sub: String = resp.json();
     assert_eq!(sub, "allowed-user");
 
@@ -315,8 +303,8 @@ async fn test_guard_receives_headers() {
         .bearer(&token)
         .header("x-custom-token", "anything")
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     assert_eq!(resp.text(), "header ok");
 }
 
@@ -330,8 +318,8 @@ async fn test_guard_receives_uri() {
         .get("/guarded/path-check")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     assert_eq!(resp.text(), "path ok");
 }
 
@@ -361,8 +349,8 @@ async fn test_pre_guard_api_key_required() {
         .get("/guarded/api-key")
         .header("x-api-key", "valid-key")
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     assert_eq!(resp.text(), "api key ok");
 }
 

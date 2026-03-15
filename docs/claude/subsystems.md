@@ -423,6 +423,16 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 ## Testing (r2e-test)
 
-- `TestApp` — wraps an `axum::Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch` with builder pattern for headers/body.
-- `TestResponse` — response wrapper with status, headers, and body helpers.
-- `TestJwt` — generates valid JWT tokens for test scenarios with configurable sub/email/roles.
+- `TestApp` — wraps an `axum::Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute.
+- `TestRequest` — builder with: `bearer(token)`, `header(name, value)`, `json(body)`, `body(bytes)`, `form(fields)`, `cookie(name, value)`, `query(key, value)`, `queries(pairs)`.
+- `TestResponse` — response wrapper with:
+  - **Status assertions:** `assert_ok` (200), `assert_created` (201), `assert_no_content` (204), `assert_bad_request` (400), `assert_unauthorized` (401), `assert_forbidden` (403), `assert_not_found` (404), `assert_conflict` (409), `assert_unprocessable` (422), `assert_too_many_requests` (429), `assert_internal_server_error` (500), `assert_status(code)`. All return `&Self`.
+  - **JSON-path assertions:** `assert_json_path(path, expected)`, `assert_json_path_fn(path, predicate)`, `json_path::<T>(path)`.
+  - **JSON matching:** `assert_json_contains(expected)` (partial/subset match), `assert_json_path_contains(path, item)`.
+  - **JSON shape:** `assert_json_shape(schema)` — structural type validation using exemplar values.
+  - **Header assertions:** `assert_header(name, expected)`, `assert_header_exists(name)`.
+  - **Access:** `json::<T>()`, `text()`, `header(name)`, `cookie(name)`, `cookies()`.
+- `TestSession` — cookie-persisting session wrapper. Created via `app.session()`. Builder: `with_bearer(token)`, `with_default_header(name, value)`. Cookie management: `set_cookie`, `remove_cookie`, `clear_cookies`, `cookie`. HTTP methods: `get/post/put/patch/delete/request` return `SessionRequest` (same builder API as `TestRequest`). Cookies from `Set-Cookie` responses are auto-captured.
+- `TestJwt` — generates valid JWT tokens for test scenarios with configurable sub/email/roles. `token_builder(sub)` → `TokenBuilder` with `roles`, `email`, `claim`, `expires_in_secs`, `expired`. `expired()` sets `exp` to 60 seconds in the past.
+- `#[derive(TestState)]` — generates `FromRef` impls for test state structs (eliminates boilerplate). Supports `#[test_state(skip)]`.
+- `json_contains(actual, expected)` — recursive subset matching function (exported for custom assertions).

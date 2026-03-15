@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use std::collections::HashSet;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
+use syn::{parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Fields, Ident, Type};
 
 use crate::crate_path::r2e_core_path;
 
@@ -12,6 +12,55 @@ pub fn expand(input: TokenStream) -> TokenStream {
         Ok(output) => output.into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Generate `FromRef` impls for each unique field type, skipping fields
+/// annotated with `#[<skip_attr_name>(skip)]` or `#[<skip_attr_name>(skip_from_ref)]`.
+///
+/// Shared between `BeanState` and `TestState` derives.
+pub fn generate_from_ref_impls(
+    name: &Ident,
+    fields: &Punctuated<Field, Comma>,
+    skip_attr_name: &str,
+) -> Vec<TokenStream2> {
+    let krate = r2e_core_path();
+    let mut seen_types = HashSet::new();
+    let mut from_ref_impls = Vec::new();
+
+    for field in fields {
+        let field_name = field.ident.as_ref().unwrap();
+        let field_type = &field.ty;
+
+        // Check for #[<skip_attr_name>(skip)] or #[<skip_attr_name>(skip_from_ref)]
+        let skip = field.attrs.iter().any(|attr| {
+            if !attr.path().is_ident(skip_attr_name) {
+                return false;
+            }
+            attr.parse_args::<syn::Ident>()
+                .map(|ident| ident == "skip" || ident == "skip_from_ref")
+                .unwrap_or(false)
+        });
+
+        if skip {
+            continue;
+        }
+
+        // Use the stringified type as the dedup key.
+        let type_key = type_to_string(field_type);
+        if !seen_types.insert(type_key) {
+            continue;
+        }
+
+        from_ref_impls.push(quote! {
+            impl #krate::http::extract::FromRef<#name> for #field_type {
+                fn from_ref(state: &#name) -> Self {
+                    state.#field_name.clone()
+                }
+            }
+        });
+    }
+
+    from_ref_impls
 }
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -46,49 +95,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    // Generate FromRef impls for each unique field type, unless the field
-    // is annotated with #[bean_state(skip_from_ref)].
-    let mut seen_types = HashSet::new();
-    let mut from_ref_impls = Vec::new();
-
-    for field in fields {
-        let field_name = field.ident.as_ref().unwrap();
-        let field_type = &field.ty;
-
-        // Check for #[bean_state(skip_from_ref)]
-        let skip = field.attrs.iter().any(|attr| {
-            if !attr.path().is_ident("bean_state") {
-                return false;
-            }
-            attr.parse_args::<syn::Ident>()
-                .map(|ident| ident == "skip_from_ref")
-                .unwrap_or(false)
-        });
-
-        if skip {
-            continue;
-        }
-
-        // Use the stringified type as the dedup key.
-        let type_key = type_to_string(field_type);
-        if !seen_types.insert(type_key) {
-            continue;
-        }
-
-        let krate = r2e_core_path();
-        from_ref_impls.push(quote! {
-            impl #krate::http::extract::FromRef<#name> for #field_type {
-                fn from_ref(state: &#name) -> Self {
-                    state.#field_name.clone()
-                }
-            }
-        });
-
-    }
+    // Generate FromRef impls using the shared function.
+    let from_ref_impls = generate_from_ref_impls(name, fields, "bean_state");
 
     // Generate BuildableFrom<P, Indices> impl with index witness type params.
-    // Each unique field type gets its own __I{n} parameter bundled into a tuple
-    // so the compiler can independently resolve Contains<FieldType, __I{n}>.
     let krate = r2e_core_path();
 
     let mut buildable_seen = HashSet::new();
@@ -137,4 +147,3 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 fn type_to_string(ty: &Type) -> String {
     quote!(#ty).to_string().replace(' ', "")
 }
-

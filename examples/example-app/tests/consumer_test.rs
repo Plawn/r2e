@@ -16,29 +16,11 @@ struct TestConsumerEvent {
 
 // ─── Test state ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct ConsumerTestState {
     pub event_bus: LocalEventBus,
     pub counter: Arc<AtomicUsize>,
     pub received: Arc<tokio::sync::Mutex<Option<String>>>,
-}
-
-impl r2e::http::extract::FromRef<ConsumerTestState> for LocalEventBus {
-    fn from_ref(state: &ConsumerTestState) -> Self {
-        state.event_bus.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<ConsumerTestState> for Arc<AtomicUsize> {
-    fn from_ref(state: &ConsumerTestState) -> Self {
-        state.counter.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<ConsumerTestState> for Arc<tokio::sync::Mutex<Option<String>>> {
-    fn from_ref(state: &ConsumerTestState) -> Self {
-        state.received.clone()
-    }
 }
 
 fn make_state() -> ConsumerTestState {

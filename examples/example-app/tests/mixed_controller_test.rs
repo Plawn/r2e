@@ -35,29 +35,11 @@ impl UserService {
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct MixedTestState {
     user_service: UserService,
     jwt_validator: Arc<JwtClaimsValidator>,
     config: R2eConfig,
-}
-
-impl r2e::http::extract::FromRef<MixedTestState> for UserService {
-    fn from_ref(state: &MixedTestState) -> Self {
-        state.user_service.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<MixedTestState> for Arc<JwtClaimsValidator> {
-    fn from_ref(state: &MixedTestState) -> Self {
-        state.jwt_validator.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<MixedTestState> for R2eConfig {
-    fn from_ref(state: &MixedTestState) -> Self {
-        state.config.clone()
-    }
 }
 
 // ─── Mixed controller: public + protected endpoints ───
@@ -138,7 +120,8 @@ async fn setup() -> (TestApp, TestJwt) {
 #[tokio::test]
 async fn test_public_endpoint_no_token() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/api/public").send().await.assert_ok();
+    let resp = app.get("/api/public").send().await;
+    resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
     assert_eq!(users[0].name, "Alice");
@@ -152,8 +135,8 @@ async fn test_protected_endpoint_with_token() {
         .get("/api/me")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["sub"], "user-42");
     assert_eq!(body["email"], "test@example.com");
@@ -173,8 +156,8 @@ async fn test_optional_identity_with_token() {
         .get("/api/whoami")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let text: String = resp.json();
     assert_eq!(text, "Hello, user-42");
 }
@@ -182,7 +165,8 @@ async fn test_optional_identity_with_token() {
 #[tokio::test]
 async fn test_optional_identity_without_token() {
     let (app, _jwt) = setup().await;
-    let resp = app.get("/api/whoami").send().await.assert_ok();
+    let resp = app.get("/api/whoami").send().await;
+    resp.assert_ok();
     let text: String = resp.json();
     assert_eq!(text, "Hello, anonymous");
 }
@@ -206,8 +190,8 @@ async fn test_admin_endpoint_with_admin_role() {
         .get("/api/admin")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
 }

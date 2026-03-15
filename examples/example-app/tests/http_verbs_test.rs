@@ -72,29 +72,11 @@ impl ItemService {
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct VerbTestState {
     item_service: ItemService,
     jwt_validator: Arc<JwtClaimsValidator>,
     config: R2eConfig,
-}
-
-impl r2e::http::extract::FromRef<VerbTestState> for ItemService {
-    fn from_ref(state: &VerbTestState) -> Self {
-        state.item_service.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<VerbTestState> for Arc<JwtClaimsValidator> {
-    fn from_ref(state: &VerbTestState) -> Self {
-        state.jwt_validator.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<VerbTestState> for R2eConfig {
-    fn from_ref(state: &VerbTestState) -> Self {
-        state.config.clone()
-    }
 }
 
 // ─── Controller with all HTTP verbs (struct-level identity) ───
@@ -198,7 +180,8 @@ async fn setup() -> (TestApp, TestJwt) {
 async fn test_get_list_items() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get("/items").bearer(&token).send().await.assert_ok();
+    let resp = app.get("/items").bearer(&token).send().await;
+    resp.assert_ok();
     let items: Vec<Item> = resp.json();
     assert_eq!(items.len(), 3);
 }
@@ -207,7 +190,8 @@ async fn test_get_list_items() {
 async fn test_get_item_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get("/items/1").bearer(&token).send().await.assert_ok();
+    let resp = app.get("/items/1").bearer(&token).send().await;
+    resp.assert_ok();
     let item: Item = resp.json();
     assert_eq!(item.name, "First");
 }
@@ -235,8 +219,8 @@ async fn test_put_update_item() {
         .json(&body)
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let item: Item = resp.json();
     assert_eq!(item.id, 1);
     assert_eq!(item.name, "Updated First");
@@ -265,7 +249,7 @@ async fn test_delete_item() {
         .bearer(&token)
         .send()
         .await
-        .assert_status(http::StatusCode::NO_CONTENT);
+        .assert_no_content();
 
     // Verify it's gone
     app.get("/items/1")
@@ -294,7 +278,8 @@ async fn test_patch_partial_update() {
     let token = jwt.token("user-1", &["user"]);
 
     // Item 3 starts as active=false
-    let resp = app.get("/items/3").bearer(&token).send().await.assert_ok();
+    let resp = app.get("/items/3").bearer(&token).send().await;
+    resp.assert_ok();
     let item: Item = resp.json();
     assert!(!item.active);
 
@@ -305,8 +290,8 @@ async fn test_patch_partial_update() {
         .json(&body)
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let item: Item = resp.json();
     assert_eq!(item.id, 3);
     assert!(item.active);

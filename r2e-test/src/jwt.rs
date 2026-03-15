@@ -51,7 +51,7 @@ impl TestJwt {
             roles: Vec::new(),
             email: None,
             extra_claims: serde_json::Map::new(),
-            exp_secs: 3600,
+            expiration: Expiration::InSecs(3600),
         }
     }
 
@@ -84,6 +84,11 @@ impl Default for TestJwt {
     }
 }
 
+enum Expiration {
+    InSecs(u64),
+    Expired,
+}
+
 /// Builder for constructing JWT tokens with custom claims and expiration.
 pub struct TokenBuilder<'a> {
     jwt: &'a TestJwt,
@@ -91,7 +96,7 @@ pub struct TokenBuilder<'a> {
     roles: Vec<String>,
     email: Option<String>,
     extra_claims: serde_json::Map<String, Value>,
-    exp_secs: u64,
+    expiration: Expiration,
 }
 
 impl<'a> TokenBuilder<'a> {
@@ -123,26 +128,26 @@ impl<'a> TokenBuilder<'a> {
 
     /// Set the token expiration in seconds from now.
     pub fn expires_in_secs(mut self, secs: u64) -> Self {
-        self.exp_secs = secs;
+        self.expiration = Expiration::InSecs(secs);
         self
     }
 
-    /// Make the token already expired (exp = 0).
+    /// Make the token already expired (`exp` is set to 60 seconds in the past).
     pub fn expired(mut self) -> Self {
-        self.exp_secs = 0;
+        self.expiration = Expiration::Expired;
         self
     }
 
     /// Build and sign the JWT token.
     pub fn build(self) -> String {
-        let exp = if self.exp_secs == 0 {
-            0u64
-        } else {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + self.exp_secs
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let exp = match self.expiration {
+            Expiration::InSecs(secs) => now + secs,
+            Expiration::Expired => now.saturating_sub(60),
         };
 
         let mut claims = serde_json::json!({

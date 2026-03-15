@@ -1,6 +1,6 @@
 # r2e-test
 
-Test utilities for R2E — TestApp HTTP client and TestJwt token generation.
+Test utilities for R2E — TestApp HTTP client, TestJwt token generation, TestSession cookie persistence, and assertion helpers.
 
 ## Overview
 
@@ -39,7 +39,7 @@ async fn test_list_users() {
 }
 ```
 
-Builder pattern for headers, body, and authentication:
+Builder pattern for headers, body, authentication, query params, form data, and cookies:
 
 ```rust
 // POST with JSON body
@@ -56,24 +56,51 @@ let response = client
     .bearer(&token)
     .send()
     .await;
+
+// Query parameters
+let response = client
+    .get("/search")
+    .query("q", "rust")
+    .query("page", "1")
+    .send()
+    .await;
+
+// Form data
+let response = client
+    .post("/login")
+    .form(&[("user", "admin"), ("pass", "secret")])
+    .send()
+    .await;
+
+// Cookies
+let response = client
+    .get("/dashboard")
+    .cookie("session", "abc123")
+    .send()
+    .await;
 ```
 
 Available methods: `get`, `post`, `put`, `delete`, `patch`, `request`.
 
 ### TestResponse
 
-Response wrapper with status assertions, JSON-path assertions, and body access.
+Response wrapper with status assertions, JSON-path assertions, JSON matching, and body access.
 
 #### Status assertions
 
 ```rust
-resp.assert_ok();               // 200
-resp.assert_created();          // 201
-resp.assert_bad_request();      // 400
-resp.assert_unauthorized();     // 401
-resp.assert_forbidden();        // 403
-resp.assert_not_found();        // 404
-resp.assert_status(StatusCode::NO_CONTENT); // any status
+resp.assert_ok();                    // 200
+resp.assert_created();               // 201
+resp.assert_no_content();            // 204
+resp.assert_bad_request();           // 400
+resp.assert_unauthorized();          // 401
+resp.assert_forbidden();             // 403
+resp.assert_not_found();             // 404
+resp.assert_conflict();              // 409
+resp.assert_unprocessable();         // 422
+resp.assert_too_many_requests();     // 429
+resp.assert_internal_server_error(); // 500
+resp.assert_status(StatusCode::IM_A_TEAPOT); // any status
 ```
 
 #### JSON-path assertions
@@ -105,17 +132,70 @@ let name: String = resp.json_path("users[0].name");
 let count: usize = resp.json_path("items.len()");
 ```
 
-#### Header access
+#### JSON contains (partial matching)
 
 ```rust
-let content_type = resp.header("content-type");
+resp.assert_json_contains(serde_json::json!({
+    "name": "Alice",
+    "status": "active"
+}));
+// Passes even if response has extra fields
+
+resp.assert_json_path_contains("users[0]", serde_json::json!({"name": "Alice"}));
 ```
 
-#### Body access
+#### JSON shape validation
 
 ```rust
+resp.assert_json_shape(serde_json::json!({
+    "id": 0,          // expects a number
+    "name": "",        // expects a string
+    "active": true,    // expects a boolean
+    "tags": [""]       // expects array of strings
+}));
+```
+
+#### Header assertions
+
+```rust
+resp.assert_header("content-type", "application/json");
+resp.assert_header_exists("x-request-id");
+```
+
+#### Cookie and body access
+
+```rust
+let session = resp.cookie("session_id");
+let all_cookies = resp.cookies();
+let content_type = resp.header("content-type");
 let users: Vec<User> = resp.json();
 let body: String = resp.text();
+```
+
+### TestSession
+
+Persists cookies across multiple requests, simulating a browser session:
+
+```rust
+let session = app.session();
+
+// Login — cookies from Set-Cookie are captured
+session.post("/login")
+    .form(&[("user", "admin"), ("pass", "secret")])
+    .send()
+    .await
+    .assert_ok();
+
+// Subsequent requests include captured cookies automatically
+session.get("/dashboard").send().await.assert_ok();
+```
+
+Configure default headers for the session:
+
+```rust
+let session = app.session()
+    .with_bearer("my-token")
+    .with_default_header("x-tenant-id", "acme");
 ```
 
 ### TestJwt
@@ -149,6 +229,22 @@ let expired = jwt.token_builder("user-1")
 
 // Get validators for wiring into test state
 let claims_validator = jwt.claims_validator();
+```
+
+### TestState derive
+
+Eliminates `FromRef` boilerplate for test state structs:
+
+```rust
+use r2e::prelude::*;
+
+#[derive(Clone, TestState)]
+struct TestState {
+    user_service: UserService,
+    jwt_validator: Arc<JwtClaimsValidator>,
+    config: R2eConfig,
+}
+// Automatically generates FromRef impls for each field type
 ```
 
 ## Full example

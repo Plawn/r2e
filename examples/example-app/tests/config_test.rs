@@ -7,22 +7,10 @@ use r2e_test::{TestApp, TestJwt};
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct ConfigTestState {
     jwt_validator: Arc<JwtClaimsValidator>,
     config: R2eConfig,
-}
-
-impl r2e::http::extract::FromRef<ConfigTestState> for Arc<JwtClaimsValidator> {
-    fn from_ref(state: &ConfigTestState) -> Self {
-        state.jwt_validator.clone()
-    }
-}
-
-impl r2e::http::extract::FromRef<ConfigTestState> for R2eConfig {
-    fn from_ref(state: &ConfigTestState) -> Self {
-        state.config.clone()
-    }
 }
 
 // ─── Controller testing various config types ───
@@ -138,8 +126,8 @@ async fn test_config_string_injection() {
         .get("/config/string")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let name: String = resp.json();
     assert_eq!(name, "MyApp");
 }
@@ -152,8 +140,8 @@ async fn test_config_i64_injection() {
         .get("/config/i64")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let port: i64 = resp.json();
     assert_eq!(port, 8080);
 }
@@ -166,8 +154,8 @@ async fn test_config_f64_injection() {
         .get("/config/f64")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let rate: f64 = resp.json();
     assert!((rate - 3.14).abs() < f64::EPSILON);
 }
@@ -180,8 +168,8 @@ async fn test_config_bool_injection() {
         .get("/config/bool")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let debug: bool = resp.json();
     assert!(debug);
 }
@@ -194,8 +182,8 @@ async fn test_config_option_some() {
         .get("/config/option")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["value"], "I exist");
 }
@@ -208,8 +196,8 @@ async fn test_config_option_none() {
         .get("/config/option")
         .bearer(&token)
         .send()
-        .await
-        .assert_ok();
+        .await;
+    resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert!(body["value"].is_null());
 }

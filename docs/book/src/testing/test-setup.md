@@ -39,7 +39,7 @@ async fn setup() -> (TestApp, TestJwt) {
 #[tokio::test]
 async fn test_health_check() {
     let (app, _) = setup().await;
-    app.get("/health").await.assert_ok();
+    app.get("/health").send().await.assert_ok();
 }
 ```
 
@@ -57,6 +57,44 @@ let app = TestApp::from_builder(
         // ... same setup as your main.rs, but with test fixtures
         .register_controller::<UserController>(),
 );
+```
+
+## Reducing boilerplate with `#[derive(TestState)]`
+
+Test state structs typically need `FromRef` impls for each field so Axum can extract sub-state. Use `#[derive(TestState)]` to auto-generate these:
+
+```rust
+use r2e::prelude::*;
+
+// Before: manual FromRef impls for every field
+#[derive(Clone)]
+struct TestState {
+    user_service: UserService,
+    jwt_validator: Arc<JwtClaimsValidator>,
+    config: R2eConfig,
+}
+// impl FromRef<TestState> for UserService { ... }
+// impl FromRef<TestState> for Arc<JwtClaimsValidator> { ... }
+// impl FromRef<TestState> for R2eConfig { ... }
+
+// After: one derive does it all
+#[derive(Clone, TestState)]
+struct TestState {
+    user_service: UserService,
+    jwt_validator: Arc<JwtClaimsValidator>,
+    config: R2eConfig,
+}
+```
+
+Skip fields that shouldn't get a `FromRef` impl:
+
+```rust
+#[derive(Clone, TestState)]
+struct TestState {
+    user_service: UserService,
+    #[test_state(skip)]
+    internal_counter: Arc<AtomicU64>,
+}
 ```
 
 ## Test configuration

@@ -9,15 +9,9 @@ use tokio_util::sync::CancellationToken;
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct ScheduledTestState {
     counter: Arc<AtomicUsize>,
-}
-
-impl r2e::http::extract::FromRef<ScheduledTestState> for Arc<AtomicUsize> {
-    fn from_ref(state: &ScheduledTestState) -> Self {
-        state.counter.clone()
-    }
 }
 
 // ─── Scheduled controller ───

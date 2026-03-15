@@ -53,6 +53,7 @@ pub use r2e_macros::bean;
 pub use r2e_macros::producer;
 pub use r2e_macros::Bean;
 pub use r2e_macros::BeanState;
+pub use r2e_macros::TestState;
 
 // Config macros
 pub use r2e_macros::ConfigProperties;

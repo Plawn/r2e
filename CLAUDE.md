@@ -56,7 +56,7 @@ r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore)
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
 r2e-openapi     → OpenAPI 3.0.3 spec generation, Swagger UI at /docs.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests).
+r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), #[derive(TestState)].
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.

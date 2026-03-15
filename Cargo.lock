@@ -5320,7 +5320,9 @@ dependencies = [
 name = "r2e-test"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
+ "form_urlencoded",
  "http",
  "http-body-util",
  "jsonwebtoken",

@@ -11,6 +11,13 @@ use r2e::prelude::*;
 use r2e_test::{TestApp, TestJwt};
 use std::sync::Arc;
 
+#[derive(Clone, TestState)]
+struct TestServices {
+    jwt_validator: Arc<JwtClaimsValidator>,
+    event_bus: LocalEventBus,
+    user_service: UserService,
+}
+
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let event_bus = LocalEventBus::new();
@@ -20,7 +27,7 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(event_bus)
             .with_bean::<UserService>()
-            .build_state::<AppState, _, _>()
+            .build_state::<TestServices, _, _>()
             .await
             .with(Health)
             .with(ErrorHandling)
@@ -82,6 +89,58 @@ async fn test_not_found() {
 }
 ```
 
+## Testing response shape
+
+Use `assert_json_shape` to verify the structure without asserting exact values:
+
+```rust
+#[tokio::test]
+async fn test_user_response_shape() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["user"]);
+
+    app.get("/users/1")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok()
+        .assert_json_shape(serde_json::json!({
+            "id": 0,
+            "name": "",
+            "email": "",
+            "roles": [""],
+            "created_at": ""
+        }));
+}
+```
+
+## Testing partial JSON matching
+
+Use `assert_json_contains` to check a subset of the response:
+
+```rust
+#[tokio::test]
+async fn test_user_contains_expected_fields() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["admin"]);
+
+    app.post("/users")
+        .json(&serde_json::json!({
+            "name": "Alice",
+            "email": "alice@example.com"
+        }))
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok()
+        .assert_json_contains(serde_json::json!({
+            "name": "Alice",
+            "email": "alice@example.com"
+        }));
+    // Passes even though the response also contains "id", "created_at", etc.
+}
+```
+
 ## Testing with database
 
 For tests with SQLite:
@@ -140,7 +199,52 @@ async fn test_rate_limiting() {
         .bearer(&token)
         .send()
         .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+        .assert_too_many_requests();
+}
+```
+
+## Testing with sessions
+
+Use `TestSession` for cookie-based authentication flows:
+
+```rust
+#[tokio::test]
+async fn test_session_login_flow() {
+    let (app, _) = setup().await;
+    let session = app.session();
+
+    // Login with form data
+    session.post("/login")
+        .form(&[("username", "alice"), ("password", "secret")])
+        .send()
+        .await
+        .assert_ok();
+
+    // Session cookie is automatically included
+    session.get("/dashboard")
+        .send()
+        .await
+        .assert_ok();
+}
+```
+
+## Testing with query parameters
+
+```rust
+#[tokio::test]
+async fn test_pagination() {
+    let (app, jwt) = setup().await;
+    let token = jwt.token("user-1", &["user"]);
+
+    app.get("/users")
+        .bearer(&token)
+        .query("page", "2")
+        .query("size", "10")
+        .send()
+        .await
+        .assert_ok()
+        .assert_json_path("meta.page", 2)
+        .assert_json_path("meta.size", 10);
 }
 ```
 

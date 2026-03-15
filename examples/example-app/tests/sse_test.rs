@@ -7,15 +7,9 @@ use r2e_test::TestApp;
 
 // ─── State ───
 
-#[derive(Clone)]
+#[derive(Clone, TestState)]
 struct SseTestState {
     config: R2eConfig,
-}
-
-impl r2e::http::extract::FromRef<SseTestState> for R2eConfig {
-    fn from_ref(state: &SseTestState) -> Self {
-        state.config.clone()
-    }
 }
 
 // ─── A simple finite stream for testability ───
@@ -82,7 +76,8 @@ async fn setup() -> TestApp {
 #[tokio::test]
 async fn test_sse_content_type() {
     let app = setup().await;
-    let resp = app.get("/sse/events").send().await.assert_ok();
+    let resp = app.get("/sse/events").send().await;
+    resp.assert_ok();
     let ct = resp.header("content-type").expect("missing content-type");
     assert!(
         ct.contains("text/event-stream"),
@@ -94,7 +89,8 @@ async fn test_sse_content_type() {
 #[tokio::test]
 async fn test_sse_event_format() {
     let app = setup().await;
-    let resp = app.get("/sse/events").send().await.assert_ok();
+    let resp = app.get("/sse/events").send().await;
+    resp.assert_ok();
     let body = resp.text();
 
     assert!(
@@ -107,7 +103,8 @@ async fn test_sse_event_format() {
 #[tokio::test]
 async fn test_sse_typed_event() {
     let app = setup().await;
-    let resp = app.get("/sse/events").send().await.assert_ok();
+    let resp = app.get("/sse/events").send().await;
+    resp.assert_ok();
     let body = resp.text();
 
     assert!(
@@ -125,7 +122,8 @@ async fn test_sse_typed_event() {
 #[tokio::test]
 async fn test_sse_stream_completes() {
     let app = setup().await;
-    let resp = app.get("/sse/events").send().await.assert_ok();
+    let resp = app.get("/sse/events").send().await;
+    resp.assert_ok();
     let body = resp.text();
 
     // All three events should be present

@@ -73,6 +73,7 @@
 - [Test Setup](./testing/test-setup.md)
 - [TestApp](./testing/test-app.md)
 - [TestJwt](./testing/test-jwt.md)
+- [TestSession](./testing/test-session.md)
 - [Integration Patterns](./testing/integration-patterns.md)
 
 # Reference
