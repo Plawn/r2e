@@ -47,8 +47,8 @@ impl KafkaEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    async fn resolve_topic<E: 'static>(&self) -> String {
-        self.inner.state.resolve_topic::<E>().await
+    fn resolve_topic<E: 'static>(&self) -> String {
+        self.inner.state.resolve_topic::<E>()
     }
 
     /// Ensure a topic exists in Kafka (idempotent, cached).
@@ -57,12 +57,12 @@ impl KafkaEventBus {
             return Ok(());
         }
 
-        if self.inner.state.is_topic_ensured(topic_name).await {
+        if self.inner.state.is_topic_ensured(topic_name) {
             return Ok(());
         }
 
         ensure_topic_exists(&self.inner.config, topic_name).await?;
-        self.inner.state.set_topic_ensured(topic_name).await;
+        self.inner.state.set_topic_ensured(topic_name);
         Ok(())
     }
 
@@ -115,7 +115,7 @@ impl EventBus for KafkaEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
         }
     }
 
@@ -146,7 +146,7 @@ impl EventBus for KafkaEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -160,13 +160,7 @@ impl EventBus for KafkaEventBus {
             if is_first {
                 bus.ensure_topic(&topic_name).await?;
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
@@ -196,7 +190,7 @@ impl EventBus for KafkaEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -209,13 +203,7 @@ impl EventBus for KafkaEventBus {
             if is_first {
                 bus.ensure_topic(&topic_name).await?;
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
@@ -239,7 +227,7 @@ impl EventBus for KafkaEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
             bus.publish(&topic_name, payload, &metadata).await
         }
@@ -259,7 +247,7 @@ impl EventBus for KafkaEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
         }
     }
@@ -275,7 +263,7 @@ impl EventBus for KafkaEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
@@ -302,7 +290,7 @@ impl EventBus for KafkaEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
 
@@ -316,7 +304,7 @@ impl EventBus for KafkaEventBus {
     fn clear(&self) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
             inner.state.handlers.write().await.clear();
         }
     }
@@ -327,9 +315,9 @@ impl EventBus for KafkaEventBus {
     ) -> impl Future<Output = Result<(), EventBusError>> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.shutdown.store(true, Ordering::SeqCst);
+            inner.state.shutdown.store(true, Ordering::Release);
 
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
 
             inner.state.wait_in_flight(timeout).await?;
 

@@ -141,6 +141,7 @@ async fn run_interval<T: Clone + Send + Sync + 'static>(
     }
 
     let mut tick = tokio::time::interval(interval);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = tick.tick() => {

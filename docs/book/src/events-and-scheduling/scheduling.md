@@ -38,21 +38,27 @@ pub struct ScheduledJobs {
 
 #[routes]
 impl ScheduledJobs {
-    // Run every 30 seconds
+    // Run every 30 seconds (integer = seconds)
     #[scheduled(every = 30)]
     async fn count_users(&self) {
         let count = self.user_service.count().await;
         tracing::info!(count, "Scheduled user count");
     }
 
-    // Run on a cron schedule (every hour)
+    // Run every 5 minutes (duration string)
+    #[scheduled(every = "5m")]
+    async fn sync_data(&self) {
+        tracing::info!("Syncing data");
+    }
+
+    // Run on a cron schedule (every hour) — validated at compile time
     #[scheduled(cron = "0 0 * * * *")]
     async fn hourly_cleanup(&self) {
         tracing::info!("Running hourly cleanup");
     }
 
     // Run every 60 seconds, first execution after 10 second delay
-    #[scheduled(every = 60, delay = 10)]
+    #[scheduled(every = "1m", initial_delay = "10s")]
     async fn delayed_task(&self) {
         tracing::info!("Delayed task executed");
     }
@@ -61,11 +67,14 @@ impl ScheduledJobs {
 
 ## Schedule types
 
+`every` and `initial_delay` accept either an integer (interpreted as seconds) or a duration string with suffixes `ms`, `s`, `m`, `h`, `d`. Suffixes are combinable: `"1h30m"`, `"2m30s"`.
+
 | Attribute | Description | Example |
 |-----------|-------------|---------|
 | `every = N` | Run every N seconds | `#[scheduled(every = 30)]` |
-| `every = N, delay = D` | Every N seconds, first run after D seconds | `#[scheduled(every = 60, delay = 10)]` |
-| `cron = "expr"` | Cron expression (6 fields) | `#[scheduled(cron = "0 */5 * * * *")]` |
+| `every = "dur"` | Run at a duration interval | `#[scheduled(every = "5m")]` |
+| `every = .., initial_delay = ..` | Interval with initial delay | `#[scheduled(every = "1m", initial_delay = "10s")]` |
+| `cron = "expr"` | Cron expression (6 fields, validated at compile time) | `#[scheduled(cron = "0 */5 * * * *")]` |
 
 ### Cron expression format
 
@@ -247,7 +256,7 @@ impl StatsController {
         Json(self.stats_service.current().await)
     }
 
-    #[scheduled(every = 300)]
+    #[scheduled(every = "5m")]
     async fn refresh_stats(&self) {
         self.stats_service.refresh().await;
     }

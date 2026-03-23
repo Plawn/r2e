@@ -1098,18 +1098,18 @@ fn generate_ws_route_metadata(
 
 /// Generate schedule configuration expression.
 fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, sched_krate: &TokenStream) -> TokenStream {
-    if let Some(every) = sm.config.every {
-        if let Some(delay) = sm.config.initial_delay {
+    if let Some(every_ms) = sm.config.every_ms {
+        if let Some(delay_ms) = sm.config.initial_delay_ms {
             quote! {
                 #sched_krate::ScheduleConfig::IntervalWithDelay {
-                    interval: std::time::Duration::from_secs(#every),
-                    initial_delay: std::time::Duration::from_secs(#delay),
+                    interval: std::time::Duration::from_millis(#every_ms),
+                    initial_delay: std::time::Duration::from_millis(#delay_ms),
                 }
             }
         } else {
             quote! {
                 #sched_krate::ScheduleConfig::Interval(
-                    std::time::Duration::from_secs(#every)
+                    std::time::Duration::from_millis(#every_ms)
                 )
             }
         }

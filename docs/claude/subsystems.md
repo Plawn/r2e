@@ -299,11 +299,12 @@ Scheduled tasks are auto-discovered via `register_controller()`, following the s
 - `ScheduledTaskDef<T>` — a named task definition with schedule and closure.
 - `ScheduledResult` — trait for handling `()` or `Result<(), E>` return values.
 
-**Declarative scheduling** via `#[scheduled]` attribute:
+**Declarative scheduling** via `#[scheduled]` attribute. `every` and `initial_delay` accept an integer (seconds) or a duration string (`ms`, `s`, `m`, `h`, `d`, combinable). Cron expressions are validated at compile time.
 ```rust
-#[scheduled(every = 30)]                    // every 30 seconds
-#[scheduled(every = 60, delay = 10)]        // first run after 10s
-#[scheduled(cron = "0 */5 * * * *")]        // cron expression
+#[scheduled(every = 30)]                              // every 30 seconds (integer = seconds)
+#[scheduled(every = "5m")]                            // every 5 minutes (duration string)
+#[scheduled(every = "1m", initial_delay = "10s")]     // first run after 10s
+#[scheduled(cron = "0 */5 * * * *")]                  // cron expression (compile-time validated)
 ```
 
 **Registration:** install the `Scheduler` plugin before `build_state()`, then register controllers:

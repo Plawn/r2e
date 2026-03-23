@@ -34,9 +34,11 @@ pub struct ConsumerMethod {
 }
 
 pub struct ScheduledConfig {
-    pub every: Option<u64>,
+    /// Interval in milliseconds (parsed from integer seconds or duration string).
+    pub every_ms: Option<u64>,
     pub cron: Option<String>,
-    pub initial_delay: Option<u64>,
+    /// Initial delay in milliseconds (parsed from integer seconds or duration string).
+    pub initial_delay_ms: Option<u64>,
     pub name: Option<String>,
 }
 

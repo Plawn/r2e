@@ -58,20 +58,20 @@ impl RabbitMqEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    async fn resolve_topic<E: 'static>(&self) -> String {
-        self.inner.state.resolve_topic::<E>().await
+    fn resolve_topic<E: 'static>(&self) -> String {
+        self.inner.state.resolve_topic::<E>()
     }
 
     /// Ensure a queue exists and is bound to the exchange for the given topic.
     async fn ensure_queue(&self, topic_name: &str) -> Result<String, EventBusError> {
         let queue_name = format!("{}.{}", self.inner.config.consumer_group, topic_name);
 
-        if self.inner.state.is_topic_ensured(topic_name).await {
+        if self.inner.state.is_topic_ensured(topic_name) {
             return Ok(queue_name);
         }
 
         if !self.inner.config.auto_create {
-            self.inner.state.set_topic_ensured(topic_name).await;
+            self.inner.state.set_topic_ensured(topic_name);
             return Ok(queue_name);
         }
 
@@ -126,7 +126,7 @@ impl RabbitMqEventBus {
             "declared and bound queue"
         );
 
-        self.inner.state.set_topic_ensured(topic_name).await;
+        self.inner.state.set_topic_ensured(topic_name);
         Ok(queue_name)
     }
 
@@ -186,7 +186,7 @@ impl EventBus for RabbitMqEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
         }
     }
 
@@ -217,7 +217,7 @@ impl EventBus for RabbitMqEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -231,13 +231,7 @@ impl EventBus for RabbitMqEventBus {
             if is_first {
                 let queue_name = bus.ensure_queue(&topic_name).await?;
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let queue_clone = queue_name.clone();
@@ -267,7 +261,7 @@ impl EventBus for RabbitMqEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -280,13 +274,7 @@ impl EventBus for RabbitMqEventBus {
             if is_first {
                 let queue_name = bus.ensure_queue(&topic_name).await?;
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let queue_clone = queue_name.clone();
@@ -310,7 +298,7 @@ impl EventBus for RabbitMqEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
             bus.publish(&topic_name, payload, &metadata).await
         }
@@ -330,7 +318,7 @@ impl EventBus for RabbitMqEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
         }
     }
@@ -346,7 +334,7 @@ impl EventBus for RabbitMqEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
             // Publish to RabbitMQ
@@ -375,7 +363,7 @@ impl EventBus for RabbitMqEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             // Publish to RabbitMQ
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
@@ -391,7 +379,7 @@ impl EventBus for RabbitMqEventBus {
     fn clear(&self) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
             inner.state.handlers.write().await.clear();
         }
     }
@@ -403,10 +391,10 @@ impl EventBus for RabbitMqEventBus {
         let inner = self.inner.clone();
         async move {
             // Set shutdown flag
-            inner.state.shutdown.store(true, Ordering::SeqCst);
+            inner.state.shutdown.store(true, Ordering::Release);
 
             // Cancel all consumer tasks
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
 
             // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;
@@ -498,94 +486,92 @@ async fn run_consumer_inner(
                         let payload = delivery.data.as_slice();
 
                         // Skip if this event was already dispatched locally by emit_and_wait.
-                        if inner.state.locally_dispatched.lock().await.remove(metadata.event_id) {
+                        if inner.state.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).remove(metadata.event_id) {
                             if let Err(e) = delivery.ack(BasicAckOptions::default()).await {
                                 tracing::error!(queue = %queue_name, "failed to ack deduped delivery: {e}");
                             }
                             continue;
                         }
 
-                        // Attempt to dispatch to local handlers
-                        let map = inner.state.handlers.read().await;
-                        let dispatch_ok = if let Some(topic_handlers) = map.get(&type_id) {
-                            match (topic_handlers.deserializer)(payload) {
-                                Ok(event) => {
-                                    // Dispatch to all handlers, respecting filters + retry
-                                    let mut tasks = Vec::new();
-                                    for entry in &topic_handlers.entries {
-                                        // Check filter
-                                        if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
-                                            continue;
+                        // Phase 1: Collect handlers and deserialize under lock, then release.
+                        let collected = {
+                            let map = inner.state.handlers.read().await;
+                            map.get(&type_id).map(|topic_handlers| {
+                                let deser_result = (topic_handlers.deserializer)(payload);
+                                let handlers: Vec<_> = topic_handlers.entries.iter()
+                                    .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                                    .map(|entry| (entry.handler.clone(), entry.retry_policy.clone()))
+                                    .collect();
+                                (deser_result, handlers)
+                            })
+                        };
+                        // RwLock released here
+
+                        // Phase 2: Dispatch handlers and collect results.
+                        let dispatch_ok = match collected {
+                            None => true, // No handlers — ack anyway
+                            Some((Err(err), _)) => {
+                                tracing::error!(queue = %queue_name, "failed to deserialize event: {err}");
+                                false
+                            }
+                            Some((Ok(event), handlers)) => {
+                                let dlq_payload = payload.to_vec();
+                                let mut tasks = Vec::with_capacity(handlers.len());
+
+                                for (h, retry_policy) in &handlers {
+                                    let e = event.clone();
+                                    let m = metadata.clone();
+                                    let h = h.clone();
+                                    let retry_policy = retry_policy.clone();
+
+                                    // Backpressure: acquire permit BEFORE spawning.
+                                    let permit = inner.state.handler_semaphore.clone()
+                                        .acquire_owned().await.expect("semaphore closed");
+                                    let guard = inner.state.acquire_in_flight();
+
+                                    tasks.push(tokio::spawn(async move {
+                                        let _guard = guard;
+                                        let result = if let Some(ref policy) = retry_policy {
+                                            r2e_events::backend::BackendState::invoke_with_retry(&h, &e, &m, policy).await
+                                        } else {
+                                            h(e, m).await
+                                        };
+                                        drop(permit);
+                                        result
+                                    }));
+                                }
+
+                                // Wait for all handler tasks and check results.
+                                let mut all_ack = true;
+                                for task in tasks {
+                                    match task.await {
+                                        Ok(HandlerResult::Ack) => {}
+                                        Ok(HandlerResult::Nack(reason)) => {
+                                            tracing::warn!(queue = %queue_name, "handler returned Nack: {reason}");
+                                            all_ack = false;
                                         }
-                                        let h = entry.handler.clone();
-                                        let e = event.clone();
-                                        let m = metadata.clone();
-                                        let retry_policy = entry.retry_policy.clone();
-
-                                        inner.state.in_flight.fetch_add(1, Ordering::SeqCst);
-
-                                        let state = inner.state.clone();
-                                        tasks.push(tokio::spawn(async move {
-                                            let result = if let Some(ref policy) = retry_policy {
-                                                r2e_events::backend::BackendState::invoke_with_retry(&h, &e, &m, policy).await
-                                            } else {
-                                                h(e, m).await
-                                            };
-                                            if state.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-                                                state.in_flight_zero.notify_waiters();
-                                            }
-                                            result
-                                        }));
-                                    }
-
-                                    // Collect DLQ info before dropping map
-                                    let dlq_payload = payload.to_vec();
-                                    drop(map);
-
-                                    // Wait for all handler tasks and check results
-                                    let mut all_ack = true;
-                                    for task in tasks {
-                                        match task.await {
-                                            Ok(HandlerResult::Ack) => {}
-                                            Ok(HandlerResult::Nack(reason)) => {
-                                                tracing::warn!(queue = %queue_name, "handler returned Nack: {reason}");
-                                                all_ack = false;
-                                            }
-                                            Err(e) => {
-                                                tracing::error!(queue = %queue_name, "handler task panicked: {e}");
-                                                all_ack = false;
-                                            }
+                                        Err(e) => {
+                                            tracing::error!(queue = %queue_name, "handler task panicked: {e}");
+                                            all_ack = false;
                                         }
                                     }
+                                }
 
-                                    // Publish to DLQ on final failure if configured
-                                    if !all_ack {
-                                        if let Some(ref publisher) = inner.state.dlq_publisher {
-                                            // Re-read handlers to find DLQ topics
-                                            let map = inner.state.handlers.read().await;
-                                            if let Some(th) = map.get(&type_id) {
-                                                for entry in &th.entries {
-                                                    if let Some(ref policy) = entry.retry_policy {
-                                                        if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                                                            publisher(dlq_topic.clone(), dlq_payload.clone(), metadata.clone()).await;
-                                                        }
-                                                    }
+                                // Publish to DLQ on final failure if configured.
+                                if !all_ack {
+                                    if let Some(ref publisher) = inner.state.dlq_publisher {
+                                        for (_, retry_policy) in &handlers {
+                                            if let Some(ref policy) = retry_policy {
+                                                if let Some(ref dlq_topic) = policy.dead_letter_topic {
+                                                    publisher(dlq_topic.clone(), dlq_payload.clone(), metadata.clone()).await;
                                                 }
                                             }
                                         }
                                     }
+                                }
 
-                                    all_ack
-                                }
-                                Err(err) => {
-                                    drop(map);
-                                    tracing::error!(queue = %queue_name, "failed to deserialize event: {err}");
-                                    false
-                                }
+                                all_ack
                             }
-                        } else {
-                            drop(map);
-                            true // No handlers — ack anyway
                         };
 
                         // Ack or nack the delivery

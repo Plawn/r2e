@@ -427,11 +427,18 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// `.register_controller::<MyJobs>()` and install the scheduler runtime
 /// with `.with(Scheduler)` (from `r2e-scheduler`).
 ///
+/// `every` accepts an integer (seconds) or a duration string with suffixes
+/// `ms`, `s`, `m`, `h`, `d` (combinable: `"1h30m"`). Same for `initial_delay`.
+/// Cron expressions are validated at compile time.
+///
 /// ```ignore
 /// #[scheduled(every = 30)]                    // every 30 seconds
 /// async fn cleanup(&self) { ... }
 ///
-/// #[scheduled(every = 60, delay = 10)]        // first run after 10 s
+/// #[scheduled(every = "5m")]                  // every 5 minutes
+/// async fn sync_data(&self) { ... }
+///
+/// #[scheduled(every = "2h", initial_delay = "10s")]
 /// async fn sync(&self) { ... }
 ///
 /// #[scheduled(cron = "0 */5 * * * *")]        // cron expression

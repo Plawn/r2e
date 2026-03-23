@@ -1,9 +1,9 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::{DlqPublisher, EventBusError, EventMetadata, HandlerResult, SubscriptionHandle, SubscriptionId};
@@ -86,6 +86,9 @@ impl LocallyDispatchedSet {
     }
 }
 
+/// Default maximum concurrent handlers for distributed backends.
+pub const DEFAULT_BACKEND_CONCURRENCY: usize = 1024;
+
 /// Shared inner state for distributed event bus backends.
 ///
 /// Contains all fields that are common across backends (Iggy, Kafka,
@@ -94,10 +97,10 @@ impl LocallyDispatchedSet {
 pub struct BackendState {
     pub shutdown: AtomicBool,
     pub next_id: AtomicU64,
-    /// Per-TypeId handler registry.
+    /// Per-TypeId handler registry (tokio RwLock — may be held across async dispatch).
     pub handlers: RwLock<HashMap<TypeId, TopicHandlers>>,
-    /// TypeId -> resolved topic name.
-    pub topic_registry: RwLock<TopicRegistry>,
+    /// TypeId -> resolved topic name (std RwLock — never held across awaits).
+    pub topic_registry: std::sync::RwLock<TopicRegistry>,
     /// Cancellation tokens for background pollers, keyed by TypeId.
     pub poller_cancels: Mutex<HashMap<TypeId, CancellationToken>>,
     /// Number of handlers currently executing.
@@ -112,6 +115,24 @@ pub struct BackendState {
     /// Optional callback for publishing failed events to a dead-letter topic.
     /// Provided by the backend when constructing `BackendState`.
     pub dlq_publisher: Option<DlqPublisher>,
+    /// Semaphore limiting concurrent handler execution (backpressure).
+    pub handler_semaphore: Arc<Semaphore>,
+}
+
+/// RAII guard that decrements `in_flight` and notifies waiters on drop.
+///
+/// Created by [`BackendState::acquire_in_flight`]. Ensures the in-flight
+/// counter is always decremented even if the handler panics.
+pub struct InFlightGuard {
+    state: Arc<BackendState>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if self.state.in_flight.fetch_sub(1, Ordering::Release) == 1 {
+            self.state.in_flight_zero.notify_waiters();
+        }
+    }
 }
 
 impl BackendState {
@@ -122,23 +143,33 @@ impl BackendState {
 
     /// Create a new `BackendState` with a DLQ publisher callback.
     pub fn with_dlq_publisher(topic_registry: TopicRegistry, dlq_publisher: Option<DlqPublisher>) -> Self {
+        Self::with_options(topic_registry, dlq_publisher, DEFAULT_BACKEND_CONCURRENCY)
+    }
+
+    /// Create a new `BackendState` with a DLQ publisher and custom concurrency limit.
+    pub fn with_options(
+        topic_registry: TopicRegistry,
+        dlq_publisher: Option<DlqPublisher>,
+        max_concurrency: usize,
+    ) -> Self {
         Self {
             shutdown: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             handlers: RwLock::new(HashMap::new()),
-            topic_registry: RwLock::new(topic_registry),
+            topic_registry: std::sync::RwLock::new(topic_registry),
             poller_cancels: Mutex::new(HashMap::new()),
             in_flight: AtomicUsize::new(0),
             in_flight_zero: Notify::new(),
             ensured_topics: Mutex::new(HashSet::new()),
             locally_dispatched: Mutex::new(LocallyDispatchedSet::new(8192)),
             dlq_publisher,
+            handler_semaphore: Arc::new(Semaphore::new(max_concurrency)),
         }
     }
 
     /// Check if the bus is shut down, returning `Err(Shutdown)` if so.
     pub fn check_shutdown(&self) -> Result<(), EventBusError> {
-        if self.shutdown.load(Ordering::SeqCst) {
+        if self.shutdown.load(Ordering::Acquire) {
             Err(EventBusError::Shutdown)
         } else {
             Ok(())
@@ -150,24 +181,49 @@ impl BackendState {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Increment `in_flight` and return an RAII guard that decrements it on drop.
+    ///
+    /// The guard ensures panic-safety: even if the handler panics, the counter
+    /// is decremented and waiters are notified.
+    pub fn acquire_in_flight(self: &Arc<Self>) -> InFlightGuard {
+        self.in_flight.fetch_add(1, Ordering::Release);
+        InFlightGuard { state: self.clone() }
+    }
+
+    /// Register a cancellation token for a background poller.
+    ///
+    /// Returns the token — pass it to the poller task. Call `.cancel()` to stop
+    /// the poller (done automatically by `cancel_all_pollers` on shutdown).
+    pub fn register_poller_cancel(&self, type_id: TypeId) -> CancellationToken {
+        let cancel = CancellationToken::new();
+        self.poller_cancels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(type_id, cancel.clone());
+        cancel
+    }
+
     /// Resolve the topic name for an event type.
-    pub async fn resolve_topic<E: 'static>(&self) -> String {
+    ///
+    /// Uses `std::sync::RwLock` (not async) — this is a fast HashMap lookup
+    /// called on every emit, so we avoid Tokio runtime overhead.
+    pub fn resolve_topic<E: 'static>(&self) -> String {
         let type_id = TypeId::of::<E>();
         let type_name = std::any::type_name::<E>();
-        let reg = self.topic_registry.read().await;
+        let reg = self.topic_registry.read().unwrap_or_else(|e| e.into_inner());
         reg.resolve(type_id, type_name)
     }
 
     /// Check if a topic has already been ensured.
     ///
     /// Returns `true` if the topic was previously marked as ensured.
-    pub async fn is_topic_ensured(&self, topic_name: &str) -> bool {
-        self.ensured_topics.lock().await.contains(topic_name)
+    pub fn is_topic_ensured(&self, topic_name: &str) -> bool {
+        self.ensured_topics.lock().unwrap_or_else(|e| e.into_inner()).contains(topic_name)
     }
 
     /// Mark a topic as ensured (call after successful creation).
-    pub async fn set_topic_ensured(&self, topic_name: &str) {
-        self.ensured_topics.lock().await.insert(topic_name.to_string());
+    pub fn set_topic_ensured(&self, topic_name: &str) {
+        self.ensured_topics.lock().unwrap_or_else(|e| e.into_inner()).insert(topic_name.to_string());
     }
 
     /// Register a handler for an event type, returning `(handler_id, is_first_for_type)`.
@@ -263,7 +319,7 @@ impl BackendState {
                     th.entries.retain(|e| e.id != handler_id);
                     if th.entries.is_empty() {
                         map.remove(&type_id);
-                        let mut cancels = state.poller_cancels.lock().await;
+                        let mut cancels = state.poller_cancels.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(cancel) = cancels.remove(&type_id) {
                             cancel.cancel();
                         }
@@ -281,27 +337,39 @@ impl BackendState {
         metadata: EventMetadata,
     ) -> Result<(), EventBusError> {
         // Record this event ID so the poller skips it (prevents double-delivery).
-        self.locally_dispatched.lock().await.insert(metadata.event_id);
+        self.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).insert(metadata.event_id);
 
-        let map = self.handlers.read().await;
-        let topic_handlers = match map.get(&type_id) {
-            Some(th) => th,
-            None => return Ok(()),
+        // Collect handlers under the lock, then release before spawning/awaiting.
+        let (event, handlers) = {
+            let map = self.handlers.read().await;
+            let topic_handlers = match map.get(&type_id) {
+                Some(th) => th,
+                None => return Ok(()),
+            };
+
+            let event = (topic_handlers.deserializer)(payload)
+                .map_err(EventBusError::Serialization)?;
+
+            let handlers: Vec<_> = topic_handlers.entries.iter()
+                .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                .map(|entry| entry.handler.clone())
+                .collect();
+            (event, handlers)
         };
+        // RwLock released here
 
-        let event = (topic_handlers.deserializer)(payload)
-            .map_err(EventBusError::Serialization)?;
-
-        let mut tasks = Vec::new();
-        for entry in &topic_handlers.entries {
-            // Check filter
-            if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
-                continue;
-            }
-            let h = entry.handler.clone();
+        let mut tasks = Vec::with_capacity(handlers.len());
+        for h in handlers {
             let e = event.clone();
             let m = metadata.clone();
-            tasks.push(tokio::spawn(async move { h(e, m).await }));
+            let permit = self.handler_semaphore.clone()
+                .acquire_owned().await
+                .expect("semaphore closed");
+            tasks.push(tokio::spawn(async move {
+                let result = h(e, m).await;
+                drop(permit);
+                result
+            }));
         }
 
         for task in tasks {
@@ -314,6 +382,12 @@ impl BackendState {
     }
 
     /// Dispatch a message from a poller to local handlers (fire-and-forget with in-flight tracking).
+    ///
+    /// Backpressure: a semaphore permit is acquired **before** spawning each handler
+    /// task, so the poller naturally slows down when handlers are saturated.
+    ///
+    /// Panic-safety: each task holds an [`InFlightGuard`] that decrements the
+    /// in-flight counter on drop, even on panic.
     pub async fn dispatch_from_poller(
         self: &Arc<Self>,
         type_id: TypeId,
@@ -321,72 +395,75 @@ impl BackendState {
         metadata: EventMetadata,
     ) {
         // Skip if this event was already dispatched locally by emit_and_wait.
-        if self.locally_dispatched.lock().await.remove(metadata.event_id) {
+        if self.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).remove(metadata.event_id) {
             return;
         }
 
-        let map = self.handlers.read().await;
-        let topic_handlers = match map.get(&type_id) {
-            Some(th) => th,
-            None => return,
-        };
+        // Collect handlers and deserialize under the lock, then release before spawning.
+        let (event, handler_data, dlq_data) = {
+            let map = self.handlers.read().await;
+            let topic_handlers = match map.get(&type_id) {
+                Some(th) => th,
+                None => return,
+            };
 
-        let event = match (topic_handlers.deserializer)(payload) {
-            Ok(e) => e,
-            Err(err) => {
-                tracing::error!("failed to deserialize event: {err}");
-                return;
-            }
-        };
+            let event = match (topic_handlers.deserializer)(payload) {
+                Ok(e) => e,
+                Err(err) => {
+                    tracing::error!("failed to deserialize event: {err}");
+                    return;
+                }
+            };
 
-        // Pre-allocate DLQ data only if any handler has a DLQ configured.
-        let has_dlq = self.dlq_publisher.is_some()
-            && topic_handlers.entries.iter().any(|e| {
-                e.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.as_ref()).is_some()
-            });
-        let payload_for_dlq: Option<Arc<Vec<u8>>> = if has_dlq {
-            Some(Arc::new(payload.to_vec()))
-        } else {
-            None
-        };
-        let meta_for_dlq: Option<EventMetadata> = if has_dlq {
-            Some(metadata.clone())
-        } else {
-            None
-        };
+            let handlers: Vec<_> = topic_handlers.entries.iter()
+                .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                .map(|entry| (entry.handler.clone(), entry.retry_policy.clone()))
+                .collect();
 
-        for entry in &topic_handlers.entries {
-            // Check filter
-            if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
-                continue;
-            }
+            // Pre-allocate DLQ data only if any handler has a DLQ configured.
+            let has_dlq = self.dlq_publisher.is_some()
+                && topic_handlers.entries.iter().any(|e| {
+                    e.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.as_ref()).is_some()
+                });
+            let dlq_data: Option<(Arc<Vec<u8>>, EventMetadata)> = if has_dlq {
+                Some((Arc::new(payload.to_vec()), metadata.clone()))
+            } else {
+                None
+            };
 
-            let h = entry.handler.clone();
+            (event, handlers, dlq_data)
+        };
+        // RwLock released here — subscribe/unsubscribe can proceed.
+
+        for (h, retry_policy) in handler_data {
             let e = event.clone();
             let m = metadata.clone();
-            let retry_policy = entry.retry_policy.clone();
-
-            self.in_flight.fetch_add(1, Ordering::SeqCst);
-
             let state = self.clone();
-            let payload_for_dlq = payload_for_dlq.clone();
-            let meta_for_dlq = meta_for_dlq.clone();
+            let dlq_data = dlq_data.clone();
+
+            // Backpressure: acquire permit BEFORE spawning to bound task count.
+            let permit = self.handler_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore closed");
+
+            let guard = self.acquire_in_flight();
+
             tokio::spawn(async move {
+                let _guard = guard;
                 let result = if let Some(ref policy) = retry_policy {
                     Self::invoke_with_retry(&h, &e, &m, policy).await
                 } else {
                     h(e, m).await
                 };
-                if state.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    state.in_flight_zero.notify_waiters();
-                }
+                drop(permit);
                 if let HandlerResult::Nack(ref reason) = result {
                     tracing::warn!("event handler returned Nack: {reason}");
-                    // Publish to DLQ if configured
                     if let Some(ref policy) = retry_policy {
                         if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                            if let (Some(ref publisher), Some(ref pl), Some(ref meta)) =
-                                (&state.dlq_publisher, &payload_for_dlq, &meta_for_dlq)
+                            if let (Some((ref pl, ref meta)), Some(ref publisher)) =
+                                (&dlq_data, &state.dlq_publisher)
                             {
                                 publisher(dlq_topic.clone(), pl.as_ref().clone(), meta.clone()).await;
                             }
@@ -465,10 +542,9 @@ impl BackendState {
     }
 
     /// Cancel all background pollers.
-    pub async fn cancel_all_pollers(&self) {
-        let mut cancels: HashMap<TypeId, CancellationToken> =
-            std::mem::take(&mut *self.poller_cancels.lock().await);
-        for (_, cancel) in cancels.drain() {
+    pub fn cancel_all_pollers(&self) {
+        let cancels = std::mem::take(&mut *self.poller_cancels.lock().unwrap_or_else(|e| e.into_inner()));
+        for cancel in cancels.into_values() {
             cancel.cancel();
         }
     }
@@ -486,7 +562,7 @@ impl BackendState {
                 // to avoid a TOCTOU race where the last handler finishes
                 // between our load and the notified() call.
                 let notified = self.in_flight_zero.notified();
-                if self.in_flight.load(Ordering::SeqCst) == 0 {
+                if self.in_flight.load(Ordering::Acquire) == 0 {
                     return;
                 }
                 notified.await;
@@ -496,7 +572,7 @@ impl BackendState {
             self.handlers.write().await.clear();
             return Err(EventBusError::Other(format!(
                 "shutdown timed out with {} handlers still in flight",
-                self.in_flight.load(Ordering::SeqCst)
+                self.in_flight.load(Ordering::Acquire)
             )));
         }
         Ok(())

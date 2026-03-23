@@ -5179,6 +5179,7 @@ dependencies = [
 name = "r2e-macros"
 version = "0.1.0"
 dependencies = [
+ "cron",
  "proc-macro-crate",
  "proc-macro2",
  "quote",

@@ -46,8 +46,8 @@ impl PulsarEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    async fn resolve_topic<E: 'static>(&self) -> String {
-        self.inner.state.resolve_topic::<E>().await
+    fn resolve_topic<E: 'static>(&self) -> String {
+        self.inner.state.resolve_topic::<E>()
     }
 
     /// Build the full Pulsar topic name (with prefix).
@@ -111,16 +111,21 @@ impl PulsarEventBus {
             deliver_at_time: None,
         };
 
-        // Lock the producers and send through the cached producer
-        let mut producers = self.inner.producers.lock().await;
-        let producer = producers
-            .get_mut(&full_topic)
-            .ok_or_else(|| EventBusError::Other(format!("producer not found for {full_topic}")))?;
+        // Lock the producers only for the send; release before awaiting the broker receipt.
+        let receipt = {
+            let mut producers = self.inner.producers.lock().await;
+            let producer = producers
+                .get_mut(&full_topic)
+                .ok_or_else(|| EventBusError::Other(format!("producer not found for {full_topic}")))?;
 
-        producer
-            .send_non_blocking(msg)
-            .await
-            .map_err(|e: PulsarError| map_pulsar_error(e))?
+            producer
+                .send_non_blocking(msg)
+                .await
+                .map_err(|e: PulsarError| map_pulsar_error(e))?
+        };
+
+        // Await the broker acknowledgement without holding the Mutex.
+        receipt
             .await
             .map_err(|e| EventBusError::Other(format!("send receipt error: {e}")))?;
 
@@ -134,7 +139,7 @@ impl EventBus for PulsarEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().await.register_by_type_id(type_id, topic);
+            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
         }
     }
 
@@ -165,7 +170,7 @@ impl EventBus for PulsarEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -179,13 +184,7 @@ impl EventBus for PulsarEventBus {
             if is_first {
                 let full_topic = bus.full_topic(&topic_name);
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
@@ -215,7 +214,7 @@ impl EventBus for PulsarEventBus {
             inner.state.check_shutdown()?;
 
             let type_id = TypeId::of::<E>();
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
@@ -228,13 +227,7 @@ impl EventBus for PulsarEventBus {
             if is_first {
                 let full_topic = bus.full_topic(&topic_name);
 
-                let cancel = CancellationToken::new();
-                inner
-                    .state
-                    .poller_cancels
-                    .lock()
-                    .await
-                    .insert(type_id, cancel.clone());
+                let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
@@ -258,7 +251,7 @@ impl EventBus for PulsarEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
             bus.publish(&topic_name, payload, &metadata).await
         }
@@ -278,7 +271,7 @@ impl EventBus for PulsarEventBus {
 
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
         }
     }
@@ -294,7 +287,7 @@ impl EventBus for PulsarEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
             // Publish to Pulsar
@@ -323,7 +316,7 @@ impl EventBus for PulsarEventBus {
             let type_id = TypeId::of::<E>();
             let payload = serde_json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>().await;
+            let topic_name = bus.resolve_topic::<E>();
 
             // Publish to Pulsar
             bus.publish(&topic_name, payload.clone(), &metadata).await?;
@@ -339,7 +332,7 @@ impl EventBus for PulsarEventBus {
     fn clear(&self) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
             inner.state.handlers.write().await.clear();
         }
     }
@@ -351,10 +344,10 @@ impl EventBus for PulsarEventBus {
         let inner = self.inner.clone();
         async move {
             // Set shutdown flag
-            inner.state.shutdown.store(true, Ordering::SeqCst);
+            inner.state.shutdown.store(true, Ordering::Release);
 
             // Cancel all pollers
-            inner.state.cancel_all_pollers().await;
+            inner.state.cancel_all_pollers();
 
             // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;

@@ -58,7 +58,7 @@ struct InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if self.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if self.in_flight.fetch_sub(1, Ordering::Release) == 1 {
             self.in_flight_zero.notify_waiters();
         }
     }
@@ -110,7 +110,7 @@ impl LocalEventBus {
 
     /// Returns the number of currently active (executing) handlers.
     fn active_handlers(&self) -> usize {
-        self.in_flight.load(Ordering::SeqCst)
+        self.in_flight.load(Ordering::Acquire)
     }
 
     /// Internal: dispatch event to all handlers, optionally waiting for completion.
@@ -121,68 +121,73 @@ impl LocalEventBus {
         metadata: EventMetadata,
         wait: bool,
     ) -> Result<(), EventBusError> {
-        if self.shutdown.load(Ordering::SeqCst) {
+        if self.shutdown.load(Ordering::Acquire) {
             return Err(EventBusError::Shutdown);
         }
 
-        let map = self.handlers.read().await;
-        if let Some(entries) = map.get(&type_id) {
-            let mut tasks = Vec::new();
-            for entry in entries {
-                // Check filter
-                if entry.filter.as_ref().is_some_and(|f| !f(&metadata)) {
-                    continue;
-                }
-                let h = entry.handler.clone();
-                let e = event.clone();
-                let m = metadata.clone();
-                let in_flight = self.in_flight.clone();
-                let in_flight_zero = self.in_flight_zero.clone();
-
-                in_flight.fetch_add(1, Ordering::SeqCst);
-
-                match &self.semaphore {
-                    Some(sem) => {
-                        let permit = sem
-                            .clone()
-                            .acquire_owned()
-                            .await
-                            .expect("semaphore closed");
-                        let handle = tokio::spawn(async move {
-                            let _guard = InFlightGuard { in_flight, in_flight_zero };
-                            let result = h(e, m).await;
-                            drop(permit);
-                            result
-                        });
-                        tasks.push(handle);
-                    }
-                    None => {
-                        let handle = tokio::spawn(async move {
-                            let _guard = InFlightGuard { in_flight, in_flight_zero };
-                            h(e, m).await
-                        });
-                        tasks.push(handle);
-                    }
-                }
+        // Collect matching handlers under the lock, then release before
+        // acquiring semaphore permits (which can block).
+        let handler_snapshot: Vec<Handler> = {
+            let map = self.handlers.read().await;
+            match map.get(&type_id) {
+                Some(entries) => entries
+                    .iter()
+                    .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                    .map(|entry| entry.handler.clone())
+                    .collect(),
+                None => return Ok(()),
             }
+        };
+        // RwLock released here — semaphore acquire will not block subscribe/unsubscribe.
 
-            if wait {
-                for task in tasks {
-                    if let Ok(HandlerResult::Nack(reason)) = task.await {
-                        tracing::warn!("event handler returned Nack: {reason}");
-                    }
-                }
-            } else {
-                // Fire-and-forget, but still log Nacks
-                for task in tasks {
-                    tokio::spawn(async move {
-                        if let Ok(HandlerResult::Nack(reason)) = task.await {
+        let mut tasks = Vec::with_capacity(handler_snapshot.len());
+        for h in handler_snapshot {
+            let e = event.clone();
+            let m = metadata.clone();
+            let in_flight = self.in_flight.clone();
+            let in_flight_zero = self.in_flight_zero.clone();
+
+            in_flight.fetch_add(1, Ordering::Relaxed);
+
+            match &self.semaphore {
+                Some(sem) => {
+                    let permit = sem
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .expect("semaphore closed");
+                    let handle = tokio::spawn(async move {
+                        let _guard = InFlightGuard { in_flight, in_flight_zero };
+                        let result = h(e, m).await;
+                        drop(permit);
+                        if let HandlerResult::Nack(ref reason) = result {
                             tracing::warn!("event handler returned Nack: {reason}");
                         }
+                        result
                     });
+                    tasks.push(handle);
+                }
+                None => {
+                    let handle = tokio::spawn(async move {
+                        let _guard = InFlightGuard { in_flight, in_flight_zero };
+                        let result = h(e, m).await;
+                        if let HandlerResult::Nack(ref reason) = result {
+                            tracing::warn!("event handler returned Nack: {reason}");
+                        }
+                        result
+                    });
+                    tasks.push(handle);
                 }
             }
         }
+
+        if wait {
+            // Await all handlers; Nack logging already happened inside each task.
+            for task in tasks {
+                let _ = task.await;
+            }
+        }
+        // Fire-and-forget: tasks log Nacks themselves and run to completion.
 
         Ok(())
     }
@@ -202,7 +207,7 @@ impl EventBus for LocalEventBus {
         let next_id = self.next_id.clone();
         let shutdown = self.shutdown.clone();
         async move {
-            if shutdown.load(Ordering::SeqCst) {
+            if shutdown.load(Ordering::Acquire) {
                 return Err(EventBusError::Shutdown);
             }
 
@@ -303,16 +308,17 @@ impl EventBus for LocalEventBus {
         let handlers = self.handlers.clone();
         async move {
             // Set the shutdown flag
-            shutdown.store(true, Ordering::SeqCst);
+            shutdown.store(true, Ordering::Release);
 
             // Wait for in-flight handlers to complete (with timeout)
-            if in_flight.load(Ordering::SeqCst) > 0 {
+            if in_flight.load(Ordering::Acquire) > 0 {
                 let wait = async {
                     loop {
-                        if in_flight.load(Ordering::SeqCst) == 0 {
+                        let notified = in_flight_zero.notified();
+                        if in_flight.load(Ordering::Acquire) == 0 {
                             return;
                         }
-                        in_flight_zero.notified().await;
+                        notified.await;
                     }
                 };
                 if tokio::time::timeout(timeout, wait).await.is_err() {
@@ -320,7 +326,7 @@ impl EventBus for LocalEventBus {
                     handlers.write().await.clear();
                     return Err(EventBusError::Other(format!(
                         "shutdown timed out with {} handlers still in flight",
-                        in_flight.load(Ordering::SeqCst)
+                        in_flight.load(Ordering::Acquire)
                     )));
                 }
             }
