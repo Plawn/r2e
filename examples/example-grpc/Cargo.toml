@@ -5,11 +5,11 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-r2e = { path = "../../r2e", features = ["grpc"] }
-tokio = { version = "1", features = ["full"] }
-tonic = "~0.13"
-prost = "~0.13"
-tracing = "0.1"
+r2e = {workspace = true, features = ["grpc"]}
+tokio = {workspace = true, features = ["full"]}
+tonic = {workspace = true, default-features = true}
+prost = {workspace = true}
+tracing = {workspace = true}
 
 [build-dependencies]
-tonic-build = "~0.13"
+tonic-build = {workspace = true}

@@ -17,5 +17,5 @@ postgres = ["diesel/postgres"]
 mysql = ["diesel/mysql"]
 
 [dependencies]
-r2e-data = { path = "../r2e-data", version = "0.1.0" }
-diesel = { version = "2", features = ["r2d2"] }
+r2e-data = {workspace = true}
+diesel = {workspace = true, features = ["r2d2"]}

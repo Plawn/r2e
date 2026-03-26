@@ -43,26 +43,26 @@ multipart = ["r2e-core/multipart"]
 dev-reload = ["dep:r2e-devtools", "r2e-core/dev-reload"]
 
 [dependencies]
-r2e-core = { path = "../r2e-core", version = "0.1.0" }
-r2e-macros = { path = "../r2e-macros", version = "0.1.0" }
-r2e-security = { path = "../r2e-security", version = "0.1.0", optional = true }
-r2e-events = { path = "../r2e-events", version = "0.1.0", optional = true }
-r2e-utils = { path = "../r2e-utils", version = "0.1.0", optional = true }
-r2e-data = { path = "../r2e-data", version = "0.1.0", optional = true }
-r2e-data-sqlx = { path = "../r2e-data-sqlx", version = "0.1.0", optional = true }
-r2e-data-diesel = { path = "../r2e-data-diesel", version = "0.1.0", optional = true }
-r2e-scheduler = { path = "../r2e-scheduler", version = "0.1.0", optional = true }
-r2e-cache = { path = "../r2e-cache", version = "0.1.0", optional = true }
-r2e-rate-limit = { path = "../r2e-rate-limit", version = "0.1.0", optional = true }
-r2e-oidc = { path = "../r2e-oidc", version = "0.1.0", optional = true }
-r2e-openapi = { path = "../r2e-openapi", version = "0.1.0", optional = true }
-r2e-prometheus = { path = "../r2e-prometheus", version = "0.1.0", optional = true }
-r2e-openfga = { path = "../r2e-openfga", version = "0.1.0", optional = true }
-r2e-grpc = { path = "../r2e-grpc", version = "0.1.0", optional = true }
-r2e-static = { path = "../r2e-static", version = "0.1.0", optional = true }
-r2e-observability = { path = "../r2e-observability", version = "0.1.0", optional = true }
-r2e-events-iggy = { path = "../r2e-events-iggy", version = "0.1.0", optional = true }
-r2e-events-kafka = { path = "../r2e-events-kafka", version = "0.1.0", optional = true }
-r2e-events-pulsar = { path = "../r2e-events-pulsar", version = "0.1.0", optional = true }
-r2e-events-rabbitmq = { path = "../r2e-events-rabbitmq", version = "0.1.0", optional = true }
-r2e-devtools = { path = "../r2e-devtools", version = "0.1.0", optional = true }
+r2e-core = {workspace = true}
+r2e-macros = {workspace = true}
+r2e-security = {workspace = true, optional = true}
+r2e-events = {workspace = true, optional = true}
+r2e-utils = {workspace = true, optional = true}
+r2e-data = {workspace = true, optional = true}
+r2e-data-sqlx = {workspace = true, optional = true}
+r2e-data-diesel = {workspace = true, optional = true}
+r2e-scheduler = {workspace = true, optional = true}
+r2e-cache = {workspace = true, optional = true}
+r2e-rate-limit = {workspace = true, optional = true}
+r2e-oidc = {workspace = true, optional = true}
+r2e-openapi = {workspace = true, optional = true}
+r2e-prometheus = {workspace = true, optional = true}
+r2e-openfga = {workspace = true, optional = true}
+r2e-grpc = {workspace = true, optional = true}
+r2e-static = {workspace = true, optional = true}
+r2e-observability = {workspace = true, optional = true}
+r2e-events-iggy = {workspace = true, optional = true}
+r2e-events-kafka = {workspace = true, optional = true}
+r2e-events-pulsar = {workspace = true, optional = true}
+r2e-events-rabbitmq = {workspace = true, optional = true}
+r2e-devtools = {workspace = true, optional = true}

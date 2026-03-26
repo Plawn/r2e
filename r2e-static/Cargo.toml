@@ -10,13 +10,13 @@ keywords = ["static", "embed", "spa", "frontend"]
 description = "Embedded static file serving with SPA support for R2E"
 
 [dependencies]
-r2e-core = { path = "../r2e-core", version = "0.1.0" }
-rust-embed = "8"
-mime_guess = "2"
-axum = "0.8"
-http = "1"
+r2e-core = {workspace = true}
+rust-embed = {workspace = true}
+mime_guess = {workspace = true}
+axum = {workspace = true}
+http = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
+tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
+tower = {workspace = true, features = ["util"]}
+http-body-util = {workspace = true}

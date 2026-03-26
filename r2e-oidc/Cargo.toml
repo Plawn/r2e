@@ -11,23 +11,23 @@ categories = ["authentication", "web-programming"]
 description = "Embedded OIDC server plugin for R2E - issue JWT tokens without an external identity provider"
 
 [dependencies]
-r2e-core = { path = "../r2e-core", version = "0.1.0" }
-r2e-security = { path = "../r2e-security", version = "0.1.0" }
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-rsa = "0.9"
-argon2 = "0.5"
-password-hash = "0.5"
-rand = "0.8"
-base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-axum = "0.8"
-tokio = { version = "1", features = ["sync", "rt"] }
-dashmap = "6"
-tracing = "0.1"
+r2e-core = {workspace = true}
+r2e-security = {workspace = true}
+jsonwebtoken = {workspace = true, features = ["rust_crypto"]}
+rsa = {workspace = true}
+argon2 = {workspace = true}
+password-hash = {workspace = true}
+rand = {workspace = true}
+base64 = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+axum = {workspace = true}
+tokio = {workspace = true, features = ["rt", "sync"]}
+dashmap = {workspace = true}
+tracing = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
-r2e-test = { path = "../r2e-test", version = "0.1.0" }
-tower = "0.5"
-http-body-util = "0.1"
+tokio = {workspace = true, features = ["full"]}
+r2e-test = {workspace = true}
+tower = {workspace = true}
+http-body-util = {workspace = true}

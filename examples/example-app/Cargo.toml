@@ -8,25 +8,25 @@ publish = false
 dev-reload = ["r2e/dev-reload"]
 
 [dependencies]
-r2e = { path = "../../r2e", features = ["full"] }
-r2e-data-sqlx = { path = "../../r2e-data-sqlx", features = ["sqlite"] }
-tower-http = { version = "0.6", features = ["timeout"] }
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-jsonwebtoken = "10"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-garde = { version = "0.22", features = ["derive"] }
-schemars = "1"
-dashmap = "6"
-futures-core = "0.3"
+r2e = {workspace = true, features = ["full"]}
+r2e-data-sqlx = {workspace = true, features = ["sqlite"]}
+tower-http = {workspace = true, features = ["timeout"]}
+tokio = {workspace = true, features = ["full"]}
+tokio-util = {workspace = true, features = ["rt"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+jsonwebtoken = {workspace = true}
+sqlx = {workspace = true, features = ["sqlite"]}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+garde = {workspace = true}
+schemars = {workspace = true}
+dashmap = {workspace = true}
+futures-core = {workspace = true}
 
 [dev-dependencies]
-r2e-test = { path = "../../r2e-test" }
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-garde = { version = "0.22", features = ["derive"] }
-http = "1"
+r2e-test = {workspace = true}
+tokio = {workspace = true, features = ["full"]}
+tokio-util = {workspace = true, features = ["rt"]}
+garde = {workspace = true}
+http = {workspace = true}

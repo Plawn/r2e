@@ -11,4 +11,4 @@ categories = ["development-tools"]
 description = "Subsecond hot-reload integration for R2E"
 
 [dependencies]
-dioxus-devtools = { version = "0.7", features = ["serve"] }
+dioxus-devtools = {workspace = true}

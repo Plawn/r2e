@@ -14,8 +14,8 @@ description = "Procedural macros for R2E framework - Controller derive and route
 proc-macro = true
 
 [dependencies]
-syn = { version = "2", features = ["full", "extra-traits"] }
-quote = "1"
-proc-macro2 = "1"
-proc-macro-crate = "3"
-cron = "0.13"
+syn = {workspace = true}
+quote = {workspace = true}
+proc-macro2 = {workspace = true}
+proc-macro-crate = {workspace = true}
+cron = {workspace = true}

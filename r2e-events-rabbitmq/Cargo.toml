@@ -15,16 +15,16 @@ default = []
 integration = []
 
 [dependencies]
-r2e-events = { path = "../r2e-events", version = "0.1.0" }
-lapin = "2"
-tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-futures-util = "0.3"
-tokio-util = "0.7"
-tokio-executor-trait = "2"
-tokio-reactor-trait = "1"
+r2e-events = {workspace = true}
+lapin = {workspace = true}
+tokio = {workspace = true, features = ["macros", "rt", "sync", "time"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+tracing = {workspace = true}
+futures-util = {workspace = true}
+tokio-util = {workspace = true}
+tokio-executor-trait = {workspace = true}
+tokio-reactor-trait = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = {workspace = true, features = ["full"]}

@@ -13,11 +13,11 @@ name = "order-service"
 path = "src/order/main.rs"
 
 [dependencies]
-r2e = { path = "../../r2e", features = ["openapi"] }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-schemars = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest = { version = "0.12", features = ["json"] }
+r2e = {workspace = true, features = ["openapi"]}
+tokio = {workspace = true, features = ["full"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+schemars = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+reqwest = {workspace = true, default-features = true, features = ["json"]}

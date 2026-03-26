@@ -17,14 +17,14 @@ dynamic-linking = ["rdkafka/dynamic-linking"]
 integration = []
 
 [dependencies]
-r2e-events = { path = "../r2e-events", version = "0.1.0" }
-rdkafka = { version = "0.36", features = ["tokio"] }
-tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-futures-util = "0.3"
-tokio-util = "0.7"
+r2e-events = {workspace = true}
+rdkafka = {workspace = true}
+tokio = {workspace = true, features = ["macros", "rt", "sync", "time"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+tracing = {workspace = true}
+futures-util = {workspace = true}
+tokio-util = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = {workspace = true, features = ["full"]}

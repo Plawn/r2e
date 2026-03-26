@@ -11,13 +11,13 @@ categories = ["asynchronous"]
 description = "Background task scheduler for R2E - interval, cron, and delayed task execution"
 
 [dependencies]
-r2e-core = { path = "../r2e-core", version = "0.1.0" }
-axum = "0.8"
-tokio = { version = "1", features = ["time", "rt", "sync"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-cron = "0.13"
-chrono = "0.4"
-tracing = "0.1"
+r2e-core = {workspace = true}
+axum = {workspace = true}
+tokio = {workspace = true, features = ["rt", "sync", "time"]}
+tokio-util = {workspace = true, features = ["rt"]}
+cron = {workspace = true}
+chrono = {workspace = true}
+tracing = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = {workspace = true, features = ["full", "test-util"]}
