@@ -1,4 +1,3 @@
-use r2e_core::type_list::TNil;
 use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 use tokio_util::sync::CancellationToken;
 
@@ -64,9 +63,9 @@ impl PreStatePlugin for GrpcServer {
     /// GrpcServer doesn't provide beans — it uses `GrpcMarker` as a placeholder.
     /// The real coordination happens via `GrpcServiceRegistry` in plugin_data.
     type Provided = GrpcMarker;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> GrpcMarker {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> GrpcMarker {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport.clone();
         let cancel = CancellationToken::new();

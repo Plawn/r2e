@@ -4,8 +4,6 @@
 - gestion d'un inject generique dans le body pour faire transactionnal plus clean
 - injecter l'identity dans les params handler et pas au niveau controller -> OK
 - derive Service et pas que controller ?
-- ecosystem tower ? quid ? ya quoi ? ça marche comment ? -> OK
-- ecosstems de middleware ? -> OK
 - register de scheduled -> avoir des bean de service et ça register auto -> OK
 - audit ce qui a besoin d'etre send + sync -> OK
 - gestion de la secu plus flexible
@@ -20,24 +18,6 @@
 - validation error tests ? -> clean strucutred ?
 - add warning when return body could not automatticaaly be added top openapi
 
-
 - better grpc/proto automagic setup, auto compile, auto build.rs + etc
-- ensure event bus high performance -> DONE (audit 2026-03-23)
-  TECH_DEBT remaining:
-  - Arc<EventMetadata> to avoid N clones per dispatch (Handler type + EventEnvelope + 4 backends + macro codegen ~15 files)
-    -> near-free today (empty HashMap = 0 alloc, None fields = 0 alloc). Revisit if headers are heavily used + high fan-out.
-  - Lazy EventMetadata::new() — skip SystemTime::now() syscall (~20ns) for LocalEventBus where timestamp is never used
-    -> dwarfed by tokio::spawn (~200-500ns). Revisit if zero-alloc local dispatch becomes a goal.
 - tracing subscriber en json ?
-
-
---- event bus
--> clean code add warning here
-
-  The LocallyDispatchedSet uses a bounded ring buffer — it has a fixed capacity (default 8192 entries). The GC strategy is simple eviction on overflow:                                                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                                                                                                                                                                                                        
-  How it works:
-  - HashSet<u64> for O(1) lookup + VecDeque<u64> for insertion order tracking                                                                                                                                                                                                                                                                                                                                           
-  - Each entry is 8 bytes (u64 event_id), so 8192 entries = ~128KB total (set + deque)
-  - When insert() is called and len >= capacity: pop the oldest entry from the front of the VecDeque, remove it from the HashSet, then insert the new one
-  - Memory usage is constant — it never grows beyond capacity
+- ensure only r2e-http has ref to axum + improve openapi (auto detection + doc)

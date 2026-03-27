@@ -220,3 +220,87 @@ where
     T: AllSatisfied<P, IT>,
 {
 }
+
+// ── Plugin dependency resolution ─────────────────────────────────────────
+
+/// Maps a concrete tuple type to a type-level list and resolves values from
+/// the bean registry.
+///
+/// This trait bridges compile-time plugin dependency declarations (`type Deps`)
+/// with the type-level provision tracking (`TCons`/`TNil`) and runtime value
+/// resolution from [`BeanRegistry`](crate::beans::BeanRegistry).
+///
+/// # Arity Implementations
+///
+/// Implementations are provided for tuples of arity 0 through 8:
+///
+/// | Tuple | Type-level list |
+/// |---|---|
+/// | `()` | `TNil` |
+/// | `(A,)` | `TCons<A, TNil>` |
+/// | `(A, B)` | `TCons<A, TCons<B, TNil>>` |
+/// | ... | ... |
+///
+/// # Example
+///
+/// ```ignore
+/// impl PreStatePlugin for MyPlugin {
+///     type Provided = MyThing;
+///     type Deps = (DbPool, CancellationToken);
+///
+///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> MyThing {
+///         MyThing::new(pool, token)
+///     }
+/// }
+/// ```
+pub trait PluginDeps: Send {
+    /// The type-level list representation of these dependencies.
+    type AsList;
+
+    /// Resolve all dependency values from the bean registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a required bean is not present. This should never happen when
+    /// the compile-time `AllSatisfied` bound on `.plugin()` is satisfied.
+    fn resolve(registry: &crate::beans::BeanRegistry) -> Self;
+}
+
+// Arity 0
+impl PluginDeps for () {
+    type AsList = TNil;
+
+    fn resolve(_registry: &crate::beans::BeanRegistry) -> Self {}
+}
+
+macro_rules! impl_plugin_deps {
+    ($($T:ident),+) => {
+        impl<$($T),+> PluginDeps for ($($T,)+)
+        where
+            $($T: Clone + Send + Sync + 'static),+
+        {
+            type AsList = impl_plugin_deps!(@list $($T),+);
+
+            fn resolve(registry: &crate::beans::BeanRegistry) -> Self {
+                ($(
+                    registry.get_provided::<$T>().cloned()
+                        .unwrap_or_else(|| panic!(
+                            "PluginDeps: bean `{}` not found in registry (this is a bug — the compile-time bound should have caught this)",
+                            std::any::type_name::<$T>()
+                        )),
+                )+)
+            }
+        }
+    };
+    (@list $head:ident) => { TCons<$head, TNil> };
+    (@list $head:ident, $($rest:ident),+) => { TCons<$head, impl_plugin_deps!(@list $($rest),+)> };
+}
+
+impl_plugin_deps!(A);
+impl_plugin_deps!(A, B);
+impl_plugin_deps!(A, B, C);
+impl_plugin_deps!(A, B, C, D);
+impl_plugin_deps!(A, B, C, D, E);
+impl_plugin_deps!(A, B, C, D, E, F);
+impl_plugin_deps!(A, B, C, D, E, F, G);
+impl_plugin_deps!(A, B, C, D, E, F, G, H);

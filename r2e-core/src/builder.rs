@@ -130,6 +130,19 @@ impl AppBuilder<NoState, TNil, TNil> {
 }
 
 impl<P, R> AppBuilder<NoState, P, R> {
+    /// Access the bean registry (for internal use by the blanket PreStatePlugin impl).
+    pub(crate) fn bean_registry(&self) -> &BeanRegistry {
+        &self.shared.bean_registry
+    }
+
+    /// Access the loaded config (for internal use by the blanket PreStatePlugin impl).
+    ///
+    /// Named differently from [`AppBuilder<T>::r2e_config()`] to avoid a method
+    /// resolution conflict when `T = NoState`.
+    pub(crate) fn r2e_config_ref(&self) -> Option<&crate::config::R2eConfig> {
+        self.shared.config.as_ref()
+    }
+
     /// Reconstruct the builder with updated type-level tracking parameters.
     ///
     /// Since `P` and `R` are phantom types used only for compile-time bean graph
@@ -336,13 +349,14 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///     .build_state::<Services, _, _>()
     ///     .await
     /// ```
-    pub fn plugin<Pl: RawPreStatePlugin>(
+    pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
     ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
+        Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
     }
@@ -353,13 +367,14 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// Use [`.plugin()`](Self::plugin) instead.
     #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: RawPreStatePlugin>(
+    pub fn with_plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
     ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
+        Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
     }
@@ -374,19 +389,17 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```ignore
     /// impl PreStatePlugin for MyPlugin {
     ///     type Provided = MyToken;
-    ///     type Required = TNil;
+    ///     type Deps = ();
     ///
-    ///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-    ///     where
-    ///         R: TAppend<Self::Required>,
-    ///     {
+    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
-    ///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
-    ///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
-    ///             ctx.on_shutdown(|| { /* cleanup */ });
-    ///         })).with_updated_types()
+    ///         ctx.add_deferred(DeferredAction::new("MyPlugin", move |dctx| {
+    ///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
+    ///             dctx.on_shutdown(|| { /* cleanup */ });
+    ///         }));
+    ///         token
     ///     }
     /// }
     /// ```

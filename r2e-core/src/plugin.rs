@@ -13,7 +13,7 @@
 //! Both traits use the same `.with(plugin)` method on `AppBuilder`.
 
 use crate::builder::{AppBuilder, NoState};
-use crate::type_list::{TAppend, TCons};
+use crate::type_list::{PluginDeps, TAppend, TCons};
 use std::any::Any;
 use tokio_util::sync::CancellationToken;
 
@@ -69,36 +69,52 @@ pub trait Plugin: Send + 'static {
 
 // ── Pre-state Plugin traits ────────────────────────────────────────────────
 
-/// Context passed to [`PreStatePlugin::install`] for registering deferred actions.
+/// Context passed to [`PreStatePlugin::install`] for registering deferred actions
+/// and accessing configuration.
 ///
 /// This is the simplified plugin API. Instead of receiving the full `AppBuilder`,
 /// plugins create their provided value and optionally register deferred actions
 /// (layers, serve/shutdown hooks) via this context.
 ///
-/// # Example
+/// # Configuration Access
+///
+/// Plugins can read configuration values loaded by [`AppBuilder::load_config`]:
+///
+/// ```ignore
+/// fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyConfig {
+///     let name = ctx.config_get::<String>("my_plugin.name")
+///         .unwrap_or_else(|| "default".into());
+///     MyConfig { name }
+/// }
+/// ```
+///
+/// # Typed Dependencies
+///
+/// For bean dependencies, declare [`PreStatePlugin::Deps`] instead of reading
+/// from the context. Dependencies are passed as a typed tuple parameter and
+/// verified at compile time:
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = MyConfig;
-///     type Required = TNil;
+///     type Provided = MyThing;
+///     type Deps = (DbPool, CancellationToken);
 ///
-///     fn install(self, ctx: &mut PluginInstallContext) -> MyConfig {
-///         ctx.add_deferred(DeferredAction::new("MyPlugin", |dctx| {
-///             dctx.on_shutdown(|| { tracing::info!("Bye"); });
-///         }));
-///         MyConfig { /* ... */ }
+///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> MyThing {
+///         MyThing::new(pool, token)
 ///     }
 /// }
 /// ```
-pub struct PluginInstallContext {
+pub struct PluginInstallContext<'a> {
     deferred: Vec<DeferredAction>,
+    config: Option<&'a crate::config::R2eConfig>,
 }
 
-impl PluginInstallContext {
-    /// Create a new empty install context.
-    pub fn new() -> Self {
+impl<'a> PluginInstallContext<'a> {
+    /// Create a new install context with access to config.
+    pub(crate) fn new(config: Option<&'a crate::config::R2eConfig>) -> Self {
         Self {
             deferred: Vec::new(),
+            config,
         }
     }
 
@@ -107,24 +123,50 @@ impl PluginInstallContext {
         self.deferred.push(action);
     }
 
+    /// Returns the loaded [`R2eConfig`], if available.
+    ///
+    /// This is `Some` when [`AppBuilder::load_config`] or [`AppBuilder::with_config`]
+    /// was called before this plugin was installed.
+    pub fn config(&self) -> Option<&crate::config::R2eConfig> {
+        self.config
+    }
+
+    /// Read a typed configuration value by key.
+    ///
+    /// Shorthand for `ctx.config().and_then(|c| c.get::<T>(key).ok())`.
+    pub fn config_get<T: crate::config::FromConfigValue>(&self, key: &str) -> Option<T> {
+        self.config.and_then(|c| c.get::<T>(key).ok())
+    }
+
     /// Consume the context and return the collected deferred actions.
     pub fn into_deferred(self) -> Vec<DeferredAction> {
         self.deferred
     }
 }
 
-impl Default for PluginInstallContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A plugin that runs in the pre-state phase and provides a single bean.
 ///
 /// This is the **simplified** plugin API — most plugins should implement this
-/// trait. The `install` method receives a [`PluginInstallContext`] for registering
-/// deferred actions and returns the provided bean value directly. No builder
+/// trait. The `install` method receives resolved dependencies as a typed tuple
+/// and a [`PluginInstallContext`] for registering deferred actions. No builder
 /// generics, no `with_updated_types()`.
+///
+/// # Compile-Time Dependency Checking
+///
+/// Declare dependencies via [`Deps`](Self::Deps). The compiler verifies at
+/// each `.plugin()` call site that all dependencies have already been provided:
+///
+/// ```ignore
+/// AppBuilder::new()
+///     .plugin(Scheduler)          // provides CancellationToken
+///     .provide(pool)              // provides DbPool
+///     .plugin(MyPlugin { .. })    // ✅ compiles: both deps are in P
+///
+/// // But swap the order:
+/// AppBuilder::new()
+///     .plugin(MyPlugin { .. })    // ❌ compile error: deps not yet provided
+///     .plugin(Scheduler)
+/// ```
 ///
 /// For plugins that need to provide **multiple** beans or need full builder
 /// access, implement [`RawPreStatePlugin`] instead.
@@ -132,20 +174,34 @@ impl Default for PluginInstallContext {
 /// Every `PreStatePlugin` is automatically a [`RawPreStatePlugin`] via a blanket
 /// impl, so both work with `.plugin()`.
 ///
-/// # Example
+/// # Examples
+///
+/// Simple plugin (no dependencies):
 ///
 /// ```ignore
-/// use r2e_core::{PreStatePlugin, PluginInstallContext, DeferredAction};
-/// use r2e_core::type_list::TNil;
+/// use r2e_core::{PreStatePlugin, PluginInstallContext};
 ///
 /// pub struct MyPlugin { pub value: String }
 ///
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = String;
-///     type Required = TNil;
+///     type Deps = ();
 ///
-///     fn install(self, _ctx: &mut PluginInstallContext) -> String {
+///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> String {
 ///         self.value
+///     }
+/// }
+/// ```
+///
+/// Plugin with dependencies:
+///
+/// ```ignore
+/// impl PreStatePlugin for MyPlugin {
+///     type Provided = MyService;
+///     type Deps = (DbPool, CancellationToken);
+///
+///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> MyService {
+///         MyService::new(pool, token)
 ///     }
 /// }
 /// ```
@@ -153,16 +209,22 @@ pub trait PreStatePlugin: Send + 'static {
     /// The bean type this plugin provides to the bean registry.
     type Provided: Clone + Send + Sync + 'static;
 
-    /// Bean dependencies this plugin requires from the bean graph.
+    /// Bean dependencies this plugin requires, as a concrete tuple.
     ///
-    /// Most plugins set this to `TNil` (no additional requirements).
-    type Required;
+    /// The compiler checks at each `.plugin()` call site that every type in
+    /// this tuple has already been provided (via `.provide()` or an earlier
+    /// `.plugin()`). Dependencies are resolved from the bean registry and
+    /// passed to [`install()`](Self::install) as the `deps` parameter.
+    ///
+    /// Most plugins set this to `()` (no dependencies).
+    type Deps: crate::type_list::PluginDeps;
 
     /// Install the plugin in the pre-state phase.
     ///
+    /// `deps` contains the resolved dependency values declared by [`Deps`](Self::Deps).
     /// Return the value to be provided to the bean registry. Optionally
     /// register deferred actions via `ctx.add_deferred()`.
-    fn install(self, ctx: &mut PluginInstallContext) -> Self::Provided;
+    fn install(self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
 }
 
 /// A pre-state plugin with full builder access (advanced API).
@@ -233,7 +295,7 @@ pub trait RawPreStatePlugin: Send + 'static {
 // Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
 impl<T: PreStatePlugin> RawPreStatePlugin for T {
     type Provisions = TCons<T::Provided, crate::type_list::TNil>;
-    type Required = T::Required;
+    type Required = <T::Deps as crate::type_list::PluginDeps>::AsList;
 
     fn install<P, R>(
         self,
@@ -243,10 +305,14 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
     {
-        let mut ctx = PluginInstallContext::new();
-        let provided = PreStatePlugin::install(self, &mut ctx);
+        let deps = T::Deps::resolve(app.bean_registry());
+        let (provided, deferred) = {
+            let mut ctx = PluginInstallContext::new(app.r2e_config_ref());
+            let provided = PreStatePlugin::install(self, deps, &mut ctx);
+            (provided, ctx.into_deferred())
+        };
         let mut builder = app;
-        for action in ctx.into_deferred() {
+        for action in deferred {
             builder = builder.add_deferred(action);
         }
         builder.provide(provided).with_updated_types()
@@ -266,19 +332,17 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = MyToken;
-///     type Required = TNil;
+///     type Deps = ();
 ///
-///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>) -> AppBuilder<NoState, TCons<Self::Provided, P>, <R as TAppend<Self::Required>>::Output>
-///     where
-///         R: TAppend<Self::Required>,
-///     {
+///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
 ///         let token = MyToken::new();
 ///         let handle = MyHandle::new(token.clone());
 ///
-///         app.provide(token).add_deferred(DeferredAction::new("MyPlugin", move |ctx| {
-///             ctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
-///             ctx.on_shutdown(|| { /* cleanup */ });
-///         })).with_updated_types()
+///         ctx.add_deferred(DeferredAction::new("MyPlugin", move |dctx| {
+///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
+///             dctx.on_shutdown(|| { /* cleanup */ });
+///         }));
+///         token
 ///     }
 /// }
 /// ```

@@ -25,7 +25,7 @@ dashmap = {workspace = true}
 futures-core = {workspace = true}
 
 [dev-dependencies]
-r2e-test = {workspace = true}
+r2e-test = {workspace = true, features = ["ws"]}
 tokio = {workspace = true, features = ["full"]}
 tokio-util = {workspace = true, features = ["rt"]}
 garde = {workspace = true}

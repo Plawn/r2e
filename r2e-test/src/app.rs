@@ -19,6 +19,7 @@ pub(crate) struct RequestParts {
     pub(crate) headers: HeaderMap,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) queries: Vec<(String, String)>,
+    pub(crate) multipart: Option<crate::multipart::MultipartForm>,
 }
 
 impl RequestParts {
@@ -29,11 +30,19 @@ impl RequestParts {
             headers: HeaderMap::new(),
             body: None,
             queries: Vec::new(),
+            multipart: None,
         }
     }
 
     /// Build an HTTP request from these parts.
-    pub(crate) fn into_request(self) -> Request<Body> {
+    pub(crate) fn into_request(mut self) -> Request<Body> {
+        // If multipart was used, encode it and set body + Content-Type.
+        if let Some(mp) = self.multipart.take() {
+            let ct = mp.content_type();
+            self.body = Some(mp.encode());
+            self.headers.insert(CONTENT_TYPE, ct.parse().unwrap());
+        }
+
         let uri = build_uri(&self.path, &self.queries);
         let body = match self.body {
             Some(b) => Body::from(b),
@@ -56,6 +65,81 @@ pub(crate) fn parse_set_cookie(header_value: &str) -> Option<(&str, &str)> {
     let rest = &header_value[eq_pos + 1..];
     let value = rest.split(';').next().unwrap_or("");
     Some((name, value))
+}
+
+/// SameSite cookie attribute value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SameSite {
+    Strict,
+    Lax,
+    None,
+}
+
+/// Parsed Set-Cookie header with all standard attributes.
+#[derive(Debug, Clone)]
+pub struct SetCookie {
+    pub name: String,
+    pub value: String,
+    pub path: Option<String>,
+    pub domain: Option<String>,
+    pub max_age: Option<i64>,
+    pub expires: Option<String>,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: Option<SameSite>,
+}
+
+/// Parse a full `Set-Cookie` header into a `SetCookie` struct.
+pub(crate) fn parse_set_cookie_full(header_value: &str) -> Option<SetCookie> {
+    let mut parts = header_value.splitn(2, '=');
+    let name = parts.next()?.trim().to_string();
+    let rest = parts.next()?;
+
+    let mut segments = rest.split(';');
+    let value = segments.next().unwrap_or("").to_string();
+
+    let mut cookie = SetCookie {
+        name,
+        value,
+        path: None,
+        domain: None,
+        max_age: None,
+        expires: None,
+        secure: false,
+        http_only: false,
+        same_site: None,
+    };
+
+    for segment in segments {
+        let segment = segment.trim();
+        let lower = segment.to_lowercase();
+
+        if lower == "secure" {
+            cookie.secure = true;
+        } else if lower == "httponly" {
+            cookie.http_only = true;
+        } else if let Some(val) = lower.strip_prefix("path=") {
+            cookie.path = Some(val.to_string());
+        } else if let Some(val) = lower.strip_prefix("domain=") {
+            cookie.domain = Some(val.to_string());
+        } else if let Some(val) = lower.strip_prefix("max-age=") {
+            cookie.max_age = val.parse().ok();
+        } else if lower.starts_with("expires=") {
+            // Preserve original case for the date string
+            cookie.expires = segment.strip_prefix("expires=")
+                .or_else(|| segment.strip_prefix("Expires="))
+                .map(|s| s.to_string());
+        } else if let Some(val) = lower.strip_prefix("samesite=") {
+            cookie.same_site = match val {
+                "strict" => Some(SameSite::Strict),
+                "lax" => Some(SameSite::Lax),
+                "none" => Some(SameSite::None),
+                _ => None,
+            };
+        }
+    }
+
+    Some(cookie)
 }
 
 /// Builder methods shared between `TestRequest` and `SessionRequest`.
@@ -136,6 +220,53 @@ macro_rules! impl_request_builders {
             }
             self
         }
+
+        /// Set the Content-Type header explicitly.
+        ///
+        /// This is set automatically by `json()` and `form()`, but can be used
+        /// independently for custom content types (e.g., `text/xml`, `text/plain`).
+        pub fn content_type(mut self, ct: &str) -> Self {
+            self.parts.headers.insert(CONTENT_TYPE, ct.parse().unwrap());
+            self
+        }
+
+        /// Add a file part to the request body (multipart/form-data).
+        ///
+        /// Implicitly switches the request to multipart encoding.
+        pub fn file(
+            mut self,
+            field_name: &str,
+            file_name: &str,
+            content_type: &str,
+            data: impl Into<Vec<u8>>,
+        ) -> Self {
+            self.parts
+                .multipart
+                .get_or_insert_with(crate::multipart::MultipartForm::new)
+                .add_file(field_name, file_name, content_type, data);
+            self
+        }
+
+        /// Add a text field to the request body (multipart/form-data).
+        ///
+        /// Implicitly switches the request to multipart encoding.
+        pub fn field(mut self, name: &str, value: &str) -> Self {
+            self.parts
+                .multipart
+                .get_or_insert_with(crate::multipart::MultipartForm::new)
+                .add_text(name, value);
+            self
+        }
+
+        /// Explicitly mark this request as multipart/form-data.
+        ///
+        /// Called implicitly by `.file()` and `.field()`.
+        pub fn multipart(mut self) -> Self {
+            self.parts
+                .multipart
+                .get_or_insert_with(crate::multipart::MultipartForm::new);
+            self
+        }
     };
 }
 
@@ -193,6 +324,14 @@ impl TestApp {
     /// Create a `TestSession` that persists cookies across requests.
     pub fn session(&self) -> crate::session::TestSession<'_> {
         crate::session::TestSession::new(self)
+    }
+
+    /// Spawn this app on a random local TCP port and return a `TestServer`.
+    ///
+    /// Use this for tests that require a real TCP connection, such as
+    /// WebSocket or SSE endpoints.
+    pub async fn serve(&self) -> crate::server::TestServer {
+        crate::server::TestServer::new(self.router.clone()).await
     }
 }
 
@@ -426,6 +565,18 @@ pub struct TestResponse {
 }
 
 impl TestResponse {
+    /// Create a `TestResponse` from individual parts.
+    ///
+    /// Useful for unit-testing response helpers without a running server.
+    pub fn from_parts(status: StatusCode, headers: HeaderMap, body: impl Into<Bytes>) -> Self {
+        Self {
+            status,
+            headers,
+            body: body.into(),
+            json_cache: OnceLock::new(),
+        }
+    }
+
     /// Get the cached JSON `Value`, parsing on first access.
     fn json_value(&self) -> &Value {
         self.json_cache.get_or_init(|| {
@@ -672,5 +823,134 @@ impl TestResponse {
     /// Return the response body as a UTF-8 string.
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).to_string()
+    }
+
+    /// Return the raw response body bytes.
+    pub fn bytes(&self) -> &Bytes {
+        &self.body
+    }
+
+    /// Return the Content-Type header value, if present.
+    pub fn content_type(&self) -> Option<&str> {
+        self.header("content-type")
+    }
+
+    /// Check whether the response Content-Type indicates JSON.
+    pub fn is_json(&self) -> bool {
+        self.content_type()
+            .map(|ct| ct.starts_with("application/json"))
+            .unwrap_or(false)
+    }
+
+    /// Deserialize the response body as JSON, returning `None` if parsing fails.
+    pub fn json_optional<T: DeserializeOwned>(&self) -> Option<T> {
+        serde_json::from_slice(&self.body).ok()
+    }
+
+    /// Assert the Content-Type header matches the expected value.
+    pub fn assert_content_type(&self, expected: &str) -> &Self {
+        let actual = self.content_type().unwrap_or("<missing>");
+        assert!(
+            actual.starts_with(expected),
+            "Content-Type assertion failed\n  Expected: {expected}\n  Actual: {actual}",
+        );
+        self
+    }
+
+    // ── SSE helpers ──
+
+    /// Parse the response body as SSE events.
+    pub fn sse_events(&self) -> Vec<crate::sse::ParsedSseEvent> {
+        crate::sse::parse_sse_body(&self.text())
+    }
+
+    /// Assert that the SSE response contains a typed event with the given data.
+    pub fn assert_sse_event(&self, event_type: &str, expected_data: &str) -> &Self {
+        let events = self.sse_events();
+        let found = events.iter().any(|e| {
+            e.event.as_deref() == Some(event_type) && e.data == expected_data
+        });
+        assert!(
+            found,
+            "SSE event assertion failed: no event with type=\"{event_type}\" and data=\"{expected_data}\"\n  Events: {events:?}",
+        );
+        self
+    }
+
+    /// Assert that the SSE response contains a data-only event with the given payload.
+    pub fn assert_sse_data(&self, expected_data: &str) -> &Self {
+        let events = self.sse_events();
+        let found = events.iter().any(|e| e.event.is_none() && e.data == expected_data);
+        assert!(
+            found,
+            "SSE data assertion failed: no data-only event with data=\"{expected_data}\"\n  Events: {events:?}",
+        );
+        self
+    }
+
+    // ── Cookie attribute helpers ──
+
+    /// Get a fully parsed `SetCookie` from the `Set-Cookie` headers by name.
+    pub fn set_cookie(&self, name: &str) -> Option<SetCookie> {
+        self.headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|cookie_str| {
+                let c = parse_set_cookie_full(cookie_str)?;
+                if c.name == name { Some(c) } else { None }
+            })
+    }
+
+    /// Return all `Set-Cookie` headers as parsed `SetCookie` structs.
+    pub fn set_cookies(&self) -> Vec<SetCookie> {
+        self.headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(parse_set_cookie_full)
+            .collect()
+    }
+
+    /// Assert that a Set-Cookie is marked `Secure`.
+    pub fn assert_cookie_secure(&self, name: &str) -> &Self {
+        let c = self.set_cookie(name)
+            .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
+        assert!(c.secure, "Expected cookie \"{name}\" to be Secure");
+        self
+    }
+
+    /// Assert that a Set-Cookie is marked `HttpOnly`.
+    pub fn assert_cookie_http_only(&self, name: &str) -> &Self {
+        let c = self.set_cookie(name)
+            .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
+        assert!(c.http_only, "Expected cookie \"{name}\" to be HttpOnly");
+        self
+    }
+
+    /// Assert that a Set-Cookie has a specific `SameSite` value.
+    pub fn assert_cookie_same_site(&self, name: &str, expected: SameSite) -> &Self {
+        let c = self.set_cookie(name)
+            .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
+        assert_eq!(
+            c.same_site,
+            Some(expected),
+            "Cookie \"{name}\" SameSite assertion failed\n  Expected: {expected:?}\n  Actual: {:?}",
+            c.same_site,
+        );
+        self
+    }
+
+    /// Assert that a Set-Cookie has a specific `Path`.
+    pub fn assert_cookie_path(&self, name: &str, expected: &str) -> &Self {
+        let c = self.set_cookie(name)
+            .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
+        assert_eq!(
+            c.path.as_deref(),
+            Some(expected),
+            "Cookie \"{name}\" Path assertion failed\n  Expected: {expected}\n  Actual: {:?}",
+            c.path,
+        );
+        self
     }
 }

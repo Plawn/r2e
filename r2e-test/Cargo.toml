@@ -10,6 +10,10 @@ keywords = ["testing", "http-client", "jwt"]
 categories = ["development-tools::testing"]
 description = "Test utilities for R2E - TestApp HTTP client and TestJwt token generation"
 
+[features]
+default = []
+ws = ["dep:tokio-tungstenite", "dep:futures-util"]
+
 [dependencies]
 r2e-core = {workspace = true}
 r2e-security = {workspace = true}
@@ -22,6 +26,9 @@ serde = {workspace = true}
 serde_json = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 form_urlencoded = {workspace = true}
+futures-core = {workspace = true}
+tokio-tungstenite = {workspace = true, optional = true}
+futures-util = {workspace = true, optional = true}
 
 [dev-dependencies]
 base64 = {workspace = true}

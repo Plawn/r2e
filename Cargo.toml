@@ -170,6 +170,9 @@ dioxus-devtools = { version = "0.7", features = ["serve"] }
 # Misc
 openfga-rs = "0.1"
 
+# Testing
+tokio-tungstenite = "0.28"
+
 # Dev
 tempfile = "3"
 serial_test = "3"

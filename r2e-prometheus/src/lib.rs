@@ -143,9 +143,9 @@ impl Prometheus {
 
 impl PreStatePlugin for Prometheus {
     type Provided = PrometheusRegistry;
-    type Required = r2e_core::type_list::TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> Self::Provided {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
         // Initialize global metrics singleton
         let m = init_metrics(&self.config);
 
@@ -223,6 +223,24 @@ impl PrometheusBuilder {
     /// alongside built-in HTTP metrics on the `/metrics` endpoint.
     pub fn register(mut self, collector: Box<dyn prometheus::core::Collector>) -> Self {
         self.collectors.push(collector);
+        self
+    }
+
+    /// Register multiple Prometheus collectors at once.
+    ///
+    /// Accepts any iterator yielding boxed collectors, enabling inline usage:
+    ///
+    /// ```rust,ignore
+    /// .plugin(Prometheus::builder()
+    ///     .namespace("myapp")
+    ///     .register_all(my_collectors())
+    ///     .build())
+    /// ```
+    pub fn register_all(
+        mut self,
+        collectors: impl IntoIterator<Item = Box<dyn prometheus::core::Collector>>,
+    ) -> Self {
+        self.collectors.extend(collectors);
         self
     }
 

@@ -60,7 +60,9 @@ pub use request_id::{RequestId, RequestIdPlugin};
 pub use secure_headers::SecureHeaders;
 pub use service::ServiceComponent;
 pub use state::R2eState;
-pub use type_list::{AllSatisfied, BuildableFrom, Contains, Here, TAppend, TCons, TNil, There};
+pub use type_list::{
+    AllSatisfied, BuildableFrom, Contains, Here, PluginDeps, TAppend, TCons, TNil, There,
+};
 
 // Dev-reload helpers
 #[cfg(feature = "dev-reload")]

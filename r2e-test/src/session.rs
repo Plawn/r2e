@@ -151,7 +151,7 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
     /// Cookies from the session jar are included automatically.
     /// `Set-Cookie` headers from the response update the session jar.
     pub async fn send(self) -> TestResponse {
-        let RequestParts { method, path, headers, body, queries } = self.parts;
+        let RequestParts { method, path, headers, body, queries, multipart } = self.parts;
 
         // Start with session defaults, override with per-request headers
         let mut merged = self.session.default_headers.clone();
@@ -172,6 +172,7 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
             headers: merged,
             body,
             queries,
+            multipart,
         };
 
         let request = parts.into_request();

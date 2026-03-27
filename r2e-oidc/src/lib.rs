@@ -60,7 +60,6 @@ use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
-use r2e_core::type_list::TNil;
 use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
@@ -198,9 +197,9 @@ pub struct OidcRuntime {
 
 impl PreStatePlugin for OidcRuntime {
     type Provided = Arc<JwtClaimsValidator>;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
         let oidc_state = self.state;
         let base_path = self.base_path;
         ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
@@ -215,10 +214,10 @@ impl PreStatePlugin for OidcRuntime {
 
 impl PreStatePlugin for OidcServer {
     type Provided = Arc<JwtClaimsValidator>;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> Arc<JwtClaimsValidator> {
-        self.build().install(ctx)
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
+        self.build().install((), ctx)
     }
 }
 
