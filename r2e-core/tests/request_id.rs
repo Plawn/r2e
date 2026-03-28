@@ -1,5 +1,5 @@
 use r2e_core::request_id::RequestId;
-use axum::response::IntoResponse;
+use r2e_core::http::IntoResponse;
 use http_body_util::BodyExt;
 
 #[test]

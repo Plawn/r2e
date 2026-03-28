@@ -1,6 +1,6 @@
 #![cfg(feature = "ws")]
 
-use axum::extract::ws::Message;
+use r2e_core::http::ws::Message;
 use r2e_core::ws::{WsBroadcaster, WsRooms};
 
 #[tokio::test]

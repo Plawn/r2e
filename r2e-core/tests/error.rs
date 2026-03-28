@@ -1,6 +1,5 @@
 use r2e_core::HttpError;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use r2e_core::http::{StatusCode, IntoResponse};
 use http_body_util::BodyExt;
 
 async fn error_parts(err: HttpError) -> (StatusCode, serde_json::Value) {

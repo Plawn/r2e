@@ -32,7 +32,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::response::IntoResponse;
+use crate::http::response::IntoResponse;
 use serde::Serialize;
 
 /// Result of a single health check.
@@ -306,7 +306,7 @@ impl HealthState {
 
 /// Handler: GET /health — aggregated status.
 pub(crate) async fn health_handler(
-    state: axum::extract::State<Arc<HealthState>>,
+    state: crate::http::extract::State<Arc<HealthState>>,
 ) -> impl IntoResponse {
     let response = state.aggregate().await;
     let status_code = if matches!(response.status, HealthCheckStatus::Up) {
@@ -314,7 +314,7 @@ pub(crate) async fn health_handler(
     } else {
         crate::http::StatusCode::SERVICE_UNAVAILABLE
     };
-    (status_code, axum::Json(response))
+    (status_code, crate::http::Json(response))
 }
 
 /// Handler: GET /health/live — always 200.
@@ -324,7 +324,7 @@ pub(crate) async fn liveness_handler() -> impl IntoResponse {
 
 /// Handler: GET /health/ready — 200 if all readiness-affecting checks pass.
 pub(crate) async fn readiness_handler(
-    state: axum::extract::State<Arc<HealthState>>,
+    state: crate::http::extract::State<Arc<HealthState>>,
 ) -> impl IntoResponse {
     let response = state.aggregate_readiness().await;
     let status_code = if matches!(response.status, HealthCheckStatus::Up) {
@@ -332,5 +332,5 @@ pub(crate) async fn readiness_handler(
     } else {
         crate::http::StatusCode::SERVICE_UNAVAILABLE
     };
-    (status_code, axum::Json(response))
+    (status_code, crate::http::Json(response))
 }

@@ -18,7 +18,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::extract::ws::{Message, WebSocket};
+use crate::http::ws::{Message, WebSocket};
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
@@ -28,8 +28,8 @@ use tokio::sync::broadcast;
 /// Errors from WebSocket operations.
 #[derive(Debug)]
 pub enum WsError {
-    Send(axum::Error),
-    Recv(axum::Error),
+    Send(crate::http::Error),
+    Recv(crate::http::Error),
     Json(serde_json::Error),
     Closed,
 }

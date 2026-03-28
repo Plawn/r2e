@@ -232,7 +232,7 @@ impl Plugin for DevReload {
         app.mark_dev_reload_applied();
         app.register_routes(crate::dev::dev_routes())
             .with_layer_fn(|router| {
-                router.layer(axum::middleware::from_fn(crate::dev::dev_headers_middleware))
+                router.layer(crate::http::middleware::from_fn(crate::dev::dev_headers_middleware))
             })
     }
 }

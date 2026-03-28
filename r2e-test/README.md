@@ -4,7 +4,7 @@ Test utilities for R2E — TestApp HTTP client, TestJwt token generation, TestSe
 
 ## Overview
 
-Provides helpers for writing integration tests against R2E applications without starting a real HTTP server. `TestApp` wraps an `axum::Router` and sends requests through Tower's service layer.
+Provides helpers for writing integration tests against R2E applications without starting a real HTTP server. `TestApp` wraps a `Router` and sends requests through Tower's service layer.
 
 ## Usage
 
@@ -19,14 +19,14 @@ r2e-test = "0.1"
 
 ### TestApp
 
-Wraps an `axum::Router` with a builder-based HTTP client for integration testing:
+Wraps a `Router` with a builder-based HTTP client for integration testing:
 
 ```rust
 use r2e_test::TestApp;
 
 #[tokio::test]
 async fn test_list_users() {
-    let app = build_app().await; // your axum::Router
+    let app = build_app().await; // your Router
     let client = TestApp::new(app);
 
     let users: Vec<User> = client

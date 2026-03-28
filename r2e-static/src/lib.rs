@@ -27,7 +27,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use axum::response::IntoResponse;
+use r2e_core::http::response::IntoResponse;
 pub use rust_embed;
 
 // ── File server abstraction ─────────────────────────────────────────────────
@@ -214,7 +214,7 @@ struct StaticFileHandler {
 }
 
 impl StaticFileHandler {
-    fn serve(&self, path: &str) -> axum::response::Response {
+    fn serve(&self, path: &str) -> r2e_core::http::Response {
         let clean = path.trim_start_matches('/');
 
         // 1. Check excluded prefixes.
@@ -248,7 +248,7 @@ impl StaticFileHandler {
         not_found()
     }
 
-    fn try_serve_file(&self, path: &str) -> Option<axum::response::Response> {
+    fn try_serve_file(&self, path: &str) -> Option<r2e_core::http::Response> {
         let file = self.file_server.get_file(path)?;
 
         let mime = mime_guess::from_path(path)
@@ -267,26 +267,26 @@ impl StaticFileHandler {
             &self.config.default_cache_control
         };
 
-        let mut builder = axum::response::Response::builder()
-            .status(http::StatusCode::OK)
-            .header(http::header::CONTENT_TYPE, mime)
-            .header(http::header::CACHE_CONTROL, cache_control);
+        let mut builder = r2e_core::http::Response::builder()
+            .status(r2e_core::http::StatusCode::OK)
+            .header(r2e_core::http::header::CONTENT_TYPE, mime)
+            .header(r2e_core::http::header::CACHE_CONTROL, cache_control);
 
         if let Some(hash) = &file.hash {
-            builder = builder.header(http::header::ETAG, format!("\"{}\"", hash));
+            builder = builder.header(r2e_core::http::header::ETAG, format!("\"{}\"", hash));
         }
 
         Some(
             builder
-                .body(axum::body::Body::from(file.data))
+                .body(r2e_core::http::Body::from(file.data))
                 .unwrap()
                 .into_response(),
         )
     }
 }
 
-fn not_found() -> axum::response::Response {
-    (http::StatusCode::NOT_FOUND, "Not Found").into_response()
+fn not_found() -> r2e_core::http::Response {
+    (r2e_core::http::StatusCode::NOT_FOUND, "Not Found").into_response()
 }
 
 // ── Plugin implementation ───────────────────────────────────────────────────
@@ -303,7 +303,7 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
 
         app.with_layer_fn(move |router| {
             let handler = handler.clone();
-            router.fallback(move |req: axum::extract::Request| async move {
+            router.fallback(move |req: r2e_core::http::Request| async move {
                 let path = req.uri().path().to_string();
 
                 // Strip base_path prefix if configured.

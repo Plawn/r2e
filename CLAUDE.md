@@ -41,7 +41,8 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
-r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks.
+r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, and multipart types.
+r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
 r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module.
 r2e-events-iggy → Apache Iggy EventBus backend: persistent distributed event streaming.
@@ -56,14 +57,16 @@ r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore)
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
 r2e-openapi     → OpenAPI 3.0.3 spec generation, Swagger UI at /docs.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), #[derive(TestState)].
+r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders, #[derive(TestState)].
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
 example-app     → Demo binary exercising all features.
 ```
 
-Dependency flow: `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-events-kafka` / `r2e-events-pulsar` / `r2e-events-rabbitmq` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-events-kafka` / `r2e-events-pulsar` / `r2e-events-rabbitmq` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+
+**Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
 ### Vendored Dependencies
 
@@ -107,8 +110,8 @@ impl UserController {
 - `mod __r2e_meta_<Name>` — `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`
 - `struct __R2eExtract_<Name>` — `FromRequestParts` extractor
 - `impl StatefulConstruct<State> for Name` — only when no `#[inject(identity)]` struct fields
-- Free-standing Axum handler functions (`__r2e_<Name>_<method>`)
-- `impl Controller<State> for Name` — wires routes into `axum::Router<State>`
+- Free-standing handler functions (`__r2e_<Name>_<method>`)
+- `impl Controller<State> for Name` — wires routes into `Router<State>`
 
 ### Macro Crate Internals (r2e-macros)
 

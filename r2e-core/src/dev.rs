@@ -17,9 +17,9 @@ use crate::http::middleware::Next;
 use crate::http::response::IntoResponse;
 use crate::http::routing::get;
 use crate::http::Router;
-use axum::extract::Request;
-use axum::http::header::CONNECTION;
-use axum::response::Response;
+use crate::http::Request;
+use crate::http::header::CONNECTION;
+use crate::http::Response;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 

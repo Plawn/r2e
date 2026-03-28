@@ -130,7 +130,7 @@ pub trait Cacheable: Sized + Send {
     fn from_cache(bytes: &[u8]) -> Option<Self>;
 }
 
-impl<T> Cacheable for axum::Json<T>
+impl<T> Cacheable for crate::http::Json<T>
 where
     T: serde::Serialize + serde::de::DeserializeOwned + Send,
 {
@@ -139,7 +139,7 @@ where
     }
 
     fn from_cache(bytes: &[u8]) -> Option<Self> {
-        serde_json::from_slice(bytes).ok().map(axum::Json)
+        serde_json::from_slice(bytes).ok().map(crate::http::Json)
     }
 }
 

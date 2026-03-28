@@ -22,6 +22,7 @@ members = [
     "r2e-oidc",
     "r2e-devtools",
     "r2e-static",
+    "r2e-http",
     "r2e-cli",
     "r2e-test",
     "r2e-utils",
@@ -76,6 +77,7 @@ r2e-grpc = { path = "r2e-grpc", version = "0.1.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.1.0" }
 r2e-devtools = { path = "r2e-devtools", version = "0.1.0" }
 r2e-static = { path = "r2e-static", version = "0.1.0" }
+r2e-http = { path = "r2e-http", version = "0.1.0" }
 r2e-test = { path = "r2e-test", version = "0.1.0" }
 
 # Core

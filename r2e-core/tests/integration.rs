@@ -1,5 +1,4 @@
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use r2e_core::http::{Body, Request, StatusCode};
 use http_body_util::BodyExt;
 use r2e_core::builder::AppBuilder;
 use r2e_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
@@ -7,7 +6,7 @@ use r2e_core::request_id::RequestIdPlugin;
 use r2e_core::secure_headers::SecureHeaders;
 use tower::ServiceExt;
 
-async fn send_get(router: axum::Router, path: &str) -> (StatusCode, String) {
+async fn send_get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String) {
     let req = Request::builder()
         .uri(path)
         .body(Body::empty())
@@ -19,11 +18,11 @@ async fn send_get(router: axum::Router, path: &str) -> (StatusCode, String) {
 }
 
 async fn send_get_with_header(
-    router: axum::Router,
+    router: r2e_core::http::Router,
     path: &str,
     header_name: &str,
     header_value: &str,
-) -> axum::http::Response<Body> {
+) -> r2e_core::http::Response {
     let req = Request::builder()
         .uri(path)
         .header(header_name, header_value)
@@ -33,11 +32,11 @@ async fn send_get_with_header(
 }
 
 async fn send_request(
-    router: axum::Router,
+    router: r2e_core::http::Router,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
-) -> axum::http::Response<Body> {
+) -> r2e_core::http::Response {
     let mut builder = Request::builder().method(method).uri(path);
     for (name, value) in headers {
         builder = builder.header(*name, *value);
@@ -64,11 +63,11 @@ async fn health_returns_200_ok() {
 
 #[tokio::test]
 async fn error_handling_catches_panic() {
-    use axum::routing::get;
+    use r2e_core::http::routing::get;
 
     let app = AppBuilder::new()
         .with_state(())
-        .register_routes(axum::Router::new().route(
+        .register_routes(r2e_core::http::Router::new().route(
             "/panic",
             get(|| async {
                 panic!("boom");
@@ -513,19 +512,19 @@ async fn startup_hook_registration_accepted() {
 
 #[tokio::test]
 async fn plugin_ordering_layers_respected() {
-    use axum::http::HeaderValue;
+    use r2e_core::http::HeaderValue;
 
     let router = build_app()
         .with(Health)
         .with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(|req, next: axum::middleware::Next| async move {
+            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
                 let mut resp = next.run(req).await;
                 resp.headers_mut().insert("x-plugin-a", HeaderValue::from_static("a"));
                 resp
             }))
         })
         .with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(|req, next: axum::middleware::Next| async move {
+            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
                 let mut resp = next.run(req).await;
                 resp.headers_mut().insert("x-plugin-b", HeaderValue::from_static("b"));
                 resp
@@ -541,12 +540,12 @@ async fn plugin_ordering_layers_respected() {
 
 #[tokio::test]
 async fn with_layer_fn_applied() {
-    use axum::http::HeaderValue;
+    use r2e_core::http::HeaderValue;
 
     let router = build_app()
         .with(Health)
         .with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(|req, next: axum::middleware::Next| async move {
+            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
                 let mut resp = next.run(req).await;
                 resp.headers_mut().insert("x-custom-layer", HeaderValue::from_static("applied"));
                 resp
@@ -575,10 +574,10 @@ async fn with_state_bypasses_bean_graph() {
 
 #[tokio::test]
 async fn register_routes_adds_handler() {
-    use axum::routing::get;
+    use r2e_core::http::routing::get;
 
     let router = build_app()
-        .register_routes(axum::Router::new().route("/test", get(|| async { "ok" })))
+        .register_routes(r2e_core::http::Router::new().route("/test", get(|| async { "ok" })))
         .build();
     let (status, body) = send_get(router, "/test").await;
     assert_eq!(status, StatusCode::OK);
@@ -587,11 +586,11 @@ async fn register_routes_adds_handler() {
 
 #[tokio::test]
 async fn multiple_route_registrations_merge() {
-    use axum::routing::get;
+    use r2e_core::http::routing::get;
 
     let router = build_app()
-        .register_routes(axum::Router::new().route("/a", get(|| async { "alpha" })))
-        .register_routes(axum::Router::new().route("/b", get(|| async { "beta" })))
+        .register_routes(r2e_core::http::Router::new().route("/a", get(|| async { "alpha" })))
+        .register_routes(r2e_core::http::Router::new().route("/b", get(|| async { "beta" })))
         .build();
 
     let (status_a, body_a) = send_get(router.clone(), "/a").await;
@@ -605,8 +604,8 @@ async fn multiple_route_registrations_merge() {
 
 #[tokio::test]
 async fn register_routes_with_state_access() {
-    use axum::extract::State;
-    use axum::routing::get;
+    use r2e_core::http::State;
+    use r2e_core::http::routing::get;
 
     #[derive(Clone)]
     struct AppState {
@@ -618,7 +617,7 @@ async fn register_routes_with_state_access() {
     };
     let router = AppBuilder::new()
         .with_state(state)
-        .register_routes(axum::Router::new().route(
+        .register_routes(r2e_core::http::Router::new().route(
             "/greet",
             get(|State(s): State<AppState>| async move { s.greeting }),
         ))

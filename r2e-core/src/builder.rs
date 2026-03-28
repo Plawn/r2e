@@ -967,7 +967,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// ```
     pub fn register_subscriber<S>(mut self) -> Self
     where
-        S: crate::EventSubscriber + axum::extract::FromRef<T>,
+        S: crate::EventSubscriber + crate::http::extract::FromRef<T>,
     {
         self.consumer_registrations.push(Box::new(|state| {
             let subscriber = S::from_ref(&state);

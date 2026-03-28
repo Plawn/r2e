@@ -22,7 +22,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use axum::response::sse::Event as SseEvent;
+use crate::http::response::SseEvent;
 use tokio::sync::broadcast;
 
 /// Message sent through the broadcast channel.

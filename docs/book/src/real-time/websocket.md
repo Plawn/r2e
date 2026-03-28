@@ -123,7 +123,7 @@ For structured WebSocket handling with lifecycle callbacks, implement `WsHandler
 
 ```rust
 use r2e::ws::{WsHandler, WsStream};
-use axum::extract::ws::Message;
+use r2e::http::ws::Message;
 
 struct ChatHandler {
     username: String,
@@ -377,8 +377,8 @@ WebSocket operations return `WsError` for error conditions:
 
 | Variant | When |
 |---------|------|
-| `WsError::Send(axum::Error)` | Failed to send a message |
-| `WsError::Recv(axum::Error)` | Failed to receive a message |
+| `WsError::Send(r2e::http::Error)` | Failed to send a message |
+| `WsError::Recv(r2e::http::Error)` | Failed to receive a message |
 | `WsError::Json(serde_json::Error)` | JSON serialization or deserialization failed |
 | `WsError::Closed` | The connection is closed |
 

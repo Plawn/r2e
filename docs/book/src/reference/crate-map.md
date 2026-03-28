@@ -6,6 +6,7 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 
 ```
 r2e              Facade crate — re-exports everything, feature-gated
+r2e-http         HTTP abstraction layer — sole owner of the axum dependency
 r2e-core         Runtime: AppBuilder, Controller, guards, interceptors, config, plugins
 r2e-macros       Proc macros: #[derive(Controller)], #[routes], #[bean], #[producer]
 r2e-security     JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
@@ -31,9 +32,11 @@ r2e-cli          CLI scaffolding tool
 ## Dependency flow
 
 ```
+r2e-http (HTTP abstraction — sole axum dependency)
+    ↑
 r2e-macros (proc-macro, no runtime deps)
     ↑
-r2e-core (runtime foundation)
+r2e-core (runtime foundation, re-exports r2e-http as `http` module)
     ↑
 r2e-security / r2e-events / r2e-scheduler / r2e-data
     ↑

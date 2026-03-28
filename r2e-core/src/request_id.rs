@@ -25,10 +25,10 @@
 //! }
 //! ```
 
-use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
-use axum::http::{HeaderName, HeaderValue};
-use axum::response::{IntoResponse, Response};
+use crate::http::extract::FromRequestParts;
+use crate::http::header::Parts;
+use crate::http::{HeaderName, HeaderValue};
+use crate::http::response::{IntoResponse, Response};
 
 use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
@@ -75,7 +75,7 @@ impl IntoResponse for RequestId {
 
 /// Middleware function that injects the request ID.
 async fn request_id_middleware(
-    mut req: axum::extract::Request,
+    mut req: crate::http::Request,
     next: crate::http::middleware::Next,
 ) -> Response {
     let id = req
@@ -107,7 +107,7 @@ pub struct RequestIdPlugin;
 impl Plugin for RequestIdPlugin {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(request_id_middleware))
+            router.layer(crate::http::middleware::from_fn(request_id_middleware))
         })
     }
 }

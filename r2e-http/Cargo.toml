@@ -1,0 +1,21 @@
+[package]
+name = "r2e-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["http", "web", "axum", "framework"]
+categories = ["web-programming::http-server"]
+description = "HTTP abstraction layer for R2E - sole owner of the axum dependency"
+
+[features]
+default = []
+ws = ["axum/ws"]
+multipart = ["axum/multipart"]
+
+[dependencies]
+axum = {workspace = true}
+bytes = {workspace = true}
+http = {workspace = true}

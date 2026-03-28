@@ -25,8 +25,8 @@
 //!     .build())
 //! ```
 
-use axum::http::{HeaderName, HeaderValue};
-use axum::response::Response;
+use crate::http::{HeaderName, HeaderValue};
+use crate::http::Response;
 
 use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
@@ -62,8 +62,8 @@ impl Plugin for SecureHeaders {
         let headers = std::sync::Arc::new(self.headers);
         app.with_layer_fn(move |router| {
             let headers = headers.clone();
-            router.layer(axum::middleware::from_fn(
-                move |req: axum::extract::Request, next: crate::http::middleware::Next| {
+            router.layer(crate::http::middleware::from_fn(
+                move |req: crate::http::Request, next: crate::http::middleware::Next| {
                     let headers = headers.clone();
                     async move {
                         let mut response: Response = next.run(req).await;

@@ -32,7 +32,7 @@ AppBuilder::new()
     .register_controller::<AccountController>()
     .register_controller::<ScheduledJobs>() // auto-discovers #[scheduled] methods
     .register_subscriber::<NotificationService>() // bean event subscribers
-    .build()                               // → axum::Router
+    .build()                               // → Router
     // or .serve("0.0.0.0:3000").await     // build + listen + graceful shutdown
     // or .serve_auto().await              // reads server.host / server.port from config (defaults: 0.0.0.0:3000)
 ```
@@ -41,7 +41,7 @@ AppBuilder::new()
 - `on_start(|state| async move { Ok(()) })` — runs before the server starts listening. Receives state, returns `Result`.
 - `on_stop(|state| async move { })` — runs after graceful shutdown. Receives state, returns `()`.
 
-`build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks. `serve_auto()` does the same but reads address from config keys `server.host` (String, default `"0.0.0.0"`) and `server.port` (u16, default `3000`).
+`build()` returns a `Router` (from `r2e::http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks. `serve_auto()` does the same but reads address from config keys `server.host` (String, default `"0.0.0.0"`) and `server.port` (u16, default `3000`).
 
 `.shutdown_grace_period(Duration)` — optional maximum time for shutdown hooks to complete before force-exiting the process. Without it, the process waits indefinitely.
 
@@ -424,16 +424,24 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 ## Testing (r2e-test)
 
-- `TestApp` — wraps an `axum::Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute.
-- `TestRequest` — builder with: `bearer(token)`, `header(name, value)`, `json(body)`, `body(bytes)`, `form(fields)`, `cookie(name, value)`, `query(key, value)`, `queries(pairs)`.
+- `TestApp` — wraps a `Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute. `serve()` spawns a live `TestServer` on a random TCP port (needed for WebSocket/SSE).
+- `TestRequest` — builder with: `bearer(token)`, `header(name, value)`, `json(body)`, `body(bytes)`, `form(fields)`, `cookie(name, value)`, `query(key, value)`, `queries(pairs)`, `content_type(ct)`, `file(field, name, ct, data)`, `field(name, value)`, `multipart()`.
 - `TestResponse` — response wrapper with:
   - **Status assertions:** `assert_ok` (200), `assert_created` (201), `assert_no_content` (204), `assert_bad_request` (400), `assert_unauthorized` (401), `assert_forbidden` (403), `assert_not_found` (404), `assert_conflict` (409), `assert_unprocessable` (422), `assert_too_many_requests` (429), `assert_internal_server_error` (500), `assert_status(code)`. All return `&Self`.
   - **JSON-path assertions:** `assert_json_path(path, expected)`, `assert_json_path_fn(path, predicate)`, `json_path::<T>(path)`.
   - **JSON matching:** `assert_json_contains(expected)` (partial/subset match), `assert_json_path_contains(path, item)`.
   - **JSON shape:** `assert_json_shape(schema)` — structural type validation using exemplar values.
-  - **Header assertions:** `assert_header(name, expected)`, `assert_header_exists(name)`.
-  - **Access:** `json::<T>()`, `text()`, `header(name)`, `cookie(name)`, `cookies()`.
+  - **Header assertions:** `assert_header(name, expected)`, `assert_header_exists(name)`, `assert_content_type(expected)`.
+  - **Cookie attribute assertions:** `assert_cookie_secure(name)`, `assert_cookie_http_only(name)`, `assert_cookie_same_site(name, expected)`, `assert_cookie_path(name, expected)`.
+  - **SSE assertions:** `sse_events()` → `Vec<ParsedSseEvent>`, `assert_sse_event(type, data)`, `assert_sse_data(data)`.
+  - **Access:** `json::<T>()`, `json_optional::<T>()`, `text()`, `bytes()`, `content_type()`, `is_json()`, `header(name)`, `cookie(name)`, `cookies()`, `set_cookie(name)` → `Option<SetCookie>`, `set_cookies()` → `Vec<SetCookie>`.
+  - **Construction:** `from_parts(status, headers, body)` — for unit-testing response helpers.
 - `TestSession` — cookie-persisting session wrapper. Created via `app.session()`. Builder: `with_bearer(token)`, `with_default_header(name, value)`. Cookie management: `set_cookie`, `remove_cookie`, `clear_cookies`, `cookie`. HTTP methods: `get/post/put/patch/delete/request` return `SessionRequest` (same builder API as `TestRequest`). Cookies from `Set-Cookie` responses are auto-captured.
-- `TestJwt` — generates valid JWT tokens for test scenarios with configurable sub/email/roles. `token_builder(sub)` → `TokenBuilder` with `roles`, `email`, `claim`, `expires_in_secs`, `expired`. `expired()` sets `exp` to 60 seconds in the past.
+- `TestJwt` — generates JWT tokens for test scenarios with configurable sub/email/roles. `token_builder(sub)` → `TokenBuilder` with `roles`, `email`, `claim`, `expires_in_secs`, `expired`, `issuer`, `audience`, `algorithm`, `without_sub`, `without_claim`. Convenience: `wrong_issuer_token(sub)`, `wrong_audience_token(sub)`, `wrong_algorithm_token(sub)`, `malformed_token()`.
+- `TestServer` — spawns a router on a random local TCP port with graceful shutdown on drop. Methods: `addr()`, `url()`, `ws_url()` (feature `ws`), `ws(path)` (feature `ws`).
+- `WsTestClient` (feature `ws`) — WebSocket test client. `send_text`, `send_json`, `send_binary`, `close`. `next_text`, `next_json`, `next_binary` (all with configurable timeout, default 5s). `with_timeout(dur)`, `assert_no_message(wait)`.
+- `SetCookie` — parsed `Set-Cookie` header with all attributes: `name`, `value`, `path`, `domain`, `max_age`, `expires`, `secure`, `http_only`, `same_site`.
+- `FiniteStream<T>` — yields items from a `Vec` then completes. Use for testing SSE endpoints backed by infinite broadcast streams.
+- `ParsedSseEvent` — parsed SSE event with `event: Option<String>` and `data: String`.
 - `#[derive(TestState)]` — generates `FromRef` impls for test state structs (eliminates boilerplate). Supports `#[test_state(skip)]`.
 - `json_contains(actual, expected)` — recursive subset matching function (exported for custom assertions).

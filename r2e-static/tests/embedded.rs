@@ -1,5 +1,5 @@
-use axum::Router;
-use http::StatusCode;
+use r2e_core::http::{Body, HeaderMap, Router, Request, StatusCode};
+use r2e_core::http::body::to_bytes;
 use r2e_static::{EmbeddedFrontend, rust_embed};
 use tower::ServiceExt;
 
@@ -7,15 +7,15 @@ use tower::ServiceExt;
 #[folder = "tests/fixtures"]
 struct TestAssets;
 
-async fn get(app: Router, path: &str) -> (StatusCode, http::HeaderMap, String) {
-    let req = http::Request::builder()
+async fn get(app: Router, path: &str) -> (StatusCode, HeaderMap, String) {
+    let req = Request::builder()
         .uri(path)
-        .body(axum::body::Body::empty())
+        .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
     let headers = resp.headers().clone();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+    let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     (status, headers, String::from_utf8_lossy(&body).into_owned())

@@ -1,6 +1,6 @@
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use r2e_core::http::StatusCode;
+use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::Json;
 use serde::Serialize;
 
 /// OAuth 2.0 error response per RFC 6749 Section 5.2.

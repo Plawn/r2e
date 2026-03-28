@@ -1,5 +1,4 @@
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use r2e_core::http::{StatusCode, IntoResponse};
 use http_body_util::BodyExt;
 use r2e_core::prelude::*;
 

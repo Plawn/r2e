@@ -1,7 +1,6 @@
 use r2e_core::managed::{ManagedErr, ManagedError};
 use r2e_core::HttpError;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use r2e_core::http::{StatusCode, IntoResponse, Response};
 use http_body_util::BodyExt;
 
 #[tokio::test]

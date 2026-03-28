@@ -13,8 +13,6 @@ description = "Embedded static file serving with SPA support for R2E"
 r2e-core = {workspace = true}
 rust-embed = {workspace = true}
 mime_guess = {workspace = true}
-axum = {workspace = true}
-http = {workspace = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}

@@ -1,6 +1,6 @@
 # Introduction
 
-**R2E** (Rust Enterprise Edition) is a Quarkus-like ergonomic layer over [Axum](https://github.com/tokio-rs/axum) for Rust. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.
+**R2E** (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on [Axum](https://github.com/tokio-rs/axum) via the `r2e-http` abstraction layer.
 
 ## What R2E offers
 

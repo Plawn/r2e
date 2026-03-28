@@ -455,7 +455,7 @@ Both methods store the raw config in the builder and provide `R2eConfig` in the 
 Your state type must implement `FromRef` for `R2eConfig`:
 
 ```rust
-impl axum::extract::FromRef<AppState> for R2eConfig {
+impl r2e::http::FromRef<AppState> for R2eConfig {
     fn from_ref(state: &AppState) -> Self {
         state.config.clone()
     }

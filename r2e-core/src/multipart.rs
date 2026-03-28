@@ -7,7 +7,7 @@ use crate::http::response::{IntoResponse, Response};
 use crate::http::{Json, StatusCode};
 
 /// Re-export the raw Axum multipart extractor for advanced use cases.
-pub use axum::extract::Multipart;
+pub use crate::http::multipart::Multipart;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 

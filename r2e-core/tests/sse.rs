@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use axum::response::sse::Event as SseEvent;
+use r2e_core::http::SseEvent;
 use r2e_core::sse::{SseBroadcaster, SseSubscription};
 
 async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {

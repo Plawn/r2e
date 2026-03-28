@@ -15,7 +15,7 @@ pub struct RequestLogger;
 impl Plugin for RequestLogger {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         app.with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(|req, next| async move {
+            router.layer(r2e::http::middleware::from_fn(|req, next| async move {
                 tracing::info!("Request: {} {}", req.method(), req.uri());
                 next.run(req).await
             }))
@@ -59,7 +59,6 @@ Install before `build_state()` with `.plugin(plugin)`. Implement `PreStatePlugin
 
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext};
-use r2e::type_list::TNil;
 
 pub struct MyPlugin {
     config: MyPluginConfig,
@@ -67,12 +66,46 @@ pub struct MyPlugin {
 
 impl PreStatePlugin for MyPlugin {
     type Provided = MyPluginConfig;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, _ctx: &mut PluginInstallContext) -> MyPluginConfig {
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyPluginConfig {
         self.config
     }
 }
+```
+
+### Compile-time dependency checking
+
+Plugins can declare typed dependencies via `Deps`. The compiler verifies at each `.plugin()` call site that all dependencies have already been provided:
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext};
+use tokio_util::sync::CancellationToken;
+
+pub struct MyPlugin;
+
+impl PreStatePlugin for MyPlugin {
+    type Provided = MyService;
+    type Deps = (DbPool, CancellationToken);
+
+    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
+        MyService::new(pool, token)
+    }
+}
+```
+
+```rust
+// ✅ Compiles: both deps are provided before MyPlugin
+AppBuilder::new()
+    .plugin(Scheduler)          // provides CancellationToken
+    .provide(pool)              // provides DbPool
+    .plugin(MyPlugin)
+    .build_state::<AppState, _, _>().await
+
+// ❌ Compile error: deps not yet provided
+AppBuilder::new()
+    .plugin(MyPlugin)           // error: DbPool not in provisions
+    .plugin(Scheduler)
 ```
 
 Usage:
@@ -92,22 +125,21 @@ For plugins that need to set up infrastructure after state is built but during s
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
 use r2e::plugin::DeferredContext;
-use r2e::type_list::TNil;
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
     type Provided = CancellationToken;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> CancellationToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
         let token = CancellationToken::new();
 
         let t = token.clone();
         ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
             // Add a Tower layer
-            dctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
+            dctx.add_layer(Box::new(|router| router.layer(r2e::http::Extension("my-plugin-data"))));
 
             // Store data for later access
             dctx.store_data(MyPluginHandle::new());
@@ -191,8 +223,9 @@ AppBuilder::new()
 |---|---|---|
 | Provides | Single bean | Multiple beans |
 | Generics | None | `<P, R>` on `install()` |
-| Builder access | Via `PluginInstallContext` | Full `AppBuilder` |
-| `with_updated_types()` | Not needed (handled automatically) | Required when `Required = TNil` |
+| Dependencies | `type Deps = (A, B)` (compile-time checked) | Manual via builder |
+| Config access | Via `PluginInstallContext` | Via `app.r2e_config()` |
+| `with_updated_types()` | Not needed (handled automatically) | Required |
 
 ## Step-by-step: Request ID plugin
 
@@ -245,7 +278,6 @@ A pre-state plugin that spawns a periodic health check task and cancels it on sh
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
 use r2e::plugin::DeferredContext;
-use r2e::type_list::TNil;
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -256,9 +288,9 @@ pub struct HealthChecker {
 
 impl PreStatePlugin for HealthChecker {
     type Provided = CancellationToken;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> CancellationToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
         let token = CancellationToken::new();
         let interval = self.interval;
         let url = self.url;
@@ -323,7 +355,7 @@ Post-state plugins (`Plugin::install`) receive `AppBuilder<T>` and can call:
 | `with_layer(layer)` | Add a Tower layer (strict type bounds) |
 | `with_layer_fn(\|router\| ...)` | Apply a custom router transformation (escape hatch) |
 | `with_service_builder(\|router\| ...)` | Alias for `with_layer_fn` |
-| `register_routes(router)` | Merge a raw `axum::Router<T>` into the app |
+| `register_routes(router)` | Merge a `Router<T>` into the app |
 | `merge_router(router)` | Alias for `register_routes` |
 | `on_start(\|state\| async { Ok(()) })` | Register a startup hook (runs before listening) |
 | `on_stop(\|\| async { })` | Register a shutdown hook (runs after signal) |

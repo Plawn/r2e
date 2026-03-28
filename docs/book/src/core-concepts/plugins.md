@@ -106,16 +106,28 @@ Implement `PreStatePlugin` for plugins that provide a single bean. No builder ge
 
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext};
-use r2e::type_list::TNil;
 
 pub struct MyPreStatePlugin;
 
 impl PreStatePlugin for MyPreStatePlugin {
     type Provided = MyConfig;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, _ctx: &mut PluginInstallContext) -> MyConfig {
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyConfig {
         MyConfig::default()
+    }
+}
+```
+
+Plugins can declare typed dependencies via `Deps`. The compiler verifies at each `.plugin()` call that all deps have already been provided:
+
+```rust
+impl PreStatePlugin for MyPlugin {
+    type Provided = MyService;
+    type Deps = (DbPool, CancellationToken);
+
+    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
+        MyService::new(pool, token)
     }
 }
 ```
@@ -127,13 +139,12 @@ For plugins that need to perform setup after state construction, use `DeferredAc
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
 use r2e::plugin::DeferredContext;
-use r2e::type_list::TNil;
 
 impl PreStatePlugin for MyPlugin {
     type Provided = MyToken;
-    type Required = TNil;
+    type Deps = ();
 
-    fn install(self, ctx: &mut PluginInstallContext) -> MyToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
         let token = MyToken::new();
         let t = token.clone();
         ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {

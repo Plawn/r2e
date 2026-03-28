@@ -1,5 +1,5 @@
 use r2e_core::interceptors::{Cacheable, InterceptorContext};
-use axum::Json;
+use r2e_core::http::Json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

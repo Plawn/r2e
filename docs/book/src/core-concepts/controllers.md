@@ -193,6 +193,6 @@ Behind the scenes, `#[derive(Controller)]` and `#[routes]` generate:
 2. **Extractor struct** (`__R2eExtract_<Name>`) — implements `FromRequestParts` to construct the controller
 3. **StatefulConstruct impl** — when no struct-level `#[inject(identity)]` fields exist
 4. **Handler functions** — standalone async functions for each route
-5. **Controller trait impl** — wires routes into `axum::Router<State>`
+5. **Controller trait impl** — wires routes into `Router<State>`
 
 All of this is hidden from your code — you just write the struct and methods.

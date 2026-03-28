@@ -34,7 +34,7 @@ AppBuilder::new()
 
 `build_state()` is **async** — it resolves the bean dependency graph with topological sorting.
 
-`build()` returns an `axum::Router`. `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, listens, waits for shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
+`build()` returns a `Router` (from `r2e-http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, listens, waits for shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
 
 ## Dependency injection
 

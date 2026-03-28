@@ -1,6 +1,6 @@
 # R2E — Rust Enterprise Edition
 
-A Quarkus-like ergonomic layer over [Axum](https://github.com/tokio-rs/axum) for Rust. Declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.
+An ergonomic enterprise framework for Rust, inspired by Quarkus. Declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on [Axum](https://github.com/tokio-rs/axum) via the `r2e-http` abstraction layer.
 
 ```rust
 #[derive(Controller)]
@@ -147,7 +147,7 @@ All injection is resolved at compile time — no runtime reflection, no trait ob
 
 | Attribute | Scope | Description |
 |-----------|-------|-------------|
-| `#[inject]` | App | Cloned from Axum state. Type must be `Clone + Send + Sync`. |
+| `#[inject]` | App | Cloned from application state. Type must be `Clone + Send + Sync`. |
 | `#[inject(identity)]` | Request | Extracted via `FromRequestParts` (e.g. `AuthenticatedUser`). |
 | `#[config("key")]` | App | Resolved from `R2eConfig`. Supports `String`, `i64`, `f64`, `bool`, `Option<T>`. |
 
@@ -460,6 +460,7 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 
 ```
 r2e               Facade crate — re-exports everything, feature-gated
+r2e-http          HTTP abstraction layer — sole owner of the axum dependency
 r2e-core          Runtime: AppBuilder, Controller, guards, interceptors, config, plugins, SSE, WS
 r2e-macros        Proc macros: #[derive(Controller)], #[routes], #[bean]
 r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache

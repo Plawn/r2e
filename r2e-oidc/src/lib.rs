@@ -58,8 +58,8 @@ mod state;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
-use axum::Router;
+use r2e_core::http::routing::{get, post};
+use r2e_core::http::Router;
 use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 

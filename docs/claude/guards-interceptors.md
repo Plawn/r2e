@@ -142,7 +142,7 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 
 ### `#[middleware]` — Tower middleware functions
 
-Applies a Tower middleware function to a specific route via `axum::middleware::from_fn`. The function must follow Axum's middleware signature: `async fn(Request, Next) -> Response`.
+Applies a Tower middleware function to a specific route via `r2e::http::middleware::from_fn`. The function must follow the standard middleware signature: `async fn(Request, Next) -> Response`.
 
 ```rust
 #[get("/data")]
@@ -158,7 +158,7 @@ Multiple `#[middleware]` attributes can be stacked; they apply outermost-first i
 async fn protected_data(&self) -> Json<Vec<Item>> { /* ... */ }
 ```
 
-Generated code calls `.layer(axum::middleware::from_fn(name))` on the route handler.
+Generated code calls `.layer(r2e::http::middleware::from_fn(name))` on the route handler.
 
 ### `#[layer]` — Arbitrary Tower layers
 

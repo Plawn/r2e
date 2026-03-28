@@ -12,7 +12,7 @@ use r2e::prelude::*; // middleware, layer, status, returns, raw
 
 ## `#[middleware]` — Tower middleware functions
 
-The `#[middleware]` attribute applies a Tower middleware function to a specific route. It wraps the handler using `axum::middleware::from_fn`, so the function must follow Axum's middleware signature.
+The `#[middleware]` attribute applies a Tower middleware function to a specific route. It wraps the handler using `r2e::http::middleware::from_fn`, so the function must follow the standard middleware signature.
 
 ### Middleware function signature
 
@@ -22,8 +22,8 @@ A middleware function takes a `Request` and `Next`, and returns a `Response`:
 use r2e::prelude::*;
 
 async fn require_api_key(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
+    req: Request,
+    next: r2e::http::middleware::Next,
 ) -> Response {
     let has_key = req
         .headers()
@@ -51,7 +51,7 @@ impl ApiController {
 }
 ```
 
-The generated code calls `.layer(axum::middleware::from_fn(require_api_key))` on that route's handler.
+The generated code calls `.layer(r2e::http::middleware::from_fn(require_api_key))` on that route's handler.
 
 ### Multiple middleware
 
@@ -273,7 +273,7 @@ Accessing client connection info:
 
 ```rust
 use std::net::SocketAddr;
-use axum::extract::ConnectInfo;
+use r2e::http::ConnectInfo;
 
 #[get("/")]
 async fn handler(

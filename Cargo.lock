@@ -5102,7 +5102,6 @@ dependencies = [
 name = "r2e-core"
 version = "0.1.0"
 dependencies = [
- "axum",
  "bytes",
  "dashmap",
  "dotenvy",
@@ -5111,6 +5110,7 @@ dependencies = [
  "garde",
  "http-body-util",
  "r2e-devtools",
+ "r2e-http",
  "r2e-macros",
  "serde",
  "serde_json",
@@ -5252,6 +5252,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "r2e-http"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "http",
+]
+
+[[package]]
 name = "r2e-macros"
 version = "0.1.0"
 dependencies = [
@@ -5284,7 +5293,6 @@ name = "r2e-oidc"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "axum",
  "base64 0.22.1",
  "dashmap",
  "http-body-util",
@@ -5356,7 +5364,6 @@ dependencies = [
 name = "r2e-scheduler"
 version = "0.1.0"
 dependencies = [
- "axum",
  "chrono",
  "cron",
  "r2e-core",
@@ -5383,8 +5390,6 @@ dependencies = [
 name = "r2e-static"
 version = "0.1.0"
 dependencies = [
- "axum",
- "http",
  "http-body-util",
  "mime_guess",
  "r2e-core",

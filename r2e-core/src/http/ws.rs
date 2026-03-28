@@ -1,8 +1,8 @@
-//! WebSocket re-exports from Axum.
+//! WebSocket re-exports from r2e-http.
 //!
 //! Gated behind the `ws` feature flag.
 
-pub use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+pub use r2e_http::ws::*;
 
 /// Marker trait for compile-time verification in the `#[ws]` macro.
 pub trait IsWebSocket: Send + 'static {}

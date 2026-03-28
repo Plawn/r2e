@@ -2,7 +2,9 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+>
+> **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
 ---
 
@@ -21,9 +23,28 @@ CONTRIBUTING.md         Contribution guidelines
 
 ---
 
+## r2e-http — HTTP abstraction layer
+
+Sole owner of the `axum` dependency. Re-exports Router, extractors, responses, middleware, routing, WebSocket, and multipart types.
+
+```
+src/
+  lib.rs                    Entry point — top-level re-exports (Router, Json, Extension, serve, etc.)
+  body.rs                   Body, to_bytes
+  extract.rs                Extractors (State, Path, Query, Form, FromRequestParts, etc.)
+  header.rs                 HTTP headers, StatusCode, Method, HeaderMap, Parts
+  middleware.rs              from_fn, from_fn_with_state, Next
+  response.rs               IntoResponse, Response, Html, Redirect, Sse
+  routing.rs                get, post, put, patch, delete, Route
+  ws.rs                     WebSocket types (feature = "ws")
+  multipart.rs              Multipart extractor (feature = "multipart")
+```
+
+---
+
 ## r2e-macros — Procedural macros
 
-No runtime dependencies. Generates Axum handlers, extractors, and DI wiring at compile time.
+No runtime dependencies. Generates handlers, extractors, and DI wiring at compile time.
 
 ```
 src/
@@ -113,14 +134,8 @@ src/
     value.rs                ConfigValue enum (String, Int, Float, Bool, List, Map)
 
   http/
-    mod.rs                  HTTP module re-exports (Router, StatusCode, HeaderMap, ...)
-    body.rs                 Request/response body types
-    extract.rs              Custom extractors (FromRef, FromRequestParts wrappers)
-    header.rs               Header utilities (Parts, HttpRequest)
-    middleware.rs            Middleware types (Next)
-    response.rs             Response builders (IntoResponse)
-    routing.rs              Routing utilities
-    ws.rs                   WebSocket re-exports
+    mod.rs                  HTTP module — re-exports from r2e-http (Router, StatusCode, HeaderMap, ...)
+    ws.rs                   WebSocket re-exports + IsWebSocket trait
 
 tests/
   integration.rs            Full-stack integration tests (AppBuilder -> TestApp)

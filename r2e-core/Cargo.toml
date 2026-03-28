@@ -12,12 +12,12 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 
 [features]
 default = []
-ws = ["axum/ws", "dep:dashmap"]
-multipart = ["axum/multipart"]
+ws = ["r2e-http/ws", "dep:dashmap"]
+multipart = ["r2e-http/multipart"]
 dev-reload = ["dep:r2e-devtools"]
 
 [dependencies]
-axum = {workspace = true}
+r2e-http = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 tower = {workspace = true}
 tower-http = {workspace = true, features = ["catch-panic", "cors", "trace"]}

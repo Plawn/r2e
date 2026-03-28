@@ -12,8 +12,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
+use r2e_core::http::extract::FromRequestParts;
+use r2e_core::http::header::Parts;
 use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::http::StatusCode;
 use r2e_core::type_list::{TAppend, TCons, TNil};
@@ -212,7 +212,7 @@ impl RawPreStatePlugin for Scheduler {
             .add_deferred(DeferredAction::new("Scheduler", move |ctx| {
                 // Add the layer that provides SchedulerHandle via extension.
                 ctx.add_layer(Box::new(move |router| {
-                    router.layer(axum::Extension(handle))
+                    router.layer(r2e_core::http::Extension(handle))
                 }));
 
                 // Store the task registry for use during controller registration.

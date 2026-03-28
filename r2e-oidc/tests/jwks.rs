@@ -1,9 +1,9 @@
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use r2e_core::http::body::to_bytes;
+use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-fn build_app() -> axum::Router {
+fn build_app() -> Router {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "pass",
@@ -21,8 +21,8 @@ fn build_app() -> axum::Router {
         .build()
 }
 
-async fn body_json(resp: axum::http::Response<Body>) -> serde_json::Value {
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+async fn body_json(resp: Response) -> serde_json::Value {
+    let bytes = to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     serde_json::from_slice(&bytes).unwrap()
