@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static", "events-iggy", "events-kafka", "events-pulsar", "events-rabbitmq"]
+full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
