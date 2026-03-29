@@ -19,5 +19,5 @@
 - add warning when return body could not automatticaaly be added top openapi
 
 - better grpc/proto automagic setup, auto compile, auto build.rs + etc
-- tracing subscriber en json ?
-- ensure only r2e-http has ref to axum + improve openapi (auto detection + doc)
+- tracing subscriber en json ? -> OK
+- ensure only r2e-http has ref to axum + improve openapi (auto detection + doc) -> OK

@@ -1,11 +1,14 @@
 use r2e_openapi::schema::{SchemaProvider, SchemaRegistry};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 
 // ── Phase 1: SchemaRegistry ─────────────────────────────────────────────────
 
 #[test]
 fn registry_new_empty() {
     let registry = SchemaRegistry::new();
+    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
     let schemas = registry.into_schemas();
     assert!(schemas.is_empty());
 }
@@ -16,6 +19,8 @@ fn register_single_schema() {
     registry.register("User", json!({"type": "object"}));
 
     assert!(registry.contains("User"));
+    assert_eq!(registry.len(), 1);
+    assert!(!registry.is_empty());
     let schemas = registry.into_schemas();
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas["User"], json!({"type": "object"}));
@@ -76,7 +81,18 @@ fn into_schemas_output() {
 fn default_creates_empty_registry() {
     let registry = SchemaRegistry::default();
     assert!(!registry.contains("anything"));
+    assert!(registry.is_empty());
     assert!(registry.into_schemas().is_empty());
+}
+
+#[test]
+fn iter_yields_all_entries() {
+    let mut registry = SchemaRegistry::new();
+    registry.register("A", json!({"type": "string"}));
+    registry.register("B", json!({"type": "integer"}));
+
+    let items: Vec<_> = registry.iter().collect();
+    assert_eq!(items.len(), 2);
 }
 
 // ── Phase 2: SchemaProvider trait ───────────────────────────────────────────
@@ -84,8 +100,8 @@ fn default_creates_empty_registry() {
 struct TestUser;
 
 impl SchemaProvider for TestUser {
-    fn schema_name() -> &'static str {
-        "TestUser"
+    fn schema_name() -> Cow<'static, str> {
+        "TestUser".into()
     }
 
     fn json_schema() -> Value {
@@ -123,4 +139,60 @@ fn register_schema_populates_registry() {
     let schemas = registry.into_schemas();
     assert_eq!(schemas["TestUser"]["type"], "object");
     assert_eq!(schemas["TestUser"]["properties"]["id"]["type"], "integer");
+}
+
+#[test]
+fn register_provider_populates_registry() {
+    let mut registry = SchemaRegistry::new();
+    registry.register_provider::<TestUser>();
+
+    assert!(registry.contains("TestUser"));
+    let schemas = registry.into_schemas();
+    assert_eq!(schemas["TestUser"]["type"], "object");
+}
+
+// ── Phase 3: register_for (schemars integration) ───────────────────────────
+
+#[derive(schemars::JsonSchema)]
+struct Widget {
+    name: String,
+    count: u32,
+}
+
+#[test]
+fn register_for_json_schema_type() {
+    let mut registry = SchemaRegistry::new();
+    registry.register_for::<Widget>();
+
+    assert!(registry.contains("Widget"));
+    let schemas = registry.into_schemas();
+    let widget = &schemas["Widget"];
+    assert!(widget["properties"]["name"].is_object());
+    assert!(widget["properties"]["count"].is_object());
+}
+
+#[derive(schemars::JsonSchema)]
+struct Parent {
+    child: Child,
+}
+
+#[derive(schemars::JsonSchema)]
+struct Child {
+    value: String,
+}
+
+#[test]
+fn register_for_nested_type_includes_defs() {
+    let mut registry = SchemaRegistry::new();
+    registry.register_for::<Parent>();
+
+    // The raw schema should contain $defs for Child.
+    // Actual promotion happens in build_spec, but the schema should be stored.
+    let schemas = registry.into_schemas();
+    let parent = &schemas["Parent"];
+    // schemars puts nested types in $defs
+    assert!(
+        parent.get("$defs").is_some() || parent["properties"]["child"].get("$ref").is_some(),
+        "nested type should produce $defs or $ref"
+    );
 }

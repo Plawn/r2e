@@ -286,7 +286,7 @@ tests/
 
 ## r2e-openapi — API documentation
 
-OpenAPI 3.0.3 spec generation from route metadata.
+OpenAPI 3.1.0 spec generation from route metadata.
 
 ```
 src/

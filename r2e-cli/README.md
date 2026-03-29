@@ -193,7 +193,7 @@ If the dependency is already present, prints a warning and does nothing.
 | `data` | `r2e-data` | Entity, Repository, QueryBuilder abstractions |
 | `data-sqlx` | `r2e-data-sqlx` | SQLx backend for Repository |
 | `data-diesel` | `r2e-data-diesel` | Diesel backend for Repository |
-| `openapi` | `r2e-openapi` | OpenAPI 3.0.3 spec generation + Swagger UI |
+| `openapi` | `r2e-openapi` | OpenAPI 3.1.0 spec generation + Swagger UI |
 | `events` | `r2e-events` | In-process typed event bus |
 | `scheduler` | `r2e-scheduler` | Background task scheduling (cron, interval) |
 | `cache` | `r2e-cache` | TTL cache with pluggable backends |

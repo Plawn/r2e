@@ -1,5 +1,8 @@
 use r2e_core::meta::{ParamLocation, RouteInfo};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+
+use crate::schema::SchemaRegistry;
 
 /// Recursively rewrite `$ref` paths from schemars format to OpenAPI components format.
 ///
@@ -58,6 +61,8 @@ pub struct OpenApiConfig {
     pub version: String,
     pub description: Option<String>,
     pub docs_ui: bool,
+    pub(crate) schema_registry: SchemaRegistry,
+    pub(crate) schema_overrides: HashMap<String, Value>,
 }
 
 impl OpenApiConfig {
@@ -67,6 +72,8 @@ impl OpenApiConfig {
             version: version.to_string(),
             description: None,
             docs_ui: false,
+            schema_registry: SchemaRegistry::new(),
+            schema_overrides: HashMap::new(),
         }
     }
 
@@ -77,6 +84,37 @@ impl OpenApiConfig {
 
     pub fn with_docs_ui(mut self, enabled: bool) -> Self {
         self.docs_ui = enabled;
+        self
+    }
+
+    /// Add a schema for a type implementing `schemars::JsonSchema`.
+    ///
+    /// The schema will appear in `components/schemas` even if the type is not
+    /// referenced by any route.
+    pub fn with_schema<T: schemars::JsonSchema>(mut self) -> Self {
+        self.schema_registry.register_for::<T>();
+        self
+    }
+
+    /// Add a manually-crafted schema under the given name.
+    pub fn with_raw_schema(mut self, name: &str, schema: Value) -> Self {
+        self.schema_registry.register(name, schema);
+        self
+    }
+
+    /// Merge all schemas from a populated `SchemaRegistry`.
+    pub fn with_schema_registry(mut self, registry: SchemaRegistry) -> Self {
+        for (name, schema) in registry.into_schemas() {
+            self.schema_registry.register(&name, schema);
+        }
+        self
+    }
+
+    /// Override the auto-generated schema for a type.
+    ///
+    /// This takes precedence over both route-derived and registry schemas.
+    pub fn with_schema_override(mut self, name: &str, schema: Value) -> Self {
+        self.schema_overrides.insert(name.to_string(), schema);
         self
     }
 }
@@ -270,10 +308,29 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         }
     }
 
-    // Merge promoted $defs from schemars into components/schemas.
+    // Merge extra schemas from registry (route schemas take precedence).
+    for (name, schema) in config.schema_registry.iter() {
+        if !schemas.contains_key(name) {
+            insert_schema(
+                &mut schemas,
+                &mut extra_definitions,
+                name,
+                &Some(schema.clone()),
+            );
+        }
+    }
+
+    // Merge promoted $defs from all sources (routes + registry).
     for (def_name, mut def_schema) in extra_definitions {
         sanitize_schema(&mut def_schema);
         schemas.entry(def_name).or_insert(def_schema);
+    }
+
+    // Apply explicit overrides (replace any existing schema).
+    for (name, schema) in &config.schema_overrides {
+        let mut s = schema.clone();
+        sanitize_schema(&mut s);
+        schemas.insert(name.clone(), s);
     }
 
     // Insert standard error schemas

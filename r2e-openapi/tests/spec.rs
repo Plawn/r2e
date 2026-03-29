@@ -729,3 +729,148 @@ fn response_schema_ref_rewrite() {
     let role = &spec["components"]["schemas"]["Role"];
     assert_eq!(role["type"], "string");
 }
+
+// ── Schema Registry Integration ─────────────────────────────────────────────
+
+#[test]
+fn registry_schema_appears_in_spec() {
+    let config = OpenApiConfig::new("Test", "1.0.0").with_raw_schema(
+        "WsMessage",
+        json!({
+            "type": "object",
+            "properties": {
+                "event": { "type": "string" },
+                "data": { "type": "object" }
+            }
+        }),
+    );
+    let spec = build_spec(&config, &[]);
+    let ws = &spec["components"]["schemas"]["WsMessage"];
+    assert_eq!(ws["type"], "object");
+    assert_eq!(ws["properties"]["event"]["type"], "string");
+}
+
+#[test]
+fn registry_schema_defs_are_promoted() {
+    let config = OpenApiConfig::new("Test", "1.0.0").with_raw_schema(
+        "Parent",
+        json!({
+            "type": "object",
+            "properties": {
+                "child": { "$ref": "#/$defs/Child" }
+            },
+            "$defs": {
+                "Child": { "type": "object", "properties": { "v": { "type": "string" } } }
+            }
+        }),
+    );
+    let spec = build_spec(&config, &[]);
+
+    // $defs should be promoted to components/schemas
+    let child = &spec["components"]["schemas"]["Child"];
+    assert_eq!(child["type"], "object");
+
+    // $ref should be rewritten
+    let parent = &spec["components"]["schemas"]["Parent"];
+    assert_eq!(
+        parent["properties"]["child"]["$ref"],
+        "#/components/schemas/Child"
+    );
+}
+
+#[test]
+fn route_schema_takes_precedence_over_registry() {
+    let config = OpenApiConfig::new("Test", "1.0.0")
+        .with_raw_schema("User", json!({"type": "string", "description": "from registry"}));
+
+    let routes = vec![{
+        let mut r = route("POST", "/users", "create_user");
+        r.request_body_type = Some("User".to_string());
+        r.request_body_schema = Some(json!({"type": "object", "description": "from route"}));
+        r
+    }];
+    let spec = build_spec(&config, &routes);
+    // Route schema wins
+    assert_eq!(
+        spec["components"]["schemas"]["User"]["description"],
+        "from route"
+    );
+}
+
+#[test]
+fn schema_override_replaces_route_schema() {
+    let config = OpenApiConfig::new("Test", "1.0.0").with_schema_override(
+        "User",
+        json!({"type": "object", "description": "overridden"}),
+    );
+
+    let routes = vec![{
+        let mut r = route("POST", "/users", "create_user");
+        r.request_body_type = Some("User".to_string());
+        r.request_body_schema = Some(json!({"type": "object", "description": "from route"}));
+        r
+    }];
+    let spec = build_spec(&config, &routes);
+    // Override wins over route
+    assert_eq!(
+        spec["components"]["schemas"]["User"]["description"],
+        "overridden"
+    );
+}
+
+#[test]
+fn schema_override_replaces_error_schema() {
+    let config = OpenApiConfig::new("Test", "1.0.0").with_schema_override(
+        "ErrorResponse",
+        json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "integer" },
+                "message": { "type": "string" }
+            }
+        }),
+    );
+    let routes = vec![route("GET", "/test", "test")];
+    let spec = build_spec(&config, &routes);
+    // Override replaces the hardcoded ErrorResponse
+    assert!(spec["components"]["schemas"]["ErrorResponse"]["properties"]["code"].is_object());
+}
+
+#[derive(schemars::JsonSchema)]
+struct Event {
+    kind: String,
+    payload: serde_json::Value,
+}
+
+#[test]
+fn with_schema_generic_method() {
+    let config = OpenApiConfig::new("Test", "1.0.0").with_schema::<Event>();
+    let spec = build_spec(&config, &[]);
+    let event = &spec["components"]["schemas"]["Event"];
+    assert_eq!(event["type"], "object");
+    assert!(event["properties"]["kind"].is_object());
+}
+
+#[test]
+fn with_schema_registry_merges_all() {
+    let mut registry = r2e_openapi::SchemaRegistry::new();
+    registry.register("Alpha", json!({"type": "string"}));
+    registry.register("Beta", json!({"type": "integer"}));
+
+    let config = OpenApiConfig::new("Test", "1.0.0").with_schema_registry(registry);
+    let spec = build_spec(&config, &[]);
+    assert_eq!(spec["components"]["schemas"]["Alpha"]["type"], "string");
+    assert_eq!(spec["components"]["schemas"]["Beta"]["type"], "integer");
+}
+
+#[test]
+fn empty_registry_does_not_affect_spec() {
+    let spec_without = build_spec(&default_config(), &[]);
+    let config_with = OpenApiConfig::new("Test API", "0.1.0");
+    let spec_with = build_spec(&config_with, &[]);
+    // Both specs should have the same structure
+    assert_eq!(
+        spec_without["components"]["schemas"],
+        spec_with["components"]["schemas"]
+    );
+}

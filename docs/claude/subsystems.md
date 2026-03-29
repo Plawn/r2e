@@ -388,7 +388,8 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 - Generates **OpenAPI 3.1.0** specs. Uses **schemars 1.x** (JSON Schema Draft 2020-12) for schema generation.
 - `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page.
 - `OpenApiPlugin` — registers OpenAPI routes. Use `.with(OpenApiPlugin::new(config))` on the builder.
-- `SchemaRegistry` / `SchemaProvider` — JSON Schema collection for request/response types.
+- `SchemaRegistry` — extra schema collection. `register_for::<T: JsonSchema>()` for schemars types, `register(name, value)` for manual schemas. Wire into `OpenApiConfig` via `with_schema::<T>()`, `with_raw_schema(name, json)`, `with_schema_registry(registry)`, `with_schema_override(name, json)`. Precedence: overrides > route schemas > registry > built-in error schemas.
+- `SchemaProvider` — trait for types without `JsonSchema` derive; returns `Cow<'static, str>` name + `Value` schema. Use `SchemaRegistry::register_provider::<T>()` to register.
 - Route metadata is collected from `Controller::route_metadata()` via `RouteInfo` (in `r2e-core/src/meta.rs`).
 - Always serves the spec at `/openapi.json`. When `docs_ui` is enabled, also serves an interactive API documentation UI at `/docs`.
 - **Users must add `schemars = "1"` to their Cargo.toml** and derive `JsonSchema` on request/response types. This is required because `schemars_derive` generates code referencing `schemars::` by crate name (same pattern as serde).

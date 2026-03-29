@@ -55,7 +55,7 @@ r2e-data-sqlx   → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource i
 r2e-data-diesel → Diesel backend (skeleton): DieselRepository, error bridge.
 r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore).
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
-r2e-openapi     → OpenAPI 3.0.3 spec generation, Swagger UI at /docs.
+r2e-openapi     → OpenAPI 3.1.0 spec generation, Swagger UI at /docs.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders, #[derive(TestState)].
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.

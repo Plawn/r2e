@@ -54,7 +54,7 @@ example-app / example-postgres / example-multi-tenant / ...
 | `r2e-data-sqlx` | SQLx backend: SqlxRepository, Tx, HasPool, migrations |
 | `r2e-cache` | TTL cache with pluggable backends |
 | `r2e-rate-limit` | Token-bucket rate limiting |
-| `r2e-openapi` | OpenAPI 3.0.3 spec generation + docs UI |
+| `r2e-openapi` | OpenAPI 3.1.0 spec generation + docs UI |
 | `r2e-utils` | Built-in interceptors: Logged, Timed, Cache, CacheInvalidate |
 | `r2e-test` | TestApp, TestJwt for integration testing |
 | `r2e-cli` | CLI scaffolding tool |

@@ -17,7 +17,7 @@ r2e-data-sqlx    SQLx backend: SqlxRepository, Tx, HasPool, migrations
 r2e-data-diesel  Diesel backend (skeleton)
 r2e-cache        TTL cache with pluggable backends
 r2e-rate-limit   Token-bucket rate limiting with pluggable backends
-r2e-openapi      OpenAPI 3.0.3 spec generation + docs UI
+r2e-openapi      OpenAPI 3.1.0 spec generation + docs UI
 r2e-prometheus   Prometheus metrics middleware
 r2e-observability Structured observability (tracing, metrics)
 r2e-openfga      OpenFGA authorization integration

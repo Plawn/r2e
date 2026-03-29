@@ -35,7 +35,7 @@ r2e = { version = "0.1", features = ["security", "data", "openapi"] }
 | `data` | Data access abstractions (`r2e-data`, `r2e-data-sqlx`) |
 | `cache` | TTL cache with pluggable backends (`r2e-cache`) |
 | `rate-limit` | Token-bucket rate limiting (`r2e-rate-limit`) |
-| `openapi` | OpenAPI 3.0.3 spec generation (`r2e-openapi`) |
+| `openapi` | OpenAPI 3.1.0 spec generation (`r2e-openapi`) |
 | `utils` | Built-in interceptors: Logged, Timed, Cache (`r2e-utils`) |
 | `static` | Embedded static file serving with SPA support (`r2e-static`) |
 | `full` | Enables all features above |

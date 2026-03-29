@@ -41,7 +41,7 @@ impl UserController {
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle (begin/commit/rollback)
 - **Data access** — `Entity`, `Repository`, `QueryBuilder`, and `Pageable`/`Page` for database operations
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
-- **OpenAPI** — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI at `/docs`
+- **OpenAPI** — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI at `/docs`
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
 - **OpenTelemetry** — Distributed tracing and context propagation via OTLP exporter
 - **gRPC** — Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports
@@ -395,7 +395,7 @@ AppBuilder::new()
     .await
     .unwrap();
 
-// GET /openapi.json  — OpenAPI 3.0.3 spec
+// GET /openapi.json  — OpenAPI 3.1.0 spec
 // GET /docs          — interactive API docs
 ```
 
@@ -471,7 +471,7 @@ r2e-data-sqlx     SQLx backend: SqlxRepository, Tx, HasPool (sqlite/postgres/mys
 r2e-data-diesel   Diesel backend (skeleton): DieselRepository (sqlite/postgres/mysql)
 r2e-cache         TTL cache with pluggable backends
 r2e-rate-limit    Token-bucket rate limiting with pluggable backends
-r2e-openapi       OpenAPI 3.0.3 spec generation + docs UI
+r2e-openapi       OpenAPI 3.1.0 spec generation + docs UI
 r2e-prometheus    Prometheus metrics middleware
 r2e-observability OpenTelemetry distributed tracing + context propagation (OTLP)
 r2e-grpc          gRPC server support via Tonic, multiplexed with HTTP

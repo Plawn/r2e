@@ -41,7 +41,11 @@
 //! AppBuilder::new()
 //!     .build_state::<AppState, _, _>().await
 //!     .with(OpenApiPlugin::new(
-//!         OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true),
+//!         OpenApiConfig::new("My API", "1.0.0")
+//!             .with_docs_ui(true)
+//!             // Extra schemas not in any route:
+//!             .with_schema::<WsMessage>()
+//!             .with_raw_schema("Legacy", json!({...})),
 //!     ))
 //!     .register_controller::<UserController>()
 //!     .serve("0.0.0.0:3000").await.unwrap();

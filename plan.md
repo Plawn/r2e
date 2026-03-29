@@ -28,7 +28,7 @@ r2e/
  ├─ r2e-data/         # Entity, QueryBuilder, Repository, Pageable/Page
  ├─ r2e-cache/        # TtlCache, CacheStore trait, InMemoryStore
  ├─ r2e-rate-limit/   # Token-bucket RateLimiter, RateLimitRegistry
- ├─ r2e-openapi/      # OpenAPI 3.0.3 generation + Swagger UI
+ ├─ r2e-openapi/      # OpenAPI 3.1.0 generation + Swagger UI
  ├─ r2e-utils/        # Built-in interceptors (Logged, Timed, Cache, CacheInvalidate)
  ├─ r2e-test/         # TestApp, TestJwt for integration tests
  ├─ r2e-cli/          # CLI: r2e new/add/dev/generate
@@ -311,7 +311,7 @@ proc-macro2
 * ✅ `r2e-data` — Entity, QueryBuilder, Repository, pagination
 * ✅ `r2e-cache` — TtlCache + pluggable CacheStore
 * ✅ `r2e-rate-limit` — Pluggable token-bucket rate limiting
-* ✅ `r2e-openapi` — OpenAPI 3.0.3 spec + Swagger UI
+* ✅ `r2e-openapi` — OpenAPI 3.1.0 spec + Swagger UI
 * ✅ `r2e-utils` — Built-in interceptors (Logged, Timed, Cache, CacheInvalidate)
 * ✅ `r2e-test` — TestApp + TestJwt
 * ✅ `r2e-cli` — Scaffold and dev-mode

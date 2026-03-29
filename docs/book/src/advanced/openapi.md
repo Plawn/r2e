@@ -227,3 +227,76 @@ This produces a spec with:
 | `new(title, version)` | Create config with title and version |
 | `with_description(desc)` | Set API description |
 | `with_docs_ui(true)` | Enable interactive docs at `/docs` |
+| `with_schema::<T>()` | Register an extra schema for `T: JsonSchema` |
+| `with_raw_schema(name, json)` | Add a manually-crafted JSON schema |
+| `with_schema_registry(registry)` | Merge a pre-built `SchemaRegistry` |
+| `with_schema_override(name, json)` | Override an auto-generated schema |
+
+## Extra schemas
+
+Route request/response types are included automatically. Use the schema methods for types that don't appear in any route but should still be in the spec (WebSocket messages, domain events, shared DTOs, etc.).
+
+### Register a `JsonSchema` type
+
+```rust
+use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
+
+OpenApiConfig::new("My API", "1.0.0")
+    .with_schema::<WsMessage>()
+    .with_schema::<DomainEvent>()
+    .with_docs_ui(true)
+```
+
+### Manual schema (no `JsonSchema` derive)
+
+```rust
+use serde_json::json;
+
+OpenApiConfig::new("My API", "1.0.0")
+    .with_raw_schema("ExternalThing", json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "status": { "type": "string", "enum": ["active", "inactive"] }
+        }
+    }))
+```
+
+### Override an auto-generated schema
+
+Override takes precedence over both route-derived and registry schemas:
+
+```rust
+OpenApiConfig::new("My API", "1.0.0")
+    .with_schema_override("ErrorResponse", json!({
+        "type": "object",
+        "properties": {
+            "code": { "type": "integer" },
+            "message": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } }
+        }
+    }))
+```
+
+### Bulk registration with `SchemaRegistry`
+
+```rust
+use r2e::r2e_openapi::{SchemaRegistry, OpenApiConfig};
+
+let mut registry = SchemaRegistry::new();
+registry.register_for::<WsMessage>();
+registry.register_for::<DomainEvent>();
+registry.register("Legacy", json!({"type": "object"}));
+
+OpenApiConfig::new("My API", "1.0.0")
+    .with_schema_registry(registry)
+```
+
+### Schema precedence
+
+When the same name appears from multiple sources:
+
+1. **Overrides** (`with_schema_override`) — highest priority
+2. **Route-derived schemas** — from request/response types
+3. **Registry schemas** — from `with_schema`, `with_raw_schema`, `with_schema_registry`
+4. **Built-in error schemas** — `ErrorResponse`, `ValidationErrorResponse`, `FieldError`
