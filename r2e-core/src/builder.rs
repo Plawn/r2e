@@ -27,6 +27,14 @@ type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> +
 /// Tasks already have their state captured, so only the token is needed.
 type ServeHook = Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>;
 
+/// Resolve the active profile: `R2E_PROFILE` env > `r2e.profile` config > `"default"`.
+fn resolve_profile(config: &crate::config::R2eConfig) -> String {
+    std::env::var("R2E_PROFILE")
+        .ok()
+        .or_else(|| config.try_get::<String>("r2e.profile"))
+        .unwrap_or_else(|| "default".to_string())
+}
+
 /// Marker type: application state has not been set yet.
 ///
 /// `AppBuilder<NoState>` is the initial phase returned by [`AppBuilder::new()`].
@@ -56,6 +64,9 @@ struct BuilderConfig {
     /// Maximum time allowed for shutdown hooks to complete before force-exiting.
     /// `None` means wait indefinitely (default).
     shutdown_grace_period: Option<Duration>,
+    /// Active profile name, resolved from `R2E_PROFILE` env var, `r2e.profile`
+    /// config key, or `"default"`.
+    active_profile: String,
 }
 
 /// Builder for assembling a R2E application.
@@ -112,6 +123,7 @@ impl AppBuilder<NoState, TNil, TNil> {
                 normalize_path: false,
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
+                active_profile: "default".to_string(),
             },
             state: None,
             routes: Vec::new(),
@@ -292,6 +304,105 @@ impl<P, R> AppBuilder<NoState, P, R> {
             .unwrap_or(false)
     }
 
+    // ── Profile-based registration ─────────────────────────────────────
+
+    /// Returns the active profile name.
+    ///
+    /// Resolved (in priority order) from:
+    /// 1. `R2E_PROFILE` environment variable
+    /// 2. `r2e.profile` config key
+    /// 3. `"default"` (fallback)
+    ///
+    /// The profile is set when [`load_config`](Self::load_config) or
+    /// [`with_config`](Self::with_config) is called. Before that, it is
+    /// `"default"`.
+    pub fn active_profile(&self) -> &str {
+        &self.shared.active_profile
+    }
+
+    /// Register a bean only if the active profile matches.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    pub fn with_bean_for_profile<B: Bean>(self, profile: &str) -> Self {
+        let matches = self.shared.active_profile == profile;
+        self.with_bean_when::<B>(matches)
+    }
+
+    /// Register an async bean only if the active profile matches.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    pub fn with_async_bean_for_profile<B: AsyncBean>(self, profile: &str) -> Self {
+        let matches = self.shared.active_profile == profile;
+        self.with_async_bean_when::<B>(matches)
+    }
+
+    /// Register a producer only if the active profile matches.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
+    pub fn with_producer_for_profile<Pr: Producer>(self, profile: &str) -> Self {
+        let matches = self.shared.active_profile == profile;
+        self.with_producer_when::<Pr>(matches)
+    }
+
+    // ── Default / Alternative bean registration ────────────────────────
+
+    /// Register a default bean that can be overridden by alternatives.
+    ///
+    /// The bean IS added to the provision list (guaranteed to be present).
+    /// A later call to [`with_alternative_bean_when`](Self::with_alternative_bean_when)
+    /// for the same type will silently replace this registration.
+    pub fn with_default_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    where
+        R: TAppend<B::Deps>,
+    {
+        self.shared.bean_registry.register_default::<B>();
+        self.with_updated_types()
+    }
+
+    /// Register a default async bean that can be overridden by alternatives.
+    ///
+    /// The bean IS added to the provision list (guaranteed to be present).
+    pub fn with_default_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    where
+        R: TAppend<B::Deps>,
+    {
+        self.shared.bean_registry.register_async_default::<B>();
+        self.with_updated_types()
+    }
+
+    /// Register a default producer that can be overridden by alternatives.
+    ///
+    /// The producer's output IS added to the provision list (guaranteed to be present).
+    pub fn with_default_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>, <R as TAppend<Pr::Deps>>::Output>
+    where
+        R: TAppend<Pr::Deps>,
+    {
+        self.shared.bean_registry.register_producer_default::<Pr>();
+        self.with_updated_types()
+    }
+
+    /// Register an alternative bean that replaces the default when the condition is true.
+    ///
+    /// Does NOT change the provision list — the default already covers it.
+    /// If the condition is false, the default remains.
+    pub fn with_alternative_bean_when<B: Bean>(self, condition: bool) -> Self {
+        self.with_bean_when::<B>(condition)
+    }
+
+    /// Register an alternative async bean that replaces the default when the condition is true.
+    ///
+    /// Does NOT change the provision list — the default already covers it.
+    pub fn with_alternative_async_bean_when<B: AsyncBean>(self, condition: bool) -> Self {
+        self.with_async_bean_when::<B>(condition)
+    }
+
+    /// Register an alternative producer that replaces the default when the condition is true.
+    ///
+    /// Does NOT change the provision list — the default already covers it.
+    pub fn with_alternative_producer_when<Pr: Producer>(self, condition: bool) -> Self {
+        self.with_producer_when::<Pr>(condition)
+    }
+
     /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
     ///
     /// The closure receives a reference to the resolved config and returns
@@ -339,6 +450,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
         mut self,
         config: crate::config::R2eConfig,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
+        self.shared.active_profile = resolve_profile(&config);
         self.shared.config = Some(config.clone());
         self.shared.bean_registry.provide(config);
         self.with_updated_types()
@@ -377,6 +489,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
             .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
         C::register(&config, &mut self.shared.bean_registry)
             .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
+        self.shared.active_profile = resolve_profile(&config);
         self.shared.config = Some(config.clone());
         self.shared.bean_registry.provide(config);
         self.with_updated_types()

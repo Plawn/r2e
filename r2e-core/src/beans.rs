@@ -1,5 +1,5 @@
 use std::any::{type_name, Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 #[cfg(feature = "dev-reload")]
@@ -292,6 +292,9 @@ struct BeanRegistration {
     factory: Factory,
     /// Optional post-construct callback, set via `register_post_construct`.
     post_construct: Option<PostConstructFn>,
+    /// When `true`, this registration can be replaced by a later registration
+    /// of the same `TypeId` (used by the default/alternative bean pattern).
+    overridable: bool,
 }
 
 /// Errors that can occur during bean graph resolution.
@@ -372,6 +375,19 @@ impl BeanRegistry {
     /// The bean's dependencies will be resolved from other beans or provided
     /// instances during [`resolve`](Self::resolve).
     pub fn register<T: Bean>(&mut self) -> &mut Self {
+        self.register_inner::<T>(false)
+    }
+
+    /// Register a default (sync) bean that can be overridden by an alternative.
+    ///
+    /// Same as [`register`](Self::register) but marks the registration as
+    /// overridable: a later registration of the same `TypeId` will silently
+    /// replace it (used by the default/alternative bean pattern).
+    pub fn register_default<T: Bean>(&mut self) -> &mut Self {
+        self.register_inner::<T>(true)
+    }
+
+    fn register_inner<T: Bean>(&mut self, overridable: bool) -> &mut Self {
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
@@ -385,6 +401,7 @@ impl BeanRegistry {
                 })
             }),
             post_construct: None,
+            overridable,
         });
         T::after_register(self);
         self
@@ -394,6 +411,15 @@ impl BeanRegistry {
     ///
     /// The bean's constructor is awaited during resolution.
     pub fn register_async<T: AsyncBean>(&mut self) -> &mut Self {
+        self.register_async_inner::<T>(false)
+    }
+
+    /// Register a default async bean that can be overridden by an alternative.
+    pub fn register_async_default<T: AsyncBean>(&mut self) -> &mut Self {
+        self.register_async_inner::<T>(true)
+    }
+
+    fn register_async_inner<T: AsyncBean>(&mut self, overridable: bool) -> &mut Self {
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
@@ -407,6 +433,7 @@ impl BeanRegistry {
                 })
             }),
             post_construct: None,
+            overridable,
         });
         T::after_register(self);
         self
@@ -457,6 +484,7 @@ impl BeanRegistry {
                 })
             }),
             post_construct: None,
+            overridable: false,
         });
     }
 
@@ -465,6 +493,15 @@ impl BeanRegistry {
     /// The producer is awaited during resolution. The resulting bean is
     /// registered under the producer's `Output` type.
     pub fn register_producer<P: Producer>(&mut self) -> &mut Self {
+        self.register_producer_inner::<P>(false)
+    }
+
+    /// Register a default producer that can be overridden by an alternative.
+    pub fn register_producer_default<P: Producer>(&mut self) -> &mut Self {
+        self.register_producer_inner::<P>(true)
+    }
+
+    fn register_producer_inner<P: Producer>(&mut self, overridable: bool) -> &mut Self {
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<P::Output>(),
             type_name: type_name::<P::Output>(),
@@ -478,6 +515,7 @@ impl BeanRegistry {
                 })
             }),
             post_construct: None,
+            overridable,
         });
         self
     }
@@ -498,19 +536,24 @@ impl BeanRegistry {
     pub fn compute_fingerprint(&self) -> Result<(u64, Vec<(TypeId, &'static str, u64)>), BeanError> {
         // Work on a snapshot of bean metadata to handle deduplication
         // without mutating self (resolve() will do the real dedup later).
+        let alt_remove = Self::overridable_indices_to_remove(&self.beans);
+
         let beans: Vec<&BeanRegistration> = if self.allow_overrides {
             // Deduplicate: keep only the last registration per TypeId
             let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
             for (i, reg) in self.beans.iter().enumerate() {
                 last_seen.insert(reg.type_id, i);
             }
-            let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
+            let keep: HashSet<usize> = last_seen.values().copied().collect();
             self.beans.iter().enumerate()
-                .filter(|(i, _)| keep.contains(i))
+                .filter(|(i, _)| keep.contains(i) && !alt_remove.contains(i))
                 .map(|(_, reg)| reg)
                 .collect()
         } else {
-            self.beans.iter().collect()
+            self.beans.iter().enumerate()
+                .filter(|(i, _)| !alt_remove.contains(i))
+                .map(|(_, reg)| reg)
+                .collect()
         };
 
         let bean_count = beans.len();
@@ -599,6 +642,10 @@ impl BeanRegistry {
             entries.insert(tid, value);
         }
 
+        // Resolve default/alternative beans: remove overridable registrations
+        // that have been superseded by a later registration of the same TypeId.
+        Self::resolve_alternatives(&mut self.beans);
+
         // When overrides are allowed, deduplicate beans (last registration wins).
         if self.allow_overrides {
             Self::deduplicate_beans(&mut self.beans, &mut entries);
@@ -643,6 +690,53 @@ impl BeanRegistry {
         }
 
         Ok(ctx)
+    }
+
+    /// Compute the set of indices whose registrations are overridable and
+    /// have been superseded by a later registration of the same `TypeId`.
+    fn overridable_indices_to_remove(beans: &[BeanRegistration]) -> HashSet<usize> {
+        if !beans.iter().any(|r| r.overridable) {
+            return HashSet::new();
+        }
+
+        let mut type_indices: HashMap<TypeId, Vec<(usize, bool)>> = HashMap::new();
+        for (i, reg) in beans.iter().enumerate() {
+            type_indices
+                .entry(reg.type_id)
+                .or_default()
+                .push((i, reg.overridable));
+        }
+
+        let mut remove = HashSet::new();
+        for indices in type_indices.values() {
+            if indices.len() <= 1 {
+                continue;
+            }
+            let last_idx = indices.last().unwrap().0;
+            for &(idx, overridable) in indices {
+                if idx != last_idx && overridable {
+                    remove.insert(idx);
+                }
+            }
+        }
+        remove
+    }
+
+    /// Remove overridable (default) registrations that have been superseded
+    /// by a later (alternative) registration of the same `TypeId`.
+    ///
+    /// This runs before the global deduplication / duplicate-check so that
+    /// the default/alternative pattern works regardless of `allow_overrides`.
+    fn resolve_alternatives(beans: &mut Vec<BeanRegistration>) {
+        let remove = Self::overridable_indices_to_remove(beans);
+        if !remove.is_empty() {
+            let mut idx = 0;
+            beans.retain(|_| {
+                let keep = !remove.contains(&idx);
+                idx += 1;
+                keep
+            });
+        }
     }
 
     /// Deduplicate beans when overrides are enabled: last registration wins.
