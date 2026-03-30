@@ -1,5 +1,6 @@
 pub mod beans;
 pub mod builder;
+pub mod lazy;
 pub mod config;
 pub mod controller;
 pub mod dev;
@@ -32,6 +33,7 @@ pub mod multipart;
 pub mod ws;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
+pub use lazy::Lazy;
 pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,

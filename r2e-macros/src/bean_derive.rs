@@ -6,7 +6,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::unwrap_option_type;
+use crate::type_utils::{unwrap_option_type, parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -51,11 +51,18 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let field_type = &field.ty;
 
         let is_inject = field.attrs.iter().any(|a| a.path().is_ident("inject"));
+        let inject_name = parse_inject_name(&field.attrs)?;
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
         let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
 
         if is_inject {
-            if let Some(inner_ty) = unwrap_option_type(field_type) {
+            if let Some(name) = inject_name {
+                // Named injection: resolve via generated newtype, unwrap with .0
+                let newtype_ident = named_bean_newtype_ident(&name, field_type);
+                dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
+                dep_types.push(quote! { #newtype_ident });
+                field_inits.push(quote! { #field_name: ctx.get::<#newtype_ident>().0 });
+            } else if let Some(inner_ty) = unwrap_option_type(field_type) {
                 field_inits.push(quote! { #field_name: ctx.try_get::<#inner_ty>() });
             } else {
                 dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
@@ -147,25 +154,3 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Parse `#[config_section(prefix = "...")]` and return the prefix string.
-fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String> {
-    let mut prefix: Option<String> = None;
-    if let syn::Meta::List(_) = &attr.meta {
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("prefix") {
-                let value = meta.value()?;
-                let lit: syn::LitStr = value.parse()?;
-                prefix = Some(lit.value());
-                Ok(())
-            } else {
-                Err(meta.error("expected `prefix` in #[config_section(prefix = \"...\")]"))
-            }
-        })?;
-    }
-    prefix.ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
-        )
-    })
-}

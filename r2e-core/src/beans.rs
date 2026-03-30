@@ -5,6 +5,7 @@ use std::future::Future;
 #[cfg(feature = "dev-reload")]
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
+use std::sync::Arc;
 
 // ── Traits ──────────────────────────────────────────────────────────────────
 
@@ -200,32 +201,86 @@ pub trait BeanState: Clone + Send + Sync + 'static {
 /// Read-only container holding all resolved bean instances.
 ///
 /// Produced by [`BeanRegistry::resolve`]. Each entry is keyed by [`TypeId`].
+///
+/// Internally uses a two-layer design: a shared `Arc` base (which lazy bean
+/// factories can cheaply snapshot) plus an overlay for newly added entries.
+/// This avoids `Arc::try_unwrap` failures when lazy factories hold snapshots.
 pub struct BeanContext {
-    entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    /// Shared base entries. May be referenced by lazy bean factories.
+    base: Arc<HashMap<TypeId, Box<dyn Any + Send + Sync>>>,
+    /// Overlay: entries added after the base was created. Checked first by `get()`.
+    overlay: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl Clone for BeanContext {
+    fn clone(&self) -> Self {
+        Self {
+            base: Arc::clone(&self.base),
+            // Lazy snapshots don't need the overlay — they only depend on
+            // beans that were already constructed (i.e., in the base).
+            // But to keep Clone simple, we share the base and start a
+            // fresh overlay. This is only used by lazy factories.
+            overlay: HashMap::new(),
+        }
+    }
 }
 
 impl fmt::Debug for BeanContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BeanContext")
-            .field("entry_count", &self.entries.len())
+            .field("base_count", &self.base.len())
+            .field("overlay_count", &self.overlay.len())
             .finish()
     }
 }
 
 impl BeanContext {
-    /// Create a new BeanContext with the given entries.
+    /// Create a new BeanContext wrapping the given entries as the shared base.
     fn new(entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> Self {
-        Self { entries }
+        Self {
+            base: Arc::new(entries),
+            overlay: HashMap::new(),
+        }
+    }
+
+    /// Insert a new entry, creating a new context that shares the same base.
+    ///
+    /// If the base `Arc` has no other references, the new entry is merged
+    /// into the base directly (zero overhead). Otherwise the entry goes
+    /// into the overlay (which is checked first by `get()`).
+    fn with_new_entry(
+        mut self,
+        type_id: TypeId,
+        value: Box<dyn Any + Send + Sync>,
+    ) -> Self {
+        // Fast path: if we're the sole owner of the base, merge everything
+        // into a single HashMap for the next iteration.
+        if let Some(base) = Arc::get_mut(&mut self.base) {
+            // Drain overlay into base first
+            for (k, v) in self.overlay.drain() {
+                base.insert(k, v);
+            }
+            base.insert(type_id, value);
+        } else {
+            // A lazy factory holds a snapshot of the base. New entries
+            // go into the overlay.
+            self.overlay.insert(type_id, value);
+        }
+        self
     }
 
     /// Retrieve a bean by type, cloning it out of the context.
+    ///
+    /// Checks the overlay first, then falls back to the shared base.
     ///
     /// # Panics
     ///
     /// Panics if the requested type was not registered or provided.
     pub fn get<T: Clone + 'static>(&self) -> T {
-        self.entries
-            .get(&TypeId::of::<T>())
+        let tid = TypeId::of::<T>();
+        self.overlay
+            .get(&tid)
+            .or_else(|| self.base.get(&tid))
             .and_then(|v| v.downcast_ref::<T>())
             .unwrap_or_else(|| {
                 panic!(
@@ -238,8 +293,10 @@ impl BeanContext {
 
     /// Try to retrieve a bean by type, returning `None` if absent.
     pub fn try_get<T: Clone + 'static>(&self) -> Option<T> {
-        self.entries
-            .get(&TypeId::of::<T>())
+        let tid = TypeId::of::<T>();
+        self.overlay
+            .get(&tid)
+            .or_else(|| self.base.get(&tid))
             .and_then(|v| v.downcast_ref::<T>())
             .cloned()
     }
@@ -520,6 +577,67 @@ impl BeanRegistry {
         self
     }
 
+    /// Register a lazy async bean: stores `Lazy<T>` in the context instead of `T`.
+    ///
+    /// The bean's constructor is NOT called during `resolve()`. Instead, a
+    /// [`Lazy<T>`](crate::lazy::Lazy) wrapper is placed in the context. The
+    /// actual construction happens on first `.get().await`.
+    ///
+    /// Consumers must declare `Lazy<T>` (not `T`) as their dependency.
+    pub fn register_lazy_async<T: AsyncBean>(&mut self) -> &mut Self {
+        use crate::lazy::Lazy;
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<Lazy<T>>(),
+            type_name: type_name::<Lazy<T>>(),
+            dependencies: T::dependencies(),
+            config_keys: T::config_keys(),
+            build_version: T::BUILD_VERSION,
+            factory: Box::new(|ctx| {
+                Box::pin(async move {
+                    // Clone captures a snapshot of the current base Arc.
+                    // The construction loop's `with_new_entry` will detect
+                    // the extra Arc reference and use the overlay for
+                    // subsequent entries, avoiding a try_unwrap panic.
+                    let snapshot = ctx.clone();
+                    let lazy = Lazy::new(move || {
+                        Box::pin(async move { T::build(&snapshot).await })
+                    });
+                    (ctx, Box::new(lazy) as Box<dyn Any + Send + Sync>)
+                })
+            }),
+            post_construct: None,
+            overridable: false,
+        });
+        self
+    }
+
+    /// Register a lazy (sync) bean: stores `Lazy<T>` in the context instead of `T`.
+    ///
+    /// Same as [`register_lazy_async`](Self::register_lazy_async) but for
+    /// synchronous [`Bean`] implementations.
+    pub fn register_lazy<T: Bean>(&mut self) -> &mut Self {
+        use crate::lazy::Lazy;
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<Lazy<T>>(),
+            type_name: type_name::<Lazy<T>>(),
+            dependencies: T::dependencies(),
+            config_keys: T::config_keys(),
+            build_version: T::BUILD_VERSION,
+            factory: Box::new(|ctx| {
+                Box::pin(async move {
+                    let snapshot = ctx.clone();
+                    let lazy = Lazy::new(move || {
+                        Box::pin(async move { T::build(&snapshot) })
+                    });
+                    (ctx, Box::new(lazy) as Box<dyn Any + Send + Sync>)
+                })
+            }),
+            post_construct: None,
+            overridable: false,
+        });
+        self
+    }
+
     /// Compute the graph fingerprint without constructing any beans.
     ///
     /// Performs deduplication (when overrides are enabled), topological sorting,
@@ -678,9 +796,7 @@ impl BeanRegistry {
             .collect();
 
         // Construct beans in order (async)
-        entries = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
-
-        let mut ctx = BeanContext::new(entries);
+        let mut ctx = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
 
         // Run post-construct hooks in topological order
         for pc_fn in pc_fns.into_iter().flatten() {
@@ -942,28 +1058,31 @@ impl BeanRegistry {
     }
 
     /// Construct beans in topological order (async).
+    ///
+    /// Factories receive a `BeanContext` (entries behind `Arc`) and return it.
+    /// Lazy bean factories may clone the context to capture a dependency
+    /// snapshot. When that happens, `Arc::get_mut` fails and new entries go
+    /// into the overlay. This two-layer design avoids the `Arc::try_unwrap`
+    /// panic that would otherwise occur.
     async fn construct_beans_in_order(
         beans: Vec<BeanRegistration>,
         sorted_order: Vec<usize>,
-        mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    ) -> HashMap<TypeId, Box<dyn Any + Send + Sync>> {
-        // Move factories and type_ids out so we can consume them one by one.
+        entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) -> BeanContext {
         let mut bean_data: Vec<Option<(TypeId, Factory)>> = beans
             .into_iter()
             .map(|r| Some((r.type_id, r.factory)))
             .collect();
 
+        let mut ctx = BeanContext::new(entries);
+
         for idx in sorted_order {
             let (type_id, factory) = bean_data[idx].take().unwrap();
-            // Move entries into a BeanContext so the factory can call ctx.get::<T>().
-            // The factory returns entries back along with the constructed bean.
-            let ctx = BeanContext::new(entries);
             let (returned_ctx, bean_value) = factory(ctx).await;
-            entries = returned_ctx.entries;
-            entries.insert(type_id, bean_value);
+            ctx = returned_ctx.with_new_entry(type_id, bean_value);
         }
 
-        entries
+        ctx
     }
 }
 

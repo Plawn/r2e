@@ -761,8 +761,8 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     .await
 /// ```
 #[proc_macro_attribute]
-pub fn producer(_args: TokenStream, input: TokenStream) -> TokenStream {
-    producer_attr::expand(input)
+pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
+    producer_attr::expand(args, input)
 }
 
 /// Derive macro for simple beans whose `#[inject]` fields are resolved

@@ -68,6 +68,7 @@ pub use r2e_macros::ApiError;
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
 pub use crate::builder::{AppBuilder, PreparedApp};
+pub use crate::lazy::Lazy;
 pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::{HttpError, HttpErrorExt};

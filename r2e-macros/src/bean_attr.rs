@@ -7,7 +7,7 @@ use crate::crate_path::{r2e_core_path, r2e_events_path};
 use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::unwrap_option_type;
+use crate::type_utils::{unwrap_option_type, parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
 
 /// Parsed consumer method data from a `#[bean]` impl block.
 struct BeanConsumerMethod {
@@ -69,11 +69,20 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
                 let ty = &*pat_type.ty;
                 let arg_name = syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
 
+                // Check for #[inject(name = "...")] attribute
+                let inject_name = parse_inject_name(&pat_type.attrs)?;
+
                 // Check for #[config("key")] or #[config_section(prefix = "...")] attribute
                 let config_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config"));
                 let config_section_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config_section"));
 
-                if let Some(attr) = config_section_attr {
+                if let Some(name) = inject_name {
+                    // Named injection: resolve via generated newtype
+                    let newtype_ident = named_bean_newtype_ident(&name, ty);
+                    dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
+                    dep_types.push(quote! { #newtype_ident });
+                    build_args.push(quote! { let #arg_name: #ty = ctx.get::<#newtype_ident>().0; });
+                } else if let Some(attr) = config_section_attr {
                     let prefix_str = parse_config_section_prefix(attr)?;
                     let krate = r2e_core_path();
                     build_args.push(quote! {
@@ -540,31 +549,9 @@ fn returns_self(ret: &ReturnType, self_ty: &Type) -> bool {
     }
 }
 
-/// Parse `#[config_section(prefix = "...")]` and return the prefix string.
-fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String> {
-    let mut prefix: Option<String> = None;
-    if let syn::Meta::List(_) = &attr.meta {
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("prefix") {
-                let value = meta.value()?;
-                let lit: syn::LitStr = value.parse()?;
-                prefix = Some(lit.value());
-                Ok(())
-            } else {
-                Err(meta.error("expected `prefix` in #[config_section(prefix = \"...\")]"))
-            }
-        })?;
-    }
-    prefix.ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
-        )
-    })
-}
 
-/// Strip `#[config(...)]` and `#[config_section(...)]` attributes from the constructor parameters and
-/// `#[consumer(...)]` attributes from methods in the emitted impl block.
+/// Strip `#[config(...)]`, `#[config_section(...)]`, and `#[inject(...)]` attributes from
+/// the constructor parameters and `#[consumer(...)]` attributes from methods in the emitted impl block.
 fn strip_attrs_from_impl(item_impl: &ItemImpl) -> TokenStream2 {
     let mut items: Vec<TokenStream2> = Vec::new();
 
@@ -588,7 +575,11 @@ fn strip_attrs_from_impl(item_impl: &ItemImpl) -> TokenStream2 {
                         FnArg::Receiver(r) => quote! { #r },
                         FnArg::Typed(pt) => {
                             let non_config_attrs: Vec<_> = pt.attrs.iter()
-                                .filter(|a| !a.path().is_ident("config") && !a.path().is_ident("config_section"))
+                                .filter(|a| {
+                                    !a.path().is_ident("config")
+                                    && !a.path().is_ident("config_section")
+                                    && !a.path().is_ident("inject")
+                                })
                                 .collect();
                             let pat = &pt.pat;
                             let ty = &pt.ty;

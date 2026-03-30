@@ -6,11 +6,41 @@ use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::unwrap_option_type;
+use crate::type_utils::{unwrap_option_type, to_pascal_case, type_base_name, parse_config_section_prefix};
 
-pub fn expand(input: TokenStream) -> TokenStream {
+/// Parsed `#[producer(...)]` arguments.
+struct ProducerArgs {
+    /// If present, the `name = "..."` qualifier for named beans.
+    name: Option<String>,
+}
+
+impl ProducerArgs {
+    fn parse(args: TokenStream) -> syn::Result<Self> {
+        let mut name = None;
+        if !args.is_empty() {
+            let parser = syn::meta::parser(|meta| {
+                if meta.path.is_ident("name") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    name = Some(lit.value());
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `name = \"...\"`"))
+                }
+            });
+            syn::parse::Parser::parse(parser, args)?;
+        }
+        Ok(Self { name })
+    }
+}
+
+pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
+    let producer_args = match ProducerArgs::parse(args) {
+        Ok(a) => a,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let item_fn = parse_macro_input!(input as ItemFn);
-    match generate(&item_fn) {
+    match generate(&item_fn, &producer_args) {
         Ok(output) => {
             let output = quote! {
                 #output
@@ -21,7 +51,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     }
 }
 
-fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
+fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> {
     let fn_name = &item_fn.sig.ident;
     let is_async = item_fn.sig.asyncness.is_some();
 
@@ -175,15 +205,42 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
     let fn_asyncness = &item_fn.sig.asyncness;
     let ret_ty = &item_fn.sig.output;
 
+    // If name = "..." is specified, generate a newtype wrapper
+    let (effective_output_ty, newtype_decl, produce_body) = if let Some(ref name) = args.name {
+        let newtype_name = format!("{}{}", to_pascal_case(name), type_base_name(&output_ty));
+        let newtype_ident = syn::Ident::new(&newtype_name, fn_name.span());
+        let doc = format!("Generated newtype for named bean `{}`.", name);
+        let newtype = quote! {
+            #[doc = #doc]
+            #[derive(Clone)]
+            #vis struct #newtype_ident(pub #output_ty);
+
+            impl ::std::ops::Deref for #newtype_ident {
+                type Target = #output_ty;
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+        };
+        let wrapped_ty: TokenStream2 = quote! { #newtype_ident };
+        let wrap = quote! { #newtype_ident(#call) };
+        (wrapped_ty, newtype, wrap)
+    } else {
+        (quote! { #output_ty }, quote! {}, call)
+    };
+
     Ok(quote! {
         // Emit the original function with cleaned params
         #vis #fn_asyncness fn #fn_name(#(#clean_params),*) #ret_ty #fn_body
+
+        // Generated newtype (if named)
+        #newtype_decl
 
         // Generated producer struct
         #vis struct #struct_ident;
 
         impl #krate::beans::Producer for #struct_ident {
-            type Output = #output_ty;
+            type Output = #effective_output_ty;
             type Deps = #deps_type;
 
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -199,44 +256,9 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
             async fn produce(ctx: &#krate::beans::BeanContext) -> Self::Output {
                 #config_prelude
                 #(#build_args)*
-                #call
+                #produce_body
             }
         }
     })
 }
 
-/// Parse `#[config_section(prefix = "...")]` and return the prefix string.
-fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String> {
-    let mut prefix: Option<String> = None;
-    if let syn::Meta::List(_) = &attr.meta {
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("prefix") {
-                let value = meta.value()?;
-                let lit: syn::LitStr = value.parse()?;
-                prefix = Some(lit.value());
-                Ok(())
-            } else {
-                Err(meta.error("expected `prefix` in #[config_section(prefix = \"...\")]"))
-            }
-        })?;
-    }
-    prefix.ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
-        )
-    })
-}
-
-/// Convert a snake_case name to PascalCase.
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect()
-}
