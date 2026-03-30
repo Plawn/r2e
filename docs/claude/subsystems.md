@@ -14,6 +14,12 @@ AppBuilder::new()
     .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
     .with_async_bean::<MyAsyncService>()   // async bean constructor
     .with_bean::<UserService>()            // sync bean (unchanged)
+    // ── Conditional registration (NOT in provision list P — consumers use Option<T>) ──
+    .with_bean_when::<RedisCache>(use_redis)            // register if runtime bool is true
+    .with_async_bean_when::<SmtpMailer>(smtp_enabled)   // async variant
+    .with_producer_when::<CreateMetrics>(has_metrics)    // producer variant
+    .with_bean_on_config::<MetricsCollector>("metrics.enabled")  // register if config key is truthy
+    .with_async_bean_on_config::<SmtpMailer>("smtp.enabled")     // async + config key
     // config sections are auto-registered as beans by load_config (inject with #[inject])
     .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
     .await

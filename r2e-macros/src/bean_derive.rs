@@ -6,6 +6,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
+use crate::type_utils::unwrap_option_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -54,9 +55,13 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
 
         if is_inject {
-            dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
-            dep_types.push(quote! { #field_type });
-            field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
+            if let Some(inner_ty) = unwrap_option_type(field_type) {
+                field_inits.push(quote! { #field_name: ctx.try_get::<#inner_ty>() });
+            } else {
+                dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
+                dep_types.push(quote! { #field_type });
+                field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
+            }
         } else if let Some(attr) = config_section_attr {
             let prefix_str = parse_config_section_prefix(attr)?;
             field_inits.push(quote! {

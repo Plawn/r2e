@@ -14,21 +14,7 @@ pub struct RoutesImplDef {
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
-/// Try to unwrap `Option<T>` → `Some(T)`, or `None` if not an Option.
-fn unwrap_option_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
+use crate::type_utils::unwrap_option_type;
 
 /// Detect `#[inject(identity)]` or legacy `#[identity]` on handler parameters.
 /// Returns the parameter index (among typed params, excluding `&self`) and the

@@ -27,6 +27,7 @@ pub(crate) mod params_derive;
 pub(crate) mod api_error_derive;
 pub(crate) mod hash_tokens;
 pub(crate) mod main_attr;
+pub(crate) mod type_utils;
 
 /// Derive macro for declaring a R2E controller struct.
 ///

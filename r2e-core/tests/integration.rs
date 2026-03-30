@@ -485,6 +485,160 @@ async fn build_state_with_config_injection() {
     assert_eq!(status, StatusCode::OK);
 }
 
+// ── E.2b Conditional Bean Registration ───────────────────────────────────
+
+// State with an optional dependency
+#[derive(Clone)]
+struct OptionalDepState {
+    dep: TestDep,
+    service: Option<TestService>,
+}
+
+impl BeanState for OptionalDepState {
+    fn from_context(ctx: &BeanContext) -> Self {
+        Self {
+            dep: ctx.get::<TestDep>(),
+            service: ctx.try_get::<TestService>(),
+        }
+    }
+}
+
+// Only TestDep is required — TestService is optional
+impl<P, I0> BuildableFrom<P, (I0,)> for OptionalDepState
+where
+    P: Contains<TestDep, I0>,
+{
+}
+
+#[tokio::test]
+async fn with_bean_when_true_provides_some() {
+    let app = AppBuilder::new()
+        .provide(TestDep(1))
+        .with_bean_when::<TestService>(true)
+        .build_state::<OptionalDepState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_bean_when_false_provides_none() {
+    let app = AppBuilder::new()
+        .provide(TestDep(2))
+        .with_bean_when::<TestService>(false)
+        .build_state::<OptionalDepState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_async_bean_when_true() {
+    // State with optional async service
+    #[derive(Clone)]
+    struct OptionalAsyncState {
+        service: Option<AsyncService>,
+    }
+    impl BeanState for OptionalAsyncState {
+        fn from_context(ctx: &BeanContext) -> Self {
+            Self { service: ctx.try_get::<AsyncService>() }
+        }
+    }
+    impl<P> BuildableFrom<P, ()> for OptionalAsyncState {}
+
+    let app = AppBuilder::new()
+        .with_async_bean_when::<AsyncService>(true)
+        .build_state::<OptionalAsyncState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_producer_when_false() {
+    #[derive(Clone)]
+    struct OptionalProducedState {
+        value: Option<ProducedValue>,
+    }
+    impl BeanState for OptionalProducedState {
+        fn from_context(ctx: &BeanContext) -> Self {
+            Self { value: ctx.try_get::<ProducedValue>() }
+        }
+    }
+    impl<P> BuildableFrom<P, ()> for OptionalProducedState {}
+
+    let app = AppBuilder::new()
+        .with_producer_when::<TestProducer>(false)
+        .build_state::<OptionalProducedState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_bean_on_config_enabled() {
+    use r2e_core::config::{ConfigValue, R2eConfig};
+
+    let mut config = R2eConfig::empty();
+    config.set("features.test-service", ConfigValue::Bool(true));
+
+    let app = AppBuilder::new()
+        .with_config(config)
+        .provide(TestDep(10))
+        .with_bean_on_config::<TestService>("features.test-service")
+        .build_state::<OptionalDepState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_bean_on_config_disabled() {
+    use r2e_core::config::{ConfigValue, R2eConfig};
+
+    let mut config = R2eConfig::empty();
+    config.set("features.test-service", ConfigValue::Bool(false));
+
+    let app = AppBuilder::new()
+        .with_config(config)
+        .provide(TestDep(11))
+        .with_bean_on_config::<TestService>("features.test-service")
+        .build_state::<OptionalDepState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_bean_on_config_missing_key_defaults_to_false() {
+    use r2e_core::config::R2eConfig;
+
+    let config = R2eConfig::empty();
+
+    let app = AppBuilder::new()
+        .with_config(config)
+        .provide(TestDep(12))
+        .with_bean_on_config::<TestService>("features.nonexistent")
+        .build_state::<OptionalDepState, _, _>()
+        .await
+        .with(Health)
+        .build();
+    let (status, _) = send_get(app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 // ── E.3 Plugin Lifecycle ──────────────────────────────────────────────────
 
 #[tokio::test]

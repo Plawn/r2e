@@ -35,31 +35,8 @@ struct FieldInfo {
     has_validate: bool,
 }
 
-/// Check if a type is `Option<T>`.
-fn is_option_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if let Some(seg) = path.segments.last() {
-            return seg.ident == "Option";
-        }
-    }
-    false
-}
-
-/// Extract the inner type from `Option<T>`.
-fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if let Some(seg) = path.segments.last() {
-            if seg.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
+use crate::type_utils::is_option_type;
+use crate::type_utils::unwrap_option_type as option_inner_type;
 
 /// Extract doc comments from a field's attributes.
 fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {

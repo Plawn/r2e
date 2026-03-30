@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use syn::{parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Fields, Ident, Type};
 
 use crate::crate_path::r2e_core_path;
+use crate::type_utils::unwrap_option_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -91,7 +92,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .map(|f| {
             let field_name = f.ident.as_ref().unwrap();
             let field_type = &f.ty;
-            quote! { #field_name: ctx.get::<#field_type>() }
+            if let Some(inner_ty) = unwrap_option_type(field_type) {
+                quote! { #field_name: ctx.try_get::<#inner_ty>() }
+            } else {
+                quote! { #field_name: ctx.get::<#field_type>() }
+            }
         })
         .collect();
 
@@ -107,6 +112,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let mut idx_counter = 0usize;
     for field in fields {
         let field_type = &field.ty;
+
+        if unwrap_option_type(field_type).is_some() {
+            continue;
+        }
+
         let type_key = type_to_string(field_type);
         if buildable_seen.insert(type_key) {
             let idx_ident = quote::format_ident!("__I{}", idx_counter);

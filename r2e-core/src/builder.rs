@@ -213,6 +213,85 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self.with_updated_types()
     }
 
+    /// Conditionally register a bean based on a runtime boolean.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    /// The bean's own dependencies are checked at runtime during `build_state()`.
+    pub fn with_bean_when<B: Bean>(mut self, condition: bool) -> Self {
+        if condition {
+            self.shared.bean_registry.register::<B>();
+        }
+        self
+    }
+
+    /// Conditionally register an async bean based on a runtime boolean.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    pub fn with_async_bean_when<B: AsyncBean>(mut self, condition: bool) -> Self {
+        if condition {
+            self.shared.bean_registry.register_async::<B>();
+        }
+        self
+    }
+
+    /// Conditionally register a producer based on a runtime boolean.
+    ///
+    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
+    pub fn with_producer_when<Pr: Producer>(mut self, condition: bool) -> Self {
+        if condition {
+            self.shared.bean_registry.register_producer::<Pr>();
+        }
+        self
+    }
+
+    /// Register a bean only if a config key is truthy (`true`, non-empty string, etc.).
+    ///
+    /// Requires `.load_config()` or `.with_config()` to have been called first.
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no config has been loaded.
+    pub fn with_bean_on_config<B: Bean>(self, key: &str) -> Self {
+        let enabled = self.is_config_enabled(key);
+        self.with_bean_when::<B>(enabled)
+    }
+
+    /// Register an async bean only if a config key is truthy.
+    ///
+    /// Requires `.load_config()` or `.with_config()` to have been called first.
+    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no config has been loaded.
+    pub fn with_async_bean_on_config<B: AsyncBean>(self, key: &str) -> Self {
+        let enabled = self.is_config_enabled(key);
+        self.with_async_bean_when::<B>(enabled)
+    }
+
+    /// Register a producer only if a config key is truthy.
+    ///
+    /// Requires `.load_config()` or `.with_config()` to have been called first.
+    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no config has been loaded.
+    pub fn with_producer_on_config<Pr: Producer>(self, key: &str) -> Self {
+        let enabled = self.is_config_enabled(key);
+        self.with_producer_when::<Pr>(enabled)
+    }
+
+    /// Check if a config key is truthy (bool `true`). Panics if no config loaded.
+    fn is_config_enabled(&self, key: &str) -> bool {
+        self.shared.config
+            .as_ref()
+            .expect("conditional config registration requires config — call .load_config() first")
+            .try_get::<bool>(key)
+            .unwrap_or(false)
+    }
+
     /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
     ///
     /// The closure receives a reference to the resolved config and returns

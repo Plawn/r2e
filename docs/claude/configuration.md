@@ -35,6 +35,7 @@ R2eConfig::empty()                         // testing
 | Method | Returns | Description |
 |---|---|---|
 | `get::<V>("key")` | `Result<V, ConfigError>` | Typed retrieval. `V: FromConfigValue` |
+| `try_get::<V>("key")` | `Option<V>` | Returns `None` on missing key or type mismatch |
 | `get_or("key", default)` | `V` | With fallback |
 | `contains_key("key")` | `bool` | Key existence |
 | `set("key", ConfigValue::...)` | `()` | Insert/overwrite |

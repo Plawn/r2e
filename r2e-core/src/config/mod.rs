@@ -150,6 +150,14 @@ impl R2eConfig {
         V::from_config_value(value, key)
     }
 
+    /// Try to get a typed value, returning `None` if the key is missing.
+    ///
+    /// Unlike [`get`](Self::get), this does not return an error on missing keys.
+    /// Type mismatches still return `None`.
+    pub fn try_get<V: FromConfigValue>(&self, key: &str) -> Option<V> {
+        self.get(key).ok()
+    }
+
     /// Get a typed value, returning a default if the key is missing.
     pub fn get_or<V: FromConfigValue>(&self, key: &str, default: V) -> V {
         self.get(key).unwrap_or(default)

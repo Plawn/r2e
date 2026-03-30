@@ -57,6 +57,73 @@ impl SearchService {
 
 No manual `.provide()` or `#[config_section]` needed — `load_config` handles it.
 
+## Optional dependencies (`Option<T>`)
+
+A bean can declare a dependency as optional by wrapping it in `Option<T>`. Optional dependencies resolve to `None` when the inner type is not in the bean graph, and `Some(T)` when it is.
+
+**Compile-time rules:**
+
+| Dependency type | In `Deps` (type list) | In `dependencies()` | Resolution |
+|---|---|---|---|
+| `T` | Yes | Yes | `ctx.get::<T>()` — panics if absent |
+| `Option<T>` | **No** | **No** | `ctx.try_get::<T>()` — `None` if absent |
+
+Optional deps are invisible to the compile-time graph. No `Contains<T, _>` bound is generated. Hard deps (`T`) remain fully checked.
+
+### In `#[bean]` constructor params
+
+```rust
+#[bean]
+impl NotificationService {
+    fn new(mailer: Mailer, cache: Option<RedisClient>) -> Self {
+        Self { mailer, cache }
+    }
+}
+```
+
+### In `#[derive(Bean)]` fields
+
+```rust
+#[derive(Clone, Bean)]
+struct MyService {
+    #[inject] mailer: Mailer,
+    #[inject] cache: Option<RedisClient>,
+}
+```
+
+### In `#[producer]` params
+
+```rust
+#[producer]
+async fn create_pool(metrics: Option<MetricsCollector>) -> SqlitePool {
+    // metrics is None if MetricsCollector was not registered
+    SqlitePool::connect("sqlite::memory:").await.unwrap()
+}
+```
+
+### In `BeanState`
+
+```rust
+#[derive(Clone, BeanState)]
+struct AppState {
+    user_service: UserService,
+    cache: Option<RedisClient>,  // no compile error if RedisClient not in P
+}
+```
+
+`Option<T>` fields in `BeanState` do NOT generate a `BuildableFrom` bound for `T`.
+
+### Composing with conditional registration
+
+Optional dependencies compose naturally with conditional builder methods (see [subsystems.md](./subsystems.md)). Conditional beans are NOT in `P` (the provision list), so consumers MUST use `Option<T>` — the compiler enforces this.
+
+```rust
+AppBuilder::new()
+    .with_bean::<UserService>()                    // always in P — guaranteed
+    .with_bean_when::<RedisCache>(use_redis)       // NOT in P — consumers must use Option<RedisCache>
+    .build_state::<AppState, _, _>().await
+```
+
 ## `#[config("key")]` in beans
 
 Resolve values from `R2eConfig` instead of the bean graph:
@@ -164,7 +231,9 @@ The `#[bean]` macro generates:
 
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/builder.rs` — `with_bean()`, `with_async_bean()`, `with_producer()`, async `build_state()`
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
-- `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support)
-- `r2e-macros/src/producer_attr.rs` — `#[producer]` macro
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
+- `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
+- `r2e-macros/src/bean_state_derive.rs` — `#[derive(BeanState)]` (`Option<T>` field support — `try_get` + skips `BuildableFrom` bounds)
+- `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
+- `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)

@@ -6,6 +6,7 @@ use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
+use crate::type_utils::unwrap_option_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item_fn = parse_macro_input!(input as ItemFn);
@@ -110,6 +111,8 @@ fn generate(item_fn: &ItemFn) -> syn::Result<TokenStream2> {
                         });
                     });
                     has_config = true;
+                } else if let Some(inner_ty) = unwrap_option_type(ty) {
+                    build_args.push(quote! { let #arg_name: #ty = ctx.try_get::<#inner_ty>(); });
                 } else {
                     dep_type_ids
                         .push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
