@@ -15,6 +15,7 @@ default = []
 ws = ["r2e-http/ws", "dep:dashmap"]
 multipart = ["r2e-http/multipart"]
 dev-reload = ["dep:r2e-devtools"]
+lazy-fallback-runtime = []
 
 [dependencies]
 r2e-http = {workspace = true}

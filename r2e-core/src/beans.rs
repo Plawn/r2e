@@ -5,7 +5,7 @@ use std::future::Future;
 #[cfg(feature = "dev-reload")]
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 // ── Traits ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +36,23 @@ pub trait Bean: Clone + Send + Sync + 'static {
     fn config_keys() -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    /// When `true`, construction is deferred until first injection.
+    /// Set by `#[bean(lazy)]`.
+    ///
+    /// Lazy beans are **not** constructed during `build_state()`. Instead,
+    /// a lazy slot is placed in the context and the bean is built on the
+    /// first `get::<Self>()` call (construct-on-first-injection, like
+    /// Quarkus CDI).
+    ///
+    /// **Runtime note:** lazy resolution needs a Tokio multi-thread runtime.
+    /// Enable the `lazy-fallback-runtime` feature to allow a fallback runtime
+    /// when none is available (or when running on a current-thread runtime).
+    ///
+    /// Consumers use `Self` directly — no wrapper type needed.
+    /// Register with `.with_bean::<T>()` / `.with_async_bean::<T>()`
+    /// as usual; the builder auto-detects the `LAZY` flag.
+    const LAZY: bool = false;
 
     /// A version stamp derived from the constructor's source tokens.
     ///
@@ -79,6 +96,10 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     /// Generated automatically by `#[bean]` on async constructors.
     /// For manual impls without dependencies, use `type Deps = TNil;`.
     type Deps;
+
+    /// When `true`, construction is deferred until first injection.
+    /// Set by `#[bean(lazy)]`. See [`Bean::LAZY`] for details.
+    const LAZY: bool = false;
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
@@ -210,6 +231,10 @@ pub struct BeanContext {
     base: Arc<HashMap<TypeId, Box<dyn Any + Send + Sync>>>,
     /// Overlay: entries added after the base was created. Checked first by `get()`.
     overlay: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    /// Lazy bean slots: initialized on first `get::<T>()`.
+    /// Shared via `Arc` so clones (used by lazy factory snapshots) see
+    /// already-resolved values from the same `OnceLock` instances.
+    lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>>,
 }
 
 impl Clone for BeanContext {
@@ -221,15 +246,19 @@ impl Clone for BeanContext {
             // But to keep Clone simple, we share the base and start a
             // fresh overlay. This is only used by lazy factories.
             overlay: HashMap::new(),
+            // Share the same lazy slots so all clones see resolved values.
+            lazy_slots: Arc::clone(&self.lazy_slots),
         }
     }
 }
 
 impl fmt::Debug for BeanContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lazy_count = self.lazy_slots.read().map(|m| m.len()).unwrap_or(0);
         f.debug_struct("BeanContext")
             .field("base_count", &self.base.len())
             .field("overlay_count", &self.overlay.len())
+            .field("lazy_count", &lazy_count)
             .finish()
     }
 }
@@ -240,7 +269,17 @@ impl BeanContext {
         Self {
             base: Arc::new(entries),
             overlay: HashMap::new(),
+            lazy_slots: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Attach lazy bean slots to this context.
+    fn with_lazy_slots(
+        mut self,
+        slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>>,
+    ) -> Self {
+        self.lazy_slots = slots;
+        self
     }
 
     /// Insert a new entry, creating a new context that shares the same base.
@@ -271,33 +310,39 @@ impl BeanContext {
 
     /// Retrieve a bean by type, cloning it out of the context.
     ///
-    /// Checks the overlay first, then falls back to the shared base.
+    /// Checks the overlay first, then the shared base. If the bean is not
+    /// found eagerly, checks the lazy slots and constructs it on first access.
     ///
     /// # Panics
     ///
     /// Panics if the requested type was not registered or provided.
     pub fn get<T: Clone + 'static>(&self) -> T {
-        let tid = TypeId::of::<T>();
-        self.overlay
-            .get(&tid)
-            .or_else(|| self.base.get(&tid))
-            .and_then(|v| v.downcast_ref::<T>())
-            .unwrap_or_else(|| {
-                panic!(
-                    "Bean of type `{}` not found in context",
-                    type_name::<T>()
-                )
-            })
-            .clone()
+        self.try_get::<T>().unwrap_or_else(|| {
+            panic!(
+                "Bean of type `{}` not found in context",
+                type_name::<T>()
+            )
+        })
     }
 
     /// Try to retrieve a bean by type, returning `None` if absent.
     pub fn try_get<T: Clone + 'static>(&self) -> Option<T> {
         let tid = TypeId::of::<T>();
-        self.overlay
+        // Fast path: eagerly-constructed bean (overlay → base)
+        if let Some(val) = self
+            .overlay
             .get(&tid)
             .or_else(|| self.base.get(&tid))
             .and_then(|v| v.downcast_ref::<T>())
+        {
+            return Some(val.clone());
+        }
+        // Lazy path: construct on first access
+        self.lazy_slots
+            .read()
+            .ok()
+            .and_then(|slots| slots.get(&tid).map(Arc::clone))
+            .and_then(|slot| slot.resolve().downcast_ref::<T>())
             .cloned()
     }
 }
@@ -325,10 +370,41 @@ type PostConstructFn = Box<
         > + Send,
 >;
 
+/// Registration for a lazy bean: excluded from the topological sort,
+/// resolved on first `get::<T>()` call.
+struct LazyBeanRegistration {
+    type_id: TypeId,
+    type_name: &'static str,
+    /// (TypeId, human-readable name) for each dependency — used for validation only.
+    dependencies: Vec<(TypeId, &'static str)>,
+    /// (config_key, expected_type_name) for config validation.
+    config_keys: Vec<(&'static str, &'static str)>,
+    #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
+    build_version: u64,
+    /// Creates a `LazySlot<T>` (type-erased as `Arc<dyn LazyResolve>`) given a
+    /// `BeanContext` snapshot containing the lazy bean's dependencies.
+    slot_factory: Box<dyn FnOnce(BeanContext) -> Arc<dyn crate::lazy::LazyResolve> + Send>,
+    /// When `true`, this registration can be replaced by a later registration
+    /// of the same `TypeId`.
+    #[allow(dead_code)]
+    overridable: bool,
+}
+
+#[cfg(feature = "dev-reload")]
+struct FingerprintReg<'a> {
+    type_id: TypeId,
+    type_name: &'static str,
+    dependencies: &'a Vec<(TypeId, &'static str)>,
+    config_keys: &'a Vec<(&'static str, &'static str)>,
+    build_version: u64,
+}
+
 /// Builder that collects bean registrations and provided instances,
 /// resolves the dependency graph, and produces a [`BeanContext`].
+#[doc(hidden)]
 pub struct BeanRegistry {
     beans: Vec<BeanRegistration>,
+    lazy_beans: Vec<LazyBeanRegistration>,
     provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// When true, duplicate bean registrations are allowed (last wins).
     pub(crate) allow_overrides: bool,
@@ -407,6 +483,7 @@ impl BeanRegistry {
     pub fn new() -> Self {
         Self {
             beans: Vec::new(),
+            lazy_beans: Vec::new(),
             provided: HashMap::new(),
             allow_overrides: false,
         }
@@ -445,21 +522,37 @@ impl BeanRegistry {
     }
 
     fn register_inner<T: Bean>(&mut self, overridable: bool) -> &mut Self {
-        self.beans.push(BeanRegistration {
-            type_id: TypeId::of::<T>(),
-            type_name: type_name::<T>(),
-            dependencies: T::dependencies(),
-            config_keys: T::config_keys(),
-            build_version: T::BUILD_VERSION,
-            factory: Box::new(|ctx| {
-                Box::pin(async move {
-                    let bean = T::build(&ctx);
-                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
-                })
-            }),
-            post_construct: None,
-            overridable,
-        });
+        if T::LAZY {
+            self.lazy_beans.push(LazyBeanRegistration {
+                type_id: TypeId::of::<T>(),
+                type_name: type_name::<T>(),
+                dependencies: T::dependencies(),
+                config_keys: T::config_keys(),
+                build_version: T::BUILD_VERSION,
+                slot_factory: Box::new(|ctx| {
+                    Arc::new(crate::lazy::LazySlot::new(move || {
+                        Box::pin(async move { T::build(&ctx) })
+                    })) as Arc<dyn crate::lazy::LazyResolve>
+                }),
+                overridable,
+            });
+        } else {
+            self.beans.push(BeanRegistration {
+                type_id: TypeId::of::<T>(),
+                type_name: type_name::<T>(),
+                dependencies: T::dependencies(),
+                config_keys: T::config_keys(),
+                build_version: T::BUILD_VERSION,
+                factory: Box::new(|ctx| {
+                    Box::pin(async move {
+                        let bean = T::build(&ctx);
+                        (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                    })
+                }),
+                post_construct: None,
+                overridable,
+            });
+        }
         T::after_register(self);
         self
     }
@@ -477,21 +570,37 @@ impl BeanRegistry {
     }
 
     fn register_async_inner<T: AsyncBean>(&mut self, overridable: bool) -> &mut Self {
-        self.beans.push(BeanRegistration {
-            type_id: TypeId::of::<T>(),
-            type_name: type_name::<T>(),
-            dependencies: T::dependencies(),
-            config_keys: T::config_keys(),
-            build_version: T::BUILD_VERSION,
-            factory: Box::new(|ctx| {
-                Box::pin(async move {
-                    let bean = T::build(&ctx).await;
-                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
-                })
-            }),
-            post_construct: None,
-            overridable,
-        });
+        if T::LAZY {
+            self.lazy_beans.push(LazyBeanRegistration {
+                type_id: TypeId::of::<T>(),
+                type_name: type_name::<T>(),
+                dependencies: T::dependencies(),
+                config_keys: T::config_keys(),
+                build_version: T::BUILD_VERSION,
+                slot_factory: Box::new(|ctx| {
+                    Arc::new(crate::lazy::LazySlot::new(move || {
+                        Box::pin(async move { T::build(&ctx).await })
+                    })) as Arc<dyn crate::lazy::LazyResolve>
+                }),
+                overridable,
+            });
+        } else {
+            self.beans.push(BeanRegistration {
+                type_id: TypeId::of::<T>(),
+                type_name: type_name::<T>(),
+                dependencies: T::dependencies(),
+                config_keys: T::config_keys(),
+                build_version: T::BUILD_VERSION,
+                factory: Box::new(|ctx| {
+                    Box::pin(async move {
+                        let bean = T::build(&ctx).await;
+                        (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                    })
+                }),
+                post_construct: None,
+                overridable,
+            });
+        }
         T::after_register(self);
         self
     }
@@ -577,67 +686,6 @@ impl BeanRegistry {
         self
     }
 
-    /// Register a lazy async bean: stores `Lazy<T>` in the context instead of `T`.
-    ///
-    /// The bean's constructor is NOT called during `resolve()`. Instead, a
-    /// [`Lazy<T>`](crate::lazy::Lazy) wrapper is placed in the context. The
-    /// actual construction happens on first `.get().await`.
-    ///
-    /// Consumers must declare `Lazy<T>` (not `T`) as their dependency.
-    pub fn register_lazy_async<T: AsyncBean>(&mut self) -> &mut Self {
-        use crate::lazy::Lazy;
-        self.beans.push(BeanRegistration {
-            type_id: TypeId::of::<Lazy<T>>(),
-            type_name: type_name::<Lazy<T>>(),
-            dependencies: T::dependencies(),
-            config_keys: T::config_keys(),
-            build_version: T::BUILD_VERSION,
-            factory: Box::new(|ctx| {
-                Box::pin(async move {
-                    // Clone captures a snapshot of the current base Arc.
-                    // The construction loop's `with_new_entry` will detect
-                    // the extra Arc reference and use the overlay for
-                    // subsequent entries, avoiding a try_unwrap panic.
-                    let snapshot = ctx.clone();
-                    let lazy = Lazy::new(move || {
-                        Box::pin(async move { T::build(&snapshot).await })
-                    });
-                    (ctx, Box::new(lazy) as Box<dyn Any + Send + Sync>)
-                })
-            }),
-            post_construct: None,
-            overridable: false,
-        });
-        self
-    }
-
-    /// Register a lazy (sync) bean: stores `Lazy<T>` in the context instead of `T`.
-    ///
-    /// Same as [`register_lazy_async`](Self::register_lazy_async) but for
-    /// synchronous [`Bean`] implementations.
-    pub fn register_lazy<T: Bean>(&mut self) -> &mut Self {
-        use crate::lazy::Lazy;
-        self.beans.push(BeanRegistration {
-            type_id: TypeId::of::<Lazy<T>>(),
-            type_name: type_name::<Lazy<T>>(),
-            dependencies: T::dependencies(),
-            config_keys: T::config_keys(),
-            build_version: T::BUILD_VERSION,
-            factory: Box::new(|ctx| {
-                Box::pin(async move {
-                    let snapshot = ctx.clone();
-                    let lazy = Lazy::new(move || {
-                        Box::pin(async move { T::build(&snapshot) })
-                    });
-                    (ctx, Box::new(lazy) as Box<dyn Any + Send + Sync>)
-                })
-            }),
-            post_construct: None,
-            overridable: false,
-        });
-        self
-    }
-
     /// Compute the graph fingerprint without constructing any beans.
     ///
     /// Performs deduplication (when overrides are enabled), topological sorting,
@@ -655,8 +703,9 @@ impl BeanRegistry {
         // Work on a snapshot of bean metadata to handle deduplication
         // without mutating self (resolve() will do the real dedup later).
         let alt_remove = Self::overridable_indices_to_remove(&self.beans);
+        let lazy_alt_remove = Self::overridable_lazy_indices_to_remove(&self.lazy_beans);
 
-        let beans: Vec<&BeanRegistration> = if self.allow_overrides {
+        let mut beans: Vec<FingerprintReg<'_>> = if self.allow_overrides {
             // Deduplicate: keep only the last registration per TypeId
             let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
             for (i, reg) in self.beans.iter().enumerate() {
@@ -665,14 +714,62 @@ impl BeanRegistry {
             let keep: HashSet<usize> = last_seen.values().copied().collect();
             self.beans.iter().enumerate()
                 .filter(|(i, _)| keep.contains(i) && !alt_remove.contains(i))
-                .map(|(_, reg)| reg)
+                .map(|(_, reg)| FingerprintReg {
+                    type_id: reg.type_id,
+                    type_name: reg.type_name,
+                    dependencies: &reg.dependencies,
+                    config_keys: &reg.config_keys,
+                    build_version: reg.build_version,
+                })
                 .collect()
         } else {
             self.beans.iter().enumerate()
                 .filter(|(i, _)| !alt_remove.contains(i))
-                .map(|(_, reg)| reg)
+                .map(|(_, reg)| FingerprintReg {
+                    type_id: reg.type_id,
+                    type_name: reg.type_name,
+                    dependencies: &reg.dependencies,
+                    config_keys: &reg.config_keys,
+                    build_version: reg.build_version,
+                })
                 .collect()
         };
+
+        // Include lazy beans in the fingerprint graph.
+        let lazy_regs: Vec<FingerprintReg<'_>> = if self.allow_overrides {
+            let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
+            for (i, reg) in self.lazy_beans.iter().enumerate() {
+                last_seen.insert(reg.type_id, i);
+            }
+            let keep: HashSet<usize> = last_seen.values().copied().collect();
+            self.lazy_beans
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| keep.contains(i) && !lazy_alt_remove.contains(i))
+                .map(|(_, reg)| FingerprintReg {
+                    type_id: reg.type_id,
+                    type_name: reg.type_name,
+                    dependencies: &reg.dependencies,
+                    config_keys: &reg.config_keys,
+                    build_version: reg.build_version,
+                })
+                .collect()
+        } else {
+            self.lazy_beans
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !lazy_alt_remove.contains(i))
+                .map(|(_, reg)| FingerprintReg {
+                    type_id: reg.type_id,
+                    type_name: reg.type_name,
+                    dependencies: &reg.dependencies,
+                    config_keys: &reg.config_keys,
+                    build_version: reg.build_version,
+                })
+                .collect()
+        };
+
+        beans.extend(lazy_regs);
 
         let bean_count = beans.len();
         if bean_count == 0 {
@@ -737,8 +834,8 @@ impl BeanRegistry {
 
 
         for &idx in &sorted_order {
-            let reg = beans[idx];
-            let fp = Self::compute_bean_fingerprint(reg, config, &dep_fingerprints);
+            let reg = &beans[idx];
+            let fp = Self::compute_reg_fingerprint(reg, config, &dep_fingerprints);
             dep_fingerprints.insert(reg.type_id, fp);
             per_bean.push((reg.type_id, reg.type_name, fp));
             fp.hash(&mut graph_hasher);
@@ -763,49 +860,141 @@ impl BeanRegistry {
         // Resolve default/alternative beans: remove overridable registrations
         // that have been superseded by a later registration of the same TypeId.
         Self::resolve_alternatives(&mut self.beans);
+        Self::resolve_lazy_alternatives(&mut self.lazy_beans);
 
         // When overrides are allowed, deduplicate beans (last registration wins).
         if self.allow_overrides {
             Self::deduplicate_beans(&mut self.beans, &mut entries);
+            Self::deduplicate_lazy_beans(&mut self.lazy_beans, &mut entries);
         }
 
         let bean_count = self.beans.len();
-        if bean_count == 0 {
-            return Ok(BeanContext::new(entries));
-        }
+        let lazy_type_ids: HashSet<TypeId> =
+            self.lazy_beans.iter().map(|lr| lr.type_id).collect();
 
-        // Check for duplicates
+        // Check for duplicates before any construction.
         if !self.allow_overrides {
             Self::check_for_duplicates(&self.beans, &entries)?;
+            Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
+        } else {
+            // Even with overrides, lazy and eager registrations must not conflict.
+            Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
         }
 
-        // Build dependency graph
-        let id_to_idx = Self::build_type_index(&self.beans);
-        Self::check_missing_dependencies(&self.beans, &entries, &id_to_idx)?;
+        let mut ctx = if bean_count == 0 {
+            BeanContext::new(entries)
+        } else {
+            // Build dependency graph
+            let id_to_idx = Self::build_type_index(&self.beans);
 
-        // Validate config keys before construction
-        Self::validate_config_keys(&self.beans, &entries)?;
+            // Include lazy beans in the known-types set for dependency validation
+            Self::check_missing_dependencies(
+                &self.beans,
+                &entries,
+                &id_to_idx,
+                &lazy_type_ids,
+            )?;
 
-        // Topological sort
-        let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
+            // Validate config keys before construction
+            Self::validate_config_keys(&self.beans, &entries)?;
 
-        // Extract post-construct fns before consuming beans
-        let pc_fns: Vec<Option<PostConstructFn>> = sorted_order
-            .iter()
-            .map(|&idx| self.beans[idx].post_construct.take())
-            .collect();
+            // Topological sort
+            let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
 
-        // Construct beans in order (async)
-        let mut ctx = Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
+            // Extract post-construct fns before consuming beans
+            let pc_fns: Vec<Option<PostConstructFn>> = sorted_order
+                .iter()
+                .map(|&idx| self.beans[idx].post_construct.take())
+                .collect();
 
-        // Run post-construct hooks in topological order
-        for pc_fn in pc_fns.into_iter().flatten() {
-            ctx = pc_fn(ctx)
-                .await
-                .map_err(|e| BeanError::PostConstruct(e.to_string()))?;
+            // Construct beans in order (async)
+            let mut ctx =
+                Self::construct_beans_in_order(self.beans, sorted_order, entries).await;
+
+            // Run post-construct hooks in topological order
+            for pc_fn in pc_fns.into_iter().flatten() {
+                ctx = pc_fn(ctx)
+                    .await
+                    .map_err(|e| BeanError::PostConstruct(e.to_string()))?;
+            }
+
+            ctx
+        };
+
+        // ── Lazy beans ──────────────────────────────────────────────────
+        if !self.lazy_beans.is_empty() {
+            // Validate lazy bean dependencies: all deps must exist in the
+            // eagerly-resolved set, provided instances, or other lazy beans.
+            let eager_ids: HashSet<TypeId> = ctx
+                .base
+                .keys()
+                .chain(ctx.overlay.keys())
+                .copied()
+                .collect();
+
+            for lazy_reg in &self.lazy_beans {
+                for (dep_id, dep_name) in &lazy_reg.dependencies {
+                    if !eager_ids.contains(dep_id) && !lazy_type_ids.contains(dep_id) {
+                        return Err(BeanError::MissingDependency {
+                            bean: lazy_reg.type_name.to_string(),
+                            dependency: dep_name.to_string(),
+                        });
+                    }
+                }
+            }
+
+            // Validate lazy bean config keys
+            let lazy_keys: Vec<_> = self
+                .lazy_beans
+                .iter()
+                .flat_map(|reg| {
+                    reg.config_keys
+                        .iter()
+                        .map(move |(key, ty_name)| (reg.type_name, *key, *ty_name))
+                })
+                .collect();
+            Self::do_validate_config_keys(
+                &lazy_keys,
+                ctx.try_get::<crate::config::R2eConfig>().as_ref(),
+            )?;
+
+            // Build lazy slots from the fully resolved context.
+            // Use a shared, mutable map so snapshots can resolve lazy-to-lazy deps.
+            let lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>> =
+                Arc::new(RwLock::new(HashMap::new()));
+            ctx = ctx.with_lazy_slots(Arc::clone(&lazy_slots));
+            for lazy_reg in self.lazy_beans {
+                let snapshot = ctx.clone();
+                let slot = (lazy_reg.slot_factory)(snapshot);
+                lazy_slots
+                    .write()
+                    .expect("Lazy slots lock poisoned")
+                    .insert(lazy_reg.type_id, slot);
+            }
         }
 
         Ok(ctx)
+    }
+
+    /// Shared config-key validation: checks the given triples against an R2eConfig.
+    fn do_validate_config_keys(
+        all_keys: &[(&str, &str, &str)],
+        config: Option<&crate::config::R2eConfig>,
+    ) -> Result<(), BeanError> {
+        if all_keys.is_empty() {
+            return Ok(());
+        }
+        let Some(config) = config else {
+            return Ok(());
+        };
+        let errors = crate::config::validate_keys(config, all_keys);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(BeanError::MissingConfigKeys(
+                crate::config::ConfigValidationError { errors },
+            ))
+        }
     }
 
     /// Compute the set of indices whose registrations are overridable and
@@ -817,6 +1006,36 @@ impl BeanRegistry {
 
         let mut type_indices: HashMap<TypeId, Vec<(usize, bool)>> = HashMap::new();
         for (i, reg) in beans.iter().enumerate() {
+            type_indices
+                .entry(reg.type_id)
+                .or_default()
+                .push((i, reg.overridable));
+        }
+
+        let mut remove = HashSet::new();
+        for indices in type_indices.values() {
+            if indices.len() <= 1 {
+                continue;
+            }
+            let last_idx = indices.last().unwrap().0;
+            for &(idx, overridable) in indices {
+                if idx != last_idx && overridable {
+                    remove.insert(idx);
+                }
+            }
+        }
+        remove
+    }
+
+    /// Compute the set of indices whose lazy registrations are overridable and
+    /// have been superseded by a later registration of the same `TypeId`.
+    fn overridable_lazy_indices_to_remove(lazy_beans: &[LazyBeanRegistration]) -> HashSet<usize> {
+        if !lazy_beans.iter().any(|r| r.overridable) {
+            return HashSet::new();
+        }
+
+        let mut type_indices: HashMap<TypeId, Vec<(usize, bool)>> = HashMap::new();
+        for (i, reg) in lazy_beans.iter().enumerate() {
             type_indices
                 .entry(reg.type_id)
                 .or_default()
@@ -855,6 +1074,20 @@ impl BeanRegistry {
         }
     }
 
+    /// Remove overridable (default) lazy registrations that have been superseded
+    /// by a later (alternative) registration of the same `TypeId`.
+    fn resolve_lazy_alternatives(lazy_beans: &mut Vec<LazyBeanRegistration>) {
+        let remove = Self::overridable_lazy_indices_to_remove(lazy_beans);
+        if !remove.is_empty() {
+            let mut idx = 0;
+            lazy_beans.retain(|_| {
+                let keep = !remove.contains(&idx);
+                idx += 1;
+                keep
+            });
+        }
+    }
+
     /// Deduplicate beans when overrides are enabled: last registration wins.
     /// Also removes beans whose type_id already exists in provided entries.
     fn deduplicate_beans(
@@ -882,6 +1115,28 @@ impl BeanRegistry {
         }
     }
 
+    /// Deduplicate lazy beans when overrides are enabled: last registration wins.
+    /// Also removes provided instances with the same type_id (lazy bean wins).
+    fn deduplicate_lazy_beans(
+        lazy_beans: &mut Vec<LazyBeanRegistration>,
+        entries: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    ) {
+        let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
+        for (i, reg) in lazy_beans.iter().enumerate() {
+            last_seen.insert(reg.type_id, i);
+        }
+        let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
+        let mut idx = 0;
+        lazy_beans.retain(|_| {
+            let kept = keep.contains(&idx);
+            idx += 1;
+            kept
+        });
+        for reg in lazy_beans.iter() {
+            entries.remove(&reg.type_id);
+        }
+    }
+
     /// Check for duplicate bean registrations.
     fn check_for_duplicates(
         beans: &[BeanRegistration],
@@ -890,6 +1145,29 @@ impl BeanRegistry {
         let mut seen: HashMap<TypeId, &str> = HashMap::new();
         for reg in beans {
             if entries.contains_key(&reg.type_id) {
+                return Err(BeanError::DuplicateBean {
+                    type_name: reg.type_name.to_string(),
+                });
+            }
+            if seen.insert(reg.type_id, reg.type_name).is_some() {
+                return Err(BeanError::DuplicateBean {
+                    type_name: reg.type_name.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check for duplicate lazy registrations, or conflicts with eager beans or provided entries.
+    fn check_for_lazy_duplicates(
+        lazy_beans: &[LazyBeanRegistration],
+        entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+        beans: &[BeanRegistration],
+    ) -> Result<(), BeanError> {
+        let eager_ids: HashSet<TypeId> = beans.iter().map(|r| r.type_id).collect();
+        let mut seen: HashMap<TypeId, &str> = HashMap::new();
+        for reg in lazy_beans {
+            if entries.contains_key(&reg.type_id) || eager_ids.contains(&reg.type_id) {
                 return Err(BeanError::DuplicateBean {
                     type_name: reg.type_name.to_string(),
                 });
@@ -913,14 +1191,19 @@ impl BeanRegistry {
     }
 
     /// Check that all dependencies are available.
+    /// `lazy_type_ids` contains TypeIds of lazy beans (also considered "known").
     fn check_missing_dependencies(
         beans: &[BeanRegistration],
         entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
         id_to_idx: &HashMap<TypeId, usize>,
+        lazy_type_ids: &HashSet<TypeId>,
     ) -> Result<(), BeanError> {
         for reg in beans {
             for (dep_id, dep_name) in &reg.dependencies {
-                if !entries.contains_key(dep_id) && !id_to_idx.contains_key(dep_id) {
+                if !entries.contains_key(dep_id)
+                    && !id_to_idx.contains_key(dep_id)
+                    && !lazy_type_ids.contains(dep_id)
+                {
                     return Err(BeanError::MissingDependency {
                         bean: reg.type_name.to_string(),
                         dependency: dep_name.to_string(),
@@ -932,8 +1215,6 @@ impl BeanRegistry {
     }
 
     /// Validate all config keys declared by beans against the provided R2eConfig.
-    ///
-    /// Uses the shared [`validate_keys`](crate::config::validate_keys) function.
     fn validate_config_keys(
         beans: &[BeanRegistration],
         entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
@@ -947,26 +1228,11 @@ impl BeanRegistry {
             })
             .collect();
 
-        if all_keys.is_empty() {
-            return Ok(());
-        }
-
         let config = entries
             .get(&TypeId::of::<crate::config::R2eConfig>())
             .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
 
-        let Some(config) = config else {
-            return Ok(());
-        };
-
-        let errors = crate::config::validate_keys(config, &all_keys);
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(BeanError::MissingConfigKeys(
-                crate::config::ConfigValidationError { errors },
-            ))
-        }
+        Self::do_validate_config_keys(&all_keys, config)
     }
 
     /// Perform topological sort using Kahn's algorithm.
@@ -1029,8 +1295,8 @@ impl BeanRegistry {
     /// fingerprint, its `BUILD_VERSION`, and the fingerprints of all its
     /// dependencies (transitively).
     #[cfg(feature = "dev-reload")]
-    fn compute_bean_fingerprint(
-        reg: &BeanRegistration,
+    fn compute_reg_fingerprint(
+        reg: &FingerprintReg<'_>,
         config: Option<&crate::config::R2eConfig>,
         dep_fingerprints: &HashMap<TypeId, u64>,
     ) -> u64 {

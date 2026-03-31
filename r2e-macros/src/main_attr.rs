@@ -148,12 +148,15 @@ impl MainArgs {
         Ok(this)
     }
 
-    /// Whether to use `new_current_thread()`. Tests default to current_thread,
-    /// main defaults to multi_thread.
+    /// Whether to use `new_current_thread()`. Defaults to multi_thread for
+    /// both main and tests unless explicitly overridden.
     fn use_current_thread(&self, is_test: bool) -> bool {
         match self.flavor {
             Some(current) => current,
-            None => is_test, // tests → current_thread, main → multi_thread
+            None => {
+                let _ = is_test;
+                false
+            }
         }
     }
 }

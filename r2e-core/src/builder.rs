@@ -403,39 +403,6 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self.with_producer_when::<Pr>(condition)
     }
 
-    // ── Lazy bean registration ─────────────────────────────────────
-
-    /// Register a lazy async bean: consumers receive `Lazy<B>` instead of `B`.
-    ///
-    /// The bean's constructor is NOT called during `build_state()`. Instead,
-    /// a [`Lazy<B>`](crate::lazy::Lazy) is placed in the context and the
-    /// actual construction happens on first `.get().await`.
-    ///
-    /// Consumers must declare `Lazy<B>` as their dependency type.
-    pub fn with_lazy_async_bean<B: AsyncBean>(
-        mut self,
-    ) -> AppBuilder<NoState, TCons<crate::lazy::Lazy<B>, P>, <R as TAppend<B::Deps>>::Output>
-    where
-        R: TAppend<B::Deps>,
-    {
-        self.shared.bean_registry.register_lazy_async::<B>();
-        self.with_updated_types()
-    }
-
-    /// Register a lazy (sync) bean: consumers receive `Lazy<B>` instead of `B`.
-    ///
-    /// Same as [`with_lazy_async_bean`](Self::with_lazy_async_bean) but for
-    /// synchronous [`Bean`] implementations.
-    pub fn with_lazy_bean<B: Bean>(
-        mut self,
-    ) -> AppBuilder<NoState, TCons<crate::lazy::Lazy<B>, P>, <R as TAppend<B::Deps>>::Output>
-    where
-        R: TAppend<B::Deps>,
-    {
-        self.shared.bean_registry.register_lazy::<B>();
-        self.with_updated_types()
-    }
-
     /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
     ///
     /// The closure receives a reference to the resolved config and returns

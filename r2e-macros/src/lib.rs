@@ -730,8 +730,8 @@ pub fn post_construct(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// The constructor must be an associated function (no `self` receiver) that
 /// returns `Self` or the concrete type name.
 #[proc_macro_attribute]
-pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
-    bean_attr::expand(input)
+pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
+    bean_attr::expand(args, input)
 }
 
 /// Attribute macro on a free function — marks it as a producer and generates
@@ -1119,8 +1119,8 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Marks an `async fn` as an R2E test.
 ///
-/// Wraps the function body in a Tokio **current-thread** runtime (like
-/// `#[tokio::test]`) and calls `init_tracing()` automatically.
+/// Wraps the function body in a Tokio **multi-thread** runtime and calls
+/// `init_tracing()` automatically.
 ///
 /// # Examples
 ///
@@ -1139,4 +1139,3 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn test(args: TokenStream, input: TokenStream) -> TokenStream {
     main_attr::expand_test(args, input)
 }
-

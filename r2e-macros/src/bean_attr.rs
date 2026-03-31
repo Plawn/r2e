@@ -9,6 +9,30 @@ use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 use crate::type_utils::{unwrap_option_type, parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
 
+/// Parsed `#[bean(...)]` arguments.
+struct BeanArgs {
+    /// When `true`, the bean is marked for lazy initialization.
+    lazy: bool,
+}
+
+impl BeanArgs {
+    fn parse(args: TokenStream) -> syn::Result<Self> {
+        let mut lazy = false;
+        if !args.is_empty() {
+            let parser = syn::meta::parser(|meta| {
+                if meta.path.is_ident("lazy") {
+                    lazy = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `lazy`"))
+                }
+            });
+            syn::parse::Parser::parse(parser, args)?;
+        }
+        Ok(Self { lazy })
+    }
+}
+
 /// Parsed consumer method data from a `#[bean]` impl block.
 struct BeanConsumerMethod {
     config: crate::extract::consumer::ConsumerConfig,
@@ -23,9 +47,13 @@ struct BeanPostConstructMethod {
     returns_result: bool,
 }
 
-pub fn expand(input: TokenStream) -> TokenStream {
+pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
+    let bean_args = match BeanArgs::parse(args) {
+        Ok(a) => a,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let item_impl = parse_macro_input!(input as ItemImpl);
-    match generate(&item_impl) {
+    match generate(&item_impl, &bean_args) {
         Ok(bean_impl) => {
             // Emit the original impl with #[config] and #[consumer] attrs stripped
             let cleaned_impl = strip_attrs_from_impl(&item_impl);
@@ -39,7 +67,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     }
 }
 
-fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
+fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStream2> {
     // Extract the Self type from the impl block.
     let self_ty = &item_impl.self_ty;
 
@@ -162,10 +190,24 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
 
     // Scan for #[consumer] methods
     let consumer_methods = scan_consumer_methods(item_impl)?;
+    if bean_args.lazy && !consumer_methods.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "#[bean(lazy)] does not yet support #[consumer] methods — \
+             remove one or the other",
+        ));
+    }
     let subscriber_impl = generate_event_subscriber_impl(self_ty, &consumer_methods)?;
 
     // Scan for #[post_construct] methods
     let pc_methods = scan_post_construct_methods(item_impl)?;
+    if bean_args.lazy && !pc_methods.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "#[bean(lazy)] does not yet support #[post_construct] — \
+             remove one or the other",
+        ));
+    }
     let post_construct_impl = generate_post_construct_impl(self_ty, &pc_methods);
     let after_register_fn = if !pc_methods.is_empty() {
         quote! {
@@ -177,11 +219,15 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
+    let lazy_const = bean_args.lazy;
+
     let bean_impl = if is_async {
         // Generate AsyncBean impl
         quote! {
             impl #krate::beans::AsyncBean for #self_ty {
                 type Deps = #deps_type;
+
+                const LAZY: bool = #lazy_const;
 
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]
@@ -205,6 +251,8 @@ fn generate(item_impl: &ItemImpl) -> syn::Result<TokenStream2> {
         quote! {
             impl #krate::beans::Bean for #self_ty {
                 type Deps = #deps_type;
+
+                const LAZY: bool = #lazy_const;
 
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
                     vec![#(#dep_type_ids),*]

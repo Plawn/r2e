@@ -1,24 +1,138 @@
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
+
+// ── LazySlot (internal) ─────────────────────────────────────────────────────
+
+/// Type-erased lazy bean slot stored in `BeanContext::lazy_slots`.
+///
+/// This trait lets `get::<T>()` resolve a lazy bean without requiring
+/// `T: Send + Sync` in its own signature — those bounds are captured
+/// when the `LazySlot<T>` is created.
+pub(crate) trait LazyResolve: Send + Sync {
+    /// Resolve the lazy bean and return a reference to it.
+    /// First call runs the factory; subsequent calls return the cached value.
+    fn resolve(&self) -> &dyn Any;
+}
+
+/// Internal lazy bean slot used by [`BeanContext`](crate::beans::BeanContext)
+/// for transparent lazy resolution.
+///
+/// Unlike [`Lazy<T>`], this is **not** exposed to users. When a bean is
+/// marked `#[bean(lazy)]`, the registry stores a `LazySlot<T>` in the
+/// context's `lazy_slots` map. On first `get::<T>()`, the factory runs
+/// via `block_in_place` + `block_on` and the result is cached in `OnceLock`.
+///
+/// **Runtime note:** this requires a Tokio multi-thread runtime. If the
+/// `lazy-fallback-runtime` feature is enabled, resolution will fall back
+/// to a global runtime when none is available (or when running on a
+/// current-thread runtime).
+pub(crate) struct LazySlot<T: Clone + Send + Sync + 'static> {
+    cell: OnceLock<T>,
+    factory: std::sync::Mutex<
+        Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>>,
+    >,
+}
+
+impl<T: Clone + Send + Sync + 'static> LazySlot<T> {
+    pub(crate) fn new<F>(factory: F) -> Self
+    where
+        F: FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync + 'static,
+    {
+        Self {
+            cell: OnceLock::new(),
+            factory: std::sync::Mutex::new(Some(Box::new(factory))),
+        }
+    }
+
+    fn get_or_init(&self) -> &T {
+        self.cell.get_or_init(|| {
+            let factory = self
+                .factory
+                .lock()
+                .expect("LazySlot factory mutex poisoned")
+                .take()
+                .expect("LazySlot factory already consumed (possible circular lazy dependency)");
+            resolve_lazy_factory(factory)
+        })
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
+    fn resolve(&self) -> &dyn Any {
+        self.get_or_init()
+    }
+}
+
+fn resolve_lazy_factory<T>(
+    factory: Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>,
+) -> T
+where
+    T: Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(|| handle.block_on(factory()))
+            } else {
+                #[cfg(feature = "lazy-fallback-runtime")]
+                {
+                    fallback_runtime().block_on(factory())
+                }
+                #[cfg(not(feature = "lazy-fallback-runtime"))]
+                {
+                    panic!(
+                        "Lazy bean resolution requires a Tokio multi-thread runtime. \
+                         Enable the `lazy-fallback-runtime` feature to allow a \
+                         fallback runtime."
+                    )
+                }
+            }
+        }
+        Err(_) => {
+            #[cfg(feature = "lazy-fallback-runtime")]
+            {
+                fallback_runtime().block_on(factory())
+            }
+            #[cfg(not(feature = "lazy-fallback-runtime"))]
+            {
+                panic!(
+                    "Lazy bean resolution requires a Tokio runtime. \
+                     Enable the `lazy-fallback-runtime` feature to allow a \
+                     fallback runtime."
+                )
+            }
+        }
+    }
+}
+
+#[cfg(feature = "lazy-fallback-runtime")]
+fn fallback_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build fallback Tokio runtime for lazy beans")
+    })
+}
+
+// ── Lazy<T> (public, deprecated path) ───────────────────────────────────────
 
 /// A lazy bean wrapper that defers construction to first access.
 ///
-/// Register a bean as lazy via `.with_lazy_async_bean::<T>()` on the builder.
-/// Consumers declare `Lazy<T>` instead of `T` — this makes the deferred
-/// construction explicit at the type level.
+/// **Deprecated pattern.** Prefer `#[bean(lazy)]` which is fully transparent —
+/// consumers use `T` directly and the bean is constructed on first injection.
 ///
-/// # Example
+/// This type is kept for backward compatibility with code that constructed
+/// `Lazy<T>` directly. The builder helpers were removed in favor of
+/// `#[bean(lazy)]` which is fully transparent.
+///
+/// # Example (deprecated pattern)
 ///
 /// ```ignore
-/// #[bean]
-/// impl ExpensiveService {
-///     async fn new(pool: SqlitePool) -> Self {
-///         Self { model: load_model().await }
-///     }
-/// }
-///
 /// // Consumer declares Lazy<ExpensiveService>
 /// #[bean]
 /// impl MyController {
