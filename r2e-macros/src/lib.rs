@@ -292,6 +292,26 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Restrict a route to users that have **all** of the specified roles (AND semantics).
+///
+/// Requires an identity source: either an `#[inject(identity)]` field on the
+/// controller struct, or an `#[inject(identity)]` parameter on the handler.
+/// Returns **403 Forbidden** if the user is missing any of the listed roles.
+///
+/// ```ignore
+/// #[get("/admin/settings")]
+/// #[all_roles("admin", "superadmin")]   // AND — user must have BOTH roles
+/// async fn admin_settings(&self) -> Json<Settings> { ... }
+/// ```
+///
+/// For OR semantics (require **at least one** role), use [`roles`] instead.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn all_roles(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Wrap a route method body in an automatic SQL transaction.
 ///
 /// The macro injects a `tx` variable (of type `sqlx::Transaction`) into

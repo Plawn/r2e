@@ -12,7 +12,7 @@ pub mod openid;
 pub use config::SecurityConfig;
 pub use error::SecurityError;
 pub use extractor::{extract_jwt_claims, extract_jwt_identity};
-pub use guards::{RoleBasedIdentity, RolesGuard};
+pub use guards::{AllRolesGuard, RoleBasedIdentity, RolesGuard};
 pub use identity::{
     AuthenticatedUser, ClaimsIdentity, DefaultIdentityBuilder, DefaultRoleExtractor,
     IdentityBuilder, IdentityBuilderWith,
@@ -31,10 +31,11 @@ pub mod __macro_support {
     pub use r2e_core::http;
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
+    pub use crate::guards::AllRolesGuard;
     pub use crate::guards::RolesGuard;
 }
 
 pub mod prelude {
     //! Re-exports of the most commonly used security types.
-    pub use crate::{AuthenticatedUser, JwtValidator, RoleBasedIdentity, RolesGuard, SecurityConfig};
+    pub use crate::{AllRolesGuard, AuthenticatedUser, JwtValidator, RoleBasedIdentity, RolesGuard, SecurityConfig};
 }

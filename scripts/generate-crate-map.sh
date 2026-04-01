@@ -13,9 +13,9 @@ FACADE_TOML="r2e/Cargo.toml"
 # ── helpers ──────────────────────────────────────────────────────────────
 
 get_desc() {
-    local desc
-    desc=$(grep '^description' "$1" 2>/dev/null | head -1 | sed 's/^description *= *"//; s/"$//')
-    echo "$desc"
+    local d
+    d=$(grep '^description' "$1" 2>/dev/null | head -1 | sed 's/^description *= *"//; s/"$//')
+    echo "${d:-(no description)}"
 }
 
 # ── crate list ───────────────────────────────────────────────────────────
@@ -27,6 +27,27 @@ collect_crates() {
         [ -f "$dir/Cargo.toml" ] || continue
         echo "$dir"
     done
+}
+
+# ── extract [features] section only ──────────────────────────────────────
+
+extract_features() {
+    awk '
+        /^\[features\]/ { inside=1; next }
+        /^\[/           { inside=0 }
+        inside && /^[a-z]/ && !/^default / && !/^full / {
+            # Split on first " = "
+            idx = index($0, " = ")
+            if (idx == 0) next
+            feat = substr($0, 1, idx - 1)
+            val  = substr($0, idx + 3)
+            # Clean up val: remove brackets, quotes, "dep:" prefix
+            gsub(/[\[\]"]/, "", val)
+            gsub(/dep:/, "", val)
+            gsub(/, */, ", ", val)
+            print feat "|" val
+        }
+    ' "$FACADE_TOML"
 }
 
 # ── output ───────────────────────────────────────────────────────────────
@@ -43,8 +64,7 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 HEADER
 
 collect_crates | while IFS= read -r name; do
-    toml="$name/Cargo.toml"
-    desc=$(get_desc "$toml")
+    desc=$(get_desc "$name/Cargo.toml")
     echo "| \`$name\` | $desc |"
 done
 
@@ -81,31 +101,8 @@ The `r2e` facade crate gates sub-crates behind features.
 |---------|----------------|
 MID
 
-# Parse features from Cargo.toml (skip default and full lines)
-awk '
-    /^\[features\]/ { in_feat=1; next }
-    /^\[/           { in_feat=0 }
-    in_feat && /^[a-z]/ && !/^default/ && !/^full/ {
-        # grab everything after " = "
-        sub(/^[^ ]+ *= */, "")
-        feat = $0
-        # get the feature name from the original line
-    }
-' "$FACADE_TOML" > /dev/null  # dummy, we'll use grep instead
-
-# Simpler approach: parse each feature line
-grep -E '^[a-z]' "$FACADE_TOML" | grep -v '^\[' | grep ' = ' | while IFS= read -r line; do
-    feat=$(echo "$line" | sed 's/ *=.*//')
-    val=$(echo "$line" | sed 's/^[^=]*= *//')
-
-    # skip default and full
-    case "$feat" in
-        default|full) continue ;;
-    esac
-
-    # Clean up the value for display
-    clean=$(echo "$val" | sed 's/\[//g; s/\]//g; s/"//g; s/dep://g; s/,/, /g' | sed 's/  */ /g')
-    echo "| \`$feat\` | $clean |"
+extract_features | while IFS='|' read -r feat val; do
+    echo "| \`$feat\` | $val |"
 done
 
 echo '| `full` | All of the above (except `dev-reload`) |'

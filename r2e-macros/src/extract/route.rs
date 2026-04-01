@@ -57,6 +57,17 @@ pub fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
     Ok(Vec::new())
 }
 
+pub fn extract_all_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
+    for attr in attrs {
+        if attr.path().is_ident("all_roles") {
+            let args: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
+                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+            return Ok(args.iter().map(|lit| lit.value()).collect());
+        }
+    }
+    Ok(Vec::new())
+}
+
 pub fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<TransactionalConfig>> {
     for attr in attrs {
         if attr.path().is_ident("transactional") {
@@ -86,6 +97,19 @@ pub fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {
     let krate = r2e_security_path();
     let tokens = quote! {
         #krate::RolesGuard {
+            required_roles: &[#(#roles),*],
+        }
+    };
+    syn::parse2(tokens).ok()
+}
+
+pub fn all_roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {
+    if roles.is_empty() {
+        return None;
+    }
+    let krate = r2e_security_path();
+    let tokens = quote! {
+        #krate::AllRolesGuard {
             required_roles: &[#(#roles),*],
         }
     };

@@ -1,6 +1,6 @@
 use r2e_core::guards::{Guard, GuardContext, Identity, PathParams};
 use r2e_core::http::{HeaderMap, Uri};
-use r2e_security::guards::{RoleBasedIdentity, RolesGuard};
+use r2e_security::guards::{AllRolesGuard, RoleBasedIdentity, RolesGuard};
 
 struct TestIdentity {
     sub: String,
@@ -87,4 +87,61 @@ async fn roles_guard_rejects_no_identity() {
     assert!(result.is_err());
     let resp = result.unwrap_err();
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+}
+
+// ── AllRolesGuard (AND semantics) ──
+
+#[r2e_core::test]
+async fn all_roles_guard_passes_when_all_present() {
+    let guard = AllRolesGuard {
+        required_roles: &["admin", "editor"],
+    };
+    let id = TestIdentity::new("user-1", &["admin", "editor", "user"]);
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx = make_ctx(Some(&id), &uri, &headers);
+    let result = guard.check(&(), &ctx).await;
+    assert!(result.is_ok());
+}
+
+#[r2e_core::test]
+async fn all_roles_guard_rejects_when_one_missing() {
+    let guard = AllRolesGuard {
+        required_roles: &["admin", "superadmin"],
+    };
+    let id = TestIdentity::new("user-1", &["admin", "user"]);
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx = make_ctx(Some(&id), &uri, &headers);
+    let result = guard.check(&(), &ctx).await;
+    assert!(result.is_err());
+    let resp = result.unwrap_err();
+    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+}
+
+#[r2e_core::test]
+async fn all_roles_guard_rejects_no_identity() {
+    let guard = AllRolesGuard {
+        required_roles: &["admin"],
+    };
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx: GuardContext<'_, TestIdentity> = make_ctx(None, &uri, &headers);
+    let result = guard.check(&(), &ctx).await;
+    assert!(result.is_err());
+    let resp = result.unwrap_err();
+    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+}
+
+#[r2e_core::test]
+async fn all_roles_guard_passes_single_role() {
+    let guard = AllRolesGuard {
+        required_roles: &["admin"],
+    };
+    let id = TestIdentity::new("user-1", &["admin"]);
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx = make_ctx(Some(&id), &uri, &headers);
+    let result = guard.check(&(), &ctx).await;
+    assert!(result.is_ok());
 }

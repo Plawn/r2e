@@ -53,6 +53,7 @@ pub struct ScheduledMethod {
 #[derive(Default)]
 pub struct MethodDecorators {
     pub roles: Vec<String>,
+    pub all_roles: Vec<String>,
     pub transactional: Option<TransactionalConfig>,
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,

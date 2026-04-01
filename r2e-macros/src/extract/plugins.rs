@@ -6,9 +6,10 @@
 //! requires implementing `RoutePlugin` and appending it here.
 
 use crate::extract::route::{
-    extract_guard_fns, extract_intercept_fns, extract_layer_exprs, extract_middleware_fns,
-    extract_pre_guard_fns, extract_returns, extract_roles, extract_status, extract_transactional,
-    is_route_attr, is_sse_attr, is_ws_attr, roles_guard_expr,
+    all_roles_guard_expr, extract_all_roles, extract_guard_fns, extract_intercept_fns,
+    extract_layer_exprs, extract_middleware_fns, extract_pre_guard_fns, extract_returns,
+    extract_roles, extract_status, extract_transactional, is_route_attr, is_sse_attr, is_ws_attr,
+    roles_guard_expr,
 };
 use crate::types::MethodDecorators;
 
@@ -41,6 +42,24 @@ impl RoutePlugin for RolesPlugin {
         // Inject the RolesGuard at the front of the guard list so it runs first.
         if let Some(roles_guard) = roles_guard_expr(&decorators.roles) {
             decorators.guard_fns.push(roles_guard);
+        }
+        Ok(())
+    }
+}
+
+struct AllRolesPlugin;
+impl RoutePlugin for AllRolesPlugin {
+    fn attr_names(&self) -> &'static [&'static str] {
+        &["all_roles"]
+    }
+    fn parse(
+        &self,
+        attrs: &[syn::Attribute],
+        decorators: &mut MethodDecorators,
+    ) -> syn::Result<()> {
+        decorators.all_roles = extract_all_roles(attrs)?;
+        if let Some(guard) = all_roles_guard_expr(&decorators.all_roles) {
+            decorators.guard_fns.push(guard);
         }
         Ok(())
     }
@@ -175,6 +194,7 @@ impl RoutePlugin for ReturnsPlugin {
 /// generated `RolesGuard` is inserted at the front of `guard_fns`.
 static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
     &RolesPlugin,
+    &AllRolesPlugin,
     &GuardPlugin,
     &PreGuardPlugin,
     &TransactionalPlugin,
@@ -190,6 +210,7 @@ static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[&InterceptPlugin];
 
 const GRPC_DISALLOWED_ATTRS: &[&str] = &[
     "roles",
+    "all_roles",
     "guard",
     "pre_guard",
     "transactional",

@@ -63,6 +63,36 @@ fn from_claims_with_custom_extractor() {
     assert_eq!(user.roles, vec!["superadmin"]);
 }
 
+// ── Merge: standard + Keycloak roles ──
+
+#[test]
+fn from_claims_merges_standard_and_keycloak_roles() {
+    let claims = json!({
+        "sub": "user-merge",
+        "roles": ["standard-admin"],
+        "realm_access": {
+            "roles": ["realm-user"]
+        }
+    });
+    let user = AuthenticatedUser::from_claims(claims);
+    assert!(user.roles.contains(&"standard-admin".to_string()));
+    assert!(user.roles.contains(&"realm-user".to_string()));
+    assert_eq!(user.roles.len(), 2);
+}
+
+#[test]
+fn from_claims_deduplicates_merged_roles() {
+    let claims = json!({
+        "sub": "user-dedup",
+        "roles": ["admin", "user"],
+        "realm_access": {
+            "roles": ["admin", "realm-only"]
+        }
+    });
+    let user = AuthenticatedUser::from_claims(claims);
+    assert_eq!(user.roles, vec!["admin", "user", "realm-only"]);
+}
+
 // ── Role Checking Methods ──
 
 #[test]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SecurityError;
 use crate::keycloak;
-use crate::openid::{Composite, RoleExtractor, StandardRoleExtractor};
+use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 
 /// Simplified identity construction from JWT claims + app state.
 ///
@@ -202,20 +202,21 @@ impl<R: RoleExtractor> IdentityBuilder for IdentityBuilderWith<R> {
 }
 
 /// Default role extractor: tries standard OIDC `roles` claim, then Keycloak `realm_access.roles`.
-pub type DefaultRoleExtractor = Composite<StandardRoleExtractor, keycloak::RealmRoleExtractor>;
+pub type DefaultRoleExtractor = Merge<StandardRoleExtractor, keycloak::RealmRoleExtractor>;
 
 /// Default identity builder with automatic support for standard OIDC and Keycloak tokens.
 ///
-/// This is the recommended builder for most use cases. It tries:
+/// This is the recommended builder for most use cases. It merges roles from:
 /// 1. Standard OIDC `roles` claim
 /// 2. Keycloak `realm_access.roles`
 ///
+/// Roles from both sources are combined and deduplicated.
 /// For more control, use [`IdentityBuilderWith`] with a custom extractor.
 pub type DefaultIdentityBuilder = IdentityBuilderWith<DefaultRoleExtractor>;
 
 impl Default for DefaultIdentityBuilder {
     fn default() -> Self {
-        Self::new(Composite(
+        Self::new(Merge(
             StandardRoleExtractor,
             keycloak::RealmRoleExtractor,
         ))
@@ -269,7 +270,7 @@ impl AuthenticatedUser {
     /// let user = AuthenticatedUser::from_claims(claims);
     /// ```
     pub fn from_claims(claims: serde_json::Value) -> Self {
-        let extractor = Composite(StandardRoleExtractor, keycloak::RealmRoleExtractor);
+        let extractor = Merge(StandardRoleExtractor, keycloak::RealmRoleExtractor);
         build_authenticated_user(claims, &extractor)
     }
 

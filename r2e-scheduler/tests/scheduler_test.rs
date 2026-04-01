@@ -51,7 +51,7 @@ async fn sleep_ms(ms: u64) {
 
 // ── Phase 3: Interval tests (start_paused = true) ─────────────────────────
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_task_runs_repeatedly() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
@@ -68,7 +68,7 @@ async fn interval_task_runs_repeatedly() {
     assert!(count >= 3, "expected >= 3 executions, got {count}");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_task_stops_on_cancel() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
@@ -95,7 +95,7 @@ async fn interval_task_stops_on_cancel() {
     );
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_with_initial_delay() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
@@ -118,7 +118,7 @@ async fn interval_with_initial_delay() {
     assert!(count >= 1, "expected >= 1 after delay, got {count}");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_cancel_during_delay() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
@@ -139,7 +139,7 @@ async fn interval_cancel_during_delay() {
     assert_eq!(counter.load(Ordering::SeqCst), 0, "should never have run");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_task_state_accessible() {
     let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -163,7 +163,7 @@ async fn interval_task_state_accessible() {
     assert!(entries.iter().all(|e| e == "tick"));
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn interval_task_panic_isolation() {
     let counter = Arc::new(AtomicUsize::new(0));
 
@@ -291,7 +291,7 @@ fn extract_tasks_empty_vec() {
     assert!(tasks.is_empty());
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn multiple_tasks_all_start() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = Arc::new(AtomicUsize::new(0));
@@ -345,7 +345,7 @@ fn task_schedule_via_trait() {
 
 // ── Phase 6: State tests (start_paused = true) ────────────────────────────
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn state_cloned_per_execution() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
@@ -361,7 +361,7 @@ async fn state_cloned_per_execution() {
     assert!(count >= 5, "expected >= 5 increments, got {count}");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn concurrent_tasks_shared_state() {
     let shared = Arc::new(AtomicUsize::new(0));
 
@@ -383,7 +383,7 @@ async fn concurrent_tasks_shared_state() {
     assert!(total >= 6, "expected total >= 6, got {total}");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn concurrent_tasks_independent_state() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = Arc::new(AtomicUsize::new(0));
@@ -406,7 +406,7 @@ async fn concurrent_tasks_independent_state() {
     assert!(v1 > v2, "fast task ({v1}) should exceed slow task ({v2})");
 }
 
-#[r2e_core::test(start_paused = true)]
+#[r2e_core::test(flavor = "current_thread", start_paused = true)]
 async fn state_mutations_visible_via_arc_mutex() {
     let log: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
 

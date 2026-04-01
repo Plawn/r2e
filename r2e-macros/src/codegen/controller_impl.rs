@@ -259,7 +259,7 @@ fn generate_route_metadata(
             let route_path_str = &rm.path;
             let method = rm.method.as_routing_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
-            let roles: Vec<_> = rm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = rm.decorators.roles.iter().chain(rm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
             let path_params = extract_path_params(rm, &krate);
@@ -287,7 +287,7 @@ fn generate_route_metadata(
             let body_required = detect_body_required(rm);
 
             // has_auth: roles, identity param, guard fns, or struct-level identity
-            let has_roles = !rm.decorators.roles.is_empty();
+            let has_roles = !rm.decorators.roles.is_empty() || !rm.decorators.all_roles.is_empty();
             let has_identity_param = rm.identity_param.is_some();
             let has_guards = !rm.decorators.guard_fns.is_empty();
 
@@ -971,10 +971,10 @@ fn generate_sse_route_metadata(
         .map(|sm| {
             let path = &sm.path;
             let op_id = format!("{}_{}", name, sm.fn_item.sig.ident);
-            let roles: Vec<_> = sm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = sm.decorators.roles.iter().chain(sm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
-            let has_roles = !sm.decorators.roles.is_empty();
+            let has_roles = !sm.decorators.roles.is_empty() || !sm.decorators.all_roles.is_empty();
             let has_guards = !sm.decorators.guard_fns.is_empty();
             let has_identity_param = sm.identity_param.is_some();
 
@@ -1062,10 +1062,10 @@ fn generate_ws_route_metadata(
         .map(|wm| {
             let path = &wm.path;
             let op_id = format!("{}_{}", name, wm.fn_item.sig.ident);
-            let roles: Vec<_> = wm.decorators.roles.iter().map(|r| quote! { #r.to_string() }).collect();
+            let roles: Vec<_> = wm.decorators.roles.iter().chain(wm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
-            let has_roles = !wm.decorators.roles.is_empty();
+            let has_roles = !wm.decorators.roles.is_empty() || !wm.decorators.all_roles.is_empty();
             let has_guards = !wm.decorators.guard_fns.is_empty();
             let has_identity_param = wm.identity_param.is_some();
 

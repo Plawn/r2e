@@ -28,6 +28,12 @@ struct Jwk {
     /// RSA exponent (base64url)
     #[serde(default)]
     e: Option<String>,
+    /// EC / OKP x-coordinate (base64url)
+    #[serde(default)]
+    x: Option<String>,
+    /// EC y-coordinate (base64url)
+    #[serde(default)]
+    y: Option<String>,
 }
 
 /// JWKS response envelope.
@@ -44,6 +50,8 @@ struct CachedJwk {
     kty: String,
     n: Option<String>,
     e: Option<String>,
+    x: Option<String>,
+    y: Option<String>,
 }
 
 impl CachedJwk {
@@ -59,6 +67,29 @@ impl CachedJwk {
                 DecodingKey::from_rsa_components(n, e).map_err(|err| {
                     SecurityError::ValidationFailed(format!(
                         "Failed to construct RSA decoding key: {err}"
+                    ))
+                })
+            }
+            "EC" => {
+                let x = self.x.as_deref().ok_or_else(|| {
+                    SecurityError::ValidationFailed("EC key missing 'x' component".into())
+                })?;
+                let y = self.y.as_deref().ok_or_else(|| {
+                    SecurityError::ValidationFailed("EC key missing 'y' component".into())
+                })?;
+                DecodingKey::from_ec_components(x, y).map_err(|err| {
+                    SecurityError::ValidationFailed(format!(
+                        "Failed to construct EC decoding key: {err}"
+                    ))
+                })
+            }
+            "OKP" => {
+                let x = self.x.as_deref().ok_or_else(|| {
+                    SecurityError::ValidationFailed("OKP key missing 'x' component".into())
+                })?;
+                DecodingKey::from_ed_components(x).map_err(|err| {
+                    SecurityError::ValidationFailed(format!(
+                        "Failed to construct EdDSA decoding key: {err}"
                     ))
                 })
             }
@@ -168,6 +199,8 @@ impl JwksCache {
                     kty: jwk.kty.clone(),
                     n: jwk.n.clone(),
                     e: jwk.e.clone(),
+                    x: jwk.x.clone(),
+                    y: jwk.y.clone(),
                 };
                 keys.insert(kid.clone(), cached);
             }
@@ -268,5 +301,61 @@ mod tests {
     fn cannot_attempt_too_soon() {
         let ts = Instant::now() - Duration::from_secs(3);
         assert!(!can_attempt(Some(ts), Duration::from_secs(10)));
+    }
+
+    // ── CachedJwk key type tests ──
+
+    use super::CachedJwk;
+
+    #[test]
+    fn rsa_key_requires_n_and_e() {
+        let jwk = CachedJwk {
+            kty: "RSA".into(),
+            n: None,
+            e: Some("AQAB".into()),
+            x: None,
+            y: None,
+        };
+        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+        assert!(err.contains("'n' component"));
+    }
+
+    #[test]
+    fn ec_key_requires_x_and_y() {
+        let jwk = CachedJwk {
+            kty: "EC".into(),
+            n: None,
+            e: None,
+            x: Some("test".into()),
+            y: None,
+        };
+        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+        assert!(err.contains("'y' component"));
+    }
+
+    #[test]
+    fn okp_key_requires_x() {
+        let jwk = CachedJwk {
+            kty: "OKP".into(),
+            n: None,
+            e: None,
+            x: None,
+            y: None,
+        };
+        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+        assert!(err.contains("'x' component"));
+    }
+
+    #[test]
+    fn unsupported_key_type_rejected() {
+        let jwk = CachedJwk {
+            kty: "unknown".into(),
+            n: None,
+            e: None,
+            x: None,
+            y: None,
+        };
+        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+        assert!(err.contains("Unsupported key type"));
     }
 }
