@@ -50,7 +50,7 @@ async fn get_token(app: &Router) -> String {
     json["access_token"].as_str().unwrap().to_string()
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn userinfo_success() {
     let app = build_app();
     let token = get_token(&app).await;
@@ -69,7 +69,7 @@ async fn userinfo_success() {
     assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn userinfo_missing_auth_header() {
     let app = build_app();
 
@@ -79,7 +79,7 @@ async fn userinfo_missing_auth_header() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn userinfo_invalid_token() {
     let app = build_app();
 

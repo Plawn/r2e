@@ -40,7 +40,7 @@ fn make_ctx<'a, I: Identity>(
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_passes_with_correct_role() {
     let guard = GrpcRolesGuard {
         required_roles: &["admin"],
@@ -52,7 +52,7 @@ async fn roles_guard_passes_with_correct_role() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_rejects_missing_role() {
     let guard = GrpcRolesGuard {
         required_roles: &["admin"],
@@ -66,7 +66,7 @@ async fn roles_guard_rejects_missing_role() {
     assert_eq!(status.code(), tonic::Code::PermissionDenied);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_rejects_no_identity() {
     let guard = GrpcRolesGuard {
         required_roles: &["admin"],
@@ -79,7 +79,7 @@ async fn roles_guard_rejects_no_identity() {
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_passes_with_any_required_role() {
     let guard = GrpcRolesGuard {
         required_roles: &["admin", "moderator"],

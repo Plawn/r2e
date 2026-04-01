@@ -3,7 +3,7 @@
 use r2e_core::http::ws::Message;
 use r2e_core::ws::{WsBroadcaster, WsRooms};
 
-#[tokio::test]
+#[r2e_core::test]
 async fn broadcaster_send_recv() {
     let broadcaster = WsBroadcaster::new(16);
     let mut rx = broadcaster.subscribe();
@@ -15,7 +15,7 @@ async fn broadcaster_send_recv() {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn broadcaster_excludes_sender() {
     let broadcaster = WsBroadcaster::new(16);
     let mut rx = broadcaster.subscribe();
@@ -34,7 +34,7 @@ async fn broadcaster_excludes_sender() {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn rooms_get_or_create() {
     let rooms = WsRooms::new(16);
     let _b1 = rooms.room("chat");
@@ -43,7 +43,7 @@ async fn rooms_get_or_create() {
     assert_eq!(rooms.room_count(), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn rooms_remove() {
     let rooms = WsRooms::new(16);
     let _b = rooms.room("chat");

@@ -1,6 +1,6 @@
 use r2e_openfga::{MockBackend, OpenFgaRegistry};
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_registry_check_with_mock() {
     let mock = MockBackend::new();
     mock.add_tuple("user:alice", "viewer", "document:1");
@@ -17,7 +17,7 @@ async fn test_registry_check_with_mock() {
         .unwrap());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_registry_cache_hit() {
     let mock = MockBackend::new();
     mock.add_tuple("user:alice", "viewer", "document:1");
@@ -37,7 +37,7 @@ async fn test_registry_cache_hit() {
         .unwrap());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_registry_invalidate_object() {
     let mock = MockBackend::new();
     let registry = OpenFgaRegistry::with_cache(mock, 60);
@@ -55,7 +55,7 @@ async fn test_registry_invalidate_object() {
     registry.invalidate_object("document:1");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_registry_clear_cache() {
     let mock = MockBackend::new();
     mock.add_tuple("user:alice", "viewer", "document:1");

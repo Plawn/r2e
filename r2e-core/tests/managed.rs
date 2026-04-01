@@ -3,7 +3,7 @@ use r2e_core::HttpError;
 use r2e_core::http::{StatusCode, IntoResponse, Response};
 use http_body_util::BodyExt;
 
-#[tokio::test]
+#[r2e_core::test]
 async fn managed_error_into_response() {
     let err = ManagedError(HttpError::NotFound("gone".into()));
     let resp: Response = err.into();
@@ -28,7 +28,7 @@ impl IntoResponse for TestError {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn managed_err_wraps_custom_error() {
     let err = ManagedErr(TestError("conflict!".into()));
     let resp: Response = err.into();

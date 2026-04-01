@@ -57,7 +57,7 @@ async fn get_response(
 
 // ── Phase 6: Plugin & Routes Integration ────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn openapi_json_endpoint() {
     let routes = vec![simple_route("GET", "/users", "list_users")];
     let router = openapi_routes::<()>(config_with_ui(), &routes);
@@ -70,7 +70,7 @@ async fn openapi_json_endpoint() {
     assert!(spec["paths"]["/users"]["get"].is_object());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn openapi_json_content_type() {
     let routes = vec![simple_route("GET", "/health", "health")];
     let router = openapi_routes::<()>(config_with_ui(), &routes);
@@ -82,7 +82,7 @@ async fn openapi_json_content_type() {
     );
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn docs_ui_when_enabled() {
     let routes = vec![];
     let router = openapi_routes::<()>(config_with_ui(), &routes);
@@ -94,7 +94,7 @@ async fn docs_ui_when_enabled() {
     assert!(body.contains("spec-url=\"/openapi.json\""));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn docs_ui_when_disabled() {
     let routes = vec![];
     let router = openapi_routes::<()>(config_without_ui(), &routes);
@@ -103,7 +103,7 @@ async fn docs_ui_when_disabled() {
     assert_eq!(status, http::StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn docs_css_served() {
     let routes = vec![];
     let router = openapi_routes::<()>(config_with_ui(), &routes);
@@ -117,7 +117,7 @@ async fn docs_css_served() {
     assert!(!body.is_empty());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn docs_js_served() {
     let routes = vec![];
     let router = openapi_routes::<()>(config_with_ui(), &routes);
@@ -131,7 +131,7 @@ async fn docs_js_served() {
     assert!(!body.is_empty());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn spec_includes_registered_routes() {
     let routes = vec![
         simple_route("GET", "/users", "list_users"),
@@ -150,7 +150,7 @@ async fn spec_includes_registered_routes() {
     assert!(spec["paths"]["/users"]["post"].is_object());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn docs_assets_not_served_when_disabled() {
     let routes = vec![];
     let router = openapi_routes::<()>(config_without_ui(), &routes);
@@ -170,7 +170,7 @@ async fn docs_assets_not_served_when_disabled() {
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn openapi_json_always_served_regardless_of_docs_ui() {
     let routes = vec![simple_route("GET", "/test", "test")];
     let router = openapi_routes::<()>(config_without_ui(), &routes);

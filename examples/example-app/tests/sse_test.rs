@@ -73,7 +73,7 @@ async fn setup() -> TestApp {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_sse_content_type() {
     let app = setup().await;
     let resp = app.get("/sse/events").send().await;
@@ -86,7 +86,7 @@ async fn test_sse_content_type() {
     );
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_sse_event_format() {
     let app = setup().await;
     let resp = app.get("/sse/events").send().await;
@@ -100,7 +100,7 @@ async fn test_sse_event_format() {
     );
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_sse_typed_event() {
     let app = setup().await;
     let resp = app.get("/sse/events").send().await;
@@ -119,7 +119,7 @@ async fn test_sse_typed_event() {
     );
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_sse_stream_completes() {
     let app = setup().await;
     let resp = app.get("/sse/events").send().await;

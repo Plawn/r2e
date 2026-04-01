@@ -26,7 +26,7 @@ where
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn plugin_provides_prometheus_registry() {
     let _app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))
@@ -36,7 +36,7 @@ async fn plugin_provides_prometheus_registry() {
     // If we get here, the plugin successfully provided PrometheusRegistry
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn builder_register_includes_custom_collectors() {
     let counter = IntCounter::new("plugin_test_counter", "test").unwrap();
     let counter_clone = counter.clone();
@@ -61,7 +61,7 @@ async fn builder_register_includes_custom_collectors() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn registry_bean_can_register_at_runtime() {
     let app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))

@@ -52,7 +52,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn password_grant_success() {
     let app = build_app();
     let resp = app
@@ -69,7 +69,7 @@ async fn password_grant_success() {
     assert!(json["access_token"].as_str().unwrap().len() > 50);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn password_grant_invalid_password() {
     let app = build_app();
     let resp = app
@@ -84,7 +84,7 @@ async fn password_grant_invalid_password() {
     assert_eq!(json["error"], "invalid_grant");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn password_grant_unknown_user() {
     let app = build_app();
     let resp = app
@@ -99,7 +99,7 @@ async fn password_grant_unknown_user() {
     assert_eq!(json["error"], "invalid_grant");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn unsupported_grant_type() {
     let app = build_app();
     let resp = app
@@ -114,7 +114,7 @@ async fn unsupported_grant_type() {
     assert_eq!(json["error"], "unsupported_grant_type");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn missing_username() {
     let app = build_app();
     let resp = app
@@ -127,7 +127,7 @@ async fn missing_username() {
     assert_eq!(json["error"], "invalid_request");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn missing_password() {
     let app = build_app();
     let resp = app

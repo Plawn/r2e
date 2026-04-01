@@ -338,12 +338,13 @@ impl BeanContext {
             return Some(val.clone());
         }
         // Lazy path: construct on first access
-        self.lazy_slots
+        let slot = self
+            .lazy_slots
             .read()
             .ok()
-            .and_then(|slots| slots.get(&tid).map(Arc::clone))
-            .and_then(|slot| slot.resolve().downcast_ref::<T>())
-            .cloned()
+            .and_then(|slots| slots.get(&tid).map(Arc::clone))?;
+        let resolved = slot.resolve();
+        resolved.downcast_ref::<T>().cloned()
     }
 }
 

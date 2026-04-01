@@ -10,42 +10,42 @@ async fn error_parts(err: HttpError) -> (StatusCode, serde_json::Value) {
     (status, json)
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_not_found_status() {
     let (status, body) = error_parts(HttpError::NotFound("resource missing".into())).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "resource missing");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_bad_request_status() {
     let (status, body) = error_parts(HttpError::BadRequest("invalid input".into())).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "invalid input");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_unauthorized_status() {
     let (status, body) = error_parts(HttpError::Unauthorized("no token".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "no token");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_forbidden_status() {
     let (status, body) = error_parts(HttpError::Forbidden("access denied".into())).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], "access denied");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_internal_status() {
     let (status, body) = error_parts(HttpError::Internal("server broke".into())).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"], "server broke");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn app_error_custom_status_and_body() {
     let custom_body = serde_json::json!({"detail": "teapot"});
     let (status, body) = error_parts(HttpError::Custom {

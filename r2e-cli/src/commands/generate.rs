@@ -468,7 +468,7 @@ use serde_json::json;
 // TODO: adapt imports to your project structure
 // use crate::models::{snake}::{entity_name};
 
-#[tokio::test]
+#[r2e::test]
 async fn test_list_{plural}() {{
     // let app = TestApp::from_builder(/* your builder */);
     // let resp = app.get("/{plural}").send().await;
@@ -476,7 +476,7 @@ async fn test_list_{plural}() {{
     todo!("Setup TestApp and test list endpoint");
 }}
 
-#[tokio::test]
+#[r2e::test]
 async fn test_create_{snake}() {{
     // let app = TestApp::from_builder(/* your builder */);
     // let body = json!({{ /* fields */ }});
@@ -485,7 +485,7 @@ async fn test_create_{snake}() {{
     todo!("Setup TestApp and test create endpoint");
 }}
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_{snake}_not_found() {{
     // let app = TestApp::from_builder(/* your builder */);
     // let resp = app.get("/{plural}/999").send().await;
@@ -493,7 +493,7 @@ async fn test_get_{snake}_not_found() {{
     todo!("Setup TestApp and test 404");
 }}
 
-#[tokio::test]
+#[r2e::test]
 async fn test_delete_{snake}() {{
     // let app = TestApp::from_builder(/* your builder */);
     // let resp = app.delete("/{plural}/1").send().await;

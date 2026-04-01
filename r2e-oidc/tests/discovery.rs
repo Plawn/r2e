@@ -53,7 +53,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn discovery_document() {
     let app = build_app();
     let req = Request::get("/.well-known/openid-configuration")
@@ -80,7 +80,7 @@ async fn discovery_document() {
     assert!(json["grant_types_supported"].as_array().unwrap().len() == 2);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn discovery_document_with_base_path() {
     let app = build_app_with_base_path();
     let req = Request::get("/auth/.well-known/openid-configuration")

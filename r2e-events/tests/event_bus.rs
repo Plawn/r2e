@@ -15,7 +15,7 @@ struct OtherEvent;
 #[derive(Serialize, Deserialize)]
 struct SlowEvent;
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_emit_and_subscribe() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -35,7 +35,7 @@ async fn test_emit_and_subscribe() {
     assert_eq!(counter.load(Ordering::SeqCst), 42);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_multiple_subscribers() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -57,7 +57,7 @@ async fn test_multiple_subscribers() {
     assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_no_cross_type_dispatch() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -77,7 +77,7 @@ async fn test_no_cross_type_dispatch() {
     assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_backpressure_limits_concurrency() {
     // Create a bus with max 3 concurrent handlers
     let bus = LocalEventBus::with_concurrency(3);
@@ -126,7 +126,7 @@ async fn test_backpressure_limits_concurrency() {
     assert_eq!(completed.load(Ordering::SeqCst), 10, "All events should be processed");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_unbounded_mode() {
     let bus = LocalEventBus::unbounded();
     assert!(bus.concurrency_limit().is_none());
@@ -147,7 +147,7 @@ async fn test_unbounded_mode() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_with_concurrency_constructor() {
     let bus = LocalEventBus::with_concurrency(100);
     // The limit should be reported (though we can't check exact value easily)
@@ -171,7 +171,7 @@ async fn test_with_concurrency_constructor() {
 
 // --- Phase 1: Error & Panic Isolation ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_panic_does_not_crash_emit() {
     let bus = LocalEventBus::new();
 
@@ -202,7 +202,7 @@ async fn test_handler_panic_does_not_crash_emit() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_panic_does_not_crash_emit_and_wait() {
     let bus = LocalEventBus::new();
 
@@ -232,7 +232,7 @@ async fn test_handler_panic_does_not_crash_emit_and_wait() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_panic_releases_permit() {
     let bus = LocalEventBus::with_concurrency(1);
 
@@ -263,7 +263,7 @@ async fn test_panic_releases_permit() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_multiple_handlers_one_panics_others_run() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -300,7 +300,7 @@ async fn test_multiple_handlers_one_panics_others_run() {
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_err_result_in_handler() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -324,7 +324,7 @@ async fn test_err_result_in_handler() {
 
 // --- Phase 2: Subscription Safety ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_late_subscriber_misses_event() {
     let bus = LocalEventBus::new();
     bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
@@ -345,7 +345,7 @@ async fn test_late_subscriber_misses_event() {
     assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_concurrent_subscribes() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -374,7 +374,7 @@ async fn test_concurrent_subscribes() {
     assert_eq!(counter.load(Ordering::SeqCst), 10);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_subscribe_during_emit() {
     let bus = LocalEventBus::new();
 
@@ -406,7 +406,7 @@ async fn test_subscribe_during_emit() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_subscribe_same_event_type_multiple() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -430,21 +430,21 @@ async fn test_subscribe_same_event_type_multiple() {
 
 // --- Phase 3: Edge Cases & Lifecycle ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_emit_no_subscribers() {
     let bus = LocalEventBus::new();
     // Should not panic when emitting with no subscribers
     bus.emit(TestEvent { value: 1 }).await.unwrap();
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_emit_and_wait_no_subscribers() {
     let bus = LocalEventBus::new();
     // Should return instantly with no subscribers, no panic
     bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_default_eventbus() {
     let default_bus = LocalEventBus::default();
     let new_bus = LocalEventBus::new();
@@ -455,19 +455,19 @@ async fn test_default_eventbus() {
     assert_eq!(default_bus.concurrency_limit(), Some(DEFAULT_MAX_CONCURRENCY));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_concurrency_limit_bounded() {
     let bus = LocalEventBus::with_concurrency(5);
     assert_eq!(bus.concurrency_limit(), Some(5));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_concurrency_limit_unbounded() {
     let bus = LocalEventBus::unbounded();
     assert_eq!(bus.concurrency_limit(), None);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_clone_shares_state() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -491,7 +491,7 @@ async fn test_clone_shares_state() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_drop_bus_with_active_handlers() {
     let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -519,7 +519,7 @@ async fn test_drop_bus_with_active_handlers() {
 
 // --- Phase 4: Async Handler Behavior ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_with_long_sleep() {
     let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -545,7 +545,7 @@ async fn test_handler_with_long_sleep() {
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_emit_and_wait_waits_for_slow() {
     let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -567,7 +567,7 @@ async fn test_emit_and_wait_waits_for_slow() {
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_spawns_nested_emit() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -602,7 +602,7 @@ async fn test_handler_spawns_nested_emit() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_shared_state_mutation() {
     let bus = LocalEventBus::new();
     let data = Arc::new(tokio::sync::Mutex::new(Vec::<i32>::new()));
@@ -629,7 +629,7 @@ async fn test_handler_shared_state_mutation() {
 
 // --- Phase 5: Stress & Performance ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_stress_many_events() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -651,7 +651,7 @@ async fn test_stress_many_events() {
     assert_eq!(counter.load(Ordering::SeqCst), 100);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_stress_many_subscribers() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -673,7 +673,7 @@ async fn test_stress_many_subscribers() {
     assert_eq!(counter.load(Ordering::SeqCst), 50);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_stress_concurrent_emit() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -705,7 +705,7 @@ async fn test_stress_concurrent_emit() {
     assert_eq!(counter.load(Ordering::SeqCst), 100);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_backpressure_high_load() {
     let bus = LocalEventBus::with_concurrency(2);
     let active = Arc::new(AtomicUsize::new(0));
@@ -748,7 +748,7 @@ async fn test_backpressure_high_load() {
 
 // --- Phase 6: EventBus trait compliance ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_local_event_bus_implements_trait() {
     // Verify LocalEventBus can be used where EventBus trait is expected
     fn assert_event_bus<T: EventBus>(_bus: &T) {}
@@ -758,7 +758,7 @@ async fn test_local_event_bus_implements_trait() {
 
 // --- Phase 7: New features (unsubscribe, metadata, shutdown, nack) ---
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_unsubscribe_prevents_future_dispatch() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -787,7 +787,7 @@ async fn test_unsubscribe_prevents_future_dispatch() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_metadata_propagated_to_handler() {
     let bus = LocalEventBus::new();
     let received_meta = Arc::new(tokio::sync::Mutex::new(None::<EventMetadata>));
@@ -820,7 +820,7 @@ async fn test_metadata_propagated_to_handler() {
     assert!(m.timestamp > 0);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_auto_generated_metadata_has_unique_ids() {
     let bus = LocalEventBus::new();
     let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u64>::new()));
@@ -848,7 +848,7 @@ async fn test_auto_generated_metadata_has_unique_ids() {
     assert_eq!(collected.len(), deduped.len(), "event_ids should be unique");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_shutdown_rejects_new_emits() {
     let bus = LocalEventBus::new();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -873,7 +873,7 @@ async fn test_shutdown_rejects_new_emits() {
     assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_shutdown_waits_for_in_flight() {
     let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -897,7 +897,7 @@ async fn test_shutdown_waits_for_in_flight() {
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_shutdown_subscribe_rejected() {
     let bus = LocalEventBus::new();
     bus.shutdown(Duration::from_secs(1)).await.unwrap();
@@ -908,7 +908,7 @@ async fn test_shutdown_subscribe_rejected() {
     assert!(matches!(result, Err(EventBusError::Shutdown)));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_emit_and_wait_with_metadata() {
     let bus = LocalEventBus::new();
     let received_key = Arc::new(tokio::sync::Mutex::new(None::<String>));
@@ -931,14 +931,14 @@ async fn test_emit_and_wait_with_metadata() {
     assert_eq!(key.as_deref(), Some("my-key"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_result_from_unit() {
     // () should convert to Ack
     let result: HandlerResult = ().into();
     assert!(matches!(result, HandlerResult::Ack));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_handler_result_from_result() {
     let ok: HandlerResult = Ok::<(), String>(()).into();
     assert!(matches!(ok, HandlerResult::Ack));

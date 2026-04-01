@@ -13,7 +13,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 /// Simulate hot-reload: build the OidcRuntime once, then use it across two
 /// separate AppBuilder cycles. A token issued during the first cycle must
 /// remain valid in the second cycle (same keys, same validator).
-#[tokio::test]
+#[r2e_core::test]
 async fn token_survives_hot_reload() {
     let users = InMemoryUserStore::new().add_user(
         "alice",

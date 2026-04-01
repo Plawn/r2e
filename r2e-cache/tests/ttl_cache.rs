@@ -44,7 +44,7 @@ fn test_cache_clear() {
     assert_eq!(cache.get(&"b"), None);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_in_memory_store() {
     let store = InMemoryStore::new();
     store.set("k1", Bytes::from("v1"), Duration::from_secs(60)).await;
@@ -54,7 +54,7 @@ async fn test_in_memory_store() {
     assert_eq!(store.get("k1").await, None);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_in_memory_store_prefix_removal() {
     let store = InMemoryStore::new();
     store.set("users:1", Bytes::from("a"), Duration::from_secs(60)).await;

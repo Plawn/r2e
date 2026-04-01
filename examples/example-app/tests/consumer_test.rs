@@ -86,7 +86,7 @@ impl SecondCountingConsumer {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_consumer_method_invoked() {
     let state = make_state();
 
@@ -104,7 +104,7 @@ async fn test_consumer_method_invoked() {
     assert_eq!(state.counter.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_consumer_receives_correct_data() {
     let state = make_state();
 
@@ -120,7 +120,7 @@ async fn test_consumer_receives_correct_data() {
     assert_eq!(captured.as_deref(), Some("important payload"));
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_consumer_with_injected_deps() {
     let state = make_state();
 
@@ -140,7 +140,7 @@ async fn test_consumer_with_injected_deps() {
     assert_eq!(state.counter.load(Ordering::SeqCst), 5);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_multiple_consumers_same_event() {
     let state = make_state();
 

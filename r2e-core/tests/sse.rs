@@ -16,7 +16,7 @@ async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {
     .map(|r| r.unwrap())
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn sse_broadcaster_send_recv() {
     let broadcaster = SseBroadcaster::new(16);
     let mut sub = broadcaster.subscribe();
@@ -27,7 +27,7 @@ async fn sse_broadcaster_send_recv() {
     assert!(debug.contains("hello"), "event debug should contain data: {debug}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn sse_broadcaster_typed_event() {
     let broadcaster = SseBroadcaster::new(16);
     let mut sub = broadcaster.subscribe();
@@ -38,7 +38,7 @@ async fn sse_broadcaster_typed_event() {
     assert!(debug.contains("payload"), "event debug should contain data: {debug}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn sse_multiple_subscribers() {
     let broadcaster = SseBroadcaster::new(16);
     let mut sub1 = broadcaster.subscribe();

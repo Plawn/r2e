@@ -8,7 +8,7 @@ fn request_id_display() {
     assert_eq!(id.to_string(), "abc-123");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn request_id_into_response() {
     let id = RequestId("test-id".into());
     let resp = id.into_response();

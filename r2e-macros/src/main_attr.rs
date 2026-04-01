@@ -31,6 +31,13 @@ struct MainArgs {
     flavor: Option<bool>,
     /// Optional setup function path for hot-reload support.
     setup_fn: Option<syn::Path>,
+    max_blocking_threads: Option<usize>,
+    thread_stack_size: Option<usize>,
+    thread_name: Option<String>,
+    global_queue_interval: Option<u32>,
+    event_interval: Option<u32>,
+    thread_keep_alive_secs: Option<u64>,
+    start_paused: Option<bool>,
 }
 
 impl Default for MainArgs {
@@ -40,6 +47,13 @@ impl Default for MainArgs {
             worker_threads: None,
             flavor: None,
             setup_fn: None,
+            max_blocking_threads: None,
+            thread_stack_size: None,
+            thread_name: None,
+            global_queue_interval: None,
+            event_interval: None,
+            thread_keep_alive_secs: None,
+            start_paused: None,
         }
     }
 }
@@ -118,6 +132,97 @@ impl MainArgs {
                                 ));
                             }
                         }
+                        "max_blocking_threads" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = &nv.value
+                            {
+                                this.max_blocking_threads = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected an integer literal for `max_blocking_threads`",
+                                ));
+                            }
+                        }
+                        "thread_stack_size" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = &nv.value
+                            {
+                                this.thread_stack_size = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected an integer literal for `thread_stack_size`",
+                                ));
+                            }
+                        }
+                        "thread_name" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(s), ..
+                            }) = &nv.value
+                            {
+                                this.thread_name = Some(s.value());
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected a string literal for `thread_name`",
+                                ));
+                            }
+                        }
+                        "global_queue_interval" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = &nv.value
+                            {
+                                this.global_queue_interval = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected an integer literal for `global_queue_interval`",
+                                ));
+                            }
+                        }
+                        "event_interval" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = &nv.value
+                            {
+                                this.event_interval = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected an integer literal for `event_interval`",
+                                ));
+                            }
+                        }
+                        "thread_keep_alive" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = &nv.value
+                            {
+                                this.thread_keep_alive_secs = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected an integer literal (seconds) for `thread_keep_alive`",
+                                ));
+                            }
+                        }
+                        "start_paused" => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Bool(b), ..
+                            }) = &nv.value
+                            {
+                                this.start_paused = Some(b.value);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    &nv.value,
+                                    "expected a boolean literal for `start_paused`",
+                                ));
+                            }
+                        }
                         _ => {
                             return Err(syn::Error::new_spanned(
                                 &nv.path,
@@ -159,6 +264,55 @@ impl MainArgs {
             }
         }
     }
+
+    /// Generate the full `tokio::runtime::Builder` chain including `.build()`.
+    fn runtime_builder_tokens(&self, is_test: bool) -> TokenStream2 {
+        let builder_fn = if self.use_current_thread(is_test) {
+            quote! { ::tokio::runtime::Builder::new_current_thread() }
+        } else {
+            quote! { ::tokio::runtime::Builder::new_multi_thread() }
+        };
+
+        let worker_threads = self.worker_threads.map(|n| {
+            quote! { .worker_threads(#n) }
+        });
+        let max_blocking = self.max_blocking_threads.map(|n| {
+            quote! { .max_blocking_threads(#n) }
+        });
+        let stack_size = self.thread_stack_size.map(|n| {
+            quote! { .thread_stack_size(#n) }
+        });
+        let thread_name = self.thread_name.as_ref().map(|s| {
+            quote! { .thread_name(#s) }
+        });
+        let gqi = self.global_queue_interval.map(|n| {
+            quote! { .global_queue_interval(#n) }
+        });
+        let ei = self.event_interval.map(|n| {
+            quote! { .event_interval(#n) }
+        });
+        let keep_alive = self.thread_keep_alive_secs.map(|secs| {
+            quote! { .thread_keep_alive(::std::time::Duration::from_secs(#secs)) }
+        });
+        let start_paused = self.start_paused.map(|b| {
+            quote! { .start_paused(#b) }
+        });
+
+        quote! {
+            #builder_fn
+                #worker_threads
+                #max_blocking
+                #stack_size
+                #thread_name
+                #gqi
+                #ei
+                #keep_alive
+                #start_paused
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+        }
+    }
 }
 
 // ── Codegen ──────────────────────────────────────────────────────────────
@@ -191,15 +345,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         quote! {}
     };
 
-    let builder_fn = if args.use_current_thread(is_test) {
-        quote! { ::tokio::runtime::Builder::new_current_thread() }
-    } else {
-        quote! { ::tokio::runtime::Builder::new_multi_thread() }
-    };
-
-    let worker_threads = args.worker_threads.map(|n| {
-        quote! { .worker_threads(#n) }
-    });
+    let runtime_builder = args.runtime_builder_tokens(is_test);
 
     let test_attr = if is_test {
         quote! { #[::core::prelude::v1::test] }
@@ -236,11 +382,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
             #test_attr
             #vis fn #fn_name() #ret {
                 #tracing_init
-                #builder_fn
-                    #worker_threads
-                    .enable_all()
-                    .build()
-                    .expect("failed to build tokio runtime")
+                #runtime_builder
                     .block_on(async {
                         #[cfg(not(feature = "dev-reload"))]
                         {
@@ -282,11 +424,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         #test_attr
         #vis fn #fn_name() #ret {
             #tracing_init
-            #builder_fn
-                #worker_threads
-                .enable_all()
-                .build()
-                .expect("failed to build tokio runtime")
+            #runtime_builder
                 .block_on(async #body)
         }
     }

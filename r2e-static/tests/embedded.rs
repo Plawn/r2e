@@ -28,7 +28,7 @@ fn make_app(frontend: EmbeddedFrontend) -> Router {
         .build()
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn exact_file_match_returns_content_and_mime() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (status, headers, body) = get(app, "/style.css").await;
@@ -38,7 +38,7 @@ async fn exact_file_match_returns_content_and_mime() {
     assert_eq!(headers.get("content-type").unwrap(), "text/css");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn root_serves_index_html() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (status, _, body) = get(app, "/").await;
@@ -47,7 +47,7 @@ async fn root_serves_index_html() {
     assert!(body.contains("<h1>Hello</h1>"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn excluded_prefix_returns_404() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (status, _, _) = get(app, "/api/users").await;
@@ -55,7 +55,7 @@ async fn excluded_prefix_returns_404() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn spa_fallback_returns_index_html() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (status, _, body) = get(app, "/some/unknown/route").await;
@@ -64,7 +64,7 @@ async fn spa_fallback_returns_index_html() {
     assert!(body.contains("<h1>Hello</h1>"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn spa_disabled_returns_404_for_unknown() {
     let app = make_app(
         EmbeddedFrontend::builder::<TestAssets>()
@@ -76,7 +76,7 @@ async fn spa_disabled_returns_404_for_unknown() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn immutable_prefix_sets_cache_control() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (status, headers, _) = get(app, "/assets/app.abc123.js").await;
@@ -87,7 +87,7 @@ async fn immutable_prefix_sets_cache_control() {
     assert!(cc.contains("max-age=31536000"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn non_immutable_file_gets_default_cache_control() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (_, headers, _) = get(app, "/style.css").await;
@@ -97,7 +97,7 @@ async fn non_immutable_file_gets_default_cache_control() {
     assert!(!cc.contains("immutable"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn etag_header_present() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (_, headers, _) = get(app, "/style.css").await;
@@ -106,7 +106,7 @@ async fn etag_header_present() {
     assert!(etag.starts_with('"') && etag.ends_with('"'));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn base_path_routing() {
     let app = make_app(
         EmbeddedFrontend::builder::<TestAssets>()
@@ -127,7 +127,7 @@ async fn base_path_routing() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn custom_excluded_prefix() {
     let app = make_app(
         EmbeddedFrontend::builder::<TestAssets>()
@@ -142,7 +142,7 @@ async fn custom_excluded_prefix() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn js_file_has_correct_mime() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
     let (_, headers, _) = get(app, "/assets/app.abc123.js").await;

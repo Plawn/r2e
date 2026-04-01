@@ -51,7 +51,7 @@ fn build_app() -> AppBuilder<()> {
 
 // ── Health plugin ────────────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn health_returns_200_ok() {
     let router = build_app().with(Health).build();
     let (status, body) = send_get(router, "/health").await;
@@ -61,7 +61,7 @@ async fn health_returns_200_ok() {
 
 // ── ErrorHandling plugin ────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn error_handling_catches_panic() {
     use r2e_core::http::routing::get;
 
@@ -86,7 +86,7 @@ async fn error_handling_catches_panic() {
 
 // ── NormalizePath plugin ────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn normalize_path_strips_trailing() {
     let router = build_app().with(Health).with(NormalizePath).build();
     let (status, body) = send_get(router, "/health/").await;
@@ -96,7 +96,7 @@ async fn normalize_path_strips_trailing() {
 
 // ── DevReload plugin ────────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn dev_reload_status() {
     let router = build_app().with(DevReload).build();
     let (status, body) = send_get(router, "/__r2e_dev/status").await;
@@ -104,7 +104,7 @@ async fn dev_reload_status() {
     assert_eq!(body, "dev");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn dev_reload_ping() {
     let router = build_app().with(DevReload).build();
     let (status, body) = send_get(router, "/__r2e_dev/ping").await;
@@ -116,7 +116,7 @@ async fn dev_reload_ping() {
 
 // ── RequestIdPlugin ─────────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn request_id_generated() {
     let router = build_app().with(Health).with(RequestIdPlugin).build();
     let resp = send_get_with_header(router, "/health", "accept", "*/*").await;
@@ -127,7 +127,7 @@ async fn request_id_generated() {
     assert!(!val.is_empty());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn request_id_propagated() {
     let router = build_app().with(Health).with(RequestIdPlugin).build();
     let resp = send_get_with_header(router, "/health", "x-request-id", "test-123").await;
@@ -138,7 +138,7 @@ async fn request_id_propagated() {
 
 // ── SecureHeaders plugin ────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn secure_headers_in_response() {
     let router = build_app()
         .with(Health)
@@ -201,7 +201,7 @@ impl HealthIndicator for LivenessOnly {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn advanced_health_all_up() {
     let router = build_app()
         .with(Health::builder().check(AlwaysUp).build())
@@ -212,7 +212,7 @@ async fn advanced_health_all_up() {
     assert_eq!(json["status"], "UP");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn advanced_health_one_down() {
     let router = build_app()
         .with(Health::builder().check(AlwaysUp).check(AlwaysDown).build())
@@ -223,7 +223,7 @@ async fn advanced_health_one_down() {
     assert_eq!(json["status"], "DOWN");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn advanced_health_liveness_always_ok() {
     let router = build_app()
         .with(Health::builder().check(AlwaysDown).build())
@@ -232,7 +232,7 @@ async fn advanced_health_liveness_always_ok() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn advanced_health_readiness_filters() {
     // LivenessOnly check is down but doesn't affect readiness
     let router = build_app()
@@ -246,7 +246,7 @@ async fn advanced_health_readiness_filters() {
 
 // ── E.1 CORS Plugin ──────────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn cors_permissive_allows_origin() {
     let router = build_app()
         .with(Health)
@@ -260,7 +260,7 @@ async fn cors_permissive_allows_origin() {
     );
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn cors_preflight_returns_200() {
     let router = build_app()
         .with(Health)
@@ -310,7 +310,7 @@ where
 {
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
@@ -360,7 +360,7 @@ where
 {
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .with_bean::<TestService>()
@@ -407,7 +407,7 @@ where
 {
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .with_async_bean::<AsyncService>()
@@ -455,7 +455,7 @@ where
 {
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .with_producer::<TestProducer>()
@@ -467,7 +467,7 @@ async fn build_state_with_producer() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn build_state_with_config_injection() {
     use r2e_core::config::{ConfigValue, R2eConfig};
 
@@ -510,7 +510,7 @@ where
 {
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_bean_when_true_provides_some() {
     let app = AppBuilder::new()
         .provide(TestDep(1))
@@ -523,7 +523,7 @@ async fn with_bean_when_true_provides_some() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_bean_when_false_provides_none() {
     let app = AppBuilder::new()
         .provide(TestDep(2))
@@ -536,7 +536,7 @@ async fn with_bean_when_false_provides_none() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_async_bean_when_true() {
     // State with optional async service
     #[derive(Clone)]
@@ -560,7 +560,7 @@ async fn with_async_bean_when_true() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_producer_when_false() {
     #[derive(Clone)]
     struct OptionalProducedState {
@@ -583,7 +583,7 @@ async fn with_producer_when_false() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_bean_on_config_enabled() {
     use r2e_core::config::{ConfigValue, R2eConfig};
 
@@ -602,7 +602,7 @@ async fn with_bean_on_config_enabled() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_bean_on_config_disabled() {
     use r2e_core::config::{ConfigValue, R2eConfig};
 
@@ -621,7 +621,7 @@ async fn with_bean_on_config_disabled() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_bean_on_config_missing_key_defaults_to_false() {
     use r2e_core::config::R2eConfig;
 
@@ -641,7 +641,7 @@ async fn with_bean_on_config_missing_key_defaults_to_false() {
 
 // ── E.3 Plugin Lifecycle ──────────────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn startup_hook_registration_accepted() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -664,7 +664,7 @@ async fn startup_hook_registration_accepted() {
     assert!(!flag.load(Ordering::SeqCst));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn plugin_ordering_layers_respected() {
     use r2e_core::http::HeaderValue;
 
@@ -692,7 +692,7 @@ async fn plugin_ordering_layers_respected() {
     assert_eq!(resp.headers().get("x-plugin-b").unwrap().to_str().unwrap(), "b");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_layer_fn_applied() {
     use r2e_core::http::HeaderValue;
 
@@ -715,7 +715,7 @@ async fn with_layer_fn_applied() {
     );
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn with_state_bypasses_bean_graph() {
     // with_state() skips the bean graph entirely — verify it builds a working router.
     let router = AppBuilder::new().with_state(()).with(Health).build();
@@ -726,7 +726,7 @@ async fn with_state_bypasses_bean_graph() {
 
 // ── E.4 Controller Registration ───────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn register_routes_adds_handler() {
     use r2e_core::http::routing::get;
 
@@ -738,7 +738,7 @@ async fn register_routes_adds_handler() {
     assert_eq!(body, "ok");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn multiple_route_registrations_merge() {
     use r2e_core::http::routing::get;
 
@@ -756,7 +756,7 @@ async fn multiple_route_registrations_merge() {
     assert_eq!(body_b, "beta");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn register_routes_with_state_access() {
     use r2e_core::http::State;
     use r2e_core::http::routing::get;
@@ -784,7 +784,7 @@ async fn register_routes_with_state_access() {
 
 // ── E.5 NormalizePath edge cases ──────────────────────────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn normalize_path_preserves_query_string() {
     let router = build_app().with(Health).with(NormalizePath).build();
     // /health/ with query string should redirect to /health?foo=bar
@@ -793,7 +793,7 @@ async fn normalize_path_preserves_query_string() {
     assert_eq!(body, "OK");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn normalize_path_root_slash_unaffected() {
     // GET / with no root route should return 404, not a redirect loop
     let router = build_app().with(Health).with(NormalizePath).build();

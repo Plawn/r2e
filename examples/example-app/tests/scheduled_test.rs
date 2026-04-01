@@ -33,7 +33,7 @@ impl IntervalCounter {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_scheduled_interval_runs() {
     let state = ScheduledTestState {
         counter: Arc::new(AtomicUsize::new(0)),
@@ -77,7 +77,7 @@ async fn test_scheduled_interval_runs() {
     );
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_scheduled_cancellation_stops() {
     let state = ScheduledTestState {
         counter: Arc::new(AtomicUsize::new(0)),

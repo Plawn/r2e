@@ -28,7 +28,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn jwks_endpoint() {
     let app = build_app();
     let req = Request::get("/.well-known/jwks.json")

@@ -359,7 +359,7 @@ async fn setup() -> (TestApp, TestJwt) {
 
 // ─── Existing tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_health_endpoint() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/health").send().await;
@@ -367,7 +367,7 @@ async fn test_health_endpoint() {
     assert_eq!(resp.text(), "OK");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users_authenticated() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -378,13 +378,13 @@ async fn test_list_users_authenticated() {
     assert_eq!(users[0].name, "Alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users_unauthenticated() {
     let (app, _jwt) = setup().await;
     app.get("/users").send().await.assert_unauthorized();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_user_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -394,14 +394,14 @@ async fn test_get_user_by_id() {
     assert_eq!(user.name, "Alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_user_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     app.get("/users/999").bearer(&token).send().await.assert_not_found();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_me_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token_with_claims("user-42", &["user"], Some("test@example.com"));
@@ -411,7 +411,7 @@ async fn test_me_endpoint() {
     assert_eq!(user.sub, "user-42");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
@@ -425,7 +425,7 @@ async fn test_admin_endpoint_with_admin_role() {
     assert_eq!(users.len(), 2);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -436,7 +436,7 @@ async fn test_admin_endpoint_without_admin_role() {
         .assert_forbidden();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_cached_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
@@ -450,7 +450,7 @@ async fn test_admin_cached_endpoint_with_admin_role() {
     assert_eq!(users.len(), 2);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_cached_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -463,7 +463,7 @@ async fn test_admin_cached_endpoint_without_admin_role() {
 
 // ─── New tests: Configuration (#1) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_greeting_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -479,7 +479,7 @@ async fn test_config_greeting_endpoint() {
 
 // ─── New tests: Validation (#2) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_create_user_with_valid_data() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -499,7 +499,7 @@ async fn test_create_user_with_valid_data() {
     assert_eq!(user.email, "charlie@example.com");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_create_user_with_invalid_email() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -515,7 +515,7 @@ async fn test_create_user_with_invalid_email() {
         .assert_bad_request();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_create_user_with_empty_name() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -533,7 +533,7 @@ async fn test_create_user_with_empty_name() {
 
 // ─── New tests: Error handling (#3) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_custom_error_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -550,7 +550,7 @@ async fn test_custom_error_endpoint() {
 
 // ─── New tests: Interceptors (#4) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_cached_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -566,7 +566,7 @@ async fn test_cached_endpoint() {
     assert_eq!(body.as_array().unwrap().len(), 2);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_rate_limited_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -596,7 +596,7 @@ async fn test_rate_limited_endpoint() {
 
 // ─── New tests: OpenAPI (#5) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_json_endpoint() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -607,7 +607,7 @@ async fn test_openapi_json_endpoint() {
     assert!(spec["paths"].is_object());
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_path_params() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -623,7 +623,7 @@ async fn test_openapi_path_params() {
     );
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_query_params_from_derive() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -647,7 +647,7 @@ async fn test_openapi_query_params_from_derive() {
     assert_eq!(age_param["schema"]["type"], "integer");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_pageable_params() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -670,7 +670,7 @@ async fn test_openapi_pageable_params() {
     }
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_docs_ui_endpoint() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/docs").send().await;
@@ -682,7 +682,7 @@ async fn test_docs_ui_endpoint() {
 
 // ─── New tests: Dev mode (#9) ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_dev_mode_status() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/__r2e_dev/status").send().await;
@@ -690,7 +690,7 @@ async fn test_dev_mode_status() {
     assert_eq!(resp.text(), "dev");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_dev_mode_ping() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/__r2e_dev/ping").send().await;
@@ -702,7 +702,7 @@ async fn test_dev_mode_ping() {
 
 // ─── Nested Params extraction tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_flat_nested_params_extraction() {
     let (app, _jwt) = setup().await;
     let resp = app
@@ -718,7 +718,7 @@ async fn test_flat_nested_params_extraction() {
     assert_eq!(body["email"], "a@b.com");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_flat_nested_params_defaults() {
     let (app, _jwt) = setup().await;
     // No page/size → Pageable defaults (page=0, size=20)
@@ -735,7 +735,7 @@ async fn test_flat_nested_params_defaults() {
     assert!(body["email"].is_null());
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_prefixed_nested_params_extraction() {
     let (app, _jwt) = setup().await;
     let resp = app
@@ -750,7 +750,7 @@ async fn test_prefixed_nested_params_extraction() {
     assert_eq!(body["q"], "hello");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_prefixed_nested_params_defaults() {
     let (app, _jwt) = setup().await;
     // Pageable fields without prefix should NOT populate the prefixed params
@@ -766,7 +766,7 @@ async fn test_prefixed_nested_params_defaults() {
     assert_eq!(body["q"], "test");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_custom_prefix_nested_params_extraction() {
     let (app, _jwt) = setup().await;
     let resp = app
@@ -782,7 +782,7 @@ async fn test_custom_prefix_nested_params_extraction() {
 
 // ─── Nested Params OpenAPI tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_flat_nested_params() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -803,7 +803,7 @@ async fn test_openapi_flat_nested_params() {
     assert!(params.iter().any(|p| p["name"] == "email" && p["in"] == "query"));
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_prefixed_nested_params() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -823,7 +823,7 @@ async fn test_openapi_prefixed_nested_params() {
     assert!(params.iter().any(|p| p["name"] == "q" && p["in"] == "query"));
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_openapi_custom_prefix_params() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/openapi.json").send().await;
@@ -844,7 +844,7 @@ async fn test_openapi_custom_prefix_params() {
 
 // ─── NormalizePath trailing-slash tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_trailing_slash_list_users() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -855,7 +855,7 @@ async fn test_trailing_slash_list_users() {
     assert_eq!(users[0].name, "Alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_trailing_slash_get_user_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -865,7 +865,7 @@ async fn test_trailing_slash_get_user_by_id() {
     assert_eq!(user.name, "Alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_trailing_slash_health() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/health/").send().await;
@@ -873,7 +873,7 @@ async fn test_trailing_slash_health() {
     assert_eq!(resp.text(), "OK");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_trailing_slash_nonexistent_still_404() {
     let (app, _jwt) = setup().await;
     app.get("/nonexistent/").send().await.assert_not_found();

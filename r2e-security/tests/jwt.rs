@@ -63,7 +63,7 @@ fn valid_token(sub: &str, roles: &[&str]) -> String {
 
 // ── JwtClaimsValidator ──
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_valid_token() {
     let validator = test_claims_validator();
     let token = valid_token("user-1", &["admin"]);
@@ -73,7 +73,7 @@ async fn validate_valid_token() {
     assert_eq!(roles[0].as_str().unwrap(), "admin");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_expired_token() {
     let validator = test_claims_validator();
     let token = make_token("user-1", &["admin"], None, 0);
@@ -83,7 +83,7 @@ async fn validate_expired_token() {
     assert!(matches!(err, SecurityError::TokenExpired), "expected TokenExpired, got: {err}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_invalid_signature() {
     let validator = test_claims_validator();
 
@@ -110,7 +110,7 @@ async fn validate_invalid_signature() {
     assert!(matches!(err, SecurityError::InvalidToken(_)), "expected InvalidToken, got: {err}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_disallowed_algorithm() {
     let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE);
     let validator = JwtClaimsValidator::new_with_static_key(
@@ -124,7 +124,7 @@ async fn validate_disallowed_algorithm() {
     assert!(matches!(err, SecurityError::ValidationFailed(_)));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_empty_allowed_algorithms() {
     let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
         .with_allowed_algorithms(std::iter::empty::<Algorithm>());
@@ -139,7 +139,7 @@ async fn validate_empty_allowed_algorithms() {
     assert!(matches!(err, SecurityError::ValidationFailed(_)));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_wrong_issuer() {
     let validator = test_claims_validator();
 
@@ -165,7 +165,7 @@ async fn validate_wrong_issuer() {
     assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_wrong_audience() {
     let validator = test_claims_validator();
 
@@ -191,7 +191,7 @@ async fn validate_wrong_audience() {
     assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_malformed_token() {
     let validator = test_claims_validator();
     let result = validator.validate("not.a.jwt").await;
@@ -199,7 +199,7 @@ async fn validate_malformed_token() {
     assert!(matches!(result.unwrap_err(), SecurityError::InvalidToken(_)));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_empty_token() {
     let validator = test_claims_validator();
     let result = validator.validate("").await;
@@ -209,7 +209,7 @@ async fn validate_empty_token() {
 
 // ── JwtValidator with Identity Builder ──
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_returns_authenticated_user() {
     let validator = test_validator();
     let token = make_token("alice", &["admin", "user"], Some("alice@example.com"), 3600);
@@ -220,7 +220,7 @@ async fn validate_returns_authenticated_user() {
     assert_eq!(user.roles, vec!["admin", "user"]);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validate_claims_passthrough() {
     let validator = test_validator();
     let token = valid_token("user-1", &["admin"]);

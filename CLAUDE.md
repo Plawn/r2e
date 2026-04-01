@@ -40,6 +40,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 ### Workspace Crates
 
 ```
+r2e             → Facade crate. Re-exports all subcrates behind feature flags. Users depend on this.
 r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, and multipart types.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
@@ -53,14 +54,20 @@ r2e-scheduler   → Background task scheduling (interval, cron, initial delay). 
 r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError.
 r2e-data-sqlx   → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, migrations.
 r2e-data-diesel → Diesel backend (skeleton): DieselRepository, error bridge.
+r2e-grpc        → Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports.
 r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore).
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
 r2e-openapi     → OpenAPI 3.1.0 spec generation, Swagger UI at /docs.
+r2e-prometheus   → Prometheus metrics plugin: HTTP request tracking, /metrics endpoint.
+r2e-observability → OpenTelemetry plugin: distributed tracing and context propagation via OTLP.
+r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external IdP.
+r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders, #[derive(TestState)].
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
+r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messages.
 example-app     → Demo binary exercising all features.
 ```
 

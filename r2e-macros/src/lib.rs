@@ -1092,6 +1092,13 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// | `tracing` | `true` | Call `init_tracing()` before the body |
 /// | `flavor` | `"multi_thread"` | Tokio runtime flavor |
 /// | `worker_threads` | Tokio default | Number of worker threads |
+/// | `max_blocking_threads` | Tokio default (512) | Max threads for blocking tasks |
+/// | `thread_stack_size` | Tokio default (2 MiB) | Stack size per worker thread in bytes |
+/// | `thread_name` | Tokio default | Worker thread name prefix |
+/// | `global_queue_interval` | Tokio default (31) | How often to check the global queue |
+/// | `event_interval` | Tokio default (61) | Max events processed per tick |
+/// | `thread_keep_alive` | Tokio default (10s) | Keep-alive for blocking threads (seconds) |
+/// | `start_paused` | `false` | Start runtime with time paused (useful for tests) |
 ///
 /// # Examples
 ///
@@ -1111,6 +1118,12 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 ///
 /// #[r2e::main(worker_threads = 4)]
 /// async fn main() { /* 4 worker threads */ }
+///
+/// #[r2e::main(thread_stack_size = 8388608, max_blocking_threads = 128)]
+/// async fn main() { /* 8 MiB stack, 128 blocking threads */ }
+///
+/// #[r2e::main(thread_name = "r2e-worker", thread_keep_alive = 30)]
+/// async fn main() { /* named threads, 30s keep-alive */ }
 /// ```
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {

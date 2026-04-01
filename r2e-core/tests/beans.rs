@@ -49,7 +49,7 @@ impl Bean for ServiceB {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn resolve_simple_graph() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 42 });
@@ -62,7 +62,7 @@ async fn resolve_simple_graph() {
     assert_eq!(b.a.dep.value, 42);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn missing_dependency() {
     let mut reg = BeanRegistry::new();
     reg.register::<ServiceA>();
@@ -75,7 +75,7 @@ async fn missing_dependency() {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn duplicate_bean_registered_twice() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 1 });
@@ -85,7 +85,7 @@ async fn duplicate_bean_registered_twice() {
     assert!(matches!(err, BeanError::DuplicateBean { .. }));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn duplicate_provided_and_bean() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 1 });
@@ -123,7 +123,7 @@ impl Bean for CycleB {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn cyclic_dependency() {
     let mut reg = BeanRegistry::new();
     reg.register::<CycleA>();
@@ -132,7 +132,7 @@ async fn cyclic_dependency() {
     assert!(matches!(err, BeanError::CyclicDependency { .. }));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn provided_only() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 7 });
@@ -141,14 +141,14 @@ async fn provided_only() {
     assert_eq!(d.value, 7);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn try_get_none() {
     let reg = BeanRegistry::new();
     let ctx = reg.resolve().await.unwrap();
     assert!(ctx.try_get::<Dep>().is_none());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn empty_registry() {
     let reg = BeanRegistry::new();
     let ctx = reg.resolve().await.unwrap();
@@ -176,7 +176,7 @@ impl AsyncBean for AsyncService {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn async_bean_resolution() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 99 });
@@ -187,7 +187,7 @@ async fn async_bean_resolution() {
     assert_eq!(svc.dep.value, 99);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn mixed_sync_async_graph() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 10 });
@@ -227,7 +227,7 @@ impl Producer for CreateDbPool {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn producer_resolution() {
     let mut reg = BeanRegistry::new();
     reg.register_producer::<CreateDbPool>();
@@ -237,7 +237,7 @@ async fn producer_resolution() {
     assert_eq!(pool.url, "sqlite::memory:");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn producer_as_dependency() {
     // Producer creates DbPool, then a sync bean depends on it.
     #[derive(Clone)]
@@ -301,7 +301,7 @@ impl PostConstruct for InitTracker {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn post_construct_is_called() {
     let mut reg = BeanRegistry::new();
     reg.register::<InitTracker>();
@@ -337,7 +337,7 @@ impl PostConstruct for FailingBean {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn post_construct_error_propagates() {
     let mut reg = BeanRegistry::new();
     reg.register::<FailingBean>();
@@ -373,7 +373,7 @@ impl Bean for OptionalConsumer {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn optional_dep_none_when_absent() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 10 });
@@ -385,7 +385,7 @@ async fn optional_dep_none_when_absent() {
     assert!(consumer.optional.is_none());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn optional_dep_some_when_provided() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 20 });
@@ -419,7 +419,7 @@ impl Bean for AllOptional {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn all_optional_deps_none() {
     let mut reg = BeanRegistry::new();
     reg.register::<AllOptional>();
@@ -430,7 +430,7 @@ async fn all_optional_deps_none() {
     assert!(bean.b.is_none());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn all_optional_deps_some_when_provided() {
     let dep = Dep { value: 5 };
     let svc_a = ServiceA { dep: dep.clone() };
@@ -450,7 +450,7 @@ async fn all_optional_deps_some_when_provided() {
 
 // ── PostConstruct with dependencies (continued) ──────────────────────
 
-#[tokio::test]
+#[r2e_core::test]
 async fn post_construct_with_dependencies() {
     // InitTracker depends on nothing, ServiceA depends on Dep.
     // Verify post_construct runs after the full graph is resolved.
@@ -516,7 +516,7 @@ impl Producer for RedisCacheProducer {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn default_bean_present_when_no_alternative() {
     let mut reg = BeanRegistry::new();
     reg.register_default::<InMemoryCache>();
@@ -526,7 +526,7 @@ async fn default_bean_present_when_no_alternative() {
     assert_eq!(cache.kind, "in-memory");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn alternative_replaces_default_when_condition_true() {
     let mut reg = BeanRegistry::new();
     reg.register_producer_default::<DefaultCacheProducer>();
@@ -538,7 +538,7 @@ async fn alternative_replaces_default_when_condition_true() {
     assert_eq!(cache.kind, "redis");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn default_stays_when_alternative_not_registered() {
     let mut reg = BeanRegistry::new();
     reg.register_producer_default::<DefaultCacheProducer>();
@@ -549,7 +549,7 @@ async fn default_stays_when_alternative_not_registered() {
     assert_eq!(cache.kind, "in-memory");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn default_bean_with_dependencies() {
     // Default bean that has dependencies — should still resolve correctly.
     #[derive(Clone)]
@@ -581,7 +581,7 @@ async fn default_bean_with_dependencies() {
     assert_eq!(svc.kind, "default");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn non_overridable_duplicate_still_errors() {
     // Two non-overridable registrations of the same type should still
     // produce a DuplicateBean error (no allow_overrides).

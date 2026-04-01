@@ -117,7 +117,7 @@ async fn setup() -> (TestApp, TestJwt) {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_public_endpoint_no_token() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/api/public").send().await;
@@ -127,7 +127,7 @@ async fn test_public_endpoint_no_token() {
     assert_eq!(users[0].name, "Alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_protected_endpoint_with_token() {
     let (app, jwt) = setup().await;
     let token = jwt.token_with_claims("user-42", &["user"], Some("test@example.com"));
@@ -142,13 +142,13 @@ async fn test_protected_endpoint_with_token() {
     assert_eq!(body["email"], "test@example.com");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_protected_endpoint_no_token() {
     let (app, _jwt) = setup().await;
     app.get("/api/me").send().await.assert_unauthorized();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_optional_identity_with_token() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-42", &["user"]);
@@ -162,7 +162,7 @@ async fn test_optional_identity_with_token() {
     assert_eq!(text, "Hello, user-42");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_optional_identity_without_token() {
     let (app, _jwt) = setup().await;
     let resp = app.get("/api/whoami").send().await;
@@ -171,7 +171,7 @@ async fn test_optional_identity_without_token() {
     assert_eq!(text, "Hello, anonymous");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_optional_identity_invalid_token() {
     let (app, _jwt) = setup().await;
     // An invalid JWT should cause an error (not treated as None)
@@ -182,7 +182,7 @@ async fn test_optional_identity_invalid_token() {
         .assert_unauthorized();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
@@ -196,7 +196,7 @@ async fn test_admin_endpoint_with_admin_role() {
     assert_eq!(users.len(), 2);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);

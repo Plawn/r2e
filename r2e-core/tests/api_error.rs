@@ -18,7 +18,7 @@ pub enum SimpleError {
     NotFound(String),
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn explicit_message_with_interpolation() {
     let err = SimpleError::NotFound("alice".into());
     assert_eq!(err.to_string(), "User not found: alice");
@@ -36,7 +36,7 @@ pub enum InferredError {
     Validation(String),
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn no_message_string_field_uses_value() {
     let err = InferredError::Validation("name is required".into());
     assert_eq!(err.to_string(), "name is required");
@@ -54,7 +54,7 @@ pub enum UnitError {
     AlreadyExists,
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn unit_variant_humanized_name() {
     let err = UnitError::AlreadyExists;
     assert_eq!(err.to_string(), "Already exists");
@@ -86,7 +86,7 @@ fn from_impl_works() {
     assert!(source.to_string().contains("file missing"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn from_variant_response() {
     let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
     let err: FromError = io_err.into();
@@ -103,7 +103,7 @@ pub enum FromInferError {
     Io(#[from] std::io::Error),
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn from_inferred_message_uses_source() {
     let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
     let err: FromInferError = io_err.into();
@@ -122,7 +122,7 @@ pub enum TransparentError {
     Inner(#[from] HttpError),
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn transparent_delegates_into_response() {
     let inner = HttpError::Forbidden("no access".into());
     let err: TransparentError = inner.into();
@@ -147,7 +147,7 @@ pub enum NumericStatusError {
     RateLimited,
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn numeric_status_code() {
     let err = NumericStatusError::RateLimited;
     let (status, body) = error_parts(err).await;
@@ -163,7 +163,7 @@ pub enum NamedFieldsError {
     InvalidField { field: String, reason: String },
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn named_field_interpolation() {
     let err = NamedFieldsError::InvalidField {
         field: "email".into(),
@@ -193,7 +193,7 @@ pub enum MixedError {
     AlreadyExists,
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn mixed_enum_variants() {
     // Explicit message
     let (s, b) = error_parts(MixedError::NotFound("item-42".into())).await;

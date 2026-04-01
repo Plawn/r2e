@@ -37,7 +37,7 @@ async fn setup() -> TestApp {
     )
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_connect_and_receive_welcome() {
     let app = setup().await;
     let server = app.serve().await;
@@ -47,7 +47,7 @@ async fn test_ws_connect_and_receive_welcome() {
     assert_eq!(msg, "welcome");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_echo_text() {
     let app = setup().await;
     let server = app.serve().await;
@@ -61,7 +61,7 @@ async fn test_ws_echo_text() {
     assert_eq!(reply, "hello");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_echo_json() {
     let app = setup().await;
     let server = app.serve().await;
@@ -75,7 +75,7 @@ async fn test_ws_echo_json() {
     assert_eq!(reply, serde_json::json!({"key": "value"}));
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_timeout_on_no_message() {
     let app = setup().await;
     let server = app.serve().await;
@@ -87,7 +87,7 @@ async fn test_ws_timeout_on_no_message() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_assert_no_message() {
     let app = setup().await;
     let server = app.serve().await;
@@ -97,7 +97,7 @@ async fn test_ws_assert_no_message() {
     ws.assert_no_message(Duration::from_millis(50)).await;
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_ws_multiple_echoes() {
     let app = setup().await;
     let server = app.serve().await;

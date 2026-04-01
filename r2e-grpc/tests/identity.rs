@@ -73,7 +73,7 @@ fn extract_bearer_token_not_bearer_scheme() {
     assert!(err.message().contains("Bearer scheme"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn extract_jwt_claims_success() {
     let metadata = metadata_with_bearer("valid-token");
     let claims = serde_json::json!({ "sub": "user-1", "roles": ["admin"] });
@@ -84,7 +84,7 @@ async fn extract_jwt_claims_success() {
     assert_eq!(result.unwrap(), claims);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn extract_jwt_claims_validation_failure() {
     let metadata = metadata_with_bearer("invalid-token");
     let validator = MockValidator::err("token expired");
@@ -96,7 +96,7 @@ async fn extract_jwt_claims_validation_failure() {
     assert!(status.message().contains("JWT validation failed"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn extract_jwt_claims_missing_auth() {
     let metadata = MetadataMap::new();
     let validator = MockValidator::ok(serde_json::json!({}));
@@ -107,7 +107,7 @@ async fn extract_jwt_claims_missing_auth() {
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn arc_validator_works() {
     use std::sync::Arc;
 

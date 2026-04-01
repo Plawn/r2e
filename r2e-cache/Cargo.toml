@@ -15,4 +15,5 @@ bytes = {workspace = true}
 dashmap = {workspace = true}
 
 [dev-dependencies]
+r2e-core = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

@@ -11,7 +11,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 }
 
 /// Full integration: issue token, then validate it with the same claims_validator.
-#[tokio::test]
+#[r2e_core::test]
 async fn token_validates_with_claims_validator() {
     let users = InMemoryUserStore::new().add_user(
         "alice",
@@ -68,7 +68,7 @@ async fn token_validates_with_claims_validator() {
 }
 
 /// Client credentials grant.
-#[tokio::test]
+#[r2e_core::test]
 async fn client_credentials_grant() {
     let users = InMemoryUserStore::new().add_user(
         "alice",
@@ -108,7 +108,7 @@ async fn client_credentials_grant() {
 }
 
 /// Client credentials with wrong secret.
-#[tokio::test]
+#[r2e_core::test]
 async fn client_credentials_invalid_secret() {
     let users = InMemoryUserStore::new().add_user(
         "alice",
@@ -147,7 +147,7 @@ async fn client_credentials_invalid_secret() {
 }
 
 /// Client credentials grant when no clients are registered.
-#[tokio::test]
+#[r2e_core::test]
 async fn client_credentials_not_configured() {
     let users = InMemoryUserStore::new().add_user(
         "alice",
@@ -182,7 +182,7 @@ async fn client_credentials_not_configured() {
 }
 
 /// Base path routing.
-#[tokio::test]
+#[r2e_core::test]
 async fn base_path_routing() {
     let users = InMemoryUserStore::new().add_user(
         "alice",

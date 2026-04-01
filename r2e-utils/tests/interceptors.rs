@@ -13,7 +13,7 @@ fn test_ctx(state: &TestState) -> InterceptorContext<'_, TestState> {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_logged_interceptor() {
     let logged = Logged::info();
     let state = TestState;
@@ -21,7 +21,7 @@ async fn test_logged_interceptor() {
     assert_eq!(result, 42);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_logged_constructors() {
     assert_eq!(Logged::new().level, LogLevel::Info);
     assert_eq!(Logged::info().level, LogLevel::Info);
@@ -32,7 +32,7 @@ async fn test_logged_constructors() {
     assert_eq!(Logged::level(LogLevel::Warn).level, LogLevel::Warn);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_timed_interceptor() {
     let timed = Timed::info();
     let state = TestState;
@@ -40,7 +40,7 @@ async fn test_timed_interceptor() {
     assert_eq!(result, "hello");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_timed_with_threshold() {
     let timed = Timed::threshold_warn(1000);
     let state = TestState;
@@ -54,7 +54,7 @@ async fn test_timed_with_threshold() {
     assert_eq!(result, 99);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_timed_constructors() {
     assert_eq!(Timed::new().level, LogLevel::Info);
     assert!(Timed::new().threshold_ms.is_none());
@@ -66,7 +66,7 @@ async fn test_timed_constructors() {
     assert_eq!(Timed::threshold_warn(200).threshold_ms, Some(200));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_nested_interceptors() {
     let logged = Logged::debug();
     let timed = Timed::info();
@@ -83,7 +83,7 @@ async fn test_nested_interceptors() {
     assert_eq!(result, "nested_result");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_cache_interceptor() {
     let state = TestState;
     let ctx = InterceptorContext {
@@ -117,7 +117,7 @@ async fn test_cache_interceptor() {
     assert_eq!(result2.0, vec!["a".to_string(), "b".to_string()]);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn test_cache_invalidate_interceptor() {
     let state = TestState;
     let ctx = InterceptorContext {

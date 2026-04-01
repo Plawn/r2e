@@ -46,7 +46,7 @@ fn health_builder_collects_checks() {
         .build();
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn health_state_aggregate() {
     let state = HealthState {
         checks: vec![
@@ -65,7 +65,7 @@ async fn health_state_aggregate() {
     assert_eq!(response.checks[1].reason.as_deref(), Some("broken"));
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn health_cache_returns_cached_result() {
     let state = HealthState {
         checks: vec![Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>],
@@ -84,7 +84,7 @@ async fn health_cache_returns_cached_result() {
     assert!(cache.is_some());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn health_uptime_increases() {
     let state = HealthState {
         checks: vec![],

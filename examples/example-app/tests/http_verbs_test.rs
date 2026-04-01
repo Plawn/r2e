@@ -176,7 +176,7 @@ async fn setup() -> (TestApp, TestJwt) {
 
 // ─── GET Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_list_items() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -186,7 +186,7 @@ async fn test_get_list_items() {
     assert_eq!(items.len(), 3);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_item_by_id() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -196,7 +196,7 @@ async fn test_get_item_by_id() {
     assert_eq!(item.name, "First");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_get_item_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -209,7 +209,7 @@ async fn test_get_item_not_found() {
 
 // ─── PUT Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_put_update_item() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -226,7 +226,7 @@ async fn test_put_update_item() {
     assert_eq!(item.name, "Updated First");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_put_update_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -241,7 +241,7 @@ async fn test_put_update_not_found() {
 
 // ─── DELETE Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_delete_item() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -259,7 +259,7 @@ async fn test_delete_item() {
         .assert_not_found();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_delete_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -272,7 +272,7 @@ async fn test_delete_not_found() {
 
 // ─── PATCH Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_patch_partial_update() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -298,7 +298,7 @@ async fn test_patch_partial_update() {
     assert_eq!(item.name, "Third"); // name unchanged
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_patch_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);

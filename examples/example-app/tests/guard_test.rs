@@ -237,7 +237,7 @@ async fn setup() -> (TestApp, TestJwt) {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_custom_guard_allows() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -250,7 +250,7 @@ async fn test_custom_guard_allows() {
     assert_eq!(resp.text(), "allowed");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_custom_guard_rejects() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -261,7 +261,7 @@ async fn test_custom_guard_rejects() {
         .assert_forbidden();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_guard_receives_identity() {
     let (app, jwt) = setup().await;
 
@@ -285,7 +285,7 @@ async fn test_guard_receives_identity() {
         .assert_forbidden();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_guard_receives_headers() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -308,7 +308,7 @@ async fn test_guard_receives_headers() {
     assert_eq!(resp.text(), "header ok");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_guard_receives_uri() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -323,7 +323,7 @@ async fn test_guard_receives_uri() {
     assert_eq!(resp.text(), "path ok");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_pre_guard_rejects_early() {
     let (app, _jwt) = setup().await;
 
@@ -334,7 +334,7 @@ async fn test_pre_guard_rejects_early() {
         .assert_forbidden();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_pre_guard_api_key_required() {
     let (app, _jwt) = setup().await;
 
@@ -354,7 +354,7 @@ async fn test_pre_guard_api_key_required() {
     assert_eq!(resp.text(), "api key ok");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_pre_guard_runs_before_jwt() {
     let (app, _jwt) = setup().await;
 

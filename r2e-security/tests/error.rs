@@ -12,42 +12,42 @@ async fn error_parts(err: SecurityError) -> (StatusCode, serde_json::Value) {
     (status, json)
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn missing_auth_header_401() {
     let (status, body) = error_parts(SecurityError::MissingAuthHeader).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn invalid_auth_scheme_401() {
     let (status, body) = error_parts(SecurityError::InvalidAuthScheme).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn invalid_token_401() {
     let (status, body) = error_parts(SecurityError::InvalidToken("bad sig".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn token_expired_401() {
     let (status, body) = error_parts(SecurityError::TokenExpired).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn unknown_key_id_401() {
     let (status, body) = error_parts(SecurityError::UnknownKeyId("kid-123".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn jwks_fetch_error_401() {
     let (status, body) =
         error_parts(SecurityError::JwksFetchError("timeout".into())).await;
@@ -55,7 +55,7 @@ async fn jwks_fetch_error_401() {
     assert_eq!(body["error"], "Unauthorized");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn validation_failed_401() {
     let (status, body) =
         error_parts(SecurityError::ValidationFailed("bad issuer".into())).await;
@@ -104,7 +104,7 @@ fn into_app_error() {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn json_body_format() {
     let (_, body) = error_parts(SecurityError::TokenExpired).await;
     // Verify the body is a JSON object with an "error" key

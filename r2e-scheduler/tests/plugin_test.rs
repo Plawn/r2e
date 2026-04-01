@@ -55,7 +55,7 @@ fn boxed_task(
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn scheduler_plugin_provides_token() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
@@ -67,7 +67,7 @@ async fn scheduler_plugin_provides_token() {
     assert!(data.is_some(), "TaskRegistryHandle should be stored");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn scheduler_plugin_stores_registry() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
@@ -78,7 +78,7 @@ async fn scheduler_plugin_stores_registry() {
     assert!(registry.is_some(), "TaskRegistryHandle should be available");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn registry_collects_and_extracts() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
@@ -103,7 +103,7 @@ async fn registry_collects_and_extracts() {
     assert_eq!(tasks[0].name(), "collected");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[r2e_core::test]
 async fn full_lifecycle_without_serve() {
     let app = AppBuilder::new()
         .plugin(Scheduler)

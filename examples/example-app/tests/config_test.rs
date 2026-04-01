@@ -118,7 +118,7 @@ async fn setup() -> (TestApp, TestJwt) {
 
 // ─── Tests ───
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_string_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -132,7 +132,7 @@ async fn test_config_string_injection() {
     assert_eq!(name, "MyApp");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_i64_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -146,7 +146,7 @@ async fn test_config_i64_injection() {
     assert_eq!(port, 8080);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_f64_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -160,7 +160,7 @@ async fn test_config_f64_injection() {
     assert!((rate - 3.14).abs() < f64::EPSILON);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_bool_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -174,7 +174,7 @@ async fn test_config_bool_injection() {
     assert!(debug);
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_option_some() {
     let (app, jwt) = setup_with_option(Some("I exist")).await;
     let token = jwt.token("user-1", &["user"]);
@@ -188,7 +188,7 @@ async fn test_config_option_some() {
     assert_eq!(body["value"], "I exist");
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_config_option_none() {
     let (app, jwt) = setup_with_option(None).await;
     let token = jwt.token("user-1", &["user"]);
@@ -222,7 +222,7 @@ impl MissingConfigController {
     }
 }
 
-#[tokio::test]
+#[r2e::test]
 #[should_panic(expected = "CONFIGURATION ERRORS")]
 async fn test_config_missing_required_panics() {
     let jwt = TestJwt::new();

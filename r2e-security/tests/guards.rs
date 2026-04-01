@@ -47,7 +47,7 @@ fn make_ctx<'a, I: Identity>(
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_passes() {
     let guard = RolesGuard {
         required_roles: &["admin"],
@@ -60,7 +60,7 @@ async fn roles_guard_passes() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_rejects() {
     let guard = RolesGuard {
         required_roles: &["admin"],
@@ -75,7 +75,7 @@ async fn roles_guard_rejects() {
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_guard_rejects_no_identity() {
     let guard = RolesGuard {
         required_roles: &["admin"],

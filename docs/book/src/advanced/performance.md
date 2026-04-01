@@ -119,6 +119,37 @@ impl<S, I: Identity> Guard<S, I> for SlowGuard {
 
 If you must do I/O in guards, consider caching results or moving the check to the handler body.
 
+## Tokio runtime tuning
+
+`#[r2e::main]` exposes Tokio `runtime::Builder` options as macro attributes:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `flavor` | `"multi_thread"` | `"multi_thread"` or `"current_thread"` |
+| `worker_threads` | Tokio default | Number of async worker threads |
+| `max_blocking_threads` | 512 | Max threads for `spawn_blocking` tasks |
+| `thread_stack_size` | 2 MiB | Stack size per worker thread (bytes) |
+| `thread_name` | `"tokio-runtime-worker"` | Worker thread name prefix |
+| `global_queue_interval` | 31 | How often workers check the global queue |
+| `event_interval` | 61 | Max events processed per scheduler tick |
+| `thread_keep_alive` | 10 | Keep-alive for idle blocking threads (seconds) |
+
+```rust
+// Deep call stacks (e.g. recursive tree processing)
+#[r2e::main(thread_stack_size = 8388608)]
+async fn main() { /* 8 MiB stack per worker */ }
+
+// CPU-bound workloads with many blocking tasks
+#[r2e::main(worker_threads = 8, max_blocking_threads = 256)]
+async fn main() { /* ... */ }
+
+// Single-threaded for lightweight services
+#[r2e::main(flavor = "current_thread")]
+async fn main() { /* ... */ }
+```
+
+These are compile-time constants — the Tokio runtime is built before any async code (including config loading) runs. For runtime-variable tuning, build the runtime manually instead of using the macro.
+
 ## Comparison: struct-level vs param-level identity
 
 | Aspect | Struct-level | Param-level |
