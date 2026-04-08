@@ -6,7 +6,7 @@ use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{unwrap_option_type, to_pascal_case, type_base_name, parse_config_section_prefix};
+use crate::type_utils::{to_pascal_case, type_base_name, parse_config_section_prefix};
 
 /// Parsed `#[producer(...)]` arguments.
 struct ProducerArgs {
@@ -59,7 +59,13 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     let struct_name = to_pascal_case(&fn_name.to_string());
     let struct_ident = syn::Ident::new(&struct_name, fn_name.span());
 
-    // Extract the return type as the Output type
+    // Extract the return type as the Output type.
+    //
+    // The return type is registered verbatim — if the user returns `Option<T>`,
+    // the bean is registered under `Option<T>` (the whole type, not the inner
+    // `T`). Consumers inject `Option<T>` as a hard dependency. This lets
+    // `#[producer]` express conditional availability without a separate
+    // "soft dependency" mechanism.
     let output_ty = match &item_fn.sig.output {
         ReturnType::Default => {
             return Err(syn::Error::new_spanned(
@@ -85,7 +91,11 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         ));
     }
 
-    // Process parameters — detect #[config("key")] vs regular dependencies
+    // Process parameters — detect #[config("key")] vs regular dependencies.
+    //
+    // Note: `Option<T>` parameters are treated as hard dependencies on the
+    // whole `Option<T>` type (not the inner `T`). A producer must register
+    // `Option<T>` in the context for such a parameter to resolve.
     let mut dep_type_ids = Vec::new();
     let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut build_args = Vec::new();
@@ -141,8 +151,6 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                         });
                     });
                     has_config = true;
-                } else if let Some(inner_ty) = unwrap_option_type(ty) {
-                    build_args.push(quote! { let #arg_name: #ty = ctx.try_get::<#inner_ty>(); });
                 } else {
                     dep_type_ids
                         .push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
@@ -205,8 +213,16 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     let fn_asyncness = &item_fn.sig.asyncness;
     let ret_ty = &item_fn.sig.output;
 
-    // If name = "..." is specified, generate a newtype wrapper
-    let (effective_output_ty, newtype_decl, produce_body) = if let Some(ref name) = args.name {
+    // If `name = "..."` is specified, generate a newtype wrapper around the
+    // output type. The newtype is what gets registered in the bean context,
+    // and consumers using `#[inject(name = "...")] field: T` resolve via
+    // the newtype.
+    //
+    // Note: named producers returning `Option<T>` are not supported — named
+    // resolution goes through the newtype wrapper, which doesn't compose with
+    // `Option<T>`. Use an unnamed producer for the conditional-availability
+    // pattern.
+    let (effective_output_ty, newtype_decl, produce_expr) = if let Some(ref name) = args.name {
         let newtype_name = format!("{}{}", to_pascal_case(name), type_base_name(&output_ty));
         let newtype_ident = syn::Ident::new(&newtype_name, fn_name.span());
         let doc = format!("Generated newtype for named bean `{}`.", name);
@@ -223,10 +239,10 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
             }
         };
         let wrapped_ty: TokenStream2 = quote! { #newtype_ident };
-        let wrap = quote! { #newtype_ident(#call) };
-        (wrapped_ty, newtype, wrap)
+        let expr = quote! { #newtype_ident(#call) };
+        (wrapped_ty, newtype, expr)
     } else {
-        (quote! { #output_ty }, quote! {}, call)
+        (quote! { #output_ty }, quote! {}, quote! { #call })
     };
 
     Ok(quote! {
@@ -256,9 +272,8 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
             async fn produce(ctx: &#krate::beans::BeanContext) -> Self::Output {
                 #config_prelude
                 #(#build_args)*
-                #produce_body
+                #produce_expr
             }
         }
     })
 }
-

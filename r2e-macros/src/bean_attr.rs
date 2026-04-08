@@ -7,7 +7,7 @@ use crate::crate_path::{r2e_core_path, r2e_events_path};
 use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{unwrap_option_type, parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
+use crate::type_utils::{parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
 
 /// Parsed `#[bean(...)]` arguments.
 struct BeanArgs {
@@ -75,6 +75,10 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
     let (constructor, is_async) = find_constructor(item_impl)?;
 
     // Extract parameter types and generate dependency list + build args.
+    //
+    // `Option<T>` parameters are treated as hard dependencies on the whole
+    // `Option<T>` type — a producer somewhere in the graph must register
+    // an `Option<T>` value (typically via `#[producer] -> Option<T>`).
     let mut dep_type_ids = Vec::new();
     let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut build_args = Vec::new();
@@ -138,9 +142,9 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
                         });
                     });
                     has_config = true;
-                } else if let Some(inner_ty) = unwrap_option_type(ty) {
-                    build_args.push(quote! { let #arg_name: #ty = ctx.try_get::<#inner_ty>(); });
                 } else {
+                    // Regular dep (includes `Option<T>` — registered under
+                    // the whole `Option<T>` type as a hard dependency).
                     dep_type_ids.push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
                     dep_types.push(quote! { #ty });
                     build_args.push(quote! { let #arg_name: #ty = ctx.get::<#ty>(); });

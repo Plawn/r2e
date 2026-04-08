@@ -431,7 +431,9 @@ impl Producer for TestProducer {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn produce(_ctx: &BeanContext) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
+    fn produce(
+        _ctx: &BeanContext,
+    ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
         async { ProducedValue("produced".into()) }
     }
 }

@@ -46,6 +46,11 @@ Three bean traits resolved at compile time:
 | `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` |
 | `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` |
 
+A producer can declare `type Output = Option<T>` (the `#[producer]` macro
+infers this from the return type) to express conditional availability —
+the `Option<T>` slot is always registered, and the value reflects the
+producer's decision. Consumers hard-depend on `Option<T>`.
+
 `BeanContext` holds all resolved beans. `BeanRegistry` manages registration and topological resolution. Cyclic dependencies, missing dependencies, and duplicates are detected at build time via `BeanError`.
 
 ### Controller injection scopes

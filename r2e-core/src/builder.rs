@@ -227,8 +227,28 @@ impl<P, R> AppBuilder<NoState, P, R> {
 
     /// Conditionally register a bean based on a runtime boolean.
     ///
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
-    /// The bean's own dependencies are checked at runtime during `build_state()`.
+    /// Does NOT add to the provision list. Downstream consumers must inspect
+    /// the context at runtime via `ctx.try_get::<T>()` — they cannot declare
+    /// a compile-time dependency on the bean.
+    ///
+    /// # For Option-valued conditional availability, prefer `#[producer]`
+    ///
+    /// If the consumer wants to hold an `Option<T>` field, the recommended
+    /// pattern is a `#[producer]` that returns `Option<T>` and decides
+    /// internally whether to emit `Some`/`None` — the slot is then always
+    /// registered and consumers can hard-depend on `Option<T>`:
+    ///
+    /// ```ignore
+    /// #[producer]
+    /// async fn create_cache(#[config("app.cache.enabled")] enabled: bool) -> Option<Cache> {
+    ///     enabled.then(Cache::new)
+    /// }
+    /// ```
+    ///
+    /// `with_bean_when` is reserved for coarser-grained conditional assembly
+    /// where a consumer is built out of hand (manual `Bean` impl using
+    /// `ctx.try_get`) rather than through the `#[bean]` / `#[derive(Bean)]`
+    /// macros.
     pub fn with_bean_when<B: Bean>(mut self, condition: bool) -> Self {
         if condition {
             self.shared.bean_registry.register::<B>();
@@ -238,7 +258,9 @@ impl<P, R> AppBuilder<NoState, P, R> {
 
     /// Conditionally register an async bean based on a runtime boolean.
     ///
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
+    /// See [`with_bean_when`](Self::with_bean_when) for semantics and the
+    /// recommended `#[producer] -> Option<T>` pattern for macro-derived
+    /// consumers.
     pub fn with_async_bean_when<B: AsyncBean>(mut self, condition: bool) -> Self {
         if condition {
             self.shared.bean_registry.register_async::<B>();
@@ -248,7 +270,26 @@ impl<P, R> AppBuilder<NoState, P, R> {
 
     /// Conditionally register a producer based on a runtime boolean.
     ///
-    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
+    /// Does NOT add to the provision list. When `condition` is `false`, the
+    /// producer's output is simply absent from the context — downstream
+    /// consumers must inspect the context via `ctx.try_get::<Pr::Output>()`
+    /// in a manual `Bean` impl.
+    ///
+    /// # Prefer `#[producer] -> Option<T>` for macro-derived consumers
+    ///
+    /// The macro path (`#[derive(BeanState)]`, `#[bean]` with `Option<T>`
+    /// params, `#[derive(Bean)]` with `Option<T>` fields) treats `Option<T>`
+    /// as a first-class bean type and hard-depends on `Option<T>`. Such
+    /// consumers do **not** compose with `with_producer_when` — use a
+    /// producer that always registers but decides `Some`/`None` internally:
+    ///
+    /// ```ignore
+    /// #[producer]
+    /// async fn create_cache(#[config("app.cache.enabled")] enabled: bool) -> Option<Cache> {
+    ///     enabled.then(Cache::new)
+    /// }
+    /// // Always: .with_producer::<CreateCache>()
+    /// ```
     pub fn with_producer_when<Pr: Producer>(mut self, condition: bool) -> Self {
         if condition {
             self.shared.bean_registry.register_producer::<Pr>();

@@ -27,6 +27,11 @@ pub trait Bean: Clone + Send + Sync + 'static {
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
+    ///
+    /// `Option<T>` fields are **hard** dependencies on `Option<T>` (the
+    /// whole type, not `T`). A producer must register an `Option<T>` value
+    /// in the context for this bean to resolve. See the module docs for
+    /// the conditional-bean pattern using `#[producer] -> Option<T>`.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys required by this bean as `(key, type_name)` pairs.
@@ -103,6 +108,10 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
+    ///
+    /// `Option<T>` fields are **hard** dependencies on `Option<T>` (the
+    /// whole type, not `T`). A producer must register an `Option<T>` value
+    /// in the context for this bean to resolve.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys required by this bean as `(key, type_name)` pairs.
@@ -161,6 +170,8 @@ pub trait Producer: Send + 'static {
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to produce the output.
+    ///
+    /// `Option<T>` parameters are **hard** dependencies on `Option<T>`.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys required by this producer as `(key, type_name)` pairs.
@@ -190,6 +201,11 @@ pub trait Producer: Send + 'static {
     const BUILD_VERSION: u64 = 0;
 
     /// Produce the output from a fully resolved context.
+    ///
+    /// To express conditional availability (a bean that may or may not be
+    /// present depending on config), declare `type Output = Option<T>` and
+    /// return `Some(...)` / `None`. The whole `Option<T>` is registered as
+    /// a bean — consumers inject `Option<T>` as a hard dependency.
     fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
 }
 
@@ -547,7 +563,8 @@ impl BeanRegistry {
                 factory: Box::new(|ctx| {
                     Box::pin(async move {
                         let bean = T::build(&ctx);
-                        (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                        let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
+                        (ctx, boxed)
                     })
                 }),
                 post_construct: None,
@@ -595,7 +612,8 @@ impl BeanRegistry {
                 factory: Box::new(|ctx| {
                     Box::pin(async move {
                         let bean = T::build(&ctx).await;
-                        (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                        let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
+                        (ctx, boxed)
                     })
                 }),
                 post_construct: None,
@@ -647,7 +665,8 @@ impl BeanRegistry {
                 Box::pin(async move {
                     let config = ctx.get::<crate::config::R2eConfig>();
                     let bean = factory(&config);
-                    (ctx, Box::new(bean) as Box<dyn Any + Send + Sync>)
+                    let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
+                    (ctx, boxed)
                 })
             }),
             post_construct: None,
@@ -678,7 +697,8 @@ impl BeanRegistry {
             factory: Box::new(|ctx| {
                 Box::pin(async move {
                     let output = P::produce(&ctx).await;
-                    (ctx, Box::new(output) as Box<dyn Any + Send + Sync>)
+                    let boxed: Box<dyn Any + Send + Sync> = Box::new(output);
+                    (ctx, boxed)
                 })
             }),
             post_construct: None,

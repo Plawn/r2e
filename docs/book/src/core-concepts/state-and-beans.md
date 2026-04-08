@@ -94,6 +94,35 @@ async fn create_notifier(
 
 Parameters without `#[config]` are treated as bean dependencies (pulled from `ctx.get::<T>()`). Parameters with `#[config("key")]` are resolved from `R2eConfig` — and `R2eConfig` is automatically added to the dependency list when any `#[config]` param is present.
 
+### Conditional availability with `Option<T>`
+
+A producer may return `Option<T>` to express that a service is only available under certain conditions (e.g., a feature flag, an optional API key):
+
+```rust
+#[producer]
+async fn create_llm_client(
+    #[config("app.llm.api_key")] api_key: Option<String>,
+) -> Option<Arc<LlmClient>> {
+    let key = api_key?;
+    Some(Arc::new(LlmClient::new(&key)))
+}
+```
+
+`Option<T>` is a **first-class bean type** in R2E: the slot is registered under `TypeId::of::<Option<T>>()` — separate from `TypeId::of::<T>()` — and is **always** present in the graph. The value (`Some`/`None`) reflects the producer's decision.
+
+Consumers then **hard-depend** on `Option<T>` and decide how to behave based on the inner `Option`:
+
+```rust
+#[bean]
+impl ChatService {
+    fn new(llm: Option<Arc<LlmClient>>) -> Self {
+        Self { llm }
+    }
+}
+```
+
+This gives you a single, honest knob: the producer encapsulates the decision, the consumer handles both branches, and the compile-time dependency graph catches missing registrations. Prefer this pattern over `with_producer_when` / `with_bean_when` for anything consumed by macro-derived beans.
+
 ### `#[derive(Bean)]` — Derive-based beans
 
 For simple structs where the constructor just clones fields from the graph:

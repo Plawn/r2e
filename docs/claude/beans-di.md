@@ -42,6 +42,52 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+### Conditional availability via `Option<T>` (first-class bean type)
+
+`Option<T>` is a distinct bean type: a producer that declares
+`type Output = Option<T>` (and the `#[producer]` macro infers this from the
+return type) registers `Option<T>` in the context, **always** — the slot is
+guaranteed to exist. The value is whatever the producer body returns:
+`Some(...)` or `None`.
+
+Consumers inject `Option<T>` as a **hard** dependency (not a soft / fallible
+lookup) — the graph guarantees the slot is present, and the consumer decides
+how to behave based on the inner `Option`:
+
+```rust
+#[producer]
+async fn create_llm_client(
+    #[config("app.llm.api_key")] api_key: Option<String>,
+) -> Option<Arc<LlmClient>> {
+    let key = api_key?; // producer returns None → slot is Some/None
+    Some(Arc::new(LlmClient::new(&key)))
+}
+
+#[bean]
+impl ChatService {
+    fn new(llm: Option<Arc<LlmClient>>) -> Self { Self { llm } }
+    //              ^^^^^^^^^^^^^^^^^ hard dep on Option<Arc<LlmClient>>
+}
+```
+
+Internally:
+
+- `Producer::Output = Option<Arc<LlmClient>>` — registered under
+  `TypeId::of::<Option<Arc<LlmClient>>>()`
+- `ChatService::dependencies()` lists `Option<Arc<LlmClient>>` as a hard dep
+- The topological sort orders `ChatService` after `CreateLlmClient`
+- If you want a hard dep on the inner type instead (panic when absent),
+  declare the param as `llm: Arc<LlmClient>` — but this still requires a
+  producer that returns `Arc<LlmClient>` directly (not `Option<...>`).
+
+**Why not `with_producer_when`?** The conditional builder methods
+(`with_producer_when`, `with_bean_when`, etc.) skip registration entirely
+when the condition is false. This leaves the `Option<T>` slot missing,
+which is a compile-time-enforced `MissingDependency` for any macro consumer
+that declares `Option<T>` as a dep. Use those APIs only with manual
+`Bean` impls that call `ctx.try_get::<T>()` directly. For macro-derived
+consumers, prefer `#[producer] -> Option<T>` and always register.
+
 ## Auto-registered config beans
 
 When using `load_config::<RootConfig>()`, all `#[config(section)]` children in the root config are auto-registered as beans via `register_children`. This means beans can depend on nested config types directly:
@@ -57,28 +103,53 @@ impl SearchService {
 
 No manual `.provide()` or `#[config_section]` needed — `load_config` handles it.
 
-## Optional dependencies (`Option<T>`)
+## `Option<T>` as a first-class bean type
 
-A bean can declare a dependency as optional by wrapping it in `Option<T>`. Optional dependencies resolve to `None` when the inner type is not in the bean graph, and `Some(T)` when it is.
+`Option<T>` is a distinct bean type in the graph — its `TypeId` is
+`TypeId::of::<Option<T>>()`, separate from `TypeId::of::<T>()`. There is no
+"soft dependency" or fallible-lookup mechanism: injecting `Option<T>` is
+a **hard** dependency on the `Option<T>` slot. A producer somewhere in the
+graph must register it.
 
 **Compile-time rules:**
 
 | Dependency type | In `Deps` (type list) | In `dependencies()` | Resolution |
 |---|---|---|---|
-| `T` | Yes | Yes | `ctx.get::<T>()` — panics if absent |
-| `Option<T>` | **No** | **No** | `ctx.try_get::<T>()` — `None` if absent |
+| `T` | Yes | Yes | `ctx.get::<T>()` — panics / `MissingDependency` if absent |
+| `Option<T>` | **Yes** (keyed as `Option<T>`) | **Yes** | `ctx.get::<Option<T>>()` — the stored `Option` |
 
-Optional deps are invisible to the compile-time graph. No `Contains<T, _>` bound is generated. Hard deps (`T`) remain fully checked.
+Both hard (`T`) and option-typed (`Option<T>`) deps are fully checked by
+the compile-time graph and by the runtime `MissingDependency` error.
+
+### Producer pattern (the blessed way)
+
+The producer declares `type Output = Option<T>` (inferred from the return
+type by `#[producer]`) and decides `Some` / `None` internally. The slot is
+always registered — the value reflects the decision:
+
+```rust
+#[producer]
+async fn create_cache(
+    #[config("app.cache.enabled")] enabled: bool,
+) -> Option<RedisCache> {
+    if enabled {
+        Some(RedisCache::connect().await)
+    } else {
+        None
+    }
+}
+```
 
 ### In `#[bean]` constructor params
 
 ```rust
 #[bean]
 impl NotificationService {
-    fn new(mailer: Mailer, cache: Option<RedisClient>) -> Self {
+    fn new(mailer: Mailer, cache: Option<RedisCache>) -> Self {
         Self { mailer, cache }
     }
 }
+// dependencies() = [Mailer, Option<RedisCache>] — both hard
 ```
 
 ### In `#[derive(Bean)]` fields
@@ -87,7 +158,7 @@ impl NotificationService {
 #[derive(Clone, Bean)]
 struct MyService {
     #[inject] mailer: Mailer,
-    #[inject] cache: Option<RedisClient>,
+    #[inject] cache: Option<RedisCache>,
 }
 ```
 
@@ -96,31 +167,45 @@ struct MyService {
 ```rust
 #[producer]
 async fn create_pool(metrics: Option<MetricsCollector>) -> SqlitePool {
-    // metrics is None if MetricsCollector was not registered
+    // metrics is Some/None based on what Option<MetricsCollector>'s producer returned
     SqlitePool::connect("sqlite::memory:").await.unwrap()
 }
 ```
 
-### In `BeanState`
+### In `#[derive(BeanState)]`
 
 ```rust
 #[derive(Clone, BeanState)]
 struct AppState {
     user_service: UserService,
-    cache: Option<RedisClient>,  // no compile error if RedisClient not in P
+    cache: Option<RedisCache>, // generates BuildableFrom bound for Option<RedisCache>
 }
 ```
 
-`Option<T>` fields in `BeanState` do NOT generate a `BuildableFrom` bound for `T`.
+The derive emits `BuildableFrom<P, ...>` bounds for both `UserService` and
+`Option<RedisCache>` — `P` must contain the `Option<RedisCache>` slot,
+which is typically provided by a `#[producer] -> Option<RedisCache>`.
 
-### Composing with conditional registration
+### Why not `with_bean_when` / `with_producer_when`?
 
-Optional dependencies compose naturally with conditional builder methods (see [subsystems.md](./subsystems.md)). Conditional beans are NOT in `P` (the provision list), so consumers MUST use `Option<T>` — the compiler enforces this.
+The conditional builder methods skip registration entirely when the
+condition is false. In the first-class model, this leaves the `Option<T>`
+slot missing, which is a `MissingDependency` error for any macro-derived
+consumer that depends on `Option<T>`. Those APIs remain useful for coarse
+enable/disable with **manual** `Bean` impls that call `ctx.try_get::<T>()`
+directly — but the blessed pattern for macro consumers is to always
+register a `#[producer] -> Option<T>` and let it decide `Some`/`None`
+internally:
 
 ```rust
+// ✅ Preferred — slot always present, value reflects config
+#[producer]
+async fn create_cache(#[config("cache.enabled")] on: bool) -> Option<Cache> {
+    on.then(Cache::new)
+}
+
 AppBuilder::new()
-    .with_bean::<UserService>()                    // always in P — guaranteed
-    .with_bean_when::<RedisCache>(use_redis)       // NOT in P — consumers must use Option<RedisCache>
+    .with_producer::<CreateCache>()            // always — no `_when`
     .build_state::<AppState, _, _>().await
 ```
 

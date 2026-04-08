@@ -6,7 +6,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{unwrap_option_type, parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
+use crate::type_utils::{parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -40,6 +40,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let krate = r2e_core_path();
+    // Note: `Option<T>` fields under `#[inject]` are treated as hard
+    // dependencies on the whole `Option<T>` type — a producer elsewhere in
+    // the graph must register `Option<T>` for this bean to resolve.
     let mut dep_type_ids = Vec::new();
     let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut field_inits = Vec::new();
@@ -62,9 +65,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
                 dep_types.push(quote! { #newtype_ident });
                 field_inits.push(quote! { #field_name: ctx.get::<#newtype_ident>().0 });
-            } else if let Some(inner_ty) = unwrap_option_type(field_type) {
-                field_inits.push(quote! { #field_name: ctx.try_get::<#inner_ty>() });
             } else {
+                // Regular inject — `Option<T>` fields land here too, keyed
+                // under the whole `Option<T>` type.
                 dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
                 dep_types.push(quote! { #field_type });
                 field_inits.push(quote! { #field_name: ctx.get::<#field_type>() });
