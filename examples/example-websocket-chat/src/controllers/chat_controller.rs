@@ -28,7 +28,7 @@ impl ChatController {
             .cloned()
             .unwrap_or_else(|| "Anonymous".to_string());
 
-        let broadcaster = self.ws_rooms.room(&room);
+        let broadcaster = self.ws_rooms.room(room.clone());
         let mut rx = broadcaster.subscribe();
         let client_id = rx.client_id();
 

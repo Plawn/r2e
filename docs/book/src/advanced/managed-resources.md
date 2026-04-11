@@ -72,14 +72,13 @@ where
 
 ## Error wrappers
 
-`ManagedResource::Error` must implement `Into<Response>`. Rust's orphan rules prevent implementing foreign traits for foreign types, so R2E provides wrappers:
+`ManagedResource::Error` must implement `Into<Response>`. Rust's orphan rules prevent implementing foreign traits for foreign types, so R2E provides `ManagedErr<E>` — a generic wrapper over any error type that implements `IntoResponse`.
 
-- `ManagedError` — wraps the built-in `HttpError`
-- `ManagedErr<E>` — wraps any error type implementing `IntoResponse`
+For the common case where you just want to bubble up the framework's `HttpError`, use `ManagedErr<HttpError>`:
 
 ```rust
-// Chain: MyHttpError → ManagedErr<MyHttpError> → Response
-type Error = ManagedErr<MyHttpError>;
+// Chain: HttpError → ManagedErr<HttpError> → Response
+type Error = ManagedErr<HttpError>;
 ```
 
 ## Other resource types
@@ -95,7 +94,7 @@ pub struct AuditContext {
 }
 
 impl<S: Send + Sync> ManagedResource<S> for AuditContext {
-    type Error = ManagedError;
+    type Error = ManagedErr<HttpError>;
 
     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
         Ok(AuditContext {

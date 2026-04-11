@@ -25,13 +25,13 @@
 | `app_error_json_body_format` | Response body is `{"error": "..."}` JSON |
 | `app_error_display_formatting` | `Display` trait produces expected strings |
 
-### 1.2 `ManagedError` / `ManagedErr<E>` Wrappers
+### 1.2 `ManagedErr<E>` Wrapper
 
 **File**: `src/managed.rs` — add `#[cfg(test)] mod tests`
 
 | Test | Description |
 |------|-------------|
-| `managed_error_into_response` | `ManagedError(HttpError::...)` converts to correct HTTP response |
+| `managed_err_http_error_into_response` | `ManagedErr(HttpError::...)` converts to correct HTTP response |
 | `managed_err_wraps_custom_error` | `ManagedErr(MyError)` delegates to `IntoResponse` |
 | `managed_err_preserves_status` | Status code is preserved through the wrapper |
 

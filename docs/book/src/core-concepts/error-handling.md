@@ -237,10 +237,7 @@ Without this, a panic in a handler will drop the connection with no response.
 
 ## Error wrappers for managed resources
 
-The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. R2E provides wrappers:
-
-- `ManagedError` — wraps the built-in `HttpError`
-- `ManagedErr<E>` — wraps any error type implementing `IntoResponse`
+The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. R2E provides `ManagedErr<E>` — a generic wrapper over any error type implementing `IntoResponse`. For the framework's built-in `HttpError`, use `ManagedErr<HttpError>`.
 
 ```rust
 impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {

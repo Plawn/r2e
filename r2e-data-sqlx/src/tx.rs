@@ -4,7 +4,7 @@
 //! so that `#[managed]` handler parameters "just work" for database transactions.
 
 use r2e_core::error::HttpError;
-use r2e_core::managed::{ManagedError, ManagedResource};
+use r2e_core::managed::{ManagedErr, ManagedResource};
 use sqlx::{Database, Pool, Transaction};
 use std::ops::{Deref, DerefMut};
 
@@ -90,14 +90,14 @@ where
     DB: Database,
     S: HasPool<DB> + Send + Sync,
 {
-    type Error = ManagedError;
+    type Error = ManagedErr<HttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
         let tx = state
             .pool()
             .begin()
             .await
-            .map_err(|e| ManagedError(HttpError::internal(e.to_string())))?;
+            .map_err(|e| ManagedErr(HttpError::internal(e.to_string())))?;
         Ok(Tx(tx))
     }
 
@@ -106,7 +106,7 @@ where
             self.into_inner()
                 .commit()
                 .await
-                .map_err(|e| ManagedError(HttpError::internal(e.to_string())))?;
+                .map_err(|e| ManagedErr(HttpError::internal(e.to_string())))?;
         }
         // If !success, the transaction is dropped and automatically rolled back
         Ok(())

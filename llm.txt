@@ -573,16 +573,16 @@ impl HasPool<Sqlite> for Services {
 
 impl<S, DB> ManagedResource<S> for Tx<'static, DB>
 where DB: Database, S: HasPool<DB> + Send + Sync {
-    type Error = ManagedError;
+    type Error = ManagedErr<AppError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
         let tx = state.pool().begin().await
-            .map_err(|e| ManagedError(AppError::Internal(e.to_string())))?;
+            .map_err(|e| ManagedErr(AppError::Internal(e.to_string())))?;
         Ok(Tx(tx))
     }
 
     async fn release(self, success: bool) -> Result<(), Self::Error> {
-        if success { self.0.commit().await.map_err(|e| ManagedError(AppError::Internal(e.to_string())))?; }
+        if success { self.0.commit().await.map_err(|e| ManagedErr(AppError::Internal(e.to_string())))?; }
         Ok(())
     }
 }

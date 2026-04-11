@@ -12,7 +12,7 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 
 [features]
 default = []
-ws = ["r2e-http/ws", "dep:dashmap"]
+ws = ["r2e-http/ws"]
 multipart = ["r2e-http/multipart"]
 dev-reload = ["dep:r2e-devtools"]
 lazy-fallback-runtime = []
@@ -32,8 +32,9 @@ form_urlencoded = {workspace = true}
 serde_yaml = {workspace = true}
 dotenvy = {workspace = true}
 tokio-util = {workspace = true}
+tokio-stream = {workspace = true, features = ["sync"]}
 uuid = {workspace = true}
-dashmap = {workspace = true, optional = true}
+dashmap = {workspace = true}
 bytes = {workspace = true}
 futures-core = {workspace = true}
 r2e-devtools = {workspace = true, optional = true}
@@ -42,5 +43,4 @@ r2e-devtools = {workspace = true, optional = true}
 tempfile = {workspace = true}
 http-body-util = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
-tokio-stream = {workspace = true}
 tower = {workspace = true, features = ["util"]}

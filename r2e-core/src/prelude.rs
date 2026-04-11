@@ -73,7 +73,7 @@ pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext};
 pub use crate::interceptors::{Interceptor, InterceptorContext};
-pub use crate::managed::{ManagedErr, ManagedError, ManagedResource};
+pub use crate::managed::{ManagedErr, ManagedResource};
 pub use crate::plugin::Plugin;
 pub use crate::plugins::{Cors, Tracing, ConfiguredTracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
 pub use crate::tracing_config::{LogFormat, SpanEvents, TracingConfig};
@@ -113,8 +113,8 @@ pub use crate::http::middleware::{from_fn, Next};
 pub use crate::validation::Validate;
 pub use r2e_macros::Params;
 
-// SSE broadcaster
-pub use crate::sse::SseBroadcaster;
+// SSE broadcaster + per-key rooms
+pub use crate::sse::{LagPolicy, SseBroadcaster, SseRooms, SseSubscription};
 
 #[cfg(feature = "multipart")]
 pub use crate::multipart::{FromMultipart, Multipart, TypedMultipart, UploadedFile};

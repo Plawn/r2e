@@ -108,7 +108,7 @@ src/
   plugins.rs                Built-in plugins: Health, AdvancedHealth, Cors, Tracing, ErrorHandling, ...
   layers.rs                 Tower layer utilities: default_cors(), default_trace(), init_tracing()
   lifecycle.rs              LifecycleController for on_start/on_stop hooks
-  managed.rs                ManagedResource<S> trait, ManagedErr<E>, ManagedError wrappers
+  managed.rs                ManagedResource<S> trait, ManagedErr<E> wrapper
   meta.rs                   MetaRegistry for collecting route metadata (used by OpenAPI)
   request_id.rs             RequestId extractor and RequestIdPlugin
   secure_headers.rs         SecureHeaders plugin + builder (CSP, HSTS, X-Frame-Options, ...)

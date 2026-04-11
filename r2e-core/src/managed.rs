@@ -19,10 +19,9 @@
 //! # Error Handling
 //!
 //! The `ManagedResource` trait requires an error type that implements `Into<Response>`.
-//! This module provides two error wrappers:
-//!
-//! - [`ManagedError`] - Wraps the framework's `HttpError`
-//! - [`ManagedErr<E>`] - Generic wrapper for any error type implementing `IntoResponse`
+//! Use [`ManagedErr<E>`] — a generic wrapper over any error type that
+//! implements `IntoResponse`. For the common case, use
+//! `ManagedErr<HttpError>`.
 //!
 //! # Examples
 //!
@@ -67,7 +66,7 @@
 //! ## Request-scoped Audit Context
 //!
 //! ```ignore
-//! use r2e_core::{ManagedResource, ManagedError, HttpError};
+//! use r2e_core::{ManagedResource, ManagedErr, HttpError};
 //!
 //! pub struct AuditContext {
 //!     entries: Vec<String>,
@@ -80,7 +79,7 @@
 //! }
 //!
 //! impl<S: Send + Sync> ManagedResource<S> for AuditContext {
-//!     type Error = ManagedError;
+//!     type Error = ManagedErr<HttpError>;
 //!
 //!     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
 //!         Ok(AuditContext { entries: Vec::new() })
@@ -100,7 +99,7 @@
 //! ## Database Transaction Wrapper
 //!
 //! ```ignore
-//! use r2e_core::{ManagedResource, ManagedError, HttpError};
+//! use r2e_core::{ManagedResource, ManagedErr, HttpError};
 //! use sqlx::{Database, Pool, Transaction};
 //!
 //! /// Transaction wrapper for managed lifecycle
@@ -116,18 +115,18 @@
 //!     DB: Database,
 //!     S: HasPool<DB> + Send + Sync,
 //! {
-//!     type Error = ManagedError;
+//!     type Error = ManagedErr<HttpError>;
 //!
 //!     async fn acquire(state: &S) -> Result<Self, Self::Error> {
 //!         let tx = state.pool().begin().await
-//!             .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
+//!             .map_err(|e| ManagedErr(HttpError::Internal(e.to_string())))?;
 //!         Ok(Tx(tx))
 //!     }
 //!
 //!     async fn release(self, success: bool) -> Result<(), Self::Error> {
 //!         if success {
 //!             self.0.commit().await
-//!                 .map_err(|e| ManagedError(HttpError::Internal(e.to_string())))?;
+//!                 .map_err(|e| ManagedErr(HttpError::Internal(e.to_string())))?;
 //!         }
 //!         // On failure, transaction is dropped and rolled back
 //!         Ok(())
@@ -135,7 +134,6 @@
 //! }
 //! ```
 
-use crate::error::HttpError;
 use crate::http::response::{IntoResponse, Response};
 use std::future::Future;
 
@@ -150,14 +148,14 @@ use std::future::Future;
 /// # Implementing for Custom Resources
 ///
 /// ```ignore
-/// use r2e_core::{ManagedResource, ManagedError, HttpError};
+/// use r2e_core::{ManagedResource, ManagedErr, HttpError};
 ///
 /// pub struct MyResource {
 ///     // ... fields
 /// }
 ///
 /// impl<S: Send + Sync> ManagedResource<S> for MyResource {
-///     type Error = ManagedError;
+///     type Error = ManagedErr<HttpError>;
 ///
 ///     async fn acquire(state: &S) -> Result<Self, Self::Error> {
 ///         // Acquire/initialize the resource
@@ -199,54 +197,6 @@ pub trait ManagedResource<S>: Sized {
     /// - Audit contexts: flush logs on success
     /// - Locks: release the lock
     fn release(self, success: bool) -> impl Future<Output = Result<(), Self::Error>> + Send;
-}
-
-/// Error wrapper for managed resource operations using `HttpError`.
-///
-/// **Deprecated:** Use `ManagedErr<HttpError>` instead, which is functionally identical.
-///
-/// # Example
-///
-/// ```ignore
-/// use r2e_core::{ManagedResource, ManagedErr, HttpError};
-///
-/// impl<S: Send + Sync> ManagedResource<S> for MyResource {
-///     type Error = ManagedErr<HttpError>;
-///
-///     async fn acquire(_state: &S) -> Result<Self, Self::Error> {
-///         Err(HttpError::internal("failed to acquire").into())
-///     }
-///
-///     async fn release(self, _success: bool) -> Result<(), Self::Error> {
-///         Ok(())
-///     }
-/// }
-/// ```
-#[deprecated(since = "0.2.0", note = "use `ManagedErr<HttpError>` instead")]
-pub struct ManagedError(pub HttpError);
-
-impl From<HttpError> for ManagedError {
-    fn from(err: HttpError) -> Self {
-        ManagedError(err)
-    }
-}
-
-impl From<ManagedError> for Response {
-    fn from(err: ManagedError) -> Self {
-        err.0.into_response()
-    }
-}
-
-impl std::fmt::Display for ManagedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::fmt::Debug for ManagedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ManagedError({:?})", self.0)
-    }
 }
 
 /// Generic error wrapper for managed resource operations.

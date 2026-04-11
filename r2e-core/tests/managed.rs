@@ -1,11 +1,11 @@
-use r2e_core::managed::{ManagedErr, ManagedError};
+use r2e_core::managed::ManagedErr;
 use r2e_core::HttpError;
 use r2e_core::http::{StatusCode, IntoResponse, Response};
 use http_body_util::BodyExt;
 
 #[r2e_core::test]
-async fn managed_error_into_response() {
-    let err = ManagedError(HttpError::NotFound("gone".into()));
+async fn managed_err_http_error_into_response() {
+    let err = ManagedErr(HttpError::NotFound("gone".into()));
     let resp: Response = err.into();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body = resp.into_body().collect().await.unwrap().to_bytes();

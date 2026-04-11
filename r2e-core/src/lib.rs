@@ -55,7 +55,7 @@ pub use plugin::{
     DeferredPluginInstaller, Plugin, PluginInstallContext, PreStatePlugin, RawPreStatePlugin,
 };
 pub use event_subscriber::EventSubscriber;
-pub use managed::{ManagedErr, ManagedError, ManagedResource};
+pub use managed::{ManagedErr, ManagedResource};
 pub use meta::MetaRegistry;
 pub use plugins::{AdvancedHealth, ConfiguredTracing};
 pub use request_id::{RequestId, RequestIdPlugin};

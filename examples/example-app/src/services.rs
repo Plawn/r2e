@@ -75,7 +75,7 @@ impl NotificationService {
     }
 
     pub fn ws_room(&self, user_id: &str) -> r2e::ws::WsBroadcaster {
-        self.ws_rooms.room(user_id)
+        self.ws_rooms.room(user_id.to_string())
     }
 
     pub fn sse_broadcaster(&self, user_id: &str) -> SseBroadcaster {
@@ -86,7 +86,7 @@ impl NotificationService {
     }
 
     pub fn notify(&self, user_id: &str, message: &str) {
-        self.ws_rooms.room(user_id).send_text(message);
+        self.ws_rooms.room(user_id.to_string()).send_text(message);
 
         if let Some(broadcaster) = self.sse_users.get(user_id) {
             let _ = broadcaster.value().send_event("notification", message);

@@ -14,7 +14,9 @@
 //!
 //! Multi-client broadcast utilities for chat rooms, notifications, etc.
 
+use std::borrow::Borrow;
 use std::future::Future;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -267,6 +269,16 @@ impl WsBroadcaster {
             client_id: NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
+
+    /// Number of active subscribers on this broadcaster.
+    pub fn subscriber_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
+
+    /// Returns true if the broadcast channel currently has no queued messages.
+    pub fn is_empty(&self) -> bool {
+        self.tx.is_empty()
+    }
 }
 
 /// Receiver end of a WsBroadcaster subscription.
@@ -300,39 +312,71 @@ impl WsBroadcastReceiver {
 
 // ── WsRooms ──────────────────────────────────────────────────────────────
 
-/// Named room manager for WebSocket broadcasting.
+/// Keyed manager for per-resource WebSocket broadcasters.
 ///
-/// Clone + Send + Sync — injectable via `#[inject]`.
+/// Defaults `K = String` for the common "named chat room" case; parameterize
+/// over the key type for typed identifiers (`Uuid`, `UserId`, …). Mirrors
+/// [`crate::sse::SseRooms`].
+///
+/// Clone + Send + Sync (provided `K` is `Send + Sync`) — injectable via
+/// `#[inject]`.
 #[derive(Clone)]
-pub struct WsRooms {
-    rooms: Arc<DashMap<String, WsBroadcaster>>,
+pub struct WsRooms<K = String>
+where
+    K: Eq + Hash,
+{
+    rooms: Arc<DashMap<K, WsBroadcaster>>,
     capacity: usize,
 }
 
-impl WsRooms {
+impl<K> WsRooms<K>
+where
+    K: Eq + Hash,
+{
     /// Create a new room manager with the given per-room channel capacity.
-    pub fn new(capacity_per_room: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             rooms: Arc::new(DashMap::new()),
-            capacity: capacity_per_room,
+            capacity,
         }
     }
 
-    /// Get or create a broadcaster for the given room name.
-    pub fn room(&self, name: &str) -> WsBroadcaster {
+    /// Get or create a broadcaster for the given key.
+    pub fn room(&self, key: K) -> WsBroadcaster {
         self.rooms
-            .entry(name.to_string())
+            .entry(key)
             .or_insert_with(|| WsBroadcaster::new(self.capacity))
             .clone()
     }
 
-    /// Remove a room.
-    pub fn remove(&self, name: &str) {
-        self.rooms.remove(name);
+    /// Remove and drop the broadcaster for `key`, if any.
+    pub fn remove<Q>(&self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.rooms.remove(key);
+    }
+
+    /// Drop rooms whose broadcaster has no active subscribers. Call
+    /// periodically (or at the end of a workflow) to avoid unbounded
+    /// growth when callers forget to `remove(key)` on completion.
+    ///
+    /// Returns the number of rooms removed.
+    pub fn reap_empty(&self) -> usize {
+        let before = self.rooms.len();
+        self.rooms
+            .retain(|_k, broadcaster| broadcaster.subscriber_count() > 0);
+        before - self.rooms.len()
     }
 
     /// Returns the number of active rooms.
     pub fn room_count(&self) -> usize {
         self.rooms.len()
+    }
+
+    /// Returns true if there are no active rooms.
+    pub fn is_empty(&self) -> bool {
+        self.rooms.is_empty()
     }
 }

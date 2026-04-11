@@ -225,7 +225,7 @@ pub trait ManagedResource<S>: Sized {
 }
 ```
 
-`success` is `true` if the handler returned `Ok`, `false` on `Err`. Error wrappers: `ManagedError` (wraps `HttpError`), `ManagedErr<E>` (wraps any `E: IntoResponse`).
+`success` is `true` if the handler returned `Ok`, `false` on `Err`. Use `ManagedErr<E>` to wrap any `E: IntoResponse` — for the common case, `ManagedErr<HttpError>`.
 
 ```rust
 #[post("/")]

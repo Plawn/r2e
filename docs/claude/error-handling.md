@@ -225,5 +225,3 @@ impl UserController {
 ### Error wrappers for `ManagedResource`
 
 `ManagedErr<E>` — generic wrapper for any `IntoResponse` type. Needed because orphan rules prevent `impl Into<Response> for YourError` directly. Use `ManagedErr<HttpError>` for the common case.
-
-**Note:** `ManagedError` (non-generic) is deprecated in favor of `ManagedErr<HttpError>`.
