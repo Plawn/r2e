@@ -59,29 +59,36 @@ impl<T> __SkipValidate for &__AutoValidator<'_, T> {
     }
 }
 
-fn convert_garde_report(report: &garde::Report) -> Response {
-    let mut field_errors = Vec::new();
+/// Response body shape: `{ "error": "Validation failed", "details": [...] }`.
+/// Serialized directly instead of round-tripping through `serde_json::Value`.
+#[derive(Serialize)]
+struct ValidationErrorBody<'a> {
+    error: &'static str,
+    details: &'a [FieldError],
+}
 
-    for (path, error) in report.iter() {
-        let field = {
-            let s = path.to_string();
-            if s.is_empty() { "value".to_string() } else { s }
+fn convert_garde_report(report: &garde::Report) -> Response {
+    let iter = report.iter();
+    let mut field_errors: Vec<FieldError> = Vec::with_capacity(iter.size_hint().0);
+
+    for (path, error) in iter {
+        let rendered = path.to_string();
+        let field = if rendered.is_empty() {
+            String::from("value")
+        } else {
+            rendered
         };
         field_errors.push(FieldError {
             field,
-            message: error.message().to_string(),
+            message: error.message().to_owned(),
             code: "validation".to_string(),
         });
     }
 
-    let resp = ValidationErrorResponse {
-        errors: field_errors,
+    let body = ValidationErrorBody {
+        error: "Validation failed",
+        details: &field_errors,
     };
-
-    let body = serde_json::json!({
-        "error": "Validation failed",
-        "details": resp.errors,
-    });
     (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 

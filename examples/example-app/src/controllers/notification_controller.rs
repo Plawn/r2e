@@ -44,7 +44,7 @@ impl NotificationController {
                 broadcast = rx.recv() => {
                     match broadcast {
                         Some(msg) => {
-                            if ws.send(msg).await.is_err() { break; }
+                            if ws.send((*msg).clone()).await.is_err() { break; }
                         }
                         None => break,
                     }

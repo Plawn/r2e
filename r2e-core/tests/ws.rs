@@ -9,7 +9,7 @@ async fn broadcaster_send_recv() {
     let mut rx = broadcaster.subscribe();
     broadcaster.send_text("hello");
     let msg = rx.recv().await.unwrap();
-    match msg {
+    match &*msg {
         Message::Text(t) => assert_eq!(t.to_string(), "hello"),
         other => panic!("expected Text, got {other:?}"),
     }
@@ -28,7 +28,7 @@ async fn broadcaster_excludes_sender() {
     broadcaster.send_text_from(sender_id + 999, "other-msg");
 
     let msg = rx.recv().await.unwrap();
-    match msg {
+    match &*msg {
         Message::Text(t) => assert_eq!(t.to_string(), "other-msg"),
         other => panic!("expected Text, got {other:?}"),
     }

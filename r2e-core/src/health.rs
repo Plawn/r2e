@@ -29,6 +29,7 @@
 //! }
 //! ```
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -170,9 +171,34 @@ pub struct HealthState {
     pub cache_ttl: Option<Duration>,
     #[doc(hidden)]
     pub cache: tokio::sync::RwLock<Option<(HealthResponse, Instant)>>,
+    /// Names of checks that affect readiness — derived from `checks` at construction.
+    /// Lookup by name prevents drift when check order changes.
+    #[doc(hidden)]
+    pub readiness_names: HashSet<String>,
 }
 
 impl HealthState {
+    /// Build a `HealthState` from a fixed set of indicators, computing the
+    /// readiness-name set from them so readiness filtering is order-independent.
+    #[doc(hidden)]
+    pub fn new(
+        checks: Vec<Box<dyn HealthIndicatorErased>>,
+        cache_ttl: Option<Duration>,
+    ) -> Self {
+        let readiness_names = checks
+            .iter()
+            .filter(|c| c.affects_readiness())
+            .map(|c| c.name().to_string())
+            .collect();
+        Self {
+            checks,
+            start_time: Instant::now(),
+            cache_ttl,
+            cache: tokio::sync::RwLock::new(None),
+            readiness_names,
+        }
+    }
+
     #[doc(hidden)]
     pub async fn aggregate(&self) -> HealthResponse {
         // Check cache
@@ -236,18 +262,13 @@ impl HealthState {
             let cache = self.cache.read().await;
             if let Some((ref response, ref timestamp)) = *cache {
                 if timestamp.elapsed() < ttl {
-                    // Filter to only readiness-affecting checks
+                    // Filter by check name so the result is stable even if the
+                    // check registration order changes between builds.
                     let readiness_checks: Vec<_> = response
                         .checks
                         .iter()
-                        .enumerate()
-                        .filter(|(i, _)| {
-                            self.checks
-                                .get(*i)
-                                .map(|c| c.affects_readiness())
-                                .unwrap_or(true)
-                        })
-                        .map(|(_, c)| c.clone())
+                        .filter(|c| self.readiness_names.contains(&c.name))
+                        .cloned()
                         .collect();
                     let all_up = readiness_checks
                         .iter()

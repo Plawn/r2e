@@ -664,6 +664,20 @@ impl BeanRegistry {
         T: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> T + Send + 'static,
     {
+        // Derive a stable per-registration fingerprint from the closure type's
+        // name. The name encodes the closure's definition site, so identical
+        // closures at distinct call sites hash to distinct values. This is not
+        // perfect — it won't invalidate on config changes the closure reads —
+        // but it's strictly better than the previous hard-coded `0`, which
+        // collapsed every factory registration into the same fingerprint.
+        let build_version = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            type_name::<F>().hash(&mut hasher);
+            type_name::<T>().hash(&mut hasher);
+            hasher.finish()
+        };
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
@@ -672,7 +686,7 @@ impl BeanRegistry {
                 "R2eConfig",
             )],
             config_keys: vec![],
-            build_version: 0,
+            build_version,
             factory: Box::new(move |ctx| {
                 Box::pin(async move {
                     let config = ctx.get::<crate::config::R2eConfig>();

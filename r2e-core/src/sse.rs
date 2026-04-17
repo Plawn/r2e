@@ -92,12 +92,15 @@ impl SseBroadcaster {
         self.capacity
     }
 
-    /// Current number of queued messages across all subscribers.
+    /// Messages sent but not yet received by every subscriber.
+    ///
+    /// Matches [`tokio::sync::broadcast::Sender::len`] — the count of values
+    /// still waiting for the slowest receiver, not a sum across receivers.
     pub fn len(&self) -> usize {
         self.tx.len()
     }
 
-    /// Returns true if the broadcast channel currently has no queued messages.
+    /// Returns true when no sent message is still pending for any subscriber.
     pub fn is_empty(&self) -> bool {
         self.tx.is_empty()
     }

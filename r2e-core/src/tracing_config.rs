@@ -70,7 +70,7 @@ impl crate::config::FromConfigValue for SpanEvents {
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
 pub struct TracingConfig {
     /// `EnvFilter` directive string. `RUST_LOG` env var takes priority.
-    #[config(default = "info,tower_http=debug")]
+    #[config(default = "info")]
     pub filter: String,
 
     /// Log format: `pretty` (default) or `json`.
@@ -108,7 +108,7 @@ pub struct TracingConfig {
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            filter: "info,tower_http=debug".to_string(),
+            filter: "info".to_string(),
             format: None,
             target: None,
             thread_ids: None,

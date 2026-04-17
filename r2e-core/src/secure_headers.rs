@@ -26,7 +26,6 @@
 //! ```
 
 use crate::http::{HeaderName, HeaderValue};
-use crate::http::Response;
 
 use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
@@ -59,21 +58,15 @@ impl Default for SecureHeaders {
 
 impl Plugin for SecureHeaders {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        let headers = std::sync::Arc::new(self.headers);
-        app.with_layer_fn(move |router| {
-            let headers = headers.clone();
-            router.layer(crate::http::middleware::from_fn(
-                move |req: crate::http::Request, next: crate::http::middleware::Next| {
-                    let headers = headers.clone();
-                    async move {
-                        let mut response: Response = next.run(req).await;
-                        for (name, value) in headers.iter() {
-                            response.headers_mut().insert(name.clone(), value.clone());
-                        }
-                        response
-                    }
-                },
-            ))
+        let headers = self.headers;
+        app.with_layer_fn(move |mut router| {
+            for (name, value) in headers {
+                router = router.layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    name,
+                    value,
+                ));
+            }
+            router
         })
     }
 }

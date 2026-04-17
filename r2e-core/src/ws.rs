@@ -91,19 +91,8 @@ impl WsStream {
 
     /// Receive the next message, or `None` if the connection is closed.
     pub async fn next(&mut self) -> Option<Result<Message, WsError>> {
-        use futures_core::Stream;
-        use std::pin::Pin;
-        use std::task::Poll;
-
-        std::future::poll_fn(|cx| {
-            match Pin::new(&mut self.inner).poll_next(cx) {
-                Poll::Ready(Some(Ok(msg))) => Poll::Ready(Some(Ok(msg))),
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(WsError::Recv(e)))),
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            }
-        })
-        .await
+        use tokio_stream::StreamExt;
+        self.inner.next().await.map(|r| r.map_err(WsError::Recv))
     }
 
     /// Receive the next text message, skipping non-text messages.
@@ -119,12 +108,20 @@ impl WsStream {
     }
 
     /// Receive the next message and deserialize as JSON.
+    ///
+    /// Decodes directly from the text frame's backing bytes to avoid the
+    /// intermediate `String` allocation of the naive `next_text` + `from_str` path.
     pub async fn next_json<T: DeserializeOwned>(&mut self) -> Option<Result<T, WsError>> {
-        let text = match self.next_text().await? {
-            Ok(t) => t,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(serde_json::from_str(&text).map_err(WsError::Json))
+        loop {
+            match self.next().await? {
+                Ok(Message::Text(bytes)) => {
+                    return Some(serde_json::from_slice(bytes.as_bytes()).map_err(WsError::Json));
+                }
+                Ok(Message::Close(_)) => return None,
+                Err(e) => return Some(Err(e)),
+                _ => continue,
+            }
+        }
     }
 
     /// Process messages in a loop with a callback. Returns when the connection closes.
@@ -186,8 +183,6 @@ pub async fn run_ws_handler(mut ws: WsStream, mut handler: impl WsHandler) {
 
 // ── WsBroadcaster ────────────────────────────────────────────────────────
 
-static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
-
 /// Broadcast message wrapper with optional sender exclusion.
 #[derive(Clone)]
 struct BroadcastMessage {
@@ -201,13 +196,19 @@ struct BroadcastMessage {
 #[derive(Clone)]
 pub struct WsBroadcaster {
     tx: broadcast::Sender<BroadcastMessage>,
+    /// Per-broadcaster client id counter. Scoped to this instance so
+    /// tests and independent broadcasters get fresh, predictable ids.
+    next_client_id: Arc<AtomicU64>,
 }
 
 impl WsBroadcaster {
     /// Create a new broadcaster with the given channel capacity.
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
+        Self {
+            tx,
+            next_client_id: Arc::new(AtomicU64::new(1)),
+        }
     }
 
     /// Broadcast a text message to all subscribers.
@@ -266,7 +267,7 @@ impl WsBroadcaster {
     pub fn subscribe(&self) -> WsBroadcastReceiver {
         WsBroadcastReceiver {
             rx: self.tx.subscribe(),
-            client_id: NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed),
+            client_id: self.next_client_id.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -275,7 +276,10 @@ impl WsBroadcaster {
         self.tx.receiver_count()
     }
 
-    /// Returns true if the broadcast channel currently has no queued messages.
+    /// Returns true when no sent message is still pending for any subscriber.
+    ///
+    /// Matches [`tokio::sync::broadcast::Sender::is_empty`] — reflects the slowest
+    /// receiver, not a sum across receivers.
     pub fn is_empty(&self) -> bool {
         self.tx.is_empty()
     }
@@ -294,14 +298,19 @@ impl WsBroadcastReceiver {
     }
 
     /// Receive the next broadcast message, skipping messages sent by this client.
-    pub async fn recv(&mut self) -> Option<Message> {
+    ///
+    /// Returns the message as an `Arc<Message>` — the broadcaster already keeps
+    /// each payload in an `Arc`, so this hands out a cheap clone of the pointer
+    /// rather than cloning the full frame bytes. Call `(*msg).clone()` if you
+    /// need an owned `Message`.
+    pub async fn recv(&mut self) -> Option<Arc<Message>> {
         loop {
             match self.rx.recv().await {
                 Ok(msg) => {
                     if msg.sender_id == Some(self.client_id) {
                         continue; // skip own messages
                     }
-                    return Some((*msg.data).clone());
+                    return Some(msg.data);
                 }
                 Err(broadcast::error::RecvError::Closed) => return None,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,

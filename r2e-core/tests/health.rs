@@ -48,15 +48,13 @@ fn health_builder_collects_checks() {
 
 #[r2e_core::test]
 async fn health_state_aggregate() {
-    let state = HealthState {
-        checks: vec![
+    let state = HealthState::new(
+        vec![
             Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>,
             Box::new(AlwaysDown) as Box<dyn HealthIndicatorErased>,
         ],
-        start_time: Instant::now(),
-        cache_ttl: None,
-        cache: tokio::sync::RwLock::new(None),
-    };
+        None,
+    );
     let response = state.aggregate().await;
     assert!(matches!(response.status, HealthCheckStatus::Down));
     assert_eq!(response.checks.len(), 2);
@@ -67,12 +65,10 @@ async fn health_state_aggregate() {
 
 #[r2e_core::test]
 async fn health_cache_returns_cached_result() {
-    let state = HealthState {
-        checks: vec![Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>],
-        start_time: Instant::now(),
-        cache_ttl: Some(Duration::from_secs(60)),
-        cache: tokio::sync::RwLock::new(None),
-    };
+    let state = HealthState::new(
+        vec![Box::new(AlwaysUp) as Box<dyn HealthIndicatorErased>],
+        Some(Duration::from_secs(60)),
+    );
     // First call populates the cache
     let r1 = state.aggregate().await;
     assert!(matches!(r1.status, HealthCheckStatus::Up));
@@ -91,6 +87,7 @@ async fn health_uptime_increases() {
         start_time: Instant::now() - Duration::from_secs(5),
         cache_ttl: None,
         cache: tokio::sync::RwLock::new(None),
+        readiness_names: std::collections::HashSet::new(),
     };
     let response = state.aggregate().await;
     assert!(response.uptime_seconds.unwrap() >= 5);

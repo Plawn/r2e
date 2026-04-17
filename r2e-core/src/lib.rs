@@ -49,10 +49,9 @@ pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
 pub use tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use lifecycle::LifecycleController;
-#[allow(deprecated)]
 pub use plugin::{
-    DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin,
-    DeferredPluginInstaller, Plugin, PluginInstallContext, PreStatePlugin, RawPreStatePlugin,
+    DeferredAction, DeferredContext, Plugin, PluginInstallContext, PreStatePlugin,
+    RawPreStatePlugin,
 };
 pub use event_subscriber::EventSubscriber;
 pub use managed::{ManagedErr, ManagedResource};

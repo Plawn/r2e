@@ -5,7 +5,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 #[test]
 fn default_has_expected_values() {
     let cfg = TracingConfig::default();
-    assert_eq!(cfg.filter, "info,tower_http=debug");
+    assert_eq!(cfg.filter, "info");
     assert!(cfg.format.is_none());
     assert!(cfg.target.is_none());
     assert!(cfg.thread_ids.is_none());
@@ -67,7 +67,7 @@ tracing:
     assert_eq!(cfg.format, Some(LogFormat::Pretty));
     assert_eq!(cfg.ansi, Some(false));
     // Unset fields use default
-    assert_eq!(cfg.filter, "info,tower_http=debug");
+    assert_eq!(cfg.filter, "info");
     assert!(cfg.target.is_none());
 }
 

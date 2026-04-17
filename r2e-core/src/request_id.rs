@@ -78,23 +78,35 @@ async fn request_id_middleware(
     mut req: crate::http::Request,
     next: crate::http::middleware::Next,
 ) -> Response {
-    let id = req
-        .headers()
-        .get(&X_REQUEST_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // Build (id_string, header_value) once per request, avoiding the
+    // double alloc (String + HeaderValue) of the naive path.
+    let (id, header_val) = if let Some(v) = req.headers().get(&X_REQUEST_ID) {
+        match v.to_str() {
+            Ok(s) => (s.to_string(), v.clone()),
+            Err(_) => fresh_request_id(),
+        }
+    } else {
+        fresh_request_id()
+    };
 
-    let request_id = RequestId(id);
-    req.extensions_mut().insert(request_id.clone());
+    req.extensions_mut().insert(RequestId(id));
 
     let mut response = next.run(req).await;
-
-    if let Ok(val) = HeaderValue::from_str(&request_id.0) {
-        response.headers_mut().insert(X_REQUEST_ID.clone(), val);
-    }
-
+    response.headers_mut().insert(X_REQUEST_ID.clone(), header_val);
     response
+}
+
+/// Generate a fresh UUID v4 into a stack buffer and build the matching
+/// `HeaderValue` without paying for `HeaderValue::from_str`'s validation —
+/// the hyphenated UUID encoding is always valid visible ASCII.
+fn fresh_request_id() -> (String, HeaderValue) {
+    let mut buf = [0u8; uuid::fmt::Hyphenated::LENGTH];
+    let encoded = uuid::Uuid::new_v4().as_hyphenated().encode_lower(&mut buf);
+    // Safety note: `encode_lower` writes only `[0-9a-f-]`, which is valid
+    // UTF-8 and valid HeaderValue content. `from_bytes` is infallible here.
+    let header_val = HeaderValue::from_bytes(encoded.as_bytes())
+        .expect("hyphenated UUID is always a valid header value");
+    (encoded.to_owned(), header_val)
 }
 
 /// Plugin that installs the Request ID middleware.

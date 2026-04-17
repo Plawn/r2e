@@ -176,12 +176,7 @@ impl AdvancedHealth {
 impl Plugin for AdvancedHealth {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         use std::sync::Arc;
-        let state = Arc::new(crate::health::HealthState {
-            checks: self.checks,
-            start_time: std::time::Instant::now(),
-            cache_ttl: self.cache_ttl,
-            cache: tokio::sync::RwLock::new(None),
-        });
+        let state = Arc::new(crate::health::HealthState::new(self.checks, self.cache_ttl));
         let s1 = state.clone();
         app.register_routes(
             crate::http::Router::new()

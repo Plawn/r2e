@@ -3,8 +3,7 @@ use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
-#[allow(deprecated)]
-use crate::plugin::{DeferredAction, DeferredContext, DeferredInstallContext, DeferredPlugin, Plugin, RawPreStatePlugin};
+use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
 use crate::type_list::{AllSatisfied, BuildableFrom, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -68,9 +67,6 @@ struct BuilderConfig {
     bean_registry: BeanRegistry,
     /// Deferred actions to be executed after state resolution.
     deferred_actions: Vec<DeferredAction>,
-    /// Legacy deferred plugins (deprecated, for backward compatibility).
-    #[allow(deprecated)]
-    deferred_plugins: Vec<DeferredPlugin>,
     /// Plugin data storage (type-erased, keyed by TypeId).
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// Name of the last plugin that should be installed last (for ordering validation).
@@ -135,7 +131,6 @@ impl AppBuilder<NoState, TNil, TNil> {
                 custom_layers: Vec::new(),
                 bean_registry: BeanRegistry::new(),
                 deferred_actions: Vec::new(),
-                deferred_plugins: Vec::new(),
                 plugin_data: HashMap::new(),
                 last_plugin_name: None,
                 normalize_path: false,
@@ -659,18 +654,6 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self
     }
 
-    /// Add a deferred plugin to be installed after state resolution.
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`add_deferred`](Self::add_deferred) with [`DeferredAction`] instead.
-    #[deprecated(since = "0.2.0", note = "Use add_deferred with DeferredAction instead")]
-    #[allow(deprecated)]
-    pub fn add_deferred_plugin(mut self, plugin: DeferredPlugin) -> Self {
-        self.shared.deferred_plugins.push(plugin);
-        self
-    }
-
     /// Resolve the bean dependency graph and build the application state.
     ///
     /// Consumes the bean registry, topologically sorts all beans, constructs
@@ -790,11 +773,9 @@ impl Default for AppBuilder<NoState, TNil, TNil> {
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Internal: construct a typed builder from the pre-state shared config.
-    #[allow(deprecated)]
     fn from_pre(mut shared: BuilderConfig, state: T) -> Self {
-        // Take the deferred actions and plugins before creating the builder.
+        // Take the deferred actions before creating the builder.
         let deferred_actions = std::mem::take(&mut shared.deferred_actions);
-        let deferred_plugins = std::mem::take(&mut shared.deferred_plugins);
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
@@ -826,51 +807,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             (action.action)(&mut ctx);
         }
 
-        // Install legacy deferred plugins (deprecated API).
-        for plugin in deferred_plugins {
-            let mut ctx = LegacyInstallContext {
-                layers: &mut builder.shared.custom_layers,
-                plugin_data: &mut builder.shared.plugin_data,
-                serve_hooks: &mut builder.serve_hooks,
-                shutdown_hooks: &mut builder.plugin_shutdown_hooks,
-            };
-            plugin.installer.install(plugin.data, &mut ctx);
-        }
-
         builder
-    }
-}
-
-/// Context for installing legacy deferred plugins into a typed builder.
-#[allow(deprecated)]
-struct LegacyInstallContext<'a> {
-    layers: &'a mut Vec<LayerFn>,
-    plugin_data: &'a mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    serve_hooks: &'a mut Vec<ServeHook>,
-    shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
-}
-
-#[allow(deprecated)]
-impl DeferredInstallContext for LegacyInstallContext<'_> {
-    fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
-        self.layers.push(layer);
-    }
-
-    fn store_plugin_data(&mut self, data: Box<dyn Any + Send + Sync>) {
-        // Use the concrete type's TypeId as the key.
-        let type_id = (*data).type_id();
-        self.plugin_data.insert(type_id, data);
-    }
-
-    fn add_serve_hook(
-        &mut self,
-        hook: Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>,
-    ) {
-        self.serve_hooks.push(hook);
-    }
-
-    fn add_shutdown_hook(&mut self, hook: Box<dyn FnOnce() + Send>) {
-        self.shutdown_hooks.push(hook);
     }
 }
 
@@ -1161,7 +1098,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Get plugin data by type.
     ///
     /// Returns a reference to plugin data previously stored via
-    /// `DeferredInstallContext::store_plugin_data`.
+    /// [`DeferredContext::store_data`].
     pub fn get_plugin_data<D: Any + Send + Sync + 'static>(&self) -> Option<&D> {
         self.shared
             .plugin_data
