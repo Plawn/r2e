@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
-use r2e_core::builder::TaskRegistryHandle;
+use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::StatusCode;
 use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{AppBuilder, DeferredAction, RawPreStatePlugin};
@@ -218,9 +218,11 @@ impl RawPreStatePlugin for Scheduler {
                 // Store the task registry for use during controller registration.
                 ctx.store_data(task_registry);
 
-                // Register a serve hook to start scheduled tasks.
-                // Tasks already have their state captured, so no generic T is needed.
-                ctx.on_serve(move |tasks, _token_at_serve| {
+                // Register a serve hook to start scheduled tasks. Drains only
+                // scheduler-owned tasks from the shared registry so hooks for
+                // other subsystems don't see them.
+                ctx.on_serve(move |registry, _token_at_serve| {
+                    let tasks = registry.take_of::<ScheduledTaskMarker>();
                     start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
                 });
 

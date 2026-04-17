@@ -1,13 +1,14 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::plugin::{DeferredAction, DeferredContext};
 use tokio_util::sync::CancellationToken;
 
 fn make_deferred_context<'a>(
     layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
-    serve_hooks: &'a mut Vec<Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>>,
+    serve_hooks: &'a mut Vec<Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
 ) -> DeferredContext<'a> {
     DeferredContext {
@@ -74,7 +75,7 @@ fn deferred_context_on_serve() {
         &mut serve_hooks,
         &mut shutdown_hooks,
     );
-    ctx.on_serve(|_tasks, _token| {});
+    ctx.on_serve(|_registry, _token| {});
     assert_eq!(serve_hooks.len(), 1);
 }
 

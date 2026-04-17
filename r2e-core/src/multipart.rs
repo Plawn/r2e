@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 use crate::http::extract::{FromRequest, Request};
 use crate::http::response::{IntoResponse, Response};
@@ -8,6 +8,36 @@ use crate::http::{Json, StatusCode};
 
 /// Re-export the raw Axum multipart extractor for advanced use cases.
 pub use crate::http::multipart::Multipart;
+
+// ── Limits ───────────────────────────────────────────────────────────────────
+
+/// Upper bounds enforced while collecting multipart fields.
+///
+/// Used by [`MultipartFields::collect_from_with_limits`] and the default
+/// [`TypedMultipart`] extractor to bound memory use per request. Without a
+/// cap, a single `multipart/form-data` request can OOM the process by
+/// streaming an unbounded body.
+#[derive(Debug, Clone, Copy)]
+pub struct MultipartLimits {
+    /// Maximum bytes accepted for any individual field (file or text).
+    pub per_field: usize,
+    /// Maximum bytes accepted across all fields in one request.
+    pub total: usize,
+}
+
+impl MultipartLimits {
+    /// 10 MiB per field, 100 MiB per request.
+    pub const DEFAULT: Self = Self {
+        per_field: 10 * 1024 * 1024,
+        total: 100 * 1024 * 1024,
+    };
+}
+
+impl Default for MultipartLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +52,10 @@ pub enum MultipartError {
     AxumError(String),
     /// An error reading a multipart field's data.
     ReadError(String),
+    /// A field exceeded the per-field byte limit.
+    FieldTooLarge { field: String, limit: usize },
+    /// The aggregated request payload exceeded the total byte limit.
+    PayloadTooLarge { limit: usize },
 }
 
 impl std::fmt::Display for MultipartError {
@@ -33,14 +67,26 @@ impl std::fmt::Display for MultipartError {
             }
             Self::AxumError(msg) => write!(f, "multipart error: {msg}"),
             Self::ReadError(msg) => write!(f, "failed to read field data: {msg}"),
+            Self::FieldTooLarge { field, limit } => {
+                write!(f, "field '{field}' exceeds the per-field byte limit ({limit} bytes)")
+            }
+            Self::PayloadTooLarge { limit } => {
+                write!(f, "multipart payload exceeds the total byte limit ({limit} bytes)")
+            }
         }
     }
 }
 
 impl IntoResponse for MultipartError {
     fn into_response(self) -> Response {
+        let status = match &self {
+            Self::FieldTooLarge { .. } | Self::PayloadTooLarge { .. } => {
+                StatusCode::PAYLOAD_TOO_LARGE
+            }
+            _ => StatusCode::BAD_REQUEST,
+        };
         let body = serde_json::json!({ "error": self.to_string() });
-        (StatusCode::BAD_REQUEST, Json(body)).into_response()
+        (status, Json(body)).into_response()
     }
 }
 
@@ -84,12 +130,26 @@ pub struct MultipartFields {
 }
 
 impl MultipartFields {
-    /// Consume an Axum `Multipart` extractor and collect all fields.
-    pub async fn collect_from(mut multipart: Multipart) -> Result<Self, MultipartError> {
+    /// Consume an Axum `Multipart` extractor and collect all fields using
+    /// [`MultipartLimits::DEFAULT`] (10 MiB per field, 100 MiB total).
+    pub async fn collect_from(multipart: Multipart) -> Result<Self, MultipartError> {
+        Self::collect_from_with_limits(multipart, MultipartLimits::DEFAULT).await
+    }
+
+    /// Consume an Axum `Multipart` extractor, streaming each field into memory
+    /// while enforcing byte caps. Exceeding `per_field` yields
+    /// [`MultipartError::FieldTooLarge`]; exceeding `total` (summed across all
+    /// fields) yields [`MultipartError::PayloadTooLarge`]. Both map to
+    /// `413 Payload Too Large`.
+    pub async fn collect_from_with_limits(
+        mut multipart: Multipart,
+        limits: MultipartLimits,
+    ) -> Result<Self, MultipartError> {
         let mut text: HashMap<String, Vec<String>> = HashMap::new();
         let mut files: HashMap<String, Vec<UploadedFile>> = HashMap::new();
+        let mut total_bytes: usize = 0;
 
-        while let Some(field) = multipart
+        while let Some(mut field) = multipart
             .next_field()
             .await
             .map_err(|e| MultipartError::AxumError(e.to_string()))?
@@ -98,10 +158,32 @@ impl MultipartFields {
             let file_name = field.file_name().map(|s| s.to_string());
             let content_type = field.content_type().map(|s| s.to_string());
 
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| MultipartError::ReadError(e.to_string()))?;
+            let mut buf = BytesMut::new();
+            loop {
+                match field
+                    .chunk()
+                    .await
+                    .map_err(|e| MultipartError::ReadError(e.to_string()))?
+                {
+                    Some(chunk) => {
+                        if buf.len().saturating_add(chunk.len()) > limits.per_field {
+                            return Err(MultipartError::FieldTooLarge {
+                                field: name,
+                                limit: limits.per_field,
+                            });
+                        }
+                        if total_bytes.saturating_add(chunk.len()) > limits.total {
+                            return Err(MultipartError::PayloadTooLarge {
+                                limit: limits.total,
+                            });
+                        }
+                        total_bytes += chunk.len();
+                        buf.extend_from_slice(&chunk);
+                    }
+                    None => break,
+                }
+            }
+            let data = buf.freeze();
 
             // Heuristic: if the field has a file_name, treat it as a file upload.
             // Otherwise, treat it as a text field.
@@ -184,6 +266,10 @@ pub trait FromMultipart: Sized {
 
 /// An Axum extractor that consumes a `multipart/form-data` request body and
 /// deserializes it into a typed struct implementing `FromMultipart`.
+///
+/// Uses [`MultipartLimits::DEFAULT`] (10 MiB per field, 100 MiB total). For
+/// different caps, collect manually via
+/// [`MultipartFields::collect_from_with_limits`] in a custom extractor.
 ///
 /// # Example
 ///

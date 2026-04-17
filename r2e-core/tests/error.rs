@@ -90,3 +90,34 @@ fn app_error_from_io_error() {
         other => panic!("expected Internal, got {other}"),
     }
 }
+
+#[derive(Debug)]
+struct SentinelError(u32);
+
+impl std::fmt::Display for SentinelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sentinel({})", self.0)
+    }
+}
+
+impl std::error::Error for SentinelError {}
+
+#[test]
+fn with_source_clone_preserves_source_type() {
+    use std::error::Error;
+    use std::sync::Arc;
+
+    let original = HttpError::WithSource {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: "boom".into(),
+        source: Arc::new(SentinelError(42)),
+    };
+
+    let cloned = original.clone();
+
+    let src = <HttpError as Error>::source(&cloned).expect("cloned source missing");
+    let downcast = src
+        .downcast_ref::<SentinelError>()
+        .expect("downcast should succeed after clone");
+    assert_eq!(downcast.0, 42);
+}

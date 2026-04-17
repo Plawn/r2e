@@ -1,8 +1,51 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
+
+thread_local! {
+    /// Stack of lazy-bean `(TypeId, type_name)` pairs currently being resolved
+    /// on this thread. Used to detect circular lazy dependencies and turn the
+    /// otherwise-cryptic `OnceLock::get_or_init` re-entry abort into a clear
+    /// panic with the cycle trace.
+    static RESOLVING: RefCell<Vec<(TypeId, &'static str)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Guard that records entry into a lazy-bean factory on the thread-local
+/// resolution stack and pops on drop. Panics on re-entry (circular dep).
+struct ResolutionGuard(TypeId);
+
+impl ResolutionGuard {
+    fn enter(tid: TypeId, name: &'static str) -> Self {
+        RESOLVING.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if let Some(pos) = stack.iter().position(|(t, _)| *t == tid) {
+                let mut trace: Vec<&'static str> =
+                    stack[pos..].iter().map(|(_, n)| *n).collect();
+                trace.push(name);
+                panic!(
+                    "circular lazy bean dependency detected: {}",
+                    trace.join(" -> ")
+                );
+            }
+            stack.push((tid, name));
+        });
+        Self(tid)
+    }
+}
+
+impl Drop for ResolutionGuard {
+    fn drop(&mut self) {
+        RESOLVING.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.last().map(|(t, _)| *t) == Some(self.0) {
+                stack.pop();
+            }
+        });
+    }
+}
 
 // ── LazySlot (internal) ─────────────────────────────────────────────────────
 
@@ -48,6 +91,11 @@ impl<T: Clone + Send + Sync + 'static> LazySlot<T> {
     }
 
     fn get_or_init(&self) -> &T {
+        // Fast path: already initialized — skip the resolution-stack bookkeeping.
+        if let Some(v) = self.cell.get() {
+            return v;
+        }
+        let _guard = ResolutionGuard::enter(TypeId::of::<T>(), std::any::type_name::<T>());
         self.cell.get_or_init(|| {
             let factory = self
                 .factory

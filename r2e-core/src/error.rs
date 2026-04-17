@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use crate::http::response::{IntoResponse, Response};
 use crate::http::{Json, StatusCode};
@@ -47,10 +48,13 @@ pub enum HttpError {
     /// Used by `From` conversions (e.g., `From<DataError>`) to keep the
     /// original error accessible via `std::error::Error::source()`.
     /// The `source` is never exposed to the HTTP client — only `message`.
+    ///
+    /// `source` is wrapped in `Arc` so `Clone` is cheap and preserves the
+    /// original concrete error type (downcasting through `source()` still works).
     WithSource {
         status: StatusCode,
         message: Cow<'static, str>,
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: Arc<dyn std::error::Error + Send + Sync>,
     },
 }
 
@@ -72,7 +76,7 @@ impl Clone for HttpError {
             } => HttpError::WithSource {
                 status: *status,
                 message: message.clone(),
-                source: source.to_string().into(),
+                source: Arc::clone(source),
             },
         }
     }

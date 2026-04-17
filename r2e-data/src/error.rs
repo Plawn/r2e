@@ -42,7 +42,7 @@ impl From<DataError> for r2e_core::HttpError {
             DataError::Database(e) => r2e_core::HttpError::WithSource {
                 status: r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
                 message: "Database error".into(),
-                source: e,
+                source: std::sync::Arc::from(e),
             },
             DataError::Other(msg) => r2e_core::HttpError::Internal(msg.into()),
         }

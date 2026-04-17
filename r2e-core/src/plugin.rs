@@ -217,6 +217,11 @@ pub trait PreStatePlugin: Send + 'static {
     /// passed to [`install()`](Self::install) as the `deps` parameter.
     ///
     /// Most plugins set this to `()` (no dependencies).
+    ///
+    /// **Constraint:** plugin install runs *before* the bean graph is built,
+    /// so every type listed here must be a `.provide(instance)` value, not a
+    /// `.with_bean::<T>()` registration. If a `with_bean`-registered type
+    /// appears in `Deps`, runtime resolution panics with a clear message.
     type Deps: crate::type_list::PluginDeps;
 
     /// Install the plugin in the pre-state phase.
@@ -376,9 +381,10 @@ pub struct DeferredContext<'a> {
     /// Plugin data storage.
     #[doc(hidden)]
     pub plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
-    /// Serve hooks (called when server starts).
+    /// Serve hooks (called when server starts). Each hook receives a clone
+    /// of the shared `TaskRegistryHandle` and drains the tasks it owns.
     #[doc(hidden)]
-    pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>>,
+    pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send>>,
     /// Shutdown hooks from plugins.
     #[doc(hidden)]
     pub shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
@@ -402,11 +408,13 @@ impl DeferredContext<'_> {
     /// Add a serve hook that runs when the server starts.
     ///
     /// The hook receives:
-    /// - `tasks`: Type-erased task definitions collected during controller registration
+    /// - `registry`: Shared handle to the task registry; the hook drains the
+    ///   tasks it owns via `registry.take_of::<Tag>()` (or `take_all()` for
+    ///   single-consumer subsystems).
     /// - `token`: A cancellation token (unused by the builder, but passed for consistency)
     pub fn on_serve<F>(&mut self, hook: F)
     where
-        F: FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send + 'static,
+        F: FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send + 'static,
     {
         self.serve_hooks.push(Box::new(hook));
     }
@@ -482,7 +490,7 @@ pub trait DeferredInstallContext {
     /// Add a serve hook that runs when the server starts.
     fn add_serve_hook(
         &mut self,
-        hook: Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>,
+        hook: Box<dyn FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send>,
     );
 
     /// Add a shutdown hook that runs when the server stops.

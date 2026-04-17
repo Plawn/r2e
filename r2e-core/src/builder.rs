@@ -23,9 +23,27 @@ type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send
 /// a router fragment to be merged into the application.
 type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
 
-/// A serve hook that receives tasks and starts them.
-/// Tasks already have their state captured, so only the token is needed.
-type ServeHook = Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>;
+/// A serve hook that receives the shared task registry and a cancellation
+/// token. Each hook is responsible for draining the registry of tasks it
+/// owns (via `TaskRegistryHandle::take_of::<Tag>()` for tagged tasks, or
+/// `take_all()` for single-consumer subsystems).
+type ServeHook = Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>;
+
+/// Shared collection of JoinHandles for services spawned via
+/// [`AppBuilder::spawn_service`], so shutdown can await their completion
+/// with a grace deadline before returning.
+#[derive(Clone, Default)]
+struct ServiceHandles(Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>);
+
+impl ServiceHandles {
+    fn push(&self, handle: tokio::task::JoinHandle<()>) {
+        self.0.lock().unwrap().push(handle);
+    }
+
+    fn drain(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
 
 /// Resolve the active profile: `R2E_PROFILE` env > `r2e.profile` config > `"default"`.
 fn resolve_profile(config: &crate::config::R2eConfig) -> String {
@@ -846,7 +864,7 @@ impl DeferredInstallContext for LegacyInstallContext<'_> {
 
     fn add_serve_hook(
         &mut self,
-        hook: Box<dyn FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken) + Send>,
+        hook: Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>,
     ) {
         self.serve_hooks.push(hook);
     }
@@ -1115,9 +1133,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let token = CancellationToken::new();
         let shutdown_token = token.clone();
 
+        // Get-or-insert the shared ServiceHandles collector in plugin_data so
+        // `run_with_listener` can await all spawn_service tasks on shutdown.
+        let handles = self
+            .shared
+            .plugin_data
+            .entry(TypeId::of::<ServiceHandles>())
+            .or_insert_with(|| Box::new(ServiceHandles::default()))
+            .downcast_ref::<ServiceHandles>()
+            .expect("ServiceHandles type mismatch in plugin_data")
+            .clone();
+
         self = self.on_start(move |state| async move {
             let service = C::from_state(&state);
-            tokio::spawn(service.start(token));
+            let join = tokio::spawn(service.start(token));
+            handles.push(join);
             Ok(())
         });
 
@@ -1171,7 +1201,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             let boxed_tasks = C::scheduled_tasks_boxed(state);
             if !boxed_tasks.is_empty() {
                 if let Some(registry) = self.get_plugin_data::<TaskRegistryHandle>() {
-                    registry.add_boxed(boxed_tasks);
+                    registry.add_boxed_for::<ScheduledTaskMarker>(boxed_tasks);
                 } else {
                     tracing::warn!(
                         controller = std::any::type_name::<C>(),
@@ -1483,18 +1513,19 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             }
 
             // Call serve hooks (e.g., scheduler starts tasks).
-            let mut boxed_tasks = self.plugin_data
+            //
+            // Each hook receives a clone of the shared `TaskRegistryHandle`
+            // (Arc-backed) and drains the tasks it owns. Multiple hooks can
+            // share the registry: scheduler calls `take_all()` or
+            // `take_of::<ScheduledTaskMarker>()`, other subsystems pick their
+            // own tagged subset, and absent subsystems observe no tasks.
+            let task_registry = self.plugin_data
                 .get(&TypeId::of::<TaskRegistryHandle>())
                 .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
-                .map(|registry| registry.take_all())
+                .cloned()
                 .unwrap_or_default();
             for hook in self.serve_hooks {
-                let tasks_for_hook = if boxed_tasks.is_empty() {
-                    Vec::new()
-                } else {
-                    std::mem::take(&mut boxed_tasks)
-                };
-                hook(tasks_for_hook, CancellationToken::new());
+                hook(task_registry.clone(), CancellationToken::new());
             }
 
             // Run startup hooks
@@ -1510,26 +1541,66 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
         }
 
+        // Pull the shared spawn_service JoinHandle collector (if any) so we
+        // can await tasks after graceful shutdown.
+        let service_handles = self
+            .plugin_data
+            .get(&TypeId::of::<ServiceHandles>())
+            .and_then(|b| b.downcast_ref::<ServiceHandles>())
+            .cloned()
+            .unwrap_or_default();
+
+        // Compose the shutdown future handed to `with_graceful_shutdown`.
+        // When the OS signal arrives, fire plugin shutdown hooks (which
+        // cancel tokens handed to spawn_service tasks) BEFORE letting the
+        // HTTP server start draining. This way background tasks see the
+        // cancel signal while in-flight HTTP requests still get to finish.
+        let plugin_shutdown_hooks = if skip_lifecycle {
+            Vec::new()
+        } else {
+            self.plugin_shutdown_hooks
+        };
+        let shutdown_future = async move {
+            shutdown_signal().await;
+            for hook in plugin_shutdown_hooks {
+                hook();
+            }
+        };
+
         info!(addr = %self.addr, "R2E server listening");
         crate::http::serve(
             listener,
             self.router
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_future)
         .await?;
 
-        let shutdown_phase = async {
-            if !skip_lifecycle {
-                // Run plugin shutdown hooks (e.g., cancel scheduler)
-                for hook in self.plugin_shutdown_hooks {
-                    hook();
+        // After HTTP drain completes: await spawn_service JoinHandles with a
+        // deadline, then run user shutdown hooks. Both phases together are
+        // bounded by `shutdown_grace_period` if set.
+        let state_for_shutdown = self.state.clone();
+        let shutdown_hooks = self.shutdown_hooks;
+        let shutdown_phase = async move {
+            let handles = service_handles.drain();
+            if !handles.is_empty() {
+                tracing::info!(
+                    count = handles.len(),
+                    "Awaiting spawn_service tasks to finish"
+                );
+                for h in handles {
+                    if let Err(e) = h.await {
+                        if e.is_panic() {
+                            tracing::warn!(error = %e, "spawn_service task panicked");
+                        } else if !e.is_cancelled() {
+                            tracing::warn!(error = %e, "spawn_service task join error");
+                        }
+                    }
                 }
             }
 
-            // Always run user shutdown hooks
-            for hook in self.shutdown_hooks {
-                hook(self.state.clone()).await;
+            for hook in shutdown_hooks {
+                hook(state_for_shutdown.clone()).await;
             }
         };
 
@@ -1537,9 +1608,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             if tokio::time::timeout(grace, shutdown_phase).await.is_err() {
                 tracing::warn!(
                     grace_secs = grace.as_secs(),
-                    "Shutdown grace period elapsed, forcing exit"
+                    "Shutdown grace period elapsed; some background tasks did not finish in time"
                 );
-                std::process::exit(1);
             }
         } else {
             shutdown_phase.await;
@@ -1550,14 +1620,20 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     }
 }
 
-/// Handle to a task registry for collecting scheduled tasks.
+/// Handle to a task registry for collecting background tasks from
+/// multiple subsystems (scheduler, gRPC, custom plugins, …).
 ///
-/// This is stored in plugin_data by the scheduler plugin and used by
-/// `register_controller` to collect scheduled tasks. It's cloneable
-/// (internally Arc) so it can be shared.
+/// Tasks are tagged at insertion time with an owner `TypeId` so each
+/// subsystem's serve hook can drain only the tasks it owns. Cloneable
+/// (internally `Arc`) so all hooks share the same backing store.
 #[derive(Clone)]
 pub struct TaskRegistryHandle {
-    inner: Arc<Mutex<Vec<Box<dyn Any + Send>>>>,
+    inner: Arc<Mutex<Vec<TaggedTask>>>,
+}
+
+struct TaggedTask {
+    owner: TypeId,
+    task: Box<dyn Any + Send>,
 }
 
 impl TaskRegistryHandle {
@@ -1568,16 +1644,63 @@ impl TaskRegistryHandle {
         }
     }
 
-    /// Add type-erased tasks to the registry.
-    pub fn add_boxed(&self, tasks: Vec<Box<dyn Any + Send>>) {
-        self.inner.lock().unwrap().extend(tasks);
+    /// Add type-erased tasks to the registry, tagged with the given owner
+    /// marker type. The same marker must be used by the consuming serve
+    /// hook's `take_of::<Tag>()` call.
+    pub fn add_boxed_for<Tag: 'static>(&self, tasks: Vec<Box<dyn Any + Send>>) {
+        let owner = TypeId::of::<Tag>();
+        let mut guard = self.inner.lock().unwrap();
+        guard.extend(tasks.into_iter().map(|task| TaggedTask { owner, task }));
     }
 
-    /// Take all tasks from the registry, leaving it empty.
+    /// Add type-erased tasks tagged as "anonymous" (retrievable only by
+    /// `take_all`). Retained for the single-consumer case where no tag
+    /// marker is available; new call sites should use `add_boxed_for`.
+    pub fn add_boxed(&self, tasks: Vec<Box<dyn Any + Send>>) {
+        self.add_boxed_for::<AnonymousTask>(tasks);
+    }
+
+    /// Drain all tasks tagged with the given owner marker.
+    pub fn take_of<Tag: 'static>(&self) -> Vec<Box<dyn Any + Send>> {
+        let wanted = TypeId::of::<Tag>();
+        let mut guard = self.inner.lock().unwrap();
+        let mut kept = Vec::with_capacity(guard.len());
+        let mut taken = Vec::new();
+        for entry in std::mem::take(&mut *guard) {
+            if entry.owner == wanted {
+                taken.push(entry.task);
+            } else {
+                kept.push(entry);
+            }
+        }
+        *guard = kept;
+        taken
+    }
+
+    /// Drain every task in the registry, regardless of owner tag.
+    ///
+    /// Intended for single-consumer subsystems (historically the scheduler).
+    /// When multiple subsystems register serve hooks, prefer `take_of::<Tag>()`
+    /// so each hook only sees its own tasks.
     pub fn take_all(&self) -> Vec<Box<dyn Any + Send>> {
-        std::mem::take(&mut *self.inner.lock().unwrap())
+        let mut guard = self.inner.lock().unwrap();
+        std::mem::take(&mut *guard)
+            .into_iter()
+            .map(|e| e.task)
+            .collect()
     }
 }
+
+/// Marker type used for tasks added via the untagged `add_boxed` path.
+struct AnonymousTask;
+
+/// Marker tag for scheduled tasks (interval / cron / delayed) produced by
+/// controllers and consumed by the `r2e-scheduler` serve hook.
+///
+/// Defined in `r2e-core` so both sides — the controller registration path
+/// (which doesn't depend on `r2e-scheduler`) and the scheduler's `on_serve`
+/// hook — can agree on the tag without introducing a reverse dependency.
+pub struct ScheduledTaskMarker;
 
 impl Default for TaskRegistryHandle {
     fn default() -> Self {

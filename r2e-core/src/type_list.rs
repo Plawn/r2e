@@ -284,10 +284,23 @@ macro_rules! impl_plugin_deps {
             fn resolve(registry: &crate::beans::BeanRegistry) -> Self {
                 ($(
                     registry.get_provided::<$T>().cloned()
-                        .unwrap_or_else(|| panic!(
-                            "PluginDeps: bean `{}` not found in registry (this is a bug — the compile-time bound should have caught this)",
-                            std::any::type_name::<$T>()
-                        )),
+                        .unwrap_or_else(|| {
+                            if registry.is_bean_registered(std::any::TypeId::of::<$T>()) {
+                                panic!(
+                                    "PluginDeps: bean `{name}` is registered via `.with_bean::<{name}>()` but not \
+                                     yet materialized — plugin `Deps` can only reference types supplied via \
+                                     `.provide(instance)` at plugin-install time (beans are built later, after all \
+                                     plugins install). Change the provider to `.provide(...)` or move the plugin \
+                                     install call after the relevant bean has been provided.",
+                                    name = std::any::type_name::<$T>()
+                                )
+                            } else {
+                                panic!(
+                                    "PluginDeps: bean `{}` not found in registry (this is a bug — the compile-time bound should have caught this)",
+                                    std::any::type_name::<$T>()
+                                )
+                            }
+                        }),
                 )+)
             }
         }

@@ -521,6 +521,18 @@ impl BeanRegistry {
             .and_then(|v| v.downcast_ref::<T>())
     }
 
+    /// Returns `true` if a bean (eager or lazy) of type `T` is registered
+    /// (via `with_bean` / `with_async_bean`) but not yet materialized.
+    ///
+    /// Used by plugin dependency resolution to produce a clear error when
+    /// a plugin asks for a bean that exists only as a registration at
+    /// plugin-install time (before the bean graph is built).
+    #[doc(hidden)]
+    pub fn is_bean_registered(&self, tid: TypeId) -> bool {
+        self.beans.iter().any(|r| r.type_id == tid)
+            || self.lazy_beans.iter().any(|r| r.type_id == tid)
+    }
+
     /// Register a (sync) bean type for automatic construction.
     ///
     /// The bean's dependencies will be resolved from other beans or provided
