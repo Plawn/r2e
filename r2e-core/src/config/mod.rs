@@ -65,12 +65,32 @@ impl std::error::Error for ConfigError {}
 /// Resolution order (lowest to highest priority):
 /// 1. `application.yaml`
 /// 2. `.env` file (loaded into process environment)
-/// 3. Environment variables (e.g., `APP_DATABASE_URL` overrides `app.database.url`)
+/// 3. Environment variables prefixed with `R2E_` (e.g., `R2E_SERVER_PORT=8080`
+///    sets `server.port`). The prefix is stripped, the remainder is
+///    lowercased, and `_` is replaced with `.`. Unprefixed env vars are
+///    ignored so the config namespace does not collide with the general
+///    process environment.
 ///
 /// `.env` files never overwrite already-set environment variables.
 #[derive(Debug, Clone)]
 pub struct R2eConfig {
     values: HashMap<String, ConfigValue>,
+}
+
+/// Overlay `R2E_`-prefixed environment variables onto a config values map.
+fn apply_env_overlay<I: IntoIterator<Item = (String, String)>>(
+    values: &mut HashMap<String, ConfigValue>,
+    env: I,
+) {
+    for (env_key, env_val) in env {
+        if let Some(rest) = env_key.strip_prefix("R2E_") {
+            if rest.is_empty() {
+                continue;
+            }
+            let config_key = rest.to_lowercase().replace('_', ".");
+            values.insert(config_key, ConfigValue::String(env_val));
+        }
+    }
 }
 
 // ── Constructors ─────────────────────────────────────────────────────────
@@ -95,12 +115,8 @@ impl R2eConfig {
         // 3. Resolve ${...} placeholders in string values
         resolve_string_values(&mut values, resolver)?;
 
-        // 4. Overlay environment variables
-        // Convention: `app.database.url` <-> `APP_DATABASE_URL`
-        for (env_key, env_val) in std::env::vars() {
-            let config_key = env_key.to_lowercase().replace('_', ".");
-            values.insert(config_key, ConfigValue::String(env_val));
-        }
+        // 4. Overlay environment variables.
+        apply_env_overlay(&mut values, std::env::vars());
 
         Ok(R2eConfig { values })
     }
@@ -111,6 +127,17 @@ impl R2eConfig {
     /// then overlays environment variables.
     pub fn load() -> Result<Self, ConfigError> {
         Self::load_with_resolver(&DefaultSecretResolver)
+    }
+
+    /// Apply the `R2E_`-prefixed environment overlay to an existing values
+    /// map. Exposed for testing the overlay behaviour without mutating the
+    /// process environment.
+    #[doc(hidden)]
+    pub fn apply_env_overlay_for_test<I: IntoIterator<Item = (String, String)>>(
+        values: &mut HashMap<String, ConfigValue>,
+        env: I,
+    ) {
+        apply_env_overlay(values, env);
     }
 
     /// Create a config from a YAML string (useful for testing).

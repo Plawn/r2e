@@ -28,7 +28,7 @@ R2eConfig::empty()                         // testing
 1. `application.yaml` (hierarchies flattened: `app.database.url`)
 2. `.env` file (via dotenvy, won't overwrite existing env vars)
 3. `${...}` secret placeholders resolved in string values
-4. Environment variables (`APP_DATABASE_URL` ↔ `app.database.url`)
+4. Environment variables **prefixed with `R2E_`** (`R2E_SERVER_PORT=8080` ↔ `server.port = "8080"`). The `R2E_` prefix is stripped, the remainder is lowercased, and `_` becomes `.`. Unprefixed process env vars are ignored so the config namespace does not collide with the general process environment. Use `#[config(env = "VAR")]` on a `ConfigProperties` field if you need to pull in a specific unprefixed variable.
 
 ### Methods
 

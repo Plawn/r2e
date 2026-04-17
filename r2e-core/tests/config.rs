@@ -705,6 +705,51 @@ fn test_from_config_value_struct() {
 }
 
 // =========================================================================
+// R2E_-prefixed env overlay
+// =========================================================================
+
+#[test]
+fn test_env_overlay_applies_r2e_prefixed_vars() {
+    use std::collections::HashMap;
+    let mut values: HashMap<String, ConfigValue> = HashMap::new();
+    let env = vec![
+        ("R2E_SERVER_PORT".to_string(), "8080".to_string()),
+        ("R2E_APP_NAME".to_string(), "svc".to_string()),
+    ];
+    R2eConfig::apply_env_overlay_for_test(&mut values, env);
+
+    // Build a config around the values map to check via the public API.
+    let mut cfg = R2eConfig::empty();
+    for (k, v) in values {
+        cfg.set(&k, v);
+    }
+    assert_eq!(cfg.get::<String>("server.port").unwrap(), "8080");
+    assert_eq!(cfg.get::<String>("app.name").unwrap(), "svc");
+}
+
+#[test]
+fn test_env_overlay_ignores_unprefixed_vars() {
+    use std::collections::HashMap;
+    let mut values: HashMap<String, ConfigValue> = HashMap::new();
+    let env = vec![
+        ("HOME".to_string(), "/home/me".to_string()),
+        ("PATH".to_string(), "/usr/bin".to_string()),
+        ("SERVER_PORT".to_string(), "9999".to_string()),
+    ];
+    R2eConfig::apply_env_overlay_for_test(&mut values, env);
+    assert!(values.is_empty(), "non-R2E_ vars must not leak into config");
+}
+
+#[test]
+fn test_env_overlay_bare_prefix_is_ignored() {
+    use std::collections::HashMap;
+    let mut values: HashMap<String, ConfigValue> = HashMap::new();
+    let env = vec![("R2E_".to_string(), "noop".to_string())];
+    R2eConfig::apply_env_overlay_for_test(&mut values, env);
+    assert!(values.is_empty());
+}
+
+// =========================================================================
 // ConfigError::Deserialize display
 // =========================================================================
 
