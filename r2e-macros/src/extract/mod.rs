@@ -6,6 +6,7 @@
 //! - `managed`: Managed resource attributes (#[managed])
 
 pub mod consumer;
+pub mod duration;
 pub mod managed;
 pub mod plugins;
 pub mod route;

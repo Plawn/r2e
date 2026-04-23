@@ -1,3 +1,4 @@
+use crate::type_utils::{parse_config_field, parse_config_section_prefix};
 use crate::types::*;
 
 /// Parsed representation of a `#[derive(Controller)]` struct.
@@ -114,10 +115,7 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                 ));
             } else {
                 // #[inject] -> app-scoped (clone from state)
-                injected_fields.push(InjectedField {
-                    name: field_name,
-                    ty: field_type,
-                });
+                injected_fields.push(InjectedField { name: field_name });
             }
         } else if legacy_identity {
             // backward compat: #[identity] -> identity field
@@ -126,35 +124,15 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
                 ty: field_type,
             });
         } else if let Some(attr) = config_attr {
-            let key: syn::LitStr = attr.parse_args()?;
+            let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;
             config_fields.push(ConfigField {
                 name: field_name,
-                ty: field_type,
-                key: key.value(),
+                key,
+                env_hint,
+                ty_name,
             });
         } else if let Some(cs_attr) = config_section_attr {
-            // Parse #[config_section(prefix = "...")]
-            let mut section_prefix: Option<String> = None;
-            if let syn::Meta::List(_) = &cs_attr.meta {
-                cs_attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("prefix") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        section_prefix = Some(lit.value());
-                        Ok(())
-                    } else {
-                        Err(meta.error(
-                            "expected `prefix` in #[config_section(prefix = \"...\")]"
-                        ))
-                    }
-                })?;
-            }
-            let prefix = section_prefix.ok_or_else(|| {
-                syn::Error::new_spanned(
-                    cs_attr,
-                    "#[config_section] requires a prefix: #[config_section(prefix = \"app\")]",
-                )
-            })?;
+            let prefix = parse_config_section_prefix(cs_attr)?;
             config_section_fields.push(ConfigSectionField {
                 name: field_name,
                 ty: field_type,

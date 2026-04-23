@@ -1,10 +1,12 @@
 //! Axum handler generation for route methods.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 
 use crate::crate_path::r2e_core_path;
 use crate::routes_parsing::RoutesImplDef;
+use crate::type_utils::is_result_like;
 use crate::types::*;
 
 /// Generate all handler functions for a controller.
@@ -61,9 +63,13 @@ impl<'a> HandlerContext<'a> {
 
 /// Extract handler parameters (everything except &self) with their indices.
 fn extract_handler_params(rm: &RouteMethod) -> Vec<(usize, &syn::PatType)> {
-    rm.fn_item
-        .sig
-        .inputs
+    extract_sig_params(&rm.fn_item.sig)
+}
+
+/// Walk a method signature once and collect its typed params with indices,
+/// dropping the `&self` receiver. Shared by HTTP / SSE / WS handler codegen.
+fn extract_sig_params(sig: &syn::Signature) -> Vec<(usize, &syn::PatType)> {
+    sig.inputs
         .iter()
         .filter_map(|arg| match arg {
             syn::FnArg::Typed(pat_type) => Some(pat_type),
@@ -216,13 +222,18 @@ fn generate_guard_context(ctx: &HandlerContext, rm: &RouteMethod, krate: &TokenS
 }
 
 /// Generate managed resource acquisition statements.
+///
+/// Uses `quote_spanned!` so any trait-bound error (e.g. `T: ManagedResource<State>`
+/// not satisfied) points at the user's own `&mut T` parameter type rather than
+/// the macro-expanded handler body.
 fn generate_managed_acquire(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &TokenStream) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
-            quote! {
+            let ty_span = ty.span();
+            quote_spanned! { ty_span =>
                 let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
@@ -240,7 +251,8 @@ fn generate_managed_release(rm: &RouteMethod, meta_mod: &syn::Ident, krate: &Tok
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
-            quote! {
+            let ty_span = ty.span();
+            quote_spanned! { ty_span =>
                 if let Err(__e) = <#ty as #krate::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
                     return __e.into();
                 }
@@ -357,7 +369,8 @@ fn generate_managed_acquire_ref(rm: &RouteMethod, meta_mod: &syn::Ident, krate: 
         .map(|mp| {
             let arg_name = format_ident!("__arg_{}", mp.index);
             let ty = &mp.ty;
-            quote! {
+            let ty_span = ty.span();
+            quote_spanned! { ty_span =>
                 let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(__state_ref).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
@@ -598,16 +611,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     }
 }
 
-/// Checks if a return type annotation is a Result type.
 fn is_result_type(return_type: &syn::ReturnType) -> bool {
-    if let syn::ReturnType::Type(_, ty) = return_type {
-        if let syn::Type::Path(type_path) = ty.as_ref() {
-            if let Some(segment) = type_path.path.segments.last() {
-                return segment.ident == "Result";
-            }
-        }
+    match return_type {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => is_result_like(ty),
     }
-    false
 }
 
 // ── SSE handler generation ───────────────────────────────────────────────
@@ -625,17 +633,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let controller_name_str = controller_name.to_string();
 
     // Extra params (excluding &self)
-    let extra_params: Vec<(usize, &syn::PatType)> = sm
-        .fn_item
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pt) => Some(pt),
-            _ => None,
-        })
-        .enumerate()
-        .collect();
+    let extra_params = extract_sig_params(&sm.fn_item.sig);
 
     let handler_extra_params: Vec<_> = extra_params
         .iter()
@@ -766,17 +764,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let controller_name_str = controller_name.to_string();
 
     // Collect all typed params, excluding WsStream/WebSocket
-    let extra_params: Vec<(usize, &syn::PatType)> = wm
-        .fn_item
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pt) => Some(pt),
-            _ => None,
-        })
-        .enumerate()
-        .collect();
+    let extra_params = extract_sig_params(&wm.fn_item.sig);
 
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
 

@@ -6,7 +6,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
+use crate::type_utils::{parse_config_field, parse_config_section_prefix, parse_inject_name, named_bean_newtype_ident};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -57,6 +57,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let inject_name = parse_inject_name(&field.attrs)?;
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
         let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
+        let is_default = field.attrs.iter().any(|a| a.path().is_ident("default"));
 
         if is_inject {
             if let Some(name) = inject_name {
@@ -84,10 +85,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             });
             has_config = true;
         } else if let Some(attr) = config_attr {
-            let key: syn::LitStr = attr.parse_args()?;
-            let key_str = key.value();
-            let env_hint = key_str.replace('.', "_").to_uppercase();
-            let ty_name_str = quote!(#field_type).to_string();
+            let (key_str, env_hint, ty_name_str) = parse_config_field(attr, field_type)?;
             config_key_entries.push(quote! { (#key_str, #ty_name_str) });
             field_inits.push(quote! {
                 #field_name: __r2e_config.get::<#field_type>(#key_str).unwrap_or_else(|_| {
@@ -99,9 +97,19 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 })
             });
             has_config = true;
+        } else if is_default {
+            // Explicit opt-in: #[default] → Default::default()
+            field_inits.push(quote! { #field_name: ::core::default::Default::default() });
         } else {
-            // Fields without #[inject] or #[config] use Default::default()
-            field_inits.push(quote! { #field_name: Default::default() });
+            return Err(syn::Error::new_spanned(
+                field_name,
+                "bean field must be annotated with one of:\n\
+                 \n  #[inject]                           — resolve from the bean graph\n\
+                 \n  #[inject(name = \"...\")]             — named injection via newtype\n\
+                 \n  #[config(\"app.key\")]                — resolve from R2eConfig\n\
+                 \n  #[config_section(prefix = \"app\")]   — resolve a typed config section\n\
+                 \n  #[default]                          — use `Default::default()`",
+            ));
         }
     }
 

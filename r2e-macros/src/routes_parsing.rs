@@ -1,6 +1,7 @@
 use crate::extract::*;
 use crate::derive_parsing::has_identity_qualifier;
 use crate::types::*;
+use syn::spanned::Spanned;
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
@@ -257,6 +258,26 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                              hint: prefer #[managed] which is more explicit:\n\
                              \n  #[post(\"/\")]\n  async fn create(&self, #[managed] tx: &mut Tx<'_, Sqlite>) -> ... { }",
                         ));
+                    }
+
+                    // Validate: #[transactional] requires a Result-returning handler.
+                    // The wrapper commits on Ok / rolls back on Err, so a non-Result
+                    // return type silently miscompiles (always commits).
+                    if decorators.transactional.is_some() {
+                        let ok = match &method.sig.output {
+                            syn::ReturnType::Default => false,
+                            syn::ReturnType::Type(_, ty) => {
+                                crate::type_utils::is_result_like(ty)
+                            }
+                        };
+                        if !ok {
+                            return Err(syn::Error::new(
+                                method.sig.output.span(),
+                                "#[transactional] handlers must return `Result<_, _>` (or an `ApiResult` / `JsonResult` alias)\n\n\
+                                 The wrapper commits the transaction on `Ok(_)` and rolls back on `Err(_)` —\n\
+                                 a non-Result return type would always commit, silently swallowing failures.",
+                            ));
+                        }
                     }
 
                     route_methods.push(RouteMethod {

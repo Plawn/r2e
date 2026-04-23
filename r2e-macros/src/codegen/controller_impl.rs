@@ -6,12 +6,30 @@ use quote::{format_ident, quote};
 
 use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
 use crate::routes_parsing::RoutesImplDef;
+use crate::type_utils::type_last_segment_is;
 
 /// Generate the `Controller<State>` trait implementation.
 pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.controller_name;
     let meta_mod = format_ident!("__r2e_meta_{}", name);
+
+    // Struct-level `#[inject(identity)]` is request-scoped, so it can't drive
+    // off-request methods. Assert against the meta module's flag.
+    let has_off_request_methods =
+        !def.consumer_methods.is_empty() || !def.scheduled_methods.is_empty();
+    let off_request_identity_guard = if has_off_request_methods {
+        quote! {
+            const _: () = assert!(
+                !#meta_mod::HAS_STRUCT_IDENTITY,
+                "controllers with #[consumer] or #[scheduled] methods cannot use \
+                 struct-level #[inject(identity)] — move the identity field to a \
+                 handler parameter: `#[inject(identity)] user: AuthenticatedUser`",
+            );
+        }
+    } else {
+        quote! {}
+    };
 
     let route_registrations = generate_route_registrations(def, name);
     let sse_route_registrations = generate_sse_route_registrations(def, name);
@@ -53,6 +71,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     };
 
     quote! {
+        #off_request_identity_guard
+
         impl #krate::Controller<#meta_mod::State> for #name {
             fn routes() -> #krate::http::Router<#meta_mod::State> {
                 #router_body
@@ -352,8 +372,7 @@ fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> V
         .filter_map(|arg| {
             if let syn::FnArg::Typed(pt) = arg {
                 let ty = &pt.ty;
-                let ty_str = quote!(#ty).to_string();
-                if ty_str.contains("Path") {
+                if type_last_segment_is(ty, "Path") {
                     if let syn::Pat::TupleStruct(ts) = pt.pat.as_ref() {
                         if let Some(elem) = ts.elems.first() {
                             let param_name = quote!(#elem).to_string();
@@ -963,44 +982,20 @@ fn generate_sse_route_metadata(
     name: &syn::Ident,
     meta_mod: &syn::Ident,
 ) -> Vec<TokenStream> {
-    let krate = r2e_core_path();
-    let tag_name = name.to_string();
-
     def.sse_methods
         .iter()
         .map(|sm| {
-            let path = &sm.path;
-            let op_id = format!("{}_{}", name, sm.fn_item.sig.ident);
-            let roles: Vec<_> = sm.decorators.roles.iter().chain(sm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
-            let tag = &tag_name;
-
-            let has_roles = !sm.decorators.roles.is_empty() || !sm.decorators.all_roles.is_empty();
-            let has_guards = !sm.decorators.guard_fns.is_empty();
-            let has_identity_param = sm.identity_param.is_some();
-
-            quote! {
-                #krate::meta::RouteInfo {
-                    path: match #meta_mod::PATH_PREFIX {
-                        Some(__prefix) => format!("{}{}", __prefix, #path),
-                        None => #path.to_string(),
-                    },
-                    method: "GET".to_string(),
-                    operation_id: #op_id.to_string(),
-                    summary: Some("SSE stream".to_string()),
-                    description: None,
-                    request_body_type: None,
-                    request_body_schema: None,
-                    request_body_required: true,
-                    response_type: None,
-                    response_schema: None,
-                    response_status: 200,
-                    params: vec![],
-                    roles: vec![#(#roles),*],
-                    tag: Some(#tag.to_string()),
-                    deprecated: false,
-                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
-                }
-            }
+            emit_streaming_route_info(
+                name,
+                meta_mod,
+                &sm.path,
+                &sm.fn_item.sig.ident,
+                &sm.decorators.roles,
+                &sm.decorators.all_roles,
+                !sm.decorators.guard_fns.is_empty(),
+                sm.identity_param.is_some(),
+                "SSE stream",
+            )
         })
         .collect()
 }
@@ -1054,46 +1049,74 @@ fn generate_ws_route_metadata(
     name: &syn::Ident,
     meta_mod: &syn::Ident,
 ) -> Vec<TokenStream> {
-    let krate = r2e_core_path();
-    let tag_name = name.to_string();
-
     def.ws_methods
         .iter()
         .map(|wm| {
-            let path = &wm.path;
-            let op_id = format!("{}_{}", name, wm.fn_item.sig.ident);
-            let roles: Vec<_> = wm.decorators.roles.iter().chain(wm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
-            let tag = &tag_name;
-
-            let has_roles = !wm.decorators.roles.is_empty() || !wm.decorators.all_roles.is_empty();
-            let has_guards = !wm.decorators.guard_fns.is_empty();
-            let has_identity_param = wm.identity_param.is_some();
-
-            quote! {
-                #krate::meta::RouteInfo {
-                    path: match #meta_mod::PATH_PREFIX {
-                        Some(__prefix) => format!("{}{}", __prefix, #path),
-                        None => #path.to_string(),
-                    },
-                    method: "GET".to_string(),
-                    operation_id: #op_id.to_string(),
-                    summary: Some("WebSocket endpoint".to_string()),
-                    description: None,
-                    request_body_type: None,
-                    request_body_schema: None,
-                    request_body_required: true,
-                    response_type: None,
-                    response_schema: None,
-                    response_status: 200,
-                    params: vec![],
-                    roles: vec![#(#roles),*],
-                    tag: Some(#tag.to_string()),
-                    deprecated: false,
-                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
-                }
-            }
+            emit_streaming_route_info(
+                name,
+                meta_mod,
+                &wm.path,
+                &wm.fn_item.sig.ident,
+                &wm.decorators.roles,
+                &wm.decorators.all_roles,
+                !wm.decorators.guard_fns.is_empty(),
+                wm.identity_param.is_some(),
+                "WebSocket endpoint",
+            )
         })
         .collect()
+}
+
+/// Emit a `RouteInfo` literal for SSE / WS routes.
+///
+/// Both emit a `GET` with empty body/params/response and a 200 status; they
+/// differ only in summary text. Keeping this in one place makes adding a new
+/// streaming route kind (or a new `RouteInfo` field) a single-edit affair.
+#[allow(clippy::too_many_arguments)]
+fn emit_streaming_route_info(
+    controller_name: &syn::Ident,
+    meta_mod: &syn::Ident,
+    path: &str,
+    fn_ident: &syn::Ident,
+    roles: &[String],
+    all_roles: &[String],
+    has_guards: bool,
+    has_identity_param: bool,
+    summary: &str,
+) -> TokenStream {
+    let krate = r2e_core_path();
+    let tag = controller_name.to_string();
+    let op_id = format!("{}_{}", controller_name, fn_ident);
+    let roles_tokens: Vec<_> = roles
+        .iter()
+        .chain(all_roles.iter())
+        .map(|r| quote! { #r.to_string() })
+        .collect();
+    let has_roles = !roles.is_empty() || !all_roles.is_empty();
+
+    quote! {
+        #krate::meta::RouteInfo {
+            path: match #meta_mod::PATH_PREFIX {
+                Some(__prefix) => format!("{}{}", __prefix, #path),
+                None => #path.to_string(),
+            },
+            method: "GET".to_string(),
+            operation_id: #op_id.to_string(),
+            summary: Some(#summary.to_string()),
+            description: None,
+            request_body_type: None,
+            request_body_schema: None,
+            request_body_required: true,
+            response_type: None,
+            response_schema: None,
+            response_status: 200,
+            params: vec![],
+            roles: vec![#(#roles_tokens),*],
+            tag: Some(#tag.to_string()),
+            deprecated: false,
+            has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
+        }
+    }
 }
 
 /// Generate schedule configuration expression.

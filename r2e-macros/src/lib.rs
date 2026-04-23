@@ -800,7 +800,7 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     #[inject] event_bus: EventBus,
 /// }
 /// ```
-#[proc_macro_derive(Bean, attributes(inject, config, config_section))]
+#[proc_macro_derive(Bean, attributes(inject, config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
 }

@@ -54,15 +54,13 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     // Generate unified validate_config function
     let controller_name_str = name.to_string();
 
-    // Individual #[config("key")] fields
     let config_key_entries: Vec<TokenStream> = def
         .config_fields
         .iter()
         .map(|f| {
             let key = &f.key;
-            let ty = &f.ty;
-            let ty_name_str = quote!(#ty).to_string();
-            quote! { (#controller_name_str, #key, #ty_name_str) }
+            let ty_name = &f.ty_name;
+            quote! { (#controller_name_str, #key, #ty_name) }
         })
         .collect();
 
@@ -171,7 +169,6 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
-    // Config field initializers
     let controller_name_str = name.to_string();
     let config_inits: Vec<TokenStream> = def
         .config_fields
@@ -179,30 +176,26 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         .map(|f| {
             let field_name = &f.name;
             let key = &f.key;
-            let env_hint = key.to_uppercase().replace('.', "_");
+            let env_hint = &f.env_hint;
             quote! {
-                #field_name: {
-                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    match __cfg.get(#key) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Err(#krate::http::response::IntoResponse::into_response(
-                                #krate::HttpError::Internal(
-                                    format!(
-                                        "Configuration error in {}: key '{}' — {}. \
-                                         Add it to application.yaml or set env var {}.",
-                                        #controller_name_str, #key, e, #env_hint
-                                    ).into()
-                                )
-                            ));
-                        }
+                #field_name: match __cfg.get(#key) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(#krate::http::response::IntoResponse::into_response(
+                            #krate::HttpError::Internal(
+                                format!(
+                                    "Configuration error in {}: key '{}' — {}. \
+                                     Add it to application.yaml or set env var {}.",
+                                    #controller_name_str, #key, e, #env_hint
+                                ).into()
+                            )
+                        ));
                     }
                 }
             }
         })
         .collect();
 
-    // Config section field initializers (#[config_section(prefix = "...")])
     let config_section_inits: Vec<TokenStream> = def
         .config_section_fields
         .iter()
@@ -211,29 +204,35 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             let field_type = &f.ty;
             let prefix = &f.prefix;
             quote! {
-                #field_name: {
-                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    match <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix)) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Err(#krate::http::response::IntoResponse::into_response(
-                                #krate::HttpError::Internal(
-                                    format!(
-                                        "Configuration error in {}: failed to load section '{}' — {}",
-                                        #controller_name_str,
-                                        #prefix,
-                                        e,
-                                    ).into()
-                                )
-                            ));
-                        }
+                #field_name: match <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix)) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(#krate::http::response::IntoResponse::into_response(
+                            #krate::HttpError::Internal(
+                                format!(
+                                    "Configuration error in {}: failed to load section '{}' — {}",
+                                    #controller_name_str,
+                                    #prefix,
+                                    e,
+                                ).into()
+                            )
+                        ));
                     }
                 }
             }
         })
         .collect();
 
-    // All field initializers in declaration order
+    let has_any_config =
+        !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let config_prelude = if has_any_config {
+        quote! {
+            let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
+        }
+    } else {
+        quote! {}
+    };
+
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
         .chain(identity_inits.iter())
@@ -260,6 +259,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
                 __state: &#state_type,
             ) -> Result<Self, Self::Rejection> {
                 #(#identity_extractions)*
+                #config_prelude
                 Ok(Self(#struct_init))
             }
         }
@@ -292,17 +292,14 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         .map(|f| {
             let field_name = &f.name;
             let key = &f.key;
-            let env_hint = key.to_uppercase().replace('.', "_");
+            let env_hint = &f.env_hint;
             quote! {
-                #field_name: {
-                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    __cfg.get(#key).unwrap_or_else(|e| panic!(
-                        "Configuration error in `{}`: key '{}' — {}. \
-                         Add it to application.yaml / application-{{profile}}.yaml, \
-                         or set env var `{}`.",
-                        #sc_controller_name_str, #key, e, #env_hint
-                    ))
-                }
+                #field_name: __cfg.get(#key).unwrap_or_else(|e| panic!(
+                    "Configuration error in `{}`: key '{}' — {}. \
+                     Add it to application.yaml / application-{{profile}}.yaml, \
+                     or set env var `{}`.",
+                    #sc_controller_name_str, #key, e, #env_hint
+                ))
             }
         })
         .collect();
@@ -315,19 +312,26 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
             let field_type = &f.ty;
             let prefix = &f.prefix;
             quote! {
-                #field_name: {
-                    let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-                    <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix))
-                        .unwrap_or_else(|e| panic!(
-                            "Configuration error in `{}`: failed to load section '{}' — {}",
-                            #sc_controller_name_str,
-                            #prefix,
-                            e,
-                        ))
-                }
+                #field_name: <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix))
+                    .unwrap_or_else(|e| panic!(
+                        "Configuration error in `{}`: failed to load section '{}' — {}",
+                        #sc_controller_name_str,
+                        #prefix,
+                        e,
+                    ))
             }
         })
         .collect();
+
+    let has_any_config =
+        !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let config_prelude = if has_any_config {
+        quote! {
+            let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
+        }
+    } else {
+        quote! {}
+    };
 
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
@@ -344,6 +348,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
     quote! {
         impl #krate::StatefulConstruct<#state_type> for #name {
             fn from_state(__state: &#state_type) -> Self {
+                #config_prelude
                 #struct_init
             }
         }

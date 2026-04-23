@@ -6,7 +6,7 @@ use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{to_pascal_case, type_base_name, parse_config_section_prefix};
+use crate::type_utils::{parse_config_field, parse_config_section_prefix, to_pascal_case, type_base_name};
 
 /// Parsed `#[producer(...)]` arguments.
 struct ProducerArgs {
@@ -136,10 +136,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     });
                     has_config = true;
                 } else if let Some(attr) = config_attr {
-                    let key: syn::LitStr = attr.parse_args()?;
-                    let key_str = key.value();
-                    let env_hint = key_str.replace('.', "_").to_uppercase();
-                    let ty_name_str = quote!(#ty).to_string();
+                    let (key_str, env_hint, ty_name_str) = parse_config_field(attr, ty)?;
                     config_key_entries.push(quote! { (#key_str, #ty_name_str) });
                     build_args.push(quote! {
                         let #arg_name: #ty = __r2e_config.get::<#ty>(#key_str).unwrap_or_else(|_| {

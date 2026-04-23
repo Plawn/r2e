@@ -47,7 +47,12 @@ enum ErrorAttr {
 }
 
 enum StatusExpr {
-    Named(Ident),
+    /// Bare ident like `NOT_FOUND` — prepended with `StatusCode::` when emitted.
+    BareIdent(Ident),
+    /// Qualified path like `http::StatusCode::NOT_FOUND` — emitted verbatim so
+    /// typos or unknown constants fail at the user's own span.
+    Qualified(syn::Path),
+    /// Numeric literal, bounds-checked to `100..=599` at parse time.
     Numeric(u16),
 }
 
@@ -226,14 +231,13 @@ fn parse_status_expr(expr: &syn::Expr) -> syn::Result<StatusExpr> {
     match expr {
         syn::Expr::Path(p) => {
             if let Some(ident) = p.path.get_ident() {
-                Ok(StatusExpr::Named(ident.clone()))
+                Ok(StatusExpr::BareIdent(ident.clone()))
+            } else if p.path.segments.is_empty() {
+                Err(syn::Error::new_spanned(expr, "invalid status code"))
             } else {
-                // Multi-segment path — extract the last segment as the ident
-                if let Some(seg) = p.path.segments.last() {
-                    Ok(StatusExpr::Named(seg.ident.clone()))
-                } else {
-                    Err(syn::Error::new_spanned(expr, "invalid status code"))
-                }
+                // Keep the full path — typos will surface at the user's span
+                // instead of being silently remapped to `StatusCode::<last>`.
+                Ok(StatusExpr::Qualified(p.path.clone()))
             }
         }
         syn::Expr::Lit(syn::ExprLit {
@@ -659,11 +663,17 @@ fn gen_from_impls(def: &ApiErrorDef) -> TokenStream2 {
 
 fn status_to_tokens(status: &StatusExpr, krate: &TokenStream2) -> TokenStream2 {
     match status {
-        StatusExpr::Named(ident) => {
+        StatusExpr::BareIdent(ident) => {
             quote! { #krate::http::StatusCode::#ident }
         }
+        StatusExpr::Qualified(path) => {
+            quote! { #path }
+        }
         StatusExpr::Numeric(code) => {
-            quote! { #krate::http::StatusCode::from_u16(#code).unwrap() }
+            quote! {
+                #krate::http::StatusCode::from_u16(#code)
+                    .expect("r2e_macros: HTTP status validated at macro expansion")
+            }
         }
     }
 }

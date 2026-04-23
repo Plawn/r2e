@@ -7,7 +7,7 @@ use crate::crate_path::{r2e_core_path, r2e_events_path};
 use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{parse_inject_name, named_bean_newtype_ident, parse_config_section_prefix};
+use crate::type_utils::{is_result_like, named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name};
 
 /// Parsed `#[bean(...)]` arguments.
 struct BeanArgs {
@@ -127,10 +127,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
                     });
                     has_config = true;
                 } else if let Some(attr) = config_attr {
-                    let key: syn::LitStr = attr.parse_args()?;
-                    let key_str = key.value();
-                    let env_hint = key_str.replace('.', "_").to_uppercase();
-                    let ty_name_str = quote!(#ty).to_string();
+                    let (key_str, env_hint, ty_name_str) = parse_config_field(attr, ty)?;
                     config_key_entries.push(quote! { (#key_str, #ty_name_str) });
                     build_args.push(quote! {
                         let #arg_name: #ty = __r2e_config.get::<#ty>(#key_str).unwrap_or_else(|_| {
@@ -496,10 +493,7 @@ fn scan_post_construct_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanPost
             // Check if return type is Result<(), ...>
             let returns_result = match &method.sig.output {
                 ReturnType::Default => false,
-                ReturnType::Type(_, ty) => {
-                    let ty_str = quote!(#ty).to_string();
-                    ty_str.starts_with("Result")
-                }
+                ReturnType::Type(_, ty) => is_result_like(ty),
             };
 
             methods.push(BeanPostConstructMethod {

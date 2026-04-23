@@ -85,11 +85,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
-    // Generate BeanState::from_context() — all fields resolved from context.
-    //
-    // `Option<T>` fields are treated as hard dependencies on the whole
-    // `Option<T>` type (not the inner `T`). A producer must register
-    // `Option<T>` in the context for the state to resolve.
+    let krate = r2e_core_path();
+
     let field_inits: Vec<TokenStream2> = fields
         .iter()
         .map(|f| {
@@ -99,24 +96,17 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    // Generate FromRef impls using the shared function.
     let from_ref_impls = generate_from_ref_impls(name, fields, "bean_state");
 
-    // Generate BuildableFrom<P, Indices> impl with index witness type params.
-    let krate = r2e_core_path();
-
+    // `Option<T>` fields produce a bound on `Option<T>` itself — a producer
+    // must register `Option<T>` for the state to build.
     let mut buildable_seen = HashSet::new();
     let mut idx_params = Vec::new();
     let mut buildable_bounds = Vec::new();
     let mut idx_counter = 0usize;
     for field in fields {
         let field_type = &field.ty;
-
-        // `Option<T>` fields generate a `BuildableFrom` bound for
-        // `Option<T>` itself — the provision list must contain `Option<T>`,
-        // which is typically provided by a `#[producer] -> Option<T>`.
-        let type_key = type_to_string(field_type);
-        if buildable_seen.insert(type_key) {
+        if buildable_seen.insert(type_to_string(field_type)) {
             let idx_ident = quote::format_ident!("__I{}", idx_counter);
             idx_counter += 1;
             idx_params.push(quote! { #idx_ident });

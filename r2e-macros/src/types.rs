@@ -2,7 +2,6 @@ use crate::route::HttpMethod;
 
 pub struct InjectedField {
     pub name: syn::Ident,
-    pub ty: syn::Type,
 }
 
 pub struct IdentityField {
@@ -12,8 +11,9 @@ pub struct IdentityField {
 
 pub struct ConfigField {
     pub name: syn::Ident,
-    pub ty: syn::Type,
     pub key: String,
+    pub env_hint: String,
+    pub ty_name: String,
 }
 
 pub struct ConfigSectionField {

@@ -18,7 +18,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Expr, ExprLit, FnArg, ItemFn, Lit, Meta};
+use syn::{parse_macro_input, FnArg, ItemFn};
 
 use crate::crate_path::{r2e_core_path, r2e_devtools_path};
 
@@ -66,190 +66,52 @@ impl MainArgs {
             return Ok(this);
         }
 
-        let meta_list: syn::punctuated::Punctuated<Meta, syn::Token![,]> =
-            syn::parse::Parser::parse(
-                syn::punctuated::Punctuated::parse_terminated,
-                args,
-            )?;
+        let parser = syn::meta::parser(|meta| {
+            let key = meta
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
 
-        for meta in meta_list {
-            match &meta {
-                Meta::NameValue(nv) => {
-                    let key = nv
-                        .path
-                        .get_ident()
-                        .map(|i| i.to_string())
-                        .unwrap_or_default();
-
-                    match key.as_str() {
-                        "tracing" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Bool(b), ..
-                            }) = &nv.value
-                            {
-                                this.tracing = b.value;
-                            } else {
+            if meta.input.peek(syn::Token![=]) {
+                match key.as_str() {
+                    "tracing" => this.tracing = parse_bool(&meta)?,
+                    "flavor" => {
+                        let s: syn::LitStr = meta.value()?.parse()?;
+                        this.flavor = Some(match s.value().as_str() {
+                            "current_thread" => true,
+                            "multi_thread" => false,
+                            other => {
                                 return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected a boolean literal for `tracing`",
+                                    &s,
+                                    format!(
+                                        "unknown flavor \"{other}\", expected \"current_thread\" or \"multi_thread\""
+                                    ),
                                 ));
                             }
-                        }
-                        "flavor" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(s), ..
-                            }) = &nv.value
-                            {
-                                match s.value().as_str() {
-                                    "current_thread" => this.flavor = Some(true),
-                                    "multi_thread" => this.flavor = Some(false),
-                                    other => {
-                                        return Err(syn::Error::new_spanned(
-                                            s,
-                                            format!(
-                                                "unknown flavor \"{other}\", expected \"current_thread\" or \"multi_thread\""
-                                            ),
-                                        ));
-                                    }
-                                }
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected a string literal for `flavor`",
-                                ));
-                            }
-                        }
-                        "worker_threads" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.worker_threads = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal for `worker_threads`",
-                                ));
-                            }
-                        }
-                        "max_blocking_threads" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.max_blocking_threads = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal for `max_blocking_threads`",
-                                ));
-                            }
-                        }
-                        "thread_stack_size" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.thread_stack_size = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal for `thread_stack_size`",
-                                ));
-                            }
-                        }
-                        "thread_name" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(s), ..
-                            }) = &nv.value
-                            {
-                                this.thread_name = Some(s.value());
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected a string literal for `thread_name`",
-                                ));
-                            }
-                        }
-                        "global_queue_interval" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.global_queue_interval = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal for `global_queue_interval`",
-                                ));
-                            }
-                        }
-                        "event_interval" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.event_interval = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal for `event_interval`",
-                                ));
-                            }
-                        }
-                        "thread_keep_alive" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                this.thread_keep_alive_secs = Some(i.base10_parse()?);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected an integer literal (seconds) for `thread_keep_alive`",
-                                ));
-                            }
-                        }
-                        "start_paused" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Bool(b), ..
-                            }) = &nv.value
-                            {
-                                this.start_paused = Some(b.value);
-                            } else {
-                                return Err(syn::Error::new_spanned(
-                                    &nv.value,
-                                    "expected a boolean literal for `start_paused`",
-                                ));
-                            }
-                        }
-                        _ => {
-                            return Err(syn::Error::new_spanned(
-                                &nv.path,
-                                format!("unknown argument `{key}`"),
-                            ));
-                        }
+                        });
                     }
+                    "worker_threads" => this.worker_threads = Some(parse_int(&meta)?),
+                    "max_blocking_threads" => this.max_blocking_threads = Some(parse_int(&meta)?),
+                    "thread_stack_size" => this.thread_stack_size = Some(parse_int(&meta)?),
+                    "thread_name" => this.thread_name = Some(parse_str(&meta)?),
+                    "global_queue_interval" => this.global_queue_interval = Some(parse_int(&meta)?),
+                    "event_interval" => this.event_interval = Some(parse_int(&meta)?),
+                    "thread_keep_alive" => this.thread_keep_alive_secs = Some(parse_int(&meta)?),
+                    "start_paused" => this.start_paused = Some(parse_bool(&meta)?),
+                    _ => return Err(meta.error(format!("unknown argument `{key}`"))),
                 }
-                // Bare path (e.g. `setup`) → setup function name
-                Meta::Path(path) => {
-                    if this.setup_fn.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            path,
-                            "setup function already specified",
-                        ));
-                    }
-                    this.setup_fn = Some(path.clone());
+            } else {
+                // Bare path (e.g. `setup`) → setup function name.
+                if this.setup_fn.is_some() {
+                    return Err(meta.error("setup function already specified"));
                 }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        other,
-                        "expected a setup function name or `key = value` arguments",
-                    ));
-                }
+                this.setup_fn = Some(meta.path);
             }
-        }
+            Ok(())
+        });
 
+        syn::parse::Parser::parse(parser, args)?;
         Ok(this)
     }
 
@@ -313,6 +175,24 @@ impl MainArgs {
                 .expect("failed to build tokio runtime")
         }
     }
+}
+
+fn parse_bool(meta: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
+    let b: syn::LitBool = meta.value()?.parse()?;
+    Ok(b.value)
+}
+
+fn parse_int<T: std::str::FromStr>(meta: &syn::meta::ParseNestedMeta) -> syn::Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    let i: syn::LitInt = meta.value()?.parse()?;
+    i.base10_parse()
+}
+
+fn parse_str(meta: &syn::meta::ParseNestedMeta) -> syn::Result<String> {
+    let s: syn::LitStr = meta.value()?.parse()?;
+    Ok(s.value())
 }
 
 // ── Codegen ──────────────────────────────────────────────────────────────
