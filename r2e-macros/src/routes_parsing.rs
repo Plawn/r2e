@@ -10,6 +10,7 @@ pub struct RoutesImplDef {
     pub route_methods: Vec<RouteMethod>,
     pub sse_methods: Vec<SseMethod>,
     pub ws_methods: Vec<WsMethod>,
+    pub connect_methods: Vec<ConnectMethod>,
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
@@ -110,6 +111,30 @@ fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
     Ok(ws_param)
 }
 
+fn is_tunnel_type(ty: &syn::Type) -> bool {
+    crate::type_utils::type_last_segment_is(ty, "TcpTunnel")
+}
+
+fn find_tunnel_param(method: &syn::ImplItemFn) -> syn::Result<Option<ConnectTunnelParam>> {
+    let mut found = None;
+    let mut idx = 0;
+    for arg in method.sig.inputs.iter() {
+        if let syn::FnArg::Typed(pt) = arg {
+            if is_tunnel_type(&pt.ty) {
+                if found.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        pt,
+                        "only one TcpTunnel parameter allowed",
+                    ));
+                }
+                found = Some(ConnectTunnelParam { index: idx });
+            }
+            idx += 1;
+        }
+    }
+    Ok(found)
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -135,6 +160,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut route_methods = Vec::new();
     let mut sse_methods = Vec::new();
     let mut ws_methods = Vec::new();
+    let mut connect_methods = Vec::new();
     let mut consumer_methods = Vec::new();
     let mut scheduled_methods = Vec::new();
     let mut other_methods = Vec::new();
@@ -230,6 +256,18 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         ws_param,
                         fn_item: method,
                     });
+                } else if extract_connect_attr(&all_attrs) {
+                    method.attrs = strip_known_attrs(all_attrs);
+                    let tunnel_param = find_tunnel_param(&method)?;
+                    for arg in method.sig.inputs.iter_mut() {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
+                        }
+                    }
+                    connect_methods.push(ConnectMethod {
+                        tunnel_param,
+                        fn_item: method,
+                    });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
                     let mut decorators = parse_decorators(&all_attrs)?;
                     // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
@@ -303,6 +341,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         route_methods,
         sse_methods,
         ws_methods,
+        connect_methods,
         consumer_methods,
         scheduled_methods,
         other_methods,

@@ -1149,6 +1149,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
 
+        #[cfg(feature = "proxy")]
+        if let Some(handler) = C::connect_handler() {
+            if let Some(state) = &self.state {
+                let state = state.clone();
+                self.shared.custom_layers.push(Box::new(move |router| {
+                    router.layer(crate::proxy::ConnectLayer::new(handler, state))
+                }));
+            }
+        }
+
         self
     }
 

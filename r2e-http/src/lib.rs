@@ -13,6 +13,8 @@ pub mod routing;
 pub mod ws;
 #[cfg(feature = "multipart")]
 pub mod multipart;
+#[cfg(feature = "proxy")]
+pub mod upgrade;
 
 pub use axum::{serve, Extension, Json, Router, Error};
 pub use axum::http::Uri;

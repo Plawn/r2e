@@ -31,6 +31,10 @@ pub mod validation;
 pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
+#[cfg(feature = "proxy")]
+pub mod tunnel;
+#[cfg(feature = "proxy")]
+pub mod proxy;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
 pub use lazy::Lazy;

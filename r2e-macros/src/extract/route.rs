@@ -22,6 +22,10 @@ pub fn is_ws_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("ws")
 }
 
+pub fn is_connect_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("connect")
+}
+
 pub fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpMethod, String)>> {
     for attr in attrs {
         let method = if attr.path().is_ident("get") {
@@ -227,6 +231,11 @@ pub fn extract_returns(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Type
         }
     }
     Ok(None)
+}
+
+/// Extract `#[connect]`. Returns `true` if found.
+pub fn extract_connect_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("connect"))
 }
 
 /// Extract `///` doc comments from attributes.

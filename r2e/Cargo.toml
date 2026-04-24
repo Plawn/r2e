@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static"]
+full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static", "proxy"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -39,6 +39,7 @@ grpc = ["dep:r2e-grpc"]
 static = ["dep:r2e-static"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
+proxy = ["r2e-core/proxy"]
 # NOTE: dev-reload is intentionally NOT in `full` — never include in production builds
 dev-reload = ["dep:r2e-devtools", "r2e-core/dev-reload"]
 

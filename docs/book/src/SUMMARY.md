@@ -44,6 +44,7 @@
 
 - [Server-Sent Events (SSE)](./real-time/sse.md)
 - [WebSocket](./real-time/websocket.md)
+- [HTTP Proxy](./real-time/proxy.md)
 
 # gRPC
 

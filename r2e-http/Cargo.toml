@@ -14,8 +14,10 @@ description = "HTTP abstraction layer for R2E - sole owner of the axum dependenc
 default = []
 ws = ["axum/ws"]
 multipart = ["axum/multipart"]
+proxy = ["dep:hyper"]
 
 [dependencies]
 axum = {workspace = true}
 bytes = {workspace = true}
 http = {workspace = true}
+hyper = {workspace = true, optional = true}

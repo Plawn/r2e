@@ -47,6 +47,15 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         })
         .collect();
 
+    let connect_fns: Vec<TokenStream> = def
+        .connect_methods
+        .iter()
+        .map(|cm| {
+            let f = &cm.fn_item;
+            quote! { #f }
+        })
+        .collect();
+
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
@@ -58,6 +67,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     if route_fns.is_empty()
         && sse_fns.is_empty()
         && ws_fns.is_empty()
+        && connect_fns.is_empty()
         && consumer_fns.is_empty()
         && scheduled_fns.is_empty()
         && other_fns.is_empty()
@@ -69,6 +79,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 #(#route_fns)*
                 #(#sse_fns)*
                 #(#ws_fns)*
+                #(#connect_fns)*
                 #(#consumer_fns)*
                 #(#scheduled_fns)*
                 #(#other_fns)*

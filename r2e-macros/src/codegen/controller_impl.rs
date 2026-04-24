@@ -40,6 +40,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
     let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
     let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
+    let connect_handler_fn = generate_connect_handler_method(def, name, &meta_mod);
 
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
@@ -93,6 +94,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             ) -> Vec<#krate::config::MissingKeyError> {
                 #meta_mod::validate_config(__config)
             }
+
+            #connect_handler_fn
         }
     }
 }
@@ -1140,6 +1143,40 @@ fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, sched_krate: &Toke
         let cron_expr = sm.config.cron.as_ref().unwrap();
         quote! {
             #sched_krate::ScheduleConfig::Cron(#cron_expr.to_string())
+        }
+    }
+}
+
+// ── CONNECT handler generation ──────────────────────────────────────────
+
+fn generate_connect_handler_method(
+    def: &RoutesImplDef,
+    name: &syn::Ident,
+    meta_mod: &syn::Ident,
+) -> TokenStream {
+    if def.connect_methods.is_empty() {
+        return quote! {};
+    }
+
+    if def.connect_methods.len() > 1 {
+        let second = &def.connect_methods[1].fn_item.sig.ident;
+        return quote! {
+            compile_error!(concat!(
+                "only one #[connect] handler is allowed per controller; found extra: `",
+                stringify!(#second),
+                "`"
+            ));
+        };
+    }
+
+    let krate = r2e_core_path();
+    let cm = &def.connect_methods[0];
+    let handler_name = format_ident!("__r2e_connect_{}_{}", name, cm.fn_item.sig.ident);
+
+    quote! {
+        #[cfg(feature = "proxy")]
+        fn connect_handler() -> Option<#krate::proxy::ConnectHandlerFn<#meta_mod::State>> {
+            Some(std::sync::Arc::new(#handler_name))
         }
     }
 }

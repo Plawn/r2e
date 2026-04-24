@@ -128,5 +128,8 @@ pub use crate::http::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 #[cfg(feature = "ws")]
 pub use crate::ws::{WsStream, WsHandler, WsBroadcaster, WsBroadcastReceiver, WsRooms, WsError};
 
+#[cfg(feature = "proxy")]
+pub use crate::tunnel::{TcpTunnel, TcpTunnelRead, TcpTunnelWrite};
+
 #[cfg(feature = "dev-reload")]
 pub use crate::dev::invalidate_state_cache;

@@ -29,10 +29,17 @@ pub fn generate_handlers(def: &RoutesImplDef) -> TokenStream {
         .map(|wm| generate_ws_handler(def, wm))
         .collect();
 
+    let connect_handlers: Vec<_> = def
+        .connect_methods
+        .iter()
+        .map(|cm| generate_connect_handler(def, cm))
+        .collect();
+
     quote! {
         #(#route_handlers)*
         #(#sse_handlers)*
         #(#ws_handlers)*
+        #(#connect_handlers)*
     }
 }
 
@@ -905,6 +912,57 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     #upgrade_body
                 }).into_response()
             }
+        }
+    }
+}
+
+// ── CONNECT handler generation ──────────────────────────────────────────
+
+/// Generate the connect handler closure returned by `Controller::connect_handler()`.
+///
+/// Unlike HTTP/WS handlers (which are free-standing Axum handler fns), the
+/// CONNECT handler is a closure stored as a `ConnectHandlerFn<State>`. The
+/// reason: Axum's router can't route `Method::CONNECT`, so the handler is
+/// invoked from a Tower layer, not from a route.
+fn generate_connect_handler(def: &RoutesImplDef, cm: &ConnectMethod) -> TokenStream {
+    let krate = r2e_core_path();
+    let controller_name = &def.controller_name;
+    let fn_name = &cm.fn_item.sig.ident;
+    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
+    let handler_name = format_ident!("__r2e_connect_{}_{}", controller_name, fn_name);
+
+    let extra_params = extract_sig_params(&cm.fn_item.sig);
+    let tunnel_param_index = cm.tunnel_param.as_ref().map(|p| p.index);
+
+    let call_args: Vec<_> = extra_params
+        .iter()
+        .map(|(i, _)| {
+            if Some(*i) == tunnel_param_index {
+                quote! { __tunnel }
+            } else {
+                quote! { compile_error!("#[connect] handlers only accept a TcpTunnel parameter") }
+            }
+        })
+        .collect();
+
+    let call = if cm.fn_item.sig.asyncness.is_some() {
+        quote! { __ctrl.#fn_name(#(#call_args),*).await; }
+    } else {
+        quote! { __ctrl.#fn_name(#(#call_args),*); }
+    };
+
+    // The handler is a closure invoked by the ConnectLayer, not an Axum route.
+    // We generate a free fn that the controller_impl codegen references.
+    quote! {
+        #[allow(non_snake_case)]
+        fn #handler_name(
+            __state: #meta_mod::State,
+            __tunnel: #krate::tunnel::TcpTunnel,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            Box::pin(async move {
+                let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
+                #call
+            })
         }
     }
 }

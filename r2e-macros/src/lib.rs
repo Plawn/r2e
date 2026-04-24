@@ -528,6 +528,30 @@ pub fn sse(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Declare an HTTP **CONNECT** tunnel endpoint.
+///
+/// The handler receives a [`TcpTunnel`] — a raw bidirectional byte stream
+/// after the HTTP upgrade. The `TcpTunnel` provides `host()`, `port()`, and
+/// implements `AsyncRead + AsyncWrite`.
+///
+/// ```ignore
+/// // Direct TcpTunnel parameter
+/// #[connect]
+/// async fn tunnel(&self, tunnel: TcpTunnel) {
+///     let upstream = TcpStream::connect(tunnel.target()).await.unwrap();
+///     tunnel.pipe(upstream).await.ok();
+/// }
+/// ```
+///
+/// Since Axum's router doesn't support `Method::CONNECT`, the handler is
+/// installed as a Tower layer that intercepts CONNECT before routing.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn connect(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Declare a **WebSocket** endpoint.
 ///
 /// The handler receives a `WsStream` (or raw `WebSocket`) parameter.

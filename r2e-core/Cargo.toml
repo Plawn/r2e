@@ -14,6 +14,7 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 default = []
 ws = ["r2e-http/ws"]
 multipart = ["r2e-http/multipart"]
+proxy = ["r2e-http/proxy", "dep:hyper-util", "dep:pin-project-lite"]
 dev-reload = ["dep:r2e-devtools"]
 lazy-fallback-runtime = []
 
@@ -38,6 +39,8 @@ dashmap = {workspace = true}
 bytes = {workspace = true}
 futures-core = {workspace = true}
 r2e-devtools = {workspace = true, optional = true}
+hyper-util = {workspace = true, features = ["tokio"], optional = true}
+pin-project-lite = {workspace = true, optional = true}
 
 [dev-dependencies]
 tempfile = {workspace = true}

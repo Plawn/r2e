@@ -126,3 +126,12 @@ pub struct WsParam {
     /// True if the type is WsStream (vs raw WebSocket).
     pub is_ws_stream: bool,
 }
+
+pub struct ConnectMethod {
+    pub tunnel_param: Option<ConnectTunnelParam>,
+    pub fn_item: syn::ImplItemFn,
+}
+
+pub struct ConnectTunnelParam {
+    pub index: usize,
+}

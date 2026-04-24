@@ -5110,6 +5110,8 @@ dependencies = [
  "futures-core",
  "garde",
  "http-body-util",
+ "hyper-util",
+ "pin-project-lite",
  "r2e-devtools",
  "r2e-http",
  "r2e-macros",
@@ -5260,6 +5262,7 @@ dependencies = [
  "axum",
  "bytes",
  "http",
+ "hyper",
 ]
 
 [[package]]
