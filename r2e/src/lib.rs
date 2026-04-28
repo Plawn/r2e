@@ -21,6 +21,7 @@
 //! | `postgres`    | no      | `r2e-data-sqlx/postgres`  |
 //! | `mysql`       | no      | `r2e-data-sqlx/mysql`     |
 //! | `scheduler`   | no      | `r2e-scheduler`           |
+//! | `executor`    | no      | `r2e-executor` (managed task pool, à la J2EE `ManagedExecutorService`) |
 //! | `cache`       | no      | `r2e-cache`               |
 //! | `rate-limit`  | no      | `r2e-rate-limit`          |
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
@@ -80,6 +81,9 @@ pub use r2e_data_diesel;
 
 #[cfg(feature = "scheduler")]
 pub use r2e_scheduler;
+
+#[cfg(feature = "executor")]
+pub use r2e_executor;
 
 #[cfg(feature = "cache")]
 pub use r2e_cache;

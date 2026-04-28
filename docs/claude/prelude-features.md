@@ -4,9 +4,10 @@
 
 **`use r2e::prelude::*`** provides everything a developer needs — no direct `axum` imports should be necessary. The prelude includes:
 
-- **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `Params`, `ConfigProperties`, `FromConfigValue`, `Cacheable`, `ApiError`, `FromMultipart` (multipart feature)
+- **Macros:** `Controller`, `routes`, `get`/`post`/`put`/`delete`/`patch`, `guard`, `intercept`, `roles`, `managed`, `transactional`, `consumer`, `scheduled`, `bean`, `producer`, `Bean`, `BeanState`, `BackgroundService`, `Params`, `ConfigProperties`, `FromConfigValue`, `Cacheable`, `ApiError`, `FromMultipart` (multipart feature). The `#[async_exec]` attribute is consumed by `#[routes]` and needs no prelude import.
 - **Core types:** `AppBuilder`, `HttpError`, `R2eConfig`, `ConfigValue`, `Plugin`, `Interceptor`, `ManagedResource`, `ManagedErr`, `Guard`, `GuardContext`, `Identity`, `PreAuthGuard`, `StatefulConstruct`, `EventSubscriber`
 - **Events** (feature `events`): `EventBus` (trait), `LocalEventBus` (default in-process impl)
+- **Executor** (feature `executor`): `Executor` plugin, `PoolExecutor`, `JobHandle`, `RejectedError`, `JobError`, `ExecutorMetrics`, `ExecutorConfig` — managed task pool exposed as `r2e::r2e_executor::*`. See `executor.md`.
 - **Plugins:** `Cors`, `Tracing`, `ConfiguredTracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
 - **Tracing config:** `TracingConfig`, `LogFormat`, `SpanEvents`
 - **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`

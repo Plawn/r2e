@@ -1,0 +1,12 @@
+[package]
+name = "example-executor"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+r2e = {workspace = true, features = ["executor"]}
+tokio = {workspace = true, features = ["full"]}
+tokio-util = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}

@@ -1,0 +1,21 @@
+[package]
+name = "r2e-executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["executor", "task-pool", "async", "background-tasks"]
+categories = ["asynchronous"]
+description = "Managed task pool executor for R2E - injectable, bounded, with graceful shutdown"
+
+[dependencies]
+r2e-core = {workspace = true}
+r2e-macros = {workspace = true}
+tokio = {workspace = true, features = ["rt", "sync", "time", "macros"]}
+tokio-util = {workspace = true}
+tracing = {workspace = true}
+
+[dev-dependencies]
+tokio = {workspace = true, features = ["full", "test-util"]}

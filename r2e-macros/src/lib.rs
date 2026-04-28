@@ -10,6 +10,7 @@ pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
+pub(crate) mod bg_service_derive;
 pub(crate) mod test_state_derive;
 pub(crate) mod producer_attr;
 pub(crate) mod type_list_gen;
@@ -472,6 +473,47 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Mark a method on a `#[routes]` controller as an **async executor job**.
+///
+/// The body is moved off the request thread onto an injected
+/// [`PoolExecutor`](r2e_executor::PoolExecutor); calling the method returns
+/// a [`JobHandle<T>`](r2e_executor::JobHandle) instead of `T`. Useful for
+/// long-running side work (PDF generation, third-party calls, batch jobs)
+/// that should not block HTTP response.
+///
+/// Requirements:
+/// - method is `async fn(&self, ...) -> T`
+/// - the controller has an `#[inject]` field of type `PoolExecutor`
+///   (default field name: `executor`; override with `executor = "name"`)
+/// - the controller is `Clone + Send + Sync + 'static`
+///   (`#[derive(Controller)]` already implies this).
+///
+/// ```ignore
+/// #[derive(Controller, Clone)]
+/// #[controller(state = Services)]
+/// pub struct ReportController {
+///     #[inject] executor: PoolExecutor,
+/// }
+///
+/// #[routes]
+/// impl ReportController {
+///     #[post("/reports")]
+///     async fn create(&self) -> Json<()> {
+///         let _job = self.generate_pdf();   // returns JobHandle<PdfBytes>
+///         Json(())
+///     }
+///
+///     #[async_exec]
+///     async fn generate_pdf(&self) -> PdfBytes { /* heavy work */ unimplemented!() }
+/// }
+/// ```
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn async_exec(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Apply a custom Tower middleware function to a route.
 ///
 /// ```ignore
@@ -803,6 +845,44 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Bean, attributes(inject, config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
+}
+
+/// Derive macro for background services — generates
+/// [`ServiceComponent<State>`](r2e_core::ServiceComponent) so the type can
+/// be registered via [`AppBuilder::spawn_service`].
+///
+/// Field attributes mirror `#[derive(Controller)]`:
+/// - `#[inject]` — clone from app state (type must impl `Clone + Send + Sync`)
+/// - `#[config("key")]` — resolve from `R2eConfig`
+/// - `#[config_section(prefix = "...")]` — typed config section
+///
+/// The user supplies an async `run(&self, CancellationToken)` method on the
+/// struct; the generated `start` simply forwards to it.
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e::prelude::*;
+/// use tokio_util::sync::CancellationToken;
+///
+/// #[derive(BackgroundService, Clone)]
+/// #[service(state = Services)]
+/// pub struct EmailWorker {
+///     #[inject] mailer: Mailer,
+///     #[inject] executor: PoolExecutor,
+///     #[config("email.batch_size")] batch_size: i64,
+/// }
+///
+/// impl EmailWorker {
+///     async fn run(&self, shutdown: CancellationToken) { /* loop ... */ }
+/// }
+///
+/// // Register in builder:
+/// app.spawn_service::<EmailWorker>();
+/// ```
+#[proc_macro_derive(BackgroundService, attributes(service, inject, config, config_section))]
+pub fn derive_background_service(input: TokenStream) -> TokenStream {
+    bg_service_derive::expand(input)
 }
 
 /// Derive macro for state structs — generates

@@ -48,6 +48,15 @@ pub struct ScheduledMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
+/// Method annotated with `#[async_exec]` — submitted to a `PoolExecutor`.
+pub struct AsyncExecMethod {
+    /// Name of the controller field holding the executor. Default: `executor`.
+    pub executor_field: syn::Ident,
+    /// Original `async fn` body, kept as-is and rendered as
+    /// `__r2e_async_<name>_inner` in the impl block.
+    pub fn_item: syn::ImplItemFn,
+}
+
 /// Shared decorator data extracted from method attributes.
 /// Used by RouteMethod, SseMethod, WsMethod, and GrpcMethod.
 #[derive(Default)]

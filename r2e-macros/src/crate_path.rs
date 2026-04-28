@@ -139,3 +139,13 @@ pub fn r2e_grpc_path() -> TokenStream {
         "::r2e_grpc",
     )
 }
+
+/// Returns the token stream for accessing `r2e_executor` types.
+pub fn r2e_executor_path() -> TokenStream {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    resolve_cached(
+        &CACHE,
+        &[("r2e", "r2e_executor"), ("r2e-executor", "")],
+        "::r2e_executor",
+    )
+}

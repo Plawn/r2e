@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::crate_path::r2e_core_path;
+use crate::crate_path::{r2e_core_path, r2e_executor_path};
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
 
@@ -53,6 +53,12 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .map(|sm| generate_wrapped_scheduled_method(sm, def))
         .collect();
 
+    let async_exec_fns: Vec<TokenStream> = def
+        .async_exec_methods
+        .iter()
+        .map(generate_async_exec_method)
+        .collect();
+
     let other_fns: Vec<_> = def.other_methods.iter().collect();
 
     if route_fns.is_empty()
@@ -60,6 +66,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         && ws_fns.is_empty()
         && consumer_fns.is_empty()
         && scheduled_fns.is_empty()
+        && async_exec_fns.is_empty()
         && other_fns.is_empty()
     {
         quote! {}
@@ -71,8 +78,62 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 #(#ws_fns)*
                 #(#consumer_fns)*
                 #(#scheduled_fns)*
+                #(#async_exec_fns)*
                 #(#other_fns)*
             }
+        }
+    }
+}
+
+/// Generate the inner async fn (renamed) and a synchronous wrapper that
+/// submits the body to the executor and returns `JobHandle<T>`.
+fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
+    let exec_krate = r2e_executor_path();
+    let fn_item = &am.fn_item;
+    let original_sig = &fn_item.sig;
+    let original_name = &original_sig.ident;
+    let inner_name = format_ident!("__r2e_async_{}_inner", original_name);
+    let executor_field = &am.executor_field;
+
+    let mut inner_fn = fn_item.clone();
+    inner_fn.sig.ident = inner_name.clone();
+
+    let return_ty: TokenStream = match &original_sig.output {
+        syn::ReturnType::Default => quote! { () },
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+    };
+
+    let typed_inputs: Vec<&syn::PatType> = original_sig
+        .inputs
+        .iter()
+        .filter_map(|a| if let syn::FnArg::Typed(pt) = a { Some(pt) } else { None })
+        .collect();
+    let arg_idents: Vec<syn::Ident> = typed_inputs
+        .iter()
+        .enumerate()
+        .map(|(i, pt)| match &*pt.pat {
+            syn::Pat::Ident(pi) => pi.ident.clone(),
+            _ => format_ident!("__arg_{}", i),
+        })
+        .collect();
+
+    let attrs = &fn_item.attrs;
+    let vis = &fn_item.vis;
+    let generics = &original_sig.generics;
+    let where_clause = &original_sig.generics.where_clause;
+
+    quote! {
+        #inner_fn
+
+        #(#attrs)*
+        #vis fn #original_name #generics (
+            &self,
+            #(#typed_inputs),*
+        ) -> #exec_krate::JobHandle<#return_ty> #where_clause {
+            let __self = ::core::clone::Clone::clone(self);
+            self.#executor_field.submit(async move {
+                __self.#inner_name(#(#arg_idents),*).await
+            })
         }
     }
 }

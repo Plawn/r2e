@@ -2,7 +2,7 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
 >
 > **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
@@ -72,15 +72,17 @@ src/
   # Attribute extraction helpers
   extract/
     mod.rs                  Extract module re-exports
+    async_exec.rs           Extract #[async_exec(executor = "...")] definitions
     consumer.rs             Extract #[consumer(bus = "...")] definitions
     managed.rs              Extract #[managed] parameter annotations
     route.rs                Extract #[get], #[post], #[roles], #[guard], #[intercept], ...
     scheduled.rs            Extract #[scheduled(every = ..., cron = ...)] definitions
 
-  # Bean / Producer macros
+  # Bean / Producer / Service macros
   bean_attr.rs              #[bean] — auto-detects sync/async, generates Bean or AsyncBean impl
   bean_derive.rs            #[derive(Bean)] — field-level #[inject] + #[config]
   bean_state_derive.rs      #[derive(BeanState)] — generates FromRef impls for state structs
+  bg_service_derive.rs      #[derive(BackgroundService)] — generates ServiceComponent<S> from #[inject]/#[config]
   producer_attr.rs          #[producer] — free-function factory, generates Producer impl
 
   # Other derive macros
@@ -212,6 +214,22 @@ tests/
   types.rs                  ScheduleConfig parsing and task definition tests
   scheduler_test.rs         Additional scheduler tests
   plugin_test.rs            Scheduler plugin integration tests
+```
+
+---
+
+## r2e-executor — Managed task pool
+
+Bounded `PoolExecutor` (semaphore concurrency + mpsc-style queue cap), `JobHandle<T>`, graceful drain. Powers `#[async_exec]` and `#[derive(BackgroundService)]`.
+
+```
+src/
+  lib.rs                    ExecutorConfig, PoolExecutor, JobHandle, ExecutorMetrics, RejectedError, JobError, Executor PreStatePlugin
+
+tests/
+  executor.rs               submit/await, concurrency cap, queue rejection, graceful + abort shutdown
+  bg_service.rs             #[derive(BackgroundService)] roundtrip
+  async_exec.rs              #[async_exec] codegen returns JobHandle<T>
 ```
 
 ---
@@ -508,6 +526,15 @@ src/
   controllers/history_controller.rs   Message history
   controllers/consumer.rs             Event consumer
   services/chat_service.rs            Chat service
+```
+
+### example-executor — PoolExecutor + BackgroundService
+
+Demonstrates the `Executor` plugin, `#[async_exec]` returning `JobHandle<T>`, and a `#[derive(BackgroundService)]` tick worker that submits detached jobs.
+
+```
+src/
+  main.rs                   Single-binary demo (POST /reports/:id, GET /metrics, TickWorker)
 ```
 
 ### example-microservice — Multi-service architecture

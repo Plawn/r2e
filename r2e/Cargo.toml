@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static"]
+full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "static"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -28,6 +28,7 @@ events-kafka = ["events", "dep:r2e-events-kafka"]
 events-pulsar = ["events", "dep:r2e-events-pulsar"]
 events-rabbitmq = ["events", "dep:r2e-events-rabbitmq"]
 scheduler = ["dep:r2e-scheduler"]
+executor = ["dep:r2e-executor"]
 cache = ["dep:r2e-cache"]
 rate-limit = ["dep:r2e-rate-limit"]
 oidc = ["dep:r2e-oidc"]
@@ -52,6 +53,7 @@ r2e-data = {workspace = true, optional = true}
 r2e-data-sqlx = {workspace = true, optional = true}
 r2e-data-diesel = {workspace = true, optional = true}
 r2e-scheduler = {workspace = true, optional = true}
+r2e-executor = {workspace = true, optional = true}
 r2e-cache = {workspace = true, optional = true}
 r2e-rate-limit = {workspace = true, optional = true}
 r2e-oidc = {workspace = true, optional = true}

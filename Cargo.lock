@@ -2200,6 +2200,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-executor"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "example-grpc"
 version = "0.1.0"
 dependencies = [
@@ -5049,6 +5060,7 @@ dependencies = [
  "r2e-events-kafka",
  "r2e-events-pulsar",
  "r2e-events-rabbitmq",
+ "r2e-executor",
  "r2e-grpc",
  "r2e-macros",
  "r2e-observability",
@@ -5227,6 +5239,17 @@ dependencies = [
  "tokio",
  "tokio-executor-trait",
  "tokio-reactor-trait",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "r2e-executor"
+version = "0.1.0"
+dependencies = [
+ "r2e-core",
+ "r2e-macros",
+ "tokio",
  "tokio-util",
  "tracing",
 ]

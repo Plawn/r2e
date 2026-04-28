@@ -4,7 +4,40 @@ Rolling list of framework-level items deferred from tasks so they don't get lost
 
 ## Current
 
-<!-- No active items. -->
+### `r2e-executor` — replace `JobHandle<T>` with `tokio::task::JoinHandle<T>`
+
+- **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
+- **What:** `JobHandle<T>` wraps an extra `oneshot::Receiver` per submission and collapses panic / abort / shutdown into a single `JobError::Cancelled` variant. `tokio::task::JoinHandle<T>` already implements `Future<Output = Result<T, JoinError>>` and preserves panic / cancellation distinction (`is_panic()`, `is_cancelled()`, `into_panic()`).
+- **Why deferred:** changes the public return type of `submit` / `try_submit` and of every `#[async_exec]`-generated wrapper.
+- **Ref:** `r2e-executor/src/lib.rs` (`JobHandle`, `spawn_job`).
+
+### `r2e-executor` — async `on_shutdown` so graceful drain is bounded
+
+- **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
+- **What:** the executor's shutdown hook spawns `shutdown_graceful(timeout)` as a fire-and-forget task because `DeferredContext::on_shutdown` is sync-only (`FnOnce() + Send`). If the runtime tears down before the spawned task completes, the configured timeout is not actually honored.
+- **Fix:** add an async-capable shutdown hook to `r2e-core/src/plugin.rs` (`on_shutdown_async<F: FnOnce() -> BoxFuture<'static, ()>>`) and have the builder await it inside `shutdown_future`. Then route the executor drain through it.
+- **Ref:** `r2e-executor/src/lib.rs` (Executor plugin install), `r2e-core/src/plugin.rs` (`DeferredContext::on_shutdown`), `r2e-core/src/builder.rs` (~line 1500, `shutdown_future`).
+
+### `r2e-macros` — share field-resolution walker across `Controller` / `Bean` / `BackgroundService` derives
+
+- **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
+- **What:** `bg_service_derive.rs`, `derive_codegen.rs` (`generate_stateful_construct`), and `bean_derive.rs` each walk struct fields and emit nearly identical `field_inits` for `#[inject]` / `#[config]` / `#[config_section]`. Error messages and panic strings have already drifted slightly between them.
+- **Fix:** factor a `walk_injected_fields(&fields, &state_type) -> Vec<TokenStream>` helper (e.g. in `type_utils.rs` or a new `field_resolver.rs`) and rewrite all three derives on top of it.
+- **Ref:** `r2e-macros/src/{bg_service_derive.rs,derive_codegen.rs,bean_derive.rs}`.
+
+### `r2e-executor` — drop `running` atomic in favor of `Semaphore::available_permits()`
+
+- **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
+- **What:** `running` duplicates state already implied by the semaphore (`max_concurrent - sem.available_permits()`). Two atomics back what is essentially one piece of state — drift risk on every future change.
+- **Why deferred:** post-shutdown semantics differ (the closed semaphore reports 0 available permits regardless of in-flight tasks); needs a dedicated drain counter (`JoinSet` / `Notify` + count-down) to replace the metric.
+- **Ref:** `r2e-executor/src/lib.rs` (`Inner::running`, `metrics()`, `shutdown_graceful`).
+
+### `r2e-executor` — typed `Duration` and `u64` config fields
+
+- **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
+- **What:** `ExecutorConfig` uses `i64` for `max_concurrent`, `queue_capacity`, `shutdown_timeout_secs`. Negative values are silently coerced via `.max(0)`; the timeout is in raw seconds with no unit in the type. Switching to `u64` (capacities) and `Duration` (timeout via `humantime`-style `FromConfigValue`) lets users write `shutdown-timeout: 30s`.
+- **Why deferred:** affects `ConfigProperties` surface — same pattern is used across `r2e-scheduler`, `r2e-cache`, etc., so the right fix is a workspace-wide `Duration` `FromConfigValue` impl, not a per-crate change.
+- **Ref:** `r2e-executor/src/lib.rs` (`ExecutorConfig`).
 
 ## Shipped
 

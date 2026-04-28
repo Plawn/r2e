@@ -12,6 +12,7 @@ pub struct RoutesImplDef {
     pub ws_methods: Vec<WsMethod>,
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
+    pub async_exec_methods: Vec<AsyncExecMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -137,6 +138,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut ws_methods = Vec::new();
     let mut consumer_methods = Vec::new();
     let mut scheduled_methods = Vec::new();
+    let mut async_exec_methods = Vec::new();
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
@@ -230,6 +232,31 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         ws_param,
                         fn_item: method,
                     });
+                } else if let Some(cfg) = extract_async_exec(&all_attrs)? {
+                    if method.sig.asyncness.is_none() {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[async_exec] requires an `async fn` — the body is submitted to a PoolExecutor",
+                        ));
+                    }
+                    let has_self = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|arg| matches!(arg, syn::FnArg::Receiver(_)));
+                    if !has_self {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[async_exec] methods must take `&self` as the first argument. \
+                             The controller also needs an `#[inject] PoolExecutor` field \
+                             (default name: `executor`; override with `#[async_exec(executor = \"name\")]`)",
+                        ));
+                    }
+                    method.attrs = strip_async_exec_attrs(all_attrs);
+                    async_exec_methods.push(AsyncExecMethod {
+                        executor_field: cfg.executor_field,
+                        fn_item: method,
+                    });
                 } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
                     let mut decorators = parse_decorators(&all_attrs)?;
                     // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
@@ -305,6 +332,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         ws_methods,
         consumer_methods,
         scheduled_methods,
+        async_exec_methods,
         other_methods,
     })
 }
