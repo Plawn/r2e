@@ -11,7 +11,9 @@ use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 use crate::crate_path::r2e_core_path;
-use crate::type_utils::{parse_config_field, parse_config_section_prefix};
+use crate::field_resolver::{
+    ClassifyOpts, FieldKind, classify_fields, config_init_panic, config_section_init_panic,
+};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -71,49 +73,35 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    let classified = classify_fields(
+        fields.iter(),
+        &ClassifyOpts {
+            allow_named_inject: false,
+            allow_default: false,
+            context_label: "background service",
+        },
+    )?;
+
     let mut field_inits: Vec<TokenStream2> = Vec::new();
     let mut has_any_config = false;
 
-    for field in fields {
-        let field_name = field.ident.as_ref().unwrap();
-        let field_type = &field.ty;
-
-        let is_inject = field.attrs.iter().any(|a| a.path().is_ident("inject"));
-        let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
-        let config_section_attr =
-            field.attrs.iter().find(|a| a.path().is_ident("config_section"));
-
-        if is_inject {
-            field_inits.push(quote! { #field_name: __state.#field_name.clone() });
-        } else if let Some(attr) = config_section_attr {
-            let prefix = parse_config_section_prefix(attr)?;
-            field_inits.push(quote! {
-                #field_name: <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix))
-                    .unwrap_or_else(|e| panic!(
-                        "Configuration error in `{}`: failed to load section '{}' — {}",
-                        #name_str, #prefix, e,
-                    ))
-            });
-            has_any_config = true;
-        } else if let Some(attr) = config_attr {
-            let (key_str, env_hint, _ty_name) = parse_config_field(attr, field_type)?;
-            field_inits.push(quote! {
-                #field_name: __cfg.get::<#field_type>(#key_str).unwrap_or_else(|e| panic!(
-                    "Configuration error in `{}`: key '{}' — {}. \
-                     Add it to application.yaml / application-{{profile}}.yaml, \
-                     or set env var `{}`.",
-                    #name_str, #key_str, e, #env_hint
-                ))
-            });
-            has_any_config = true;
-        } else {
-            return Err(syn::Error::new_spanned(
-                field_name,
-                "background service field must be annotated with one of:\n\
-                 \n  #[inject]                           — clone from app state\n\
-                 \n  #[config(\"app.key\")]                — resolve from R2eConfig\n\
-                 \n  #[config_section(prefix = \"app\")]   — resolve a typed config section",
-            ));
+    for cf in &classified {
+        match &cf.kind {
+            FieldKind::Inject => {
+                let field_name = cf.name;
+                field_inits.push(quote! { #field_name: __state.#field_name.clone() });
+            }
+            FieldKind::ConfigSection { prefix } => {
+                field_inits.push(config_section_init_panic(
+                    cf.name, cf.ty, prefix, &name_str, &krate,
+                ));
+                has_any_config = true;
+            }
+            FieldKind::Config { key, env_hint, .. } => {
+                field_inits.push(config_init_panic(cf.name, key, env_hint, &name_str));
+                has_any_config = true;
+            }
+            FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),
         }
     }
 

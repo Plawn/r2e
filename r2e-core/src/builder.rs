@@ -114,8 +114,10 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     /// Serve hooks from plugins (called when server starts).
     /// Tasks already capture their state, so only the token is needed.
     serve_hooks: Vec<ServeHook>,
-    /// Shutdown hooks from plugins.
+    /// Shutdown hooks from plugins (sync).
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
+    /// Shutdown hooks from plugins (async, awaited during shutdown).
+    plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     _provided: PhantomData<P>,
     _required: PhantomData<R>,
 }
@@ -148,6 +150,7 @@ impl AppBuilder<NoState, TNil, TNil> {
             consumer_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
+            plugin_async_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
             _required: PhantomData,
         }
@@ -186,6 +189,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
             consumer_registrations: self.consumer_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
+            plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
             _provided: PhantomData,
             _required: PhantomData,
         }
@@ -792,6 +796,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             consumer_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
+            plugin_async_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
             _required: PhantomData,
         };
@@ -803,6 +808,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 plugin_data: &mut builder.shared.plugin_data,
                 serve_hooks: &mut builder.serve_hooks,
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
+                async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
             };
             (action.action)(&mut ctx);
         }
@@ -1220,6 +1226,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         Vec<ConsumerReg<T>>,
         Vec<ServeHook>,
         Vec<Box<dyn FnOnce() + Send>>,
+        Vec<crate::plugin::AsyncShutdownHook>,
         HashMap<TypeId, Box<dyn Any + Send + Sync>>,
         T,
         Option<Duration>,
@@ -1294,6 +1301,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             self.consumer_registrations,
             self.serve_hooks,
             self.plugin_shutdown_hooks,
+            self.plugin_async_shutdown_hooks,
             self.shared.plugin_data,
             state,
             self.shared.shutdown_grace_period,
@@ -1361,6 +1369,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             consumer_regs,
             serve_hooks,
             plugin_shutdown_hooks,
+            plugin_async_shutdown_hooks,
             plugin_data,
             state,
             shutdown_grace_period,
@@ -1382,6 +1391,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             consumer_registrations: consumer_regs,
             serve_hooks,
             plugin_shutdown_hooks,
+            plugin_async_shutdown_hooks,
             plugin_data,
             shutdown_grace_period,
             #[cfg(feature = "quic")]
@@ -1436,6 +1446,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     consumer_registrations: Vec<ConsumerReg<T>>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
+    plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     shutdown_grace_period: Option<Duration>,
     #[cfg(feature = "quic")]
@@ -1538,10 +1549,10 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // cancel tokens handed to spawn_service tasks) BEFORE letting the
         // HTTP server start draining. This way background tasks see the
         // cancel signal while in-flight HTTP requests still get to finish.
-        let plugin_shutdown_hooks = if skip_lifecycle {
-            Vec::new()
+        let (plugin_shutdown_hooks, plugin_async_shutdown_hooks) = if skip_lifecycle {
+            (Vec::new(), Vec::new())
         } else {
-            self.plugin_shutdown_hooks
+            (self.plugin_shutdown_hooks, self.plugin_async_shutdown_hooks)
         };
         let cancel_token = CancellationToken::new();
 
@@ -1592,6 +1603,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             shutdown_signal().await;
             for hook in plugin_shutdown_hooks {
                 hook();
+            }
+            for hook in plugin_async_shutdown_hooks {
+                hook().await;
             }
             cancel_for_shutdown.cancel();
         };

@@ -253,6 +253,48 @@ impl FromConfigValue for PathBuf {
     }
 }
 
+impl FromConfigValue for std::time::Duration {
+    fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
+        match value {
+            ConfigValue::Integer(secs) => {
+                let secs = u64::try_from(*secs).map_err(|_| ConfigError::TypeMismatch {
+                    key: key.to_string(),
+                    expected: "Duration (positive integer seconds or string like \"30s\", \"5m\")",
+                })?;
+                Ok(std::time::Duration::from_secs(secs))
+            }
+            ConfigValue::String(s) => parse_duration_string(s).ok_or_else(|| ConfigError::TypeMismatch {
+                key: key.to_string(),
+                expected: "Duration (positive integer seconds or string like \"30s\", \"5m\", \"1h\")",
+            }),
+            _ => Err(ConfigError::TypeMismatch {
+                key: key.to_string(),
+                expected: "Duration",
+            }),
+        }
+    }
+}
+
+fn parse_duration_string(s: &str) -> Option<std::time::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num, suffix) = s
+        .find(|c: char| !c.is_ascii_digit())
+        .map(|i| (&s[..i], s[i..].trim()))
+        .unwrap_or((s, ""));
+    let n: u64 = num.parse().ok()?;
+    let secs = match suffix {
+        "" | "s" | "sec" | "secs" => n,
+        "ms" | "millis" => return Some(std::time::Duration::from_millis(n)),
+        "m" | "min" | "mins" => n * 60,
+        "h" | "hr" | "hrs" | "hour" | "hours" => n * 3600,
+        _ => return None,
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
 impl<V: FromConfigValue> FromConfigValue for HashMap<String, V> {
     fn from_config_value(value: &ConfigValue, key: &str) -> Result<Self, ConfigError> {
         match value {

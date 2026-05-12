@@ -29,6 +29,7 @@ pub(crate) mod api_error_derive;
 pub(crate) mod hash_tokens;
 pub(crate) mod main_attr;
 pub(crate) mod type_utils;
+pub(crate) mod field_resolver;
 
 /// Derive macro for declaring a R2E controller struct.
 ///
@@ -477,7 +478,7 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The body is moved off the request thread onto an injected
 /// [`PoolExecutor`](r2e_executor::PoolExecutor); calling the method returns
-/// a [`JobHandle<T>`](r2e_executor::JobHandle) instead of `T`. Useful for
+/// `Result<JoinHandle<T>, RejectedError>` instead of `T`. Useful for
 /// long-running side work (PDF generation, third-party calls, batch jobs)
 /// that should not block HTTP response.
 ///
@@ -499,7 +500,7 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// impl ReportController {
 ///     #[post("/reports")]
 ///     async fn create(&self) -> Json<()> {
-///         let _job = self.generate_pdf();   // returns JobHandle<PdfBytes>
+///         let _job = self.generate_pdf().expect("executor running");
 ///         Json(())
 ///     }
 ///

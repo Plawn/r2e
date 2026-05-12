@@ -86,7 +86,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 }
 
 /// Generate the inner async fn (renamed) and a synchronous wrapper that
-/// submits the body to the executor and returns `JobHandle<T>`.
+/// submits the body to the executor and returns `Result<JoinHandle<T>, RejectedError>`.
 fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
     let exec_krate = r2e_executor_path();
     let fn_item = &am.fn_item;
@@ -129,7 +129,7 @@ fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
         #vis fn #original_name #generics (
             &self,
             #(#typed_inputs),*
-        ) -> #exec_krate::JobHandle<#return_ty> #where_clause {
+        ) -> ::core::result::Result<::tokio::task::JoinHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
             let __self = ::core::clone::Clone::clone(self);
             self.#executor_field.submit(async move {
                 __self.#inner_name(#(#arg_idents),*).await

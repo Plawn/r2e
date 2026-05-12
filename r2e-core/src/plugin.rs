@@ -371,6 +371,9 @@ impl DeferredAction {
     }
 }
 
+/// A boxed async shutdown hook.
+pub type AsyncShutdownHook = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
 /// Context for executing a deferred action.
 ///
 /// Provides access to builder internals that deferred actions may need to modify.
@@ -385,9 +388,12 @@ pub struct DeferredContext<'a> {
     /// of the shared `TaskRegistryHandle` and drains the tasks it owns.
     #[doc(hidden)]
     pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send>>,
-    /// Shutdown hooks from plugins.
+    /// Shutdown hooks from plugins (sync).
     #[doc(hidden)]
     pub shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
+    /// Shutdown hooks from plugins (async, awaited during shutdown).
+    #[doc(hidden)]
+    pub async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
 }
 
 impl DeferredContext<'_> {
@@ -425,6 +431,19 @@ impl DeferredContext<'_> {
         F: FnOnce() + Send + 'static,
     {
         self.shutdown_hooks.push(Box::new(hook));
+    }
+
+    /// Add an async shutdown hook that is awaited during server shutdown.
+    ///
+    /// Unlike [`on_shutdown`](Self::on_shutdown), the returned future is awaited
+    /// as part of the shutdown sequence, so operations like graceful drain can
+    /// actually complete within their configured timeout.
+    pub fn on_shutdown_async<F, Fut>(&mut self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.async_shutdown_hooks.push(Box::new(move || Box::pin(hook())));
     }
 }
 

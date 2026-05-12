@@ -8,7 +8,7 @@ Three pieces:
 
 1. `PoolExecutor` — bounded, semaphore-gated Tokio task pool. Injectable bean.
 2. `#[async_exec]` — controller-method attribute that submits the body to the
-   pool and returns a `JobHandle<T>` instead of `T`.
+   pool and returns a `Result<JoinHandle<T>, RejectedError>` instead of `T`.
 3. `#[derive(BackgroundService)]` — DI-friendly `ServiceComponent<S>` for
    long-running workers (consumers, watchers, periodic jobs).
 
@@ -22,14 +22,14 @@ r2e = { workspace = true, features = ["executor"] }
 `r2e::r2e_executor::*` (or `use r2e::prelude::*` for the macros) gives you:
 
 - `Executor` — the plugin
-- `PoolExecutor`, `JobHandle<T>`, `RejectedError`, `JobError`,
+- `PoolExecutor`, `RejectedError`,
   `ExecutorMetrics`, `ExecutorConfig`
 - `BackgroundService` derive, `#[async_exec]` attribute
 
 ## PoolExecutor
 
 ```rust
-use r2e::r2e_executor::{Executor, PoolExecutor, JobHandle, RejectedError};
+use r2e::r2e_executor::{Executor, PoolExecutor, RejectedError};
 
 AppBuilder::new()
     .plugin(Executor)              // installs PoolExecutor as a bean
@@ -44,23 +44,23 @@ The plugin reads the `executor.*` section of `R2eConfig`:
 executor:
   max-concurrent: 32     # tokio Semaphore permits — running cap
   queue-capacity: 1024   # pending submissions before rejection
-  shutdown-timeout-secs: 30
+  shutdown-timeout: 30s  # or: 30, "1m", "500ms"
 ```
 
-`shutdown-timeout-secs = 0` means "abort on shutdown, do not drain".
+`shutdown-timeout: 0` means "abort on shutdown, do not drain".
 
 ### API
 
 ```rust
 let exec: PoolExecutor = state.executor.clone();
 
-// Always-accepts; aborts the pending acquire on shutdown.
-let h: JobHandle<u32> = exec.submit(async { 21 + 21 });
-let v: u32 = h.await.expect("job ok");
+// Returns Result — Err(Shutdown) if pool is closed.
+let h = exec.submit(async { 21 + 21 }).expect("pool running");
+let v: u32 = h.await.expect("task ok");
 
 // Bounded: errors with RejectedError::QueueFull when (running + queued) > cap.
 match exec.try_submit(async { /* ... */ }) {
-    Ok(h)                             => { /* h: JobHandle */ },
+    Ok(h)                             => { /* h: JoinHandle<T> */ },
     Err(RejectedError::QueueFull)     => { /* backpressure */ },
     Err(RejectedError::Shutdown)      => { /* pool closed */ },
 }
@@ -74,13 +74,12 @@ let m = exec.metrics(); // running / queued / completed / rejected (u64)
 
 ### Shutdown
 
-The plugin registers an `on_shutdown` hook that calls
-`PoolExecutor::shutdown()` (closes the pool) and then
-`shutdown_graceful(timeout)` to drain in-flight tasks. After shutdown:
+The plugin registers an async `on_shutdown` hook that calls
+`PoolExecutor::shutdown_graceful(timeout)` to drain in-flight tasks. After shutdown:
 
-- `submit` / `try_submit` return `Shutdown` errors.
-- Pending acquires are aborted (`JobError::Shutdown`).
-- Tasks already running finish naturally — bounded by `shutdown-timeout-secs`.
+- `submit` / `try_submit` return `Err(RejectedError::Shutdown)`.
+- Queued tasks that never acquired a permit are cancelled (the `JoinHandle` resolves to a `JoinError` with `is_panic() == true`).
+- Tasks already running finish naturally — bounded by `shutdown-timeout`.
 
 ## `#[async_exec]`
 
@@ -88,7 +87,7 @@ Marks a method on a `#[routes]` controller as a pool-executed job. The
 generated wrapper:
 
 - Takes the same arguments as the original method.
-- Returns `JobHandle<T>` instead of `T`.
+- Returns `Result<JoinHandle<T>, RejectedError>` instead of `T`.
 - Is **not** `async` — the synchronous handle resolves to the result.
 
 ```rust
@@ -103,14 +102,14 @@ impl ReportController {
     #[post("/reports/:id")]
     async fn create(&self, Path(id): Path<u64>) -> Json<()> {
         // Returns immediately; PDF builds on the pool.
-        let _job = self.generate_pdf(id);
+        let _job = self.generate_pdf(id).expect("executor running");
         Json(())
     }
 
     #[get("/reports/:id")]
     async fn fetch(&self, Path(id): Path<u64>) -> Json<usize> {
         // Awaits the result inline — useful when the caller wants the bytes.
-        let bytes = self.generate_pdf(id).await.expect("job ok");
+        let bytes = self.generate_pdf(id).expect("executor running").await.expect("task ok");
         Json(bytes.len())
     }
 
@@ -153,7 +152,7 @@ use tokio_util::sync::CancellationToken;
 pub struct EmailWorker {
     #[inject] executor: PoolExecutor,
     #[inject] mailer: Mailer,
-    #[config("email.batch_size")] batch_size: i64,
+    #[config("email.batch_size")] batch_size: u64,
 }
 
 impl EmailWorker {
@@ -194,7 +193,7 @@ configured on `AppBuilder::build_state`.
 | Goal | Use |
 |---|---|
 | Slow side-task triggered by an HTTP request, fire-and-forget | `executor.submit_detached(...)` directly |
-| Slow side-task whose result the handler awaits later | `#[async_exec]` returning `JobHandle<T>` |
+| Slow side-task whose result the handler awaits later | `#[async_exec]` returning `Result<JoinHandle<T>, RejectedError>` |
 | Periodic / event-driven worker bound to app lifecycle | `#[derive(BackgroundService)]` + `spawn_service::<C>()` |
 | Cron / interval schedule | Existing `#[scheduled]` (no executor needed) |
 | Submit work from inside a background service | Inject `PoolExecutor` and call `submit*` |
@@ -207,7 +206,7 @@ configured on `AppBuilder::build_state`.
   `try_submit_rejects_when_queue_full`, `graceful_shutdown_drains_running_jobs`,
   `shutdown_aborts_queued_submissions`.
 - `bg_service.rs` — `#[derive(BackgroundService)]` round-trip.
-- `async_exec.rs` — `#[async_exec]` codegen returning `JobHandle<T>`.
+- `async_exec.rs` — `#[async_exec]` codegen returning `Result<JoinHandle<T>, RejectedError>`.
 
 See `examples/example-executor` for a runnable demo combining all three
 primitives behind HTTP endpoints.

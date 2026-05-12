@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use r2e_core::builder::TaskRegistryHandle;
-use r2e_core::plugin::{DeferredAction, DeferredContext};
+use r2e_core::plugin::{AsyncShutdownHook, DeferredAction, DeferredContext};
 use tokio_util::sync::CancellationToken;
 
 fn make_deferred_context<'a>(
@@ -10,12 +10,14 @@ fn make_deferred_context<'a>(
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
     serve_hooks: &'a mut Vec<Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
+    async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
 ) -> DeferredContext<'a> {
     DeferredContext {
         layers,
         plugin_data,
         serve_hooks,
         shutdown_hooks,
+        async_shutdown_hooks,
     }
 }
 
@@ -31,11 +33,13 @@ fn deferred_context_add_layer() {
     let mut plugin_data = HashMap::new();
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
+    let mut async_shutdown_hooks = Vec::new();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut plugin_data,
         &mut serve_hooks,
         &mut shutdown_hooks,
+        &mut async_shutdown_hooks,
     );
     ctx.add_layer(Box::new(|router| router));
     assert_eq!(layers.len(), 1);
@@ -47,11 +51,13 @@ fn deferred_context_store_data() {
     let mut plugin_data = HashMap::new();
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
+    let mut async_shutdown_hooks = Vec::new();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut plugin_data,
         &mut serve_hooks,
         &mut shutdown_hooks,
+        &mut async_shutdown_hooks,
     );
     ctx.store_data(42u32);
     assert!(plugin_data.contains_key(&std::any::TypeId::of::<u32>()));
@@ -69,11 +75,13 @@ fn deferred_context_on_serve() {
     let mut plugin_data = HashMap::new();
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
+    let mut async_shutdown_hooks = Vec::new();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut plugin_data,
         &mut serve_hooks,
         &mut shutdown_hooks,
+        &mut async_shutdown_hooks,
     );
     ctx.on_serve(|_registry, _token| {});
     assert_eq!(serve_hooks.len(), 1);
@@ -85,11 +93,13 @@ fn deferred_context_on_shutdown() {
     let mut plugin_data = HashMap::new();
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
+    let mut async_shutdown_hooks = Vec::new();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut plugin_data,
         &mut serve_hooks,
         &mut shutdown_hooks,
+        &mut async_shutdown_hooks,
     );
     ctx.on_shutdown(|| {});
     assert_eq!(shutdown_hooks.len(), 1);

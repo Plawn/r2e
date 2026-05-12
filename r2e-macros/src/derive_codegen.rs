@@ -3,6 +3,7 @@ use quote::{format_ident, quote};
 
 use crate::crate_path::r2e_core_path;
 use crate::derive_parsing::ControllerStructDef;
+use crate::field_resolver::{config_init_panic, config_section_init_panic};
 
 pub fn generate(def: &ControllerStructDef) -> TokenStream {
     let meta_module = generate_meta_module(def);
@@ -285,42 +286,17 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
-    let sc_controller_name_str = name.to_string();
+    let controller_name_str = name.to_string();
     let config_inits: Vec<TokenStream> = def
         .config_fields
         .iter()
-        .map(|f| {
-            let field_name = &f.name;
-            let key = &f.key;
-            let env_hint = &f.env_hint;
-            quote! {
-                #field_name: __cfg.get(#key).unwrap_or_else(|e| panic!(
-                    "Configuration error in `{}`: key '{}' — {}. \
-                     Add it to application.yaml / application-{{profile}}.yaml, \
-                     or set env var `{}`.",
-                    #sc_controller_name_str, #key, e, #env_hint
-                ))
-            }
-        })
+        .map(|f| config_init_panic(&f.name, &f.key, &f.env_hint, &controller_name_str))
         .collect();
 
     let config_section_inits: Vec<TokenStream> = def
         .config_section_fields
         .iter()
-        .map(|f| {
-            let field_name = &f.name;
-            let field_type = &f.ty;
-            let prefix = &f.prefix;
-            quote! {
-                #field_name: <#field_type as #krate::ConfigProperties>::from_config(&__cfg, Some(#prefix))
-                    .unwrap_or_else(|e| panic!(
-                        "Configuration error in `{}`: failed to load section '{}' — {}",
-                        #sc_controller_name_str,
-                        #prefix,
-                        e,
-                    ))
-            }
-        })
+        .map(|f| config_section_init_panic(&f.name, &f.ty, &f.prefix, &controller_name_str, &krate))
         .collect();
 
     let has_any_config =

@@ -3,7 +3,7 @@
 //! Marks a method on a `#[routes]` impl block to run on the injected
 //! `PoolExecutor`. The original body is renamed to
 //! `__r2e_async_<name>_inner` and the public method becomes a wrapper that
-//! submits the body to the pool and returns a `JobHandle<T>`.
+//! submits the body to the pool and returns a `Result<JoinHandle<T>, RejectedError>`.
 
 use syn::spanned::Spanned;
 

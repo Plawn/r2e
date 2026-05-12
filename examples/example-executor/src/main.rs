@@ -2,7 +2,7 @@
 //!
 //! Demonstrates:
 //! - `Executor` plugin → makes `PoolExecutor` injectable.
-//! - `#[async_exec]` on a controller method → returns `JobHandle<T>`.
+//! - `#[async_exec]` on a controller method → returns `Result<JoinHandle<T>, RejectedError>`.
 //! - `#[derive(BackgroundService)]` → tick worker that submits jobs to the
 //!   pool until shutdown.
 //!
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use r2e::prelude::*;
-use r2e::r2e_executor::{Executor, JobHandle, PoolExecutor};
+use r2e::r2e_executor::{Executor, PoolExecutor};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -57,14 +57,14 @@ impl ReportController {
     /// Synchronously fires a long job and returns immediately with a handle.
     #[post("/reports/:id")]
     async fn create(&self, Path(id): Path<u64>) -> Json<ReportSummary> {
-        let _job: JobHandle<Vec<u8>> = self.generate_pdf(id);
+        let _job = self.generate_pdf(id).expect("executor running");
         Json(ReportSummary { id, status: "queued", bytes: 0 })
     }
 
     /// Awaits the result inline — useful when the caller wants the bytes.
     #[get("/reports/:id")]
     async fn fetch(&self, Path(id): Path<u64>) -> Json<ReportSummary> {
-        let bytes = self.generate_pdf(id).await.expect("job ok");
+        let bytes = self.generate_pdf(id).expect("executor running").await.expect("job ok");
         Json(ReportSummary { id, status: "ready", bytes: bytes.len() })
     }
 
@@ -80,7 +80,7 @@ impl ReportController {
         })
     }
 
-    /// Body runs on the `PoolExecutor`; returns `JobHandle<Vec<u8>>`.
+    /// Body runs on the `PoolExecutor`; returns `Result<JoinHandle<Vec<u8>>, RejectedError>`.
     #[async_exec]
     async fn generate_pdf(&self, id: u64) -> Vec<u8> {
         tokio::time::sleep(Duration::from_millis(150)).await;

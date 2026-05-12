@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use r2e_executor::{ExecutorConfig, JobError, PoolExecutor, RejectedError};
+use r2e_executor::{ExecutorConfig, PoolExecutor, RejectedError};
 use tokio::sync::Notify;
 
 #[tokio::test]
 async fn submit_and_await_returns_result() {
     let exec = PoolExecutor::new(ExecutorConfig::default());
-    let handle = exec.submit(async { 7 + 35 });
+    let handle = exec.submit(async { 7 + 35 }).expect("submit ok");
     let result = handle.await.expect("job should succeed");
     assert_eq!(result, 42);
 
@@ -24,7 +24,7 @@ async fn concurrent_limit_enforced_by_semaphore() {
     let exec = PoolExecutor::new(ExecutorConfig {
         max_concurrent: 2,
         queue_capacity: 8,
-        shutdown_timeout_secs: 5,
+        shutdown_timeout: Duration::from_secs(5),
     });
 
     let inflight = Arc::new(AtomicU32::new(0));
@@ -41,7 +41,7 @@ async fn concurrent_limit_enforced_by_semaphore() {
             max_seen.fetch_max(cur, Ordering::SeqCst);
             release.notified().await;
             inflight.fetch_sub(1, Ordering::SeqCst);
-        }));
+        }).expect("submit ok"));
     }
 
     // Let pending jobs reach steady state.
@@ -66,7 +66,7 @@ async fn try_submit_rejects_when_queue_full() {
     let exec = PoolExecutor::new(ExecutorConfig {
         max_concurrent: 1,
         queue_capacity: 1,
-        shutdown_timeout_secs: 5,
+        shutdown_timeout: Duration::from_secs(5),
     });
     let release = Arc::new(Notify::new());
 
@@ -96,7 +96,7 @@ async fn graceful_shutdown_drains_running_jobs() {
     let exec = PoolExecutor::new(ExecutorConfig {
         max_concurrent: 4,
         queue_capacity: 8,
-        shutdown_timeout_secs: 5,
+        shutdown_timeout: Duration::from_secs(5),
     });
 
     let counter = Arc::new(AtomicU32::new(0));
@@ -106,7 +106,7 @@ async fn graceful_shutdown_drains_running_jobs() {
         handles.push(exec.submit(async move {
             tokio::time::sleep(Duration::from_millis(80)).await;
             c.fetch_add(1, Ordering::SeqCst);
-        }));
+        }).expect("submit ok"));
     }
 
     // Let all 4 jobs acquire their permits and start running.
@@ -123,8 +123,8 @@ async fn graceful_shutdown_drains_running_jobs() {
     assert_eq!(counter.load(Ordering::SeqCst), 4);
 
     // New submissions after shutdown are rejected.
-    let post = exec.submit(async { 1 }).await;
-    assert!(matches!(post, Err(JobError::Shutdown)));
+    let post = exec.submit(async { 1 });
+    assert_eq!(post.err(), Some(RejectedError::Shutdown));
     let try_post = exec.try_submit(async { 1 });
     assert_eq!(try_post.err(), Some(RejectedError::Shutdown));
 }
@@ -134,20 +134,22 @@ async fn shutdown_aborts_queued_submissions() {
     let exec = PoolExecutor::new(ExecutorConfig {
         max_concurrent: 1,
         queue_capacity: 8,
-        shutdown_timeout_secs: 5,
+        shutdown_timeout: Duration::from_secs(5),
     });
     let release = Arc::new(Notify::new());
 
     let r = release.clone();
-    let running = exec.submit(async move { r.notified().await; "done" });
+    let running = exec.submit(async move { r.notified().await; "done" }).expect("submit ok");
     // Queued — never gets a permit because we shut down before releasing.
-    let queued = exec.submit(async { "never" });
+    let queued = exec.submit(async { "never" }).expect("submit ok");
 
     tokio::time::sleep(Duration::from_millis(20)).await;
     exec.shutdown();
 
-    // Queued task aborts with Shutdown.
-    assert!(matches!(queued.await, Err(JobError::Shutdown)));
+    // Queued task panics with shutdown message — JoinError::is_panic() is true.
+    let queued_result = queued.await;
+    assert!(queued_result.is_err());
+    assert!(queued_result.unwrap_err().is_panic());
 
     // Allow the running task to finish.
     release.notify_waiters();

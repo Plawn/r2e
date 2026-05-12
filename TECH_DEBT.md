@@ -4,42 +4,44 @@ Rolling list of framework-level items deferred from tasks so they don't get lost
 
 ## Current
 
+(none)
+
+## Shipped
+
 ### `r2e-executor` — replace `JobHandle<T>` with `tokio::task::JoinHandle<T>`
 
 - **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
-- **What:** `JobHandle<T>` wraps an extra `oneshot::Receiver` per submission and collapses panic / abort / shutdown into a single `JobError::Cancelled` variant. `tokio::task::JoinHandle<T>` already implements `Future<Output = Result<T, JoinError>>` and preserves panic / cancellation distinction (`is_panic()`, `is_cancelled()`, `into_panic()`).
-- **Why deferred:** changes the public return type of `submit` / `try_submit` and of every `#[async_exec]`-generated wrapper.
-- **Ref:** `r2e-executor/src/lib.rs` (`JobHandle`, `spawn_job`).
+- **Landed:** 2026-05-12 (tech-debt batch).
+- **What:** removed `JobHandle<T>` / `JobError` entirely. `submit` / `try_submit` now return `Result<JoinHandle<T>, RejectedError>`. `#[async_exec]`-generated wrappers updated. Callers get native `JoinError` panic/cancellation distinction.
+- **Ref:** `r2e-executor/src/lib.rs`, `r2e-macros/src/codegen/wrapping.rs`.
 
 ### `r2e-executor` — async `on_shutdown` so graceful drain is bounded
 
 - **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
-- **What:** the executor's shutdown hook spawns `shutdown_graceful(timeout)` as a fire-and-forget task because `DeferredContext::on_shutdown` is sync-only (`FnOnce() + Send`). If the runtime tears down before the spawned task completes, the configured timeout is not actually honored.
-- **Fix:** add an async-capable shutdown hook to `r2e-core/src/plugin.rs` (`on_shutdown_async<F: FnOnce() -> BoxFuture<'static, ()>>`) and have the builder await it inside `shutdown_future`. Then route the executor drain through it.
-- **Ref:** `r2e-executor/src/lib.rs` (Executor plugin install), `r2e-core/src/plugin.rs` (`DeferredContext::on_shutdown`), `r2e-core/src/builder.rs` (~line 1500, `shutdown_future`).
+- **Landed:** 2026-05-12 (tech-debt batch).
+- **What:** added `DeferredContext::on_shutdown_async` and `AsyncShutdownHook` type to `r2e-core/src/plugin.rs`. Builder awaits async hooks inside `shutdown_future`. Executor plugin now uses `on_shutdown_async` so graceful drain is properly bounded by the configured timeout.
+- **Ref:** `r2e-core/src/plugin.rs`, `r2e-core/src/builder.rs`, `r2e-executor/src/lib.rs`.
 
 ### `r2e-macros` — share field-resolution walker across `Controller` / `Bean` / `BackgroundService` derives
 
 - **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
-- **What:** `bg_service_derive.rs`, `derive_codegen.rs` (`generate_stateful_construct`), and `bean_derive.rs` each walk struct fields and emit nearly identical `field_inits` for `#[inject]` / `#[config]` / `#[config_section]`. Error messages and panic strings have already drifted slightly between them.
-- **Fix:** factor a `walk_injected_fields(&fields, &state_type) -> Vec<TokenStream>` helper (e.g. in `type_utils.rs` or a new `field_resolver.rs`) and rewrite all three derives on top of it.
-- **Ref:** `r2e-macros/src/{bg_service_derive.rs,derive_codegen.rs,bean_derive.rs}`.
+- **Landed:** 2026-05-12 (tech-debt batch).
+- **What:** added `r2e-macros/src/field_resolver.rs` with `classify_fields()`, `ClassifiedField`, `FieldKind`, `config_init_panic()`, `config_section_init_panic()`. Rewrote `bg_service_derive.rs` and `derive_codegen.rs` (`generate_stateful_construct`) on top of the shared walker. `bean_derive.rs` uses `classify_fields` for field classification but keeps its own init code (different `BeanContext` resolution path).
+- **Ref:** `r2e-macros/src/field_resolver.rs`, `r2e-macros/src/bg_service_derive.rs`, `r2e-macros/src/derive_codegen.rs`.
 
 ### `r2e-executor` — drop `running` atomic in favor of `Semaphore::available_permits()`
 
 - **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
-- **What:** `running` duplicates state already implied by the semaphore (`max_concurrent - sem.available_permits()`). Two atomics back what is essentially one piece of state — drift risk on every future change.
-- **Why deferred:** post-shutdown semantics differ (the closed semaphore reports 0 available permits regardless of in-flight tasks); needs a dedicated drain counter (`JoinSet` / `Notify` + count-down) to replace the metric.
-- **Ref:** `r2e-executor/src/lib.rs` (`Inner::running`, `metrics()`, `shutdown_graceful`).
+- **Landed:** 2026-05-12 (tech-debt batch).
+- **What:** removed `running: AtomicU64` from `Inner`. `metrics().running` now derives from `max_concurrent - semaphore.available_permits()` when open, or `drain_count` (new `AtomicU64`) when shut down. `try_submit` backpressure also uses the semaphore-derived count.
+- **Ref:** `r2e-executor/src/lib.rs`.
 
 ### `r2e-executor` — typed `Duration` and `u64` config fields
 
 - **Surfaced:** 2026-04-28 (`/simplify` review of Tasker #190).
-- **What:** `ExecutorConfig` uses `i64` for `max_concurrent`, `queue_capacity`, `shutdown_timeout_secs`. Negative values are silently coerced via `.max(0)`; the timeout is in raw seconds with no unit in the type. Switching to `u64` (capacities) and `Duration` (timeout via `humantime`-style `FromConfigValue`) lets users write `shutdown-timeout: 30s`.
-- **Why deferred:** affects `ConfigProperties` surface — same pattern is used across `r2e-scheduler`, `r2e-cache`, etc., so the right fix is a workspace-wide `Duration` `FromConfigValue` impl, not a per-crate change.
-- **Ref:** `r2e-executor/src/lib.rs` (`ExecutorConfig`).
-
-## Shipped
+- **Landed:** 2026-05-12 (tech-debt batch).
+- **What:** `ExecutorConfig` fields changed from `i64` to `u64` (capacities) and `Duration` (timeout). Added `impl FromConfigValue for std::time::Duration` to `r2e-core` supporting integer-as-seconds and string suffixes (`s`, `ms`, `m`/`min`, `h`/`hr`). Config key changed from `shutdown-timeout-secs` to `shutdown-timeout`; users can write `shutdown-timeout: 30s`.
+- **Ref:** `r2e-core/src/config/value.rs`, `r2e-executor/src/lib.rs`.
 
 ### `WsRooms` / `SseRooms` — share implementation
 

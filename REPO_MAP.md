@@ -220,16 +220,16 @@ tests/
 
 ## r2e-executor — Managed task pool
 
-Bounded `PoolExecutor` (semaphore concurrency + mpsc-style queue cap), `JobHandle<T>`, graceful drain. Powers `#[async_exec]` and `#[derive(BackgroundService)]`.
+Bounded `PoolExecutor` (semaphore concurrency + mpsc-style queue cap), graceful drain. Powers `#[async_exec]` and `#[derive(BackgroundService)]`.
 
 ```
 src/
-  lib.rs                    ExecutorConfig, PoolExecutor, JobHandle, ExecutorMetrics, RejectedError, JobError, Executor PreStatePlugin
+  lib.rs                    ExecutorConfig, PoolExecutor, ExecutorMetrics, RejectedError, Executor PreStatePlugin
 
 tests/
   executor.rs               submit/await, concurrency cap, queue rejection, graceful + abort shutdown
   bg_service.rs             #[derive(BackgroundService)] roundtrip
-  async_exec.rs              #[async_exec] codegen returns JobHandle<T>
+  async_exec.rs              #[async_exec] codegen returns Result<JoinHandle<T>, RejectedError>
 ```
 
 ---
@@ -530,7 +530,7 @@ src/
 
 ### example-executor — PoolExecutor + BackgroundService
 
-Demonstrates the `Executor` plugin, `#[async_exec]` returning `JobHandle<T>`, and a `#[derive(BackgroundService)]` tick worker that submits detached jobs.
+Demonstrates the `Executor` plugin, `#[async_exec]` returning `Result<JoinHandle<T>, RejectedError>`, and a `#[derive(BackgroundService)]` tick worker that submits detached jobs.
 
 ```
 src/
