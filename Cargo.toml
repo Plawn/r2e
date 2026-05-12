@@ -175,6 +175,13 @@ dioxus-devtools = { version = "0.7", features = ["serve"] }
 # Misc
 openfga-rs = "0.1"
 
+# QUIC / HTTP3
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+
 # Testing
 tokio-tungstenite = "0.28"
 
@@ -182,3 +189,4 @@ tokio-tungstenite = "0.28"
 tempfile = "3"
 serial_test = "3"
 trybuild = "1"
+rcgen = "0.14"

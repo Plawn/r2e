@@ -290,6 +290,21 @@ Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKe
 
 ---
 
+## Well-known Config Keys
+
+### Server
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `server.host` | `String` | `"0.0.0.0"` | Bind host for TCP and QUIC |
+| `server.port` | `u16` | `3000` | TCP port |
+| `server.quic.port` | `u16` | — | UDP port for QUIC/HTTP3 (enables QUIC when set) |
+| `server.quic.cert` | `String` | — | PEM certificate chain path (required with `quic.port`) |
+| `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |
+| `server.quic.alt_svc_max_age` | `u32` | `3600` | Alt-Svc header max-age in seconds |
+
+---
+
 ## Reference
 
 ### ConfigError

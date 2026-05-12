@@ -2,7 +2,7 @@
 
 ## Overview
 
-R2E provides 13 main features, each documented in a dedicated file.
+R2E provides 18 main features, each documented in a dedicated file.
 
 | # | Feature | File | Crate |
 |---|---------|------|-------|
@@ -19,6 +19,11 @@ R2E provides 13 main features, each documented in a dedicated file.
 | 11 | JWT Security / Roles | [11-securite-jwt.md](./11-securite-jwt.md) | `r2e-security` |
 | 12 | Testing | [12-testing.md](./12-testing.md) | `r2e-test` |
 | 13 | Lifecycle, DI & Performance | [13-lifecycle-injection-performance.md](./13-lifecycle-injection-performance.md) | `r2e-core` / `r2e-macros` |
+| 14 | WebSocket | [14-websocket.md](./14-websocket.md) | `r2e-http` |
+| 15 | SSE | [15-sse.md](./15-sse.md) | `r2e-http` |
+| 16 | Multipart | [16-multipart.md](./16-multipart.md) | `r2e-http` |
+| 17 | gRPC | [17-grpc.md](./17-grpc.md) | `r2e-grpc` |
+| 18 | QUIC / HTTP/3 | [18-quic.md](./18-quic.md) | `r2e-http` |
 
 ## Crate Architecture
 

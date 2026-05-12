@@ -158,6 +158,12 @@ Startup hooks, consumer registrations, and scheduled tasks execute only on the *
 
 The Dioxus devserver (`dx serve`) listens on port **8080** by default. If your R2E app also binds to 8080, requests are silently intercepted. Use a different port (e.g., 3000).
 
+### QUIC endpoint caching
+
+When both `dev-reload` and `quic` features are enabled, the QUIC endpoint (UDP socket) is cached across hot-reload cycles — mirroring the TCP listener cache. The accept loop stops and restarts with the new router, but the socket stays bound.
+
+**Limitation:** TLS certificate changes are not detected. If you change the cert/key files, a full process restart is required.
+
 ### Dev headers
 
 When `DevReload` is active, two headers are added to every response:

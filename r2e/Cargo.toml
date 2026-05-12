@@ -40,6 +40,8 @@ grpc = ["dep:r2e-grpc"]
 static = ["dep:r2e-static"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
+# NOTE: quic is intentionally NOT in `full` — pulls heavy crypto deps (quinn, rustls, h3)
+quic = ["r2e-core/quic"]
 # NOTE: dev-reload is intentionally NOT in `full` — never include in production builds
 dev-reload = ["dep:r2e-devtools", "r2e-core/dev-reload"]
 

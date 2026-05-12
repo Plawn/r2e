@@ -1319,6 +1319,41 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         #[cfg(not(feature = "dev-reload"))]
         let this = self;
 
+        #[cfg(feature = "quic")]
+        let quic_server_config = this.shared.config.as_ref().and_then(|config| {
+            let port = config.try_get::<u16>("server.quic.port")?;
+            let cert_path = config.try_get::<String>("server.quic.cert")
+                .or_else(|| {
+                    tracing::error!("server.quic.port is set but server.quic.cert is missing");
+                    None
+                })?;
+            let key_path = config.try_get::<String>("server.quic.key")
+                .or_else(|| {
+                    tracing::error!("server.quic.port is set but server.quic.key is missing");
+                    None
+                })?;
+            let host = config
+                .try_get::<String>("server.host")
+                .unwrap_or_else(|| "0.0.0.0".into());
+            let addr_str = format!("{host}:{port}");
+            let bind_addr: std::net::SocketAddr = addr_str.parse().ok().or_else(|| {
+                tracing::error!(addr = %addr_str, "Invalid QUIC bind address");
+                None
+            })?;
+            match crate::http::quic::build_server_config_from_files(&cert_path, &key_path) {
+                Ok(server_config) => Some((bind_addr, server_config)),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to load QUIC TLS config");
+                    None
+                }
+            }
+        });
+
+        #[cfg(feature = "quic")]
+        let quic_alt_svc_max_age = this.shared.config.as_ref()
+            .and_then(|c| c.try_get::<u32>("server.quic.alt_svc_max_age"))
+            .unwrap_or(3600);
+
         let (
             app,
             startup_hooks,
@@ -1331,6 +1366,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shutdown_grace_period,
         ) = this.build_inner();
 
+        #[cfg(feature = "quic")]
+        let app = if let Some((ref addr, _)) = quic_server_config {
+            crate::http::quic::apply_alt_svc(app, addr.port(), quic_alt_svc_max_age)
+        } else {
+            app
+        };
+
         PreparedApp {
             router: app,
             state,
@@ -1342,6 +1384,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_shutdown_hooks,
             plugin_data,
             shutdown_grace_period,
+            #[cfg(feature = "quic")]
+            quic_server_config,
         }
     }
 
@@ -1394,6 +1438,8 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     shutdown_grace_period: Option<Duration>,
+    #[cfg(feature = "quic")]
+    quic_server_config: Option<(std::net::SocketAddr, r2e_http::quic::quinn::ServerConfig)>,
 }
 
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
@@ -1435,7 +1481,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// This is useful for hot-reload: bind the listener once in setup,
     /// and reuse it across hot-patches so we never fight port conflicts.
     pub async fn run_with_listener(
-        self,
+        mut self,
         listener: tokio::net::TcpListener,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "dev-reload")]
@@ -1497,11 +1543,57 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         } else {
             self.plugin_shutdown_hooks
         };
+        let cancel_token = CancellationToken::new();
+
+        // Spawn the QUIC/HTTP3 endpoint (if configured) before the TCP server.
+        // In dev-reload mode, the endpoint is cached so the UDP socket
+        // survives across hot-patches without port conflicts.
+        #[cfg(feature = "quic")]
+        let quic_handle = self.quic_server_config.take().map(|(addr, server_config)| {
+            let router = self.router.clone();
+            let token = cancel_token.clone();
+
+            #[cfg(feature = "dev-reload")]
+            let endpoint_result = crate::dev::get_or_bind_quic_endpoint(addr, server_config);
+            #[cfg(not(feature = "dev-reload"))]
+            let endpoint_result = crate::http::quic::quinn::Endpoint::server(server_config, addr)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) });
+
+            match endpoint_result {
+                Ok(endpoint) => {
+                    #[cfg(not(feature = "dev-reload"))]
+                    let ep_for_close = endpoint.clone();
+                    Some(tokio::spawn(async move {
+                        if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
+                            router,
+                            endpoint,
+                            token.cancelled(),
+                        )
+                        .await
+                        {
+                            tracing::error!(error = %e, "QUIC/HTTP3 server error");
+                        }
+                        #[cfg(not(feature = "dev-reload"))]
+                        {
+                            ep_for_close.close(0u32.into(), b"shutdown");
+                            ep_for_close.wait_idle().await;
+                        }
+                    }))
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to bind QUIC endpoint");
+                    None
+                }
+            }
+        }).flatten();
+
+        let cancel_for_shutdown = cancel_token.clone();
         let shutdown_future = async move {
             shutdown_signal().await;
             for hook in plugin_shutdown_hooks {
                 hook();
             }
+            cancel_for_shutdown.cancel();
         };
 
         info!(addr = %self.addr, "R2E server listening");
@@ -1512,6 +1604,16 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         )
         .with_graceful_shutdown(shutdown_future)
         .await?;
+
+        // Wait for QUIC endpoint to drain after TCP server stops.
+        #[cfg(feature = "quic")]
+        if let Some(handle) = quic_handle {
+            if let Err(join_err) = handle.await {
+                if join_err.is_panic() {
+                    tracing::warn!("QUIC task panicked");
+                }
+            }
+        }
 
         // After HTTP drain completes: await spawn_service JoinHandles with a
         // deadline, then run user shutdown hooks. Both phases together are

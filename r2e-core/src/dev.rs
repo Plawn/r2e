@@ -86,6 +86,42 @@ pub(crate) fn get_or_bind_listener(
     }
 }
 
+// ── QUIC endpoint cache for dev-reload ─────────────────────────────────────
+
+#[cfg(all(feature = "dev-reload", feature = "quic"))]
+static QUIC_ENDPOINT_STORE: OnceLock<
+    Mutex<HashMap<String, crate::http::quic::quinn::Endpoint>>,
+> = OnceLock::new();
+
+/// Retrieve a cached QUIC endpoint for the given address, or bind a new one.
+///
+/// On first call, binds a `quinn::Endpoint`, stores it, and returns a clone.
+/// Subsequent calls (after hot-patch) return another clone of the same
+/// endpoint — same UDP socket, no port conflicts.
+///
+/// Unlike the TCP [`get_or_bind_listener`], the endpoint is never closed
+/// between hot-reload cycles; the accept loop just stops and restarts with
+/// the new router.
+#[cfg(all(feature = "dev-reload", feature = "quic"))]
+pub(crate) fn get_or_bind_quic_endpoint(
+    addr: std::net::SocketAddr,
+    server_config: crate::http::quic::quinn::ServerConfig,
+) -> Result<crate::http::quic::quinn::Endpoint, Box<dyn std::error::Error + Send + Sync>> {
+    let key = addr.to_string();
+    let store = QUIC_ENDPOINT_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = store
+        .lock()
+        .map_err(|e| format!("QUIC endpoint store poisoned: {e}"))?;
+    if let Some(existing) = map.get(&key) {
+        tracing::debug!(addr = %key, "dev-reload: reusing cached QUIC endpoint (cert changes require full restart)");
+        Ok(existing.clone())
+    } else {
+        let endpoint = crate::http::quic::quinn::Endpoint::server(server_config, addr)?;
+        map.insert(key, endpoint.clone());
+        Ok(endpoint)
+    }
+}
+
 // ── State cache for dev-reload ──────────────────────────────────────────────
 
 #[cfg(feature = "dev-reload")]

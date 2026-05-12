@@ -14,6 +14,7 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 default = []
 ws = ["r2e-http/ws"]
 multipart = ["r2e-http/multipart"]
+quic = ["r2e-http/quic"]
 dev-reload = ["dep:r2e-devtools"]
 lazy-fallback-runtime = []
 

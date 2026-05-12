@@ -4,6 +4,8 @@ pub use r2e_http::header;
 pub mod ws;
 #[cfg(feature = "multipart")]
 pub use r2e_http::multipart;
+#[cfg(feature = "quic")]
+pub use r2e_http::quic;
 
 pub use r2e_http::{
     serve, Extension, Json, Router, Error, Uri, Bytes, Body,
