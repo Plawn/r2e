@@ -289,6 +289,28 @@ fn not_found() -> r2e_core::http::Response {
     (r2e_core::http::StatusCode::NOT_FOUND, "Not Found").into_response()
 }
 
+// ── Nestable Router ─────────────────────────────────────────────────────────
+
+impl EmbeddedFrontend {
+    /// Produce a standalone [`Router`](r2e_core::http::Router) that can be
+    /// nested under a sub-path via `Router::nest("/ui", frontend.into_router())`.
+    ///
+    /// SPA fallback, ETag, cache headers, and MIME detection all work in nested
+    /// mode. The `base_path` config is ignored — path stripping is handled by
+    /// Axum's `nest`.
+    pub fn into_router(self) -> r2e_core::http::Router {
+        let handler = Arc::new(StaticFileHandler {
+            file_server: self.file_server,
+            config: self.config,
+        });
+
+        r2e_core::http::Router::new().fallback(move |req: r2e_core::http::Request| async move {
+            let path = req.uri().path().to_string();
+            handler.serve(&path)
+        })
+    }
+}
+
 // ── Plugin implementation ───────────────────────────────────────────────────
 
 impl r2e_core::plugin::Plugin for EmbeddedFrontend {
@@ -313,7 +335,6 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
                             if rest.is_empty() || rest.starts_with('/') {
                                 rest
                             } else {
-                                // Path doesn't match base (e.g. base=/docs, path=/documentation).
                                 return not_found();
                             }
                         }
