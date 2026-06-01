@@ -45,16 +45,16 @@ r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
-r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module.
-r2e-events-iggy → Apache Iggy EventBus backend: persistent distributed event streaming.
-r2e-events-kafka → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
-r2e-events-pulsar → Apache Pulsar EventBus backend: distributed event streaming.
-r2e-events-rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
+r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
+  backends/iggy     → Apache Iggy EventBus backend: persistent distributed event streaming.
+  backends/kafka    → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
+  backends/pulsar   → Apache Pulsar EventBus backend: distributed event streaming.
+  backends/rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
 r2e-executor    → Managed task pool (PoolExecutor) + #[async_exec] + #[derive(BackgroundService)]. Bounded concurrency, graceful drain.
-r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError.
-r2e-data-sqlx   → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, migrations.
-r2e-data-diesel → Diesel backend (skeleton): DieselRepository, error bridge.
+r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError. Database backends live in `r2e-data/backends/`.
+  backends/sqlx     → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, migrations.
+  backends/diesel   → Diesel backend (skeleton): DieselRepository, error bridge.
 r2e-grpc        → Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports.
 r2e-cache       → TtlCache, pluggable CacheStore trait (default InMemoryStore).
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.

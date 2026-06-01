@@ -6,14 +6,14 @@ members = [
     "r2e-rate-limit",
     "r2e-security",
     "r2e-data",
-    "r2e-data-sqlx",
-    "r2e-data-diesel",
+    "r2e-data/backends/sqlx",
+    "r2e-data/backends/diesel",
     "r2e-openapi",
     "r2e-events",
-    "r2e-events-iggy",
-    "r2e-events-kafka",
-    "r2e-events-pulsar",
-    "r2e-events-rabbitmq",
+    "r2e-events/backends/iggy",
+    "r2e-events/backends/kafka",
+    "r2e-events/backends/pulsar",
+    "r2e-events/backends/rabbitmq",
     "r2e-scheduler",
     "r2e-executor",
     "r2e-prometheus",
@@ -60,13 +60,13 @@ r2e-core = { path = "r2e-core", version = "0.1.0" }
 r2e-macros = { path = "r2e-macros", version = "0.1.0" }
 r2e-security = { path = "r2e-security", version = "0.1.0" }
 r2e-data = { path = "r2e-data", version = "0.1.0" }
-r2e-data-sqlx = { path = "r2e-data-sqlx", version = "0.1.0" }
-r2e-data-diesel = { path = "r2e-data-diesel", version = "0.1.0" }
+r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.1.0" }
+r2e-data-diesel = { path = "r2e-data/backends/diesel", version = "0.1.0" }
 r2e-events = { path = "r2e-events", version = "0.1.0" }
-r2e-events-iggy = { path = "r2e-events-iggy", version = "0.1.0" }
-r2e-events-kafka = { path = "r2e-events-kafka", version = "0.1.0" }
-r2e-events-pulsar = { path = "r2e-events-pulsar", version = "0.1.0" }
-r2e-events-rabbitmq = { path = "r2e-events-rabbitmq", version = "0.1.0" }
+r2e-events-iggy = { path = "r2e-events/backends/iggy", version = "0.1.0" }
+r2e-events-kafka = { path = "r2e-events/backends/kafka", version = "0.1.0" }
+r2e-events-pulsar = { path = "r2e-events/backends/pulsar", version = "0.1.0" }
+r2e-events-rabbitmq = { path = "r2e-events/backends/rabbitmq", version = "0.1.0" }
 r2e-scheduler = { path = "r2e-scheduler", version = "0.1.0" }
 r2e-executor = { path = "r2e-executor", version = "0.1.0" }
 r2e-cache = { path = "r2e-cache", version = "0.1.0" }
