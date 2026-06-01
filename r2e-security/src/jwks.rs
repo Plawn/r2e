@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use jsonwebtoken::DecodingKey;
+use jsonwebtoken::{Algorithm, DecodingKey};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
+use tracing::warn;
 
 use crate::config::SecurityConfig;
 use crate::error::SecurityError;
@@ -45,17 +46,49 @@ struct JwksResponse {
 /// Internal storage for a cached JWK entry.
 /// We store the raw components so we can reconstruct a `DecodingKey` on demand
 /// (since `DecodingKey` does not implement `Clone`).
+///
+/// Exposed (doc-hidden) only so integration tests can construct it directly;
+/// not part of the public API.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-struct CachedJwk {
-    kty: String,
-    n: Option<String>,
-    e: Option<String>,
-    x: Option<String>,
-    y: Option<String>,
+pub struct CachedJwk {
+    pub kty: String,
+    /// Algorithm the key is intended for (`alg` in the JWK), if advertised.
+    pub alg: Option<String>,
+    pub n: Option<String>,
+    pub e: Option<String>,
+    pub x: Option<String>,
+    pub y: Option<String>,
 }
 
 impl CachedJwk {
-    fn to_decoding_key(&self) -> Result<DecodingKey, SecurityError> {
+    /// Build a decoding key, first checking that this JWK is compatible with the
+    /// algorithm declared in the token header.
+    ///
+    /// Defense-in-depth against algorithm confusion when more than one algorithm
+    /// family is allowed: the key type (`kty`) must match the token's algorithm
+    /// family, and if the JWK advertises its own `alg` it must match exactly.
+    #[doc(hidden)]
+    pub fn to_decoding_key_checked(&self, algorithm: Algorithm) -> Result<DecodingKey, SecurityError> {
+        let expected_kty = kty_for_algorithm(algorithm);
+        if self.kty != expected_kty {
+            return Err(SecurityError::ValidationFailed(format!(
+                "JWK key type '{}' is incompatible with token algorithm {algorithm:?}",
+                self.kty
+            )));
+        }
+        if let Some(alg) = &self.alg {
+            if !alg.eq_ignore_ascii_case(&format!("{algorithm:?}")) {
+                return Err(SecurityError::ValidationFailed(format!(
+                    "JWK algorithm '{alg}' does not match token algorithm {algorithm:?}"
+                )));
+            }
+        }
+        self.to_decoding_key()
+    }
+
+    #[doc(hidden)]
+    pub fn to_decoding_key(&self) -> Result<DecodingKey, SecurityError> {
         match self.kty.as_str() {
             "RSA" => {
                 let n = self.n.as_deref().ok_or_else(|| {
@@ -121,7 +154,14 @@ pub struct JwksCache {
 impl JwksCache {
     /// Create a new JWKS cache and perform an initial fetch of keys.
     pub async fn new(config: SecurityConfig) -> Result<Self, SecurityError> {
-        let client = reqwest::Client::new();
+        validate_jwks_url(&config.jwks_url, config.allow_insecure_jwks_url)?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.jwks_request_timeout_secs))
+            .connect_timeout(Duration::from_secs(config.jwks_connect_timeout_secs))
+            .build()
+            .map_err(|e| {
+                SecurityError::JwksFetchError(format!("Failed to build HTTP client: {e}"))
+            })?;
         let cache = Self {
             inner: Arc::new(RwLock::new(CacheInner {
                 keys: HashMap::new(),
@@ -140,20 +180,29 @@ impl JwksCache {
     ///
     /// If the `kid` is not in the cache, the cache is refreshed first.
     /// If still not found after refresh, returns `SecurityError::UnknownKeyId`.
-    pub async fn get_key(&self, kid: &str) -> Result<DecodingKey, SecurityError> {
+    ///
+    /// `algorithm` is the algorithm declared in the token header; the resolved
+    /// JWK must be compatible with it (see [`CachedJwk::to_decoding_key_checked`]).
+    pub async fn get_key(
+        &self,
+        kid: &str,
+        algorithm: Algorithm,
+    ) -> Result<DecodingKey, SecurityError> {
         let ttl = Duration::from_secs(self.config.jwks_cache_ttl_secs);
 
         // First, try cache. If stale or missing, attempt a refresh.
         let mut needs_refresh = false;
         let mut force_refresh = false;
+        let mut had_cached_key = false;
         {
             let cache = self.inner.read().await;
             if let Some(jwk) = cache.keys.get(kid) {
+                had_cached_key = true;
                 if is_stale(cache.last_refresh, ttl) {
                     needs_refresh = true;
                     force_refresh = false;
                 } else {
-                    return jwk.to_decoding_key();
+                    return jwk.to_decoding_key_checked(algorithm);
                 }
             } else {
                 needs_refresh = true;
@@ -163,7 +212,20 @@ impl JwksCache {
 
         if needs_refresh {
             // Kid not found (or cache was stale). Attempt refresh, then try again.
-            self.try_refresh(force_refresh).await?;
+            if let Err(err) = self.try_refresh(force_refresh).await {
+                // If we already hold a (stale) key for this kid, keep serving it
+                // rather than failing auth on a transient JWKS outage. Signing keys
+                // rotate slowly, so a stale-but-valid key is safe to use. Only a
+                // genuinely unknown kid hard-fails here.
+                if had_cached_key {
+                    let cache = self.inner.read().await;
+                    if let Some(jwk) = cache.keys.get(kid) {
+                        warn!(kid, error = %err, "JWKS refresh failed; using stale cached key");
+                        return jwk.to_decoding_key_checked(algorithm);
+                    }
+                }
+                return Err(err);
+            }
         }
 
         let cache = self.inner.read().await;
@@ -171,7 +233,7 @@ impl JwksCache {
             .keys
             .get(kid)
             .ok_or_else(|| SecurityError::UnknownKeyId(kid.to_string()))?
-            .to_decoding_key()
+            .to_decoding_key_checked(algorithm)
     }
 
     /// Force a refresh of the JWKS cache from the remote endpoint.
@@ -187,9 +249,9 @@ impl JwksCache {
             .error_for_status()
             .map_err(|e| SecurityError::JwksFetchError(e.to_string()))?;
 
-        let jwks: JwksResponse = response
-            .json()
-            .await
+        let body = read_body_limited(response, self.config.jwks_max_response_bytes).await?;
+
+        let jwks: JwksResponse = serde_json::from_slice(&body)
             .map_err(|e| SecurityError::JwksFetchError(format!("Failed to parse JWKS: {e}")))?;
 
         let mut keys = HashMap::new();
@@ -197,6 +259,7 @@ impl JwksCache {
             if let Some(kid) = &jwk.kid {
                 let cached = CachedJwk {
                     kty: jwk.kty.clone(),
+                    alg: jwk.alg.clone(),
                     n: jwk.n.clone(),
                     e: jwk.e.clone(),
                     x: jwk.x.clone(),
@@ -250,112 +313,81 @@ impl JwksCache {
     }
 }
 
-fn is_stale(last_refresh: Option<Instant>, ttl: Duration) -> bool {
+/// The JWK key type (`kty`) expected for a given JWT signing algorithm.
+#[doc(hidden)]
+pub fn kty_for_algorithm(algorithm: Algorithm) -> &'static str {
+    use Algorithm::*;
+    match algorithm {
+        HS256 | HS384 | HS512 => "oct",
+        RS256 | RS384 | RS512 | PS256 | PS384 | PS512 => "RSA",
+        ES256 | ES384 => "EC",
+        EdDSA => "OKP",
+    }
+}
+
+/// Reject a non-HTTPS JWKS URL unless insecure fetching is explicitly allowed.
+#[doc(hidden)]
+pub fn validate_jwks_url(url: &str, allow_insecure: bool) -> Result<(), SecurityError> {
+    let is_https = url
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"));
+    if is_https || allow_insecure {
+        Ok(())
+    } else {
+        Err(SecurityError::JwksFetchError(format!(
+            "Refusing to fetch JWKS over a non-HTTPS URL: {url}. \
+             Use https:// or call SecurityConfig::allow_insecure_jwks_url() for local development."
+        )))
+    }
+}
+
+/// Read a response body, failing if it exceeds `max_bytes`.
+///
+/// Checks the advertised `Content-Length` up front, then streams chunks so a
+/// missing or lying `Content-Length` still cannot exhaust memory.
+async fn read_body_limited(
+    response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Vec<u8>, SecurityError> {
+    if let Some(len) = response.content_length() {
+        if len > max_bytes {
+            return Err(SecurityError::JwksFetchError(format!(
+                "JWKS response too large: {len} bytes (max {max_bytes})"
+            )));
+        }
+    }
+
+    let max = max_bytes as usize;
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| SecurityError::JwksFetchError(e.to_string()))?
+    {
+        if body.len() + chunk.len() > max {
+            return Err(SecurityError::JwksFetchError(format!(
+                "JWKS response exceeded max size of {max_bytes} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
+}
+
+#[doc(hidden)]
+pub fn is_stale(last_refresh: Option<Instant>, ttl: Duration) -> bool {
     match last_refresh {
         None => true,
         Some(ts) => ts.elapsed() >= ttl,
     }
 }
 
-fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> bool {
+#[doc(hidden)]
+pub fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> bool {
     match last_attempt {
         None => true,
         Some(ts) => ts.elapsed() >= min_interval,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{can_attempt, is_stale};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn stale_when_never_refreshed() {
-        assert!(is_stale(None, Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn stale_when_ttl_elapsed() {
-        let ts = Instant::now() - Duration::from_secs(61);
-        assert!(is_stale(Some(ts), Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn not_stale_before_ttl() {
-        let ts = Instant::now() - Duration::from_secs(10);
-        assert!(!is_stale(Some(ts), Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn can_attempt_when_never_attempted() {
-        assert!(can_attempt(None, Duration::from_secs(10)));
-    }
-
-    #[test]
-    fn can_attempt_when_interval_elapsed() {
-        let ts = Instant::now() - Duration::from_secs(11);
-        assert!(can_attempt(Some(ts), Duration::from_secs(10)));
-    }
-
-    #[test]
-    fn cannot_attempt_too_soon() {
-        let ts = Instant::now() - Duration::from_secs(3);
-        assert!(!can_attempt(Some(ts), Duration::from_secs(10)));
-    }
-
-    // ── CachedJwk key type tests ──
-
-    use super::CachedJwk;
-
-    #[test]
-    fn rsa_key_requires_n_and_e() {
-        let jwk = CachedJwk {
-            kty: "RSA".into(),
-            n: None,
-            e: Some("AQAB".into()),
-            x: None,
-            y: None,
-        };
-        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
-        assert!(err.contains("'n' component"));
-    }
-
-    #[test]
-    fn ec_key_requires_x_and_y() {
-        let jwk = CachedJwk {
-            kty: "EC".into(),
-            n: None,
-            e: None,
-            x: Some("test".into()),
-            y: None,
-        };
-        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
-        assert!(err.contains("'y' component"));
-    }
-
-    #[test]
-    fn okp_key_requires_x() {
-        let jwk = CachedJwk {
-            kty: "OKP".into(),
-            n: None,
-            e: None,
-            x: None,
-            y: None,
-        };
-        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
-        assert!(err.contains("'x' component"));
-    }
-
-    #[test]
-    fn unsupported_key_type_rejected() {
-        let jwk = CachedJwk {
-            kty: "unknown".into(),
-            n: None,
-            e: None,
-            x: None,
-            y: None,
-        };
-        let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
-        assert!(err.contains("Unsupported key type"));
     }
 }

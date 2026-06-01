@@ -69,6 +69,7 @@ impl JwtClaimsValidator {
     /// 2. Key retrieval (from JWKS cache or static key)
     /// 3. Signature validation
     /// 4. Standard claims validation (iss, aud, exp, nbf)
+    /// 5. Subject presence: the token is rejected if it has no non-empty `sub` claim
     ///
     /// Returns the validated claims as a JSON value.
     pub async fn validate(&self, token: &str) -> Result<serde_json::Value, SecurityError> {
@@ -98,7 +99,7 @@ impl JwtClaimsValidator {
                 let kid = header.kid.as_deref().ok_or_else(|| {
                     SecurityError::InvalidToken("JWT header missing 'kid' field".into())
                 })?;
-                jwks.get_key(kid).await?
+                jwks.get_key(kid, algorithm).await?
             }
         };
 
@@ -129,11 +130,18 @@ impl JwtClaimsValidator {
                 err
             })?;
 
+        // A token must identify its subject. Without a non-empty `sub`, any
+        // authorization keyed on the user identity would operate on an empty or
+        // ambiguous identifier, so reject it outright.
         let sub = token_data
             .claims
             .get("sub")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                warn!("JWT rejected: missing or empty 'sub' (subject) claim");
+                SecurityError::ValidationFailed("Token has no 'sub' (subject) claim".into())
+            })?;
 
         debug!(sub = %sub, "JWT validated");
         Ok(token_data.claims)

@@ -39,6 +39,12 @@ fn bearer_only_no_token() {
 }
 
 #[test]
+fn extra_whitespace_is_trimmed() {
+    // Extra spaces between scheme and token must not leak into the token.
+    assert_eq!(extract_bearer_token("Bearer   abc123").unwrap(), "abc123");
+}
+
+#[test]
 fn token_with_dots() {
     let result = extract_bearer_token("Bearer eyJ.eyJ.sig");
     assert_eq!(result.unwrap(), "eyJ.eyJ.sig");

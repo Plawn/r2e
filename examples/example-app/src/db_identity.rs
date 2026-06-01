@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Use this when you need user data that isn't in the JWT (e.g., preferences,
 /// profile picture, subscription status).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// Not `Deserialize`: a trusted identity must never be constructible from a
+// request body. Built only via `ClaimsIdentity::from_jwt_claims` after JWT validation.
+#[derive(Clone, Debug, Serialize)]
 pub struct DbUser {
     /// The light identity (JWT claims only)
     pub auth: AuthenticatedUser,

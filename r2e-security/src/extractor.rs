@@ -10,14 +10,15 @@ use crate::jwt::{JwtClaimsValidator, JwtValidator};
 
 /// Extract a Bearer token from the Authorization header value.
 pub fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
-    let parts: Vec<&str> = header_value.splitn(2, ' ').collect();
-    if parts.len() != 2 {
+    let (scheme, token) = header_value
+        .split_once(' ')
+        .ok_or(SecurityError::InvalidAuthScheme)?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
         return Err(SecurityError::InvalidAuthScheme);
     }
-    if !parts[0].eq_ignore_ascii_case("Bearer") {
-        return Err(SecurityError::InvalidAuthScheme);
-    }
-    Ok(parts[1])
+    // Trim surrounding whitespace so e.g. "Bearer  <token>" (extra spaces) does
+    // not leak into the token value.
+    Ok(token.trim())
 }
 
 /// Extract the Bearer token from request headers.

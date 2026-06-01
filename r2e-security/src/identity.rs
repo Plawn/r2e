@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::SecurityError;
 use crate::keycloak;
@@ -224,7 +224,13 @@ impl Default for DefaultIdentityBuilder {
 }
 
 /// Represents an authenticated user extracted from a validated JWT token.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Intentionally **not** `Deserialize`: this is a trusted identity, constructed
+/// only from a cryptographically validated JWT (via [`AuthenticatedUser::from_claims`]
+/// / the `FromRequestParts` extractor). Deriving `Deserialize` would allow it to be
+/// used as a request-body extractor (`Json<AuthenticatedUser>`), letting a client
+/// forge their own `sub`/`roles`/`claims` and bypass authentication.
+#[derive(Clone, Debug, Serialize)]
 pub struct AuthenticatedUser {
     /// Subject claim ("sub") - unique user identifier.
     pub sub: String,
@@ -301,6 +307,11 @@ impl AuthenticatedUser {
 }
 
 /// Build an `AuthenticatedUser` from validated JWT claims using the given role extractor.
+///
+/// `sub` falls back to an empty string only if the claims lack one. Tokens that
+/// reach this function through [`JwtClaimsValidator::validate`](crate::JwtClaimsValidator::validate)
+/// are guaranteed a non-empty `sub` (validation rejects tokens without one); the
+/// fallback only applies when constructing directly from arbitrary claims.
 pub fn build_authenticated_user(
     claims: serde_json::Value,
     role_extractor: &impl RoleExtractor,

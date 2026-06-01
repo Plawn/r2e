@@ -407,8 +407,10 @@ async fn test_me_endpoint() {
     let token = jwt.token_with_claims("user-42", &["user"], Some("test@example.com"));
     let resp = app.get("/me").bearer(&token).send().await;
     resp.assert_ok();
-    let user: AuthenticatedUser = resp.json();
-    assert_eq!(user.sub, "user-42");
+    // AuthenticatedUser is intentionally not Deserialize (it is a trusted identity),
+    // so parse the response body as a plain JSON value for assertions.
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["sub"], "user-42");
 }
 
 #[r2e::test]

@@ -192,6 +192,43 @@ async fn validate_wrong_audience() {
 }
 
 #[r2e_core::test]
+async fn validate_missing_sub() {
+    let validator = test_claims_validator();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({
+        "roles": ["admin"],
+        "iss": TEST_ISSUER, "aud": TEST_AUDIENCE,
+        "exp": now + 3600,
+    });
+    let token = encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(TEST_SECRET),
+    )
+    .unwrap();
+
+    let result = validator.validate(&token).await;
+    let err = result.unwrap_err();
+    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+    assert!(err.to_string().contains("sub"), "error should mention sub: {err}");
+}
+
+#[r2e_core::test]
+async fn validate_empty_sub() {
+    let validator = test_claims_validator();
+    // exp_offset>0 keeps it unexpired; sub is explicitly empty.
+    let token = make_token("", &["admin"], None, 3600);
+
+    let result = validator.validate(&token).await;
+    let err = result.unwrap_err();
+    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+}
+
+#[r2e_core::test]
 async fn validate_malformed_token() {
     let validator = test_claims_validator();
     let result = validator.validate("not.a.jwt").await;
