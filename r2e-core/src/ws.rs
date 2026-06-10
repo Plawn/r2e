@@ -83,7 +83,7 @@ impl WsStream {
     }
 
     /// Send a binary message.
-    pub async fn send_binary(&mut self, data: Vec<u8>) -> Result<(), WsError> {
+    pub async fn send_binary(&mut self, data: impl Into<bytes::Bytes>) -> Result<(), WsError> {
         self.send(Message::Binary(data.into())).await
     }
 

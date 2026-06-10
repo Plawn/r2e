@@ -86,10 +86,9 @@ impl WsTestClient {
     }
 
     /// Send a binary message.
-    pub async fn send_binary(&mut self, data: impl Into<Vec<u8>>) -> Result<(), WsTestError> {
-        let bytes: Vec<u8> = data.into();
+    pub async fn send_binary(&mut self, data: impl Into<bytes::Bytes>) -> Result<(), WsTestError> {
         self.stream
-            .send(Message::Binary(bytes.into()))
+            .send(Message::Binary(data.into()))
             .await
             .map_err(WsTestError::Protocol)
     }
