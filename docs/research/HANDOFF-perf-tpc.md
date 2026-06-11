@@ -29,11 +29,17 @@ Completed and committed (tasks moved to closed in Tasker):
   still returns `tokio::task::JoinHandle<T>`).
   Tests in `r2e-core/tests/rt.rs`. `rt` is reachable as `r2e::rt` via the facade glob.
 
-**Next up**: 535 is now small — migrate r2e-executor's public API (`submit`, `try_submit`,
-`spawn_job`) onto `rt::JobHandle<T>` and fix the TODO site; breaking is fine. Then 536
-(SO_REUSEPORT sharding — delicate piece: orchestrator implements directly or adds an
-adversarial review pass; it must re-apply tcp_nodelay in its accept path, see task notes).
-Wave 2 proxy-mesh items (541, 542) are in the other repo.
+- **535 — executor public API on `rt::JobHandle<T>`** (session 3, 2026-06-11): `submit`/
+  `try_submit` return `Result<JobHandle<T>, RejectedError>`, `spawn_job` goes through
+  `rt::spawn`, TODO(534/535) closed. `JobHandle`/`JoinError` stay in `r2e_core::rt`;
+  r2e-executor re-exports them so `#[async_exec]` codegen emits `#exec_krate::JobHandle`.
+  No `JoinError` extension was needed. Audit caught only cosmetic leftovers (stale
+  `JoinHandle` doc comments in example-executor + builder.rs — the Wave-1 error profile
+  holds: mechanical work fine, narrative omits residues). Commit 7debb27.
+
+**Next up**: 536 (SO_REUSEPORT sharding — delicate piece: orchestrator implements directly
+or adds an adversarial review pass; it must re-apply tcp_nodelay in its accept path, see
+task notes). Wave 2 proxy-mesh items (541, 542) are in the other repo.
 
 ## What this is
 
