@@ -1362,6 +1362,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .and_then(|c| c.try_get::<u32>("server.quic.alt_svc_max_age"))
             .unwrap_or(3600);
 
+        let tcp_nodelay = this.shared.config.as_ref()
+            .and_then(|c| c.try_get::<bool>("server.tcp_nodelay"))
+            .unwrap_or(true);
+
         let (
             app,
             startup_hooks,
@@ -1394,6 +1398,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_async_shutdown_hooks,
             plugin_data,
             shutdown_grace_period,
+            tcp_nodelay,
             #[cfg(feature = "quic")]
             quic_server_config,
         }
@@ -1449,6 +1454,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     shutdown_grace_period: Option<Duration>,
+    tcp_nodelay: bool,
     #[cfg(feature = "quic")]
     quic_server_config: Option<(std::net::SocketAddr, r2e_http::quic::quinn::ServerConfig)>,
 }
@@ -1472,6 +1478,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// The bind address.
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// Whether TCP_NODELAY is enabled for accepted connections.
+    pub fn tcp_nodelay(&self) -> bool {
+        self.tcp_nodelay
     }
 
     /// Start listening and serving requests.
@@ -1611,13 +1622,25 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         };
 
         info!(addr = %self.addr, "R2E server listening");
-        crate::http::serve(
-            listener,
-            self.router
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown_future)
-        .await?;
+        let svc = self.router
+            .into_make_service_with_connect_info::<std::net::SocketAddr>();
+        if self.tcp_nodelay {
+            use crate::http::ListenerExt as _;
+            crate::http::serve(
+                listener.tap_io(|stream| {
+                    if let Err(e) = stream.set_nodelay(true) {
+                        tracing::warn!(error = %e, "failed to set TCP_NODELAY on accepted connection");
+                    }
+                }),
+                svc,
+            )
+            .with_graceful_shutdown(shutdown_future)
+            .await?;
+        } else {
+            crate::http::serve(listener, svc)
+                .with_graceful_shutdown(shutdown_future)
+                .await?;
+        }
 
         // Wait for QUIC endpoint to drain after TCP server stops.
         #[cfg(feature = "quic")]

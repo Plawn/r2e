@@ -499,6 +499,7 @@ AppBuilder::new()
 |---|---|---|
 | `server.host` | String | `"0.0.0.0"` |
 | `server.port` | u16 | `3000` |
+| `server.tcp_nodelay` | bool | `true` |
 
 If keys are missing, defaults are used. This replaces `.serve("0.0.0.0:3000")` for production setups where the address should be configurable per environment.
 

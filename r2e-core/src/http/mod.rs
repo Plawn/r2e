@@ -8,7 +8,7 @@ pub use r2e_http::multipart;
 pub use r2e_http::quic;
 
 pub use r2e_http::{
-    serve, Extension, Json, Router, Error, Uri, Bytes, Body,
+    serve, ListenerExt, Extension, Json, Router, Error, Uri, Bytes, Body,
     ConnectInfo, DefaultBodyLimit, Form, FromRef, FromRequest, FromRequestParts,
     MatchedPath, OptionalFromRequestParts, OriginalUri, Path, Query, RawPathParams,
     Request, State,

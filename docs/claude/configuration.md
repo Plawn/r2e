@@ -298,6 +298,7 @@ Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKe
 |-----|------|---------|-------------|
 | `server.host` | `String` | `"0.0.0.0"` | Bind host for TCP and QUIC |
 | `server.port` | `u16` | `3000` | TCP port |
+| `server.tcp_nodelay` | `bool` | `true` | Set `TCP_NODELAY` on every accepted TCP connection. Disabling Nagle's algorithm reduces latency on small responses at the cost of slightly higher network overhead. |
 | `server.quic.port` | `u16` | — | UDP port for QUIC/HTTP3 (enables QUIC when set) |
 | `server.quic.cert` | `String` | — | PEM certificate chain path (required with `quic.port`) |
 | `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |

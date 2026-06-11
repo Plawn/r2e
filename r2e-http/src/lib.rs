@@ -17,6 +17,7 @@ pub mod multipart;
 pub mod quic;
 
 pub use axum::{serve, Extension, Json, Router, Error};
+pub use axum::serve::ListenerExt;
 pub use axum::http::Uri;
 pub use bytes::Bytes;
 pub use self::extract::{
