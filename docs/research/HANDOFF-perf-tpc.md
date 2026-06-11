@@ -37,9 +37,25 @@ Completed and committed (tasks moved to closed in Tasker):
   `JoinHandle` doc comments in example-executor + builder.rs — the Wave-1 error profile
   holds: mechanical work fine, narrative omits residues). Commit 7debb27.
 
-**Next up**: 536 (SO_REUSEPORT sharding — delicate piece: orchestrator implements directly
-or adds an adversarial review pass; it must re-apply tcp_nodelay in its accept path, see
-task notes). Wave 2 proxy-mesh items (541, 542) are in the other repo.
+- **536 — SO_REUSEPORT sharded serving** (session 3, 2026-06-11): `server.workers: <n>|"per-core"`
+  (cap 1024), new `r2e-core/src/sharded.rs`, lifecycle shared with the single path via an
+  internal `ServeStrategy` enum + `run_inner` (no duplication), tcp_nodelay re-applied per
+  worker, unix-only cfg mirroring socket2's `set_reuse_port` (excl. solaris/illumos/cygwin),
+  dev-reload + sharding unsupported (warns, single listener). `rt` facade gained
+  `spawn_blocking` and `lookup_host`. Implemented by an **Opus subagent** (user's choice) +
+  orchestrator audit + an adversarial review pass — the adversarial pass caught 2 real
+  defects the first audit missed: (1) first-address-only resolution (same bug class as the
+  534 `bind_tcp` audit catch — fixed: all candidates tried for listener 0, remaining
+  workers bind its `local_addr()`), (2) port 0 giving each worker a different ephemeral
+  port (fixed by the same `local_addr()` mechanism, regression-tested). For delicate
+  pieces the adversarial pass stays mandatory regardless of implementing model.
+  Worker-death semantics documented (degraded capacity, no restart — v1 limitation).
+  Commit 210eb15. Side discovery: `--features dev-reload` fails to build on master
+  (pre-existing, beans.rs) → filed as task 549.
+
+**Next up**: 537 (control-plane / data-plane split — also fixes the lazy.rs
+`block_in_place` limitation noted in `NOTE(536→537)` comments). Then 538 (docs + bench).
+Wave 2/3 proxy-mesh items (541, 542, 539-master-part, 540) are in the other repo.
 
 ## What this is
 
