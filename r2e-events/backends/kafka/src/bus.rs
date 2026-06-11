@@ -1,3 +1,6 @@
+// NOTE: The `rdkafka` (librdkafka) consumer is tokio-bound; any tokio APIs
+// that originate from the rdkafka SDK remain on direct tokio and are a
+// documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::future::Future;
 use std::sync::atomic::Ordering;
@@ -165,7 +168,7 @@ impl EventBus for KafkaEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_consumer(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -208,7 +211,7 @@ impl EventBus for KafkaEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_consumer(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -358,7 +361,7 @@ async fn run_consumer(
         tracing::warn!(topic = %topic_name, "Kafka consumer disconnected, reconnecting in {backoff:?}");
         tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = tokio::time::sleep(backoff) => {},
+            _ = r2e_core::rt::sleep(backoff) => {},
         }
         backoff = (backoff * 2).min(max_backoff);
     }
@@ -407,7 +410,7 @@ async fn run_consumer_inner(
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        r2e_core::rt::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }

@@ -1,3 +1,6 @@
+// NOTE: The `pulsar` client library is tokio-bound; any tokio APIs that
+// originate from the pulsar SDK remain on direct tokio and are a documented
+// exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
@@ -189,7 +192,7 @@ impl EventBus for PulsarEventBus {
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_poller(inner_clone, type_id, full_topic, config, cancel).await;
                 });
             }
@@ -232,7 +235,7 @@ impl EventBus for PulsarEventBus {
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_poller(inner_clone, type_id, full_topic, config, cancel).await;
                 });
             }
@@ -392,7 +395,7 @@ async fn run_poller(
         tracing::warn!(topic = %full_topic, "Pulsar poller disconnected, reconnecting in {backoff:?}");
         tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = tokio::time::sleep(backoff) => {},
+            _ = r2e_core::rt::sleep(backoff) => {},
         }
         backoff = (backoff * 2).min(max_backoff);
     }
@@ -446,7 +449,7 @@ async fn run_poller_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "consumer error: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(topic = %full_topic, "consumer stream ended");

@@ -15,6 +15,7 @@ default = []
 integration = []
 
 [dependencies]
+r2e-core = {workspace = true}
 r2e-events = {workspace = true}
 lapin = {workspace = true}
 tokio = {workspace = true, features = ["macros", "rt", "sync", "time"]}

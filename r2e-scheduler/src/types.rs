@@ -86,7 +86,7 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTask for ScheduledTaskDef<T> {
         let state = self.state;
         let task = self.task;
 
-        tokio::spawn(async move {
+        r2e_core::rt::spawn(async move {
             tracing::info!(task = %name, "Scheduled task started");
             match schedule {
                 ScheduleConfig::Interval(interval) => {
@@ -135,13 +135,13 @@ async fn run_interval<T: Clone + Send + Sync + 'static>(
 ) {
     if !initial_delay.is_zero() {
         tokio::select! {
-            _ = tokio::time::sleep(initial_delay) => {},
+            _ = r2e_core::rt::sleep(initial_delay) => {},
             _ = cancel.cancelled() => { return; }
         }
     }
 
-    let mut tick = tokio::time::interval(interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut tick = r2e_core::rt::interval(interval);
+    tick.set_missed_tick_behavior(r2e_core::rt::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = tick.tick() => {
@@ -183,7 +183,7 @@ async fn run_cron<T: Clone + Send + Sync + 'static>(
         let until = (next - now).to_std().unwrap_or(Duration::from_secs(1));
 
         tokio::select! {
-            _ = tokio::time::sleep(until) => {
+            _ = r2e_core::rt::sleep(until) => {
                 tracing::debug!(task = %name, "Executing cron task");
                 task(state.clone()).await;
             }

@@ -205,7 +205,7 @@ impl PoolExecutor {
             return;
         }
         let inner = self.inner.clone();
-        tokio::spawn(async move {
+        r2e_core::rt::spawn(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -261,6 +261,8 @@ impl PoolExecutor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
+        // TODO(534/535): public API returns tokio::task::JoinHandle<T>; migrate
+        // to rt::JobHandle<T> once task 535 updates the public signature.
         let inner = self.inner.clone();
         let shutdown = inner.shutdown.clone();
         tokio::spawn(async move {
@@ -347,7 +349,7 @@ impl PoolExecutor {
                 waiter.await;
             }
         };
-        tokio::time::timeout(timeout, drain).await.is_ok()
+        r2e_core::rt::timeout(timeout, drain).await.is_ok()
     }
 }
 

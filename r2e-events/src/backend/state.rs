@@ -313,7 +313,7 @@ impl BackendState {
         let state = self.clone();
         SubscriptionHandle::new(SubscriptionId(handler_id), move || {
             let state = state.clone();
-            tokio::spawn(async move {
+            r2e_core::rt::spawn(async move {
                 let mut map = state.handlers.write().await;
                 if let Some(th) = map.get_mut(&type_id) {
                     th.entries.retain(|e| e.id != handler_id);
@@ -365,7 +365,7 @@ impl BackendState {
             let permit = self.handler_semaphore.clone()
                 .acquire_owned().await
                 .expect("semaphore closed");
-            tasks.push(tokio::spawn(async move {
+            tasks.push(r2e_core::rt::spawn(async move {
                 let result = h(e, m).await;
                 drop(permit);
                 result
@@ -450,7 +450,7 @@ impl BackendState {
 
             let guard = self.acquire_in_flight();
 
-            tokio::spawn(async move {
+            r2e_core::rt::spawn(async move {
                 let _guard = guard;
                 let result = if let Some(ref policy) = retry_policy {
                     Self::invoke_with_retry(&h, &e, &m, policy).await
@@ -524,7 +524,7 @@ impl BackendState {
             } else {
                 policy.retry_delay
             };
-            tokio::time::sleep(delay).await;
+            r2e_core::rt::sleep(delay).await;
 
             tracing::debug!(
                 attempt = attempt + 1,
@@ -568,7 +568,7 @@ impl BackendState {
                 notified.await;
             }
         };
-        if tokio::time::timeout(timeout, wait).await.is_err() {
+        if r2e_core::rt::timeout(timeout, wait).await.is_err() {
             self.handlers.write().await.clear();
             return Err(EventBusError::Other(format!(
                 "shutdown timed out with {} handlers still in flight",

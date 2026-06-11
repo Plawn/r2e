@@ -5281,6 +5281,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "iggy",
+ "r2e-core",
  "r2e-events",
  "serde",
  "serde_json",
@@ -5294,6 +5295,7 @@ name = "r2e-events-kafka"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "r2e-core",
  "r2e-events",
  "rdkafka",
  "serde",
@@ -5309,6 +5311,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "pulsar",
+ "r2e-core",
  "r2e-events",
  "serde",
  "serde_json",
@@ -5323,6 +5326,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "lapin",
+ "r2e-core",
  "r2e-events",
  "serde",
  "serde_json",

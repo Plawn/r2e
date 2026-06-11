@@ -1,3 +1,7 @@
+// FACADE EXCEPTION: r2e-http sits below r2e-core in the dependency graph
+// (r2e-core depends on r2e-http), so this file cannot use r2e_core::rt.
+// tokio::spawn is called directly here.  The quinn/h3 libraries are also
+// tokio-bound, so this is a permanent documented exception.
 use std::net::SocketAddr;
 use std::sync::Arc;
 use bytes::{Buf, Bytes};

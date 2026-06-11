@@ -17,6 +17,7 @@ dynamic-linking = ["rdkafka/dynamic-linking"]
 integration = []
 
 [dependencies]
+r2e-core = {workspace = true}
 r2e-events = {workspace = true}
 rdkafka = {workspace = true}
 tokio = {workspace = true, features = ["macros", "rt", "sync", "time"]}

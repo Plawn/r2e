@@ -1,3 +1,6 @@
+// NOTE: The `lapin` (AMQP) client library is tokio-bound; any tokio APIs that
+// originate from the lapin SDK remain on direct tokio and are a documented
+// exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::future::Future;
 use std::sync::atomic::Ordering;
@@ -236,7 +239,7 @@ impl EventBus for RabbitMqEventBus {
                 let inner_clone = bus.inner.clone();
                 let queue_clone = queue_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_consumer(inner_clone, type_id, queue_clone, cancel).await;
                 });
             }
@@ -279,7 +282,7 @@ impl EventBus for RabbitMqEventBus {
                 let inner_clone = bus.inner.clone();
                 let queue_clone = queue_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_consumer(inner_clone, type_id, queue_clone, cancel).await;
                 });
             }
@@ -439,7 +442,7 @@ async fn run_consumer(
         tracing::warn!(queue = %queue_name, "RabbitMQ consumer disconnected, reconnecting in {backoff:?}");
         tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = tokio::time::sleep(backoff) => {},
+            _ = r2e_core::rt::sleep(backoff) => {},
         }
         backoff = (backoff * 2).min(max_backoff);
     }
@@ -529,7 +532,7 @@ async fn run_consumer_inner(
                                         .acquire_owned().await.expect("semaphore closed");
                                     let guard = inner.state.acquire_in_flight();
 
-                                    tasks.push(tokio::spawn(async move {
+                                    tasks.push(r2e_core::rt::spawn(async move {
                                         let _guard = guard;
                                         let result = if let Some(ref policy) = retry_policy {
                                             r2e_events::backend::BackendState::invoke_with_retry(&h, &e, &m, policy).await
@@ -593,7 +596,7 @@ async fn run_consumer_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(queue = %queue_name, "consumer error: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(queue = %queue_name, "consumer stream ended");

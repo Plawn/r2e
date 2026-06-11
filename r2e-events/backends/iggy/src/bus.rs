@@ -1,3 +1,6 @@
+// NOTE: The `iggy` client library is tokio-bound; any tokio APIs that originate
+// from the iggy SDK (e.g. the consumer stream driver) remain on direct tokio
+// and are a documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
@@ -203,7 +206,7 @@ impl EventBus for IggyEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_poller(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -246,7 +249,7 @@ impl EventBus for IggyEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                tokio::spawn(async move {
+                r2e_core::rt::spawn(async move {
                     run_poller(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -406,7 +409,7 @@ async fn run_poller(
         tracing::warn!(topic = %topic_name, "Iggy poller disconnected, reconnecting in {backoff:?}");
         tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = tokio::time::sleep(backoff) => {},
+            _ = r2e_core::rt::sleep(backoff) => {},
         }
         backoff = (backoff * 2).min(max_backoff);
     }
@@ -460,7 +463,7 @@ async fn run_poller_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %topic_name, "poll error: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(topic = %topic_name, "consumer stream ended");

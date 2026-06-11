@@ -32,14 +32,14 @@ type ServeHook = Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>;
 /// [`AppBuilder::spawn_service`], so shutdown can await their completion
 /// with a grace deadline before returning.
 #[derive(Clone, Default)]
-struct ServiceHandles(Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>);
+struct ServiceHandles(Arc<Mutex<Vec<crate::rt::JobHandle<()>>>>);
 
 impl ServiceHandles {
-    fn push(&self, handle: tokio::task::JoinHandle<()>) {
+    fn push(&self, handle: crate::rt::JobHandle<()>) {
         self.0.lock().unwrap().push(handle);
     }
 
-    fn drain(&self) -> Vec<tokio::task::JoinHandle<()>> {
+    fn drain(&self) -> Vec<crate::rt::JobHandle<()>> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
 }
@@ -1089,7 +1089,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         self = self.on_start(move |state| async move {
             let service = C::from_state(&state);
-            let join = tokio::spawn(service.start(token));
+            let join = crate::rt::spawn(service.start(token));
             handles.push(join);
             Ok(())
         });
@@ -1483,7 +1483,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         #[cfg(feature = "dev-reload")]
         let listener = crate::dev::get_or_bind_listener(&self.addr)?;
         #[cfg(not(feature = "dev-reload"))]
-        let listener = tokio::net::TcpListener::bind(&self.addr).await?;
+        let listener = crate::rt::bind_tcp(&self.addr).await?;
         self.run_with_listener(listener).await
     }
 
@@ -1574,7 +1574,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 Ok(endpoint) => {
                     #[cfg(not(feature = "dev-reload"))]
                     let ep_for_close = endpoint.clone();
-                    Some(tokio::spawn(async move {
+                    Some(crate::rt::spawn(async move {
                         if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
                             router,
                             endpoint,
@@ -1600,7 +1600,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
         let cancel_for_shutdown = cancel_token.clone();
         let shutdown_future = async move {
-            shutdown_signal().await;
+            crate::rt::shutdown_signal().await;
             for hook in plugin_shutdown_hooks {
                 hook();
             }
@@ -1658,7 +1658,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         };
 
         if let Some(grace) = self.shutdown_grace_period {
-            if tokio::time::timeout(grace, shutdown_phase).await.is_err() {
+            if crate::rt::timeout(grace, shutdown_phase).await.is_err() {
                 tracing::warn!(
                     grace_secs = grace.as_secs(),
                     "Shutdown grace period elapsed; some background tasks did not finish in time"
@@ -1762,31 +1762,3 @@ impl Default for TaskRegistryHandle {
 }
 
 // ── Subsecond hot-reload ─────────────────────────────────────────────────
-
-
-/// Wait for a shutdown signal (Ctrl-C or SIGTERM on Unix).
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to listen for Ctrl-C");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to listen for SIGTERM")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    tracing::info!("Shutdown signal received, starting graceful shutdown");
-}
