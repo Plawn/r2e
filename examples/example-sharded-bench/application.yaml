@@ -1,0 +1,8 @@
+server:
+  host: "127.0.0.1"
+  port: 3000
+  # workers is intentionally absent here → default multi-thread serving.
+  # The benchmark script switches modes at runtime via the environment:
+  #   R2E_SERVER_WORKERS=per-core   → SO_REUSEPORT sharding, one worker per core
+  #   R2E_SERVER_WORKERS=<n>        → n worker threads
+  #   (unset)                       → default single multi-thread runtime

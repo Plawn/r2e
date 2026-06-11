@@ -2,7 +2,7 @@
 
 ## Overview
 
-R2E provides 18 main features, each documented in a dedicated file.
+R2E provides 19 main features, each documented in a dedicated file.
 
 | # | Feature | File | Crate |
 |---|---------|------|-------|
@@ -24,6 +24,7 @@ R2E provides 18 main features, each documented in a dedicated file.
 | 16 | Multipart | [16-multipart.md](./16-multipart.md) | `r2e-http` |
 | 17 | gRPC | [17-grpc.md](./17-grpc.md) | `r2e-grpc` |
 | 18 | QUIC / HTTP/3 | [18-quic.md](./18-quic.md) | `r2e-http` |
+| 19 | Sharded Serving (SO_REUSEPORT) | [19-sharded-serving.md](./19-sharded-serving.md) | `r2e-core` |
 
 ## Crate Architecture
 

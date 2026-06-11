@@ -2298,6 +2298,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-sharded-bench"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "serde",
+ "sqlx",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "example-websocket-chat"
 version = "0.1.0"
 dependencies = [

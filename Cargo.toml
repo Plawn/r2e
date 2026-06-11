@@ -36,6 +36,7 @@ members = [
     "examples/example-microservice",
     "examples/example-oidc",
     "examples/example-executor",
+    "examples/example-sharded-bench",
     "r2e-compile-tests",
 ]
 resolver = "2"

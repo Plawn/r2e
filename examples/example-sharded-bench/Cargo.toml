@@ -1,0 +1,17 @@
+[package]
+name = "example-sharded-bench"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Minimal r2e app used to benchmark SO_REUSEPORT sharded serving
+# (`server.workers`) against the default multi-thread runtime.
+# Three GET endpoints: /plain (plaintext), /json (small JSON), /db (sqlite SELECT).
+# See docs/features/19-sharded-serving.md and tools/bench-sharded.sh.
+
+[dependencies]
+r2e = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
+tracing-subscriber = { workspace = true }
