@@ -206,7 +206,7 @@ impl PoolExecutor {
             return;
         }
         let inner = self.inner.clone();
-        r2e_core::rt::spawn(async move {
+        r2e_core::rt::spawn_ctl(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -264,7 +264,7 @@ impl PoolExecutor {
     {
         let inner = self.inner.clone();
         let shutdown = inner.shutdown.clone();
-        r2e_core::rt::spawn(async move {
+        r2e_core::rt::spawn_ctl(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(tokio::sync::TryAcquireError::Closed) => {

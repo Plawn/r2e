@@ -95,10 +95,52 @@ setting `server.workers` returns:
   immediately, but a worker serve `Err` only propagates as the overall run
   error after shutdown, when all workers are joined. (The single-listener path,
   by contrast, tears the whole server down on a serve error.)
-- **Lazy beans (NOTE 536 → 537).** A worker runs a `current_thread` runtime, so
-  a lazy bean first *resolved from within a worker* requires the
-  `lazy-fallback-runtime` feature (`block_in_place` panics on current-thread
-  runtimes). In practice lazy beans are resolved during state construction on
-  the main multi-thread runtime, so this only bites if a lazy bean is first
-  touched from a worker. The proper fix (a dedicated control-plane runtime) is
-  deferred to task 537.
+
+## Which runtime executes what (control plane / data plane)
+
+Sharded mode splits work across two kinds of runtime:
+
+| Work | Runtime |
+|---|---|
+| HTTP request handling | **HTTP workers** (one `current_thread` runtime per worker — the *data plane*) |
+| Scheduler tasks (`#[scheduled]`) | **Control plane** (the caller's main multi-thread runtime) |
+| `ServiceComponent`s / `spawn_service` | Control plane |
+| Event-bus consumers (`#[consumer]`), per-emit handler dispatch | Control plane |
+| QUIC / HTTP3 endpoint | Control plane |
+| Executor pool jobs (`PoolExecutor::submit`/`try_submit`) | Control plane |
+| Lazy-bean resolution (`#[bean(lazy)]` first-touch) | Control plane |
+
+Each worker thread registers the control-plane handle (`r2e_core::rt::set_control_plane`)
+before entering its runtime. Background work initiated from within a request
+handler is routed back to the control plane via `r2e_core::rt::spawn_ctl`, so the
+worker runtimes serve HTTP and nothing else. When `server.workers` is absent,
+`spawn_ctl` is byte-for-byte equivalent to `spawn` — the default path is
+untouched.
+
+Implication for `#[scheduled]` / `#[consumer]` code: the control plane is a
+multi-thread runtime, so such code must be `Send` (it already is — nothing
+changes for users). Lazy beans first touched from a request handler are now
+resolved on the control plane (see below); no hidden fallback runtime is spun
+up.
+
+### Lazy beans
+
+A lazy bean first touched from within a worker is resolved on the control-plane
+runtime: the worker spawns the factory onto the control plane (via the
+registered handle) and blocks on a channel for the result. It does **not** use
+`block_in_place` (which panics on current-thread runtimes) and does **not**
+require the `lazy-fallback-runtime` feature.
+
+**This stalls the worker.** While the factory runs on the control plane, the
+worker's entire `current_thread` runtime is blocked waiting for the result —
+every other in-flight connection on that worker stops being served until the
+factory completes. The path exists so a worker-side first-touch is *correct*,
+not so it is cheap: resolve lazy beans eagerly during state construction (which
+runs on the main runtime before serving) if they can be touched from request
+handlers. If the factory panics, the original panic payload is re-raised on the
+worker thread.
+
+Known limitation: the circular-lazy-dependency detector does not see across
+threads, so a factory that circularly re-touches the bean being resolved on a
+worker deadlocks instead of panicking with a cycle trace. This already held with
+the previous `lazy-fallback-runtime` behavior.

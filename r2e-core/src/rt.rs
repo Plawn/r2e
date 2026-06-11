@@ -9,10 +9,22 @@
 //!
 //! # What is in scope
 //!
-//! - Task spawning: [`spawn`], [`spawn_blocking`] → [`JobHandle<T>`]
+//! - Task spawning: [`spawn`], [`spawn_blocking`], [`spawn_ctl`] → [`JobHandle<T>`]
+//! - Control-plane handle: [`set_control_plane`], [`current_handle`]
 //! - Time: [`sleep`], [`timeout`], [`interval`]
 //! - Network: [`bind_tcp`], [`lookup_host`]
 //! - Signals: [`shutdown_signal`]
+//!
+//! # Control-plane / data-plane split
+//!
+//! In sharded mode (`server.workers`), HTTP requests are served on N
+//! `current_thread` worker runtimes (the *data plane*), while all non-HTTP work
+//! — scheduler tasks, services, event consumers, QUIC, executor jobs, lazy-bean
+//! resolution — must run on the caller's main multi-thread runtime (the
+//! *control plane*). [`spawn_ctl`] routes a future onto the control plane when a
+//! worker thread has registered the control-plane handle (see
+//! [`set_control_plane`]); otherwise it is byte-for-byte equivalent to
+//! [`spawn`].
 //!
 //! # Explicitly out of scope
 //!
@@ -143,6 +155,63 @@ where
     T: Send + 'static,
 {
     JobHandle(tokio::spawn(future))
+}
+
+// ── Control plane ───────────────────────────────────────────────────────────
+
+thread_local! {
+    /// The control-plane runtime handle for this thread, if any.
+    ///
+    /// This is a thread-local (not a global `OnceLock`) on purpose: a process
+    /// can run several r2e apps with distinct runtimes (the test suite does this
+    /// constantly). A global handle would pin the first app's runtime and make
+    /// later apps spawn onto a possibly-dropped runtime. The thread-local is set
+    /// only on sharded worker threads (see [`set_control_plane`]), scoping the
+    /// control plane to the app that created the worker.
+    static CONTROL_PLANE: std::cell::RefCell<Option<tokio::runtime::Handle>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Register `handle` as the control-plane runtime for the current thread.
+///
+/// Called by each sharded worker thread at startup so that work initiated from
+/// within a request handler (anything reaching [`spawn_ctl`], including
+/// lazy-bean first-touch) is routed onto the caller's main multi-thread runtime
+/// rather than the worker's `current_thread` runtime.
+pub fn set_control_plane(handle: tokio::runtime::Handle) {
+    CONTROL_PLANE.with(|cp| *cp.borrow_mut() = Some(handle));
+}
+
+/// Returns the control-plane handle registered for the current thread, if any.
+pub(crate) fn control_plane_handle() -> Option<tokio::runtime::Handle> {
+    CONTROL_PLANE.with(|cp| cp.borrow().clone())
+}
+
+/// The handle of the runtime currently driving this thread.
+///
+/// Thin wrapper over `tokio::runtime::Handle::current()` kept inside the facade
+/// so call sites do not touch `tokio::runtime` directly. Panics if called
+/// outside a runtime context (same contract as the underlying tokio call).
+pub fn current_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::current()
+}
+
+/// Spawn a task on the control-plane runtime, returning a [`JobHandle<T>`].
+///
+/// When a control-plane handle has been registered on the current thread (only
+/// on sharded worker threads, via [`set_control_plane`]), the future is spawned
+/// onto that runtime — keeping background work off the HTTP worker runtimes.
+/// When no handle is registered (the default, non-sharded path), this is
+/// byte-for-byte equivalent to [`spawn`].
+pub fn spawn_ctl<F, T>(future: F) -> JobHandle<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    match control_plane_handle() {
+        Some(handle) => JobHandle(handle.spawn(future)),
+        None => JobHandle(tokio::spawn(future)),
+    }
 }
 
 /// Run a blocking closure on the runtime's blocking thread pool, returning a

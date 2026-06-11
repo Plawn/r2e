@@ -65,3 +65,62 @@ async fn join_error_is_panic_on_panicking_task() {
     assert!(err.is_panic(), "expected panic, got: {err}");
     assert!(!err.is_cancelled());
 }
+
+#[tokio::test]
+async fn spawn_ctl_without_control_plane_behaves_like_spawn() {
+    // No control-plane handle registered on this thread → spawn_ctl is a plain
+    // spawn onto the current runtime.
+    let handle = rt::spawn_ctl(async { 7u32 });
+    let result = handle.await.expect("task should not fail");
+    assert_eq!(result, 7);
+}
+
+#[test]
+fn spawn_ctl_with_control_plane_runs_on_control_plane_runtime() {
+    use tokio::runtime::RuntimeFlavor;
+
+    // The control plane is a multi-thread runtime.
+    let control_plane = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("build control-plane runtime");
+    let cp_handle = control_plane.handle().clone();
+
+    // Simulate a sharded worker thread: a current_thread runtime on a thread
+    // where the control-plane handle is registered.
+    let worker = std::thread::Builder::new()
+        .name("test-worker".to_string())
+        .spawn(move || {
+            rt::set_control_plane(cp_handle);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build worker runtime");
+            rt.block_on(async {
+                // From inside the worker's current_thread runtime, spawn_ctl
+                // must land on the multi-thread control plane.
+                let flavor = rt::spawn_ctl(async {
+                    tokio::runtime::Handle::current().runtime_flavor()
+                })
+                .await
+                .expect("ctl task should not fail");
+                assert_eq!(
+                    flavor,
+                    RuntimeFlavor::MultiThread,
+                    "spawn_ctl must execute on the multi-thread control plane"
+                );
+
+                // A plain spawn, by contrast, stays on the worker's current_thread runtime.
+                let local_flavor = rt::spawn(async {
+                    tokio::runtime::Handle::current().runtime_flavor()
+                })
+                .await
+                .expect("local task should not fail");
+                assert_eq!(local_flavor, RuntimeFlavor::CurrentThread);
+            });
+        })
+        .expect("spawn worker thread");
+
+    worker.join().expect("worker thread should not panic");
+}

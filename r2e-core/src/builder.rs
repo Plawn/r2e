@@ -1782,6 +1782,24 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 let router = self.router.clone();
                 let tcp_nodelay = self.tcp_nodelay;
                 let cancel_for_workers = cancel_token.clone();
+                // Capture the main (multi-thread) runtime handle as the control
+                // plane. Worker threads register it so that background work
+                // initiated from request handlers (and lazy-bean first-touch)
+                // runs here, not on the workers' current_thread runtimes.
+                let control_plane = crate::rt::current_handle();
+                if control_plane.runtime_flavor()
+                    != tokio::runtime::RuntimeFlavor::MultiThread
+                {
+                    // A current_thread control plane mostly works, but a
+                    // worker-side lazy first-touch would block the worker on a
+                    // runtime that may itself be busy — sharding is designed
+                    // for a multi-thread main runtime.
+                    tracing::warn!(
+                        "server.workers is set but run() is driven by a \
+                         non-multi-thread runtime; the control plane should be \
+                         a multi-thread runtime (use #[tokio::main])"
+                    );
+                }
                 // `serve_sharded` blocks the calling thread joining the worker
                 // threads, so run it on a blocking task to avoid stalling the
                 // main runtime (which must keep driving the shutdown future).
@@ -1791,6 +1809,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         &addrs,
                         workers,
                         tcp_nodelay,
+                        control_plane,
                         cancel_for_workers,
                     )
                 })

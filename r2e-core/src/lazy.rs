@@ -120,14 +120,62 @@ fn resolve_lazy_factory<T>(
 where
     T: Send + 'static,
 {
-    // NOTE(536→537): A sharded SO_REUSEPORT worker runs a `current_thread`
-    // runtime, so a lazy bean first resolved from within a worker takes the
-    // non-MultiThread branch below and requires the `lazy-fallback-runtime`
-    // feature (block_in_place panics on current_thread runtimes). The proper
-    // fix — resolving lazy beans on a dedicated control-plane runtime — is
-    // deferred to task 537. In practice lazy beans are resolved during state
-    // construction on the main multi-thread runtime, so this only bites if a
-    // lazy bean is first touched from a worker.
+    // Control-plane resolution (sharded mode): a sharded SO_REUSEPORT worker
+    // runs a `current_thread` runtime, so a lazy bean first touched from within
+    // a worker cannot use `block_in_place` (it panics on current_thread
+    // runtimes). When the worker thread has a control-plane handle registered
+    // (see `crate::rt::set_control_plane`), resolve the factory on the
+    // control-plane (main multi-thread) runtime and block this thread on a
+    // channel for the result. We deliberately do NOT use `Handle::block_on` /
+    // `Runtime::block_on` here: both panic when called from within an async
+    // execution context, which is exactly where a worker-side first-touch
+    // happens.
+    //
+    // CAUTION: while this thread waits on `recv()`, the worker's entire
+    // `current_thread` runtime is stalled — every other in-flight connection
+    // on this worker stops being polled until the factory completes. Lazy
+    // beans should be resolved eagerly during state construction; this path
+    // exists so a worker-side first-touch is *correct*, not so it is cheap.
+    //
+    // Known limitation: the circular-lazy-dependency detector (`RESOLVING`
+    // thread-local) does not see across threads. A factory running on the
+    // control plane that circularly re-touches the bean being resolved on a
+    // worker deadlocks instead of panicking with a cycle trace. This limitation
+    // already existed with the `lazy-fallback-runtime` fallback (whose factory
+    // also ran on other threads); same-thread detection on the main runtime is
+    // unaffected (this branch is never active there).
+    if let Some(handle) = crate::rt::control_plane_handle() {
+        tracing::debug!(
+            bean = std::any::type_name::<T>(),
+            "resolving lazy bean on the control-plane runtime"
+        );
+        // Two-stage spawn so the factory's JoinHandle outcome (value, panic
+        // payload, cancellation) crosses the thread boundary intact: the
+        // second task awaits the first and forwards the join result over the
+        // channel.
+        let factory_task = handle.spawn(factory());
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        handle.spawn(async move {
+            // If this send fails, the receiver was dropped — nothing to do.
+            let _ = tx.send(factory_task.await);
+        });
+        return match rx.recv() {
+            Ok(Ok(value)) => value,
+            // Re-raise the factory's own panic on this thread so the caller
+            // sees the original payload, not a generic message.
+            Ok(Err(join_err)) if join_err.is_panic() => {
+                std::panic::resume_unwind(join_err.into_panic())
+            }
+            Ok(Err(join_err)) => panic!(
+                "lazy bean factory task was cancelled on the control plane: {join_err}"
+            ),
+            Err(_) => panic!(
+                "control-plane runtime shut down while resolving lazy bean {}",
+                std::any::type_name::<T>()
+            ),
+        };
+    }
+
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
@@ -162,6 +210,21 @@ where
             }
         }
     }
+}
+
+/// Test-only accessor exercising the real [`resolve_lazy_factory`] path.
+///
+/// Exposed as `pub` + `#[doc(hidden)]` (repo convention) so integration tests in
+/// `tests/` can drive control-plane lazy resolution without `#[cfg(test)]`
+/// visibility hacks. Not part of the public API.
+#[doc(hidden)]
+pub fn __resolve_lazy_factory_for_tests<T>(
+    factory: Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>,
+) -> T
+where
+    T: Send + 'static,
+{
+    resolve_lazy_factory(factory)
 }
 
 #[cfg(feature = "lazy-fallback-runtime")]

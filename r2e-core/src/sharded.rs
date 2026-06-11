@@ -26,17 +26,28 @@
 //! both are requested, sharding is ignored and the single-listener path is
 //! used (with a `tracing::warn!`).
 //!
-//! # Lazy beans (NOTE 536 → 537)
+//! # Control plane / data plane
 //!
-//! Each worker runs a `current_thread` runtime. If a lazy bean is resolved
-//! from within a worker (i.e. during request handling on a worker runtime),
-//! `crate::lazy::resolve_lazy_factory` cannot use `block_in_place` (it panics
-//! on current-thread runtimes) and instead requires the
-//! `lazy-fallback-runtime` feature, which spins up a dedicated fallback
-//! runtime. The proper fix (resolving lazy beans on a separate control-plane
-//! runtime) is deferred to task 537. In practice lazy beans are resolved once
-//! during state construction on the main (multi-thread) runtime, so this only
-//! bites if a lazy bean is first touched from a worker.
+//! Each worker runs a `current_thread` runtime and serves HTTP requests only
+//! (the *data plane*). All non-HTTP work — scheduler tasks, services, event
+//! consumers, QUIC, executor jobs — runs on the caller's main multi-thread
+//! runtime (the *control plane*), which keeps driving the lifecycle while the
+//! workers serve. Each worker thread registers the control-plane handle via
+//! [`crate::rt::set_control_plane`] before entering its runtime, so background
+//! work initiated from within a request handler (anything reaching
+//! [`crate::rt::spawn_ctl`]) is routed back onto the control plane rather than
+//! the worker's `current_thread` runtime.
+//!
+//! # Lazy beans
+//!
+//! A lazy bean first touched from within a worker is resolved on the
+//! control-plane runtime: because the worker registered the control-plane
+//! handle, [`crate::lazy`]'s `resolve_lazy_factory` spawns the factory on the
+//! control plane and blocks the worker on a channel for the result (it cannot
+//! use `block_in_place`, which panics on current-thread runtimes). No hidden
+//! `lazy-fallback-runtime` is spun up. In practice lazy beans are resolved once
+//! during state construction on the main runtime, so the worker path only bites
+//! if a lazy bean is first touched from a worker.
 
 use crate::config::R2eConfig;
 
@@ -151,6 +162,7 @@ mod imp {
         addrs: &[SocketAddr],
         workers: usize,
         tcp_nodelay: bool,
+        control_plane: tokio::runtime::Handle,
         cancel_token: CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Pre-create the listeners on the main thread so that a bind failure
@@ -191,9 +203,15 @@ mod imp {
         for (i, std_listener) in std_listeners.into_iter().enumerate() {
             let router = router.clone();
             let child_token = cancel_token.child_token();
+            let control_plane = control_plane.clone();
             let handle = std::thread::Builder::new()
                 .name(format!("r2e-worker-{i}"))
                 .spawn(move || -> Result<(), String> {
+                    // Register the control-plane handle so background work
+                    // initiated from request handlers (rt::spawn_ctl) and
+                    // lazy-bean first-touch run on the main multi-thread
+                    // runtime, not this worker's current_thread runtime.
+                    crate::rt::set_control_plane(control_plane);
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()

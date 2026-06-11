@@ -156,7 +156,7 @@ impl LocalEventBus {
                         .acquire_owned()
                         .await
                         .expect("semaphore closed");
-                    let handle = r2e_core::rt::spawn(async move {
+                    let handle = r2e_core::rt::spawn_ctl(async move {
                         let _guard = InFlightGuard { in_flight, in_flight_zero };
                         let result = h(e, m).await;
                         drop(permit);
@@ -168,7 +168,7 @@ impl LocalEventBus {
                     tasks.push(handle);
                 }
                 None => {
-                    let handle = r2e_core::rt::spawn(async move {
+                    let handle = r2e_core::rt::spawn_ctl(async move {
                         let _guard = InFlightGuard { in_flight, in_flight_zero };
                         let result = h(e, m).await;
                         if let HandlerResult::Nack(ref reason) = result {
@@ -233,7 +233,9 @@ impl EventBus for LocalEventBus {
                 move || {
                     let handlers = handlers_for_unsub.clone();
                     // Always spawn a task to avoid borrow issues with try_write.
-                    r2e_core::rt::spawn(async move {
+                    // Unsubscribe can be triggered from a request handler, so
+                    // route to the control plane in sharded mode.
+                    r2e_core::rt::spawn_ctl(async move {
                         let mut map = handlers.write().await;
                         if let Some(entries) = map.get_mut(&type_id) {
                             entries.retain(|e| e.id != id);

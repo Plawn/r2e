@@ -313,7 +313,9 @@ impl BackendState {
         let state = self.clone();
         SubscriptionHandle::new(SubscriptionId(handler_id), move || {
             let state = state.clone();
-            r2e_core::rt::spawn(async move {
+            // Unsubscribe can be triggered from a request handler, so route to
+            // the control plane in sharded mode.
+            r2e_core::rt::spawn_ctl(async move {
                 let mut map = state.handlers.write().await;
                 if let Some(th) = map.get_mut(&type_id) {
                     th.entries.retain(|e| e.id != handler_id);
@@ -365,7 +367,8 @@ impl BackendState {
             let permit = self.handler_semaphore.clone()
                 .acquire_owned().await
                 .expect("semaphore closed");
-            tasks.push(r2e_core::rt::spawn(async move {
+            // Reachable from `emit_and_wait` in a request handler → control plane.
+            tasks.push(r2e_core::rt::spawn_ctl(async move {
                 let result = h(e, m).await;
                 drop(permit);
                 result
@@ -450,6 +453,8 @@ impl BackendState {
 
             let guard = self.acquire_in_flight();
 
+            // The poller loop already runs on the control plane (registered at
+            // startup), so plain `spawn` keeps handler tasks there.
             r2e_core::rt::spawn(async move {
                 let _guard = guard;
                 let result = if let Some(ref policy) = retry_policy {
