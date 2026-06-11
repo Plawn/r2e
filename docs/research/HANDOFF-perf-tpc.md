@@ -75,8 +75,29 @@ Completed and committed (tasks moved to closed in Tasker):
   limitation: cross-thread circular lazy deps deadlock instead of panicking with a
   trace (pre-existing with lazy-fallback-runtime). Commit b525cba.
 
-**Next up**: 538 (docs + bench, sharded vs multi-thread).
-Wave 2/3 proxy-mesh items (541, 542, 539-master-part, 540) are in the other repo.
+- **538 — thread-per-core docs + benchmark** (session 4, 2026-06-11): extended the
+  existing `docs/features/19-sharded-serving.md` (536/537 had already created it — no
+  new file) with "When to use it", "Benchmark" and "Future directions" (options C/D
+  preserved from the research doc); new `examples/example-sharded-bench` (/plain,
+  /json, /db sqlite; mode switched at runtime via `R2E_SERVER_WORKERS` env overlay)
+  + `tools/bench-sharded.sh` (oha, both modes, markdown table); CLAUDE.md routing
+  row + features README index. Opus subagent + audit + adversarial pass. The audit's
+  own re-run **invalidated the subagent's committed numbers**: its run happened under
+  disk-full IO pressure and showed default winning 1.7–3.7× everywhere; three clean
+  re-runs showed default ~10–30% ahead on /plain & /json with the ranking FLIPPING on
+  one run, and only /db stable (~1.6× default). Table replaced with a clean run and
+  the narrative rewritten around variance — macOS numbers are indicative only, the
+  committed script is for the real Linux run (still TODO, table has an empty Linux
+  block). Audit also fixed: hard-coded `/opt/homebrew/bin/oha` (script is *for*
+  Linux re-runs), subshell PID semantics (`exec`), scratch/RESULTS_DIR leaks on
+  early exit. Adversarial pass: `JobHandle` routing-keyword collision with
+  executor.md (dropped), sharded-mode thread-count asymmetry now noted in
+  methodology, unused deps removed. Commit 6c79bf5.
+
+**r2e side of the plan is COMPLETE** (534, 535, 536, 537, 538, 544 all closed).
+**Next up**: Wave 2/3 proxy-mesh items (541, 542, 539-master-part, 540) in the
+proxy-mesh repo, plus the deferred Linux benchmark run (fill the Linux table in
+`docs/features/19-sharded-serving.md` via `tools/bench-sharded.sh`).
 
 ## What this is
 
