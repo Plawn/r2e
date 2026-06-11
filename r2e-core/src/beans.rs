@@ -842,7 +842,7 @@ impl BeanRegistry {
             .collect();
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
         for (i, reg) in beans.iter().enumerate() {
-            for (dep_id, _) in &reg.dependencies {
+            for (dep_id, _) in reg.dependencies {
                 if let Some(&dep_idx) = id_to_idx.get(dep_id) {
                     dependents[dep_idx].push(i);
                 }
@@ -1361,7 +1361,7 @@ impl BeanRegistry {
         }
 
         // 3. Fingerprints of all bean dependencies (transitively propagated)
-        for (dep_id, _) in &reg.dependencies {
+        for (dep_id, _) in reg.dependencies {
             if let Some(&dep_fp) = dep_fingerprints.get(dep_id) {
                 dep_fp.hash(&mut hasher);
             }

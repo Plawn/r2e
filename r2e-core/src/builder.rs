@@ -1480,6 +1480,9 @@ enum ServeStrategy {
     /// SO_REUSEPORT sharded serving: `workers` worker threads, each with its
     /// own `current_thread` runtime and listener on the bound address (first
     /// candidate from `addrs` that binds).
+    // Under dev-reload the constructing path (`run_sharded`) is compiled out
+    // (sharding + hot-reload is unsupported), so the variant is never built.
+    #[cfg_attr(feature = "dev-reload", allow(dead_code))]
     Sharded {
         #[allow(dead_code)]
         addrs: Vec<std::net::SocketAddr>,

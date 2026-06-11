@@ -11,6 +11,7 @@ R2E is **not in production yet**. Breaking changes are always allowed — no nee
 ```bash
 cargo build --workspace            # Build all crates
 cargo check --workspace            # Check all crates (faster, no codegen)
+cargo check -p r2e-core --features dev-reload   # dev-reload is off by default; check it explicitly
 cargo run -p example-app           # Run the example app (serves on 0.0.0.0:3000)
 cargo test --workspace             # Run tests
 cargo build -p <crate-name>        # Build a specific crate
