@@ -1,6 +1,7 @@
 # Methodology — Subagent implementation + orchestrator audit
 
 > Established 2026-06-11 while implementing Wave 1 of the perf/TPC plan (tasks 544, 534).
+> Refined through sessions 3–4 (536, 537, 538) — see "Refinements" at the bottom.
 > Read this before resuming the task waves in `HANDOFF-perf-tpc.md`.
 
 ## The pattern
@@ -64,3 +65,27 @@ and audits across the whole session.
 `in_progress` at spawn → `in_review` after audit+fixes → `closed` after commit.
 Note: the Tasker MCP can be slow; a "stuck" call may have landed server-side — on version
 conflict, re-fetch before retrying.
+
+## Refinements (sessions 3–4, tasks 536/537/538)
+
+- **Implementing model is Opus** (user's choice since 536). The Wave-1 error profile
+  (mechanical work reliable, implicit invariants fallible) still holds in attenuated
+  form — the audit is NOT optional with a stronger implementer.
+- **Adversarial review pass is mandatory on delicate pieces, regardless of the
+  implementing model.** A second Opus agent prompted to REFUTE (find defects, wrong
+  claims, things that invalidate the work — not to summarize). It caught 2 real defects
+  on 536 and 2 on 537 that the orchestrator's own line-by-line audit had missed, and 3
+  retained findings on 538. Findings come back with confidence levels; the orchestrator
+  triages — some get rejected as overstated (one on 537).
+- **The orchestrator re-runs measurements independently.** New rule from 538: the
+  subagent's benchmark run happened under disk-full IO pressure and produced plausible,
+  internally-consistent, WRONG numbers (default 1.7–3.7× ahead everywhere) with a
+  confident causal narrative fitted to them. Three clean orchestrator re-runs showed a
+  much smaller gap and a ranking flip on one run. Green tests + committed tables are not
+  evidence for *data*; for any task that produces numbers, the orchestrator re-runs them
+  (several times, to characterize variance) before letting a narrative rest on a single
+  sample. Prefer reporting variance honestly over a clean story.
+- **Self-contained prompt also imposes the report format** ("raw data for an
+  orchestrator": files changed, decisions taken where latitude was given, exact
+  verification commands + results, exceptions/deferrals/surprises). This has worked
+  well — keep it.
