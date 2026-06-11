@@ -20,6 +20,7 @@ pub mod plugins;
 pub mod prelude;
 pub mod request_id;
 pub mod service;
+pub mod sharded;
 pub mod secure_headers;
 pub mod sse;
 pub mod state;

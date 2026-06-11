@@ -40,8 +40,14 @@ bytes = {workspace = true}
 futures-core = {workspace = true}
 r2e-devtools = {workspace = true, optional = true}
 
+[target.'cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))))'.dependencies]
+socket2 = {workspace = true}
+
 [dev-dependencies]
 tempfile = {workspace = true}
 http-body-util = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 tower = {workspace = true, features = ["util"]}
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

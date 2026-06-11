@@ -9,9 +9,9 @@
 //!
 //! # What is in scope
 //!
-//! - Task spawning: [`spawn`] → [`JobHandle<T>`]
+//! - Task spawning: [`spawn`], [`spawn_blocking`] → [`JobHandle<T>`]
 //! - Time: [`sleep`], [`timeout`], [`interval`]
-//! - Network: [`bind_tcp`]
+//! - Network: [`bind_tcp`], [`lookup_host`]
 //! - Signals: [`shutdown_signal`]
 //!
 //! # Explicitly out of scope
@@ -26,6 +26,9 @@
 //!   `r2e-http` sits *below* `r2e-core` in the dependency graph (r2e-core
 //!   depends on r2e-http) and therefore cannot use this module.  The quinn/h3
 //!   libraries are tokio-bound anyway.
+//! - `r2e-core/src/sharded.rs` — constructs `current_thread` worker runtimes
+//!   via `tokio::runtime::Builder` directly.  Runtime *construction* is the
+//!   sharding mechanism itself, not a touchpoint to abstract.
 
 use std::future::Future;
 use std::io;
@@ -142,6 +145,18 @@ where
     JobHandle(tokio::spawn(future))
 }
 
+/// Run a blocking closure on the runtime's blocking thread pool, returning a
+/// [`JobHandle<T>`].
+///
+/// Equivalent to `tokio::task::spawn_blocking`.
+pub fn spawn_blocking<F, T>(f: F) -> JobHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    JobHandle(tokio::task::spawn_blocking(f))
+}
+
 /// Wait for `duration` to elapse.
 ///
 /// Equivalent to `tokio::time::sleep`.
@@ -178,6 +193,25 @@ pub fn interval(period: Duration) -> Interval {
 /// call site is isolated.
 pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<tokio::net::TcpListener> {
     tokio::net::TcpListener::bind(addr).await
+}
+
+/// Resolve `addr` to all its [`std::net::SocketAddr`] candidates using async DNS.
+///
+/// Returns every resolved address, in resolver order, so callers can try each
+/// candidate like `tokio::net::TcpListener::bind` does (binding only the first
+/// would silently drop the multi-address fallback — e.g. `localhost` resolving
+/// to `::1` then `127.0.0.1`). Errors if resolution yields no address. This
+/// goes through the facade (tokio's async resolver) so we never perform
+/// blocking std DNS on an async thread.
+pub async fn lookup_host(addr: &str) -> io::Result<Vec<std::net::SocketAddr>> {
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(addr).await?.collect();
+    if addrs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("could not resolve address: {addr}"),
+        ));
+    }
+    Ok(addrs)
 }
 
 /// Future that resolves on Ctrl-C or SIGTERM (Unix).

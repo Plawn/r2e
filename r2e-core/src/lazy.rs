@@ -120,6 +120,14 @@ fn resolve_lazy_factory<T>(
 where
     T: Send + 'static,
 {
+    // NOTE(536→537): A sharded SO_REUSEPORT worker runs a `current_thread`
+    // runtime, so a lazy bean first resolved from within a worker takes the
+    // non-MultiThread branch below and requires the `lazy-fallback-runtime`
+    // feature (block_in_place panics on current_thread runtimes). The proper
+    // fix — resolving lazy beans on a dedicated control-plane runtime — is
+    // deferred to task 537. In practice lazy beans are resolved during state
+    // construction on the main multi-thread runtime, so this only bites if a
+    // lazy bean is first touched from a worker.
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {

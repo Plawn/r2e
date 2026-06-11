@@ -1366,6 +1366,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .and_then(|c| c.try_get::<bool>("server.tcp_nodelay"))
             .unwrap_or(true);
 
+        // Parse `server.workers` (SO_REUSEPORT sharding). Parsing happens here
+        // (like `tcp_nodelay`) but `prepare()` is infallible, so the result —
+        // including parse errors for invalid values like 0 or unknown strings —
+        // is carried on `PreparedApp` and surfaced at `run()` time.
+        let workers = crate::sharded::parse_workers(this.shared.config.as_ref());
+
         let (
             app,
             startup_hooks,
@@ -1399,6 +1405,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_data,
             shutdown_grace_period,
             tcp_nodelay,
+            workers,
             #[cfg(feature = "quic")]
             quic_server_config,
         }
@@ -1455,8 +1462,30 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     shutdown_grace_period: Option<Duration>,
     tcp_nodelay: bool,
+    /// Parsed `server.workers` config. `Ok(None)` → single-listener (default).
+    /// `Ok(Some(n))` → SO_REUSEPORT sharded serving with `n` workers.
+    /// `Err(msg)` → invalid config value, surfaced as an error at `run()` time.
+    workers: Result<Option<usize>, String>,
     #[cfg(feature = "quic")]
     quic_server_config: Option<(std::net::SocketAddr, r2e_http::quic::quinn::ServerConfig)>,
+}
+
+/// Internal serving strategy chosen by [`PreparedApp::run`].
+///
+/// The two variants share the entire lifecycle in
+/// [`PreparedApp::run_inner`]; only the bind-and-serve middle section differs.
+enum ServeStrategy {
+    /// Single listener on the caller's runtime (default behavior, unchanged).
+    Single(tokio::net::TcpListener),
+    /// SO_REUSEPORT sharded serving: `workers` worker threads, each with its
+    /// own `current_thread` runtime and listener on the bound address (first
+    /// candidate from `addrs` that binds).
+    Sharded {
+        #[allow(dead_code)]
+        addrs: Vec<std::net::SocketAddr>,
+        #[allow(dead_code)]
+        workers: usize,
+    },
 }
 
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
@@ -1485,17 +1514,81 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         self.tcp_nodelay
     }
 
+    /// The parsed `server.workers` (SO_REUSEPORT sharding) configuration.
+    ///
+    /// `Ok(None)` → single-listener serving (default). `Ok(Some(n))` → sharded
+    /// serving with `n` worker threads. `Err(msg)` → the config value was
+    /// invalid (e.g. `0` or an unknown string); this error is returned by
+    /// [`run()`](Self::run).
+    pub fn workers(&self) -> Result<Option<usize>, &str> {
+        self.workers.as_ref().copied().map_err(|s| s.as_str())
+    }
+
     /// Start listening and serving requests.
     ///
     /// Registers event consumers, runs startup hooks, binds the TCP listener,
     /// and serves with graceful shutdown. After shutdown, runs plugin and user
     /// shutdown hooks.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        #[cfg(feature = "dev-reload")]
-        let listener = crate::dev::get_or_bind_listener(&self.addr)?;
-        #[cfg(not(feature = "dev-reload"))]
-        let listener = crate::rt::bind_tcp(&self.addr).await?;
-        self.run_with_listener(listener).await
+        // Resolve the `server.workers` config; an invalid value is a hard error.
+        let workers = self.workers.clone()?;
+
+        match workers {
+            // Sharded SO_REUSEPORT serving requested.
+            Some(n) => {
+                // Hot-reload + sharding is unsupported in v1: the dev-reload
+                // listener-caching path bypasses sharding entirely.
+                #[cfg(feature = "dev-reload")]
+                {
+                    let _ = n; // sharding ignored under hot-reload
+                    tracing::warn!(
+                        "server.workers is set but the `dev-reload` feature is active; \
+                         SO_REUSEPORT sharding is ignored (unsupported with hot-reload). \
+                         Serving with a single listener."
+                    );
+                    let listener = crate::dev::get_or_bind_listener(&self.addr)?;
+                    self.run_inner(ServeStrategy::Single(listener)).await
+                }
+                #[cfg(not(feature = "dev-reload"))]
+                {
+                    self.run_sharded(n).await
+                }
+            }
+            // Default: single listener on the caller's runtime — unchanged.
+            None => {
+                #[cfg(feature = "dev-reload")]
+                let listener = crate::dev::get_or_bind_listener(&self.addr)?;
+                #[cfg(not(feature = "dev-reload"))]
+                let listener = crate::rt::bind_tcp(&self.addr).await?;
+                self.run_inner(ServeStrategy::Single(listener)).await
+            }
+        }
+    }
+
+    /// Sharded SO_REUSEPORT serving. Resolves the bind address once, then
+    /// delegates to [`run_inner`](Self::run_inner) with the sharded strategy.
+    #[cfg(not(feature = "dev-reload"))]
+    async fn run_sharded(self, workers: usize) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(all(
+            unix,
+            not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+        ))]
+        {
+            // Resolve the address once on the main runtime (async DNS — never
+            // blocking std DNS on an async thread). All candidates are kept:
+            // the sharded path tries each in order, like `bind_tcp` does.
+            let addrs = crate::rt::lookup_host(&self.addr).await?;
+            self.run_inner(ServeStrategy::Sharded { addrs, workers })
+                .await
+        }
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+        )))]
+        {
+            let _ = workers;
+            Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into())
+        }
     }
 
     /// Like [`run()`](Self::run) but with a pre-bound listener.
@@ -1503,8 +1596,31 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// This is useful for hot-reload: bind the listener once in setup,
     /// and reuse it across hot-patches so we never fight port conflicts.
     pub async fn run_with_listener(
-        mut self,
+        self,
         listener: tokio::net::TcpListener,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Sharding is unsupported on the explicit-listener path: the caller
+        // owns the (single) listener. If `server.workers` was configured, warn
+        // and proceed single-listener.
+        if matches!(self.workers, Ok(Some(_))) {
+            tracing::warn!(
+                "server.workers is set but run_with_listener was called with an \
+                 explicit listener; SO_REUSEPORT sharding is ignored. Serving with \
+                 the provided single listener."
+            );
+        }
+        self.run_inner(ServeStrategy::Single(listener)).await
+    }
+
+    /// Shared serving core for both single-listener and sharded strategies.
+    ///
+    /// Owns the full lifecycle: consumer registration, serve/startup hooks,
+    /// QUIC spawn, shutdown-future composition, the serve call (single or
+    /// sharded), QUIC drain, and the shutdown phase. Only the "bind + serve"
+    /// middle differs between strategies.
+    async fn run_inner(
+        #[cfg_attr(not(feature = "quic"), allow(unused_mut))] mut self,
+        strategy: ServeStrategy,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "dev-reload")]
         let skip_lifecycle = crate::dev::is_lifecycle_initialized();
@@ -1621,26 +1737,81 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             cancel_for_shutdown.cancel();
         };
 
-        info!(addr = %self.addr, "R2E server listening");
-        let svc = self.router
-            .into_make_service_with_connect_info::<std::net::SocketAddr>();
-        if self.tcp_nodelay {
-            use crate::http::ListenerExt as _;
-            crate::http::serve(
-                listener.tap_io(|stream| {
-                    if let Err(e) = stream.set_nodelay(true) {
-                        tracing::warn!(error = %e, "failed to set TCP_NODELAY on accepted connection");
-                    }
-                }),
-                svc,
-            )
-            .with_graceful_shutdown(shutdown_future)
-            .await?;
-        } else {
-            crate::http::serve(listener, svc)
-                .with_graceful_shutdown(shutdown_future)
-                .await?;
-        }
+        // ── Serve (single-listener or sharded) ──────────────────────────────
+        // Only this middle section differs between strategies; the lifecycle
+        // start above and the shutdown phase below are shared.
+        let serve_result: Result<(), Box<dyn std::error::Error>> = match strategy {
+            ServeStrategy::Single(listener) => {
+                info!(addr = %self.addr, "R2E server listening");
+                let svc = self.router
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>();
+                if self.tcp_nodelay {
+                    use crate::http::ListenerExt as _;
+                    crate::http::serve(
+                        listener.tap_io(|stream| {
+                            if let Err(e) = stream.set_nodelay(true) {
+                                tracing::warn!(error = %e, "failed to set TCP_NODELAY on accepted connection");
+                            }
+                        }),
+                        svc,
+                    )
+                    .with_graceful_shutdown(shutdown_future)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+                } else {
+                    crate::http::serve(listener, svc)
+                        .with_graceful_shutdown(shutdown_future)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+                }
+            }
+            #[cfg(all(
+                unix,
+                not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+            ))]
+            ServeStrategy::Sharded { addrs, workers } => {
+                // Drive the shutdown future on the main runtime: it awaits the
+                // OS signal, fires plugin shutdown hooks, then cancels the
+                // shared token. Each worker observes a child token's
+                // cancellation as its graceful-shutdown signal.
+                let shutdown_handle = crate::rt::spawn(shutdown_future);
+
+                let router = self.router.clone();
+                let tcp_nodelay = self.tcp_nodelay;
+                let cancel_for_workers = cancel_token.clone();
+                // `serve_sharded` blocks the calling thread joining the worker
+                // threads, so run it on a blocking task to avoid stalling the
+                // main runtime (which must keep driving the shutdown future).
+                let join = crate::rt::spawn_blocking(move || {
+                    crate::sharded::serve_sharded(
+                        router,
+                        &addrs,
+                        workers,
+                        tcp_nodelay,
+                        cancel_for_workers,
+                    )
+                })
+                .await;
+
+                // Ensure the shutdown future's task is wound down (it has
+                // already fired by the time workers exited, since workers only
+                // exit on cancellation).
+                shutdown_handle.abort();
+
+                match join {
+                    Ok(res) => res.map_err(|e| -> Box<dyn std::error::Error> { e }),
+                    Err(e) => Err(format!("sharded serve task failed: {e}").into()),
+                }
+            }
+            #[cfg(not(all(
+                unix,
+                not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+            )))]
+            ServeStrategy::Sharded { .. } => {
+                Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into())
+            }
+        };
+        serve_result?;
 
         // Wait for QUIC endpoint to drain after TCP server stops.
         #[cfg(feature = "quic")]

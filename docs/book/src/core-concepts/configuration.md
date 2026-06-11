@@ -500,6 +500,11 @@ AppBuilder::new()
 | `server.host` | String | `"0.0.0.0"` |
 | `server.port` | u16 | `3000` |
 | `server.tcp_nodelay` | bool | `true` |
+| `server.workers` | usize \| `"per-core"` | *(absent → single listener)* |
+
+`server.workers` enables SO_REUSEPORT sharded serving (N worker threads, each a
+`current_thread` runtime with its own listener). Unix only; unsupported with
+hot-reload. See the [Sharded Serving feature doc](../../../features/19-sharded-serving.md).
 
 If keys are missing, defaults are used. This replaces `.serve("0.0.0.0:3000")` for production setups where the address should be configurable per environment.
 
