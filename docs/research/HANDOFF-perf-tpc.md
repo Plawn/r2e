@@ -51,7 +51,7 @@ Completed and committed (tasks moved to closed in Tasker):
   pieces the adversarial pass stays mandatory regardless of implementing model.
   Worker-death semantics documented (degraded capacity, no restart — v1 limitation).
   Commit 210eb15. Side discovery: `--features dev-reload` fails to build on master
-  (pre-existing, beans.rs) → filed as task 549.
+  (pre-existing, beans.rs) → filed as task 549, fixed in 03735b5 (closed).
 
 **Next up**: 537 (control-plane / data-plane split — also fixes the lazy.rs
 `block_in_place` limitation noted in `NOTE(536→537)` comments). Then 538 (docs + bench).
