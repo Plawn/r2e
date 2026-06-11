@@ -46,11 +46,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{Notify, Semaphore};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use r2e_core::config::ConfigProperties;
 use r2e_core::plugin::{DeferredAction, PluginInstallContext, PreStatePlugin};
+
+pub use r2e_core::rt::{JobHandle, JoinError};
 
 // ── Configuration ─────────────────────────────────────────────────────────
 
@@ -179,11 +180,11 @@ impl PoolExecutor {
 
     /// Submit a future to the pool.
     ///
-    /// Returns a [`JoinHandle`] that resolves to the job's result.
+    /// Returns a [`JobHandle`] that resolves to the job's result.
     /// Returns [`RejectedError::Shutdown`] if the pool has been shut down.
     ///
     /// This call always queues — use [`try_submit`](Self::try_submit) to apply backpressure.
-    pub fn submit<F, T>(&self, fut: F) -> Result<JoinHandle<T>, RejectedError>
+    pub fn submit<F, T>(&self, fut: F) -> Result<JobHandle<T>, RejectedError>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -238,7 +239,7 @@ impl PoolExecutor {
     /// Returns [`RejectedError::QueueFull`] when the in-flight count would exceed
     /// `max_concurrent + queue_capacity`, or [`RejectedError::Shutdown`] when the
     /// pool has been shut down.
-    pub fn try_submit<F, T>(&self, fut: F) -> Result<JoinHandle<T>, RejectedError>
+    pub fn try_submit<F, T>(&self, fut: F) -> Result<JobHandle<T>, RejectedError>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -256,16 +257,14 @@ impl PoolExecutor {
         Ok(self.spawn_job(fut))
     }
 
-    fn spawn_job<F, T>(&self, fut: F) -> JoinHandle<T>
+    fn spawn_job<F, T>(&self, fut: F) -> JobHandle<T>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        // TODO(534/535): public API returns tokio::task::JoinHandle<T>; migrate
-        // to rt::JobHandle<T> once task 535 updates the public signature.
         let inner = self.inner.clone();
         let shutdown = inner.shutdown.clone();
-        tokio::spawn(async move {
+        r2e_core::rt::spawn(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(tokio::sync::TryAcquireError::Closed) => {

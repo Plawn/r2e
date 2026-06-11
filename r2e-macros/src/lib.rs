@@ -478,7 +478,7 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// The body is moved off the request thread onto an injected
 /// [`PoolExecutor`](r2e_executor::PoolExecutor); calling the method returns
-/// `Result<JoinHandle<T>, RejectedError>` instead of `T`. Useful for
+/// `Result<JobHandle<T>, RejectedError>` instead of `T`. Useful for
 /// long-running side work (PDF generation, third-party calls, batch jobs)
 /// that should not block HTTP response.
 ///

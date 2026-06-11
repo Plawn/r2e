@@ -1,5 +1,5 @@
 //! Verifies `#[async_exec]` codegen on a `#[routes]` controller — the
-//! marked method must return a `JoinHandle<T>` whose result matches what
+//! marked method must return a `JobHandle<T>` whose result matches what
 //! the original body would have produced inline.
 
 use std::sync::Arc;
@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use r2e_core::http::extract::FromRef;
 use r2e_core::prelude::*;
-use r2e_executor::{ExecutorConfig, PoolExecutor, RejectedError};
-use tokio::task::JoinHandle;
+use r2e_executor::{ExecutorConfig, JobHandle, PoolExecutor, RejectedError};
 
 #[derive(Clone)]
 struct Services {
@@ -47,7 +46,7 @@ async fn async_exec_returns_join_handle() {
     };
 
     let worker = Worker::from_state(&services);
-    let handle: Result<JoinHandle<u32>, RejectedError> = worker.compute(21);
+    let handle: Result<JobHandle<u32>, RejectedError> = worker.compute(21);
     let result = handle.expect("submit ok").await.expect("job succeeds");
 
     assert_eq!(result, 42);

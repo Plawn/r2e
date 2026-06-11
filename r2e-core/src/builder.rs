@@ -28,7 +28,7 @@ type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> +
 /// `take_all()` for single-consumer subsystems).
 type ServeHook = Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>;
 
-/// Shared collection of JoinHandles for services spawned via
+/// Shared collection of JobHandles for services spawned via
 /// [`AppBuilder::spawn_service`], so shutdown can await their completion
 /// with a grace deadline before returning.
 #[derive(Clone, Default)]
@@ -1546,7 +1546,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
         }
 
-        // Pull the shared spawn_service JoinHandle collector (if any) so we
+        // Pull the shared spawn_service JobHandle collector (if any) so we
         // can await tasks after graceful shutdown.
         let service_handles = self
             .plugin_data
@@ -1652,7 +1652,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             }
         }
 
-        // After HTTP drain completes: await spawn_service JoinHandles with a
+        // After HTTP drain completes: await spawn_service JobHandles with a
         // deadline, then run user shutdown hooks. Both phases together are
         // bounded by `shutdown_grace_period` if set.
         let state_for_shutdown = self.state.clone();

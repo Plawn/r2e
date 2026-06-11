@@ -8,7 +8,7 @@ Three pieces:
 
 1. `PoolExecutor` — bounded, semaphore-gated Tokio task pool. Injectable bean.
 2. `#[async_exec]` — controller-method attribute that submits the body to the
-   pool and returns a `Result<JoinHandle<T>, RejectedError>` instead of `T`.
+   pool and returns a `Result<JobHandle<T>, RejectedError>` instead of `T`.
 3. `#[derive(BackgroundService)]` — DI-friendly `ServiceComponent<S>` for
    long-running workers (consumers, watchers, periodic jobs).
 
@@ -60,7 +60,7 @@ let v: u32 = h.await.expect("task ok");
 
 // Bounded: errors with RejectedError::QueueFull when (running + queued) > cap.
 match exec.try_submit(async { /* ... */ }) {
-    Ok(h)                             => { /* h: JoinHandle<T> */ },
+    Ok(h)                             => { /* h: JobHandle<T> */ },
     Err(RejectedError::QueueFull)     => { /* backpressure */ },
     Err(RejectedError::Shutdown)      => { /* pool closed */ },
 }
@@ -78,7 +78,7 @@ The plugin registers an async `on_shutdown` hook that calls
 `PoolExecutor::shutdown_graceful(timeout)` to drain in-flight tasks. After shutdown:
 
 - `submit` / `try_submit` return `Err(RejectedError::Shutdown)`.
-- Queued tasks that never acquired a permit are cancelled (the `JoinHandle` resolves to a `JoinError` with `is_panic() == true`).
+- Queued tasks that never acquired a permit are cancelled (the `JobHandle` resolves to a `JoinError` with `is_panic() == true`).
 - Tasks already running finish naturally — bounded by `shutdown-timeout`.
 
 ## `#[async_exec]`
@@ -87,7 +87,7 @@ Marks a method on a `#[routes]` controller as a pool-executed job. The
 generated wrapper:
 
 - Takes the same arguments as the original method.
-- Returns `Result<JoinHandle<T>, RejectedError>` instead of `T`.
+- Returns `Result<JobHandle<T>, RejectedError>` instead of `T`.
 - Is **not** `async` — the synchronous handle resolves to the result.
 
 ```rust
@@ -180,7 +180,7 @@ AppBuilder::new()
     .serve_auto().await?;
 ```
 
-`spawn_service::<C>()` collects the `JoinHandle` so graceful shutdown
+`spawn_service::<C>()` collects the task handle so graceful shutdown
 awaits the worker. The cancellation token is cancelled on shutdown
 signal; the worker is expected to observe `shutdown.cancelled()` and
 exit promptly.
@@ -193,7 +193,7 @@ configured on `AppBuilder::build_state`.
 | Goal | Use |
 |---|---|
 | Slow side-task triggered by an HTTP request, fire-and-forget | `executor.submit_detached(...)` directly |
-| Slow side-task whose result the handler awaits later | `#[async_exec]` returning `Result<JoinHandle<T>, RejectedError>` |
+| Slow side-task whose result the handler awaits later | `#[async_exec]` returning `Result<JobHandle<T>, RejectedError>` |
 | Periodic / event-driven worker bound to app lifecycle | `#[derive(BackgroundService)]` + `spawn_service::<C>()` |
 | Cron / interval schedule | Existing `#[scheduled]` (no executor needed) |
 | Submit work from inside a background service | Inject `PoolExecutor` and call `submit*` |
@@ -206,7 +206,7 @@ configured on `AppBuilder::build_state`.
   `try_submit_rejects_when_queue_full`, `graceful_shutdown_drains_running_jobs`,
   `shutdown_aborts_queued_submissions`.
 - `bg_service.rs` — `#[derive(BackgroundService)]` round-trip.
-- `async_exec.rs` — `#[async_exec]` codegen returning `Result<JoinHandle<T>, RejectedError>`.
+- `async_exec.rs` — `#[async_exec]` codegen returning `Result<JobHandle<T>, RejectedError>`.
 
 See `examples/example-executor` for a runnable demo combining all three
 primitives behind HTTP endpoints.

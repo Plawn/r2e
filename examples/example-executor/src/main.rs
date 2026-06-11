@@ -2,7 +2,7 @@
 //!
 //! Demonstrates:
 //! - `Executor` plugin → makes `PoolExecutor` injectable.
-//! - `#[async_exec]` on a controller method → returns `Result<JoinHandle<T>, RejectedError>`.
+//! - `#[async_exec]` on a controller method → returns `Result<JobHandle<T>, RejectedError>`.
 //! - `#[derive(BackgroundService)]` → tick worker that submits jobs to the
 //!   pool until shutdown.
 //!
@@ -80,7 +80,7 @@ impl ReportController {
         })
     }
 
-    /// Body runs on the `PoolExecutor`; returns `Result<JoinHandle<Vec<u8>>, RejectedError>`.
+    /// Body runs on the `PoolExecutor`; returns `Result<JobHandle<Vec<u8>>, RejectedError>`.
     #[async_exec]
     async fn generate_pdf(&self, id: u64) -> Vec<u8> {
         tokio::time::sleep(Duration::from_millis(150)).await;
