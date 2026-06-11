@@ -95,9 +95,31 @@ Completed and committed (tasks moved to closed in Tasker):
   methodology, unused deps removed. Commit 6c79bf5.
 
 **r2e side of the plan is COMPLETE** (534, 535, 536, 537, 538, 544 all closed).
-**Next up**: Wave 2/3 proxy-mesh items (541, 542, 539-master-part, 540) in the
-proxy-mesh repo, plus the deferred Linux benchmark run (fill the Linux table in
+**Next up**: Wave 2/3 proxy-mesh items (541, 542, 540) in the proxy-mesh repo,
+plus the deferred Linux benchmark run (fill the Linux table in
 `docs/features/19-sharded-serving.md` via `tools/bench-sharded.sh`).
+
+- **539 — proxy-mesh TCP_NODELAY** (session 5, 2026-06-12, proxy-mesh repo): the
+  pre-implementation audit found the task already half-done — agent→target tunnel
+  sockets (direct/brightdata/apify) all go through `configure_tunnel_socket()`
+  (nodelay + keepalive), and reqwest 0.12 defaults `tcp_nodelay` to true, so only
+  three gaps existed: (1) master listener → covered by bumping proxy-master's r2e
+  rev ead533d → d314cd8 (server.tcp_nodelay default true, verified in the d314cd8
+  source: applied via `tap_io` on the single-listener path used by `app.serve()`);
+  (2) the **preauth listener** (`proxy-master/src/preauth.rs`, per-session CONNECT
+  tunnels — a hot path the task description didn't list) → explicit
+  `set_nodelay(true)` after accept; (3) agent→master WS →
+  `connect_async_with_config(&url, None, true)` (tokio-tungstenite 0.26's
+  `disable_nagle` param, verified in crate source: set on the raw TcpStream before
+  the TLS wrap, so ws:// and wss:// both covered). QUIC is UDP, N/A. Opus subagent
+  + orchestrator audit (clean — no defects found; adversarial pass skipped as the
+  diff is 6 lines of mechanical change). Verification re-run by orchestrator:
+  proxy-master 29/29, proxy-agent 6/6, proxy-e2e 9/9 (WS transport exercised),
+  clippy warning count unchanged (20 before/after). Latency check before/after
+  (2×30 runs each, loopback CONNECT tunnel): no measurable difference
+  (~0.84ms p50 both) — expected, Nagle doesn't penalize single-write
+  request/response on loopback; the win targets real links + multi-write patterns
+  (TLS handshakes). Commit ec23aa7 (proxy-mesh).
 
 ## What this is
 
