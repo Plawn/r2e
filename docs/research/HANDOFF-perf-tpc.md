@@ -53,8 +53,29 @@ Completed and committed (tasks moved to closed in Tasker):
   Commit 210eb15. Side discovery: `--features dev-reload` fails to build on master
   (pre-existing, beans.rs) → filed as task 549, fixed in 03735b5 (closed).
 
-**Next up**: 537 (control-plane / data-plane split — also fixes the lazy.rs
-`block_in_place` limitation noted in `NOTE(536→537)` comments). Then 538 (docs + bench).
+- **537 — control-plane / data-plane runtime split** (session 3, 2026-06-11): in sharded
+  mode, background work initiated from request handlers runs on the caller's main
+  multi-thread runtime (control plane), never on the worker `current_thread` runtimes.
+  `rt` facade gained a **thread-local** control-plane handle (`set_control_plane`,
+  registered by each worker thread; thread-local, not a global OnceLock, so multiple
+  apps/runtimes per process — i.e. tests — cannot cross-spawn), `spawn_ctl` (routes onto
+  it; byte-for-byte `spawn` when unset) and `current_handle`. Call-site classification:
+  executor pool jobs + per-emit/unsubscribe event dispatch → `spawn_ctl`
+  (handler-reachable); consumer loops, poller dispatch, scheduler/service/QUIC startup
+  spawns stay `spawn` (already control-plane). lazy.rs worker-side first-touch resolves
+  on the control plane via two-stage spawn + blocking channel (no `block_on` — it panics
+  in async context; no hidden fallback runtime); NOTE(536→537) resolved. Opus subagent +
+  audit + adversarial pass again: the pass flagged (1) docs hiding that a worker-side
+  lazy first-touch stalls that worker's whole runtime (fixed: explicit caveat, eager
+  resolution recommended), (2) factory panic payload swallowed (fixed: JoinError-based
+  two-stage spawn re-raises the original payload on the worker, regression-tested),
+  plus a warn when sharding is driven by a non-multi-thread runtime. One adversarial
+  finding rejected as overstated (cross-thread cycle-detector claim — same-thread
+  detection on the main runtime is unaffected; comment sharpened instead). Known v1
+  limitation: cross-thread circular lazy deps deadlock instead of panicking with a
+  trace (pre-existing with lazy-fallback-runtime). Commit b525cba.
+
+**Next up**: 538 (docs + bench, sharded vs multi-thread).
 Wave 2/3 proxy-mesh items (541, 542, 539-master-part, 540) are in the other repo.
 
 ## What this is
