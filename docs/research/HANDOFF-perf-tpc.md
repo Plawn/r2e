@@ -6,7 +6,7 @@
 ## ⚡ Session 2 update (2026-06-11, later) — Wave 1 (r2e side) DONE
 
 **Methodology: read `METHODOLOGY-subagent-implementation.md` FIRST and follow it** —
-implementations are delegated to Sonnet subagents (one per task, self-contained prompt),
+implementations are delegated to Opus 4.8 subagents (one per task, self-contained prompt),
 the orchestrator audits the full diff and re-verifies. It caught 3 real defects in Wave 1;
 the audit is not optional.
 
