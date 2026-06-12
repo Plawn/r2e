@@ -220,12 +220,61 @@ plus the deferred Linux benchmark run (fill the Linux table in
    mid-response (agent Abort → master truncation), request abort mid-upload (first
    real user of the agent's abort machinery).
 
-**Next**: **540** (master streams — `PendingRequest::Http` delivers start + body_rx,
-`Body::from_stream`, metrics at END/ABORT, ABORT-after-start = truncation not 502;
-also re-examine the master QUIC http-writer lifecycle now that the agent can respond
-before the request body ends), then **543** LAST and measure-first (premise
-re-verified: the mpsc hop is still there; the tunnel reorder hazard from 541's
-finding 3 naturally belongs to it). Push to origin only once 540 is done.
+- **540 — master streams HTTP both directions** (session 6, 2026-06-12, proxy-mesh repo,
+  commit 3bf2175 — **LOCAL ONLY until the block pushes**, completes the 541/542/540 wire
+  block; PROTOCOL_VERSION still 2, proxy-agent and proxy-protocol untouched). What landed:
+  - `responses.rs` rewritten around streaming: `HttpResponseStart` resolves a oneshot with
+    `HttpStart { status, headers, agent_timings, body_rx: HttpBodyStream }`; the body flows
+    through an **unbounded** mpsc with a `queued_bytes` cap at `MAX_HTTP_BODY_SIZE` (64MiB).
+    The flow-control trilemma (no per-request wire flow control on a multiplexed link) was
+    decided as: capped backlog + visible truncation — never block the shared per-agent
+    dispatch loop, never unbounded memory. Cap matches the old accumulator's limit, so
+    nothing that worked before is newly rejected; worst case backlog 64MiB+16KiB (agent
+    chunks ≤ BUFFER_SIZE). Pre-start chunks (QUIC reordering) buffer under the same cap and
+    replay in order.
+  - proxy.rs: `RequestBody::{None,Buffered,Stream}`; request bodies stream into the agent
+    as `HttpBodyChunk` frames concurrently with awaiting the response start (early-responding
+    upstream works); client upload error emits `MasterMessage::HttpBodyAbort` — the first
+    real user of 542's agent abort machinery. `MeteredHttpBody` counts bytes_down, applies
+    HTTP_TIMEOUT as idle-timeout between chunks (TTFB deadline before start), records
+    metrics exactly once at the terminal with real status + `response_truncated` error
+    counter — never a false-clean 200. Abort-after-start = io::Error truncation on the
+    client body stream, never 502. The 413 request-size cap is gone for proxied requests;
+    `/api/proxy` keeps buffered input, streams output; preauth streams both directions.
+  - Process: Opus subagent + line-by-line audit + adversarial pass. The audit/adversarial
+    combo caught **2 BLOCKERs + 1 MAJOR in the subagent's code, all fixed by an
+    orchestrator rewrite of responses.rs**: (S1) abort delivered `Err(BodyAborted)` via
+    `try_send` on a bounded channel — when full (slow client), the truncation terminal was
+    silently dropped → clean EOF + clean metrics on a truncated body (data corruption
+    presented as success); fixed by the unbounded channel making the Err infallible (FIFO:
+    Err never overtakes buffered chunks), regression test
+    `abort_with_large_undrained_backlog_still_truncates`. (S2) backpressure-stall teardown
+    removed the entry with no error terminal — same silent truncation; fixed structurally
+    (append is sync, no timeout path exists). (M1) `append_http_body` awaited up to 30s
+    inside the shared per-agent dispatch loop — one slow HTTP client head-of-line blocked
+    ALL multiplexed traffic (tunnels, pongs — could trip the heartbeat reaper); fixed:
+    sync append + capped backlog. A second adversarial pass on the rewrite found nothing.
+  - 542's two ⚠️ items addressed: C-L exactness holds (hyper `Incoming` yields None only on
+    a complete body; client error → Abort path, never a short clean stream); e2e blind spot
+    covered with `spawn_early_responder` + `early_responding_upstream_on_post_with_body`
+    (1MiB patterned up / 800KB patterned down, upstream answers after headers only).
+  - Verification (orchestrator re-run): cargo check clean, units 20+12+47 (4 new), residue
+    greps clean (no HttpAccumulator/pending_end leftovers; `collect_body_capped` only in
+    proxy_api). e2e **25/25** across two runs: full run 18/25 where all 7 failures were
+    proven external (httpbin.org returning 503 to a direct curl; all 7 are CONNECT-tunnel
+    tests untouched by 540), https subset re-run green 8/8 after httpbin recovered.
+    Ops note: the OnceLock harness leaves orphan master/agent processes that inherit the
+    stdout pipe — redirect e2e output to a file and pkill orphans after.
+  - Known INFO items (deliberate, bounded): `bytes_up` recorded as 0 for early-responding
+    upstreams (metrics-only race); registry entry can linger after client disconnect until
+    the next agent frame; the 504 arm leaves the spawned body task streaming to a dead id
+    (agent pending_bodies absorbs it); tunnel try_send→spawn reorder hazard deferred to 543.
+
+**The 541/542/540 wire block is COMPLETE** (local commits 1b2cd68, 45cda55, 3bf2175 on top
+of ec23aa7). **Next**: decide the push to origin master (user gate — GitLab CI auto-deploys;
+deploy masters before agents per the v2 handshake), then **543** LAST and measure-first
+(premise re-verified: the mpsc hop is still there; the tunnel reorder hazard from 541's
+finding 3 naturally belongs to it — bench before/after or don't merge).
 
 ## What this is
 
