@@ -121,6 +121,60 @@ plus the deferred Linux benchmark run (fill the Linux table in
   request/response on loopback; the win targets real links + multi-write patterns
   (TLS handshakes). Commit ec23aa7 (proxy-mesh).
 
+- **541 — HTTP body off MessagePack, raw framing + protocol v2** (session 5, 2026-06-12,
+  proxy-mesh repo, commit 1b2cd68 — **LOCAL ONLY, do not push**: 540/541/542 ship as one
+  block, and a master push triggers GitLab CI auto-deploy). The full coordinated wire
+  change was designed up front (`/tmp/541-design/DESIGN-wire-http-body.md`, amended by an
+  adversarial design review — 8 amendments integrated) so 542/540 need no further wire
+  changes. What landed:
+  - Raw frame tags 0x04/0x05/0x06 (`HttpBodyChunk/End/Abort`, both directions, never
+    msgpack); `ProxyHttp.has_body`; `HttpResponseStart` replaces `HttpResponse` (body
+    always framed, empty = immediate END); `MAX_HTTP_BODY_SIZE` = 64MiB.
+  - **PROTOCOL_VERSION=2 handshake**: `Register.protocol` (serde-default 0), master Kicks
+    mismatched agents, and sends `Welcome{protocol}` FIRST (rmp_serde ignores unknown
+    fields → the Register gate alone is one-directional); agent requires Welcome within
+    5s else disconnect+retry. **Deploy masters before agents.**
+  - QUIC: master-opened bi-stream per HTTP request (9-byte header `[0x01][id u64 BE]`);
+    tunnel streams untouched (8-byte header). Removes the implicit 16MiB QUIC response
+    cap (e2e-verified with a 20MiB body). Pending buffers both directions for
+    control-frame/stream races; `HttpAccumulator.pending_end` for start/end reorder.
+  - `ResponseRegistry.fail_node()` at both deregister points — fixes a pre-existing bug
+    where agent death left in-flight HTTP requests hanging until timeout.
+  - preauth forward path refactored through `execute_http_on_node` (single ProxyHttp
+    emitter, metrics parity).
+  - Process: Opus subagent implementation + orchestrator line-by-line audit (caught a
+    missing Welcome 5s timeout the subagent's report didn't flag) + adversarial
+    implementation review, which produced **4 refuted findings, all fixed**: (1) QUIC
+    `open_bi` awaited in the session select loop = up-to-5s head-of-line block → moved
+    off-loop (writer registered synchronously, open+header+writer as one task); (2)
+    ingress 64MiB cap only enforced AFTER full `collect()` on all 3 master paths →
+    `collect_body_capped()` errors mid-collection (413); (3) the tunnel
+    try_send→Full→spawn pattern REORDERS chunks under backpressure and was copied onto
+    HTTP paths → HTTP writer/body channels are now **unbounded** (ordering guaranteed;
+    memory bounded by the 64MiB cap + refcounted `Bytes` slices, zero-copy chunking both
+    sides) — tunnels still have the reorder hazard, deliberately left to 543; (4) agent
+    pending-body flush could silently drop the terminal `End` (hung request task) →
+    unbounded channel cannot refuse.
+  - e2e: harness builds binaries; local HTTP server with **position-dependent payloads**
+    (`i % 251` — uniform fills can't detect chunk reorder); 1MiB POST + 1.5MiB GET on
+    WS+QUIC + 20MiB QUIC GET. Verification (orchestrator re-run): units 6+39+20, e2e
+    **24/24** (needs `cargo test -p proxy-e2e --features quic` — quic is non-default
+    there; without it only 11 WS tests run).
+  - Deferred (acceptable, noted for later): unbounded pending maps for misbehaving-master
+    ids, agent-side independent body cap, per-request agent timeout (agent task can wait
+    forever on a body that never comes if the master dies mid-request — master side
+    resolves via fail_node). For 542: the master QUIC code no longer removes the http
+    writer when the reader joins, but re-examine writer lifecycles when the agent can
+    respond before the request body ends.
+
+**Next**: **542** (agent streams upstream responses — `ExitStrategy` returns start +
+chunk stream, reqwest `bytes_stream()`, TTFB at first chunk; no wire change needed),
+then **540** (master streams — `PendingRequest::Http` delivers start + body_rx,
+`Body::from_stream`, metrics at END/ABORT, ABORT-after-start = truncation not 502),
+then **543** LAST and measure-first (premise re-verified: the mpsc hop is still there;
+the tunnel reorder hazard from finding 3 naturally belongs to it). Push to origin only
+once 542+540 are done.
+
 ## What this is
 
 A research + planning conversation, **no code written yet**. We investigated how to push
