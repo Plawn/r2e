@@ -167,13 +167,65 @@ plus the deferred Linux benchmark run (fill the Linux table in
     writer when the reader joins, but re-examine writer lifecycles when the agent can
     respond before the request body ends.
 
-**Next**: **542** (agent streams upstream responses — `ExitStrategy` returns start +
-chunk stream, reqwest `bytes_stream()`, TTFB at first chunk; no wire change needed),
-then **540** (master streams — `PendingRequest::Http` delivers start + body_rx,
-`Body::from_stream`, metrics at END/ABORT, ABORT-after-start = truncation not 502),
-then **543** LAST and measure-first (premise re-verified: the mpsc hop is still there;
-the tunnel reorder hazard from finding 3 naturally belongs to it). Push to origin only
-once 542+540 are done.
+- **542 — agent streams HTTP both directions** (session 5, 2026-06-12, proxy-mesh repo,
+  commit 45cda55 — **LOCAL ONLY, do not push**, same block rule). No wire change,
+  master untouched, PROTOCOL_VERSION still 2. What landed:
+  - `ExitStrategy::execute_http` now takes `HttpRequestStart { method, url, headers,
+    body: Option<reqwest::Body> }` and returns `HttpResponseStream { status, headers,
+    timings, body: BoxStream<'static, Result<Bytes, ExitError>> }` (reqwest
+    `bytes_stream()`; workspace reqwest gains the `stream` feature). The plain
+    `HttpRequest`/`HttpResponse` structs were deleted from proxy-protocol (agent-only,
+    never serialized — verified zero users left, incl. feature-gated cfg).
+  - connection.rs: request bodies stream into reqwest via `Body::wrap_stream` over a
+    `poll_fn` adapter on the chunk channel (Data→Ok, End→stream end, Abort→ sets a
+    shared `AtomicBool` then yields Err so reqwest tears down upstream) — no Vec
+    reassembly. Response path sends `HttpResponseStart` at upstream headers (TTFB to
+    the client now starts at headers), forwards chunks (`send_response_chunk` splits
+    anything > BUFFER_SIZE into refcounted `Bytes::slice` sub-chunks), End on
+    exhaustion, **Abort on mid-stream error** (master's `abort_http` handles
+    abort-after-start: always wins → client 502 under the still-buffering master; 540
+    turns this into truncation semantics). execute_http Err + abort flag → echo
+    `HttpBodyAbort`; Err without flag → buffered 502 (old `send_http_response` survives
+    only for this).
+  - nodelay acceptance criterion verified already satisfied: every
+    `connect_timed`/`connect_with_mark_timed` call site runs `configure_tunnel_socket`
+    right after connect, reqwest 0.12 defaults `tcp_nodelay` on. No change.
+  - Process: Opus subagent implementation (its final report was lost — it ended its
+    turn waiting on a background test — but the diff was complete; audited from the
+    tree) + orchestrator line-by-line audit + adversarial Opus pass. The adversarial
+    pass found **1 real BLOCKER, fixed**: when an upstream responds without consuming
+    the streamed request body, reqwest drops the receiver; the old send-failure
+    handling evicted the sink from `http_bodies`, misrouting the rest of that id's
+    frames — terminal End included — into `pending_bodies` where nothing drains them
+    (ids never recur) → per-session memory leak, ~Content-Length bytes per affected
+    POST. Fix: keep the dead sink registered and drop chunks on failed send; the
+    End/Abort arms bound the entry's lifetime (master always sends a terminal).
+    Adversarial INFOs: the request-abort machinery is dead code under today's
+    buffered master (no `MasterMessage::HttpBodyAbort` emitter exists yet — 540 adds
+    it); `tcp_connect_ms` now means time-to-headers (write-only metrics column, more
+    accurate than the old time-to-full-body).
+  - Verification (orchestrator re-run on final code): cargo check clean (forced
+    recompile, zero warnings), units 20 (protocol) + 39 (master) + 12 (agent, 6 new:
+    body-stream adapter Data/End/Abort + closed-channel, chunk splitting), e2e
+    **24/24** with `--features quic` (run twice: pre- and post-BLOCKER-fix).
+
+**⚠️ For 540 (two items from this session)**:
+1. hyper honors a forwarded `Content-Length` header on a `wrap_stream` body
+   (fixed-length framing, not chunked). The streaming master MUST deliver exactly
+   Content-Length bytes into the agent or fail via the stream-error path — a short
+   non-abort stream would poison upstream connections / hang. Today's buffered master
+   trivially guarantees this; 540 must preserve it.
+2. e2e blind spots that 540 should cover (or consciously skip): early-responding
+   upstream on a POST with body (exercises the BLOCKER path above), upstream reset
+   mid-response (agent Abort → master truncation), request abort mid-upload (first
+   real user of the agent's abort machinery).
+
+**Next**: **540** (master streams — `PendingRequest::Http` delivers start + body_rx,
+`Body::from_stream`, metrics at END/ABORT, ABORT-after-start = truncation not 502;
+also re-examine the master QUIC http-writer lifecycle now that the agent can respond
+before the request body ends), then **543** LAST and measure-first (premise
+re-verified: the mpsc hop is still there; the tunnel reorder hazard from 541's
+finding 3 naturally belongs to it). Push to origin only once 540 is done.
 
 ## What this is
 
