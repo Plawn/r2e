@@ -1,5 +1,7 @@
-use r2e_core::guards::{GuardContext, Identity, NoIdentity, PathParams};
-use r2e_core::http::{HeaderMap, Uri};
+use r2e_core::guards::{
+    GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuardContext,
+};
+use r2e_core::http::{HeaderMap, StatusCode, Uri};
 
 struct TestIdentity {
     sub: String,
@@ -54,6 +56,20 @@ fn make_ctx<'a, I: Identity>(
     }
 }
 
+fn make_pre_auth_ctx<'a>(
+    uri: &'a Uri,
+    headers: &'a HeaderMap,
+    path_params: PathParams<'a>,
+) -> PreAuthGuardContext<'a> {
+    PreAuthGuardContext {
+        method_name: "test_method",
+        controller_name: "TestController",
+        headers,
+        uri,
+        path_params,
+    }
+}
+
 // PathParams tests
 #[test]
 fn path_params_get_existing() {
@@ -72,6 +88,30 @@ fn path_params_get_missing() {
 #[test]
 fn path_params_empty() {
     assert_eq!(PathParams::EMPTY.get("anything"), None);
+}
+
+#[test]
+fn path_params_parse_existing() {
+    let pairs = [("id", "123")];
+    let params = PathParams::from_pairs(&pairs);
+    let parsed: u64 = params.parse("id").unwrap();
+    assert_eq!(parsed, 123);
+}
+
+#[test]
+fn path_params_parse_missing_returns_internal_error() {
+    let err: GuardError = PathParams::EMPTY.parse::<u64>("id").unwrap_err();
+    assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(err.message.contains("missing path parameter `id`"));
+}
+
+#[test]
+fn path_params_parse_invalid_returns_bad_request() {
+    let pairs = [("id", "abc")];
+    let params = PathParams::from_pairs(&pairs);
+    let err = params.parse::<u64>("id").unwrap_err();
+    assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    assert!(err.message.contains("invalid path parameter `id`"));
 }
 
 // NoIdentity tests
@@ -133,6 +173,27 @@ fn guard_context_path_param() {
         make_ctx(None, &uri, &headers, PathParams::from_pairs(&pairs));
     assert_eq!(ctx.path_param("id"), Some("42"));
     assert_eq!(ctx.path_param("missing"), None);
+}
+
+#[test]
+fn guard_context_parse_path_param() {
+    let pairs = [("id", "42")];
+    let uri = make_uri("/users/42");
+    let headers = HeaderMap::new();
+    let ctx: GuardContext<'_, NoIdentity> =
+        make_ctx(None, &uri, &headers, PathParams::from_pairs(&pairs));
+    let parsed: u64 = ctx.parse_path_param("id").unwrap();
+    assert_eq!(parsed, 42);
+}
+
+#[test]
+fn pre_auth_guard_context_parse_path_param() {
+    let pairs = [("id", "42")];
+    let uri = make_uri("/users/42");
+    let headers = HeaderMap::new();
+    let ctx = make_pre_auth_ctx(&uri, &headers, PathParams::from_pairs(&pairs));
+    let parsed: u64 = ctx.parse_path_param("id").unwrap();
+    assert_eq!(parsed, 42);
 }
 
 #[test]

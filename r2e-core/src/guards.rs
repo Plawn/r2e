@@ -77,13 +77,33 @@ impl<'a> PathParams<'a> {
     /// ```
     pub fn get(&self, name: &str) -> Option<&str> {
         match &self.0 {
-            PathParamsInner::Raw(raw) => {
-                raw.iter().find(|(k, _)| *k == name).map(|(_, v)| v)
-            }
+            PathParamsInner::Raw(raw) => raw.iter().find(|(k, _)| *k == name).map(|(_, v)| v),
             PathParamsInner::Pairs(pairs) => {
                 pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
             }
         }
+    }
+
+    /// Parse a path parameter into a strongly typed value.
+    ///
+    /// Missing parameters indicate a guard/route mismatch and return a 500
+    /// [`GuardError`]. Values that fail to parse return a 400 [`GuardError`].
+    ///
+    /// # Example
+    /// ```ignore
+    /// let id: u64 = ctx.path_params.parse("id")?;
+    /// ```
+    pub fn parse<T>(&self, name: &str) -> Result<T, GuardError>
+    where
+        T: std::str::FromStr,
+        T::Err: std::fmt::Display,
+    {
+        let value = self
+            .get(name)
+            .ok_or_else(|| GuardError::missing_path_param(name))?;
+        value
+            .parse()
+            .map_err(|err| GuardError::invalid_path_param(name, value, err))
     }
 }
 
@@ -127,6 +147,23 @@ impl<'a, I: Identity> GuardContext<'a, I> {
     /// ```
     pub fn path_param(&self, name: &str) -> Option<&str> {
         self.path_params.get(name)
+    }
+
+    /// Parse a path parameter into a strongly typed value.
+    ///
+    /// Use this in resource guards to avoid repeating string lookup and parse
+    /// boilerplate.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let project_id: ProjectId = ctx.parse_path_param("pid")?;
+    /// ```
+    pub fn parse_path_param<T>(&self, name: &str) -> Result<T, GuardError>
+    where
+        T: std::str::FromStr,
+        T::Err: std::fmt::Display,
+    {
+        self.path_params.parse(name)
     }
 
     /// Convenience accessor for the identity email.
@@ -196,6 +233,18 @@ impl<'a> PreAuthGuardContext<'a> {
     pub fn path_param(&self, name: &str) -> Option<&str> {
         self.path_params.get(name)
     }
+
+    /// Parse a path parameter into a strongly typed value.
+    ///
+    /// Missing parameters indicate a guard/route mismatch and return a 500
+    /// [`GuardError`]. Values that fail to parse return a 400 [`GuardError`].
+    pub fn parse_path_param<T>(&self, name: &str) -> Result<T, GuardError>
+    where
+        T: std::str::FromStr,
+        T::Err: std::fmt::Display,
+    {
+        self.path_params.parse(name)
+    }
 }
 
 // ── GuardError helper ─────────────────────────────────────────────────
@@ -216,6 +265,7 @@ impl<'a> PreAuthGuardContext<'a> {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct GuardError {
     pub status: crate::http::StatusCode,
     pub message: String,
@@ -238,6 +288,30 @@ impl GuardError {
     /// 403 Forbidden guard error.
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(crate::http::StatusCode::FORBIDDEN, message)
+    }
+
+    /// 400 Bad Request guard error.
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(crate::http::StatusCode::BAD_REQUEST, message)
+    }
+
+    /// 500 Internal Server Error guard error.
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(crate::http::StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+
+    /// Error for a guard that references a route path parameter that does not exist.
+    pub fn missing_path_param(name: &str) -> Self {
+        Self::internal(format!(
+            "missing path parameter `{name}` while evaluating guard"
+        ))
+    }
+
+    /// Error for a path parameter that cannot be parsed as the requested type.
+    pub fn invalid_path_param(name: &str, value: &str, err: impl std::fmt::Display) -> Self {
+        Self::bad_request(format!(
+            "invalid path parameter `{name}` value `{value}`: {err}"
+        ))
     }
 }
 
@@ -266,4 +340,3 @@ pub trait PreAuthGuard<S>: Send + Sync {
         ctx: &PreAuthGuardContext<'_>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
 }
-

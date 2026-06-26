@@ -72,7 +72,10 @@ pub use crate::builder::{AppBuilder, PreparedApp};
 pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::{HttpError, HttpErrorExt};
-pub use crate::guards::{Guard, GuardContext, Identity, NoIdentity, PreAuthGuard, PreAuthGuardContext};
+pub use crate::guards::{
+    Guard, GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuard,
+    PreAuthGuardContext,
+};
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{ManagedErr, ManagedResource};
 pub use crate::plugin::Plugin;

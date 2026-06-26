@@ -66,9 +66,96 @@ Guards receive a `GuardContext` with:
 | `controller_name` | `&str` | Controller struct name |
 | `headers` | `&HeaderMap` | Request headers |
 | `uri` | `&Uri` | Request URI |
+| `path_params` | `PathParams` | Route path parameters captured from patterns like `/projects/{pid}` |
 | `identity` | `Option<&I>` | Authenticated identity (if available) |
 
-Convenience methods: `identity_sub()`, `identity_roles()`, `identity_email()`, `identity_claims()`, `path()`, `query_string()`.
+Convenience methods: `identity_sub()`, `identity_email()`, `identity_claims()`, `path()`, `query_string()`, `path_param()`, `parse_path_param()`.
+
+Use `parse_path_param()` for resource authorization guards that need typed IDs:
+
+```rust
+use r2e::prelude::*;
+use std::future::Future;
+
+#[derive(Clone, Copy)]
+struct ProjectId(u64);
+
+impl std::str::FromStr for ProjectId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse().map(Self)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProjectRole {
+    Viewer,
+}
+
+struct ProjectGuard {
+    param: &'static str,
+    min_role: ProjectRole,
+}
+
+impl ProjectGuard {
+    const fn viewer(param: &'static str) -> Self {
+        Self {
+            param,
+            min_role: ProjectRole::Viewer,
+        }
+    }
+}
+
+impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
+    fn check(
+        &self,
+        state: &AppState,
+        ctx: &GuardContext<'_, AuthenticatedUser>,
+    ) -> impl Future<Output = Result<(), Response>> + Send {
+        async move {
+            let user = ctx
+                .identity
+                .ok_or_else(|| GuardError::unauthorized("identity required"))?;
+            let project_id: ProjectId = ctx.parse_path_param(self.param)?;
+
+            state
+                .authz
+                .require_project_role(user.sub(), project_id, self.min_role)
+                .await
+                .map_err(|_| Response::from(GuardError::forbidden("insufficient project role")))
+        }
+    }
+}
+
+#[get("/projects/{pid}")]
+#[guard(ProjectGuard::viewer("pid"))]
+async fn project(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<Project> {
+    /* ... */
+}
+```
+
+Path-param parsing has consistent error mapping:
+
+| Case | Response |
+|------|----------|
+| Guard references a missing route parameter | `500 Internal Server Error` |
+| Route parameter is present but cannot parse as `T` | `400 Bad Request` |
+| Authorization policy denies access | `403 Forbidden` |
+
+For nested resources, keep the route parameter names explicit in the guard constructor:
+
+```rust
+#[get("/tenants/{tid}/projects/{pid}/sboms/{sid}")]
+#[guard(TenantGuard::member("tid"))]
+#[guard(ProjectGuard::viewer("pid"))]
+#[guard(SbomGuard::viewer("pid", "sid"))]
+async fn sbom(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<Sbom> {
+    /* ... */
+}
+```
+
+This pattern keeps controller routes readable while moving tenant/project policy decisions into application-level guards.
 
 ### The `Identity` trait
 
@@ -77,13 +164,12 @@ Guards are generic over the `Identity` trait, decoupling them from the concrete 
 ```rust
 pub trait Identity: Send + Sync {
     fn sub(&self) -> &str;
-    fn roles(&self) -> &[String];
     fn email(&self) -> Option<&str> { None }
     fn claims(&self) -> Option<&serde_json::Value> { None }
 }
 ```
 
-`AuthenticatedUser` implements `Identity`. You can create custom identity types by implementing this trait.
+`AuthenticatedUser` implements `Identity`. Role checks use `RoleBasedIdentity` from `r2e-security`. You can create custom identity types by implementing these traits.
 
 ## Pre-auth guards
 
