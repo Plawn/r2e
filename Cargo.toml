@@ -86,13 +86,13 @@ r2e-test = { path = "r2e-test", version = "0.1.0" }
 
 # Core
 tokio = { version = "1" }
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 axum = "0.8"
 tower = "0.5"
-tower-http = "0.6"
+tower-http = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 http = "1"
@@ -123,19 +123,17 @@ password-hash = "0.5"
 rand = "0.8"
 
 # Data
-sqlx = { version = "0.8", features = ["runtime-tokio"] }
+sqlx = { version = "0.9", features = ["runtime-tokio"] }
 diesel = "2"
 
 # Events
-iggy = "0.9"
+iggy = "0.10"
 rdkafka = { version = "0.39", features = ["tokio"] }
 pulsar = "6"
-lapin = "2"
-tokio-executor-trait = "2"
-tokio-reactor-trait = "1"
+lapin = "4"
 
 # Scheduler
-cron = "0.16"
+cron = "0.17"
 
 # gRPC
 tonic = { version = "~0.13", default-features = false }
@@ -144,15 +142,15 @@ tonic-reflection = "~0.13"
 tonic-build = "~0.13"
 
 # Observability
-opentelemetry = "0.31"
-opentelemetry_sdk = "0.31"
-opentelemetry-otlp = "0.31"
-opentelemetry-semantic-conventions = "0.31"
-tracing-opentelemetry = "0.32"
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+opentelemetry-otlp = "0.32"
+opentelemetry-semantic-conventions = "0.32"
+tracing-opentelemetry = "0.33"
 prometheus = "0.14"
 
 # Validation & serialization
-garde = { version = "0.22", features = ["derive"] }
+garde = { version = "0.23", features = ["derive"] }
 schemars = "1"
 
 # CLI
@@ -185,7 +183,7 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
 
 # Testing
-tokio-tungstenite = "0.28"
+tokio-tungstenite = "0.29"
 
 # Dev
 tempfile = "3"

@@ -66,7 +66,10 @@ impl DataController {
         }
         sql.push_str(" ORDER BY id ASC");
 
-        let mut query = sqlx::query_as::<_, (i64, String, String)>(&sql);
+        // SQL is built from static fragments; all user input is passed via bind
+        // parameters below, so asserting safety is sound here.
+        let mut query =
+            sqlx::query_as::<_, (i64, String, String)>(sqlx::AssertSqlSafe(sql));
         if let Some(ref pattern) = bind_name {
             query = query.bind(pattern);
         }

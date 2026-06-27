@@ -99,7 +99,7 @@ impl RabbitMqEventBus {
         self.inner
             .channel
             .queue_declare(
-                &queue_name,
+                queue_name.as_str().into(),
                 QueueDeclareOptions {
                     durable: self.inner.config.durable,
                     ..QueueDeclareOptions::default()
@@ -113,9 +113,9 @@ impl RabbitMqEventBus {
         self.inner
             .channel
             .queue_bind(
-                &queue_name,
-                &self.inner.config.exchange,
-                topic_name,
+                queue_name.as_str().into(),
+                self.inner.config.exchange.as_str().into(),
+                topic_name.into(),
                 QueueBindOptions::default(),
                 FieldTable::default(),
             )
@@ -168,8 +168,8 @@ impl RabbitMqEventBus {
         self.inner
             .channel
             .basic_publish(
-                &self.inner.config.exchange,
-                topic_name,
+                self.inner.config.exchange.as_str().into(),
+                topic_name.into(),
                 BasicPublishOptions::default(),
                 &payload,
                 props,
@@ -406,7 +406,7 @@ impl EventBus for RabbitMqEventBus {
             inner.state.handlers.write().await.clear();
 
             // Close the channel gracefully
-            if let Err(e) = inner.channel.close(200, "shutdown").await {
+            if let Err(e) = inner.channel.close(200, "shutdown".into()).await {
                 tracing::warn!("error closing RabbitMQ channel: {e}");
             }
 
@@ -459,8 +459,8 @@ async fn run_consumer_inner(
     let consumer = match inner
         .channel
         .basic_consume(
-            queue_name,
-            &consumer_tag,
+            queue_name.into(),
+            consumer_tag.as_str().into(),
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )

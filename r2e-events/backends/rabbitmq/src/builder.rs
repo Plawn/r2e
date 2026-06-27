@@ -52,7 +52,9 @@ impl RabbitMqEventBusBuilder {
     /// Connect to the RabbitMQ broker and return a ready-to-use [`RabbitMqEventBus`].
     pub async fn connect(self) -> Result<RabbitMqEventBus, EventBusError> {
         // Build connection properties
-        let mut conn_props = ConnectionProperties::default()
+        // lapin 4 uses the tokio runtime by default (default-runtime feature),
+        // so no explicit executor/reactor wiring is required.
+        let conn_props = ConnectionProperties::default()
             .with_connection_name(
                 self.config
                     .connection_name
@@ -60,11 +62,6 @@ impl RabbitMqEventBusBuilder {
                     .unwrap_or_else(|| "r2e-events-rabbitmq".into())
                     .into(),
             );
-
-        // Set heartbeat via executor
-        // lapin ConnectionProperties uses the tokio executor by default
-        conn_props = conn_props.with_executor(tokio_executor_trait::Tokio::current())
-            .with_reactor(tokio_reactor_trait::Tokio);
 
         // Connect to RabbitMQ
         let connection = Connection::connect(&self.config.uri, conn_props)
@@ -89,7 +86,7 @@ impl RabbitMqEventBusBuilder {
         if self.config.auto_create {
             channel
                 .exchange_declare(
-                    &self.config.exchange,
+                    self.config.exchange.as_str().into(),
                     ExchangeKind::Topic,
                     ExchangeDeclareOptions {
                         durable: self.config.durable,

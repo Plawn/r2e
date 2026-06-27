@@ -2,7 +2,7 @@
 // from the iggy SDK (e.g. the consumer stream driver) remain on direct tokio
 // and are a documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -93,9 +93,9 @@ impl IggyEventBus {
     /// Build Iggy message headers from `EventMetadata`.
     fn build_headers(
         metadata: &EventMetadata,
-    ) -> Result<HashMap<HeaderKey, HeaderValue>, EventBusError> {
+    ) -> Result<BTreeMap<HeaderKey, HeaderValue>, EventBusError> {
         let pairs = encode_metadata(metadata);
-        let mut headers = HashMap::new();
+        let mut headers = BTreeMap::new();
 
         for (k, v) in pairs {
             // Skip partition_key — it's used for Iggy partitioning, not headers
