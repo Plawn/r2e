@@ -1,6 +1,50 @@
 use crate::http::response::Response;
 use crate::http::{HeaderMap, Uri};
 
+/// Typed descriptor for a route path parameter.
+///
+/// `#[routes]` generates values of this type in a local `path` namespace so
+/// guard constructors can refer to path params without raw string literals:
+///
+/// ```ignore
+/// #[guard(ProjectGuard::viewer(path::id))]
+/// async fn show(&self, Path(id): Path<ProjectId>) { ... }
+/// ```
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct PathParam<T = ()> {
+    pub name: &'static str,
+    _marker: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for PathParam<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for PathParam<T> {}
+
+impl<T> PathParam<T> {
+    /// Create a typed descriptor for a named route path parameter.
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Return the route path parameter name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl<T> AsRef<str> for PathParam<T> {
+    fn as_ref(&self) -> &str {
+        self.name
+    }
+}
+
 /// Trait representing an authenticated identity (user, service account, etc.).
 ///
 /// Implement this trait on your identity type (e.g. `AuthenticatedUser`) to

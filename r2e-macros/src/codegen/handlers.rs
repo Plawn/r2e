@@ -162,6 +162,166 @@ fn is_wrapper_type(ty: &syn::Type) -> bool {
     false
 }
 
+struct PathParamSymbol {
+    ident: syn::Ident,
+    name: String,
+    ty: syn::Type,
+}
+
+/// Extract `{name}` parameters from an Axum-style route path.
+fn extract_route_path_param_names(path: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = path;
+
+    while let Some(open) = rest.find('{') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            break;
+        };
+        let raw = &after_open[..close];
+        let name = raw
+            .split(':')
+            .next()
+            .unwrap_or(raw)
+            .trim()
+            .trim_start_matches('*');
+        if !name.is_empty() {
+            names.push(name.to_string());
+        }
+        rest = &after_open[close + 1..];
+    }
+
+    names
+}
+
+fn path_wrapper_inner_type(ty: &syn::Type) -> Option<syn::Type> {
+    let syn::Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Path" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| match arg {
+        syn::GenericArgument::Type(ty) => Some(ty.clone()),
+        _ => None,
+    })
+}
+
+fn flatten_path_inner_types(ty: &syn::Type) -> Vec<syn::Type> {
+    match ty {
+        syn::Type::Tuple(tuple) => tuple.elems.iter().cloned().collect(),
+        other => vec![other.clone()],
+    }
+}
+
+fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
+    match pat {
+        syn::Pat::Ident(ident) => {
+            let mut name = ident.ident.to_string();
+            if name != "_" {
+                if let Some(stripped) = name.strip_prefix('_') {
+                    if !stripped.is_empty() {
+                        name = stripped.to_string();
+                    }
+                }
+                out.push(name);
+            }
+        }
+        syn::Pat::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                collect_pat_idents(elem, out);
+            }
+        }
+        syn::Pat::TupleStruct(tuple_struct) => {
+            for elem in &tuple_struct.elems {
+                collect_pat_idents(elem, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn path_extractor_info(rm: &RouteMethod) -> Option<(Vec<String>, Vec<syn::Type>)> {
+    for (_, param) in extract_handler_params(rm) {
+        let Some(inner_ty) = path_wrapper_inner_type(&param.ty) else {
+            continue;
+        };
+        let mut pat_names = Vec::new();
+        collect_pat_idents(&param.pat, &mut pat_names);
+        return Some((pat_names, flatten_path_inner_types(&inner_ty)));
+    }
+    None
+}
+
+fn infer_path_param_symbols(rm: &RouteMethod) -> Vec<PathParamSymbol> {
+    let route_names = extract_route_path_param_names(&rm.path);
+    let (pat_names, path_types) = path_extractor_info(rm).unwrap_or_default();
+
+    let mut ordered_names = if pat_names.is_empty() {
+        route_names.clone()
+    } else {
+        pat_names
+    };
+
+    for name in route_names {
+        if !ordered_names.iter().any(|known| known == &name) {
+            ordered_names.push(name);
+        }
+    }
+
+    let fallback_ty: syn::Type = syn::parse_quote! { () };
+    let mut symbols = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for (index, name) in ordered_names.into_iter().enumerate() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Ok(ident) = syn::parse_str::<syn::Ident>(&name) else {
+            continue;
+        };
+        let ty = path_types
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| fallback_ty.clone());
+        symbols.push(PathParamSymbol { ident, name, ty });
+    }
+
+    symbols
+}
+
+fn generate_path_param_module(rm: &RouteMethod, krate: &TokenStream) -> TokenStream {
+    let symbols = infer_path_param_symbols(rm);
+    if symbols.is_empty() {
+        return quote! {};
+    }
+
+    let consts: Vec<TokenStream> = symbols
+        .iter()
+        .map(|symbol| {
+            let ident = &symbol.ident;
+            let name = &symbol.name;
+            let ty = &symbol.ty;
+            quote! {
+                pub const #ident: #krate::PathParam<#ty> = #krate::PathParam::new(#name);
+            }
+        })
+        .collect();
+
+    quote! {
+        #[allow(non_snake_case)]
+        #[allow(non_upper_case_globals)]
+        mod path {
+            use super::*;
+            #(#consts)*
+        }
+    }
+}
+
 /// Generate guard check statements.
 fn generate_guard_checks(guard_fns: &[syn::Expr], krate: &TokenStream) -> Vec<TokenStream> {
     guard_fns
@@ -526,6 +686,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     } else {
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
         let guard_checks = generate_guard_checks(&rm.decorators.guard_fns, &krate);
+        let path_param_module = if has_guards {
+            generate_path_param_module(rm, &krate)
+        } else {
+            quote! {}
+        };
         let guard_context_construction = if has_guards {
             generate_guard_context(&ctx, rm, &krate)
         } else {
@@ -602,6 +767,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 #(#handler_extra_params,)*
             ) -> #krate::http::response::Response {
                 #guard_context_construction
+                #path_param_module
                 #(#guard_checks)*
                 #(#validation_calls)*
                 let __ctrl = __ctrl_ext.0;

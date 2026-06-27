@@ -197,6 +197,13 @@ fn pre_auth_guard_context_parse_path_param() {
 }
 
 #[test]
+fn path_param_descriptor_exposes_name() {
+    let param = r2e_core::PathParam::<u64>::new("id");
+    assert_eq!(param.name(), "id");
+    assert_eq!(param.as_ref(), "id");
+}
+
+#[test]
 fn guard_context_method_name() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();

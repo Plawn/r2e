@@ -75,6 +75,7 @@ Use `parse_path_param()` for resource authorization guards that need typed IDs:
 
 ```rust
 use r2e::prelude::*;
+use r2e::PathParam;
 use std::future::Future;
 
 #[derive(Clone, Copy)]
@@ -99,9 +100,9 @@ struct ProjectGuard {
 }
 
 impl ProjectGuard {
-    const fn viewer(param: &'static str) -> Self {
+    const fn viewer(param: PathParam<ProjectId>) -> Self {
         Self {
-            param,
+            param: param.name(),
             min_role: ProjectRole::Viewer,
         }
     }
@@ -129,11 +130,23 @@ impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
 }
 
 #[get("/projects/{pid}")]
-#[guard(ProjectGuard::viewer("pid"))]
-async fn project(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<Project> {
+#[guard(ProjectGuard::viewer(path::pid))]
+async fn project(
+    &self,
+    #[inject(identity)] user: AuthenticatedUser,
+    Path(pid): Path<ProjectId>,
+) -> Json<Project> {
     /* ... */
 }
 ```
+
+`#[routes]` generates a local `path` namespace for each guarded route. Each
+symbol is a `PathParam<T>` containing the route parameter name and, when the
+handler uses `Path<T>`, the extracted Rust type. String-based constructors such
+as `ProjectGuard::viewer("pid")` continue to work for compatibility. Prefer
+`path::pid` in new guard declarations because an unknown symbol like
+`path::missing` fails at compile time. Use `ctx.parse_path_param::<T>("pid")`
+inside the guard implementation when reading the actual request value.
 
 Path-param parsing has consistent error mapping:
 
@@ -148,9 +161,13 @@ For nested resources, keep the route parameter names explicit in the guard const
 ```rust
 #[get("/tenants/{tid}/projects/{pid}/sboms/{sid}")]
 #[guard(TenantGuard::member("tid"))]
-#[guard(ProjectGuard::viewer("pid"))]
-#[guard(SbomGuard::viewer("pid", "sid"))]
-async fn sbom(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<Sbom> {
+#[guard(ProjectGuard::viewer(path::pid))]
+#[guard(SbomGuard::viewer(path::pid, path::sid))]
+async fn sbom(
+    &self,
+    #[inject(identity)] user: AuthenticatedUser,
+    Path((tid, pid, sid)): Path<(TenantId, ProjectId, SbomVersionId)>,
+) -> Json<Sbom> {
     /* ... */
 }
 ```

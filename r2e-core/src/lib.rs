@@ -46,7 +46,7 @@ pub use config::{
 };
 pub use controller::{Controller, StatefulConstruct};
 pub use error::{HttpError, HttpErrorExt};
-pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuard, PreAuthGuardContext};
+pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
 pub use tracing_config::{LogFormat, SpanEvents, TracingConfig};
@@ -74,4 +74,3 @@ pub use dev::invalidate_state_cache;
 // Entry-point macros
 pub use r2e_macros::main;
 pub use r2e_macros::test;
-
