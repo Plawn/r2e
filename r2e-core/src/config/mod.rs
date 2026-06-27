@@ -7,6 +7,7 @@ pub mod value;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use registry::{register_section, registered_sections, RegisteredSection};
@@ -74,7 +75,7 @@ impl std::error::Error for ConfigError {}
 /// `.env` files never overwrite already-set environment variables.
 #[derive(Debug, Clone)]
 pub struct R2eConfig {
-    values: HashMap<String, ConfigValue>,
+    values: Arc<HashMap<String, ConfigValue>>,
 }
 
 /// Overlay `R2E_`-prefixed environment variables onto a config values map.
@@ -118,7 +119,9 @@ impl R2eConfig {
         // 4. Overlay environment variables.
         apply_env_overlay(&mut values, std::env::vars());
 
-        Ok(R2eConfig { values })
+        Ok(R2eConfig {
+            values: Arc::new(values),
+        })
     }
 
     /// Load configuration (default resolver: env + file).
@@ -144,19 +147,21 @@ impl R2eConfig {
     pub fn from_yaml_str(yaml: &str) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
         loader::load_yaml_str(yaml, &mut values)?;
-        Ok(R2eConfig { values })
+        Ok(R2eConfig {
+            values: Arc::new(values),
+        })
     }
 
     /// Create an empty config (useful for testing).
     pub fn empty() -> Self {
         R2eConfig {
-            values: HashMap::new(),
+            values: Arc::new(HashMap::new()),
         }
     }
 
     /// Set a value programmatically.
     pub fn set(&mut self, key: &str, value: ConfigValue) {
-        self.values.insert(key.to_string(), value);
+        Arc::make_mut(&mut self.values).insert(key.to_string(), value);
     }
 }
 
@@ -270,4 +275,30 @@ fn resolve_string_values(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigValue, R2eConfig};
+    use std::sync::Arc;
+
+    #[test]
+    fn clone_shares_values_backing_store() {
+        let config = R2eConfig::from_yaml_str("app:\n  name: original\n").unwrap();
+        let cloned = config.clone();
+
+        assert!(Arc::ptr_eq(&config.values, &cloned.values));
+    }
+
+    #[test]
+    fn set_on_clone_uses_copy_on_write() {
+        let config = R2eConfig::from_yaml_str("app:\n  name: original\n").unwrap();
+        let mut cloned = config.clone();
+
+        cloned.set("app.name", ConfigValue::String("updated".into()));
+
+        assert!(!Arc::ptr_eq(&config.values, &cloned.values));
+        assert_eq!(config.get::<String>("app.name").unwrap(), "original");
+        assert_eq!(cloned.get::<String>("app.name").unwrap(), "updated");
+    }
 }

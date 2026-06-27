@@ -43,12 +43,11 @@ struct JwksResponse {
     keys: Vec<Jwk>,
 }
 
-/// Internal storage for a cached JWK entry.
-/// We store the raw components so we can reconstruct a `DecodingKey` on demand
-/// (since `DecodingKey` does not implement `Clone`).
+/// JWK components used to construct and test cached keys.
 ///
 /// Exposed (doc-hidden) only so integration tests can construct it directly;
-/// not part of the public API.
+/// not part of the public API. The cache itself stores a pre-built
+/// `Arc<DecodingKey>` rather than these components.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct CachedJwk {
@@ -69,21 +68,11 @@ impl CachedJwk {
     /// family is allowed: the key type (`kty`) must match the token's algorithm
     /// family, and if the JWK advertises its own `alg` it must match exactly.
     #[doc(hidden)]
-    pub fn to_decoding_key_checked(&self, algorithm: Algorithm) -> Result<DecodingKey, SecurityError> {
-        let expected_kty = kty_for_algorithm(algorithm);
-        if self.kty != expected_kty {
-            return Err(SecurityError::ValidationFailed(format!(
-                "JWK key type '{}' is incompatible with token algorithm {algorithm:?}",
-                self.kty
-            )));
-        }
-        if let Some(alg) = &self.alg {
-            if !alg.eq_ignore_ascii_case(&format!("{algorithm:?}")) {
-                return Err(SecurityError::ValidationFailed(format!(
-                    "JWK algorithm '{alg}' does not match token algorithm {algorithm:?}"
-                )));
-            }
-        }
+    pub fn to_decoding_key_checked(
+        &self,
+        algorithm: Algorithm,
+    ) -> Result<DecodingKey, SecurityError> {
+        validate_key_metadata(&self.kty, self.alg.as_deref(), algorithm)?;
         self.to_decoding_key()
     }
 
@@ -133,9 +122,74 @@ impl CachedJwk {
     }
 }
 
+/// A JWK whose decoding key was built when the JWKS response was loaded.
+///
+/// Construction failures are retained as validation errors so a malformed key
+/// keeps the same request-time behavior as before instead of silently becoming
+/// an unknown `kid` or invalidating every other key in the JWKS response.
+struct CachedKey {
+    kty: String,
+    alg: Option<String>,
+    decoding_key: Result<Arc<DecodingKey>, String>,
+}
+
+impl CachedKey {
+    fn new(jwk: CachedJwk) -> Self {
+        let decoding_key = jwk
+            .to_decoding_key()
+            .map(Arc::new)
+            .map_err(validation_error_message);
+
+        Self {
+            kty: jwk.kty,
+            alg: jwk.alg,
+            decoding_key,
+        }
+    }
+
+    fn decoding_key_checked(
+        &self,
+        algorithm: Algorithm,
+    ) -> Result<Arc<DecodingKey>, SecurityError> {
+        validate_key_metadata(&self.kty, self.alg.as_deref(), algorithm)?;
+        self.decoding_key
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|message| SecurityError::ValidationFailed(message.clone()))
+    }
+}
+
+fn validation_error_message(error: SecurityError) -> String {
+    match error {
+        SecurityError::ValidationFailed(message) => message,
+        unexpected => unexpected.to_string(),
+    }
+}
+
+fn validate_key_metadata(
+    kty: &str,
+    advertised_algorithm: Option<&str>,
+    algorithm: Algorithm,
+) -> Result<(), SecurityError> {
+    let expected_kty = kty_for_algorithm(algorithm);
+    if kty != expected_kty {
+        return Err(SecurityError::ValidationFailed(format!(
+            "JWK key type '{kty}' is incompatible with token algorithm {algorithm:?}"
+        )));
+    }
+    if let Some(advertised_algorithm) = advertised_algorithm {
+        if !advertised_algorithm.eq_ignore_ascii_case(&format!("{algorithm:?}")) {
+            return Err(SecurityError::ValidationFailed(format!(
+                "JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Cached state behind the lock.
 struct CacheInner {
-    keys: HashMap<String, CachedJwk>,
+    keys: HashMap<String, CachedKey>,
     last_refresh: Option<Instant>,
     last_refresh_attempt: Option<Instant>,
 }
@@ -188,44 +242,47 @@ impl JwksCache {
         kid: &str,
         algorithm: Algorithm,
     ) -> Result<DecodingKey, SecurityError> {
+        self.get_shared_key(kid, algorithm)
+            .await
+            .map(|key| key.as_ref().clone())
+    }
+
+    /// Resolve the cached decoding key without cloning its internal buffers.
+    pub(crate) async fn get_shared_key(
+        &self,
+        kid: &str,
+        algorithm: Algorithm,
+    ) -> Result<Arc<DecodingKey>, SecurityError> {
         let ttl = Duration::from_secs(self.config.jwks_cache_ttl_secs);
 
         // First, try cache. If stale or missing, attempt a refresh.
-        let mut needs_refresh = false;
-        let mut force_refresh = false;
-        let mut had_cached_key = false;
-        {
+        let (force_refresh, had_cached_key) = {
             let cache = self.inner.read().await;
             if let Some(jwk) = cache.keys.get(kid) {
-                had_cached_key = true;
                 if is_stale(cache.last_refresh, ttl) {
-                    needs_refresh = true;
-                    force_refresh = false;
+                    (false, true)
                 } else {
-                    return jwk.to_decoding_key_checked(algorithm);
+                    return jwk.decoding_key_checked(algorithm);
                 }
             } else {
-                needs_refresh = true;
-                force_refresh = true;
+                (true, false)
             }
-        }
+        };
 
-        if needs_refresh {
-            // Kid not found (or cache was stale). Attempt refresh, then try again.
-            if let Err(err) = self.try_refresh(force_refresh).await {
-                // If we already hold a (stale) key for this kid, keep serving it
-                // rather than failing auth on a transient JWKS outage. Signing keys
-                // rotate slowly, so a stale-but-valid key is safe to use. Only a
-                // genuinely unknown kid hard-fails here.
-                if had_cached_key {
-                    let cache = self.inner.read().await;
-                    if let Some(jwk) = cache.keys.get(kid) {
-                        warn!(kid, error = %err, "JWKS refresh failed; using stale cached key");
-                        return jwk.to_decoding_key_checked(algorithm);
-                    }
+        // Kid not found (or cache was stale). Attempt refresh, then try again.
+        if let Err(err) = self.try_refresh(force_refresh).await {
+            // If we already hold a (stale) key for this kid, keep serving it
+            // rather than failing auth on a transient JWKS outage. Signing keys
+            // rotate slowly, so a stale-but-valid key is safe to use. Only a
+            // genuinely unknown kid hard-fails here.
+            if had_cached_key {
+                let cache = self.inner.read().await;
+                if let Some(jwk) = cache.keys.get(kid) {
+                    warn!(kid, error = %err, "JWKS refresh failed; using stale cached key");
+                    return jwk.decoding_key_checked(algorithm);
                 }
-                return Err(err);
             }
+            return Err(err);
         }
 
         let cache = self.inner.read().await;
@@ -233,7 +290,7 @@ impl JwksCache {
             .keys
             .get(kid)
             .ok_or_else(|| SecurityError::UnknownKeyId(kid.to_string()))?
-            .to_decoding_key_checked(algorithm)
+            .decoding_key_checked(algorithm)
     }
 
     /// Force a refresh of the JWKS cache from the remote endpoint.
@@ -256,17 +313,18 @@ impl JwksCache {
 
         let mut keys = HashMap::new();
         for jwk in jwks.keys {
-            if let Some(kid) = &jwk.kid {
-                let cached = CachedJwk {
-                    kty: jwk.kty.clone(),
-                    alg: jwk.alg.clone(),
-                    n: jwk.n.clone(),
-                    e: jwk.e.clone(),
-                    x: jwk.x.clone(),
-                    y: jwk.y.clone(),
-                };
-                keys.insert(kid.clone(), cached);
-            }
+            let Some(kid) = jwk.kid else {
+                continue;
+            };
+            let cached = CachedJwk {
+                kty: jwk.kty,
+                alg: jwk.alg,
+                n: jwk.n,
+                e: jwk.e,
+                x: jwk.x,
+                y: jwk.y,
+            };
+            keys.insert(kid, CachedKey::new(cached));
         }
 
         let now = Instant::now();
@@ -389,5 +447,27 @@ pub fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> boo
     match last_attempt {
         None => true,
         Some(ts) => ts.elapsed() >= min_interval,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_key_reuses_prebuilt_decoding_key() {
+        let cached = CachedKey::new(CachedJwk {
+            kty: "RSA".into(),
+            alg: Some("RS256".into()),
+            n: Some("AQ".into()),
+            e: Some("AQAB".into()),
+            x: None,
+            y: None,
+        });
+
+        let first = cached.decoding_key_checked(Algorithm::RS256).unwrap();
+        let second = cached.decoding_key_checked(Algorithm::RS256).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }

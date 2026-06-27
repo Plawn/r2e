@@ -1118,9 +1118,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// declared on the controller, so that they are started automatically
     /// by `serve()`.
     pub fn register_controller<C: Controller<T>>(mut self) -> Self {
-        self.routes.push(C::routes());
-        self.pre_auth_guard_fns
-            .push(Box::new(|router, state| C::apply_pre_auth_guards(router, state)));
         C::register_meta(&mut self.meta_registry);
         self.consumer_registrations
             .push(Box::new(|state| C::register_consumers(state)));
@@ -1137,6 +1134,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 );
             }
         }
+
+        // Construct and bind app-scoped controllers only after config
+        // validation, so configuration errors retain their aggregated report.
+        let state = self
+            .state
+            .as_ref()
+            .expect("AppBuilder: state must be set before registering a controller");
+        self.routes.push(C::routes_with_state(state));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.

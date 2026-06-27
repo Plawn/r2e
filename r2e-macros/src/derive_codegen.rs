@@ -111,6 +111,28 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     };
 
     let has_struct_identity = !def.identity_fields.is_empty();
+    let bind_controller_fn = if has_struct_identity {
+        quote! {
+            pub fn bind_controller(
+                __router: #krate::http::Router<State>,
+                _state: &State,
+            ) -> #krate::http::Router<State> {
+                __router
+            }
+        }
+    } else {
+        quote! {
+            pub fn bind_controller(
+                __router: #krate::http::Router<State>,
+                __state: &State,
+            ) -> #krate::http::Router<State> {
+                let __controller = ::std::sync::Arc::new(
+                    <super::#name as #krate::StatefulConstruct<State>>::from_state(__state)
+                );
+                __router.layer(#krate::http::Extension(__controller))
+            }
+        }
+    };
 
     quote! {
         #[doc(hidden)]
@@ -122,6 +144,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
             #guard_identity_fn
+            #bind_controller_fn
             #validate_fn
         }
     }
@@ -133,6 +156,36 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
     let name = &def.name;
     let state_type = &def.state_type;
     let extractor_name = format_ident!("__R2eExtract_{}", name);
+
+    if def.identity_fields.is_empty() {
+        return quote! {
+            #[doc(hidden)]
+            #[allow(non_camel_case_types)]
+            pub struct #extractor_name(pub ::std::sync::Arc<#name>);
+
+            impl #krate::http::extract::FromRequestParts<#state_type> for #extractor_name {
+                type Rejection = #krate::http::response::Response;
+
+                async fn from_request_parts(
+                    __parts: &mut #krate::http::header::Parts,
+                    __state: &#state_type,
+                ) -> Result<Self, Self::Rejection> {
+                    let __controller = match
+                        <#krate::http::Extension<::std::sync::Arc<#name>> as
+                            #krate::http::extract::FromRequestParts<#state_type>>
+                            ::from_request_parts(__parts, __state)
+                            .await
+                    {
+                        Ok(#krate::http::Extension(__controller)) => __controller,
+                        Err(_) => ::std::sync::Arc::new(
+                            <#name as #krate::StatefulConstruct<#state_type>>::from_state(__state)
+                        ),
+                    };
+                    Ok(Self(__controller))
+                }
+            }
+        };
+    }
 
     // Identity extractions (async, from request parts)
     let identity_extractions: Vec<TokenStream> = def

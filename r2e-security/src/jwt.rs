@@ -12,7 +12,7 @@ use crate::openid::RoleExtractor;
 /// Source of decoding keys: either a JWKS cache or a static key for testing.
 enum KeySource {
     Jwks(Arc<JwksCache>),
-    Static(DecodingKey),
+    Static(Arc<DecodingKey>),
 }
 
 /// Low-level JWT claims validator.
@@ -38,22 +38,45 @@ enum KeySource {
 pub struct JwtClaimsValidator {
     key_source: KeySource,
     config: SecurityConfig,
+    validation: Validation,
 }
 
 impl JwtClaimsValidator {
+    fn build_validation(config: &SecurityConfig) -> Validation {
+        // `algorithms` is replaced below, so this fallback is only needed to
+        // construct a Validation when the configured allow-list is empty.
+        let mut validation = Validation::new(
+            config
+                .allowed_algorithms
+                .first()
+                .copied()
+                .unwrap_or(jsonwebtoken::Algorithm::RS256),
+        );
+        validation.algorithms = config.allowed_algorithms.clone();
+        validation.set_issuer(&[&config.issuer]);
+        validation.set_audience(&[&config.audience]);
+        validation.validate_exp = true;
+        validation.validate_nbf = true;
+        validation
+    }
+
     /// Create a new validator backed by a JWKS cache.
     pub fn new(jwks: Arc<JwksCache>, config: SecurityConfig) -> Self {
+        let validation = Self::build_validation(&config);
         Self {
             key_source: KeySource::Jwks(jwks),
             config,
+            validation,
         }
     }
 
     /// Create a new validator with a static decoding key (useful for testing).
     pub fn new_with_static_key(key: DecodingKey, config: SecurityConfig) -> Self {
+        let validation = Self::build_validation(&config);
         Self {
-            key_source: KeySource::Static(key),
+            key_source: KeySource::Static(Arc::new(key)),
             config,
+            validation,
         }
     }
 
@@ -94,25 +117,18 @@ impl JwtClaimsValidator {
 
         // Step 2: Get the decoding key
         let decoding_key = match &self.key_source {
-            KeySource::Static(key) => key.clone(),
+            KeySource::Static(key) => Arc::clone(key),
             KeySource::Jwks(jwks) => {
                 let kid = header.kid.as_deref().ok_or_else(|| {
                     SecurityError::InvalidToken("JWT header missing 'kid' field".into())
                 })?;
-                jwks.get_key(kid, algorithm).await?
+                jwks.get_shared_key(kid, algorithm).await?
             }
         };
 
-        // Step 3: Set up validation parameters
-        let mut validation = Validation::new(algorithm);
-        validation.algorithms = self.config.allowed_algorithms.clone();
-        validation.set_issuer(&[&self.config.issuer]);
-        validation.set_audience(&[&self.config.audience]);
-        validation.validate_exp = true;
-        validation.validate_nbf = true;
-
-        // Step 4: Decode and validate the token
-        let token_data = decode::<serde_json::Value>(token, &decoding_key, &validation)
+        // Step 3: Decode and validate the token using the parameters prepared
+        // once when the validator was constructed.
+        let token_data = decode::<serde_json::Value>(token, &decoding_key, &self.validation)
             .map_err(|e| {
                 let err = match e.kind() {
                     jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
@@ -170,7 +186,10 @@ impl JwtClaimsValidator {
     ///
     /// This is a convenience method that creates an [`IdentityBuilderWith`]
     /// using the provided role extractor.
-    pub fn with_role_extractor<R: RoleExtractor>(self, extractor: R) -> JwtValidator<IdentityBuilderWith<R>> {
+    pub fn with_role_extractor<R: RoleExtractor>(
+        self,
+        extractor: R,
+    ) -> JwtValidator<IdentityBuilderWith<R>> {
         self.with_identity_builder(IdentityBuilderWith::new(extractor))
     }
 }

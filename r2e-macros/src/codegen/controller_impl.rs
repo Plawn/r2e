@@ -78,6 +78,13 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #router_body
             }
 
+            fn routes_with_state(
+                __state: &#meta_mod::State,
+            ) -> #krate::http::Router<#meta_mod::State> {
+                let __router = Self::apply_pre_auth_guards(Self::routes(), __state);
+                #meta_mod::bind_controller(__router, __state)
+            }
+
             fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
                 #(#register_meta_stmts)*
             }

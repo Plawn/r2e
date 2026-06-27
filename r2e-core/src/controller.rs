@@ -14,6 +14,17 @@ pub trait StatefulConstruct<S> {
 pub trait Controller<T: Clone + Send + Sync + 'static> {
     fn routes() -> crate::http::Router<T>;
 
+    /// Build this controller's routes once the application state is available.
+    ///
+    /// Derived controllers use this hook to construct app-scoped controllers
+    /// once and attach them to their routes. The default keeps manually
+    /// implemented controllers source-compatible while still applying their
+    /// pre-authentication guards.
+    #[doc(hidden)]
+    fn routes_with_state(state: &T) -> crate::http::Router<T> {
+        Self::apply_pre_auth_guards(Self::routes(), state)
+    }
+
     /// Apply pre-authentication guard layers to specific routes.
     ///
     /// Called by `register_controller()` with the application state after building
