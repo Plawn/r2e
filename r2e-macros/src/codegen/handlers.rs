@@ -245,8 +245,8 @@ fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
     }
 }
 
-fn path_extractor_info(rm: &RouteMethod) -> Option<(Vec<String>, Vec<syn::Type>)> {
-    for (_, param) in extract_handler_params(rm) {
+fn path_extractor_info(sig: &syn::Signature) -> Option<(Vec<String>, Vec<syn::Type>)> {
+    for (_, param) in extract_sig_params(sig) {
         let Some(inner_ty) = path_wrapper_inner_type(&param.ty) else {
             continue;
         };
@@ -257,9 +257,9 @@ fn path_extractor_info(rm: &RouteMethod) -> Option<(Vec<String>, Vec<syn::Type>)
     None
 }
 
-fn infer_path_param_symbols(rm: &RouteMethod) -> Vec<PathParamSymbol> {
-    let route_names = extract_route_path_param_names(&rm.path);
-    let (pat_names, path_types) = path_extractor_info(rm).unwrap_or_default();
+fn infer_path_param_symbols(path: &str, sig: &syn::Signature) -> Vec<PathParamSymbol> {
+    let route_names = extract_route_path_param_names(path);
+    let (pat_names, path_types) = path_extractor_info(sig).unwrap_or_default();
 
     let mut ordered_names = if pat_names.is_empty() {
         route_names.clone()
@@ -294,8 +294,12 @@ fn infer_path_param_symbols(rm: &RouteMethod) -> Vec<PathParamSymbol> {
     symbols
 }
 
-fn generate_path_param_module(rm: &RouteMethod, krate: &TokenStream) -> TokenStream {
-    let symbols = infer_path_param_symbols(rm);
+fn generate_path_param_module(
+    path: &str,
+    sig: &syn::Signature,
+    krate: &TokenStream,
+) -> TokenStream {
+    let symbols = infer_path_param_symbols(path, sig);
     if symbols.is_empty() {
         return quote! {};
     }
@@ -687,7 +691,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
         let guard_checks = generate_guard_checks(&rm.decorators.guard_fns, &krate);
         let path_param_module = if has_guards {
-            generate_path_param_module(rm, &krate)
+            generate_path_param_module(&rm.path, &rm.fn_item.sig, &krate)
         } else {
             quote! {}
         };
@@ -862,6 +866,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         }
     } else {
         let guard_checks = generate_guard_checks(&sm.decorators.guard_fns, &krate);
+        let path_param_module = generate_path_param_module(&sm.path, &sm.fn_item.sig, &krate);
 
         let guard_context = if let Some(ref id_param) = sm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);
@@ -905,6 +910,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                 __ctrl_ext: #extractor_name,
                 #(#handler_extra_params,)*
             ) -> #krate::http::response::Response {
+                #path_param_module
                 #guard_context
                 #(#guard_checks)*
                 let __ctrl = __ctrl_ext.0;
@@ -1020,6 +1026,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         }
     } else {
         let guard_checks = generate_guard_checks(&wm.decorators.guard_fns, &krate);
+        let path_param_module = generate_path_param_module(&wm.path, &wm.fn_item.sig, &krate);
 
         let guard_context = if let Some(ref id_param) = wm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);
@@ -1064,6 +1071,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 #(#handler_extra_params,)*
                 __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
             ) -> #krate::http::response::Response {
+                #path_param_module
                 #guard_context
                 #(#guard_checks)*
                 __ws_upgrade.on_upgrade(move |__socket| async move {
