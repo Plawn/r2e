@@ -178,7 +178,7 @@ fn generate_grpc_guard_checks(
                     service_name: #controller_name_str,
                     method_name: #fn_name_str,
                     metadata: request.metadata(),
-                    identity: None::<&#grpc_krate::__macro_support::tonic::codegen::Never>,
+                    identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
                 };
                 // Note: roles guard requires identity — this is a simplified version.
                 // The full version would extract identity first and pass it.
@@ -201,7 +201,7 @@ fn generate_grpc_guard_checks(
                         service_name: #controller_name_str,
                         method_name: #fn_name_str,
                         metadata: request.metadata(),
-                        identity: None::<&#grpc_krate::__macro_support::tonic::codegen::Never>,
+                        identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
                     };
                     if let Err(__status) = #grpc_krate::GrpcGuard::check(&__guard, &self.state, &__guard_ctx).await {
                         return Err(__status);

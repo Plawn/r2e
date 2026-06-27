@@ -16,7 +16,7 @@ reflection = ["dep:tonic-reflection"]
 
 [dependencies]
 r2e-core = {workspace = true}
-tonic = {workspace = true, features = ["codegen", "prost", "router", "server"]}
+tonic = {workspace = true, features = ["codegen", "router", "server"]}
 prost = {workspace = true}
 tokio = {workspace = true, features = ["net", "rt"]}
 hyper = {workspace = true, features = ["http2", "server"]}

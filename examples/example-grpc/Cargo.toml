@@ -8,8 +8,10 @@ publish = false
 r2e = {workspace = true, features = ["grpc"]}
 tokio = {workspace = true, features = ["full"]}
 tonic = {workspace = true, default-features = true}
+tonic-prost = {workspace = true}
 prost = {workspace = true}
 tracing = {workspace = true}
 
 [build-dependencies]
 tonic-build = {workspace = true}
+tonic-prost-build = {workspace = true}

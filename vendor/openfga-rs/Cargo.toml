@@ -18,16 +18,18 @@ include = [
 resolver = "2"
 
 [dependencies]
-tonic = { version = "~0.13", default-features = false, features = ["tls-ring", "tls-webpki-roots", "channel", "codegen", "prost"] }
-prost = { version = "~0.13", features = ["std", "prost-derive"] }
-prost-types = "~0.13"
-prost-wkt = "~0.6"
-prost-wkt-types = "~0.6"
+tonic = { version = "~0.14", default-features = false, features = ["tls-ring", "tls-webpki-roots", "channel", "codegen"] }
+tonic-prost = "~0.14"
+prost = { version = "~0.14", features = ["std", "derive"] }
+prost-types = "~0.14"
+prost-wkt = "~0.7"
+prost-wkt-types = "~0.7"
 serde = { version = "~1.0", features = ["derive"] }
 
 [build-dependencies]
-tonic-build = { version = "~0.13" }
-prost-wkt-build = "~0.6"
+tonic-build = { version = "~0.14" }
+tonic-prost-build = "~0.14"
+prost-wkt-build = "~0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

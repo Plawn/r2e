@@ -169,6 +169,18 @@ pub mod __macro_support {
     pub use crate::identity::{GrpcIdentityExtractor, JwtClaimsValidatorLike};
     pub use crate::service::GrpcService;
     pub use tonic;
+
+    /// Uninhabited placeholder identity used by generated guard scaffolding when
+    /// no concrete identity type is available (e.g. `None::<&NeverIdentity>`).
+    ///
+    /// Replaces the former `tonic::codegen::Never`, which was removed in tonic 0.14.
+    pub enum NeverIdentity {}
+
+    impl r2e_core::Identity for NeverIdentity {
+        fn sub(&self) -> &str {
+            match *self {}
+        }
+    }
 }
 
 pub mod prelude {
