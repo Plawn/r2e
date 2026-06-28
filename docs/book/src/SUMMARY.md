@@ -67,6 +67,7 @@
 - [Multipart File Uploads](./advanced/multipart.md)
 - [Observability](./advanced/observability.md)
 - [Performance Guide](./advanced/performance.md)
+- [Controller Lifecycle and Handler Dispatch](./advanced/controller-lifecycle-and-dispatch.md)
 
 # Testing
 

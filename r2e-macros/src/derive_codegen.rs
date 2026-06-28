@@ -111,25 +111,45 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     };
 
     let has_struct_identity = !def.identity_fields.is_empty();
-    let bind_controller_fn = if has_struct_identity {
+
+    // Dispatch helper used by `routes_with_state`:
+    //
+    //  * Non-identity controllers: construct the controller Arc once and
+    //    hand it to `__arc_router` so all routes can be registered via
+    //    closures that capture it — bypassing the per-request
+    //    `Extension<Arc<Self>>` extraction entirely.
+    //  * Identity controllers: keep the request-scoped behavior by running
+    //    the legacy `__fallback_router` (which builds the router from
+    //    `Self::routes()` plus `apply_pre_auth_guards`).
+    let build_arc_router_or_fn = if has_struct_identity {
         quote! {
-            pub fn bind_controller(
-                __router: #krate::http::Router<State>,
+            pub fn build_arc_router_or<F, G>(
                 _state: &State,
-            ) -> #krate::http::Router<State> {
-                __router
+                _arc_router: F,
+                __fallback_router: G,
+            ) -> #krate::http::Router<State>
+            where
+                F: ::core::ops::FnOnce(::std::sync::Arc<super::#name>) -> #krate::http::Router<State>,
+                G: ::core::ops::FnOnce() -> #krate::http::Router<State>,
+            {
+                __fallback_router()
             }
         }
     } else {
         quote! {
-            pub fn bind_controller(
-                __router: #krate::http::Router<State>,
+            pub fn build_arc_router_or<F, G>(
                 __state: &State,
-            ) -> #krate::http::Router<State> {
+                __arc_router: F,
+                _fallback_router: G,
+            ) -> #krate::http::Router<State>
+            where
+                F: ::core::ops::FnOnce(::std::sync::Arc<super::#name>) -> #krate::http::Router<State>,
+                G: ::core::ops::FnOnce() -> #krate::http::Router<State>,
+            {
                 let __controller = ::std::sync::Arc::new(
                     <super::#name as #krate::StatefulConstruct<State>>::from_state(__state)
                 );
-                __router.layer(#krate::http::Extension(__controller))
+                __arc_router(__controller)
             }
         }
     };
@@ -144,7 +164,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
             #guard_identity_fn
-            #bind_controller_fn
+            #build_arc_router_or_fn
             #validate_fn
         }
     }
@@ -277,8 +297,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         })
         .collect();
 
-    let has_any_config =
-        !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let has_any_config = !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
     let config_prelude = if has_any_config {
         quote! {
             let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
@@ -352,8 +371,7 @@ fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
         .map(|f| config_section_init_panic(&f.name, &f.ty, &f.prefix, &controller_name_str, &krate))
         .collect();
 
-    let has_any_config =
-        !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let has_any_config = !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
     let config_prelude = if has_any_config {
         quote! {
             let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);

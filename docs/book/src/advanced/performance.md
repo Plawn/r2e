@@ -159,3 +159,10 @@ These are compile-time constants — the Tokio runtime is built before any async
 | Consumers/Schedulers | Not possible | Possible |
 | Identity access | `self.user` | Only in handler parameter |
 | Public endpoint overhead | JWT validation wasted | None |
+
+Struct-level identity also makes the controller request-scoped because the
+controller owns a concrete identity value. Parameter-level identity keeps the
+controller application-scoped, so `register_controller()` can construct it
+once and reuse it through a captured `Arc`. See [Controller Lifecycle and
+Handler Dispatch](./controller-lifecycle-and-dispatch.md) for the generated
+dispatch paths and their compatibility trade-offs.

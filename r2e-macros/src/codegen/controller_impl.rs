@@ -34,6 +34,14 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let route_registrations = generate_route_registrations(def, name);
     let sse_route_registrations = generate_sse_route_registrations(def, name);
     let ws_route_registrations = generate_ws_route_registrations(def, name);
+
+    // Arc-binding (fast-path) registrations: one entry per route — each
+    // captures the controller Arc in a closure and forwards to the
+    // `_arc` inner handler.
+    let arc_route_registrations = generate_arc_route_registrations(def);
+    let arc_sse_route_registrations = generate_arc_sse_route_registrations(def);
+    let arc_ws_route_registrations = generate_arc_ws_route_registrations(def);
+    let arc_pre_auth_registrations = generate_arc_pre_auth_registrations(def, name, &meta_mod);
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
@@ -70,6 +78,23 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         }
     };
 
+    // Arc-binding router body. Used by `routes_with_state` for non-identity
+    // controllers — the controller `Arc` is captured once at router build
+    // time and reused per request.
+    let arc_router_body = quote! {
+        |__ctrl: ::std::sync::Arc<#name>| {
+            let mut __inner = #krate::http::Router::new()
+                #(#arc_route_registrations)*
+                #(#arc_sse_route_registrations)*
+                #(#arc_ws_route_registrations)*;
+            #(#arc_pre_auth_registrations)*
+            match #meta_mod::PATH_PREFIX {
+                Some("/") | None => __inner,
+                Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
+            }
+        }
+    };
+
     quote! {
         #off_request_identity_guard
 
@@ -81,8 +106,17 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             fn routes_with_state(
                 __state: &#meta_mod::State,
             ) -> #krate::http::Router<#meta_mod::State> {
-                let __router = Self::apply_pre_auth_guards(Self::routes(), __state);
-                #meta_mod::bind_controller(__router, __state)
+                // Dispatch:
+                //   * non-identity controllers → build the router via the
+                //     Arc-capturing closure (fast path, no Extension).
+                //   * identity controllers → fall back to `Self::routes()`;
+                //     the request extractor rebuilds the controller from the
+                //     request-scoped identity.
+                #meta_mod::build_arc_router_or(
+                    __state,
+                    #arc_router_body,
+                    || Self::apply_pre_auth_guards(Self::routes(), __state),
+                )
             }
 
             fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
@@ -233,7 +267,8 @@ fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<T
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
 
-            let has_layers = !rm.decorators.middleware_fns.is_empty() || !rm.decorators.layer_exprs.is_empty();
+            let has_layers =
+                !rm.decorators.middleware_fns.is_empty() || !rm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -463,8 +498,9 @@ fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
     if let syn::Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             return match segment.ident.to_string().as_str() {
-                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64"
-                | "isize" => "integer",
+                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
+                    "integer"
+                }
                 "f32" | "f64" => "number",
                 "bool" => "boolean",
                 _ => "string",
@@ -952,7 +988,8 @@ fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> V
             let handler_name = format_ident!("__r2e_{}_{}", name, sm.fn_item.sig.ident);
             let path = &sm.path;
 
-            let has_layers = !sm.decorators.middleware_fns.is_empty() || !sm.decorators.layer_exprs.is_empty();
+            let has_layers =
+                !sm.decorators.middleware_fns.is_empty() || !sm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -1019,7 +1056,8 @@ fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Ve
             let handler_name = format_ident!("__r2e_{}_{}", name, wm.fn_item.sig.ident);
             let path = &wm.path;
 
-            let has_layers = !wm.decorators.middleware_fns.is_empty() || !wm.decorators.layer_exprs.is_empty();
+            let has_layers =
+                !wm.decorators.middleware_fns.is_empty() || !wm.decorators.layer_exprs.is_empty();
 
             if !has_layers {
                 quote! {
@@ -1126,8 +1164,205 @@ fn emit_streaming_route_info(
     }
 }
 
+// ── Arc-binding route registrations (fast-path, no Extension) ───────────
+//
+// These produce the `.route(path, METHOD(closure))` fragments registered
+// inside the `routes_with_state` Arc closure for non-identity controllers.
+// Each fragment captures the controller `Arc` once and forwards to the
+// `_arc` inner handler emitted by `handlers.rs`.
+
+fn generate_arc_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    def.route_methods
+        .iter()
+        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty())
+        .map(|rm| {
+            let path = &rm.path;
+            let method_fn = format_ident!("{}", rm.method.as_routing_fn());
+            let closure = super::handlers::generate_arc_route_closure(def, rm);
+            let middleware_layers: Vec<_> = rm
+                .decorators
+                .middleware_fns
+                .iter()
+                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                .collect();
+            let direct_layers: Vec<_> = rm
+                .decorators
+                .layer_exprs
+                .iter()
+                .map(|expr| quote! { .layer(#expr) })
+                .collect();
+            quote! {
+                .route(
+                    #path,
+                    #krate::http::routing::#method_fn(#closure)
+                        #(#middleware_layers)*
+                        #(#direct_layers)*
+                )
+            }
+        })
+        .collect()
+}
+
+fn generate_arc_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    def.sse_methods
+        .iter()
+        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty())
+        .map(|sm| {
+            let path = &sm.path;
+            let closure = super::handlers::generate_arc_sse_closure(def, sm);
+            let middleware_layers: Vec<_> = sm
+                .decorators
+                .middleware_fns
+                .iter()
+                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                .collect();
+            let direct_layers: Vec<_> = sm
+                .decorators
+                .layer_exprs
+                .iter()
+                .map(|expr| quote! { .layer(#expr) })
+                .collect();
+            quote! {
+                .route(
+                    #path,
+                    #krate::http::routing::get(#closure)
+                        #(#middleware_layers)*
+                        #(#direct_layers)*
+                )
+            }
+        })
+        .collect()
+}
+
+fn generate_arc_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    def.ws_methods
+        .iter()
+        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty())
+        .map(|wm| {
+            let path = &wm.path;
+            let closure = super::handlers::generate_arc_ws_closure(def, wm);
+            let middleware_layers: Vec<_> = wm
+                .decorators
+                .middleware_fns
+                .iter()
+                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                .collect();
+            let direct_layers: Vec<_> = wm
+                .decorators
+                .layer_exprs
+                .iter()
+                .map(|expr| quote! { .layer(#expr) })
+                .collect();
+            quote! {
+                .route(
+                    #path,
+                    #krate::http::routing::get(#closure)
+                        #(#middleware_layers)*
+                        #(#direct_layers)*
+                )
+            }
+        })
+        .collect()
+}
+
+/// Generate `__router = __router.route(...);` statements wrapping
+/// pre-auth-guarded routes with the Arc closure + the pre-auth middleware,
+/// for use inside the Arc router builder. Paths are bare here because the
+/// surrounding `match PATH_PREFIX` re-nests the router afterwards.
+fn generate_arc_pre_auth_registrations(
+    def: &RoutesImplDef,
+    name: &syn::Ident,
+    _meta_mod: &syn::Ident,
+) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    let controller_name_str = name.to_string();
+
+    def.route_methods
+        .iter()
+        .filter(|rm| !rm.decorators.pre_auth_guard_fns.is_empty())
+        .map(|rm| {
+            let path = &rm.path;
+            let method_fn = format_ident!("{}", rm.method.as_routing_fn());
+            let fn_name_str = rm.fn_item.sig.ident.to_string();
+            let closure = super::handlers::generate_arc_route_closure(def, rm);
+
+            let pre_auth_checks: Vec<_> = rm
+                .decorators
+                .pre_auth_guard_fns
+                .iter()
+                .map(|guard_expr| {
+                    quote! {
+                        if let Err(__resp) = #krate::PreAuthGuard::check(
+                            &#guard_expr,
+                            &__mw_state,
+                            &__pre_ctx,
+                        ).await {
+                            return __resp;
+                        }
+                    }
+                })
+                .collect();
+
+            let middleware_layers: Vec<_> = rm
+                .decorators
+                .middleware_fns
+                .iter()
+                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+                .collect();
+            let direct_layers: Vec<_> = rm
+                .decorators
+                .layer_exprs
+                .iter()
+                .map(|expr| quote! { .layer(#expr) })
+                .collect();
+
+            // We need the controller state here for the pre-auth middleware.
+            // The arc closure is constructed inside a scope where `__state`
+            // (the closure parameter of `routes_with_state`) is not in
+            // direct scope, but the controller Arc is. The pre-auth
+            // middleware uses the *state*, not the controller, so we
+            // re-acquire it via `#krate::http::extract::State` inside its own
+            // axum closure (the surrounding `routes_with_state` keeps
+            // `__state: &State` available — we capture a clone).
+            quote! {
+                {
+                    let __state_for_mw = __state.clone();
+                    let __pre_auth_mw = move |__req: #krate::http::extract::Request,
+                                              __next: #krate::http::middleware::Next| {
+                        let __mw_state = __state_for_mw.clone();
+                        async move {
+                            let __pre_ctx = #krate::PreAuthGuardContext {
+                                method_name: #fn_name_str,
+                                controller_name: #controller_name_str,
+                                headers: __req.headers(),
+                                uri: __req.uri(),
+                                path_params: #krate::PathParams::EMPTY,
+                            };
+                            #(#pre_auth_checks)*
+                            __next.run(__req).await
+                        }
+                    };
+                    __inner = __inner.route(
+                        #path,
+                        #krate::http::routing::#method_fn(#closure)
+                            #(#middleware_layers)*
+                            #(#direct_layers)*
+                            .layer(#krate::http::middleware::from_fn(__pre_auth_mw))
+                    );
+                }
+            }
+        })
+        .collect()
+}
+
 /// Generate schedule configuration expression.
-fn generate_schedule_expr(sm: &crate::types::ScheduledMethod, sched_krate: &TokenStream) -> TokenStream {
+fn generate_schedule_expr(
+    sm: &crate::types::ScheduledMethod,
+    sched_krate: &TokenStream,
+) -> TokenStream {
     if let Some(every_ms) = sm.config.every_ms {
         if let Some(delay_ms) = sm.config.initial_delay_ms {
             quote! {
