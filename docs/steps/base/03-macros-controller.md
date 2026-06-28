@@ -22,7 +22,7 @@ Input:                              Output:
 impl UserResource {                 2. impl UserResource { original methods }
     #[inject]                       3. Free-standing Axum handlers (async functions)
     user_service: UserService,      4. impl Controller<Services> for UserResource
-                                    5. fn routes() -> Router
+                                    5. fn routes(&state) -> Router
     #[identity]
     user: AuthenticatedUser,
 
@@ -154,11 +154,12 @@ async fn __r2e_handler_list(
 | `#[identity] bar: Bar` | Extraction parameter: `bar: Bar` |
 | Method parameters (besides `&self`) | Additional extraction parameters (e.g., `Path(id): Path<u64>`, `Json(body): Json<T>`) |
 
-### Generate `impl Controller<T>` + `fn routes()`
+### Generate `impl Controller<T>` + `fn routes(&state)`
 
 ```rust
 impl Controller<Services> for UserResource {
-    fn routes() -> axum::Router<AppState<Services>> {
+    fn routes(state: &Services) -> axum::Router<AppState<Services>> {
+        let _ = state;
         axum::Router::new()
             .route("/users", axum::routing::get(__r2e_handler_list))
             .route("/users/:id", axum::routing::get(__r2e_handler_get_by_id))
@@ -243,7 +244,7 @@ impl HelloController {
 }
 
 // Verify that Controller is implemented
-let router = HelloController::routes();
+let router = HelloController::routes(&services);
 ```
 
 ## Dependencies Between Steps

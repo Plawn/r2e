@@ -1141,7 +1141,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .state
             .as_ref()
             .expect("AppBuilder: state must be set before registering a controller");
-        self.routes.push(C::routes_with_state(state));
+        self.routes.push(C::routes(state));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.

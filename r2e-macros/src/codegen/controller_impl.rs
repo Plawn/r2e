@@ -35,9 +35,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let sse_route_registrations = generate_sse_route_registrations(def, name);
     let ws_route_registrations = generate_ws_route_registrations(def, name);
 
-    // Arc-binding (fast-path) registrations: one entry per route — each
-    // captures the controller Arc in a closure and forwards to the
-    // `_arc` inner handler.
+    // Application-scoped registrations: one entry per route, each capturing
+    // the controller Arc and wrapping it in the common hidden handler input.
     let arc_route_registrations = generate_arc_route_registrations(def);
     let arc_sse_route_registrations = generate_arc_sse_route_registrations(def);
     let arc_ws_route_registrations = generate_arc_ws_route_registrations(def);
@@ -48,6 +47,11 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
     let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
     let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
+    let pre_auth_helper = format_ident!("__r2e_apply_pre_auth_{}", name);
+    let has_pre_auth = def
+        .route_methods
+        .iter()
+        .any(|rm| !rm.decorators.pre_auth_guard_fns.is_empty());
 
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
@@ -65,7 +69,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         stmts
     };
 
-    let router_body = quote! {
+    let request_router_body = quote! {
         {
             let __inner = #krate::http::Router::new()
                 #(#route_registrations)*
@@ -78,10 +82,15 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         }
     };
 
-    // Arc-binding router body. Used by `routes_with_state` for non-identity
-    // controllers — the controller `Arc` is captured once at router build
-    // time and reused per request.
-    let arc_router_body = quote! {
+    let request_router = if has_pre_auth {
+        quote! { || #pre_auth_helper(#request_router_body, __state) }
+    } else {
+        quote! { || #request_router_body }
+    };
+
+    // Application-scoped router body. The controller Arc is captured once at
+    // router build time and reused per request.
+    let application_router_body = quote! {
         |__ctrl: ::std::sync::Arc<#name>| {
             let mut __inner = #krate::http::Router::new()
                 #(#arc_route_registrations)*
@@ -97,33 +106,22 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
 
     quote! {
         #off_request_identity_guard
+        #pre_auth_guards_fn
 
         impl #krate::Controller<#meta_mod::State> for #name {
-            fn routes() -> #krate::http::Router<#meta_mod::State> {
-                #router_body
-            }
-
-            fn routes_with_state(
+            fn routes(
                 __state: &#meta_mod::State,
             ) -> #krate::http::Router<#meta_mod::State> {
-                // Dispatch:
-                //   * non-identity controllers → build the router via the
-                //     Arc-capturing closure (fast path, no Extension).
-                //   * identity controllers → fall back to `Self::routes()`;
-                //     the request extractor rebuilds the controller from the
-                //     request-scoped identity.
-                #meta_mod::build_arc_router_or(
+                #meta_mod::build_routes(
                     __state,
-                    #arc_router_body,
-                    || Self::apply_pre_auth_guards(Self::routes(), __state),
+                    #application_router_body,
+                    #request_router,
                 )
             }
 
             fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
                 #(#register_meta_stmts)*
             }
-
-            #pre_auth_guards_fn
 
             #register_consumers_fn
 
@@ -138,12 +136,11 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate pre-auth guard middleware and `apply_pre_auth_guards` trait method.
+/// Generate the state-aware pre-auth guard helper used by the request-scoped
+/// router branch.
 ///
-/// Routes with pre-auth guards are registered in `routes()` as normal, but then
-/// `apply_pre_auth_guards` wraps them with an additional middleware layer.
-/// Since `apply_pre_auth_guards` receives a reference to the state, we can use
-/// a state-capturing closure to access the rate-limit registry etc.
+/// Application-scoped routes install the equivalent middleware directly while
+/// their captured-Arc router is assembled.
 fn generate_pre_auth_guards(
     def: &RoutesImplDef,
     name: &syn::Ident,
@@ -243,8 +240,10 @@ fn generate_pre_auth_guards(
         })
         .collect();
 
+    let helper_name = format_ident!("__r2e_apply_pre_auth_{}", name);
     quote! {
-        fn apply_pre_auth_guards(
+        #[allow(non_snake_case)]
+        fn #helper_name(
             mut __router: #krate::http::Router<#meta_mod::State>,
             __state: &#meta_mod::State,
         ) -> #krate::http::Router<#meta_mod::State> {
@@ -255,7 +254,8 @@ fn generate_pre_auth_guards(
 }
 
 /// Generate route registration expressions for the router.
-/// Routes with pre-auth guards are excluded here and registered in `apply_pre_auth_guards` instead.
+/// Routes with pre-auth guards are excluded here and registered by the
+/// state-aware pre-auth helper instead.
 fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
     let krate = r2e_core_path();
 
@@ -1164,12 +1164,12 @@ fn emit_streaming_route_info(
     }
 }
 
-// ── Arc-binding route registrations (fast-path, no Extension) ───────────
+// ── Application-scoped route registrations ─────────────────────────────
 //
 // These produce the `.route(path, METHOD(closure))` fragments registered
-// inside the `routes_with_state` Arc closure for non-identity controllers.
-// Each fragment captures the controller `Arc` once and forwards to the
-// `_arc` inner handler emitted by `handlers.rs`.
+// inside the state-aware application-controller closure. Each fragment
+// captures the controller `Arc` once and forwards to the common handler
+// wrapper emitted by `handlers.rs`.
 
 fn generate_arc_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
@@ -1320,13 +1320,10 @@ fn generate_arc_pre_auth_registrations(
                 .collect();
 
             // We need the controller state here for the pre-auth middleware.
-            // The arc closure is constructed inside a scope where `__state`
-            // (the closure parameter of `routes_with_state`) is not in
-            // direct scope, but the controller Arc is. The pre-auth
-            // middleware uses the *state*, not the controller, so we
-            // re-acquire it via `#krate::http::extract::State` inside its own
-            // axum closure (the surrounding `routes_with_state` keeps
-            // `__state: &State` available — we capture a clone).
+            // The application-controller closure captures the Arc, while the
+            // pre-auth middleware needs the application state. The surrounding
+            // state-aware route method keeps `__state: &State` available, so
+            // capture a clone for the middleware.
             quote! {
                 {
                     let __state_for_mw = __state.clone();

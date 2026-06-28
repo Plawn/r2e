@@ -1,8 +1,8 @@
 # Controller Lifecycle and Handler Dispatch
 
-This page documents how controller lifetime interacts with identity injection,
-and why R2E currently generates two handler variants for each HTTP, SSE, and
-WebSocket endpoint.
+This page documents how controller lifetime interacts with identity injection
+and how the state-aware controller registration path dispatches HTTP, SSE, and
+WebSocket endpoints.
 
 ## Lifetime model
 
@@ -67,18 +67,18 @@ request an identity.
 
 ## Normal registration path
 
-`AppBuilder::register_controller::<C>()` calls `C::routes_with_state(state)`.
-The generated implementation selects one of two paths at router construction:
+`AppBuilder::register_controller::<C>()` calls `C::routes(&state)`. This is the
+only controller route-construction API. The generated implementation selects
+the controller binding at router construction:
 
 ```text
 register_controller
-  -> routes_with_state
+  -> routes(&state)
        -> controller without struct identity
             build C once from state
             wrap it in Arc<C>
             register closures that capture the Arc
        -> controller with struct identity
-            use routes()
             extract identity and construct C on each request
 ```
 
@@ -87,58 +87,44 @@ route closure. Axum clones the closure for a request, which clones that `Arc`.
 There is no request-extension lookup and no controller reconstruction on this
 path.
 
-Calling `C::routes()` directly remains supported. That path uses the generated
-controller extractor. For a controller without struct identity, the extractor
-first looks for an `Arc<C>` in request extensions and falls back to constructing
-`C` from state if none is present. Application registration should use
-`register_controller()` so the optimized path is selected.
+Code assembling a controller router directly must also provide state:
 
-## Why two handler variants are generated
+```rust,ignore
+let router = <AccountController as Controller<AppState>>::routes(&state);
+```
 
-The optimized and compatibility paths provide the controller differently:
+There is no no-argument compatibility path. Application-scoped controllers are
+never looked up through request extensions and are never reconstructed as an
+extractor fallback.
 
-- `routes()` needs an Axum extractor parameter;
-- `routes_with_state()` needs a captured `Arc<C>` because no controller is
-  stored in request extensions.
+## One generated Axum handler
 
-The `#[routes]` macro currently emits two functions per endpoint:
+Application-scoped and request-scoped controllers are bound differently:
+
+- the application-scoped path captures an `Arc<C>` in the registered closure;
+- the struct-identity path extracts a request-scoped controller.
+
+Both paths call the same generated Axum handler through the hidden controller
+wrapper:
 
 ```text
 __r2e_AccountController_me(
     __ctrl_ext: __R2eExtract_AccountController,
     ...
 )
-
-__r2e_AccountController_me__arc(
-    __ctrl: Arc<AccountController>,
-    ...
-)
 ```
 
-The first function backs `routes()`. The second backs the closure registered by
-`routes_with_state()`. Both variants currently contain the complete generated
-handler body: parameter injection, guards, interceptors, managed resources,
-the controller method call, and response conversion.
+For an application-scoped controller, the route closure wraps its captured
+`Arc<C>` directly before calling this handler. For a struct-identity controller,
+Axum obtains the wrapper through `FromRequestParts`. Neither path uses a request
+`Extension<Arc<C>>` lookup.
 
-This is **source generation duplication**, not two executions at runtime. A
-request takes exactly one path. The costs of the current implementation are
-instead paid during compilation and maintenance:
+The Axum-facing handler forwards to one internal invocation function containing
+parameter injection, guards, interceptors, managed resources, the controller
+method call, and response conversion. HTTP, SSE, and WebSocket endpoints each
+follow this shape, so there is no duplicated full handler body.
 
-- more expanded Rust code to parse, type-check, and optimize;
-- possible binary-size growth, although the linker may fold identical code;
-- both variants must compile even when one is unreachable for that controller;
-- route registration and pre-auth registration have parallel implementations;
-- a change to generated signatures must remain synchronized with the Arc
-  forwarding closures.
-
-The duplication was introduced to preserve direct `routes()` compatibility
-while removing request-extension lookup and reconstruction from the normal
-application path.
-
-## Target design: one invocation body, two thin adapters
-
-The next iteration should keep the two controller-source adapters but emit the
-handler logic only once:
+Conceptually, the expanded code is:
 
 ```rust,ignore
 async fn __invoke_me(
@@ -148,35 +134,34 @@ async fn __invoke_me(
     // Guards, interceptors, managed resources, method call and conversion.
 }
 
-async fn __legacy_me(
+async fn __r2e_AccountController_me(
     controller: __R2eExtract_AccountController,
     /* Axum extractors */
 ) -> Response {
-    __invoke_me(&controller.0, /* arguments */).await
+    __invoke_me(controller.as_controller(), /* arguments */).await
 }
 
-// Conceptual route closure; Axum owns the captured Arc for the whole await.
+// Application-scoped route closure; the captured Arc lives for the request/session.
 move |/* Axum extractors */| {
     let controller = captured_controller.clone();
-    async move { __invoke_me(&controller, /* arguments */).await }
+    async move {
+        __r2e_AccountController_me(
+            __R2eExtract_AccountController::from_application(controller),
+            /* arguments */
+        ).await
+    }
 }
 ```
 
-This preserves the current runtime properties:
+This provides the current runtime properties:
 
 - one controller construction at registration for application-scoped
   controllers;
 - one `Arc` clone per request on the captured-controller path;
 - request construction for struct-level identity controllers;
-- direct `routes()` compatibility;
+- pre-auth guards assembled within the same state-aware registration path,
 
-while reducing duplicated generated bodies. Only the small Axum-facing
-adapters and their argument forwarding remain duplicated.
-
-An alternative is to remove direct `routes()` compatibility in a future major
-version and generate only the path required by the controller lifetime. That
-would simplify generation further, but it is an API compatibility decision,
-not a prerequisite for the shared invocation body.
+with one generated Axum handler and one full invocation body per endpoint.
 
 ## Required invariants
 
@@ -189,5 +174,4 @@ Changes to this dispatch mechanism must preserve these properties:
 4. Struct-level identity is extracted independently for every request.
 5. Guards, interceptors, managed parameters, pre-auth guards, SSE, and
    WebSocket routes behave identically on both dispatch paths.
-6. Direct `routes()` calls retain their documented fallback until that API is
-   explicitly deprecated or removed.
+6. Route construction always receives application state explicitly.

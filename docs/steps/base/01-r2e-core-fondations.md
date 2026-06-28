@@ -118,7 +118,7 @@ Also provide conversions like `From<sqlx::Error>`, `From<std::io::Error>`, etc. 
 /// Provides the method to register routes.
 pub trait Controller<T: Clone + Send + Sync + 'static> {
     /// Returns the Router containing all routes for this controller.
-    fn routes() -> axum::Router<AppState<T>>;
+    fn routes(state: &AppState<T>) -> axum::Router<AppState<T>>;
 }
 ```
 

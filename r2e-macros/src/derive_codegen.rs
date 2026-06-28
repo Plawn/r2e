@@ -112,35 +112,34 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 
     let has_struct_identity = !def.identity_fields.is_empty();
 
-    // Dispatch helper used by `routes_with_state`:
+    // Dispatch helper used by the single state-aware controller route method:
     //
     //  * Non-identity controllers: construct the controller Arc once and
-    //    hand it to `__arc_router` so all routes can be registered via
+    //    hand it to the application router so all routes can be registered via
     //    closures that capture it — bypassing the per-request
-    //    `Extension<Arc<Self>>` extraction entirely.
+    //    request extraction entirely.
     //  * Identity controllers: keep the request-scoped behavior by running
-    //    the legacy `__fallback_router` (which builds the router from
-    //    `Self::routes()` plus `apply_pre_auth_guards`).
-    let build_arc_router_or_fn = if has_struct_identity {
+    //    the request extractor router.
+    let build_routes_fn = if has_struct_identity {
         quote! {
-            pub fn build_arc_router_or<F, G>(
+            pub fn build_routes<F, G>(
                 _state: &State,
-                _arc_router: F,
-                __fallback_router: G,
+                _application_router: F,
+                __request_router: G,
             ) -> #krate::http::Router<State>
             where
                 F: ::core::ops::FnOnce(::std::sync::Arc<super::#name>) -> #krate::http::Router<State>,
                 G: ::core::ops::FnOnce() -> #krate::http::Router<State>,
             {
-                __fallback_router()
+                __request_router()
             }
         }
     } else {
         quote! {
-            pub fn build_arc_router_or<F, G>(
+            pub fn build_routes<F, G>(
                 __state: &State,
-                __arc_router: F,
-                _fallback_router: G,
+                __application_router: F,
+                _request_router: G,
             ) -> #krate::http::Router<State>
             where
                 F: ::core::ops::FnOnce(::std::sync::Arc<super::#name>) -> #krate::http::Router<State>,
@@ -149,7 +148,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
                 let __controller = ::std::sync::Arc::new(
                     <super::#name as #krate::StatefulConstruct<State>>::from_state(__state)
                 );
-                __arc_router(__controller)
+                __application_router(__controller)
             }
         }
     };
@@ -164,7 +163,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
             #guard_identity_fn
-            #build_arc_router_or_fn
+            #build_routes_fn
             #validate_fn
         }
     }
@@ -181,29 +180,35 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
         return quote! {
             #[doc(hidden)]
             #[allow(non_camel_case_types)]
-            pub struct #extractor_name(pub ::std::sync::Arc<#name>);
+            struct #extractor_name(::std::sync::Arc<#name>);
+
+            impl #extractor_name {
+                #[doc(hidden)]
+                fn as_controller(&self) -> &#name {
+                    &self.0
+                }
+
+                #[doc(hidden)]
+                fn from_application(__controller: ::std::sync::Arc<#name>) -> Self {
+                    Self(__controller)
+                }
+            }
 
             impl #krate::http::extract::FromRequestParts<#state_type> for #extractor_name {
                 type Rejection = #krate::http::response::Response;
 
                 async fn from_request_parts(
-                    __parts: &mut #krate::http::header::Parts,
-                    __state: &#state_type,
+                    _parts: &mut #krate::http::header::Parts,
+                    _state: &#state_type,
                 ) -> Result<Self, Self::Rejection> {
-                    let __controller = match
-                        <#krate::http::Extension<::std::sync::Arc<#name>> as
-                            #krate::http::extract::FromRequestParts<#state_type>>
-                            ::from_request_parts(__parts, __state)
-                            .await
-                    {
-                        Ok(#krate::http::Extension(__controller)) => __controller,
-                        Err(_) => ::std::sync::Arc::new(
-                            <#name as #krate::StatefulConstruct<#state_type>>::from_state(__state)
-                        ),
-                    };
-                    Ok(Self(__controller))
+                    Err(#krate::http::response::IntoResponse::into_response(
+                        #krate::HttpError::Internal(
+                            "application-scoped controller handler was registered without state binding".into()
+                        )
+                    ))
                 }
             }
+
         };
     }
 
@@ -322,7 +327,25 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types)]
-        pub struct #extractor_name(pub #name);
+        enum #extractor_name {
+            Application(::std::sync::Arc<#name>),
+            Request(#name),
+        }
+
+        impl #extractor_name {
+            #[doc(hidden)]
+            fn as_controller(&self) -> &#name {
+                match self {
+                    Self::Application(__controller) => __controller,
+                    Self::Request(__controller) => __controller,
+                }
+            }
+
+            #[doc(hidden)]
+            fn from_application(__controller: ::std::sync::Arc<#name>) -> Self {
+                Self::Application(__controller)
+            }
+        }
 
         impl #krate::http::extract::FromRequestParts<#state_type> for #extractor_name {
             type Rejection = #krate::http::response::Response;
@@ -333,7 +356,7 @@ fn generate_extractor(def: &ControllerStructDef) -> TokenStream {
             ) -> Result<Self, Self::Rejection> {
                 #(#identity_extractions)*
                 #config_prelude
-                Ok(Self(#struct_init))
+                Ok(Self::Request(#struct_init))
             }
         }
     }

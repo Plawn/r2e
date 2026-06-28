@@ -11,48 +11,29 @@ use crate::types::*;
 
 /// Generate all handler functions for a controller.
 ///
-/// For each route/SSE/WS endpoint we emit TWO functions:
-///   * the legacy `__r2e_<Name>_<method>` taking `__R2eExtract_<Name>` —
-///     used by `Self::routes()` for direct routes compatibility.
-///   * the fast-path `__r2e_<Name>_<method>__arc` taking `Arc<Name>` —
-///     used by `routes_with_state` for non-identity controllers, which
-///     captures the controller Arc in a closure and bypasses the
-///     per-request `Extension<Arc<Name>>` extraction entirely.
-///
-/// Both variants share the same body; only the controller-source binding
-/// differs.
+/// For each route/SSE/WS endpoint we emit one invocation function plus one
+/// thin Axum adapter. Request-scoped controllers are produced by the hidden
+/// extractor; application-scoped controllers are wrapped explicitly by the
+/// state-aware route closure. Guards, interceptors, managed resources, method
+/// invocation, and response conversion are emitted only in the invocation
+/// function.
 pub fn generate_handlers(def: &RoutesImplDef) -> TokenStream {
     let route_handlers: Vec<_> = def
         .route_methods
         .iter()
-        .flat_map(|rm| {
-            [
-                generate_single_handler(def, rm, CtrlBinding::Extractor),
-                generate_single_handler(def, rm, CtrlBinding::Arc),
-            ]
-        })
+        .map(|rm| generate_single_handler(def, rm))
         .collect();
 
     let sse_handlers: Vec<_> = def
         .sse_methods
         .iter()
-        .flat_map(|sm| {
-            [
-                generate_sse_handler(def, sm, CtrlBinding::Extractor),
-                generate_sse_handler(def, sm, CtrlBinding::Arc),
-            ]
-        })
+        .map(|sm| generate_sse_handler(def, sm))
         .collect();
 
     let ws_handlers: Vec<_> = def
         .ws_methods
         .iter()
-        .flat_map(|wm| {
-            [
-                generate_ws_handler(def, wm, CtrlBinding::Extractor),
-                generate_ws_handler(def, wm, CtrlBinding::Arc),
-            ]
-        })
+        .map(|wm| generate_ws_handler(def, wm))
         .collect();
 
     quote! {
@@ -62,84 +43,41 @@ pub fn generate_handlers(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// Which controller-source the handler should be wired to.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub(super) enum CtrlBinding {
-    /// Legacy: handler takes `__R2eExtract_<Name>` and resolves the controller
-    /// via the `FromRequestParts` extractor (Extension lookup or fresh build).
-    Extractor,
-    /// Fast-path: handler takes `Arc<Name>` directly. A closure registered in
-    /// `routes_with_state` captures the Arc and forwards to this variant.
-    Arc,
+fn invocation_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Ident {
+    format_ident!("__r2e_invoke_{}_{}", controller, method)
 }
 
-/// Suffix used by the arc-binding handler so it doesn't clash with the
-/// legacy `__r2e_<Name>_<method>` function name.
-pub(super) const ARC_HANDLER_SUFFIX: &str = "__arc";
-
-/// Build the binding-specific tokens used by handler emission.
-struct CtrlTokens {
-    /// Parameter declaration injected into the Axum handler signature.
-    param_decl: TokenStream,
-    /// Statement run at the top of the body to define `let __ctrl = ...;`.
-    init_stmt: TokenStream,
-    /// Expression producing `&Self` for `guard_identity` (only used when the
-    /// controller has struct-level identity — kept syntactically valid for
-    /// both bindings to satisfy the type checker).
-    guard_ctrl_ref: TokenStream,
+/// Extracted Axum arguments and their forwarding order around the controller
+/// binding. Keeping this shape separate from the invocation body makes both
+/// adapters mechanical.
+struct HandlerShape {
+    adapter_prefix_params: Vec<TokenStream>,
+    invocation_prefix_params: Vec<TokenStream>,
+    prefix_args: Vec<TokenStream>,
+    extra_params: Vec<TokenStream>,
+    extra_args: Vec<TokenStream>,
 }
 
-impl CtrlTokens {
-    fn for_binding(
-        binding: CtrlBinding,
-        controller_name: &syn::Ident,
-        extractor_name: &syn::Ident,
-    ) -> Self {
-        match binding {
-            CtrlBinding::Extractor => Self {
-                param_decl: quote! { __ctrl_ext: #extractor_name },
-                init_stmt: quote! { let __ctrl = __ctrl_ext.0; },
-                guard_ctrl_ref: quote! { &__ctrl_ext.0 },
-            },
-            CtrlBinding::Arc => Self {
-                param_decl: quote! { __ctrl: ::std::sync::Arc<#controller_name> },
-                init_stmt: quote! {},
-                guard_ctrl_ref: quote! { &*__ctrl },
-            },
-        }
-    }
-}
-
-fn handler_ident_for(
-    controller: &syn::Ident,
-    method: &syn::Ident,
-    binding: CtrlBinding,
-) -> syn::Ident {
-    match binding {
-        CtrlBinding::Extractor => format_ident!("__r2e_{}_{}", controller, method),
-        CtrlBinding::Arc => format_ident!("__r2e_{}_{}{}", controller, method, ARC_HANDLER_SUFFIX),
-    }
+fn handler_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Ident {
+    format_ident!("__r2e_{}_{}", controller, method)
 }
 
 /// Context for handler generation, containing names and identifiers.
 struct HandlerContext<'a> {
     meta_mod: syn::Ident,
-    handler_name: syn::Ident,
+    invocation_name: syn::Ident,
     fn_name: &'a syn::Ident,
     fn_name_str: String,
     controller_name_str: String,
-    ctrl: CtrlTokens,
 }
 
 impl<'a> HandlerContext<'a> {
-    fn new(def: &'a RoutesImplDef, rm: &'a RouteMethod, binding: CtrlBinding) -> Self {
+    fn new(def: &'a RoutesImplDef, rm: &'a RouteMethod) -> Self {
         let controller_name = &def.controller_name;
         let fn_name = &rm.fn_item.sig.ident;
-        let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
         Self {
             meta_mod: format_ident!("__r2e_meta_{}", controller_name),
-            handler_name: handler_ident_for(controller_name, fn_name, binding),
-            ctrl: CtrlTokens::for_binding(binding, controller_name, &extractor_name),
+            invocation_name: invocation_ident_for(controller_name, fn_name),
             fn_name,
             fn_name_str: fn_name.to_string(),
             controller_name_str: controller_name.to_string(),
@@ -457,10 +395,8 @@ fn generate_guard_context(
             };
         }
     } else {
-        // Case B: struct-level identity or no identity.
-        // The `&Self` reference comes from the active controller binding so
-        // both the extractor- and Arc-based handlers produce identical code.
-        let ctrl_ref = &ctx.ctrl.guard_ctrl_ref;
+        // Case B: struct-level identity or no identity. Both adapters have
+        // already normalized their controller source to `&Controller`.
         quote! {
             let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
             let __guard_ctx = #krate::GuardContext {
@@ -469,7 +405,7 @@ fn generate_guard_context(
                 headers: &__headers,
                 uri: &__uri,
                 path_params: __path_params,
-                identity: #meta_mod::guard_identity(#ctrl_ref),
+                identity: #meta_mod::guard_identity(__ctrl),
             };
         }
     }
@@ -672,16 +608,42 @@ fn generate_managed_acquire_ref(
 /// `has_managed` branch), the managed lifecycle wraps `into_response` inside the
 /// interceptor closure because release errors must convert to `Response`. This means
 /// type-constrained interceptors don't work with `#[managed]` params.
-fn generate_single_handler(
+fn generate_handler_adapter(
     def: &RoutesImplDef,
-    rm: &RouteMethod,
-    binding: CtrlBinding,
+    method: &syn::Ident,
+    invocation_name: &syn::Ident,
+    shape: &HandlerShape,
+    return_type: &TokenStream,
 ) -> TokenStream {
+    let controller_name = &def.controller_name;
+    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let adapter_prefix_params = &shape.adapter_prefix_params;
+    let prefix_args = &shape.prefix_args;
+    let extra_params = &shape.extra_params;
+    let extra_args = &shape.extra_args;
+
+    let handler_name = handler_ident_for(controller_name, method);
+    quote! {
+        #[allow(non_snake_case)]
+        async fn #handler_name(
+            #(#adapter_prefix_params,)*
+            __ctrl_ext: #extractor_name,
+            #(#extra_params,)*
+        ) #return_type {
+            #invocation_name(
+                #(#prefix_args,)*
+                __ctrl_ext.as_controller(),
+                #(#extra_args),*
+            ).await
+        }
+    }
+}
+
+fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let ctx = HandlerContext::new(def, rm, binding);
+    let ctx = HandlerContext::new(def, rm);
+    let controller_name = &def.controller_name;
     let return_type = &rm.fn_item.sig.output;
-    let ctrl_param = &ctx.ctrl.param_decl;
-    let ctrl_init = &ctx.ctrl.init_stmt;
 
     let extra_params = extract_handler_params(rm);
     let managed_indices: std::collections::HashSet<usize> =
@@ -704,7 +666,7 @@ fn generate_single_handler(
     let needs_response = has_guards || has_managed;
     let needs_state = needs_response || has_intercepts;
 
-    let handler_name = &ctx.handler_name;
+    let invocation_name = &ctx.invocation_name;
     let meta_mod = &ctx.meta_mod;
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
@@ -719,31 +681,71 @@ fn generate_single_handler(
     );
     let has_validation = !validation_calls.is_empty();
 
-    if !needs_state && !has_validation {
+    let mut shape = HandlerShape {
+        adapter_prefix_params: Vec::new(),
+        invocation_prefix_params: Vec::new(),
+        prefix_args: Vec::new(),
+        extra_params: handler_extra_params,
+        extra_args: extra_params
+            .iter()
+            .filter(|(i, _)| !managed_indices.contains(i))
+            .map(|(i, _)| {
+                let arg_name = format_ident!("__arg_{}", i);
+                quote! { #arg_name }
+            })
+            .collect(),
+    };
+
+    if needs_state {
+        shape.adapter_prefix_params.push(quote! {
+            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>
+        });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __state: #meta_mod::State });
+        shape.prefix_args.push(quote! { __state });
+    }
+    if has_guards {
+        shape
+            .adapter_prefix_params
+            .push(quote! { __headers: #krate::http::HeaderMap });
+        shape
+            .adapter_prefix_params
+            .push(quote! { __uri: #krate::http::Uri });
+        shape
+            .adapter_prefix_params
+            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __headers: #krate::http::HeaderMap });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __uri: #krate::http::Uri });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        shape.prefix_args.extend([
+            quote! { __headers },
+            quote! { __uri },
+            quote! { __raw_path_params },
+        ]);
+    }
+
+    let invocation_prefix_params = &shape.invocation_prefix_params;
+    let invocation_extra_params = &shape.extra_params;
+
+    let (invocation_return, invocation_body) = if !needs_state && !has_validation {
         // Case 1a: Simple handler — no guards, no managed, no interceptors, no validation
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) #return_type {
-                #ctrl_init
-                #call_expr
-            }
-        }
+        (quote! { #return_type }, quote! { #call_expr })
     } else if !needs_state && has_validation {
         // Case 1b: Simple handler with validation — returns Response
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+        (
+            quote! { -> #krate::http::response::Response },
+            quote! {
                 #(#validation_calls)*
-                #ctrl_init
                 #krate::http::response::IntoResponse::into_response(#call_expr)
-            }
-        }
+            },
+        )
     } else if has_intercepts && !needs_response && !has_validation {
         // Case 2a: Interceptors only, no validation — returns method's own type
         let interceptor_body = wrap_with_handler_interceptors(
@@ -755,17 +757,7 @@ fn generate_single_handler(
             &krate,
         );
 
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) #return_type {
-                #ctrl_init
-                #interceptor_body
-            }
-        }
+        (quote! { #return_type }, interceptor_body)
     } else if has_intercepts && !needs_response && has_validation {
         // Case 2b: Interceptors + validation — returns Response
         // Apply into_response AFTER the interceptor chain so interceptors
@@ -782,18 +774,13 @@ fn generate_single_handler(
             #krate::http::response::IntoResponse::into_response(#interceptor_body)
         };
 
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+        (
+            quote! { -> #krate::http::response::Response },
+            quote! {
                 #(#validation_calls)*
-                #ctrl_init
                 #interceptor_body
-            }
-        }
+            },
+        )
     } else {
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
         let guard_checks = generate_guard_checks(&rm.decorators.guard_fns, &krate);
@@ -804,16 +791,6 @@ fn generate_single_handler(
         };
         let guard_context_construction = if has_guards {
             generate_guard_context(&ctx, rm, &krate)
-        } else {
-            quote! {}
-        };
-
-        let guard_params = if has_guards {
-            quote! {
-                __headers: #krate::http::HeaderMap,
-                __uri: #krate::http::Uri,
-                __raw_path_params: #krate::http::extract::RawPathParams,
-            }
         } else {
             quote! {}
         };
@@ -879,22 +856,37 @@ fn generate_single_handler(
             }
         };
 
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
-                #guard_params
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+        (
+            quote! { -> #krate::http::response::Response },
+            quote! {
                 #guard_context_construction
                 #path_param_module
                 #(#guard_checks)*
                 #(#validation_calls)*
-                #ctrl_init
                 #inner_body
-            }
+            },
+        )
+    };
+
+    let adapter = generate_handler_adapter(
+        def,
+        ctx.fn_name,
+        invocation_name,
+        &shape,
+        &invocation_return,
+    );
+
+    quote! {
+        #[allow(non_snake_case)]
+        async fn #invocation_name(
+            #(#invocation_prefix_params,)*
+            __ctrl: &#controller_name,
+            #(#invocation_extra_params,)*
+        ) #invocation_return {
+            #invocation_body
         }
+
+        #adapter
     }
 }
 
@@ -908,17 +900,12 @@ fn is_result_type(return_type: &syn::ReturnType) -> bool {
 // ── SSE handler generation ───────────────────────────────────────────────
 
 /// Generate a handler function for an `#[sse("/path")]` method.
-fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod, binding: CtrlBinding) -> TokenStream {
+fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_name = &sm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
-    let handler_name = handler_ident_for(controller_name, fn_name, binding);
-    let ctrl = CtrlTokens::for_binding(binding, controller_name, &extractor_name);
-    let ctrl_param = &ctrl.param_decl;
-    let ctrl_init = &ctrl.init_stmt;
-    let ctrl_guard_ref = &ctrl.guard_ctrl_ref;
+    let invocation_name = invocation_ident_for(controller_name, fn_name);
 
     let fn_name_str = fn_name.to_string();
     let controller_name_str = controller_name.to_string();
@@ -934,7 +921,6 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod, binding: CtrlBindin
             quote! { #arg_name: #ty }
         })
         .collect();
-
     let call_args: Vec<_> = extra_params
         .iter()
         .map(|(i, _)| {
@@ -973,19 +959,54 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod, binding: CtrlBindin
 
     let has_guards = !sm.decorators.guard_fns.is_empty();
 
-    if !has_guards {
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) -> impl #krate::http::response::IntoResponse {
-                #ctrl_init
+    let mut shape = HandlerShape {
+        adapter_prefix_params: Vec::new(),
+        invocation_prefix_params: Vec::new(),
+        prefix_args: Vec::new(),
+        extra_params: handler_extra_params,
+        extra_args: call_args.clone(),
+    };
+
+    let (invocation_return, invocation_body) = if !has_guards {
+        (
+            quote! { -> impl #krate::http::response::IntoResponse },
+            quote! {
                 let __stream = #call_expr;
                 #keep_alive_expr
-            }
-        }
+            },
+        )
     } else {
+        shape.adapter_prefix_params.push(quote! {
+            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>
+        });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __state: #meta_mod::State });
+        shape
+            .adapter_prefix_params
+            .push(quote! { __headers: #krate::http::HeaderMap });
+        shape
+            .adapter_prefix_params
+            .push(quote! { __uri: #krate::http::Uri });
+        shape
+            .adapter_prefix_params
+            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __headers: #krate::http::HeaderMap });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __uri: #krate::http::Uri });
+        shape
+            .invocation_prefix_params
+            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        shape.prefix_args.extend([
+            quote! { __state },
+            quote! { __headers },
+            quote! { __uri },
+            quote! { __raw_path_params },
+        ]);
+
         let guard_checks = generate_guard_checks(&sm.decorators.guard_fns, &krate);
         let path_param_module = generate_path_param_module(&sm.path, &sm.fn_item.sig, &krate);
 
@@ -1016,46 +1037,53 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod, binding: CtrlBindin
                     headers: &__headers,
                     uri: &__uri,
                     path_params: __path_params,
-                    identity: #meta_mod::guard_identity(#ctrl_guard_ref),
+                    identity: #meta_mod::guard_identity(__ctrl),
                 };
             }
         };
 
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
-                __headers: #krate::http::HeaderMap,
-                __uri: #krate::http::Uri,
-                __raw_path_params: #krate::http::extract::RawPathParams,
-                #ctrl_param,
-                #(#handler_extra_params,)*
-            ) -> #krate::http::response::Response {
+        (
+            quote! { -> #krate::http::response::Response },
+            quote! {
                 #path_param_module
                 #guard_context
                 #(#guard_checks)*
-                #ctrl_init
                 let __stream = #call_expr;
                 #krate::http::response::IntoResponse::into_response(#keep_alive_expr)
-            }
+            },
+        )
+    };
+
+    let invocation_prefix_params = &shape.invocation_prefix_params;
+    let invocation_extra_params = &shape.extra_params;
+    let adapter =
+        generate_handler_adapter(def, fn_name, &invocation_name, &shape, &invocation_return);
+
+    quote! {
+        #[allow(non_snake_case)]
+        async fn #invocation_name(
+            #(#invocation_prefix_params,)*
+            __ctrl: &#controller_name,
+            #(#invocation_extra_params,)*
+        ) #invocation_return {
+            #invocation_body
         }
+
+        #adapter
     }
 }
 
 // ── WS handler generation ────────────────────────────────────────────────
 
 /// Generate a handler function for a `#[ws("/path")]` method.
-fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod, binding: CtrlBinding) -> TokenStream {
+fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_name = &wm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
-    let handler_name = handler_ident_for(controller_name, fn_name, binding);
-    let ctrl = CtrlTokens::for_binding(binding, controller_name, &extractor_name);
-    let ctrl_param = &ctrl.param_decl;
-    let ctrl_init = &ctrl.init_stmt;
-    let ctrl_guard_ref = &ctrl.guard_ctrl_ref;
+    let invocation_name = invocation_ident_for(controller_name, fn_name);
+    let preflight_name = format_ident!("__r2e_preflight_{}_{}", controller_name, fn_name);
 
     let fn_name_str = fn_name.to_string();
     let controller_name_str = controller_name.to_string();
@@ -1075,11 +1103,21 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod, binding: CtrlBinding)
             quote! { #arg_name: #ty }
         })
         .collect();
+    let forwarded_args: Vec<_> = extra_params
+        .iter()
+        .filter(|(i, _)| Some(*i) != ws_param_index)
+        .map(|(i, _)| {
+            let arg_name = format_ident!("__arg_{}", i);
+            quote! { #arg_name }
+        })
+        .collect();
 
     let has_guards = !wm.decorators.guard_fns.is_empty();
 
-    // Build the on_upgrade closure body
-    let upgrade_body = if let Some(ref ws_p) = wm.ws_param {
+    // Build the shared post-upgrade invocation body. Controller ownership
+    // remains in the thin adapter's `on_upgrade` closure; this function only
+    // receives a borrow while the session setup/method invocation runs.
+    let invocation_body = if let Some(ref ws_p) = wm.ws_param {
         // Pattern 1: WsStream or WebSocket parameter
         let call_args: Vec<_> = extra_params
             .iter()
@@ -1135,32 +1173,52 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod, binding: CtrlBinding)
         }
     };
 
-    if !has_guards {
-        quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #ctrl_param,
-                #(#handler_extra_params,)*
-                __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-            ) -> #krate::http::response::Response {
-                __ws_upgrade.on_upgrade(move |__socket| async move {
-                    #ctrl_init
-                    #upgrade_body
-                }).into_response()
-            }
-        }
-    } else {
-        let guard_checks = generate_guard_checks(&wm.decorators.guard_fns, &krate);
+    let (preflight, preflight_call) = if has_guards {
+        let guard_checks: Vec<TokenStream> = wm
+            .decorators
+            .guard_fns
+            .iter()
+            .map(|guard_expr| {
+                quote! {
+                    if let Err(__resp) = #krate::Guard::check(
+                        &#guard_expr,
+                        &__state,
+                        &__guard_ctx,
+                    ).await {
+                        return Err(__resp);
+                    }
+                }
+            })
+            .collect();
         let path_param_module = generate_path_param_module(&wm.path, &wm.fn_item.sig, &krate);
 
-        let guard_context = if let Some(ref id_param) = wm.identity_param {
-            let arg_name = format_ident!("__arg_{}", id_param.index);
-            let identity_expr = if id_param.is_optional {
-                quote! { #arg_name.as_ref() }
+        let (identity_decl, identity_call, identity_expr) =
+            if let Some(ref id_param) = wm.identity_param {
+                let arg_name = format_ident!("__arg_{}", id_param.index);
+                let identity_ty = extra_params
+                    .iter()
+                    .find(|(index, _)| *index == id_param.index)
+                    .map(|(_, param)| &param.ty)
+                    .expect("identity parameter must be present in the method signature");
+                let identity_expr = if id_param.is_optional {
+                    quote! { __identity.as_ref() }
+                } else {
+                    quote! { Some(__identity) }
+                };
+                (
+                    quote! { __identity: &#identity_ty },
+                    quote! { &#arg_name },
+                    identity_expr,
+                )
             } else {
-                quote! { Some(&#arg_name) }
+                (
+                    quote! {},
+                    quote! {},
+                    quote! { #meta_mod::guard_identity(__ctrl) },
+                )
             };
-            quote! {
+
+        let guard_context = quote! {
                 let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
                 let __guard_ctx = #krate::GuardContext {
                     method_name: #fn_name_str,
@@ -1170,54 +1228,101 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod, binding: CtrlBinding)
                     path_params: __path_params,
                     identity: #identity_expr,
                 };
-            }
-        } else {
-            quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                let __guard_ctx = #krate::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    headers: &__headers,
-                    uri: &__uri,
-                    path_params: __path_params,
-                    identity: #meta_mod::guard_identity(#ctrl_guard_ref),
-                };
-            }
         };
 
+        (
+            quote! {
+                #[allow(non_snake_case)]
+                async fn #preflight_name(
+                    __state: #meta_mod::State,
+                    __headers: #krate::http::HeaderMap,
+                    __uri: #krate::http::Uri,
+                    __raw_path_params: #krate::http::extract::RawPathParams,
+                    __ctrl: &#controller_name,
+                    #identity_decl
+                ) -> Result<(), #krate::http::response::Response> {
+                    #path_param_module
+                    #guard_context
+                    #(#guard_checks)*
+                    Ok(())
+                }
+            },
+            quote! {
+                if let Err(__response) = #preflight_name(
+                    __state,
+                    __headers,
+                    __uri,
+                    __raw_path_params,
+                    __ctrl_for_guard,
+                    #identity_call
+                ).await {
+                    return __response;
+                }
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+
+    let handler_name = handler_ident_for(controller_name, fn_name);
+    let guard_params = if has_guards {
         quote! {
-            #[allow(non_snake_case)]
-            async fn #handler_name(
-                #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
-                __headers: #krate::http::HeaderMap,
-                __uri: #krate::http::Uri,
-                __raw_path_params: #krate::http::extract::RawPathParams,
-                #ctrl_param,
-                #(#handler_extra_params,)*
-                __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-            ) -> #krate::http::response::Response {
-                #path_param_module
-                #guard_context
-                #(#guard_checks)*
+            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            __headers: #krate::http::HeaderMap,
+            __uri: #krate::http::Uri,
+            __raw_path_params: #krate::http::extract::RawPathParams,
+        }
+    } else {
+        quote! {}
+    };
+    let guard_controller_borrow = if has_guards {
+        quote! { let __ctrl_for_guard = __ctrl_ext.as_controller(); }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #[allow(non_snake_case)]
+        async fn #invocation_name(
+            __ctrl: &#controller_name,
+            #(#handler_extra_params,)*
+            __socket: #krate::http::ws::WebSocket,
+        ) {
+            #invocation_body
+        }
+
+        #preflight
+        #[allow(non_snake_case)]
+        async fn #handler_name(
+            #guard_params
+            __ctrl_ext: #extractor_name,
+            #(#handler_extra_params,)*
+            __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
+        ) -> #krate::http::response::Response {
+            #guard_controller_borrow
+            #preflight_call
+            #krate::http::response::IntoResponse::into_response(
                 __ws_upgrade.on_upgrade(move |__socket| async move {
-                    #ctrl_init
-                    #upgrade_body
-                }).into_response()
-            }
+                    #invocation_name(
+                        __ctrl_ext.as_controller(),
+                        #(#forwarded_args,)*
+                        __socket,
+                    ).await
+                })
+            )
         }
     }
 }
 
-// ── Arc-binding closure helpers ──────────────────────────────────────────
+// ── Application-controller closure helpers ──────────────────────────────
 //
-// These build the `move |...| async move { __r2e_<Name>_<m>__arc(...) }`
-// closures registered by `routes_with_state` for non-identity controllers,
-// so the per-route `Extension<Arc<Self>>` extraction is bypassed entirely.
-// The closure captures the controller `Arc` and forwards the request-extracted
-// params to the inner handler.
+// These build the `move |...| async move { __r2e_<Name>_<m>(...) }`
+// closures registered by the state-aware route builder for non-identity
+// controllers. The closure captures the controller `Arc` and forwards the
+// request-extracted parameters to the common hidden handler wrapper.
 
 /// Build the Axum-extractable params + matching call args for a closure
-/// wrapping the Arc-binding HTTP handler.
+/// wrapping the application-scoped HTTP handler.
 fn route_axum_params_and_args(
     rm: &RouteMethod,
     needs_state: bool,
@@ -1257,14 +1362,15 @@ fn route_axum_params_and_args(
     (params, args)
 }
 
-/// Generate the closure expression that registers the Arc-binding HTTP handler
-/// for a given route in `routes_with_state`.
+/// Generate the closure expression that registers an application-scoped HTTP
+/// handler for a route.
 pub(super) fn generate_arc_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_name = &rm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let inner = handler_ident_for(controller_name, fn_name, CtrlBinding::Arc);
+    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let inner = handler_ident_for(controller_name, fn_name);
 
     let has_guards = !rm.decorators.guard_fns.is_empty();
     let has_managed = !rm.managed_params.is_empty();
@@ -1294,7 +1400,11 @@ pub(super) fn generate_arc_route_closure(def: &RoutesImplDef, rm: &RouteMethod) 
             let __ctrl_capture = __ctrl.clone();
             move |#(#closure_params),*| {
                 async move {
-                    #inner(#(#prefix,)* __ctrl_capture, #(#suffix),*).await
+                    #inner(
+                        #(#prefix,)*
+                        #extractor_name::from_application(__ctrl_capture),
+                        #(#suffix),*
+                    ).await
                 }
             }
         }
@@ -1308,7 +1418,8 @@ pub(super) fn generate_arc_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> T
     let controller_name = &def.controller_name;
     let fn_name = &sm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let inner = handler_ident_for(controller_name, fn_name, CtrlBinding::Arc);
+    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let inner = handler_ident_for(controller_name, fn_name);
     let has_guards = !sm.decorators.guard_fns.is_empty();
 
     let mut closure_params: Vec<TokenStream> = Vec::new();
@@ -1339,7 +1450,11 @@ pub(super) fn generate_arc_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> T
             let __ctrl_capture = __ctrl.clone();
             move |#(#closure_params),*| {
                 async move {
-                    #inner(#(#prefix,)* __ctrl_capture, #(#suffix),*).await
+                    #inner(
+                        #(#prefix,)*
+                        #extractor_name::from_application(__ctrl_capture),
+                        #(#suffix),*
+                    ).await
                 }
             }
         }
@@ -1354,7 +1469,8 @@ pub(super) fn generate_arc_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> Tok
     let controller_name = &def.controller_name;
     let fn_name = &wm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let inner = handler_ident_for(controller_name, fn_name, CtrlBinding::Arc);
+    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let inner = handler_ident_for(controller_name, fn_name);
     let has_guards = !wm.decorators.guard_fns.is_empty();
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
 
@@ -1391,7 +1507,11 @@ pub(super) fn generate_arc_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> Tok
             let __ctrl_capture = __ctrl.clone();
             move |#(#closure_params),*| {
                 async move {
-                    #inner(#(#prefix,)* __ctrl_capture, #(#suffix),*).await
+                    #inner(
+                        #(#prefix,)*
+                        #extractor_name::from_application(__ctrl_capture),
+                        #(#suffix),*
+                    ).await
                 }
             }
         }

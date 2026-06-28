@@ -38,7 +38,7 @@ AppBuilder::new()
 The `build_inner()` method produces a tuple `(Router, StartupHooks, ShutdownHooks, ConsumerRegs, State)`:
 
 1. **Axum Router creation** — an empty `Router<T>`
-2. **Route merging** — each controller registers its routes via `Controller::routes()`
+2. **Route merging** — each controller registers its routes via `Controller::routes(&state)`
 3. **OpenAPI** (if enabled) — invocation of the OpenAPI builder with collected metadata, adding `/openapi.json` and `/docs` routes
 4. **System routes** — `/health` and `/__r2e_dev/*` if enabled
 5. **State application** — `router.with_state(state.clone())`: a single clone at construction time

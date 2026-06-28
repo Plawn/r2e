@@ -164,7 +164,8 @@ Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardC
 
 ```rust
 impl r2e::Controller<AppState> for UserController {
-    fn routes() -> axum::Router<AppState> {
+    fn routes(state: &AppState) -> axum::Router<AppState> {
+        let _ = state;
         axum::Router::new()
             .route("/users/", axum::routing::get(__r2e_UserController_list))
             .route("/users/{id}", axum::routing::get(__r2e_UserController_get_by_id))

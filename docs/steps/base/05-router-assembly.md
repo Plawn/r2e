@@ -32,7 +32,8 @@ let app = AppBuilder::new()
 
 ```rust
 pub fn register_controller<C: Controller<T>>(mut self) -> Self {
-    self.routes.push(C::routes());
+    let state = self.state.as_ref().expect("state must be set");
+    self.routes.push(C::routes(state));
     self
 }
 ```

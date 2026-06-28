@@ -1,5 +1,5 @@
 //! V1 fast-path coverage: non-identity controllers must build once in
-//! `routes_with_state` and serve every request from the captured `Arc`,
+//! the state-aware route builder and serve every request from the captured `Arc`,
 //! across every handler shape — simple, guarded, intercepted, managed, SSE,
 //! and pre-auth-guarded routes. Identity controllers must still remain
 //! request-scoped (covered separately in `controller_scope.rs`).
@@ -21,7 +21,7 @@ use tower::ServiceExt;
 
 /// Counts how many times `StatefulConstruct::from_state` runs per
 /// controller. The Arc fast path should make this go to exactly 1 — the
-/// router-build call inside `routes_with_state`.
+/// router-build call inside `Controller::routes(&state)`.
 struct BuildTracker {
     builds: Arc<AtomicUsize>,
 }
@@ -260,7 +260,7 @@ impl PreAuthController {
     }
 }
 
-// ── 7. Direct-routes (Self::routes()) compatibility ────────────────────────
+// ── 7. Direct state-aware routes construction ──────────────────────────────
 
 #[derive(Controller)]
 #[controller(state = AppState)]
@@ -294,7 +294,7 @@ async fn get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String)
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 
-/// Simple controller — Arc captured once in `routes_with_state`, never
+/// Simple controller — Arc captured once in the state-aware route builder, never
 /// rebuilt per request.
 #[r2e_core::test]
 async fn simple_controller_constructed_once() {
@@ -495,14 +495,12 @@ async fn arc_fast_path_skips_per_request_construction() {
     );
 }
 
-/// Direct routes: `Self::routes()` must still work when wired manually
-/// without going through `routes_with_state`. The legacy
-/// `__R2eExtract_<Name>` extractor falls back to `StatefulConstruct`.
+/// Direct routes remain available when the application state is supplied.
 #[r2e_core::test]
-async fn direct_routes_self_routes_still_works() {
+async fn direct_state_aware_routes_still_work() {
     let state = AppState::new();
-    let router =
-        <DirectRoutesController as r2e_core::Controller<AppState>>::routes().with_state(state);
+    let router = <DirectRoutesController as r2e_core::Controller<AppState>>::routes(&state)
+        .with_state(state);
 
     let (status, body) = get(router, "/direct").await;
     assert_eq!(status, StatusCode::OK);
