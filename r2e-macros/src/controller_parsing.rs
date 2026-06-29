@@ -45,6 +45,8 @@ impl ControllerStructDef {
 /// These must be stripped from the emitted physical struct: once the derive is
 /// gone they are no longer registered helper attributes, so leaving them on the
 /// struct would produce "cannot find attribute" errors.
+// `identity` is stripped only to keep the migration diagnostic targeted; it is
+// no longer accepted as controller syntax.
 pub const CONTROLLER_FIELD_ATTRS: &[&str] = &["inject", "identity", "config", "config_section"];
 
 /// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
@@ -140,14 +142,19 @@ pub fn parse(
         let field_type = field.ty.clone();
 
         let inject_attr = field.attrs.iter().find(|a| a.path().is_ident("inject"));
-        let legacy_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
+        let removed_identity_attr = field.attrs.iter().find(|a| a.path().is_ident("identity"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
         let config_section_attr = field
             .attrs
             .iter()
             .find(|a| a.path().is_ident("config_section"));
 
-        if let Some(attr) = inject_attr {
+        if let Some(attr) = removed_identity_attr {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`#[identity]` was removed; use `#[inject(identity)]`",
+            ));
+        } else if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {
                 // #[inject(identity)] -> request-scoped identity
                 identity_fields.push(make_identity_field(field_name, field_type));
@@ -170,9 +177,6 @@ pub fn parse(
                 // #[inject] -> app-scoped (clone from state)
                 injected_fields.push(InjectedField { name: field_name });
             }
-        } else if legacy_identity {
-            // backward compat: #[identity] -> identity field
-            identity_fields.push(make_identity_field(field_name, field_type));
         } else if let Some(attr) = config_attr {
             let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;
             config_fields.push(ConfigField {

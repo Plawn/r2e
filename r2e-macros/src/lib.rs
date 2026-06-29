@@ -48,8 +48,7 @@ pub(crate) mod field_resolver;
 /// |-----------|-------|-------------|
 /// | `#[inject]` | App-scoped | Cloned from the Axum state. Type must impl `Clone + Send + Sync`. |
 /// | `#[inject(identity)]` | Request-scoped | Extracted via Axum's `FromRequestParts` (e.g. `AuthenticatedUser`). Type must impl `Identity`. |
-/// | `#[identity]` | Request-scoped | **Legacy** — equivalent to `#[inject(identity)]`. |
-/// | `#[config("key")]` | App-scoped | Resolved from `R2eConfig` at request time. |
+/// | `#[config("key")]` | App-scoped | Resolved from `R2eConfig` at registration. |
 ///
 /// # Handler parameter attributes
 ///
@@ -101,7 +100,7 @@ pub(crate) mod field_resolver;
 ///
 /// - A hidden metadata module (`__r2e_meta_<Name>`) — state type alias, path
 ///   prefix, identity type alias, the `guard_identity` accessor (reads the
-///   façade), `bind_request` (binds the façade), and `build_routes`.
+///   façade) and `bind_request` (binds the façade).
 /// - A request-data extractor (`__R2eRequestData_<Name>`) implementing
 ///   `FromRequestParts<State>` — extracts the request-scoped values (zero-sized
 ///   and infallible when there are none).
@@ -423,8 +422,8 @@ pub fn pre_guard(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Mark a method as an **event consumer** — called when an event is emitted
 /// on the specified event bus.
 ///
-/// The controller must have an `#[inject]` field for the bus, and **must
-/// not** have `#[identity]` fields (consumers run outside HTTP context).
+/// The controller must have an `#[inject]` field for the bus. Request-scoped
+/// fields are unavailable because consumers run outside HTTP context.
 /// The bus field type must implement the [`EventBus`](r2e_events::EventBus) trait.
 ///
 /// ```ignore
@@ -450,8 +449,8 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Mark a method as a **scheduled background task**.
 ///
-/// The controller **must not** have `#[identity]` fields (scheduled tasks
-/// run outside HTTP context). Register the controller via
+/// Request-scoped fields are unavailable because scheduled tasks run outside
+/// HTTP context. Register the controller via
 /// `.register_controller::<MyJobs>()` and install the scheduler runtime
 /// with `.with(Scheduler)` (from `r2e-scheduler`).
 ///

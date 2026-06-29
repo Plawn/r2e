@@ -22,8 +22,7 @@
 // ── Macros (from r2e-macros) ────────────────────────────────────────────
 
 /// Attribute macro — emits the physical struct plus its metadata, Axum
-/// extractor, and `StatefulConstruct` impl (when no `#[inject(identity)]`
-/// fields).
+/// request façade, extractor, and `StatefulConstruct` impl.
 pub use r2e_macros::controller;
 
 /// Attribute macro on `impl` blocks — generates Axum handlers, route wiring,

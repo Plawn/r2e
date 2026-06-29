@@ -105,7 +105,6 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     shared: BuilderConfig,
     state: Option<T>,
     routes: Vec<crate::http::Router<T>>,
-    pre_auth_guard_fns: Vec<Box<dyn FnOnce(crate::http::Router<T>, &T) -> crate::http::Router<T> + Send>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
     meta_registry: MetaRegistry,
@@ -142,7 +141,6 @@ impl AppBuilder<NoState, TNil, TNil> {
             },
             state: None,
             routes: Vec::new(),
-            pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
             meta_registry: MetaRegistry::new(),
@@ -181,7 +179,6 @@ impl<P, R> AppBuilder<NoState, P, R> {
             shared: self.shared,
             state: None,
             routes: self.routes,
-            pre_auth_guard_fns: self.pre_auth_guard_fns,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
             meta_registry: self.meta_registry,
@@ -788,7 +785,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shared,
             state: Some(state),
             routes: Vec::new(),
-            pre_auth_guard_fns: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
             meta_registry: MetaRegistry::new(),
@@ -1119,8 +1115,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// by `serve()`.
     pub fn register_controller<C: Controller<T>>(mut self) -> Self {
         C::register_meta(&mut self.meta_registry);
-        self.consumer_registrations
-            .push(Box::new(|state| C::register_consumers(state)));
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -1141,12 +1135,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .state
             .as_ref()
             .expect("AppBuilder: state must be set before registering a controller");
-        self.routes.push(C::routes(state));
+        let core = Arc::new(C::from_state(state));
+        self.routes.push(C::routes(state, Arc::clone(&core)));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
         if let Some(state) = &self.state {
-            let boxed_tasks = C::scheduled_tasks_boxed(state);
+            let boxed_tasks = C::scheduled_tasks_boxed(state, Arc::clone(&core));
             if !boxed_tasks.is_empty() {
                 if let Some(registry) = self.get_plugin_data::<TaskRegistryHandle>() {
                     registry.add_boxed_for::<ScheduledTaskMarker>(boxed_tasks);
@@ -1159,6 +1154,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 }
             }
         }
+
+        // Consumers start later during serve(), but use the same controller
+        // core that was constructed above for routes and scheduled tasks.
+        self.consumer_registrations.push(Box::new(move |state| {
+            C::register_consumers(state, core)
+        }));
 
         self
     }
@@ -1245,11 +1246,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Merge all controller / manual routes.
         for r in self.routes {
             router = router.merge(r);
-        }
-
-        // Apply pre-auth guard layers (before state finalization).
-        for guard_fn in self.pre_auth_guard_fns {
-            router = guard_fn(router, &state);
         }
 
         // Invoke meta consumers (e.g. OpenAPI spec builder).

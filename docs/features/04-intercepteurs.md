@@ -38,7 +38,7 @@ These no-op declarations exist for three reasons:
 | `#[cached(ttl = N, key = "params")]` | Key based on parameters | Parameters impl `Debug` |
 | `#[cache_invalidate("x")]` | Invalidates a cache group after execution | None |
 | `#[rate_limited(max = N, window = S)]` | Global request limit | None |
-| `#[rate_limited(..., key = "user")]` | Per-user limit | `#[identity]` field |
+| `#[rate_limited(..., key = "user")]` | Per-user limit | `#[inject(identity)]` field |
 | `#[rate_limited(..., key = "ip")]` | Per-IP-address limit | `X-Forwarded-For` header |
 | `#[transactional]` | SQL transaction with auto-commit/rollback | Injected `pool` field |
 | `#[transactional(pool = "read_db")]` | Transaction on a specific pool | Corresponding injected field |
@@ -182,7 +182,7 @@ Caches the method result. The cache uses the `Interceptor<axum::Json<T>>` trait 
   - Types with `#[derive(Cacheable)]`
 - The cache serializes/deserializes via JSON using `serde_json`
 - For `key = "params"`, the method parameters must implement `Debug`
-- For `key = "user"` or `key = "user_params"`, the controller must have an `#[identity]` field
+- For `key = "user"` or `key = "user_params"`, the controller must have an `#[inject(identity)]` field
 
 ### Cache groups and invalidation
 
@@ -229,7 +229,7 @@ Limits the number of requests. Handled at the **handler level** (short-circuits 
 | Key | Generated code | Prerequisites |
 |-----|---------------|---------------|
 | `"global"` (default) | `format!("{}:global", fn_name)` | None |
-| `"user"` | `format!("{}:user:{}", fn_name, identity.sub)` | `#[identity]` field |
+| `"user"` | `format!("{}:user:{}", fn_name, identity.sub)` | `#[inject(identity)]` field |
 | `"ip"` | `format!("{}:ip:{}", fn_name, ip)` | `X-Forwarded-For` header |
 
 For `key = "ip"`, the IP is extracted from the `X-Forwarded-For` header (first element, trimmed). Fallback: `"unknown"`.
@@ -351,7 +351,7 @@ pub struct UserController {
     #[inject]
     pool: sqlx::SqlitePool,
 
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 }
 

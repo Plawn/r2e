@@ -117,7 +117,7 @@ impl UserController {
     #[inject]
     user_service: UserService,
 
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 
     #[get("/users")]

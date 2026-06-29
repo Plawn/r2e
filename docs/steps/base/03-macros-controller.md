@@ -23,7 +23,7 @@ impl UserResource {                 2. impl UserResource { original methods }
     #[inject]                       3. Free-standing Axum handlers (async functions)
     user_service: UserService,      4. impl Controller<Services> for UserResource
                                     5. fn routes(&state) -> Router
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 
     #[get("/users")]
@@ -47,7 +47,7 @@ pub struct ControllerDef {
     /// #[inject] fields — app-scoped
     pub injected_fields: Vec<InjectedField>,
 
-    /// #[identity] fields — request-scoped
+    /// #[inject(identity)] fields — request-scoped
     pub identity_fields: Vec<IdentityField>,
 
     /// Methods annotated with a route attribute
@@ -79,7 +79,7 @@ pub struct RouteMethod {
 1. **Identify the type**: extract the `Self` type from the `impl` block
 2. **Classify items**:
    - Item with `#[inject]` → `InjectedField`
-   - Item with `#[identity]` → `IdentityField`
+   - Item with `#[inject(identity)]` → `IdentityField`
    - Method with `#[get(...)]` / `#[post(...)]` / etc. → `RouteMethod`
    - Other method → `other_methods`
 
@@ -109,7 +109,7 @@ The user defines the struct normally and `#[controller]` is applied to the `impl
 struct UserResource {
     #[inject]
     user_service: UserService,
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 }
 
@@ -136,11 +136,11 @@ Output:
 ```rust
 async fn __r2e_handler_list(
     axum::extract::State(state): axum::extract::State<AppState<Services>>,
-    user: AuthenticatedUser,    // each #[identity] field
+    user: AuthenticatedUser,    // each #[inject(identity)] field
 ) -> impl axum::response::IntoResponse {
     let controller = UserResource {
         user_service: state.get().user_service.clone(),  // each #[inject] field
-        user,                                             // each #[identity] field
+        user,                                             // each #[inject(identity)] field
     };
     controller.list().await
 }
@@ -151,15 +151,17 @@ async fn __r2e_handler_list(
 | Source | In the handler |
 |--------|----------------|
 | `#[inject] foo: Foo` | `foo: state.get().foo.clone()` |
-| `#[identity] bar: Bar` | Extraction parameter: `bar: Bar` |
+| `#[inject(identity)] bar: Bar` | Extraction parameter: `bar: Bar` |
 | Method parameters (besides `&self`) | Additional extraction parameters (e.g., `Path(id): Path<u64>`, `Json(body): Json<T>`) |
 
-### Generate `impl Controller<T>` + `fn routes(&state)`
+### Generate `impl Controller<T>` + `fn routes(&state, core)`
 
 ```rust
 impl Controller<Services> for UserResource {
-    fn routes(state: &Services) -> axum::Router<AppState<Services>> {
-        let _ = state;
+    fn routes(
+        state: &Services,
+        core: Arc<Self>,
+    ) -> axum::Router<AppState<Services>> {
         axum::Router::new()
             .route("/users", axum::routing::get(__r2e_handler_list))
             .route("/users/:id", axum::routing::get(__r2e_handler_get_by_id))
@@ -212,7 +214,7 @@ pub fn inject(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn identity(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn inject(_args: TokenStream, input: TokenStream) -> TokenStream {
     input // no-op, read by #[controller]
 }
 ```
@@ -244,7 +246,8 @@ impl HelloController {
 }
 
 // Verify that Controller is implemented
-let router = HelloController::routes(&services);
+let core = Arc::new(HelloController::from_state(&services));
+let router = HelloController::routes(&services, core);
 ```
 
 ## Dependencies Between Steps

@@ -30,6 +30,50 @@ impl IntervalCounter {
     }
 }
 
+struct CloneTrackedScheduledDep {
+    clones: Arc<AtomicUsize>,
+    ticks: Arc<AtomicUsize>,
+}
+
+impl Clone for CloneTrackedScheduledDep {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
+        Self {
+            clones: Arc::clone(&self.clones),
+            ticks: Arc::clone(&self.ticks),
+        }
+    }
+}
+
+struct ReuseScheduledState {
+    dep: CloneTrackedScheduledDep,
+}
+
+impl Clone for ReuseScheduledState {
+    fn clone(&self) -> Self {
+        Self {
+            dep: CloneTrackedScheduledDep {
+                clones: Arc::clone(&self.dep.clones),
+                ticks: Arc::clone(&self.dep.ticks),
+            },
+        }
+    }
+}
+
+#[controller(state = ReuseScheduledState)]
+struct ReuseScheduledController {
+    #[inject]
+    dep: CloneTrackedScheduledDep,
+}
+
+#[routes]
+impl ReuseScheduledController {
+    #[scheduled(every = 1)]
+    async fn tick(&self) {
+        self.dep.ticks.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 // ─── Tests ───
 
 #[r2e::test]
@@ -39,10 +83,13 @@ async fn test_scheduled_interval_runs() {
     };
 
     let cancel = CancellationToken::new();
+    let core = Arc::new(IntervalCounter::from_state(&state));
 
     // Get scheduled task definitions from the controller (type-erased)
     let boxed_tasks =
-        <IntervalCounter as ControllerTrait<ScheduledTestState>>::scheduled_tasks_boxed(&state);
+        <IntervalCounter as ControllerTrait<ScheduledTestState>>::scheduled_tasks_boxed(
+            &state, core,
+        );
 
     // Extract back to ScheduledTask trait objects
     let tasks = extract_tasks(boxed_tasks);
@@ -83,9 +130,12 @@ async fn test_scheduled_cancellation_stops() {
     };
 
     let cancel = CancellationToken::new();
+    let core = Arc::new(IntervalCounter::from_state(&state));
 
     let boxed_tasks =
-        <IntervalCounter as ControllerTrait<ScheduledTestState>>::scheduled_tasks_boxed(&state);
+        <IntervalCounter as ControllerTrait<ScheduledTestState>>::scheduled_tasks_boxed(
+            &state, core,
+        );
     let tasks = extract_tasks(boxed_tasks);
 
     for task in tasks {
@@ -111,5 +161,36 @@ async fn test_scheduled_cancellation_stops() {
         count_at_cancel, count_after,
         "Task should have stopped after cancellation (was {}, now {})",
         count_at_cancel, count_after
+    );
+}
+
+#[r2e::test]
+async fn scheduled_task_reuses_supplied_core_for_every_tick() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let state = ReuseScheduledState {
+        dep: CloneTrackedScheduledDep {
+            clones: Arc::clone(&clones),
+            ticks: Arc::clone(&ticks),
+        },
+    };
+    let core = Arc::new(ReuseScheduledController::from_state(&state));
+    assert_eq!(clones.load(Ordering::SeqCst), 1);
+
+    let tasks = extract_tasks(<ReuseScheduledController as ControllerTrait<
+        ReuseScheduledState,
+    >>::scheduled_tasks_boxed(&state, core));
+    let cancel = CancellationToken::new();
+    for task in tasks {
+        task.start(cancel.clone());
+    }
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    cancel.cancel();
+
+    assert!(ticks.load(Ordering::SeqCst) >= 2);
+    assert_eq!(
+        clones.load(Ordering::SeqCst),
+        1,
+        "scheduled ticks must not reconstruct the controller core"
     );
 }

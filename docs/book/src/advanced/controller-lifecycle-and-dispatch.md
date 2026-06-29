@@ -82,15 +82,14 @@ the application dependencies per request.
 
 ## Normal registration path
 
-`AppBuilder::register_controller::<C>()` calls `C::routes(&state)`. This is the
-only controller route-construction API. The generated implementation builds the
-core once and captures an `Arc` of it in each registered route closure:
+`AppBuilder::register_controller::<C>()` builds the core once, wraps it in an
+`Arc`, and passes that same instance to routes, consumers, and scheduled tasks:
 
 ```text
 register_controller
-  -> routes(&state)
-       build the core once from state (StatefulConstruct::from_state)
-       wrap it in Arc<Core>
+  -> build the core once from state (StatefulConstruct::from_state)
+  -> wrap it in Arc<Core>
+  -> routes(&state, core.clone())
        for each route, register a closure that:
          - captures an Arc clone of the core
          - extracts __R2eRequestData_<Name> via FromRequestParts
@@ -103,10 +102,11 @@ fields. A controller with no request-scoped fields simply binds a façade whose
 request-data extractor is zero-sized and infallible. There is no
 request-extension lookup and no controller reconstruction on this path.
 
-Code assembling a controller router directly must also provide state:
+Code assembling a controller router directly must provide state and a core:
 
 ```rust,ignore
-let router = <AccountController as Controller<AppState>>::routes(&state);
+let core = Arc::new(AccountController::from_state(&state));
+let router = <AccountController as Controller<AppState>>::routes(&state, core);
 ```
 
 There is no no-argument compatibility path. Controllers are never looked up
@@ -132,7 +132,8 @@ Router::new().route(
     get({
         let core = core.clone(); // once per registered route
         move |data: __R2eRequestData_AccountController, /* Axum extractors */| {
-            let core = core.clone(); // one logical Arc increment per request
+            // Axum cloned this closure once for the request. Move that Arc
+            // directly into the façade; do not clone it again here.
             async move {
                 // Bind the request-scoped values into the stack façade.
                 let controller = __r2e_meta_AccountController::bind_request(core, data);

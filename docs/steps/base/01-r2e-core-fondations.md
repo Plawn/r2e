@@ -116,9 +116,9 @@ Also provide conversions like `From<sqlx::Error>`, `From<std::io::Error>`, etc. 
 ```rust
 /// Trait implemented by generated controllers.
 /// Provides the method to register routes.
-pub trait Controller<T: Clone + Send + Sync + 'static> {
+pub trait Controller<T: Clone + Send + Sync + 'static>: StatefulConstruct<T> + Send + Sync + 'static {
     /// Returns the Router containing all routes for this controller.
-    fn routes(state: &AppState<T>) -> axum::Router<AppState<T>>;
+    fn routes(state: &AppState<T>, core: Arc<Self>) -> axum::Router<AppState<T>>;
 }
 ```
 

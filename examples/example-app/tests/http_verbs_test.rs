@@ -86,7 +86,7 @@ pub struct ItemController {
     #[inject]
     item_service: ItemService,
 
-    #[identity]
+    #[inject(identity)]
     user: AuthenticatedUser,
 }
 

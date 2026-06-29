@@ -67,8 +67,6 @@ mod __r2e_meta_UserController {
         data: super::__R2eRequestData_UserController,
     ) -> super::__R2eRequest_UserController { /* ... */ }
 
-    pub fn build_routes</* ... */>(/* ... */) -> /* Router */ { /* ... */ }
-
     pub fn validate_config(_config: &r2e::config::R2eConfig) -> Vec<r2e::config::MissingKeyError> {
         Vec::new()
     }
@@ -220,18 +218,19 @@ Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardC
 
 ```rust
 impl r2e::Controller<AppState> for UserController {
-    fn routes(state: &AppState) -> axum::Router<AppState> {
-        let _ = state;
+    fn routes(
+        state: &AppState,
+        core: std::sync::Arc<Self>,
+    ) -> axum::Router<AppState> {
         axum::Router::new()
-            .route("/users/", axum::routing::get(__r2e_UserController_list))
-            .route("/users/{id}", axum::routing::get(__r2e_UserController_get_by_id))
+            // Each generated closure captures core.clone().
+            .route("/users/", axum::routing::get(/* generated closure */))
+            .route("/users/{id}", axum::routing::get(/* generated closure */))
     }
 
     fn register_meta(registry: &mut r2e::MetaRegistry) { /* ... */ }
 
-    fn scheduled_tasks(_state: &AppState) -> Vec<r2e::scheduling::ScheduledTaskDef<AppState>> {
-        vec![]
-    }
+    // Consumers and scheduled tasks receive the same core Arc.
 }
 ```
 

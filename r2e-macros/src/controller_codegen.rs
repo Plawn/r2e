@@ -14,7 +14,7 @@ use crate::field_resolver::{config_init_panic, config_section_init_panic};
 /// Emits, per controller:
 /// - the physical core struct (app/config fields only);
 /// - `mod __r2e_meta_<Name>` (state alias, path prefix, identity metadata,
-///   `guard_identity`, `bind_request`, `build_routes`, config validation);
+///   `guard_identity`, `bind_request`, config validation);
 /// - `struct __R2eRequestData_<Name>` + `FromRequestParts` (request-scoped values);
 /// - `struct __R2eRequest_<Name>` + `Deref<Target = Core>` (the request façade);
 /// - `impl StatefulConstruct<State>` for the core (always — the core has no
@@ -161,26 +161,6 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 
     let has_struct_identity = !def.identity_fields.is_empty();
 
-    // Single, uniform route-construction path: the core always implements
-    // `StatefulConstruct` (it holds no request-scoped fields), so it is built
-    // once into an `Arc` here and handed to the application router. Per request,
-    // the route closures extract `__R2eRequestData_<Name>` and bind the façade —
-    // there is no longer a request-vs-application branch.
-    let build_routes_fn = quote! {
-        pub fn build_routes<F>(
-            __state: &State,
-            __application_router: F,
-        ) -> #krate::http::Router<State>
-        where
-            F: ::core::ops::FnOnce(::std::sync::Arc<super::#name>) -> #krate::http::Router<State>,
-        {
-            let __controller = ::std::sync::Arc::new(
-                <super::#name as #krate::StatefulConstruct<State>>::from_state(__state)
-            );
-            __application_router(__controller)
-        }
-    };
-
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -192,7 +172,6 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             #identity_type
             #guard_identity_fn
             #bind_request_fn
-            #build_routes_fn
             #validate_fn
         }
     }
@@ -224,8 +203,9 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
             struct #data_name;
 
             impl #krate::http::extract::FromRequestParts<#state_type> for #data_name {
-                type Rejection = #krate::http::response::Response;
+                type Rejection = ::std::convert::Infallible;
 
+                #[inline(always)]
                 async fn from_request_parts(
                     _parts: &mut #krate::http::header::Parts,
                     _state: &#state_type,
@@ -316,8 +296,8 @@ fn generate_facade(def: &ControllerStructDef) -> TokenStream {
 ///
 /// Always emitted: the physical core holds only app/config-scoped fields (every
 /// request-scoped field moved to the façade), so it is always buildable from
-/// state. This is what lets `build_routes` use one uniform Arc-capture path and
-/// lets consumers/scheduled tasks reconstruct the core off-request.
+/// state. `AppBuilder` constructs it once and shares it between routes,
+/// consumers, and scheduled tasks.
 fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.name;

@@ -199,10 +199,10 @@ AppBuilder::new()
 Behind the scenes, `#[controller]` and `#[routes]` generate:
 
 1. **Controller core** — your struct with request-scoped fields stripped out; holds only `#[inject]` + `#[config]` fields and is built once into an `Arc`
-2. **Metadata module** (`__r2e_meta_<Name>`) — state type, identity type, path prefix, `bind_request`, `build_routes`, config validation
+2. **Metadata module** (`__r2e_meta_<Name>`) — state type, identity type, path prefix, `bind_request`, config validation
 3. **Request-data extractor** (`__R2eRequestData_<Name>`) — implements `FromRequestParts` to extract the request-scoped values (identity + `#[inject(request)]`)
 4. **Request façade** (`__R2eRequest_<Name>`) — `{ __core: Arc<Core>, <request fields> }` with `Deref<Target = Core>`; route methods run here
 5. **StatefulConstruct impl** — always generated (the core never holds request-scoped fields)
-6. **Controller trait impl** — `fn routes(state: &State) -> Router<State>` wires routes into `Router<State>`
+6. **Controller trait impl** — wires the core supplied by `register_controller()` into routes, consumers, and scheduled tasks
 
 All of this is hidden from your code — you just write the struct and methods.

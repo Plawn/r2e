@@ -16,14 +16,14 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
 
     // Single registration path: each route captures the application core `Arc`
     // once at build time, then per request extracts `__R2eRequestData_<Name>`
-    // and binds the façade. Consumers/scheduled tasks run on the core (rebuilt
-    // from state); a consumer/scheduled method touching a request-scoped field
+    // and binds the façade. Consumers/scheduled tasks receive that same core;
+    // a consumer/scheduled method touching a request-scoped field
     // fails to compile naturally because that field lives on the façade, not the
     // core impl.
-    let arc_route_registrations = generate_arc_route_registrations(def);
-    let arc_sse_route_registrations = generate_arc_sse_route_registrations(def);
-    let arc_ws_route_registrations = generate_arc_ws_route_registrations(def);
-    let arc_pre_auth_registrations = generate_arc_pre_auth_registrations(def, name, &meta_mod);
+    let route_registrations = generate_route_registrations(def);
+    let sse_route_registrations = generate_sse_route_registrations(def);
+    let ws_route_registrations = generate_ws_route_registrations(def);
+    let pre_auth_registrations = generate_pre_auth_registrations(def, name, &meta_mod);
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
@@ -51,10 +51,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let application_router_body = quote! {
         |__ctrl: ::std::sync::Arc<#name>| {
             let mut __inner = #krate::http::Router::new()
-                #(#arc_route_registrations)*
-                #(#arc_sse_route_registrations)*
-                #(#arc_ws_route_registrations)*;
-            #(#arc_pre_auth_registrations)*
+                #(#route_registrations)*
+                #(#sse_route_registrations)*
+                #(#ws_route_registrations)*;
+            #(#pre_auth_registrations)*
             match #meta_mod::PATH_PREFIX {
                 Some("/") | None => __inner,
                 Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
@@ -66,11 +66,9 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         impl #krate::Controller<#meta_mod::State> for #name {
             fn routes(
                 __state: &#meta_mod::State,
+                __core: ::std::sync::Arc<Self>,
             ) -> #krate::http::Router<#meta_mod::State> {
-                #meta_mod::build_routes(
-                    __state,
-                    #application_router_body,
-                )
+                (#application_router_body)(__core)
             }
 
             fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
@@ -563,7 +561,6 @@ fn generate_consumer_registrations(
         return quote! {};
     }
 
-    let krate = r2e_core_path();
     let events_krate = r2e_events_path();
     let consumer_registrations: Vec<_> = def
         .consumer_methods
@@ -585,26 +582,30 @@ fn generate_consumer_registrations(
             let subscribe_call = if let Some(ref deser_fn) = cm.deserializer {
                 let deser_ident = format_ident!("{}", deser_fn);
                 quote! {
-                    let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(#controller_name::#deser_ident);
-                    #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__event_bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                        let __state = __state.clone();
-                        async move {
-                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            let __result = __ctrl.#fn_name(__envelope.event).await;
-                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                        }
-                    }).await
+                    {
+                        let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(#controller_name::#deser_ident);
+                        let __consumer_core = __core.clone();
+                        #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__event_bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                            let __ctrl = __consumer_core.clone();
+                            async move {
+                                let __result = __ctrl.#fn_name(__envelope.event).await;
+                                ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
+                            }
+                        }).await
+                    }
                 }
             } else {
                 quote! {
-                    #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                        let __state = __state.clone();
-                        async move {
-                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
-                            let __result = __ctrl.#fn_name(__envelope.event).await;
-                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                        }
-                    }).await
+                    {
+                        let __consumer_core = __core.clone();
+                        #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                            let __ctrl = __consumer_core.clone();
+                            async move {
+                                let __result = __ctrl.#fn_name(__envelope.event).await;
+                                ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
+                            }
+                        }).await
+                    }
                 }
             };
 
@@ -614,10 +615,9 @@ fn generate_consumer_registrations(
                 let filter_ident = format_ident!("{}", filter_fn);
                 quote! {
                     Some(std::sync::Arc::new({
-                        let __state_for_filter = __state_orig.clone();
+                        let __filter_core = __core.clone();
                         move |__meta: &#events_krate::EventMetadata| -> bool {
-                            let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state_for_filter);
-                            __ctrl.#filter_ident(__meta)
+                            __filter_core.#filter_ident(__meta)
                         }
                     }) as #events_krate::EventFilter)
                 }
@@ -661,8 +661,6 @@ fn generate_consumer_registrations(
                 {
                     let __event_bus = __state.#bus_field.clone();
                     let __event_bus_ref = __event_bus.clone();
-                    let __state_orig = __state.clone();
-                    let __state = __state.clone();
                     #register_topic
                     let __handle = #subscribe_call;
                     #configure_handler
@@ -677,6 +675,7 @@ fn generate_consumer_registrations(
     quote! {
         fn register_consumers(
             __state: #meta_mod::State,
+            __core: ::std::sync::Arc<Self>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
             Box::pin(async move {
                 #(#consumer_registrations)*
@@ -705,7 +704,6 @@ fn generate_scheduled_tasks(
         return quote! {};
     }
 
-    let krate = r2e_core_path();
     let sched_krate = r2e_scheduler_path();
     let controller_name_str = name.to_string();
     let task_defs: Vec<TokenStream> = def
@@ -731,13 +729,14 @@ fn generate_scheduled_tasks(
             // Task captures state via the `state` field
             quote! {
                 {
+                    let __task_core = __core.clone();
                     let __task_def = #sched_krate::ScheduledTaskDef {
                         name: #task_name.to_string(),
                         schedule: #schedule_expr,
                         state: __state.clone(),
-                        task: Box::new(move |__state: #meta_mod::State| {
+                        task: Box::new(move |_state: #meta_mod::State| {
+                            let __ctrl = __task_core.clone();
                             Box::pin(async move {
-                                let __ctrl = <#name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&__state);
                                 #sched_krate::ScheduledResult::log_if_err(
                                     #call_expr,
                                     #task_name,
@@ -754,7 +753,10 @@ fn generate_scheduled_tasks(
         .collect();
 
     quote! {
-        fn scheduled_tasks_boxed(__state: &#meta_mod::State) -> Vec<Box<dyn std::any::Any + Send>> {
+        fn scheduled_tasks_boxed(
+            __state: &#meta_mod::State,
+            __core: ::std::sync::Arc<Self>,
+        ) -> Vec<Box<dyn std::any::Any + Send>> {
             vec![#(#task_defs),*]
         }
     }
@@ -865,7 +867,7 @@ fn emit_streaming_route_info(
 // captures the controller `Arc` once and forwards to the common handler
 // wrapper emitted by `handlers.rs`.
 
-fn generate_arc_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.route_methods
         .iter()
@@ -873,7 +875,7 @@ fn generate_arc_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .map(|rm| {
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
-            let closure = super::handlers::generate_arc_route_closure(def, rm);
+            let closure = super::handlers::generate_route_closure(def, rm);
             let middleware_layers: Vec<_> = rm
                 .decorators
                 .middleware_fns
@@ -898,14 +900,14 @@ fn generate_arc_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .collect()
 }
 
-fn generate_arc_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+fn generate_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.sse_methods
         .iter()
         .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty())
         .map(|sm| {
             let path = &sm.path;
-            let closure = super::handlers::generate_arc_sse_closure(def, sm);
+            let closure = super::handlers::generate_sse_closure(def, sm);
             let middleware_layers: Vec<_> = sm
                 .decorators
                 .middleware_fns
@@ -930,14 +932,14 @@ fn generate_arc_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream>
         .collect()
 }
 
-fn generate_arc_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
+fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.ws_methods
         .iter()
         .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty())
         .map(|wm| {
             let path = &wm.path;
-            let closure = super::handlers::generate_arc_ws_closure(def, wm);
+            let closure = super::handlers::generate_ws_closure(def, wm);
             let middleware_layers: Vec<_> = wm
                 .decorators
                 .middleware_fns
@@ -963,10 +965,10 @@ fn generate_arc_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> 
 }
 
 /// Generate `__router = __router.route(...);` statements wrapping
-/// pre-auth-guarded routes with the Arc closure + the pre-auth middleware,
-/// for use inside the Arc router builder. Paths are bare here because the
+/// pre-auth-guarded routes with the captured-core closure + pre-auth middleware.
+/// Paths are bare here because the
 /// surrounding `match PATH_PREFIX` re-nests the router afterwards.
-fn generate_arc_pre_auth_registrations(
+fn generate_pre_auth_registrations(
     def: &RoutesImplDef,
     name: &syn::Ident,
     _meta_mod: &syn::Ident,
@@ -981,7 +983,7 @@ fn generate_arc_pre_auth_registrations(
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
             let fn_name_str = rm.fn_item.sig.ident.to_string();
-            let closure = super::handlers::generate_arc_route_closure(def, rm);
+            let closure = super::handlers::generate_route_closure(def, rm);
 
             let pre_auth_checks: Vec<_> = rm
                 .decorators

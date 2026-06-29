@@ -1,8 +1,8 @@
-//! V1 fast-path coverage: non-identity controllers must build once in
-//! the state-aware route builder and serve every request from the captured `Arc`,
+//! Captured-core coverage: controllers build once in the state-aware route
+//! builder and serve every request from the shared `Arc`,
 //! across every handler shape — simple, guarded, intercepted, managed, SSE,
-//! and pre-auth-guarded routes. Identity controllers must still remain
-//! request-scoped (covered separately in `controller_scope.rs`).
+//! and pre-auth-guarded routes. Request identity remains scoped to the facade
+//! (covered separately in `controller_scope.rs`).
 
 use http_body_util::BodyExt;
 use r2e_core::http::response::Response;
@@ -20,8 +20,8 @@ use tower::ServiceExt;
 // ── Shared bookkeeping types ──────────────────────────────────────────────
 
 /// Counts how many times `StatefulConstruct::from_state` runs per
-/// controller. The Arc fast path should make this go to exactly 1 — the
-/// router-build call inside `Controller::routes(&state)`.
+/// controller. Captured-core dispatch should make this go to exactly 1 — the
+/// registration call inside `AppBuilder::register_controller()`.
 struct BuildTracker {
     builds: Arc<AtomicUsize>,
 }
@@ -96,7 +96,7 @@ async fn assert_no_controller_extension(
             .extensions()
             .get::<Arc<SimpleController>>()
             .is_none(),
-        "the Arc fast path must not place the controller in request extensions"
+        "captured-core dispatch must not place the controller in request extensions"
     );
     next.run(request).await
 }
@@ -310,9 +310,9 @@ async fn simple_controller_constructed_once() {
     assert_eq!(tracker.count(), 5);
 }
 
-/// Guarded controller — guards still fire and the Arc fast path is used.
+/// Guarded controller — guards still fire with the captured core.
 #[r2e_core::test]
-async fn guarded_controller_uses_arc_fast_path() {
+async fn guarded_controller_uses_captured_core() {
     let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
         .with_state(state)
@@ -326,10 +326,9 @@ async fn guarded_controller_uses_arc_fast_path() {
     }
 }
 
-/// Intercepted controller — the interceptor chain runs over the Arc fast
-/// path.
+/// Intercepted controller — the interceptor chain runs over the captured core.
 #[r2e_core::test]
-async fn intercepted_controller_uses_arc_fast_path() {
+async fn intercepted_controller_uses_captured_core() {
     let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
         .with_state(state)
@@ -343,10 +342,9 @@ async fn intercepted_controller_uses_arc_fast_path() {
     }
 }
 
-/// Managed-resource controller — acquire/release run over the Arc fast
-/// path.
+/// Managed-resource controller — acquire/release run over the captured core.
 #[r2e_core::test]
-async fn managed_controller_uses_arc_fast_path() {
+async fn managed_controller_uses_captured_core() {
     let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
         .with_state(state)
@@ -360,9 +358,9 @@ async fn managed_controller_uses_arc_fast_path() {
     }
 }
 
-/// SSE controller — the stream is produced and the Arc fast path is used.
+/// SSE controller — the stream is produced from the captured core.
 #[r2e_core::test]
-async fn sse_controller_uses_arc_fast_path() {
+async fn sse_controller_uses_captured_core() {
     let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
         .with_state(state)
@@ -379,11 +377,10 @@ async fn sse_controller_uses_arc_fast_path() {
     assert!(body.contains("hello"), "got body: {body:?}");
 }
 
-/// Pre-auth-guarded controller — the route is registered inside the Arc
-/// router builder, the pre-auth middleware fires, and the Arc fast path
-/// is used.
+/// Pre-auth-guarded controller — the route uses the captured core and the
+/// pre-auth middleware fires before dispatch.
 #[r2e_core::test]
-async fn pre_auth_route_uses_arc_fast_path() {
+async fn pre_auth_route_uses_captured_core() {
     let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
         .with_state(state)
@@ -397,7 +394,7 @@ async fn pre_auth_route_uses_arc_fast_path() {
     }
 }
 
-// ── Quantitative fast-path check ──────────────────────────────────────────
+// ── Quantitative captured-core check ──────────────────────────────────────
 
 /// `from_state` clones this dependency, so the dependency clone counter
 /// is a proxy for the number of times the controller was constructed.
@@ -455,11 +452,11 @@ impl FastPathController {
     }
 }
 
-/// With the Arc fast path, even a guarded route should construct the
+/// With captured-core dispatch, even a guarded route should construct the
 /// controller exactly once (during router build). Per-request rebuilds
 /// would push the clone count above 1.
 #[r2e_core::test]
-async fn arc_fast_path_skips_per_request_construction() {
+async fn captured_core_skips_per_request_construction() {
     let clones = Arc::new(AtomicUsize::new(0));
     let state = CloneState::new(Arc::clone(&clones));
     let router = r2e_core::AppBuilder::new()
@@ -482,7 +479,7 @@ async fn arc_fast_path_skips_per_request_construction() {
     let after_requests = clones.load(Ordering::SeqCst);
     assert_eq!(
         after_requests, after_build,
-        "controller must not be rebuilt per request via the Arc fast path \
+        "controller must not be rebuilt per request with captured-core dispatch \
          (before requests: {after_build}, after 10 requests: {after_requests})"
     );
 }
@@ -491,7 +488,10 @@ async fn arc_fast_path_skips_per_request_construction() {
 #[r2e_core::test]
 async fn direct_state_aware_routes_still_work() {
     let state = AppState::new();
-    let router = <DirectRoutesController as r2e_core::Controller<AppState>>::routes(&state)
+    let core = Arc::new(<DirectRoutesController as r2e_core::StatefulConstruct<
+        AppState,
+    >>::from_state(&state));
+    let router = <DirectRoutesController as r2e_core::Controller<AppState>>::routes(&state, core)
         .with_state(state);
 
     let (status, body) = get(router, "/direct").await;

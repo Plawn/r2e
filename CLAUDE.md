@@ -118,12 +118,12 @@ impl UserController {
 ```
 
 **Generated items (hidden):**
-- A physical **core** struct (the source struct with request-scoped fields stripped) — holds only `#[inject]` + `#[config]` fields, built once into an `Arc` at router-build time.
-- `mod __r2e_meta_<Name>` — `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn build_routes()`, `fn validate_config()`.
+- A physical **core** struct (the source struct with request-scoped fields stripped) — holds only `#[inject]` + `#[config]` fields, built once into an `Arc` by `register_controller()`.
+- `mod __r2e_meta_<Name>` — `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn validate_config()`.
 - `struct __R2eRequestData_<Name>` — `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`). Zero-sized + infallible when there are none.
 - `struct __R2eRequest_<Name>` — the per-request façade: `{ __core: Arc<Core>, <request-scoped fields> }`, with `Deref<Target = Core>`. Route methods run on this; `self.<injected/config>` resolves through `Deref`, `self.<identity/request>` is a direct façade field.
 - `impl StatefulConstruct<State> for Name` — always generated (the core has no request-scoped fields).
-- `impl Controller<State> for Name` — `fn routes(state: &State) -> Router<State>` wires routes; the core is built once and an `Arc` clone is captured per route. Per request: one `Arc` clone of the core + one `FromRequestParts` extraction binding the stack façade. No DI re-resolution per request, no `Extension<Arc<Controller>>`, no task-local identity.
+- `impl Controller<State> for Name` — receives the core built by `register_controller()` and wires routes, consumers, and scheduled tasks to that same instance. Per request: one `Arc` clone of the core + one `FromRequestParts` extraction binding the stack façade. No DI re-resolution per request, no `Extension<Arc<Controller>>`, no task-local identity.
 
 ### Macro Crate Internals (r2e-macros)
 
@@ -152,7 +152,7 @@ impl UserController {
 |---|---|
 | `R2eConfig`, `ConfigProperties`, `ConfigValue`, `FromConfigValue`, `#[config(...)]`, `load_config`, `with_config`, secrets (`${...}`), YAML config, typed sections, `#[config(section)]`, env overlay, `serve_auto` | `docs/claude/configuration.md` |
 | `Guard`, `PreAuthGuard`, `GuardContext`, `#[guard]`, `#[roles]`, `Identity`, `RolesGuard`, `RateLimitGuard`, `Interceptor`, `#[intercept]`, `Logged`, `Timed`, middleware ordering | `docs/claude/guards-interceptors.md` |
-| controller lifetime, controller reconstruction, struct-level identity, parameter identity, request façade, `Controller::routes(&state)`, handler generation, controller codegen performance | `docs/claude/controller-identity-codegen-refactor.md` |
+| controller lifetime, controller reconstruction, struct-level identity, parameter identity, request façade, `Controller::routes(&state, core)`, handler generation, controller codegen performance | `docs/claude/controller-identity-codegen-refactor.md` |
 | `HttpError`, `ApiError`, `#[derive(ApiError)]`, `map_error!`, validation, `garde`, `ManagedResource`, `#[managed]`, error responses | `docs/claude/error-handling.md` |
 | `Bean`, `AsyncBean`, `Producer`, `#[bean]`, `#[producer]`, `#[inject]`, `#[post_construct]`, `BeanRegistry`, `BeanContext`, `build_state`, dependency injection, bean graph | `docs/claude/beans-di.md` |
 | `PoolExecutor`, `JobHandle`, `Executor` plugin, `ExecutorConfig`, `#[async_exec]`, `#[derive(BackgroundService)]`, `ServiceComponent`, `spawn_service`, managed task pool, background workers | `docs/claude/executor.md` |

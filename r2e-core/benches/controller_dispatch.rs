@@ -1,17 +1,18 @@
 //! Controller dispatch micro-benchmark (roadmap Phase 6 "performance proof").
 //!
 //! Measures controller DISPATCH overhead in isolation from JWT cryptography by
-//! comparing four scenarios over an in-process `tower::oneshot` call (no sockets,
-//! no live server, no IdP):
+//! comparing equivalent scenarios over an in-process `tower::oneshot` call (no
+//! sockets, no live server, no IdP):
 //!
-//! 1. `plain_axum`           — baseline Axum handler, no R2E controller.
-//! 2. `r2e_no_identity`      — R2E controller with only app-scoped `#[inject]`
-//!                             fields (served from the captured `Arc` core, no
-//!                             per-request façade).
-//! 3. `r2e_param_identity`   — R2E parameter-level `#[inject(identity)]` using a
-//!                             STUB extractor (fixed value, no signature check).
-//! 4. `r2e_struct_identity`  — R2E struct-level identity façade using the SAME
-//!                             stub extractor.
+//! 1. `axum_bare` — diagnostic bare-Axum reference, without `AppBuilder` layers.
+//! 2. `axum_app_stack` — manual Axum handler built through `AppBuilder`, with the
+//!    same captured `Arc` core and global layers as the R2E controller.
+//! 3. `r2e_no_request_scope` — standard R2E controller with only app-scoped
+//!    `#[inject]` fields.
+//! 4. `axum_app_stack_param_identity` — manual Axum identity handler through the
+//!    same application stack, using the same stub extractor.
+//! 5. `r2e_param_identity` — parameter-level `#[inject(identity)]`.
+//! 6. `r2e_struct_identity` — struct-level identity in the request façade.
 //!
 //! The stub identity deliberately performs NO cryptography: it returns a fixed
 //! value with no header parsing or signature verification, so the delta between
@@ -21,7 +22,7 @@
 //! Run a quick pass with:
 //! `cargo bench -p r2e-core --bench controller_dispatch -- --warm-up-time 1 --measurement-time 3`
 
-use std::hint::black_box;
+use std::{hint::black_box, sync::Arc};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use r2e_core::http::extract::FromRequestParts;
@@ -61,48 +62,54 @@ impl<S: Send + Sync> FromRequestParts<S> for StubIdentity {
 
 #[derive(Clone)]
 struct BenchState {
-    label: String,
+    label: &'static str,
 }
 
-// ── Scenario 2: R2E controller WITHOUT identity (app-scoped only) ────────────
+struct PlainCore {
+    label: &'static str,
+}
+
+// ── Standard R2E controller without request-scoped fields ───────────────────
 
 #[controller(state = BenchState)]
 struct NoIdentityController {
     #[inject]
-    label: String,
+    label: &'static str,
 }
 
 #[routes]
 impl NoIdentityController {
     #[get("/dispatch")]
-    async fn handle(&self) -> String {
-        self.label.clone()
+    async fn handle(&self) -> StatusCode {
+        black_box(self.label);
+        StatusCode::NO_CONTENT
     }
 }
 
-// ── Scenario 3: R2E parameter-level identity (stub extractor) ────────────────
+// ── R2E parameter-level identity (stub extractor) ───────────────────────────
 
 #[controller(state = BenchState)]
 struct ParamIdentityController {
     #[inject]
-    label: String,
+    label: &'static str,
 }
 
 #[routes]
 impl ParamIdentityController {
     #[get("/dispatch")]
-    async fn handle(&self, #[inject(identity)] user: StubIdentity) -> String {
-        // Touch both the core field and the request-scoped identity.
-        format!("{}:{}", self.label, user.0)
+    async fn handle(&self, #[inject(identity)] user: StubIdentity) -> StatusCode {
+        black_box(self.label);
+        black_box(user.0);
+        StatusCode::NO_CONTENT
     }
 }
 
-// ── Scenario 4: R2E struct-level identity façade (stub extractor) ────────────
+// ── R2E struct-level identity façade (stub extractor) ───────────────────────
 
 #[controller(state = BenchState)]
 struct StructIdentityController {
     #[inject]
-    label: String,
+    label: &'static str,
     #[inject(identity)]
     user: StubIdentity,
 }
@@ -110,25 +117,67 @@ struct StructIdentityController {
 #[routes]
 impl StructIdentityController {
     #[get("/dispatch")]
-    async fn handle(&self) -> String {
-        format!("{}:{}", self.label, self.user.0)
+    async fn handle(&self) -> StatusCode {
+        black_box(self.label);
+        black_box(self.user.0);
+        StatusCode::NO_CONTENT
     }
 }
 
 // ── Router construction (outside the timed loop) ─────────────────────────────
 
 fn state() -> BenchState {
-    BenchState {
-        label: "ok".to_string(),
-    }
+    BenchState { label: "ok" }
 }
 
-fn plain_axum_router() -> Router {
-    // Mirrors the R2E handler shape: a GET returning a String, no state.
-    Router::new().route("/dispatch", get(|| async { "ok".to_string() }))
+fn plain_axum_routes() -> Router<BenchState> {
+    let core = Arc::new(PlainCore { label: "ok" });
+    Router::new().route(
+        "/dispatch",
+        get({
+            let core = core.clone();
+            move || async move {
+                black_box(core.label);
+                StatusCode::NO_CONTENT
+            }
+        }),
+    )
 }
 
-fn no_identity_router() -> Router {
+fn plain_axum_identity_routes() -> Router<BenchState> {
+    let core = Arc::new(PlainCore { label: "ok" });
+    Router::new().route(
+        "/dispatch",
+        get({
+            let core = core.clone();
+            move |user: StubIdentity| async move {
+                black_box(core.label);
+                black_box(user.0);
+                StatusCode::NO_CONTENT
+            }
+        }),
+    )
+}
+
+fn bare_axum_router() -> Router {
+    plain_axum_routes().with_state(state())
+}
+
+fn axum_app_stack_router() -> Router {
+    r2e_core::AppBuilder::new()
+        .with_state(state())
+        .register_routes(plain_axum_routes())
+        .build()
+}
+
+fn axum_app_stack_identity_router() -> Router {
+    r2e_core::AppBuilder::new()
+        .with_state(state())
+        .register_routes(plain_axum_identity_routes())
+        .build()
+}
+
+fn no_request_scope_router() -> Router {
     r2e_core::AppBuilder::new()
         .with_state(state())
         .register_controller::<NoIdentityController>()
@@ -163,7 +212,7 @@ fn request() -> Request<Body> {
 /// assert is negligible, but keeps the bench honest).
 fn dispatch(rt: &tokio::runtime::Runtime, router: &Router) {
     let resp = rt.block_on(router.clone().oneshot(request())).unwrap();
-    debug_assert_eq!(resp.status(), StatusCode::OK);
+    debug_assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     black_box(resp);
 }
 
@@ -174,18 +223,24 @@ fn bench_dispatch(c: &mut Criterion) {
         .unwrap();
 
     // Build every router once, outside the timed loop.
-    let plain = plain_axum_router();
-    let no_identity = no_identity_router();
+    let bare_axum = bare_axum_router();
+    let axum_app_stack = axum_app_stack_router();
+    let no_request_scope = no_request_scope_router();
+    let axum_app_stack_identity = axum_app_stack_identity_router();
     let param_identity = param_identity_router();
     let struct_identity = struct_identity_router();
 
     let mut group = c.benchmark_group("controller_dispatch");
 
-    group.bench_function("plain_axum", |b| {
-        b.iter(|| dispatch(&rt, &plain))
+    group.bench_function("axum_bare", |b| b.iter(|| dispatch(&rt, &bare_axum)));
+    group.bench_function("axum_app_stack", |b| {
+        b.iter(|| dispatch(&rt, &axum_app_stack))
     });
-    group.bench_function("r2e_no_identity", |b| {
-        b.iter(|| dispatch(&rt, &no_identity))
+    group.bench_function("r2e_no_request_scope", |b| {
+        b.iter(|| dispatch(&rt, &no_request_scope))
+    });
+    group.bench_function("axum_app_stack_param_identity", |b| {
+        b.iter(|| dispatch(&rt, &axum_app_stack_identity))
     });
     group.bench_function("r2e_param_identity", |b| {
         b.iter(|| dispatch(&rt, &param_identity))
