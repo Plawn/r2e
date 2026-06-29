@@ -14,29 +14,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let name = &def.controller_name;
     let meta_mod = format_ident!("__r2e_meta_{}", name);
 
-    // Struct-level `#[inject(identity)]` is request-scoped, so it can't drive
-    // off-request methods. Assert against the meta module's flag.
-    let has_off_request_methods =
-        !def.consumer_methods.is_empty() || !def.scheduled_methods.is_empty();
-    let off_request_identity_guard = if has_off_request_methods {
-        quote! {
-            const _: () = assert!(
-                !#meta_mod::HAS_STRUCT_IDENTITY,
-                "controllers with #[consumer] or #[scheduled] methods cannot use \
-                 struct-level #[inject(identity)] — move the identity field to a \
-                 handler parameter: `#[inject(identity)] user: AuthenticatedUser`",
-            );
-        }
-    } else {
-        quote! {}
-    };
-
-    let route_registrations = generate_route_registrations(def, name);
-    let sse_route_registrations = generate_sse_route_registrations(def, name);
-    let ws_route_registrations = generate_ws_route_registrations(def, name);
-
-    // Application-scoped registrations: one entry per route, each capturing
-    // the controller Arc and wrapping it in the common hidden handler input.
+    // Single registration path: each route captures the application core `Arc`
+    // once at build time, then per request extracts `__R2eRequestData_<Name>`
+    // and binds the façade. Consumers/scheduled tasks run on the core (rebuilt
+    // from state); a consumer/scheduled method touching a request-scoped field
+    // fails to compile naturally because that field lives on the façade, not the
+    // core impl.
     let arc_route_registrations = generate_arc_route_registrations(def);
     let arc_sse_route_registrations = generate_arc_sse_route_registrations(def);
     let arc_ws_route_registrations = generate_arc_ws_route_registrations(def);
@@ -46,12 +29,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
     let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
     let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
-    let pre_auth_guards_fn = generate_pre_auth_guards(def, name, &meta_mod);
-    let pre_auth_helper = format_ident!("__r2e_apply_pre_auth_{}", name);
-    let has_pre_auth = def
-        .route_methods
-        .iter()
-        .any(|rm| !rm.decorators.pre_auth_guard_fns.is_empty());
 
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
@@ -67,25 +44,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             stmts.push(quote! { __registry.extend(vec![#(#ws_metadata_items),*]); });
         }
         stmts
-    };
-
-    let request_router_body = quote! {
-        {
-            let __inner = #krate::http::Router::new()
-                #(#route_registrations)*
-                #(#sse_route_registrations)*
-                #(#ws_route_registrations)*;
-            match #meta_mod::PATH_PREFIX {
-                Some("/") | None => __inner,
-                Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
-            }
-        }
-    };
-
-    let request_router = if has_pre_auth {
-        quote! { || #pre_auth_helper(#request_router_body, __state) }
-    } else {
-        quote! { || #request_router_body }
     };
 
     // Application-scoped router body. The controller Arc is captured once at
@@ -105,9 +63,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     };
 
     quote! {
-        #off_request_identity_guard
-        #pre_auth_guards_fn
-
         impl #krate::Controller<#meta_mod::State> for #name {
             fn routes(
                 __state: &#meta_mod::State,
@@ -115,7 +70,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #meta_mod::build_routes(
                     __state,
                     #application_router_body,
-                    #request_router,
                 )
             }
 
@@ -134,176 +88,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             }
         }
     }
-}
-
-/// Generate the state-aware pre-auth guard helper used by the request-scoped
-/// router branch.
-///
-/// Application-scoped routes install the equivalent middleware directly while
-/// their captured-Arc router is assembled.
-fn generate_pre_auth_guards(
-    def: &RoutesImplDef,
-    name: &syn::Ident,
-    meta_mod: &syn::Ident,
-) -> TokenStream {
-    let has_pre_auth = def
-        .route_methods
-        .iter()
-        .any(|rm| !rm.decorators.pre_auth_guard_fns.is_empty());
-
-    if !has_pre_auth {
-        return quote! {};
-    }
-
-    let krate = r2e_core_path();
-    let controller_name_str = name.to_string();
-
-    // Collect pre-auth guard checks grouped by route path+method.
-    // We generate route-specific sub-routers with the pre-auth middleware.
-    let pre_auth_routes: Vec<TokenStream> = def
-        .route_methods
-        .iter()
-        .filter(|rm| !rm.decorators.pre_auth_guard_fns.is_empty())
-        .map(|rm| {
-            let handler_name = format_ident!("__r2e_{}_{}", name, rm.fn_item.sig.ident);
-            let fn_name_str = rm.fn_item.sig.ident.to_string();
-            let path = &rm.path;
-            let method_fn = format_ident!("{}", rm.method.as_routing_fn());
-            let controller_name_str = &controller_name_str;
-
-            let pre_auth_checks: Vec<_> = rm
-                .decorators
-                .pre_auth_guard_fns
-                .iter()
-                .map(|guard_expr| {
-                    quote! {
-                        if let Err(__resp) = #krate::PreAuthGuard::check(
-                            &#guard_expr,
-                            &__mw_state,
-                            &__pre_ctx,
-                        ).await {
-                            return __resp;
-                        }
-                    }
-                })
-                .collect();
-
-            let middleware_layers: Vec<_> = rm
-                .decorators
-                .middleware_fns
-                .iter()
-                .map(|mw_fn| {
-                    quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) }
-                })
-                .collect();
-
-            let direct_layers: Vec<_> = rm
-                .decorators
-                .layer_exprs
-                .iter()
-                .map(|expr| {
-                    quote! { .layer(#expr) }
-                })
-                .collect();
-
-            quote! {
-                {
-                    let __state_for_mw = __state.clone();
-                    let __pre_auth_mw = move |__req: #krate::http::extract::Request,
-                                              __next: #krate::http::middleware::Next| {
-                        let __mw_state = __state_for_mw.clone();
-                        async move {
-                            let __pre_ctx = #krate::PreAuthGuardContext {
-                                method_name: #fn_name_str,
-                                controller_name: #controller_name_str,
-                                headers: __req.headers(),
-                                uri: __req.uri(),
-                                path_params: #krate::PathParams::EMPTY,
-                            };
-                            #(#pre_auth_checks)*
-                            __next.run(__req).await
-                        }
-                    };
-                    let __full_path = match #meta_mod::PATH_PREFIX {
-                        Some("/") | None => #path.to_string(),
-                        Some(__prefix) => format!("{}{}", __prefix, #path),
-                    };
-                    __router = __router.route(
-                        &__full_path,
-                        #krate::http::routing::#method_fn(#handler_name)
-                            #(#middleware_layers)*
-                            #(#direct_layers)*
-                            .layer(#krate::http::middleware::from_fn(__pre_auth_mw))
-                    );
-                }
-            }
-        })
-        .collect();
-
-    let helper_name = format_ident!("__r2e_apply_pre_auth_{}", name);
-    quote! {
-        #[allow(non_snake_case)]
-        fn #helper_name(
-            mut __router: #krate::http::Router<#meta_mod::State>,
-            __state: &#meta_mod::State,
-        ) -> #krate::http::Router<#meta_mod::State> {
-            #(#pre_auth_routes)*
-            __router
-        }
-    }
-}
-
-/// Generate route registration expressions for the router.
-/// Routes with pre-auth guards are excluded here and registered by the
-/// state-aware pre-auth helper instead.
-fn generate_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
-    let krate = r2e_core_path();
-
-    def.route_methods
-        .iter()
-        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty())
-        .map(|rm| {
-            let handler_name = format_ident!("__r2e_{}_{}", name, rm.fn_item.sig.ident);
-            let path = &rm.path;
-            let method_fn = format_ident!("{}", rm.method.as_routing_fn());
-
-            let has_layers =
-                !rm.decorators.middleware_fns.is_empty() || !rm.decorators.layer_exprs.is_empty();
-
-            if !has_layers {
-                quote! {
-                    .route(#path, #krate::http::routing::#method_fn(#handler_name))
-                }
-            } else {
-                let middleware_layers: Vec<_> = rm
-                    .decorators
-                    .middleware_fns
-                    .iter()
-                    .map(|mw_fn| {
-                        quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) }
-                    })
-                    .collect();
-
-                let direct_layers: Vec<_> = rm
-                    .decorators
-                    .layer_exprs
-                    .iter()
-                    .map(|expr| {
-                        quote! { .layer(#expr) }
-                    })
-                    .collect();
-
-                quote! {
-                    .route(
-                        #path,
-                        #krate::http::routing::#method_fn(#handler_name)
-                            #(#middleware_layers)*
-                            #(#direct_layers)*
-                    )
-                }
-            }
-        })
-        .collect()
 }
 
 /// Generate route metadata for OpenAPI documentation.
@@ -976,51 +760,6 @@ fn generate_scheduled_tasks(
     }
 }
 
-// ── SSE route registration ──────────────────────────────────────────────
-
-fn generate_sse_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
-    let krate = r2e_core_path();
-
-    def.sse_methods
-        .iter()
-        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty())
-        .map(|sm| {
-            let handler_name = format_ident!("__r2e_{}_{}", name, sm.fn_item.sig.ident);
-            let path = &sm.path;
-
-            let has_layers =
-                !sm.decorators.middleware_fns.is_empty() || !sm.decorators.layer_exprs.is_empty();
-
-            if !has_layers {
-                quote! {
-                    .route(#path, #krate::http::routing::get(#handler_name))
-                }
-            } else {
-                let middleware_layers: Vec<_> = sm
-                    .decorators
-                    .middleware_fns
-                    .iter()
-                    .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-                    .collect();
-                let direct_layers: Vec<_> = sm
-                    .decorators
-                    .layer_exprs
-                    .iter()
-                    .map(|expr| quote! { .layer(#expr) })
-                    .collect();
-                quote! {
-                    .route(
-                        #path,
-                        #krate::http::routing::get(#handler_name)
-                            #(#middleware_layers)*
-                            #(#direct_layers)*
-                    )
-                }
-            }
-        })
-        .collect()
-}
-
 fn generate_sse_route_metadata(
     def: &RoutesImplDef,
     name: &syn::Ident,
@@ -1040,51 +779,6 @@ fn generate_sse_route_metadata(
                 sm.identity_param.is_some(),
                 "SSE stream",
             )
-        })
-        .collect()
-}
-
-// ── WS route registration ───────────────────────────────────────────────
-
-fn generate_ws_route_registrations(def: &RoutesImplDef, name: &syn::Ident) -> Vec<TokenStream> {
-    let krate = r2e_core_path();
-
-    def.ws_methods
-        .iter()
-        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty())
-        .map(|wm| {
-            let handler_name = format_ident!("__r2e_{}_{}", name, wm.fn_item.sig.ident);
-            let path = &wm.path;
-
-            let has_layers =
-                !wm.decorators.middleware_fns.is_empty() || !wm.decorators.layer_exprs.is_empty();
-
-            if !has_layers {
-                quote! {
-                    .route(#path, #krate::http::routing::get(#handler_name))
-                }
-            } else {
-                let middleware_layers: Vec<_> = wm
-                    .decorators
-                    .middleware_fns
-                    .iter()
-                    .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-                    .collect();
-                let direct_layers: Vec<_> = wm
-                    .decorators
-                    .layer_exprs
-                    .iter()
-                    .map(|expr| quote! { .layer(#expr) })
-                    .collect();
-                quote! {
-                    .route(
-                        #path,
-                        #krate::http::routing::get(#handler_name)
-                            #(#middleware_layers)*
-                            #(#direct_layers)*
-                    )
-                }
-            }
         })
         .collect()
 }

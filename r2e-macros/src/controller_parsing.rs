@@ -1,6 +1,6 @@
 use syn::parse::Parser;
 
-use crate::type_utils::{parse_config_field, parse_config_section_prefix};
+use crate::type_utils::{parse_config_field, parse_config_section_prefix, unwrap_option_type};
 use crate::types::*;
 
 /// Parsed representation of a `#[controller(...)]` struct.
@@ -10,9 +10,34 @@ pub struct ControllerStructDef {
     pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
+    pub request_fields: Vec<RequestField>,
     pub config_fields: Vec<ConfigField>,
     pub config_section_fields: Vec<ConfigSectionField>,
     pub is_unit_struct: bool,
+}
+
+impl ControllerStructDef {
+    /// Names of every request-scoped field (identity + `#[inject(request)]`).
+    /// These are removed from the physical controller core and live on the
+    /// generated request façade instead.
+    pub fn request_scoped_field_names(&self) -> Vec<syn::Ident> {
+        self.identity_fields
+            .iter()
+            .map(|f| f.name.clone())
+            .chain(self.request_fields.iter().map(|f| f.name.clone()))
+            .collect()
+    }
+
+    /// (name, declared type) of every request-scoped field, in declaration
+    /// order: the single optional identity field first, then request fields.
+    /// Used to generate the request-data extractor and the façade fields.
+    pub fn request_scoped_fields(&self) -> Vec<(&syn::Ident, &syn::Type)> {
+        self.identity_fields
+            .iter()
+            .map(|f| (&f.name, &f.ty))
+            .chain(self.request_fields.iter().map(|f| (&f.name, &f.ty)))
+            .collect()
+    }
 }
 
 /// Field helper attributes consumed by the `#[controller]` attribute macro.
@@ -24,9 +49,18 @@ pub const CONTROLLER_FIELD_ATTRS: &[&str] = &["inject", "identity", "config", "c
 
 /// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
 pub fn has_identity_qualifier(attr: &syn::Attribute) -> bool {
+    inject_qualifier_is(attr, "identity")
+}
+
+/// Check whether an `#[inject(...)]` attribute has the `request` qualifier.
+pub fn has_request_qualifier(attr: &syn::Attribute) -> bool {
+    inject_qualifier_is(attr, "request")
+}
+
+fn inject_qualifier_is(attr: &syn::Attribute, want: &str) -> bool {
     if let syn::Meta::List(_) = &attr.meta {
         attr.parse_args::<syn::Ident>()
-            .map(|ident| ident == "identity")
+            .map(|ident| ident == want)
             .unwrap_or(false)
     } else {
         false
@@ -94,6 +128,7 @@ pub fn parse(
 
     let mut injected_fields = Vec::new();
     let mut identity_fields = Vec::new();
+    let mut request_fields = Vec::new();
     let mut config_fields = Vec::new();
     let mut config_section_fields = Vec::new();
 
@@ -115,7 +150,10 @@ pub fn parse(
         if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {
                 // #[inject(identity)] -> request-scoped identity
-                identity_fields.push(IdentityField {
+                identity_fields.push(make_identity_field(field_name, field_type));
+            } else if has_request_qualifier(attr) {
+                // #[inject(request)] -> request-scoped extraction (any FromRequestParts)
+                request_fields.push(RequestField {
                     name: field_name,
                     ty: field_type,
                 });
@@ -123,9 +161,10 @@ pub fn parse(
                 // #[inject(something_else)] -> error
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "invalid qualifier in #[inject(...)]: only `identity` is supported\n\
+                    "invalid qualifier in #[inject(...)]: only `identity` and `request` are supported\n\
                      \n  #[inject]           — app-scoped (cloned from state)\n\
-                     \n  #[inject(identity)] — request-scoped identity extraction",
+                     \n  #[inject(identity)] — request-scoped identity extraction\n\
+                     \n  #[inject(request)]  — request-scoped value via FromRequestParts",
                 ));
             } else {
                 // #[inject] -> app-scoped (clone from state)
@@ -133,10 +172,7 @@ pub fn parse(
             }
         } else if legacy_identity {
             // backward compat: #[identity] -> identity field
-            identity_fields.push(IdentityField {
-                name: field_name,
-                ty: field_type,
-            });
+            identity_fields.push(make_identity_field(field_name, field_type));
         } else if let Some(attr) = config_attr {
             let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;
             config_fields.push(ConfigField {
@@ -158,6 +194,7 @@ pub fn parse(
                 "every controller field must be annotated with one of:\n\
                  \n  #[inject]              — clone from app state\n\
                  \n  #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)\n\
+                 \n  #[inject(request)]     — extract from request via FromRequestParts\n\
                  \n  #[config(\"app.key\")]   — resolve from R2eConfig\n\
                  \n  #[config_section(prefix = \"...\")]  — resolve typed config section via ConfigProperties",
             ));
@@ -179,8 +216,23 @@ pub fn parse(
         prefix,
         injected_fields,
         identity_fields,
+        request_fields,
         config_fields,
         config_section_fields,
         is_unit_struct,
     })
+}
+
+/// Build an [`IdentityField`], unwrapping `Option<T>` so guards see `Option<&T>`.
+fn make_identity_field(name: syn::Ident, declared: syn::Type) -> IdentityField {
+    let (inner_ty, is_optional) = match unwrap_option_type(&declared) {
+        Some(inner) => (inner.clone(), true),
+        None => (declared.clone(), false),
+    };
+    IdentityField {
+        name,
+        ty: declared,
+        inner_ty,
+        is_optional,
+    }
 }

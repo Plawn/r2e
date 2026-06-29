@@ -4,6 +4,8 @@ error: every controller field must be annotated with one of:
 
          #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)
 
+         #[inject(request)]     — extract from request via FromRequestParts
+
          #[config("app.key")]   — resolve from R2eConfig
 
          #[config_section(prefix = "...")]  — resolve typed config section via ConfigProperties

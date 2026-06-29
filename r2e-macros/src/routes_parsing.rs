@@ -1,5 +1,5 @@
-use crate::extract::*;
 use crate::controller_parsing::has_identity_qualifier;
+use crate::extract::*;
 use crate::types::*;
 use syn::spanned::Spanned;
 
@@ -62,6 +62,53 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
         }
     }
     Ok(identity_param)
+}
+
+/// Reject route/SSE/WS methods that mention `Self` in their public signature.
+///
+/// These methods are moved onto the generated request façade
+/// (`impl __R2eRequest_<Name>`), so `Self` in a parameter or return type would
+/// silently change meaning from the controller core to the hidden façade. Until
+/// façade semantics for such signatures are deliberately designed, reject them
+/// with a single targeted error. The `&self` receiver is fine — only type
+/// positions are checked.
+fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
+    fn ty_mentions_self(ty: &syn::Type) -> bool {
+        use quote::ToTokens;
+        ty.to_token_stream()
+            .into_iter()
+            .any(|tt| matches!(&tt, proc_macro2::TokenTree::Ident(i) if i == "Self"))
+    }
+
+    for arg in sig.inputs.iter() {
+        if let syn::FnArg::Typed(pt) = arg {
+            if ty_mentions_self(&pt.ty) {
+                return Err(syn::Error::new_spanned(
+                    &pt.ty,
+                    format!(
+                        "{kind} methods cannot expose `Self` in their signature\n\n\
+                         {kind} methods run on the generated request façade, where `Self` no \
+                         longer refers to the controller. Name the controller type explicitly \
+                         instead of using `Self`.",
+                    ),
+                ));
+            }
+        }
+    }
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
+        if ty_mentions_self(ty) {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "{kind} methods cannot expose `Self` in their return type\n\n\
+                     {kind} methods run on the generated request façade, where `Self` no \
+                     longer refers to the controller. Name the controller type explicitly \
+                     instead of using `Self`.",
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Check if a type is a WS type (WsStream or WebSocket) by inspecting the last path segment.
@@ -293,9 +340,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     if decorators.transactional.is_some() {
                         let ok = match &method.sig.output {
                             syn::ReturnType::Default => false,
-                            syn::ReturnType::Type(_, ty) => {
-                                crate::type_utils::is_result_like(ty)
-                            }
+                            syn::ReturnType::Type(_, ty) => crate::type_utils::is_result_like(ty),
                         };
                         if !ok {
                             return Err(syn::Error::new(
@@ -322,6 +367,18 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             }
             _ => {} // skip non-method items
         }
+    }
+
+    // Route-scoped methods move to the request façade; `Self` in their public
+    // signature would change meaning. Reject it with a targeted error.
+    for rm in &route_methods {
+        reject_self_in_route_signature(&rm.fn_item.sig, "route")?;
+    }
+    for sm in &sse_methods {
+        reject_self_in_route_signature(&sm.fn_item.sig, "sse")?;
+    }
+    for wm in &ws_methods {
+        reject_self_in_route_signature(&wm.fn_item.sig, "ws")?;
     }
 
     Ok(RoutesImplDef {

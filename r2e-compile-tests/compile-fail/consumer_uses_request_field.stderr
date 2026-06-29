@@ -1,0 +1,7 @@
+error[E0609]: no field `user` on type `&AccountController`
+  --> compile-fail/consumer_uses_request_field.rs:42:37
+   |
+42 |         let _ = (&event.name, &self.user);
+   |                                     ^^^^ unknown field
+   |
+   = note: available field is: `event_bus`

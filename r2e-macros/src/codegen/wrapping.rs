@@ -10,23 +10,27 @@ use crate::crate_path::{r2e_core_path, r2e_executor_path};
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
 
-/// Generate the impl block with wrapped methods.
+/// Generate the impl blocks with wrapped methods, split by execution scope.
+///
+/// Request-scoped methods — HTTP/SSE/WS routes and their generated
+/// interceptor/transaction wrappers — are emitted on the request façade
+/// `impl __R2eRequest_<Name>`. There `self.<identity/request field>` resolves to
+/// a façade field and `self.<injected/config field>` / core helpers resolve
+/// through `Deref<Target = Core>`.
+///
+/// Off-request methods — consumers, `#[scheduled]`, `#[async_exec]`, and
+/// ordinary helpers — stay on the core `impl <Name>`. A consumer/scheduled
+/// method that touches a request-scoped field therefore fails to compile (the
+/// field is not on the core), which is the intended diagnostic.
 pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let name = &def.controller_name;
+    let facade_name = format_ident!("__R2eRequest_{}", name);
 
+    // ── Façade (request-scoped) methods ──
     let route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .map(|rm| generate_wrapped_method(rm))
-        .collect();
-
-    let consumer_fns: Vec<_> = def
-        .consumer_methods
-        .iter()
-        .map(|cm| {
-            let f = &cm.fn_item;
-            quote! { #f }
-        })
+        .map(generate_wrapped_method)
         .collect();
 
     let sse_fns: Vec<TokenStream> = def
@@ -47,6 +51,16 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         })
         .collect();
 
+    // ── Core (off-request) methods ──
+    let consumer_fns: Vec<_> = def
+        .consumer_methods
+        .iter()
+        .map(|cm| {
+            let f = &cm.fn_item;
+            quote! { #f }
+        })
+        .collect();
+
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
@@ -61,10 +75,19 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 
     let other_fns: Vec<_> = def.other_methods.iter().collect();
 
-    if route_fns.is_empty()
-        && sse_fns.is_empty()
-        && ws_fns.is_empty()
-        && consumer_fns.is_empty()
+    let facade_impl = if route_fns.is_empty() && sse_fns.is_empty() && ws_fns.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            impl #facade_name {
+                #(#route_fns)*
+                #(#sse_fns)*
+                #(#ws_fns)*
+            }
+        }
+    };
+
+    let core_impl = if consumer_fns.is_empty()
         && scheduled_fns.is_empty()
         && async_exec_fns.is_empty()
         && other_fns.is_empty()
@@ -73,15 +96,17 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     } else {
         quote! {
             impl #name {
-                #(#route_fns)*
-                #(#sse_fns)*
-                #(#ws_fns)*
                 #(#consumer_fns)*
                 #(#scheduled_fns)*
                 #(#async_exec_fns)*
                 #(#other_fns)*
             }
         }
+    };
+
+    quote! {
+        #facade_impl
+        #core_impl
     }
 }
 
@@ -106,7 +131,13 @@ fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
     let typed_inputs: Vec<&syn::PatType> = original_sig
         .inputs
         .iter()
-        .filter_map(|a| if let syn::FnArg::Typed(pt) = a { Some(pt) } else { None })
+        .filter_map(|a| {
+            if let syn::FnArg::Typed(pt) = a {
+                Some(pt)
+            } else {
+                None
+            }
+        })
         .collect();
     let arg_idents: Vec<syn::Ident> = typed_inputs
         .iter()

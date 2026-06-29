@@ -97,8 +97,38 @@ async fn standard_controller_is_constructed_once_and_reused() {
 
 struct RequestIdentity(String);
 
-#[derive(Clone)]
-struct IdentityState;
+// `from_state` clones this dependency into the controller core, so the
+// dependency clone counter is a proxy for the number of times the core was
+// constructed. With the request façade, a struct-identity controller's core is
+// built once at router-build time and never per request.
+struct CoreBuildTracked {
+    clones: Arc<AtomicUsize>,
+}
+
+impl Clone for CoreBuildTracked {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
+        Self {
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
+
+struct IdentityState {
+    dep: CoreBuildTracked,
+}
+
+// State cloning is routine in Axum; keep it outside the dependency-clone counter
+// so the test observes only controller-core construction.
+impl Clone for IdentityState {
+    fn clone(&self) -> Self {
+        Self {
+            dep: CoreBuildTracked {
+                clones: Arc::clone(&self.dep.clones),
+            },
+        }
+    }
+}
 
 impl FromRequestParts<IdentityState> for RequestIdentity {
     type Rejection = Response;
@@ -118,6 +148,9 @@ impl FromRequestParts<IdentityState> for RequestIdentity {
 
 #[controller(state = IdentityState)]
 struct RequestScopedController {
+    #[inject]
+    #[allow(dead_code)]
+    dep: CoreBuildTracked,
     #[inject(identity)]
     identity: RequestIdentity,
 }
@@ -130,16 +163,40 @@ impl RequestScopedController {
     }
 }
 
+/// Struct-level identity no longer reconstructs the controller core per request:
+/// the core is built exactly once (router-build time) and each request only
+/// extracts a fresh identity into a stack façade.
 #[r2e_core::test]
-async fn struct_identity_controller_remains_request_scoped() {
+async fn struct_identity_controller_core_built_once() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let state = IdentityState {
+        dep: CoreBuildTracked {
+            clones: Arc::clone(&clones),
+        },
+    };
+
     let router = r2e_core::AppBuilder::new()
-        .with_state(IdentityState)
+        .with_state(state)
         .register_controller::<RequestScopedController>()
         .build();
 
+    let after_build = clones.load(Ordering::SeqCst);
+
+    // Each request still sees its own extracted identity...
     assert_eq!(
         get(router.clone(), "/identity", Some("alice")).await,
         "alice"
     );
-    assert_eq!(get(router, "/identity", Some("bob")).await, "bob");
+    assert_eq!(get(router.clone(), "/identity", Some("bob")).await, "bob");
+    for _ in 0..5 {
+        let _ = get(router.clone(), "/identity", Some("carol")).await;
+    }
+
+    // ...but the core was never rebuilt: the dependency clone count is unchanged
+    // from the single router-build construction.
+    assert_eq!(
+        clones.load(Ordering::SeqCst),
+        after_build,
+        "struct-identity controller core must be built once, not per request"
+    );
 }

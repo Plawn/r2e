@@ -5207,6 +5207,8 @@ name = "r2e-compile-tests"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "futures-core",
+ "futures-util",
  "r2e",
  "schemars 1.2.1",
  "serde",

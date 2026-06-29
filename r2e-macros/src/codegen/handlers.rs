@@ -47,6 +47,21 @@ fn invocation_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Id
     format_ident!("__r2e_invoke_{}_{}", controller, method)
 }
 
+/// The generated request façade type for a controller. Route/SSE/WS methods are
+/// emitted on `impl __R2eRequest_<Name>`; handler invocation runs on a borrow of
+/// it. Application/config fields and core helpers are reached through its
+/// `Deref<Target = Core>`.
+fn facade_ident_for(controller: &syn::Ident) -> syn::Ident {
+    format_ident!("__R2eRequest_{}", controller)
+}
+
+/// The generated request-data extractor type for a controller. Carries the
+/// request-scoped values (identity + `#[inject(request)]`) and is bound into the
+/// façade alongside the captured core `Arc`.
+fn request_data_ident_for(controller: &syn::Ident) -> syn::Ident {
+    format_ident!("__R2eRequestData_{}", controller)
+}
+
 /// Extracted Axum arguments and their forwarding order around the controller
 /// binding. Keeping this shape separate from the invocation body makes both
 /// adapters mechanical.
@@ -616,7 +631,7 @@ fn generate_handler_adapter(
     return_type: &TokenStream,
 ) -> TokenStream {
     let controller_name = &def.controller_name;
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let facade_name = facade_ident_for(controller_name);
     let adapter_prefix_params = &shape.adapter_prefix_params;
     let prefix_args = &shape.prefix_args;
     let extra_params = &shape.extra_params;
@@ -627,12 +642,12 @@ fn generate_handler_adapter(
         #[allow(non_snake_case)]
         async fn #handler_name(
             #(#adapter_prefix_params,)*
-            __ctrl_ext: #extractor_name,
+            __facade: #facade_name,
             #(#extra_params,)*
         ) #return_type {
             #invocation_name(
                 #(#prefix_args,)*
-                __ctrl_ext.as_controller(),
+                &__facade,
                 #(#extra_args),*
             ).await
         }
@@ -876,11 +891,12 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         &invocation_return,
     );
 
+    let facade_name = facade_ident_for(controller_name);
     quote! {
         #[allow(non_snake_case)]
         async fn #invocation_name(
             #(#invocation_prefix_params,)*
-            __ctrl: &#controller_name,
+            __ctrl: &#facade_name,
             #(#invocation_extra_params,)*
         ) #invocation_return {
             #invocation_body
@@ -1059,11 +1075,12 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let adapter =
         generate_handler_adapter(def, fn_name, &invocation_name, &shape, &invocation_return);
 
+    let facade_name = facade_ident_for(controller_name);
     quote! {
         #[allow(non_snake_case)]
         async fn #invocation_name(
             #(#invocation_prefix_params,)*
-            __ctrl: &#controller_name,
+            __ctrl: &#facade_name,
             #(#invocation_extra_params,)*
         ) #invocation_return {
             #invocation_body
@@ -1081,7 +1098,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let controller_name = &def.controller_name;
     let fn_name = &wm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let facade_name = facade_ident_for(controller_name);
     let invocation_name = invocation_ident_for(controller_name, fn_name);
     let preflight_name = format_ident!("__r2e_preflight_{}_{}", controller_name, fn_name);
 
@@ -1238,7 +1255,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
                     __raw_path_params: #krate::http::extract::RawPathParams,
-                    __ctrl: &#controller_name,
+                    __ctrl: &#facade_name,
                     #identity_decl
                 ) -> Result<(), #krate::http::response::Response> {
                     #path_param_module
@@ -1276,7 +1293,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         quote! {}
     };
     let guard_controller_borrow = if has_guards {
-        quote! { let __ctrl_for_guard = __ctrl_ext.as_controller(); }
+        quote! { let __ctrl_for_guard = &__facade; }
     } else {
         quote! {}
     };
@@ -1284,7 +1301,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     quote! {
         #[allow(non_snake_case)]
         async fn #invocation_name(
-            __ctrl: &#controller_name,
+            __ctrl: &#facade_name,
             #(#handler_extra_params,)*
             __socket: #krate::http::ws::WebSocket,
         ) {
@@ -1295,16 +1312,19 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         #[allow(non_snake_case)]
         async fn #handler_name(
             #guard_params
-            __ctrl_ext: #extractor_name,
+            __facade: #facade_name,
             #(#handler_extra_params,)*
             __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
         ) -> #krate::http::response::Response {
+            // Guard checks borrow the façade; the upgrade callback then owns it
+            // for the whole socket lifetime (façade owns its Arc + request data,
+            // so nothing is borrowed across the upgrade boundary).
             #guard_controller_borrow
             #preflight_call
             #krate::http::response::IntoResponse::into_response(
                 __ws_upgrade.on_upgrade(move |__socket| async move {
                     #invocation_name(
-                        __ctrl_ext.as_controller(),
+                        &__facade,
                         #(#forwarded_args,)*
                         __socket,
                     ).await
@@ -1369,7 +1389,7 @@ pub(super) fn generate_arc_route_closure(def: &RoutesImplDef, rm: &RouteMethod) 
     let controller_name = &def.controller_name;
     let fn_name = &rm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let data_name = request_data_ident_for(controller_name);
     let inner = handler_ident_for(controller_name, fn_name);
 
     let has_guards = !rm.decorators.guard_fns.is_empty();
@@ -1395,14 +1415,17 @@ pub(super) fn generate_arc_route_closure(def: &RoutesImplDef, rm: &RouteMethod) 
         0
     };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    // One per-request `Arc` increment: axum clones the `Fn`-once closure per
+    // request (cloning `__core_capture`), then this body moves that clone into
+    // `bind_request`. There is no second explicit `.clone()`.
     quote! {
         {
-            let __ctrl_capture = __ctrl.clone();
-            move |#(#closure_params),*| {
+            let __core_capture = __ctrl.clone();
+            move |__r2e_data: #data_name, #(#closure_params),*| {
                 async move {
                     #inner(
                         #(#prefix,)*
-                        #extractor_name::from_application(__ctrl_capture),
+                        #meta_mod::bind_request(__core_capture, __r2e_data),
                         #(#suffix),*
                     ).await
                 }
@@ -1418,7 +1441,7 @@ pub(super) fn generate_arc_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> T
     let controller_name = &def.controller_name;
     let fn_name = &sm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let data_name = request_data_ident_for(controller_name);
     let inner = handler_ident_for(controller_name, fn_name);
     let has_guards = !sm.decorators.guard_fns.is_empty();
 
@@ -1447,12 +1470,12 @@ pub(super) fn generate_arc_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> T
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     quote! {
         {
-            let __ctrl_capture = __ctrl.clone();
-            move |#(#closure_params),*| {
+            let __core_capture = __ctrl.clone();
+            move |__r2e_data: #data_name, #(#closure_params),*| {
                 async move {
                     #inner(
                         #(#prefix,)*
-                        #extractor_name::from_application(__ctrl_capture),
+                        #meta_mod::bind_request(__core_capture, __r2e_data),
                         #(#suffix),*
                     ).await
                 }
@@ -1469,7 +1492,7 @@ pub(super) fn generate_arc_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> Tok
     let controller_name = &def.controller_name;
     let fn_name = &wm.fn_item.sig.ident;
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let extractor_name = format_ident!("__R2eExtract_{}", controller_name);
+    let data_name = request_data_ident_for(controller_name);
     let inner = handler_ident_for(controller_name, fn_name);
     let has_guards = !wm.decorators.guard_fns.is_empty();
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
@@ -1504,12 +1527,12 @@ pub(super) fn generate_arc_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> Tok
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     quote! {
         {
-            let __ctrl_capture = __ctrl.clone();
-            move |#(#closure_params),*| {
+            let __core_capture = __ctrl.clone();
+            move |__r2e_data: #data_name, #(#closure_params),*| {
                 async move {
                     #inner(
                         #(#prefix,)*
-                        #extractor_name::from_application(__ctrl_capture),
+                        #meta_mod::bind_request(__core_capture, __r2e_data),
                         #(#suffix),*
                     ).await
                 }

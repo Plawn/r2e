@@ -6,6 +6,22 @@ pub struct InjectedField {
 
 pub struct IdentityField {
     pub name: syn::Ident,
+    /// The type as declared on the struct (may be `Option<T>`). Used for the
+    /// request-data field, the façade field, and `FromRequestParts` extraction.
+    pub ty: syn::Type,
+    /// The identity type unwrapped from `Option<T>`. Used for `IdentityType` and
+    /// `guard_identity` (guards see `Option<&T>`, never `Option<&Option<T>>`).
+    pub inner_ty: syn::Type,
+    /// Whether the field was declared as `Option<T>`.
+    pub is_optional: bool,
+}
+
+/// A `#[inject(request)]` field: any type implementing `FromRequestParts<State>`,
+/// extracted per request and moved onto the generated request façade. Unlike
+/// identity fields, request fields are not visible to guards. Multiple are
+/// allowed; `Option<T>` is allowed.
+pub struct RequestField {
+    pub name: syn::Ident,
     pub ty: syn::Type,
 }
 
