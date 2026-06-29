@@ -1,5 +1,5 @@
 use crate::extract::*;
-use crate::derive_parsing::has_identity_qualifier;
+use crate::controller_parsing::has_identity_qualifier;
 use crate::types::*;
 use syn::spanned::Spanned;
 

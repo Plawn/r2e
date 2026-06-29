@@ -71,7 +71,6 @@ impl AppState {
 
 // ── 1. Simple non-identity controller ──────────────────────────────────────
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct SimpleController {
     #[inject]
@@ -115,7 +114,6 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for AllowAll {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct GuardedController {
     #[inject]
@@ -150,7 +148,6 @@ impl<R: Send, S: Send + Sync> r2e_core::Interceptor<R, S> for PassThrough {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct InterceptedController {
     #[inject]
@@ -183,7 +180,6 @@ impl ManagedResource<AppState> for ManagedToken {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct ManagedController {
     #[inject]
@@ -201,7 +197,6 @@ impl ManagedController {
 
 // ── 5. SSE controller ──────────────────────────────────────────────────────
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct SseController {
     #[inject]
@@ -243,7 +238,6 @@ impl<S: Send + Sync> PreAuthGuard<S> for AllowAllPre {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct PreAuthController {
     #[inject]
@@ -262,7 +256,6 @@ impl PreAuthController {
 
 // ── 7. Direct state-aware routes construction ──────────────────────────────
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct DirectRoutesController {
     #[inject]
@@ -446,7 +439,6 @@ impl CloneState {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = CloneState)]
 struct FastPathController {
     #[inject]

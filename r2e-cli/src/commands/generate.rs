@@ -6,7 +6,7 @@ use super::templates::{self, to_snake_case, pluralize};
 
 /// Generate a controller skeleton.
 ///
-/// Creates `src/controllers/<snake_name>.rs` with a `#[derive(Controller)]`
+/// Creates `src/controllers/<snake_name>.rs` with a `#[controller(...)]`
 /// struct and a `#[routes]` impl block. Updates `src/controllers/mod.rs`
 /// if it exists.
 ///
@@ -30,7 +30,6 @@ use serde::{{Deserialize, Serialize}};
 // TODO: import your state type
 // use crate::state::AppState;
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct {name} {{
     // #[inject]
@@ -351,7 +350,6 @@ fn crud_controller(entity_name: &str, _fields: &[Field]) -> String {
 use crate::services::{snake}_service::{entity_name}Service;
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/{plural}", state = AppState)]
 pub struct {entity_name}Controller {{
     #[inject]
@@ -609,7 +607,6 @@ use proto::*;
 // TODO: import your state type
 // use crate::state::AppState;
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct {name}Service {{
     // #[inject]

@@ -1,6 +1,6 @@
 //! `#[derive(BackgroundService)]` — generates `impl ServiceComponent<State>`.
 //!
-//! Mirrors the field resolution of `#[derive(Controller)]` (struct-level
+//! Mirrors the field resolution of `#[controller(...)]` (struct-level
 //! identity is not supported here — background services have no request
 //! context). The user implements an async `run(&self, CancellationToken)`
 //! method on the struct; the derive wires `from_state` + `start`.

@@ -4,7 +4,6 @@ use r2e::ws::{WsRooms, WsStream};
 use crate::models::{MessageSentEvent, WsIncoming, WsOutgoing};
 use crate::state::AppState;
 
-#[derive(Controller)]
 #[controller(path = "/chat", state = AppState)]
 pub struct ChatController {
     #[inject]

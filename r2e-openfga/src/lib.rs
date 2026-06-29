@@ -83,7 +83,6 @@
 //! ```ignore
 //! use r2e_openfga::FgaCheck;
 //!
-//! #[derive(Controller)]
 //! #[controller(path = "/documents", state = Services)]
 //! pub struct DocumentController {
 //!     #[inject] fga: OpenFgaRegistry,

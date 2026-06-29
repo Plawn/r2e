@@ -33,7 +33,6 @@ fn make_state() -> ConsumerTestState {
 
 // ─── Consumer controllers ───
 
-#[derive(Controller)]
 #[controller(state = ConsumerTestState)]
 pub struct CountingConsumer {
     #[inject]
@@ -50,7 +49,6 @@ impl CountingConsumer {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = ConsumerTestState)]
 pub struct DataCapturingConsumer {
     #[inject]
@@ -67,7 +65,6 @@ impl DataCapturingConsumer {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = ConsumerTestState)]
 pub struct SecondCountingConsumer {
     #[inject]

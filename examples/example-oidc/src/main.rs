@@ -19,7 +19,6 @@ struct Services {
 // Controller
 // ---------------------------------------------------------------------------
 
-#[derive(Controller)]
 #[controller(path = "/", state = Services)]
 pub struct GreetingController;
 

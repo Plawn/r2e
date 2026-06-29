@@ -1,6 +1,6 @@
 use r2e::prelude::*;
 
-#[derive(Controller)]
+#[controller(path = "/test")]
 pub struct MyController {
     #[inject]
     name: String,

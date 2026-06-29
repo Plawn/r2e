@@ -5,7 +5,6 @@ use crate::services::ChatService;
 use crate::state::AppState;
 
 /// REST endpoints for room listing and message history.
-#[derive(Controller)]
 #[controller(path = "/rooms", state = AppState)]
 pub struct HistoryController {
     #[inject]

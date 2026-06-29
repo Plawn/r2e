@@ -6,7 +6,6 @@ pub struct AppState {
     pub event_bus: LocalEventBus,
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct MyConsumer {
     #[inject]

@@ -22,7 +22,6 @@
 //! Inject and submit work:
 //!
 //! ```ignore
-//! #[derive(Controller)]
 //! #[controller(state = Services)]
 //! pub struct ReportController {
 //!     #[inject] executor: PoolExecutor,

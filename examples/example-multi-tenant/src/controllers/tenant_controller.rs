@@ -8,7 +8,6 @@ use crate::tenant_identity::TenantUser;
 
 /// Tenant-scoped project endpoints.
 /// Uses param-level identity + TenantGuard for tenant isolation.
-#[derive(Controller)]
 #[controller(path = "/tenants", state = AppState)]
 pub struct TenantController {
     #[inject]

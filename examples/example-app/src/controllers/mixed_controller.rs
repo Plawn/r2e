@@ -8,7 +8,6 @@ use r2e::prelude::*;
 /// Because there is no `#[inject(identity)]` on the struct, `StatefulConstruct`
 /// is generated — enabling this controller for consumers and scheduled tasks
 /// while still having protected endpoints via handler-param identity.
-#[derive(Controller)]
 #[controller(path = "/mixed", state = Services)]
 pub struct MixedController {
     #[inject]

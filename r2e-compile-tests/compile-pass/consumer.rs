@@ -12,7 +12,6 @@ pub struct UserCreated {
     pub name: String,
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct EventConsumer {
     #[inject]

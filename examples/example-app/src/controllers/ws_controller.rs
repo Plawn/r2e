@@ -3,7 +3,6 @@ use r2e::ws::WsStream;
 
 use crate::state::Services;
 
-#[derive(Controller)]
 #[controller(path = "/ws", state = Services)]
 pub struct WsEchoController;
 

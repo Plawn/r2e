@@ -1,6 +1,6 @@
 //! Parsing for the `#[grpc_routes(TraitPath)]` attribute macro.
 
-use crate::derive_parsing::has_identity_qualifier;
+use crate::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
 use crate::types::{IdentityParam, MethodDecorators};
 

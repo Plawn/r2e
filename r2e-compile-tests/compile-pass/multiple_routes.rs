@@ -11,7 +11,6 @@ pub struct Item {
     pub name: String,
 }
 
-#[derive(Controller)]
 #[controller(path = "/items", state = AppState)]
 pub struct ItemController;
 

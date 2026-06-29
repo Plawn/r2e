@@ -10,7 +10,6 @@ pub struct ProfileUpload {
     pub attachments: Vec<UploadedFile>,
 }
 
-#[derive(Controller)]
 #[controller(path = "/uploads", state = crate::state::Services)]
 pub struct UploadController;
 

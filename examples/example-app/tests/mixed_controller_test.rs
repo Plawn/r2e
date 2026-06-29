@@ -44,7 +44,6 @@ struct MixedTestState {
 
 // ─── Mixed controller: public + protected endpoints ───
 
-#[derive(Controller)]
 #[controller(path = "/api", state = MixedTestState)]
 pub struct MixedTestController {
     #[inject]

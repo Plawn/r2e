@@ -7,7 +7,6 @@ use crate::models::{Article, CreateArticleRequest, UpdateArticleRequest};
 use crate::services::ArticleService;
 use crate::state::AppState;
 
-#[derive(Controller)]
 #[controller(path = "/articles", state = AppState)]
 pub struct ArticleController {
     #[inject]

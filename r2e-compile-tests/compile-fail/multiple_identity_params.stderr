@@ -7,9 +7,9 @@ error: only one #[inject(identity)] parameter is allowed per handler
              let email = user.email();
              let roles = user.roles();
          }
-  --> compile-fail/multiple_identity_params.rs:20:9
+  --> compile-fail/multiple_identity_params.rs:19:9
    |
-20 |         #[inject(identity)] user2: AuthenticatedUser,
+19 |         #[inject(identity)] user2: AuthenticatedUser,
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: unused import: `r2e::r2e_security::AuthenticatedUser`

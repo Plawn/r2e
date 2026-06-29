@@ -19,7 +19,6 @@ pub struct GreetingPrefix(pub String);
 
 // ── gRPC Service ───────────────────────────────────────────────────────
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct GreeterService {
     #[inject]
@@ -53,7 +52,6 @@ impl GreeterService {
 
 // ── HTTP Controller (to show multiplexing) ─────────────────────────────
 
-#[derive(Controller)]
 #[controller(path = "/api", state = Services)]
 pub struct HealthController;
 

@@ -15,7 +15,6 @@ struct ConfigTestState {
 
 // ─── Controller testing various config types ───
 
-#[derive(Controller)]
 #[controller(path = "/config", state = ConfigTestState)]
 pub struct ConfigTestController {
     #[config("app.name")]
@@ -204,7 +203,6 @@ async fn test_config_option_none() {
 
 // ─── Missing required config key panics ───
 
-#[derive(Controller)]
 #[controller(path = "/bad-config", state = ConfigTestState)]
 pub struct MissingConfigController {
     #[config("nonexistent.key")]

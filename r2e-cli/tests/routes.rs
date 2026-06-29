@@ -29,7 +29,6 @@ impl Drop for CwdGuard {
 #[test]
 fn extracts_controller_path() {
     let content = r#"
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController;
 "#;
@@ -42,7 +41,6 @@ pub struct UserController;
 #[test]
 fn extracts_controller_path_no_path() {
     let content = r#"
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserController;
 "#;
@@ -127,7 +125,6 @@ fn parses_routes_from_controller_file() {
     fs::write(
         &file_path,
         r#"
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController;
 

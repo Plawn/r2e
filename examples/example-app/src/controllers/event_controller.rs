@@ -4,7 +4,6 @@ use crate::models::UserCreatedEvent;
 use crate::state::Services;
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserEventConsumer {
     #[inject]

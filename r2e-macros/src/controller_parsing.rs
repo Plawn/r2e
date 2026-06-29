@@ -1,7 +1,9 @@
+use syn::parse::Parser;
+
 use crate::type_utils::{parse_config_field, parse_config_section_prefix};
 use crate::types::*;
 
-/// Parsed representation of a `#[derive(Controller)]` struct.
+/// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
     pub name: syn::Ident,
     pub state_type: syn::Path,
@@ -12,6 +14,13 @@ pub struct ControllerStructDef {
     pub config_section_fields: Vec<ConfigSectionField>,
     pub is_unit_struct: bool,
 }
+
+/// Field helper attributes consumed by the `#[controller]` attribute macro.
+///
+/// These must be stripped from the emitted physical struct: once the derive is
+/// gone they are no longer registered helper attributes, so leaving them on the
+/// struct would produce "cannot find attribute" errors.
+pub const CONTROLLER_FIELD_ATTRS: &[&str] = &["inject", "identity", "config", "config_section"];
 
 /// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
 pub fn has_identity_qualifier(attr: &syn::Attribute) -> bool {
@@ -24,60 +33,61 @@ pub fn has_identity_qualifier(attr: &syn::Attribute) -> bool {
     }
 }
 
-pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
-    let name = input.ident;
-
-    // Parse #[controller(path = "...", state = ...)]
+/// Parse the `#[controller(path = "...", state = ...)]` attribute arguments.
+pub fn parse_controller_args(
+    args: proc_macro2::TokenStream,
+    span: proc_macro2::Span,
+) -> syn::Result<(syn::Path, Option<String>)> {
     let mut state_type: Option<syn::Path> = None;
     let mut prefix: Option<String> = None;
 
-    for attr in &input.attrs {
-        if attr.path().is_ident("controller") {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("path") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    prefix = Some(lit.value());
-                    Ok(())
-                } else if meta.path.is_ident("state") {
-                    let value = meta.value()?;
-                    state_type = Some(value.parse()?);
-                    Ok(())
-                } else {
-                    Err(meta.error(
-                        "unknown attribute in #[controller(...)]: expected `path` or `state`"
-                    ))
-                }
-            })?;
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("path") {
+            let value = meta.value()?;
+            let lit: syn::LitStr = value.parse()?;
+            prefix = Some(lit.value());
+            Ok(())
+        } else if meta.path.is_ident("state") {
+            let value = meta.value()?;
+            state_type = Some(value.parse()?);
+            Ok(())
+        } else {
+            Err(meta.error("unknown attribute in #[controller(...)]: expected `path` or `state`"))
         }
-    }
+    });
+    parser.parse2(args)?;
 
     let state_type = state_type.ok_or_else(|| {
         syn::Error::new(
-            name.span(),
+            span,
             "#[controller(state = ...)] is required\n\
              example: #[controller(path = \"/users\", state = AppState)]",
         )
     })?;
 
-    // Parse fields
-    let (fields, is_unit_struct) = match input.data {
-        syn::Data::Struct(data) => match data.fields {
-            syn::Fields::Named(named) => (named.named, false),
-            syn::Fields::Unit => (syn::punctuated::Punctuated::new(), true),
-            syn::Fields::Unnamed(_) => {
-                return Err(syn::Error::new(
-                    name.span(),
-                    "Controller cannot have tuple fields — use named fields or a unit struct:\n\
-                     \n  struct MyController {\n      #[inject] service: MyService,\n  }\n\
-                     \n  // or: struct MyController;",
-                ))
-            }
-        },
-        _ => {
+    Ok((state_type, prefix))
+}
+
+/// Parse a `#[controller]` struct into a [`ControllerStructDef`].
+///
+/// `state_type`/`prefix` come from the attribute arguments; field scopes are
+/// read from the struct's named fields.
+pub fn parse(
+    state_type: syn::Path,
+    prefix: Option<String>,
+    item: &syn::ItemStruct,
+) -> syn::Result<ControllerStructDef> {
+    let name = item.ident.clone();
+
+    let (fields, is_unit_struct): (Vec<&syn::Field>, bool) = match &item.fields {
+        syn::Fields::Named(named) => (named.named.iter().collect(), false),
+        syn::Fields::Unit => (Vec::new(), true),
+        syn::Fields::Unnamed(_) => {
             return Err(syn::Error::new(
                 name.span(),
-                "#[derive(Controller)] only works on structs — enums and unions are not supported",
+                "Controller cannot have tuple fields — use named fields or a unit struct:\n\
+                 \n  struct MyController {\n      #[inject] service: MyService,\n  }\n\
+                 \n  // or: struct MyController;",
             ))
         }
     };
@@ -88,15 +98,19 @@ pub fn parse(input: syn::DeriveInput) -> syn::Result<ControllerStructDef> {
     let mut config_section_fields = Vec::new();
 
     for field in fields {
-        let field_name = field.ident.clone().ok_or_else(|| {
-            syn::Error::new(name.span(), "expected named field")
-        })?;
+        let field_name = field
+            .ident
+            .clone()
+            .ok_or_else(|| syn::Error::new(name.span(), "expected named field"))?;
         let field_type = field.ty.clone();
 
         let inject_attr = field.attrs.iter().find(|a| a.path().is_ident("inject"));
         let legacy_identity = field.attrs.iter().any(|a| a.path().is_ident("identity"));
         let config_attr = field.attrs.iter().find(|a| a.path().is_ident("config"));
-        let config_section_attr = field.attrs.iter().find(|a| a.path().is_ident("config_section"));
+        let config_section_attr = field
+            .attrs
+            .iter()
+            .find(|a| a.path().is_ident("config_section"));
 
         if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {

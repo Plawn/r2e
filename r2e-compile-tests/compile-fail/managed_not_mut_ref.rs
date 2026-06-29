@@ -5,7 +5,6 @@ pub struct AppState;
 
 pub struct MyResource;
 
-#[derive(Controller)]
 #[controller(path = "/test", state = AppState)]
 pub struct MyController;
 

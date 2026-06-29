@@ -4,7 +4,6 @@ use crate::models::{CreateOrderRequest, Order};
 use crate::services::OrderService;
 use crate::state::OrderState;
 
-#[derive(Controller)]
 #[controller(path = "/orders", state = OrderState)]
 pub struct OrderController {
     #[inject]

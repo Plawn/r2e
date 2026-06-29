@@ -22,8 +22,8 @@ impl FromRef<Services> for Arc<AtomicU32> {
     fn from_ref(s: &Services) -> Self { s.counter.clone() }
 }
 
-#[derive(Controller, Clone)]
 #[controller(state = Services)]
+#[derive(Clone)]
 struct Worker {
     #[inject] executor: PoolExecutor,
     #[inject] counter: Arc<AtomicU32>,

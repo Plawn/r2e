@@ -20,7 +20,6 @@ struct Row {
     value: i64,
 }
 
-#[derive(Controller)]
 #[controller(path = "/", state = Services)]
 pub struct BenchController {
     #[inject]

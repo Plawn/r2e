@@ -6,7 +6,6 @@ use r2e::sse::SseBroadcaster;
 
 use crate::state::Services;
 
-#[derive(Controller)]
 #[controller(path = "/sse", state = Services)]
 pub struct SseController {
     #[inject]

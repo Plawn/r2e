@@ -22,7 +22,6 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/mixed", state = AppState)]
 pub struct MixedController {
     #[inject]

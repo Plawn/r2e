@@ -142,7 +142,6 @@ pub struct CustomPrefixParams {
     pub q: Option<String>,
 }
 
-#[derive(Controller)]
 #[controller(path = "/search", state = TestServices)]
 pub struct TestSearchController {
     #[inject]
@@ -164,7 +163,6 @@ impl TestSearchController {
 
 // ─── Nested Params test controller ───
 
-#[derive(Controller)]
 #[controller(path = "/nested", state = TestServices)]
 pub struct NestedParamsController {
     #[inject]
@@ -207,7 +205,6 @@ impl NestedParamsController {
 
 // ─── Main test controller ───
 
-#[derive(Controller)]
 #[controller(state = TestServices)]
 pub struct TestUserController {
     #[inject]

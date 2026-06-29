@@ -25,7 +25,6 @@ pub struct RootConfig {
     pub app: AppConfig,
 }
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
     #[inject]

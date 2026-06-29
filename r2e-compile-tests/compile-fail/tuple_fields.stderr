@@ -5,7 +5,7 @@ error: Controller cannot have tuple fields — use named fields or a unit struct
          }
 
          // or: struct MyController;
- --> compile-fail/tuple_fields.rs:8:12
+ --> compile-fail/tuple_fields.rs:7:12
   |
-8 | pub struct MyController(String, i32);
+7 | pub struct MyController(String, i32);
   |            ^^^^^^^^^^^^

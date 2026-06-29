@@ -59,7 +59,6 @@ impl ManagedResource<AppState> for RequestResource {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/combined", state = AppState)]
 pub struct CombinedController;
 

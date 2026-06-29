@@ -7,7 +7,6 @@ use crate::services::ChatService;
 use crate::state::AppState;
 
 /// Event consumer that persists chat messages to the database.
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct MessagePersistenceConsumer {
     #[inject]

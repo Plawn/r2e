@@ -13,7 +13,6 @@ pub struct SearchParams {
     pub email: Option<String>,
 }
 
-#[derive(Controller)]
 #[controller(path = "/data/users", state = Services)]
 pub struct DataController {
     #[inject]

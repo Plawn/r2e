@@ -16,7 +16,6 @@ struct ScheduledTestState {
 
 // ─── Scheduled controller ───
 
-#[derive(Controller)]
 #[controller(state = ScheduledTestState)]
 pub struct IntervalCounter {
     #[inject]

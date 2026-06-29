@@ -51,7 +51,6 @@ impl Clone for AppState {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct AppScopedController {
     #[inject]
@@ -117,7 +116,6 @@ impl FromRequestParts<IdentityState> for RequestIdentity {
     }
 }
 
-#[derive(Controller)]
 #[controller(state = IdentityState)]
 struct RequestScopedController {
     #[inject(identity)]

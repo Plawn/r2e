@@ -235,7 +235,6 @@ pub fn hello_controller() -> &'static str {
     r#"use crate::state::AppState;
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/", state = AppState)]
 pub struct HelloController;
 

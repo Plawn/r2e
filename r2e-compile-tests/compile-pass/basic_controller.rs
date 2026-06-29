@@ -5,7 +5,6 @@ pub struct AppState {
     pub greeting: String,
 }
 
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct BasicController {
     #[inject]

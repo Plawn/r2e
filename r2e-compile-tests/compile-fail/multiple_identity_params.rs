@@ -7,7 +7,6 @@ pub struct AppState {
     pub claims_validator: Arc<r2e::r2e_security::JwtClaimsValidator>,
 }
 
-#[derive(Controller)]
 #[controller(path = "/test", state = AppState)]
 pub struct MyController;
 

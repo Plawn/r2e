@@ -9,7 +9,6 @@ pub struct AppState {
 #[derive(Debug, Clone)]
 pub struct MyEvent;
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct MyConsumer {
     #[inject]

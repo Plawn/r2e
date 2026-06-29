@@ -33,7 +33,6 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for StreamGuard {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/projects/{pid}", state = AppState)]
 pub struct RealtimeController;
 

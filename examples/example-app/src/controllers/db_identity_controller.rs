@@ -15,7 +15,6 @@ use crate::state::Services;
 ///
 /// This is a "mixed" controller using parameter-level identity injection,
 /// allowing different identity types per endpoint.
-#[derive(Controller)]
 #[controller(path = "/identity", state = Services)]
 pub struct IdentityController;
 

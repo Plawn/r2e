@@ -98,7 +98,6 @@ pub struct ScheduledJobInfo {
 /// # Example
 ///
 /// ```ignore
-/// #[derive(Controller)]
 /// #[controller(path = "/admin", state = Services)]
 /// pub struct AdminController {
 ///     #[inject] jobs: ScheduledJobRegistry,
@@ -169,7 +168,6 @@ impl Default for ScheduledJobRegistry {
 /// In controllers, inject the token or job registry directly:
 ///
 /// ```ignore
-/// #[derive(Controller)]
 /// #[controller(state = Services)]
 /// pub struct MyController {
 ///     #[inject] cancel: CancellationToken,

@@ -3,7 +3,6 @@
 //! ```ignore
 //! use r2e_core::prelude::*;
 //!
-//! #[derive(Controller)]
 //! #[controller(state = MyState)]
 //! pub struct MyController {
 //!     #[inject]  my_service: MyService,
@@ -22,9 +21,10 @@
 
 // ── Macros (from r2e-macros) ────────────────────────────────────────────
 
-/// Derive macro — generates struct metadata, Axum extractor, and
-/// `StatefulConstruct` impl (when no `#[inject(identity)]` fields).
-pub use r2e_macros::Controller;
+/// Attribute macro — emits the physical struct plus its metadata, Axum
+/// extractor, and `StatefulConstruct` impl (when no `#[inject(identity)]`
+/// fields).
+pub use r2e_macros::controller;
 
 /// Attribute macro on `impl` blocks — generates Axum handlers, route wiring,
 /// and `Controller` trait impl.

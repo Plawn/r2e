@@ -6,7 +6,6 @@ use crate::state::AppState;
 use crate::tenant_identity::TenantUser;
 
 /// Admin-only endpoints for managing tenants.
-#[derive(Controller)]
 #[controller(path = "/admin", state = AppState)]
 pub struct AdminController {
     #[inject]

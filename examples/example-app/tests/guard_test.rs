@@ -151,7 +151,6 @@ struct GuardTestState {
 
 // ─── Controller with various guard scenarios ───
 
-#[derive(Controller)]
 #[controller(path = "/guarded", state = GuardTestState)]
 pub struct GuardTestController;
 

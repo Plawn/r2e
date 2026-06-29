@@ -37,7 +37,6 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for ProjectGuard {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/guarded", state = AppState)]
 pub struct GuardedController;
 

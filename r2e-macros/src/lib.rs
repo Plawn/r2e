@@ -14,9 +14,9 @@ pub(crate) mod bg_service_derive;
 pub(crate) mod test_state_derive;
 pub(crate) mod producer_attr;
 pub(crate) mod type_list_gen;
-pub(crate) mod derive_codegen;
-pub(crate) mod derive_controller;
-pub(crate) mod derive_parsing;
+pub(crate) mod controller_attr;
+pub(crate) mod controller_codegen;
+pub(crate) mod controller_parsing;
 pub(crate) mod route;
 pub(crate) mod routes_attr;
 pub(crate) mod codegen;
@@ -31,7 +31,7 @@ pub(crate) mod main_attr;
 pub(crate) mod type_utils;
 pub(crate) mod field_resolver;
 
-/// Derive macro for declaring a R2E controller struct.
+/// Attribute macro for declaring a R2E controller struct.
 ///
 /// # Struct-level attribute
 ///
@@ -63,7 +63,6 @@ pub(crate) mod field_resolver;
 /// use r2e_core::prelude::*;
 ///
 /// // Struct-level identity (all endpoints require auth)
-/// #[derive(Controller)]
 /// #[controller(path = "/users", state = Services)]
 /// pub struct UserController {
 ///     #[inject]  user_service: UserService,
@@ -73,7 +72,6 @@ pub(crate) mod field_resolver;
 /// }
 ///
 /// // Mixed controller (param-level identity)
-/// #[derive(Controller)]
 /// #[controller(path = "/api", state = Services)]
 /// pub struct MixedController {
 ///     #[inject] user_service: UserService,
@@ -105,15 +103,15 @@ pub(crate) mod field_resolver;
 /// - `impl StatefulConstruct<State> for Name` — **only** when there are no
 ///   `#[inject(identity)]` fields on the struct. Used by event consumers and
 ///   scheduled tasks that run outside HTTP context.
-#[proc_macro_derive(Controller, attributes(controller, inject, identity, config, config_section))]
-pub fn derive_controller(input: TokenStream) -> TokenStream {
-    derive_controller::expand(input)
+#[proc_macro_attribute]
+pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
+    controller_attr::expand(args, input)
 }
 
 /// Attribute macro on an `impl` block — generates Axum handlers, route
 /// wiring, and trait impls.
 ///
-/// Must be placed on an `impl` block whose `Self` type derives [`Controller`].
+/// Must be placed on an `impl` block whose `Self` type uses [`macro@controller`].
 ///
 /// # Method attributes
 ///
@@ -422,7 +420,6 @@ pub fn pre_guard(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// The bus field type must implement the [`EventBus`](r2e_events::EventBus) trait.
 ///
 /// ```ignore
-/// #[derive(Controller)]
 /// #[controller(state = Services)]
 /// pub struct UserEventConsumer {
 ///     #[inject] event_bus: LocalEventBus,
@@ -487,11 +484,11 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// - the controller has an `#[inject]` field of type `PoolExecutor`
 ///   (default field name: `executor`; override with `executor = "name"`)
 /// - the controller is `Clone + Send + Sync + 'static`
-///   (`#[derive(Controller)]` already implies this).
+///   (add `#[derive(Clone)]` alongside `#[controller(...)]`).
 ///
 /// ```ignore
-/// #[derive(Controller, Clone)]
 /// #[controller(state = Services)]
+/// #[derive(Clone)]
 /// pub struct ReportController {
 ///     #[inject] executor: PoolExecutor,
 /// }
@@ -852,7 +849,7 @@ pub fn derive_bean(input: TokenStream) -> TokenStream {
 /// [`ServiceComponent<State>`](r2e_core::ServiceComponent) so the type can
 /// be registered via [`AppBuilder::spawn_service`].
 ///
-/// Field attributes mirror `#[derive(Controller)]`:
+/// Field attributes mirror `#[controller(...)]`:
 /// - `#[inject]` — clone from app state (type must impl `Clone + Send + Sync`)
 /// - `#[config("key")]` — resolve from `R2eConfig`
 /// - `#[config_section(prefix = "...")]` — typed config section
@@ -1029,7 +1026,7 @@ pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
 /// The argument is the path to the tonic-generated service trait
 /// (e.g., `proto::user_service_server::UserService`).
 ///
-/// The struct must derive [`Controller`] (for `#[inject]`, `#[config]`,
+/// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
 /// and the metadata module). The macro generates:
 ///
 /// - A wrapper struct implementing the tonic trait
@@ -1038,7 +1035,6 @@ pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```ignore
-/// #[derive(Controller)]
 /// #[controller(state = Services)]
 /// pub struct UserGrpcService {
 ///     #[inject] user_service: UserService,

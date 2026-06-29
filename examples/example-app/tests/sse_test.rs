@@ -38,7 +38,6 @@ fn finite_stream<T: Unpin>(items: Vec<T>) -> FiniteStream<T> {
 
 // ─── SSE Controller with finite stream ───
 
-#[derive(Controller)]
 #[controller(path = "/sse", state = SseTestState)]
 pub struct SseTestController;
 

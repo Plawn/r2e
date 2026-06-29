@@ -45,8 +45,8 @@ struct ExecMetrics {
     background_ticks: u64,
 }
 
-#[derive(Controller, Clone)]
 #[controller(path = "/", state = Services)]
+#[derive(Clone)]
 pub struct ReportController {
     #[inject] executor: PoolExecutor,
     #[inject] counter: Arc<AtomicU64>,

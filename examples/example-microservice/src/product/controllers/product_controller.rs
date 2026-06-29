@@ -4,7 +4,6 @@ use crate::models::{AvailabilityResponse, ProductInfo};
 use crate::services::ProductService;
 use crate::state::ProductState;
 
-#[derive(Controller)]
 #[controller(path = "/products", state = ProductState)]
 pub struct ProductController {
     #[inject]

@@ -168,7 +168,7 @@ fn generate_controller_valid_content() {
     generate::controller("UserController").unwrap();
 
     let content = fs::read_to_string("src/controllers/user_controller.rs").unwrap();
-    assert!(content.contains("#[derive(Controller)]"));
+    assert!(content.contains("#[controller("));
     assert!(content.contains("pub struct UserController"));
     assert!(content.contains("#[routes]"));
     assert!(content.contains("impl UserController"));

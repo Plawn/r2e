@@ -14,7 +14,6 @@ struct WsTestState {
 
 // ─── Echo controller ───
 
-#[derive(Controller)]
 #[controller(path = "/ws", state = WsTestState)]
 pub struct WsEchoTestController;
 

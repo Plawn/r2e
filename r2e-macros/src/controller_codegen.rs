@@ -1,16 +1,22 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::controller_parsing::ControllerStructDef;
 use crate::crate_path::r2e_core_path;
-use crate::derive_parsing::ControllerStructDef;
 use crate::field_resolver::{config_init_panic, config_section_init_panic};
 
-pub fn generate(def: &ControllerStructDef) -> TokenStream {
+/// Generate the physical controller struct plus all supporting items.
+///
+/// `physical_struct` is the user's struct with the controller helper field
+/// attributes (`#[inject]`, `#[identity]`, `#[config]`, `#[config_section]`)
+/// already stripped, so it can be re-emitted directly.
+pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) -> TokenStream {
     let meta_module = generate_meta_module(def);
     let extractor = generate_extractor(def);
     let stateful_construct = generate_stateful_construct(def);
 
     quote! {
+        #physical_struct
         #meta_module
         #extractor
         #stateful_construct

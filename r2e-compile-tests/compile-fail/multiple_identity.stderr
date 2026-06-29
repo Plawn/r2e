@@ -4,7 +4,7 @@ error: controller can have at most one #[inject(identity)] struct field
 
          #[get("/me")]
          async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> ... { }
- --> compile-fail/multiple_identity.rs:9:12
+ --> compile-fail/multiple_identity.rs:8:12
   |
-9 | pub struct MyController {
+8 | pub struct MyController {
   |            ^^^^^^^^^^^^

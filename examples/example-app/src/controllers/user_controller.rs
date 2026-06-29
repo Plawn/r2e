@@ -75,7 +75,6 @@ impl<R: Send> Interceptor<R, Services> for DbAuditLog {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/users", state = Services)]
 pub struct UserController {
     #[inject]

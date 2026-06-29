@@ -10,7 +10,6 @@ use r2e::ws::WsStream;
 use crate::services::NotificationService;
 use crate::state::Services;
 
-#[derive(Controller)]
 #[controller(path = "/notifications", state = Services)]
 pub struct NotificationController {
     #[inject]

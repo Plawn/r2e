@@ -2,7 +2,6 @@ use crate::services::UserService;
 use crate::state::Services;
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ScheduledJobs {
     #[inject]

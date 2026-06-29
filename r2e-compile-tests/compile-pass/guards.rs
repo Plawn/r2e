@@ -138,7 +138,6 @@ impl Guard<AppState, AuthenticatedUser> for SbomGuard {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/guarded", state = AppState)]
 pub struct GuardedController;
 
@@ -173,7 +172,6 @@ impl GuardedController {
     }
 }
 
-#[derive(Controller)]
 #[controller(path = "/projects/{pid}", state = AppState)]
 pub struct SbomController;
 

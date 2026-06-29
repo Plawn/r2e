@@ -81,7 +81,6 @@ struct VerbTestState {
 
 // ─── Controller with all HTTP verbs (struct-level identity) ───
 
-#[derive(Controller)]
 #[controller(path = "/items", state = VerbTestState)]
 pub struct ItemController {
     #[inject]
