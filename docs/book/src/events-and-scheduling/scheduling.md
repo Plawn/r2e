@@ -30,7 +30,6 @@ The `Scheduler` plugin must be installed **before** `build_state()` because it p
 Use `#[scheduled]` on controller methods:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
@@ -89,7 +88,7 @@ Six fields: `second minute hour day_of_month month day_of_week`
 
 ## Requirements
 
-- Scheduled controller must **not** have struct-level `#[inject(identity)]` fields (needs `StatefulConstruct`)
+- Scheduled methods run on the controller core (built via `StatefulConstruct`) and cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable. A controller may still declare struct-level identity for its HTTP routes; its scheduled methods just use only core (`#[inject]` / `#[config]`) fields.
 - The `Scheduler` plugin must be installed before `build_state()`
 - Scheduled methods take `&self` only (no additional parameters)
 
@@ -126,7 +125,6 @@ Add `SchedulerHandle` as a parameter to any handler method:
 ```rust
 use r2e::r2e_scheduler::SchedulerHandle;
 
-#[derive(Controller)]
 #[controller(path = "/admin", state = AppState)]
 pub struct AdminController {
     #[inject] some_service: SomeService,
@@ -166,7 +164,6 @@ The `ScheduledJobRegistry` provides runtime introspection of all registered sche
 ```rust
 use r2e::r2e_scheduler::{ScheduledJobRegistry, ScheduledJobInfo};
 
-#[derive(Controller)]
 #[controller(path = "/admin", state = AppState)]
 pub struct JobAdminController {
     #[inject] jobs: ScheduledJobRegistry,
@@ -204,7 +201,6 @@ You can use both together to build a full admin dashboard:
 ```rust
 use r2e::r2e_scheduler::{SchedulerHandle, ScheduledJobRegistry, ScheduledJobInfo};
 
-#[derive(Controller)]
 #[controller(path = "/admin/scheduler", state = AppState)]
 pub struct SchedulerAdminController {
     #[inject] jobs: ScheduledJobRegistry,
@@ -243,7 +239,6 @@ impl SchedulerAdminController {
 A controller can have both HTTP routes and scheduled tasks:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/stats", state = AppState)]
 pub struct StatsController {
     #[inject] stats_service: StatsService,

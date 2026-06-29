@@ -34,7 +34,6 @@ AppBuilder::new()
 ## Declarative scheduling
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/jobs", state = AppState)]
 pub struct ScheduledJobs {
     #[inject] service: CleanupService,
@@ -77,7 +76,7 @@ impl ScheduledJobs {
 
 ## Constraints
 
-Controllers with `#[inject(identity)]` struct fields cannot be used for scheduling (no `StatefulConstruct`). Use parameter-level `#[inject(identity)]` on individual handler methods instead.
+Scheduled tasks run on the controller core, which always implements `StatefulConstruct` (identity and request-scoped fields live only on the per-request façade). Controllers can be used for scheduling regardless of any struct-level or param-level `#[inject(identity)]`.
 
 ## License
 

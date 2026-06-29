@@ -49,14 +49,14 @@ No runtime dependencies. Generates handlers, extractors, and DI wiring at compil
 ```
 src/
   lib.rs                    Entry point — all #[proc_macro_attribute] and #[proc_macro_derive] definitions
-  types.rs                  Shared IR types (InjectedField, IdentityField, ConfigField, RouteMethod, ...)
+  types.rs                  Shared IR types (InjectedField, IdentityField, RequestField, ConfigField, RouteMethod, ...)
   crate_path.rs             Dynamic crate path resolution (r2e vs r2e-core facade detection)
   route.rs                  HttpMethod enum and RoutePath parser
 
-  # Controller derive pipeline
-  derive_controller.rs      Entry point for #[derive(Controller)]
-  derive_parsing.rs         Parse DeriveInput -> ControllerStructDef
-  derive_codegen.rs         Generate meta module, __R2eExtract_ struct, StatefulConstruct impl
+  # Controller attribute pipeline
+  controller_attr.rs        Entry point for #[controller(...)] (transforming attribute)
+  controller_parsing.rs     Parse the struct -> ControllerStructDef
+  controller_codegen.rs     Generate the core, meta module, __R2eRequestData_ extractor, __R2eRequest_ façade (+ Deref), StatefulConstruct impl
 
   # Routes attribute pipeline
   routes_attr.rs            Entry point for #[routes] on impl blocks

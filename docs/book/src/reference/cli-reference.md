@@ -150,7 +150,6 @@ r2e generate controller UserController
 use r2e::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserController {
     // #[inject]
@@ -258,7 +257,6 @@ CREATE TABLE IF NOT EXISTS users (
 #### Generated controller example
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/articles", state = AppState)]
 pub struct ArticleController {
     #[inject]

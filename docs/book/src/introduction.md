@@ -5,7 +5,6 @@
 ## What R2E offers
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject]           user_service: UserService,
@@ -34,7 +33,7 @@ If you've used Java's Quarkus, Spring Boot, or C#'s ASP.NET, this should feel fa
 
 ## Key features
 
-- **Declarative controllers** — `#[derive(Controller)]` + `#[routes]` generate Axum handlers with zero boilerplate
+- **Declarative controllers** — `#[controller]` + `#[routes]` generate Axum handlers with zero boilerplate
 - **Compile-time DI** — `#[inject]` for services, `#[inject(identity)]` for request-scoped identity, `#[config("key")]` for configuration
 - **JWT/OIDC security** — `AuthenticatedUser` extractor with JWKS caching, role-based access via `#[roles("admin")]`
 - **Guards** — Pre-auth and post-auth guards for custom authorization logic

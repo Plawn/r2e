@@ -11,7 +11,6 @@ There are two places to inject identity in a controller:
 When `#[inject(identity)]` is on a struct field, **every endpoint** in the controller requires authentication. If the JWT is missing or invalid, the request is rejected before any handler runs.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
@@ -19,14 +18,13 @@ pub struct UserController {
 }
 ```
 
-This also means `StatefulConstruct` is **not** generated for the controller, so it cannot be used as a consumer or scheduled task target.
+The identity field lives on the per-request façade, never on the controller core. The core still gets a `StatefulConstruct` impl (it always does), so the controller can also host `#[consumer]` / `#[scheduled]` methods — those run on the core and simply cannot access the request identity.
 
 ### Parameter-level identity
 
-When `#[inject(identity)]` is on a handler parameter instead, only the annotated endpoints require authentication. The controller retains `StatefulConstruct`, making it eligible for consumers and scheduled tasks.
+When `#[inject(identity)]` is on a handler parameter instead, only the annotated endpoints require authentication. This is the recommended form for mixed public/protected controllers, since each endpoint opts into authentication individually.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct ApiController {
     #[inject] service: MyService,
@@ -96,7 +94,6 @@ This example shows a controller with public, protected, role-gated, and optional
 ```rust
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/items", state = AppState)]
 pub struct ItemController {
     #[inject] item_service: ItemService,

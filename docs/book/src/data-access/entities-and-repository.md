@@ -84,7 +84,6 @@ repo.delete(&1).await?;
 ## In controllers
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] pool: SqlitePool,

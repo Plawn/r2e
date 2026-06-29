@@ -152,7 +152,6 @@ This means upstream proxies and API gateways can set the request ID, and R2E wil
 ```rust
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct ApiController {
     #[inject] service: MyService,
@@ -263,7 +262,6 @@ AppBuilder::new()
 ```
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] service: UserService,

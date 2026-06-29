@@ -23,7 +23,6 @@ use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-#[derive(Controller)]
 #[controller(path = "/sse", state = AppState)]
 pub struct SseController {
     #[inject]
@@ -205,7 +204,6 @@ impl NotificationService {
 Wire this into a controller:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/notifications", state = AppState)]
 pub struct NotificationController {
     #[inject]
@@ -257,7 +255,6 @@ pub struct AppState {
 
 // ── Controller ──
 
-#[derive(Controller)]
 #[controller(path = "/sse", state = AppState)]
 pub struct LiveController {
     #[inject]

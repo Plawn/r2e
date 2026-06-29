@@ -132,10 +132,12 @@ Requete HTTP
     |
     +-- State (si handler guarde)
     +-- HeaderMap (si handler guarde)
-    +-- __R2eExtract_<Name>  ← construction du controller
+    +-- Arc<Core>            ← clone de l'Arc du core (construit une fois a l'enregistrement)
+    +-- __R2eRequestData_<Name>  ← FromRequestParts : valeurs request-scoped uniquement
     |       +-- #[inject(identity)] : FromRequestParts (async)
-    |       +-- #[inject]           : state.field.clone() (sync)
-    |       +-- #[config("key")]    : config.get(key) (sync)
+    |       +-- #[inject(request)]  : FromRequestParts (async)
+    |   (les #[inject] / #[config] vivent sur le core, deja construits)
+    +-- bind_request → façade __R2eRequest_<Name> (Deref vers le core)
     +-- Params handler (Json, Path, Query, etc.)
     +-- #[inject(identity)] param (si param-level)
     |
@@ -175,11 +177,38 @@ Requete HTTP
 Reponse HTTP
 ```
 
-### 2.2 Controller Extraction
+### 2.2 Controller Core and Request Façade
 
-The generated extractor `__R2eExtract_<Name>` implements `FromRequestParts<State>`. It constructs the controller in three phases:
+`#[controller]` splits every controller into two physical pieces:
 
-**Phase 1 — Identity (async, fallible)**
+- a **core** struct holding only application-scoped data (`#[inject]` and `#[config]`
+  fields). The core is built **once** at router-build time via
+  `StatefulConstruct::from_state` and shared as an `Arc<Core>`. The `#[inject]`/`#[config]`
+  resolution described below therefore happens **once at registration**, not per request.
+- a generated **request façade** (`__R2eRequest_<Name>`) holding the request-scoped fields
+  plus an `Arc` to the core, with `Deref<Target = Core>`. Inside a route body, `self.user`
+  is a direct façade field while `self.service` resolves to the core through autoderef.
+
+Each registered route closure captures the core `Arc` and, per request, runs two steps:
+
+**Step 1 — Core construction (once, at registration)**
+
+```rust
+// Built once when the router is registered, shared across all requests.
+let core: Arc<UserController> = Arc::new(UserController::from_state(&state));
+// Inside from_state:
+//   user_service: state.user_service.clone(),         // #[inject], sync
+//   greeting: {                                        // #[config], sync
+//       let cfg = <R2eConfig as FromRef<State>>::from_ref(state);
+//       cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
+//   }
+```
+
+**Step 2 — Request data extraction (per request, async, fallible)**
+
+The generated `__R2eRequestData_<Name>` extractor implements `FromRequestParts<State>` and
+produces **only** the request-scoped values (`#[inject(identity)]` and `#[inject(request)]`).
+When the controller declares no request-scoped fields it is zero-sized and infallible.
 
 ```rust
 let user = <AuthenticatedUser as FromRequestParts<State>>
@@ -188,74 +217,67 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
     .map_err(IntoResponse::into_response)?;
 ```
 
-This is the only asynchronous phase. For `AuthenticatedUser`, this involves:
+For `AuthenticatedUser`, this involves:
 - Extracting the `Authorization: Bearer <token>` header
 - JWT validation (cryptographic signature verification)
 - JWKS lookup if the key is not cached (potentially a network call)
 - Constructing the `AuthenticatedUser` object
 
-If extraction fails, the request is immediately rejected (401).
-
-**Phase 2 — Inject (sync, infallible)**
-
-```rust
-user_service: state.user_service.clone(),
-pool: state.pool.clone(),
-```
-
-Each `#[inject]` field is cloned from the state. Purely synchronous operation.
-
-**Phase 3 — Config (sync, panics if missing)**
-
-```rust
-greeting: {
-    let cfg = <R2eConfig as FromRef<State>>::from_ref(state);
-    cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
-}
-```
-
-Extraction of `R2eConfig` from the state via `FromRef`, then a `HashMap` lookup.
+If extraction fails, the request is immediately rejected (401). The extracted values are
+then moved, together with the core `Arc`, into the façade via
+`__r2e_meta_<Name>::bind_request`. There is no per-request DI re-resolution: `#[inject]` and
+`#[config]` are read from the shared core, never recomputed.
 
 ### 2.3 Two Handler Modes
 
-**Simple mode** (without guards) — the handler directly returns the method's return type:
+Every endpoint shares the same shape: the Axum-facing closure captures the core `Arc`,
+extracts `__R2eRequestData_<Name>`, binds the stack façade with `bind_request`, then runs
+the route method on the façade.
+
+**Simple mode** (without guards) — the closure directly returns the method's return type:
 
 ```rust
-async fn __r2e_UserController_list(
-    ctrl_ext: __R2eExtract_UserController,
-    // ... params
-) -> Json<Vec<User>> {
-    let ctrl = ctrl_ext.0;
-    ctrl.list().await
-}
-```
-
-**Guarded mode** (with `#[roles]`, `#[rate_limited]`, `#[guard]`) — the handler returns `Response` to allow short-circuiting:
-
-```rust
-async fn __r2e_UserController_admin_list(
-    State(state): State<Services>,
-    headers: HeaderMap,
-    ctrl_ext: __R2eExtract_UserController,
-) -> Response {
-    let guard_ctx = GuardContext {
-        method_name: "admin_list",
-        controller_name: "UserController",
-        headers: &headers,
-        identity: guard_identity(&ctrl_ext.0),  // Option<&AuthenticatedUser>
-    };
-
-    // Short-circuit si le guard echoue
-    if let Err(resp) = Guard::check(&RolesGuard { required_roles: &["admin"] }, &state, &guard_ctx) {
-        return resp;
+// core: Arc<UserController> est capture une fois a l'enregistrement.
+let core = core.clone();
+move |data: __R2eRequestData_UserController, /* ... params */| {
+    let core = core.clone(); // un clone d'Arc par requete
+    async move {
+        let ctrl = __r2e_meta_UserController::bind_request(core, data);
+        ctrl.list(/* params */).await
     }
-
-    let ctrl = ctrl_ext.0;
-    IntoResponse::into_response(ctrl.admin_list().await)
 }
 ```
 
-**Implications**: in guarded mode, Axum also extracts `State` and `HeaderMap` in addition to the controller extractor. State extraction is an additional clone (but cheap — it is an internal `Arc` clone).
+**Guarded mode** (with `#[roles]`, `#[rate_limited]`, `#[guard]`) — the closure also extracts
+`State` and `HeaderMap` and returns `Response` to allow short-circuiting:
+
+```rust
+let core = core.clone();
+move |State(state): State<Services>,
+      headers: HeaderMap,
+      data: __R2eRequestData_UserController| {
+    let core = core.clone();
+    async move {
+        let ctrl = __r2e_meta_UserController::bind_request(core, data);
+
+        let guard_ctx = GuardContext {
+            method_name: "admin_list",
+            controller_name: "UserController",
+            headers: &headers,
+            identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, lu sur la façade
+        };
+
+        // Short-circuit si le guard echoue
+        if let Err(resp) = Guard::check(&RolesGuard { required_roles: &["admin"] }, &state, &guard_ctx) {
+            return resp;
+        }
+
+        IntoResponse::into_response(ctrl.admin_list().await)
+    }
+}
+```
+
+**Implications**: in guarded mode, Axum also extracts `State` and `HeaderMap` in addition to the request-data extractor. State extraction is an additional clone (but cheap — it is an internal `Arc` clone). In all modes the per-request cost is one `Arc` clone of the core plus one request-data extraction; the core itself is built once at registration.
 
 ---
 
@@ -266,7 +288,7 @@ async fn __r2e_UserController_admin_list(
 | Property | Value |
 |----------|-------|
 | Resolution | Compile-time (codegen) |
-| Timing | On each request |
+| Timing | Once at registration (into the shared core `Arc`) |
 | Operation | `state.field.clone()` |
 | Prerequisite | `Clone + Send + Sync` |
 | Fallible | No |
@@ -310,8 +332,14 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
 
 **Two possible locations:**
 
-- **On the struct** — the controller always requires the identity. No `StatefulConstruct`.
-- **On a handler parameter** — only annotated handlers require the identity. `StatefulConstruct` is generated.
+- **On the struct** — every HTTP route on the controller authenticates. The identity lives
+  on the per-request façade, never on the core, so `StatefulConstruct` is still generated for
+  the core (the dependencies are not rebuilt per request).
+- **On a handler parameter** — only annotated handlers require the identity. `StatefulConstruct`
+  is generated for the core as well.
+
+In both cases the core is built once and `StatefulConstruct` is always generated; only the
+small façade (one `Arc` clone plus the extracted identity) is created per request.
 
 **Cost**: this is the most expensive scope. For `AuthenticatedUser`, each request involves JWT validation with cryptographic signature verification.
 
@@ -320,7 +348,7 @@ let user = <AuthenticatedUser as FromRequestParts<State>>
 | Property | Value |
 |----------|-------|
 | Resolution | Compile-time (codegen) |
-| Timing | On each request |
+| Timing | Once at registration (into the shared core `Arc`) |
 | Operation | `FromRef` + `HashMap::get()` |
 | Prerequisite | `FromConfigValue` |
 | Fallible | Panics if key is missing |
@@ -367,7 +395,7 @@ field_name: {
 
 ## 4. Construction Outside HTTP Context: `StatefulConstruct`
 
-The `StatefulConstruct<S>` trait allows constructing a controller from the state alone, without an HTTP request. It is automatically generated by `#[derive(Controller)]` **only** when the struct has no `#[inject(identity)]` field.
+The `StatefulConstruct<S>` trait constructs a controller **core** from the state alone, without an HTTP request. It is **always** generated by `#[controller]`: identity and `#[inject(request)]` fields live only on the per-request façade, never on the core, so the core can always be built from state. It is what the router uses to build the shared core once at registration, and what consumers and scheduled tasks use to build a fresh core per run (these run on the core and cannot access request identity).
 
 ### 4.1 Usage by Consumers
 
@@ -400,14 +428,16 @@ scheduler.add_task(ScheduledTask {
 
 ### 4.3 The Mixed Controller Pattern
 
-With `#[inject(identity)]` on handler **parameters** (not on the struct), the controller retains `StatefulConstruct` while still allowing protected endpoints:
+With `#[inject(identity)]` on handler **parameters** (not on the struct), the controller keeps
+request scope explicit per endpoint while still allowing protected endpoints. (Struct-level
+identity also keeps `StatefulConstruct` on the core — it simply makes every HTTP route
+authenticate.)
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/api", state = Services)]
 pub struct MixedController {
     #[inject] user_service: UserService,
-    // Pas de #[inject(identity)] ici → StatefulConstruct genere
+    // Identity au niveau parametre → request scope explicite par endpoint
 }
 
 #[routes]
@@ -469,9 +499,9 @@ let guard_ctx = GuardContext {
 **Case B** — Identity on the struct (or absent):
 
 ```rust
-// Appel a la fonction du meta-module
+// Appel a la fonction du meta-module sur la façade (ctrl)
 let guard_ctx = GuardContext {
-    identity: __r2e_meta_Name::guard_identity(&ctrl_ext.0),
+    identity: __r2e_meta_Name::guard_identity(&ctrl),
     ...
 };
 ```
@@ -592,17 +622,22 @@ Guards are executed synchronously within an async handler. They do not block the
 | Aspect | Struct-level `#[inject(identity)]` | Param-level `#[inject(identity)]` |
 |--------|-----------------------------------|----------------------------------|
 | JWT extraction | On every request, all endpoints | Only annotated endpoints |
-| `StatefulConstruct` | Not generated | Generated |
-| Consumers / Schedulers | Impossible | Possible |
-| Identity access in self | `self.user` (always available) | Not available in self |
+| `StatefulConstruct` | Generated (on the core) | Generated (on the core) |
+| Consumers / Schedulers | Possible (run on the core) | Possible (run on the core) |
+| Identity access in self | `self.user` (façade field, always available) | Not available in self |
 | Guard context | Via `guard_identity(&ctrl)` | Via reference to param |
 | Public endpoint overhead | Unnecessary JWT validation | No JWT overhead |
+| Per-request DI cost | One core `Arc` clone (deps built once) | One core `Arc` clone (deps built once) |
 
-**Recommendation**: use the param-level pattern for controllers that mix public and protected endpoints. Reserve struct-level for fully protected controllers where the identity is used in most methods.
+**Recommendation**: use the param-level pattern for controllers that mix public and protected endpoints. Reserve struct-level for fully protected controllers where the identity is used in most methods. Note that struct-level identity no longer rebuilds the controller's dependencies per request — the shared core is built once; only the façade carries the per-request identity.
 
 ### 6.6 Scheduled Tasks: Construction Cost
 
-Each scheduled task execution calls `StatefulConstruct::from_state`, which clones `#[inject]` fields and looks up `#[config]` fields. For high-frequency tasks (e.g., `every = 1`), this cost is identical to that of an HTTP request (minus identity extraction).
+Each scheduled task execution calls `StatefulConstruct::from_state`, which builds a fresh
+core by cloning `#[inject]` fields and looking up `#[config]` fields. Unlike HTTP requests —
+which now reuse the once-built shared core `Arc` — scheduled tasks construct a new core on
+every run. For high-frequency tasks (e.g., `every = 1`), this core-construction cost recurs
+each execution.
 
 **Recommendation**: for very high-frequency tasks, reduce the number of injected fields to the minimum necessary.
 

@@ -44,7 +44,7 @@ This generates and opens documentation for all R2E crates.
 
 | Macro | Description |
 |-------|-------------|
-| `#[derive(Controller)]` | Generate controller metadata and extractor |
+| `#[controller]` | Declare a controller: generate metadata, request façade, and routes |
 | `#[routes]` | Generate Axum handlers and Controller impl |
 | `#[bean]` | Generate Bean or AsyncBean impl |
 | `#[producer]` | Generate Producer impl from free function |

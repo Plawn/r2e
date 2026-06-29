@@ -8,7 +8,7 @@ Automatically generate an OpenAPI 3.1.0 specification from controller route meta
 
 ### Route metadata
 
-Each controller annotated with `#[derive(Controller)]` + `#[routes]` implements `Controller::route_metadata()`, which returns a list of `RouteInfo` — path, HTTP method, parameters, required roles, request/response schemas.
+Each controller annotated with `#[controller]` + `#[routes]` implements `Controller::route_metadata()`, which returns a list of `RouteInfo` — path, HTTP method, parameters, required roles, request/response schemas.
 
 ### OpenApiConfig
 

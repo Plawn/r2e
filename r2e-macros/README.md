@@ -1,6 +1,6 @@
 # r2e-macros
 
-Procedural macros for the R2E framework — `#[derive(Controller)]`, `#[routes]`, `#[bean]`, and `#[producer]`.
+Procedural macros for the R2E framework — `#[controller]`, `#[routes]`, `#[bean]`, and `#[producer]`.
 
 ## Overview
 
@@ -8,24 +8,29 @@ This proc-macro crate generates all the Axum boilerplate at compile time with ze
 
 ## Macros
 
-### `#[derive(Controller)]`
+### `#[controller(...)]`
 
-Generates controller metadata, Axum extractor, and `StatefulConstruct` impl:
+A transforming attribute on the struct. It rewrites the struct into a physical
+*core* (request-scoped fields stripped out, built once into an `Arc`) and
+generates the request-data extractor, the per-request façade, metadata, and
+`StatefulConstruct`:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,
-    #[inject(identity)] user: AuthenticatedUser,
+    #[inject(identity)] user: AuthenticatedUser,        // request-scoped (auth)
+    #[inject(request)] tenant: TenantId,                // request-scoped (generic)
     #[config("app.greeting")] greeting: String,
 }
 ```
 
 **Generated items:**
-- `mod __r2e_meta_UserController` — type aliases and constants
-- `struct __R2eExtract_UserController` — `FromRequestParts` extractor
-- `impl StatefulConstruct` — when no `#[inject(identity)]` struct fields
+- the controller **core** (struct with request-scoped fields stripped)
+- `mod __r2e_meta_UserController` — type aliases, constants, `guard_identity`, `bind_request`, `build_routes`, `validate_config`
+- `struct __R2eRequestData_UserController` — `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`)
+- `struct __R2eRequest_UserController` — the per-request façade, `Deref<Target = core>`; route methods run here
+- `impl StatefulConstruct` — always (the core never holds request-scoped fields)
 
 ### `#[routes]`
 

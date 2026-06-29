@@ -51,7 +51,6 @@ Use `Json<T>` as usual — validation is automatic:
 ```rust
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserController {
     #[inject]

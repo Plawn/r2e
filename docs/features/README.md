@@ -29,7 +29,7 @@ R2E provides 19 main features, each documented in a dedicated file.
 ## Crate Architecture
 
 ```
-r2e-macros       Proc-macro. #[derive(Controller)] + #[routes] generate Axum code.
+r2e-macros       Proc-macro. #[controller] + #[routes] generate Axum code.
 r2e-core         Runtime. AppBuilder, Controller, HttpError, config, validation, cache, rate limiter.
 r2e-security     JWT/JWKS, AuthenticatedUser, #[roles].
 r2e-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.

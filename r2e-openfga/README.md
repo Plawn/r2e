@@ -57,7 +57,6 @@ AppBuilder::new()
 ```rust
 use r2e::r2e_openfga::OpenFgaRegistry;
 
-#[derive(Controller)]
 #[controller(path = "/documents", state = AppState)]
 pub struct DocumentController {
     #[inject] fga: OpenFgaRegistry,

@@ -117,7 +117,6 @@ let config = R2eConfig::load_with_resolver(&VaultResolver { /* ... */ }).unwrap(
 Inject individual values by their full dot-separated key. The field type must implement `FromConfigValue`.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[config("app.greeting")] greeting: String,
@@ -358,7 +357,6 @@ If `app.name` is missing, the error includes: `-- The display name of the applic
 With `load_config::<RootConfig>()`, config types are auto-registered as beans. Inject them with `#[inject]`:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
     #[inject]

@@ -5,7 +5,6 @@ Instead of manually calling `event_bus.subscribe()`, use `#[consumer]` for decla
 ## Controller consumers
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserEventConsumer {
     #[inject] event_bus: LocalEventBus,
@@ -44,7 +43,7 @@ Under the hood, the `#[routes]` macro generates a `register_consumers()` method 
 ## Requirements
 
 - The controller must have a field implementing `EventBus` (named in the `bus = "..."` attribute)
-- The controller must **not** have struct-level `#[inject(identity)]` fields (consumers need `StatefulConstruct`)
+- Consumer methods run on the controller core (built via `StatefulConstruct`) and so cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable inside a consumer. A controller may still declare struct-level identity for its HTTP routes and have consumer methods that use only core (`#[inject]` / `#[config]`) fields.
 - The consumer method must take `&self` and `Arc<EventType>`
 - Consumer controllers don't need a `path` in `#[controller]`
 
@@ -68,7 +67,6 @@ Registration happens once at startup. All consumer methods on the controller are
 A controller can have both HTTP routes and consumers. This is common when a feature needs both a REST API and event-driven side-effects:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/notifications", state = AppState)]
 pub struct NotificationController {
     #[inject] event_bus: LocalEventBus,
@@ -99,7 +97,6 @@ impl NotificationController {
 Consumer methods have access to all `#[inject]` fields on the controller, just like HTTP handlers. This makes it easy to reuse services:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct OrderConsumer {
     #[inject] event_bus: LocalEventBus,

@@ -6,11 +6,10 @@ Controllers are the central building block of R2E. They map HTTP routes to handl
 
 A controller requires two macros working together:
 
-1. `#[derive(Controller)]` on the struct — generates the Axum extractor and metadata
+1. `#[controller(path = "...", state = ...)]` on the struct — a transforming attribute that generates the controller core, the request-data extractor, the per-request façade, and metadata
 2. `#[routes]` on the impl block — generates Axum handler functions and route registration
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,
@@ -112,23 +111,34 @@ See [Validation](./validation.md#params--aggregated-parameter-extraction) for de
 
 ## Injection scopes
 
-Controller fields support three injection scopes:
+Controller fields support four injection scopes — two app-scoped (on the core)
+and two request-scoped (on the per-request façade):
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject]              user_service: UserService,     // App-scoped (from state)
-    #[inject(identity)]    user: AuthenticatedUser,       // Request-scoped (from request)
-    #[config("app.name")]  app_name: String,              // Config-scoped (from R2eConfig)
+    #[config("app.name")]  app_name: String,              // App-scoped (from R2eConfig)
+    #[inject(identity)]    user: AuthenticatedUser,        // Request-scoped auth identity
+    #[inject(request)]     tenant: TenantId,               // Request-scoped (any FromRequestParts)
 }
 ```
 
-| Scope | Attribute | Timing | Notes |
-|-------|-----------|--------|-------|
-| App | `#[inject]` | Per request | Cloned from state. Must be `Clone + Send + Sync`. |
-| Request | `#[inject(identity)]` | Per request | Extracted from request parts. Must implement `Identity`. |
-| Config | `#[config("key")]` | Per request | Looked up from `R2eConfig`. |
+| Scope | Attribute | Lives on | Timing | Notes |
+|-------|-----------|----------|--------|-------|
+| App | `#[inject]` | Core | Built once | Cloned from state. Must be `Clone + Send + Sync`. |
+| Config | `#[config("key")]` | Core | Built once | Looked up from `R2eConfig`. |
+| Request (identity) | `#[inject(identity)]` | Façade | Per request | Extracted from request parts. Must implement `Identity`. Drives guards/roles. |
+| Request (generic) | `#[inject(request)]` | Façade | Per request | Any `FromRequestParts` value (tenant id, trace context, request-scoped handle). Not modeled in OpenAPI yet. |
+
+`Option<T>` is supported for both `#[inject(identity)]` and `#[inject(request)]`.
+
+The app-scoped fields live on a physical **core** struct built once when the
+router is registered; the request-scoped fields live on a generated per-request
+**façade** that `Deref`s to the core. As a result, struct-level identity does
+**not** rebuild the controller's dependencies per request — only the small façade
+(one `Arc` clone of the core plus the extracted request values) is created per
+request. See [Controller Lifecycle and Handler Dispatch](../advanced/controller-lifecycle-and-dispatch.md).
 
 **Important:** Struct-level `#[inject(identity)]` means **all** endpoints require authentication. For mixed public/protected controllers, use param-level injection instead (see below).
 
@@ -137,7 +147,6 @@ pub struct UserController {
 When only some endpoints need authentication, use param-level `#[inject(identity)]` instead of struct-level. This is the **recommended pattern** for most controllers:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct ApiController {
     #[inject] service: MyService,
@@ -168,7 +177,7 @@ impl ApiController {
 }
 ```
 
-This is the **mixed controller pattern** — it's more efficient because JWT validation only runs on endpoints that need it. It also preserves `StatefulConstruct`, enabling the controller to be used with `#[consumer]` and `#[scheduled]`.
+This is the **mixed controller pattern** — it's more efficient because JWT validation only runs on endpoints that need it, and it keeps request scope explicit per handler. The controller core always implements `StatefulConstruct`, so it can also be used with `#[consumer]` and `#[scheduled]` (which run on the core and cannot access request identity).
 
 ## Registering controllers
 
@@ -187,12 +196,13 @@ AppBuilder::new()
 
 ## What gets generated
 
-Behind the scenes, `#[derive(Controller)]` and `#[routes]` generate:
+Behind the scenes, `#[controller]` and `#[routes]` generate:
 
-1. **Metadata module** (`__r2e_meta_<Name>`) — state type, identity type, path prefix
-2. **Extractor struct** (`__R2eExtract_<Name>`) — implements `FromRequestParts` to construct the controller
-3. **StatefulConstruct impl** — when no struct-level `#[inject(identity)]` fields exist
-4. **Handler functions** — standalone async functions for each route
-5. **Controller trait impl** — wires routes into `Router<State>`
+1. **Controller core** — your struct with request-scoped fields stripped out; holds only `#[inject]` + `#[config]` fields and is built once into an `Arc`
+2. **Metadata module** (`__r2e_meta_<Name>`) — state type, identity type, path prefix, `bind_request`, `build_routes`, config validation
+3. **Request-data extractor** (`__R2eRequestData_<Name>`) — implements `FromRequestParts` to extract the request-scoped values (identity + `#[inject(request)]`)
+4. **Request façade** (`__R2eRequest_<Name>`) — `{ __core: Arc<Core>, <request fields> }` with `Deref<Target = Core>`; route methods run here
+5. **StatefulConstruct impl** — always generated (the core never holds request-scoped fields)
+6. **Controller trait impl** — `fn routes(state: &State) -> Router<State>` wires routes into `Router<State>`
 
 All of this is hidden from your code — you just write the struct and methods.

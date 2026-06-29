@@ -3,7 +3,6 @@
 An ergonomic enterprise framework for Rust, inspired by Quarkus. Declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on [Axum](https://github.com/tokio-rs/axum) via the `r2e-http` abstraction layer.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject]           user_service: UserService,
@@ -30,8 +29,8 @@ impl UserController {
 
 ## Features
 
-- **Declarative controllers** — `#[derive(Controller)]` + `#[routes]` generate Axum handlers with zero boilerplate
-- **Compile-time DI** — `#[inject]` for services, `#[inject(identity)]` for request-scoped identity, `#[config("key")]` for configuration
+- **Declarative controllers** — `#[controller]` + `#[routes]` generate Axum handlers with zero boilerplate
+- **Compile-time DI** — `#[inject]` for services, `#[inject(identity)]`/`#[inject(request)]` for request-scoped fields, `#[config("key")]` for configuration
 - **JWT/OIDC security** — `AuthenticatedUser` extractor with JWKS caching, role-based access via `#[roles("admin")]`
 - **Guards** — Pre-auth and post-auth guards (`#[guard(...)]`, `#[pre_guard(...)]`) for custom authorization logic
 - **Interceptors** — AOP-style `#[intercept(...)]` for logging, timing, caching, and custom cross-cutting concerns
@@ -92,7 +91,6 @@ Define a controller:
 ```rust
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject]
@@ -155,7 +153,6 @@ All injection is resolved at compile time — no runtime reflection, no trait ob
 
 ```rust
 // Mixed controller — some endpoints public, some protected
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct ApiController {
     #[inject] service: MyService,
@@ -289,7 +286,6 @@ pub struct UserCreatedEvent {
 self.event_bus.emit(UserCreatedEvent { user_id: 1, name: "Alice".into() }).await;
 
 // Declarative consumer
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserEventConsumer {
     #[inject] event_bus: EventBus,
@@ -307,7 +303,6 @@ impl UserEventConsumer {
 ## Scheduling
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
@@ -462,7 +457,7 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 r2e               Facade crate — re-exports everything, feature-gated
 r2e-http          HTTP abstraction layer — sole owner of the axum dependency
 r2e-core          Runtime: AppBuilder, Controller, guards, interceptors, config, plugins, SSE, WS
-r2e-macros        Proc macros: #[derive(Controller)], #[routes], #[bean]
+r2e-macros        Proc macros: #[controller], #[routes], #[bean]
 r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
 r2e-events        In-process typed EventBus with pub/sub
 r2e-scheduler     Background task scheduling (interval, cron)

@@ -24,7 +24,6 @@ Axum extractor that validates Bearer tokens and exposes user identity:
 ```rust
 use r2e::r2e_security::AuthenticatedUser;
 
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
@@ -82,7 +81,6 @@ Trait-based role extraction to support multiple OIDC providers. The default `Def
 For mixed controllers with both public and protected endpoints:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/api", state = AppState)]
 pub struct MixedController {
     #[inject] service: MyService,

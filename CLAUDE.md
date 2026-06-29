@@ -42,7 +42,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e             → Facade crate. Re-exports all subcrates behind feature flags. Users depend on this.
-r2e-macros      → Proc-macro crate. #[derive(Controller)] + #[routes] generate Axum handlers.
+r2e-macros      → Proc-macro crate. #[controller] + #[routes] generate Axum handlers.
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, serve_auto), Controller trait, StatefulConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
@@ -83,21 +83,23 @@ Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` /
 
 ### Core Concepts
 
-**Three injection scopes, all resolved at compile time:**
-- `#[inject]` — App-scoped. Field cloned from Axum state. Type must be `Clone + Send + Sync`.
-- `#[inject(identity)]` — Request-scoped. Extracted via `FromRequestParts` (e.g., `AuthenticatedUser`). Type must implement `Identity`.
-- `#[config("key")]` — App-scoped. Resolved from `R2eConfig`. Type must implement `FromConfigValue`.
+**Four injection scopes, all resolved at compile time — two app-scoped, two request-scoped:**
+- `#[inject]` — App-scoped. Field cloned from Axum state. Type must be `Clone + Send + Sync`. Lives on the controller core (built once).
+- `#[config("key")]` — App-scoped. Resolved from `R2eConfig`. Type must implement `FromConfigValue`. Lives on the controller core.
+- `#[inject(identity)]` — Request-scoped. Extracted via `FromRequestParts` (e.g., `AuthenticatedUser`). Type must implement `Identity`. Drives guards/roles. Lives on the per-request façade.
+- `#[inject(request)]` — Request-scoped. Any type implementing `FromRequestParts` (e.g. a tenant id, correlation/trace context, a request-scoped handle). Use it for everything request-scoped that is *not* the auth identity. Lives on the per-request façade. (Not modeled in OpenAPI yet.)
+
+`Option<T>` is supported for both `#[inject(identity)]` and `#[inject(request)]`.
 
 **Handler parameter-level identity injection:**
-- `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints) while keeping `StatefulConstruct` for consumers/scheduled tasks.
+- `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints). Recommended over struct-level identity for mixed controllers, since each endpoint opts into authentication individually.
 - **Optional identity:** `#[inject(identity)] user: Option<AuthenticatedUser>` for endpoints working with or without auth.
 
 **Controller declaration uses two macros:**
-1. `#[derive(Controller)]` on the struct — generates metadata module, Axum extractor, `StatefulConstruct` impl (when no identity fields).
-2. `#[routes]` on the impl block — generates Axum handler functions and `Controller<T>` trait impl.
+1. `#[controller(path = "...", state = ...)]` — a transforming attribute on the struct. It strips request-scoped fields from the physical core struct and generates the metadata module, the request-data extractor, the per-request façade, and the `StatefulConstruct` impl (always — the core never holds request-scoped fields).
+2. `#[routes]` on the impl block — generates Axum handler functions and the `Controller<T>` trait impl. Route methods run on the generated façade.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = Services)]
 pub struct UserController {
     #[inject]  user_service: UserService,
@@ -116,26 +118,27 @@ impl UserController {
 ```
 
 **Generated items (hidden):**
-- `mod __r2e_meta_<Name>` — `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`
-- `struct __R2eExtract_<Name>` — `FromRequestParts` extractor
-- `impl StatefulConstruct<State> for Name` — only when no `#[inject(identity)]` struct fields
-- Free-standing handler functions (`__r2e_<Name>_<method>`)
-- `impl Controller<State> for Name` — wires routes into `Router<State>`
+- A physical **core** struct (the source struct with request-scoped fields stripped) — holds only `#[inject]` + `#[config]` fields, built once into an `Arc` at router-build time.
+- `mod __r2e_meta_<Name>` — `type State`, `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn build_routes()`, `fn validate_config()`.
+- `struct __R2eRequestData_<Name>` — `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`). Zero-sized + infallible when there are none.
+- `struct __R2eRequest_<Name>` — the per-request façade: `{ __core: Arc<Core>, <request-scoped fields> }`, with `Deref<Target = Core>`. Route methods run on this; `self.<injected/config>` resolves through `Deref`, `self.<identity/request>` is a direct façade field.
+- `impl StatefulConstruct<State> for Name` — always generated (the core has no request-scoped fields).
+- `impl Controller<State> for Name` — `fn routes(state: &State) -> Router<State>` wires routes; the core is built once and an `Arc` clone is captured per route. Per request: one `Arc` clone of the core + one `FromRequestParts` extraction binding the stack façade. No DI re-resolution per request, no `Extension<Arc<Controller>>`, no task-local identity.
 
 ### Macro Crate Internals (r2e-macros)
 
-**Derive path:** `lib.rs` → `derive_controller.rs` → `derive_parsing.rs` (`ControllerStructDef`) → `derive_codegen.rs`
+**Controller path:** `lib.rs` → `controller_attr.rs` → `controller_parsing.rs` (`ControllerStructDef`) → `controller_codegen.rs`
 
 **Routes path:** `lib.rs` → `routes_attr.rs` → `routes_parsing.rs` (`RoutesImplDef`) → `routes_codegen.rs`
 
 **Shared modules:**
-- `types.rs` — `InjectedField`, `IdentityField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
+- `types.rs` — `InjectedField`, `IdentityField`, `RequestField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
 - `attr_extract.rs` — `extract_route_attr`, `extract_roles`, `extract_transactional`, `extract_intercept_fns`, etc.
 - `route.rs` — `HttpMethod` enum and `RoutePath` parser
 
-**Inter-macro liaison:** Derive generates `__r2e_meta_<Name>` + `__R2eExtract_<Name>`. `#[routes]` references these by naming convention.
+**Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
 
-**No-op attribute macros:** `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]`, `#[identity]`, `#[config]` are derive helper attributes.
+**No-op attribute macros:** `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
 
 **`#[post_construct]`** — lifecycle hook on `#[bean]` methods. Called after the entire bean graph is resolved. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates `PostConstruct` trait impl.
 

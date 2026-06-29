@@ -159,7 +159,7 @@ in increasing effort:
 3. **A real per-core scope in R2E** — natural evolution if benchmarks confirm contention:
 
    ```rust
-   #[derive(Controller)]
+   #[controller]
    pub struct HotController {
        #[inject] db: DbPool,                    // app-scoped: shared, Arc
        #[inject(per_worker)] cache: LocalCache, // built N times, one instance per core

@@ -77,14 +77,13 @@ The string passed to `include_proto!` must match the `package` name in the `.pro
 
 A gRPC service in R2E follows the same pattern as an HTTP controller:
 
-1. Define a struct with `#[derive(Controller)]` and `#[controller(state = ...)]`
+1. Define a struct with `#[controller(state = ...)]`
 2. Implement the tonic service trait with `#[grpc_routes(path::to::ServiceTrait)]`
 
 ```rust
 use r2e::prelude::*;
 use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct GreeterService {
     #[inject] greeting_prefix: GreetingPrefix,
@@ -131,7 +130,6 @@ Each method goes through the pipeline: controller construction via `StatefulCons
 gRPC services support the same injection as HTTP controllers:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserGrpcService {
     #[inject] user_service: UserService,

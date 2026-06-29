@@ -99,7 +99,7 @@ r2e generate controller UserController
 ```
 
 Creates `src/controllers/user_controller.rs` with:
-- `#[derive(Controller)]` struct with `#[controller(state = AppState)]`
+- `#[controller(state = AppState)]` struct
 - `#[routes]` impl block with a placeholder `#[get]` endpoint
 
 Automatically appends `pub mod user_controller;` to `src/controllers/mod.rs` (if it exists).

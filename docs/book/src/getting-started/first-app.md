@@ -49,7 +49,6 @@ Create `src/controllers/hello.rs`:
 use crate::state::AppState;
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/hello", state = AppState)]
 pub struct HelloController;
 
@@ -169,7 +168,6 @@ use crate::state::AppState;
 use crate::services::{User, UserService};
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,

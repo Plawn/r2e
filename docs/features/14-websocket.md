@@ -38,7 +38,6 @@ use r2e::ws::WsStream;
 Annotate a controller method with `#[ws("/path")]` and accept a `WsStream` parameter:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/ws", state = AppState)]
 pub struct EchoController;
 
@@ -180,7 +179,6 @@ impl WsHandler for ChatHandler {
 When a `#[ws]` method has no `WsStream` parameter, the framework expects it to return an `impl WsHandler`:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/ws", state = AppState)]
 pub struct ChatController;
 
@@ -317,7 +315,6 @@ pub enum WsOutgoing {
     Leave { username: String, room: String },
 }
 
-#[derive(Controller)]
 #[controller(path = "/chat", state = AppState)]
 pub struct ChatController {
     #[inject]

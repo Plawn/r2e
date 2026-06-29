@@ -16,7 +16,6 @@ use r2e::ws::WsStream;
 Annotate a controller method with `#[ws("/path")]` and accept a `WsStream` parameter. The framework handles the HTTP upgrade automatically:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/ws", state = AppState)]
 pub struct EchoController;
 
@@ -160,7 +159,6 @@ impl WsHandler for ChatHandler {
 When a `#[ws]` method has no `WsStream` parameter, the framework expects it to return an `impl WsHandler`. The generated code calls `run_ws_handler` automatically:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/ws", state = AppState)]
 pub struct ChatController;
 
@@ -303,7 +301,6 @@ pub enum WsOutgoing {
     Leave { username: String, room: String },
 }
 
-#[derive(Controller)]
 #[controller(path = "/chat", state = AppState)]
 pub struct ChatController {
     #[inject]

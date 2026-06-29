@@ -23,12 +23,11 @@ cargo expand -p example-app controllers::user_controller
 cargo expand -p example-app 2>/dev/null | grep "__r2e_"
 ```
 
-## What `#[derive(Controller)]` generates
+## What `#[controller]` generates
 
 Given this controller:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,
@@ -36,9 +35,18 @@ pub struct UserController {
 }
 ```
 
-The derive produces **three items**:
+`#[controller]` is a **transforming attribute** — it rewrites the struct into a
+physical *core* (request-scoped fields stripped out) and produces four hidden
+items around it:
 
-### 1. Metadata module `__r2e_meta_UserController`
+### 1. The controller core
+
+The emitted struct keeps only app-scoped fields (`#[inject]` and `#[config]`).
+Any `#[inject(identity)]` / `#[inject(request)]` fields are removed — they only
+ever exist on the per-request façade (below). The core is built **once** when the
+router is registered and shared as an `Arc<UserController>`.
+
+### 2. Metadata module `__r2e_meta_UserController`
 
 ```rust
 #[doc(hidden)]
@@ -48,9 +56,18 @@ mod __r2e_meta_UserController {
     pub const PATH_PREFIX: Option<&str> = Some("/users");
     pub type IdentityType = r2e::NoIdentity;  // no #[inject(identity)] field
 
-    pub fn guard_identity(_ctrl: &super::UserController) -> Option<&r2e::NoIdentity> {
+    // Reads the identity off the request façade (never the core).
+    pub fn guard_identity(_facade: &super::__R2eRequest_UserController) -> Option<&r2e::NoIdentity> {
         None
     }
+
+    // Moves request-scoped values + the core Arc into the façade.
+    pub fn bind_request(
+        core: std::sync::Arc<super::UserController>,
+        data: super::__R2eRequestData_UserController,
+    ) -> super::__R2eRequest_UserController { /* ... */ }
+
+    pub fn build_routes</* ... */>(/* ... */) -> /* Router */ { /* ... */ }
 
     pub fn validate_config(_config: &r2e::config::R2eConfig) -> Vec<r2e::config::MissingKeyError> {
         Vec::new()
@@ -58,32 +75,49 @@ mod __r2e_meta_UserController {
 }
 ```
 
-This module is referenced by `#[routes]` through naming convention. It tells the routes macro what state type to use, what the path prefix is, and what identity type is available for guards.
+This module is referenced by `#[routes]` through naming convention. It tells the routes macro what state type to use, what the path prefix is, what identity type is available for guards, and how to bind the per-request façade.
 
-### 2. Extractor struct `__R2eExtract_UserController`
+### 3. Request-data extractor `__R2eRequestData_UserController`
 
 ```rust
 #[doc(hidden)]
-pub struct __R2eExtract_UserController(pub UserController);
+pub struct __R2eRequestData_UserController {
+    // One field per request-scoped (#[inject(identity)] / #[inject(request)]) field.
+    // Zero-sized here, since UserController has none.
+}
 
-impl r2e::http::extract::FromRequestParts<AppState> for __R2eExtract_UserController {
+impl r2e::http::extract::FromRequestParts<AppState> for __R2eRequestData_UserController {
     type Rejection = r2e::http::response::Response;
 
     async fn from_request_parts(
         __parts: &mut r2e::http::header::Parts,
         __state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(Self(UserController {
-            user_service: __state.user_service.clone(),
-            event_bus: __state.event_bus.clone(),
-        }))
+        Ok(Self { /* extract each request-scoped field via FromRequestParts */ })
     }
 }
 ```
 
-Each `#[inject]` field is cloned from the corresponding field on the state struct. Identity fields (`#[inject(identity)]`) use Axum's `FromRequestParts` instead.
+This is the only per-request extraction. When the controller has no request-scoped fields it is zero-sized and infallible.
 
-### 3. `StatefulConstruct` impl
+### 4. Request façade `__R2eRequest_UserController` + `Deref`
+
+```rust
+#[doc(hidden)]
+pub struct __R2eRequest_UserController {
+    __core: std::sync::Arc<UserController>,
+    // plus one field per request-scoped controller field
+}
+
+impl core::ops::Deref for __R2eRequest_UserController {
+    type Target = UserController;
+    fn deref(&self) -> &UserController { &self.__core }
+}
+```
+
+Route methods run on this façade. `self.user_service` resolves to the core through `Deref`; `self.user` (if present) is a direct façade field.
+
+### 5. `StatefulConstruct` impl
 
 ```rust
 impl r2e::StatefulConstruct<AppState> for UserController {
@@ -96,7 +130,7 @@ impl r2e::StatefulConstruct<AppState> for UserController {
 }
 ```
 
-This is only generated when there are **no** `#[inject(identity)]` struct fields. It enables the controller to be used with `#[consumer]` and `#[scheduled]` methods that run outside of HTTP requests.
+This is **always** generated (the core never holds request-scoped fields). It builds the core from state and enables the controller to be used with `#[consumer]` and `#[scheduled]` methods that run outside of HTTP requests.
 
 ## What `#[routes]` generates
 
@@ -120,45 +154,67 @@ impl UserController {
 
 ### Plain handler
 
+Route methods are emitted on the façade (`impl __R2eRequest_UserController`), and
+each route is registered as a closure that captures the core `Arc`, extracts the
+request data, and binds the façade:
+
 ```rust
-async fn __r2e_UserController_list(
-    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
-) -> Json<Vec<User>> {
-    __ctrl.list().await
+// Method moved onto the façade.
+impl __R2eRequest_UserController {
+    async fn list(&self) -> Json<Vec<User>> {
+        Json(self.user_service.list().await)  // user_service via Deref to the core
+    }
+}
+
+// Route closure (one Arc clone of the core captured once, cloned per request).
+{
+    let core = core.clone();
+    move |__data: __R2eRequestData_UserController| {
+        let core = core.clone();
+        async move {
+            let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
+            __ctrl.list().await
+        }
+    }
 }
 ```
 
-The extractor constructs the controller from state, then the handler delegates to the method.
+The closure binds the façade from the captured core `Arc` and the extracted request data, then delegates to the method.
 
 ### Guarded handler (with `#[roles]`)
 
 ```rust
-async fn __r2e_UserController_get_by_id(
+move |
     axum::extract::State(__state): axum::extract::State<AppState>,
     __headers: axum::http::HeaderMap,
     __uri: axum::http::Uri,
-    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
+    __data: __R2eRequestData_UserController,
     Path(id): Path<i64>,
-) -> Result<Json<User>, HttpError> {
-    // Guard check runs before method body
-    let __identity_ref = __r2e_meta_UserController::guard_identity(&__ctrl);
-    let __guard_ctx = r2e::GuardContext::new(
-        "get_by_id",
-        "UserController",
-        &__headers,
-        &__uri,
-        __identity_ref,
-    );
-    r2e::Guard::check(&r2e::RolesGuard::new(&["admin"]), &__state, &__guard_ctx)
-        .await
-        .map_err(/* ... */)?;
+| {
+    let core = core.clone();
+    async move {
+        let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
 
-    // Original method body
-    __ctrl.get_by_id(Path(id)).await
+        // Guard check runs before method body; identity is read off the façade.
+        let __identity_ref = __r2e_meta_UserController::guard_identity(&__ctrl);
+        let __guard_ctx = r2e::GuardContext::new(
+            "get_by_id",
+            "UserController",
+            &__headers,
+            &__uri,
+            __identity_ref,
+        );
+        r2e::Guard::check(&r2e::RolesGuard::new(&["admin"]), &__state, &__guard_ctx)
+            .await
+            .map_err(/* ... */)?;
+
+        // Original method body, on the façade.
+        __ctrl.get_by_id(Path(id)).await
+    }
 }
 ```
 
-Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardContext`.
+Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardContext`. `guard_identity` reads the identity directly from the façade.
 
 ### `Controller<AppState>` impl
 
@@ -293,7 +349,7 @@ These contribute to the `Controller` trait impl generated by `#[routes]`:
 - `#[scheduled(every = 30)]` methods appear in `scheduled_tasks()` as `ScheduledTaskDef` entries
 - `#[consumer(bus = "event_bus")]` methods are wired up in `register_event_consumers()`
 
-Both require `StatefulConstruct` (i.e. no struct-level `#[inject(identity)]`).
+Both run on the controller core via `StatefulConstruct` (always available) and therefore cannot access request identity. They coexist with struct-level `#[inject(identity)]`, which only affects the controller's HTTP routes.
 
 ## Debugging tips
 
@@ -301,8 +357,8 @@ Both require `StatefulConstruct` (i.e. no struct-level `#[inject(identity)]`).
 
 | Error message | Cause | Fix |
 |---------------|-------|-----|
-| `cannot find __R2eExtract_X` | Missing `#[derive(Controller)]` on the struct | Add `#[derive(Controller)]` |
-| `StatefulConstruct is not implemented` | Struct has `#[inject(identity)]` field | Use param-level `#[inject(identity)]` on individual handlers instead |
+| `cannot find __R2eRequest_X` / `__r2e_meta_X` | Missing `#[controller(...)]` on the struct | Add `#[controller(state = AppState)]` |
+| `#[routes]` cannot find the controller metadata | `#[routes]` impl block on a struct without `#[controller(...)]` | Add `#[controller(...)]` to the struct |
 | `#[controller(state = ...)] is required` | Missing `state` in controller attribute | Add `#[controller(state = AppState)]` |
 | `every controller field must be annotated` | Field without `#[inject]`, `#[config]`, etc. | Annotate the field with one of the supported attributes |
 

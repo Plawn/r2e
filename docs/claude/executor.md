@@ -91,8 +91,8 @@ generated wrapper:
 - Is **not** `async` — the synchronous handle resolves to the result.
 
 ```rust
-#[derive(Controller, Clone)]
 #[controller(state = Services)]
+#[derive(Clone)]
 pub struct ReportController {
     #[inject] executor: PoolExecutor,
 }
@@ -127,7 +127,7 @@ Override the executor field with `#[async_exec(executor = "io_pool")]`.
 
 - The annotated method must be `async fn(&self, ...) -> T`.
 - The controller must be `Clone + Send + Sync + 'static`
-  (`#[derive(Controller)]` already implies this).
+  (`#[controller]` already implies this).
 - The named field must implement
   `r2e_executor::PoolExecutor`-compatible `submit(...)` — typically a
   `PoolExecutor` `#[inject]`ed bean.
@@ -140,7 +140,7 @@ block.
 ## `#[derive(BackgroundService)]`
 
 Generates `impl ServiceComponent<State>` from the same `#[inject]` /
-`#[config]` field syntax used by `#[derive(Controller)]`. The user supplies
+`#[config]` field syntax used by `#[controller]`. The user supplies
 an `async fn run(&self, CancellationToken)` method; the derived `start`
 just forwards to it.
 

@@ -45,7 +45,7 @@ example-app / example-postgres / example-multi-tenant / ...
 
 | Crate | Purpose |
 |-------|---------|
-| `r2e-macros` | Proc macros: `#[derive(Controller)]`, `#[routes]`, `#[bean]`, `#[producer]` |
+| `r2e-macros` | Proc macros: `#[controller]`, `#[routes]`, `#[bean]`, `#[producer]` |
 | `r2e-core` | Runtime: AppBuilder, Controller trait, guards, interceptors, config, plugins |
 | `r2e-security` | JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache |
 | `r2e-events` | In-process typed EventBus with pub/sub |
@@ -107,7 +107,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) style:
 
 ```
 feat(core): add support for lifecycle hooks
-fix(macros): handle unit structs in #[derive(Controller)]
+fix(macros): handle unit structs in #[controller]
 docs: add macro debugging guide
 ```
 

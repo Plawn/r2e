@@ -8,40 +8,47 @@ WebSocket endpoints.
 
 Controller fields do not all have the same lifetime:
 
-| Field kind | Available from | Natural lifetime |
-|------------|----------------|------------------|
-| `#[inject]` | Application state | Application |
-| `#[config(...)]` | Application configuration | Application |
-| `#[inject(identity)]` | HTTP request credentials | Request |
+| Field kind | Available from | Natural lifetime | Lives on |
+|------------|----------------|------------------|----------|
+| `#[inject]` | Application state | Application | Core |
+| `#[config(...)]` | Application configuration | Application | Core |
+| `#[inject(identity)]` | HTTP request credentials | Request | Façade |
+| `#[inject(request)]` | Any request `FromRequestParts` value | Request | Façade |
 
-A controller containing only application-scoped data can be built once when
-the router is registered and safely shared as an `Arc<Controller>`.
+R2E splits every controller into two physical pieces:
 
-A controller containing a struct-level identity cannot be shared between
-requests. The identity belongs to one request and is stored as a concrete Rust
-value in the controller. Reusing that controller concurrently would either
-reuse the wrong identity or require mutable shared state. R2E therefore
-extracts the identity and constructs that controller for every request.
+- a **core** struct that holds only application-scoped data (`#[inject]` and
+  `#[config(...)]` fields). The `#[controller]` attribute strips the
+  request-scoped fields out of the emitted core, so the core can be built **once**
+  when the router is registered and shared as an `Arc<Core>`.
+- a generated **request façade** (`__R2eRequest_<Name>`) that holds the
+  request-scoped fields and an `Arc` to the core. It implements
+  `Deref<Target = Core>`, so a route body's `self.service` resolves to the core
+  field through autoderef while `self.user` is a direct façade field.
 
-This constraint applies to **struct-level** identity only:
+Because the request façade is a stack value constructed per request, struct-level
+identity **no longer reconstructs the controller's dependencies**. The core (and
+everything injected into it) is built once; only the small façade — one `Arc`
+clone plus the extracted identity — is created per request.
+
+This applies to **struct-level** identity:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct AccountController {
     #[inject]
     service: AccountService,
 
-    // Makes AccountController request-scoped.
+    // Request-scoped: lives on the generated façade, not the core.
     #[inject(identity)]
     user: AuthenticatedUser,
 }
 ```
 
-Parameter-level identity leaves the controller application-scoped:
+Parameter-level identity is also request-scoped, but is passed as an explicit
+handler argument:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 struct AccountController {
     #[inject]
@@ -55,37 +62,46 @@ impl AccountController {
         &self,
         #[inject(identity)] user: AuthenticatedUser,
     ) -> Json<Account> {
-        // The controller is shared; only `user` is request-scoped.
+        // The core is shared; only `user` is request-scoped.
         todo!()
     }
 }
 ```
 
-This is the recommended model. It makes request scope explicit in the handler,
-does not reconstruct the controller, and authenticates only endpoints that
-request an identity.
+Parameter-level identity is the **recommended model for mixed
+public/protected controllers**: it makes request scope explicit in the handler
+and authenticates only the endpoints that request an identity. Struct-level
+identity authenticates *every* endpoint on the controller — convenient when the
+whole controller is protected — but, thanks to the façade, it no longer rebuilds
+the application dependencies per request.
+
+> Non-auth request-scoped values (a tenant id, a correlation/trace context, a
+> request-scoped handle) use `#[inject(request)]` instead of
+> `#[inject(identity)]`. They live on the façade exactly the same way; only
+> `#[inject(identity)]` participates in guards and roles.
 
 ## Normal registration path
 
 `AppBuilder::register_controller::<C>()` calls `C::routes(&state)`. This is the
-only controller route-construction API. The generated implementation selects
-the controller binding at router construction:
+only controller route-construction API. The generated implementation builds the
+core once and captures an `Arc` of it in each registered route closure:
 
 ```text
 register_controller
   -> routes(&state)
-       -> controller without struct identity
-            build C once from state
-            wrap it in Arc<C>
-            register closures that capture the Arc
-       -> controller with struct identity
-            extract identity and construct C on each request
+       build the core once from state (StatefulConstruct::from_state)
+       wrap it in Arc<Core>
+       for each route, register a closure that:
+         - captures an Arc clone of the core
+         - extracts __R2eRequestData_<Name> via FromRequestParts
+         - binds a stack façade (bind_request)
+         - invokes the route method on the façade
 ```
 
-For an application-scoped controller, one `Arc` is retained by each registered
-route closure. Axum clones the closure for a request, which clones that `Arc`.
-There is no request-extension lookup and no controller reconstruction on this
-path.
+This is uniform for every controller, whether or not it declares request-scoped
+fields. A controller with no request-scoped fields simply binds a façade whose
+request-data extractor is zero-sized and infallible. There is no
+request-extension lookup and no controller reconstruction on this path.
 
 Code assembling a controller router directly must also provide state:
 
@@ -93,85 +109,69 @@ Code assembling a controller router directly must also provide state:
 let router = <AccountController as Controller<AppState>>::routes(&state);
 ```
 
-There is no no-argument compatibility path. Application-scoped controllers are
-never looked up through request extensions and are never reconstructed as an
-extractor fallback.
+There is no no-argument compatibility path. Controllers are never looked up
+through request extensions and are never reconstructed as an extractor fallback.
 
 ## One generated Axum handler
 
-Application-scoped and request-scoped controllers are bound differently:
-
-- the application-scoped path captures an `Arc<C>` in the registered closure;
-- the struct-identity path extracts a request-scoped controller.
-
-Both paths call the same generated Axum handler through the hidden controller
-wrapper:
-
-```text
-__r2e_AccountController_me(
-    __ctrl_ext: __R2eExtract_AccountController,
-    ...
-)
-```
-
-For an application-scoped controller, the route closure wraps its captured
-`Arc<C>` directly before calling this handler. For a struct-identity controller,
-Axum obtains the wrapper through `FromRequestParts`. Neither path uses a request
-`Extension<Arc<C>>` lookup.
-
-The Axum-facing handler forwards to one internal invocation function containing
-parameter injection, guards, interceptors, managed resources, the controller
-method call, and response conversion. HTTP, SSE, and WebSocket endpoints each
-follow this shape, so there is no duplicated full handler body.
+Every endpoint follows the same shape. The Axum-facing closure captures the core
+`Arc`, extracts the request data, binds the façade, and forwards to one internal
+invocation function containing parameter injection, guards, interceptors, managed
+resources, the controller method call, and response conversion. HTTP, SSE, and
+WebSocket endpoints all follow this shape, so there is no duplicated full handler
+body.
 
 Conceptually, the expanded code is:
 
 ```rust,ignore
-async fn __invoke_me(
-    controller: &AccountController,
-    /* already extracted arguments */
-) -> Response {
-    // Guards, interceptors, managed resources, method call and conversion.
-}
+// Built once at registration.
+let core: Arc<AccountController> = Arc::new(AccountController::from_state(&state));
 
-async fn __r2e_AccountController_me(
-    controller: __R2eExtract_AccountController,
-    /* Axum extractors */
-) -> Response {
-    __invoke_me(controller.as_controller(), /* arguments */).await
-}
-
-// Application-scoped route closure; the captured Arc lives for the request/session.
-move |/* Axum extractors */| {
-    let controller = captured_controller.clone();
-    async move {
-        __r2e_AccountController_me(
-            __R2eExtract_AccountController::from_application(controller),
-            /* arguments */
-        ).await
-    }
-}
+Router::new().route(
+    "/me",
+    get({
+        let core = core.clone(); // once per registered route
+        move |data: __R2eRequestData_AccountController, /* Axum extractors */| {
+            let core = core.clone(); // one logical Arc increment per request
+            async move {
+                // Bind the request-scoped values into the stack façade.
+                let controller = __r2e_meta_AccountController::bind_request(core, data);
+                // Route body runs on the façade: self.user is a façade field,
+                // self.service resolves to the core through Deref.
+                controller.me(/* arguments */).await
+            }
+        }
+    }),
+)
 ```
 
-This provides the current runtime properties:
+`__R2eRequestData_AccountController` is the generated `FromRequestParts`
+extractor that produces the request-scoped values (identity and any
+`#[inject(request)]` fields). `bind_request` moves those values, together with
+the core `Arc`, into the `__R2eRequest_AccountController` façade.
 
-- one controller construction at registration for application-scoped
-  controllers;
-- one `Arc` clone per request on the captured-controller path;
-- request construction for struct-level identity controllers;
+This provides the current runtime properties per request:
+
+- one core construction at registration (shared across all requests);
+- one `Arc` clone of the core per request;
+- one `FromRequestParts` extraction binding a stack façade;
 - pre-auth guards assembled within the same state-aware registration path,
 
-with one generated Axum handler and one full invocation body per endpoint.
+with one generated Axum handler and one full invocation body per endpoint. No
+request `Extension<Arc<C>>` lookup, no task-local identity, and no per-request DI
+re-resolution.
 
 ## Required invariants
 
 Changes to this dispatch mechanism must preserve these properties:
 
 1. `register_controller()` does not insert `Arc<Controller>` into request
-   extensions for application-scoped controllers.
-2. Application-scoped controllers are constructed once per registration.
-3. Parameter-level identity does not make the controller request-scoped.
-4. Struct-level identity is extracted independently for every request.
-5. Guards, interceptors, managed parameters, pre-auth guards, SSE, and
-   WebSocket routes behave identically on both dispatch paths.
-6. Route construction always receives application state explicitly.
+   extensions.
+2. The controller core is constructed once per registration.
+3. Parameter-level identity does not make the core request-scoped.
+4. Struct-level identity (and `#[inject(request)]`) is extracted independently
+   for every request into the stack façade; the core is never reconstructed.
+5. Request identity never leaks across concurrent requests.
+6. Guards, interceptors, managed parameters, pre-auth guards, SSE, and
+   WebSocket routes behave identically through the single façade dispatch path.
+7. Route construction always receives application state explicitly.

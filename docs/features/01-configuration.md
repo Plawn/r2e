@@ -98,7 +98,6 @@ The `#[config("key")]` field attribute on a controller automatically injects the
 ```rust
 use r2e_core::prelude::*;
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct MyController {
     #[config("app.greeting")]
@@ -144,7 +143,6 @@ pub struct RootConfig {
     pub app: AppConfig,
 }
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ConfigController {
     #[inject]

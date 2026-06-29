@@ -71,10 +71,9 @@ pub struct AppState {
 
 ### Controllers
 
-Controllers are structs with `#[derive(Controller)]` and an impl block with `#[routes]`. Each method becomes an Axum handler:
+Controllers are structs with `#[controller]` and an impl block with `#[routes]`. Each method becomes an Axum handler:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = AppState)]
 pub struct UserController {
     #[inject] user_service: UserService,

@@ -167,7 +167,6 @@ pub struct ProfileUpload {
     pub attachments: Vec<UploadedFile>,
 }
 
-#[derive(Controller)]
 #[controller(path = "/uploads", state = Services)]
 pub struct UploadController;
 

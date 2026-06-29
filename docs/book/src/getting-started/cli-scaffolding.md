@@ -121,7 +121,6 @@ r2e generate controller UserController
 Generates `src/controllers/user_controller.rs` with a skeleton controller:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserController {
     // #[inject]
@@ -249,7 +248,6 @@ service User {
 **`src/grpc/user.rs`** — Rust implementation with `#[grpc_routes]`:
 
 ```rust
-#[derive(Controller)]
 #[controller(state = AppState)]
 pub struct UserService { ... }
 

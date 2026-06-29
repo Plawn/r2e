@@ -340,7 +340,6 @@ pub struct Services {
     pub user_service: UserService,
 }
 
-#[derive(Controller)]
 #[controller(path = "/api", state = Services)]
 pub struct ApiController {
     #[inject] user_service: UserService,

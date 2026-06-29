@@ -20,7 +20,6 @@ use r2e::prelude::*;
 ```rust
 use r2e::prelude::*;
 
-#[derive(Controller)]
 #[controller(path = "/hello", state = ())]
 pub struct HelloController;
 
@@ -74,7 +73,7 @@ async fn main() {
 | Crate | Description |
 |-------|-------------|
 | [`r2e-core`](../r2e-core) | Runtime foundation — AppBuilder, plugins, guards, DI, config |
-| [`r2e-macros`](../r2e-macros) | Proc macros — `#[derive(Controller)]`, `#[routes]`, `#[bean]` |
+| [`r2e-macros`](../r2e-macros) | Proc macros — `#[controller]`, `#[routes]`, `#[bean]` |
 | [`r2e-security`](../r2e-security) | JWT validation, JWKS cache, `AuthenticatedUser` extractor |
 | [`r2e-events`](../r2e-events) | In-process typed pub/sub event bus |
 | [`r2e-scheduler`](../r2e-scheduler) | Background task scheduling (interval, cron) |

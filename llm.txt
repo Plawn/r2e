@@ -27,7 +27,6 @@ pub struct AppState {
     pub config: R2eConfig,
 }
 
-#[derive(Controller)]
 #[controller(path = "/hello", state = AppState)]
 pub struct HelloController;
 
@@ -73,10 +72,9 @@ This brings in: `Controller` (derive), `Params` (derive), `Validate` (re-export 
 
 ### Controller Declaration
 
-A controller needs two macros: `#[derive(Controller)]` on the struct, `#[routes]` on the impl block.
+A controller needs two macros: `#[controller(...)]` (a transforming attribute) on the struct, `#[routes]` on the impl block. The `#[controller]` attribute splits the struct into a physical core (app `#[inject]` + `#[config]` fields, built once) and a per-request façade that holds the request-scoped fields (`#[inject(identity)]` and `#[inject(request)]`) and `Deref`s to the core.
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/users", state = MyAppState)]
 pub struct UserController {
     #[inject] user_service: UserService,       // app-scoped, cloned from state
@@ -90,11 +88,12 @@ pub struct UserController {
 
 ### Field Injection
 
-| Attribute | Scope | Requirement |
-|-----------|-------|-------------|
-| `#[inject]` | App-scoped | Type must impl `Clone + Send + Sync` and be extractable via `FromRef<State>` |
-| `#[inject(identity)]` | Request-scoped | Type must impl `Identity + FromRequestParts` (e.g., `AuthenticatedUser`) |
-| `#[config("dotted.key")]` | App-scoped | Type must impl `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`) |
+| Attribute | Scope | Lives on | Requirement |
+|-----------|-------|----------|-------------|
+| `#[inject]` | App-scoped | Core | Type must impl `Clone + Send + Sync` and be extractable via `FromRef<State>` |
+| `#[config("dotted.key")]` | App-scoped | Core | Type must impl `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`) |
+| `#[inject(identity)]` | Request-scoped | Façade | Type must impl `Identity + FromRequestParts` (e.g., `AuthenticatedUser`); drives guards/roles. `Option<T>` supported |
+| `#[inject(request)]` | Request-scoped | Façade | Any type impl `FromRequestParts` (tenant id, trace context, request-scoped handle); `Option<T>` supported. Not in OpenAPI yet |
 
 ### Route Handlers
 
@@ -227,11 +226,10 @@ AppBuilder::new()
 Use param-level `#[inject(identity)]` instead of struct-level to allow both public and protected endpoints:
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/api", state = Services)]
 pub struct MixedController {
     #[inject] user_service: UserService,
-    // No identity on struct → StatefulConstruct is generated
+    // Param-level identity keeps every endpoint's auth explicit.
 }
 
 #[routes]
@@ -615,10 +613,9 @@ self.event_bus.emit_and_wait(event).await;
 
 ### Consuming (Declarative)
 
-Controller must NOT have `#[inject(identity)]` struct fields.
+Consumer methods run on the controller core (via `StatefulConstruct`, always generated) and cannot access request-scoped fields (`#[inject(identity)]` / `#[inject(request)]` are façade-only).
 
 ```rust
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct UserEventConsumer {
     #[inject] event_bus: EventBus,
@@ -639,7 +636,7 @@ impl UserEventConsumer {
 
 Requires feature: `scheduler`
 
-Controller must NOT have `#[inject(identity)]` struct fields.
+Scheduled methods run on the controller core (via `StatefulConstruct`, always generated) and cannot access request-scoped fields (`#[inject(identity)]` / `#[inject(request)]` are façade-only).
 
 ```rust
 use r2e::r2e_scheduler::Scheduler;
@@ -653,7 +650,6 @@ AppBuilder::new()
 ```
 
 ```rust
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
@@ -683,7 +679,6 @@ impl ScheduledJobs {
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-#[derive(Controller)]
 #[controller(path = "/sse", state = Services)]
 pub struct SseController {
     #[inject] sse_broadcaster: SseBroadcaster,
@@ -707,7 +702,6 @@ Requires feature: `ws`
 ```rust
 use r2e::ws::WsStream;
 
-#[derive(Controller)]
 #[controller(path = "/ws", state = Services)]
 pub struct WsEchoController;
 
@@ -798,7 +792,6 @@ let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
 ### Injection
 
 ```rust
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct MyController {
     #[config("app.name")] app_name: String,
@@ -990,7 +983,6 @@ Uses `#[grpc_routes]` macro on tonic-generated traits:
 ```rust
 use r2e_grpc::prelude::*;
 
-#[derive(Controller)]
 #[controller(state = Services)]
 pub struct GreeterService {
     #[inject] user_service: UserService,
@@ -1136,7 +1128,6 @@ impl IntoResponse for MyError {
 ### Unit Struct Controller (no injected fields)
 
 ```rust
-#[derive(Controller)]
 #[controller(path = "/health", state = Services)]
 pub struct HealthController;
 

@@ -180,7 +180,6 @@ pub struct User {
     pub email: String,
 }
 
-#[derive(Controller)]
 #[controller(path = "/users", state = Services)]
 pub struct UserController {
     #[inject] user_service: UserService,
