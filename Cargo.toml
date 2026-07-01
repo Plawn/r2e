@@ -119,7 +119,6 @@ jsonwebtoken = "10"
 reqwest = { version = "0.13", default-features = false }
 rsa = "0.9"
 argon2 = "0.5"
-password-hash = "0.5"
 rand = "0.8"
 
 # Data

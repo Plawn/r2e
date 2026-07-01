@@ -16,7 +16,6 @@ r2e-security = {workspace = true}
 jsonwebtoken = {workspace = true, features = ["rust_crypto"]}
 rsa = {workspace = true}
 argon2 = {workspace = true}
-password-hash = {workspace = true}
 rand = {workspace = true}
 base64 = {workspace = true}
 serde = {workspace = true}
