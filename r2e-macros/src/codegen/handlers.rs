@@ -166,7 +166,7 @@ fn generate_validation_calls(
                     use #krate::validation::__DoValidate as _;
                     use #krate::validation::__SkipValidate as _;
                     if let Err(__validation_err) = (&#krate::validation::__AutoValidator(#validate_target)).__maybe_validate() {
-                        return __validation_err;
+                        return *__validation_err;
                     }
                 }
             }
