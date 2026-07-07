@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use r2e_core::http::extract::{FromRef, FromRequestParts, OptionalFromRequestParts};
+use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
 use r2e_core::http::header::{Parts, AUTHORIZATION};
+use r2e_core::type_list::HasBean;
 use tracing::{debug, warn};
 
 use crate::error::SecurityError;
@@ -98,16 +99,15 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///     // With database lookup
 /// }
 /// ```
-pub async fn extract_jwt_claims<S>(
+pub async fn extract_jwt_claims<S, I>(
     parts: &Parts,
     state: &S,
 ) -> Result<serde_json::Value, r2e_core::HttpError>
 where
-    S: Send + Sync,
-    Arc<JwtClaimsValidator>: FromRef<S>,
+    S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
 {
     let token = extract_bearer_token_from_parts(parts)?;
-    let validator: Arc<JwtClaimsValidator> = Arc::from_ref(state);
+    let validator: Arc<JwtClaimsValidator> = state.get_bean();
 
     let claims = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
@@ -146,17 +146,16 @@ where
 ///     }
 /// }
 /// ```
-pub async fn extract_jwt_identity<S, B>(
+pub async fn extract_jwt_identity<S, B, I>(
     parts: &Parts,
     state: &S,
 ) -> Result<B::Identity, r2e_core::HttpError>
 where
-    S: Send + Sync,
+    S: HasBean<Arc<JwtValidator<B>>, I> + Send + Sync,
     B: IdentityBuilder + 'static,
-    Arc<JwtValidator<B>>: FromRef<S>,
 {
     let token = extract_bearer_token_from_parts(parts)?;
-    let validator: Arc<JwtValidator<B>> = Arc::from_ref(state);
+    let validator: Arc<JwtValidator<B>> = state.get_bean();
 
     let identity = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
@@ -167,31 +166,26 @@ where
     Ok(identity)
 }
 
-/// Axum extractor implementation for `AuthenticatedUser`.
+/// Request-extraction implementation for `AuthenticatedUser`.
 ///
 /// This extracts the JWT from the `Authorization: Bearer <token>` header,
-/// validates it using the `JwtValidator` from the application state,
-/// and returns an `AuthenticatedUser` on success.
+/// validates it using the `Arc<JwtClaimsValidator>` bean from the application
+/// state, and returns an `AuthenticatedUser` on success.
 ///
-/// The application state must provide either:
-/// - `Arc<JwtValidator>` via `FromRef` (recommended for simple cases)
-/// - `Arc<JwtClaimsValidator>` via `FromRef` (for multiple identity types)
-///
-/// # Example
-///
-/// ```ignore
-/// async fn protected_handler(user: AuthenticatedUser) -> impl IntoResponse {
-///     format!("Hello, {}!", user.sub)
-/// }
-/// ```
-impl<S> FromRequestParts<S> for AuthenticatedUser
+/// The impl is written against R2E's [`FromRequestPartsVia`] rather than
+/// axum's `FromRequestParts`: the validator is pulled from the state via a
+/// [`HasBean`] bound whose index witness `I` must live in the trait generics
+/// (E0207 forbids it on the impl) — it is parked in the [`ViaBean`] marker.
+/// Generated controller code threads the marker invisibly; a missing
+/// validator bean is a compile error at `register_controller()`.
+impl<S, I> FromRequestPartsVia<S, ViaBean<I>> for AuthenticatedUser
 where
-    S: Send + Sync,
-    Arc<JwtClaimsValidator>: FromRef<S>,
+    S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
+    I: Send + Sync,
 {
     type Rejection = r2e_core::HttpError;
 
-    async fn from_request_parts(
+    async fn from_request_parts_via(
         parts: &mut Parts,
         state: &S,
     ) -> Result<Self, Self::Rejection> {
@@ -200,10 +194,10 @@ where
     }
 }
 
-/// Optional extractor for `AuthenticatedUser`.
+/// Optional extraction for `AuthenticatedUser`.
 ///
-/// Enables `Option<AuthenticatedUser>` as a handler parameter for endpoints
-/// that work both with and without authentication:
+/// Enables `Option<AuthenticatedUser>` as an identity field or handler
+/// parameter for endpoints that work both with and without authentication:
 ///
 /// - No `Authorization` header → `Ok(None)`
 /// - Valid JWT → `Ok(Some(user))`
@@ -223,14 +217,14 @@ where
 ///     }
 /// }
 /// ```
-impl<S> OptionalFromRequestParts<S> for AuthenticatedUser
+impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for AuthenticatedUser
 where
-    S: Send + Sync,
-    Arc<JwtClaimsValidator>: FromRef<S>,
+    S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
+    I: Send + Sync,
 {
     type Rejection = r2e_core::HttpError;
 
-    async fn from_request_parts(
+    async fn from_request_parts_via(
         parts: &mut Parts,
         state: &S,
     ) -> Result<Option<Self>, Self::Rejection> {

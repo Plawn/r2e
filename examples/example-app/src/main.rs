@@ -15,7 +15,6 @@ mod db_identity;
 mod error;
 mod models;
 mod services;
-mod state;
 
 use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
@@ -30,7 +29,6 @@ use controllers::notification_controller::NotificationController;
 use controllers::upload_controller::UploadController;
 use controllers::ws_controller::WsEchoController;
 use services::{NotificationService, UserService};
-use state::Services;
 
 fn generate_test_token(secret: &[u8]) -> String {
     let exp = std::time::SystemTime::now()
@@ -138,7 +136,7 @@ async fn main(env: AppEnv) {
         .provide(env.notification_service)
         .register::<UserService>();
 
-    build_state!(app, Services)
+    app.build_state()
         .await
         .with(Health)
         .with(RequestIdPlugin)

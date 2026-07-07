@@ -29,6 +29,8 @@ pub use openid::RoleExtractor;
 #[doc(hidden)]
 pub mod __macro_support {
     pub use r2e_core::http;
+    pub use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+    pub use r2e_core::type_list::HasBean;
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
     pub use crate::guards::AllRolesGuard;

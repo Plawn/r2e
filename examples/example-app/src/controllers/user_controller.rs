@@ -1,7 +1,6 @@
 use crate::error::AppError;
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
-use crate::state::Services;
 use r2e::prelude::*;
 use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;
@@ -41,8 +40,10 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
 
 /// A stateful interceptor that accesses the application state.
 ///
-/// Unlike `AuditLog` (generic over `S`), this interceptor is bound to `Services`
-/// and can access the database pool, event bus, or any other field from the state.
+/// Unlike `AuditLog` (which never touches the state), this interceptor pulls
+/// the database pool out of the state by type via [`BeanLookup`] — the fixed
+/// vocabulary through which guards and interceptors access beans now that the
+/// state type is inferred (HList) rather than hand-written.
 ///
 /// # Usage
 /// ```ignore
@@ -51,10 +52,10 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
 /// ```
 pub struct DbAuditLog;
 
-impl<R: Send> Interceptor<R, Services> for DbAuditLog {
+impl<R: Send, S: BeanLookup + Send + Sync> Interceptor<R, S> for DbAuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext<'_, Services>,
+        ctx: InterceptorContext<'_, S>,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -62,7 +63,10 @@ impl<R: Send> Interceptor<R, Services> for DbAuditLog {
         Fut: Future<Output = R> + Send,
     {
         let method_name = ctx.method_name;
-        let pool = ctx.state.pool.clone();
+        let pool = ctx
+            .state
+            .bean::<sqlx::SqlitePool>()
+            .expect("SqlitePool bean not found in state");
         async move {
             let result = next().await;
             // Write an audit log entry to the database after execution
@@ -75,7 +79,7 @@ impl<R: Send> Interceptor<R, Services> for DbAuditLog {
     }
 }
 
-#[controller(path = "/users", state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]
     user_service: UserService,

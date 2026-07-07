@@ -45,6 +45,33 @@ fn invocation_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Id
     format_ident!("__r2e_invoke_{}_{}", controller, method)
 }
 
+/// The generic state ident shared by all state-generic generated items. Free
+/// generated fns declare it themselves; items inside the `Controller` impl use
+/// the impl's parameter of the same name.
+pub(super) fn state_generic() -> syn::Ident {
+    format_ident!("__R2eS")
+}
+
+/// The marker generic carried by the request-data extractor (a tuple of
+/// per-field `FromRequestPartsVia` markers, opaque to `#[routes]`).
+pub(super) fn data_marker() -> syn::Ident {
+    format_ident!("__R2eMd")
+}
+
+/// The extraction marker for a route's param-level `#[inject(identity)]`.
+/// Pascal-cased so the generated type parameter doesn't trip
+/// `non_camel_case_types` in user crates.
+pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
+    format_ident!("__R2eMp{}", crate::type_utils::to_pascal_case(&method.to_string()))
+}
+
+/// Bounds placed on the generic state by every generated item that touches it:
+/// axum's `Router` requirements plus `BeanLookup`, the fixed vocabulary through
+/// which guards, interceptors, and managed resources pull beans from the state.
+pub(super) fn state_bounds(krate: &TokenStream) -> TokenStream {
+    quote! { Clone + Send + Sync + 'static + #krate::BeanLookup }
+}
+
 /// The generated request façade type for a controller. Route/SSE/WS methods are
 /// emitted on `impl __R2eRequest_<Name>`; handler invocation runs on a borrow of
 /// it. Application/config fields and core helpers are reached through its
@@ -420,7 +447,6 @@ fn generate_guard_context(
 /// the macro-expanded handler body.
 fn generate_managed_acquire(
     rm: &RouteMethod,
-    meta_mod: &syn::Ident,
     krate: &TokenStream,
 ) -> Vec<TokenStream> {
     rm.managed_params
@@ -430,7 +456,7 @@ fn generate_managed_acquire(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(&__state).await {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<__R2eS>>::acquire(&__state).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -442,7 +468,6 @@ fn generate_managed_acquire(
 /// Generate managed resource release statements (in reverse order).
 fn generate_managed_release(
     rm: &RouteMethod,
-    meta_mod: &syn::Ident,
     krate: &TokenStream,
 ) -> Vec<TokenStream> {
     rm.managed_params
@@ -453,7 +478,7 @@ fn generate_managed_release(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                if let Err(__e) = <#ty as #krate::ManagedResource<#meta_mod::State>>::release(#arg_name, __success).await {
+                if let Err(__e) = <#ty as #krate::ManagedResource<__R2eS>>::release(#arg_name, __success).await {
                     return __e.into();
                 }
             }
@@ -565,7 +590,6 @@ fn wrap_with_handler_interceptors(
 /// Generate managed resource acquisition using `__state_ref` (for use inside interceptor closures).
 fn generate_managed_acquire_ref(
     rm: &RouteMethod,
-    meta_mod: &syn::Ident,
     krate: &TokenStream,
 ) -> Vec<TokenStream> {
     rm.managed_params
@@ -575,7 +599,7 @@ fn generate_managed_acquire_ref(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                let mut #arg_name = match <#ty as #krate::ManagedResource<#meta_mod::State>>::acquire(__state_ref).await {
+                let mut #arg_name = match <#ty as #krate::ManagedResource<__R2eS>>::acquire(__state_ref).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -638,7 +662,6 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let needs_state = needs_response || has_intercepts;
 
     let invocation_name = &ctx.invocation_name;
-    let meta_mod = &ctx.meta_mod;
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
 
@@ -655,7 +678,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let mut invocation_prefix_params = Vec::new();
 
     if needs_state {
-        invocation_prefix_params.push(quote! { __state: #meta_mod::State });
+        invocation_prefix_params.push(quote! { __state: __R2eS });
     }
     if has_guards {
         invocation_prefix_params.push(quote! { __headers: #krate::http::HeaderMap });
@@ -733,8 +756,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             // Inside the interceptor closure, use __state_ref for acquire.
             let is_result = is_result_type(return_type);
             if has_managed {
-                let managed_acquire_ref = generate_managed_acquire_ref(rm, meta_mod, &krate);
-                let managed_release = generate_managed_release(rm, meta_mod, &krate);
+                let managed_acquire_ref = generate_managed_acquire_ref(rm, &krate);
+                let managed_release = generate_managed_release(rm, &krate);
                 let body_and_release = generate_body_and_release(
                     &call_expr,
                     &managed_release,
@@ -772,8 +795,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         } else {
             // No interceptors — original behavior
-            let managed_acquire = generate_managed_acquire(rm, meta_mod, &krate);
-            let managed_release = generate_managed_release(rm, meta_mod, &krate);
+            let managed_acquire = generate_managed_acquire(rm, &krate);
+            let managed_release = generate_managed_release(rm, &krate);
             let is_result = is_result_type(return_type);
             let body_and_release = generate_body_and_release(
                 &call_expr,
@@ -801,13 +824,30 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     };
 
     let facade_name = facade_ident_for(controller_name);
+    let (fn_generics, fn_where) = if needs_state {
+        let sb = state_bounds(&krate);
+        let managed_bounds: Vec<TokenStream> = rm
+            .managed_params
+            .iter()
+            .map(|mp| {
+                let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+                quote! { #ty: #krate::ManagedResource<__R2eS> }
+            })
+            .collect();
+        (
+            quote! { <__R2eS> },
+            quote! { where __R2eS: #sb, #(#managed_bounds,)* },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
     quote! {
         #[allow(non_snake_case)]
-        async fn #invocation_name(
+        async fn #invocation_name #fn_generics(
             #(#invocation_prefix_params,)*
             __ctrl: &#facade_name,
             #(#invocation_extra_params,)*
-        ) #invocation_return {
+        ) #invocation_return #fn_where {
             #invocation_body
         }
     }
@@ -893,7 +933,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
             },
         )
     } else {
-        invocation_prefix_params.push(quote! { __state: #meta_mod::State });
+        invocation_prefix_params.push(quote! { __state: __R2eS });
         invocation_prefix_params.push(quote! { __headers: #krate::http::HeaderMap });
         invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
         invocation_prefix_params
@@ -949,13 +989,19 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let invocation_extra_params = &handler_extra_params;
 
     let facade_name = facade_ident_for(controller_name);
+    let (fn_generics, fn_where) = if has_guards {
+        let sb = state_bounds(&krate);
+        (quote! { <__R2eS> }, quote! { where __R2eS: #sb })
+    } else {
+        (quote! {}, quote! {})
+    };
     quote! {
         #[allow(non_snake_case)]
-        async fn #invocation_name(
+        async fn #invocation_name #fn_generics(
             #(#invocation_prefix_params,)*
             __ctrl: &#facade_name,
             #(#invocation_extra_params,)*
-        ) #invocation_return {
+        ) #invocation_return #fn_where {
             #invocation_body
         }
     }
@@ -1061,6 +1107,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         }
     };
 
+    let ws_state_bounds = state_bounds(&krate);
     let (preflight, preflight_call) = if has_guards {
         let guard_checks: Vec<TokenStream> = wm
             .decorators
@@ -1121,14 +1168,17 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         (
             quote! {
                 #[allow(non_snake_case)]
-                async fn #preflight_name(
-                    __state: #meta_mod::State,
+                async fn #preflight_name<__R2eS>(
+                    __state: __R2eS,
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
                     __raw_path_params: #krate::http::extract::RawPathParams,
                     __ctrl: &#facade_name,
                     #identity_decl
-                ) -> Result<(), #krate::http::response::Response> {
+                ) -> Result<(), #krate::http::response::Response>
+                where
+                    __R2eS: #ws_state_bounds,
+                {
                     #path_param_module
                     #guard_context
                     #(#guard_checks)*
@@ -1155,7 +1205,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let handler_name = handler_ident_for(controller_name, fn_name);
     let guard_params = if has_guards {
         quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>,
+            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>,
             __headers: #krate::http::HeaderMap,
             __uri: #krate::http::Uri,
             __raw_path_params: #krate::http::extract::RawPathParams,
@@ -1169,6 +1219,12 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         quote! {}
     };
 
+    let (wrapper_generics, wrapper_where) = if has_guards {
+        let sb = state_bounds(&krate);
+        (quote! { <__R2eS> }, quote! { where __R2eS: #sb })
+    } else {
+        (quote! {}, quote! {})
+    };
     quote! {
         #[allow(non_snake_case)]
         async fn #invocation_name(
@@ -1181,12 +1237,12 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         #preflight
         #[allow(non_snake_case)]
-        async fn #handler_name(
+        async fn #handler_name #wrapper_generics(
             #guard_params
             __facade: #facade_name,
             #(#handler_extra_params,)*
             __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-        ) -> #krate::http::response::Response {
+        ) -> #krate::http::response::Response #wrapper_where {
             // Guard checks borrow the façade; the upgrade callback then owns it
             // for the whole socket lifetime (façade owns its Arc + request data,
             // so nothing is borrowed across the upgrade boundary).
@@ -1218,14 +1274,15 @@ fn route_axum_params_and_args(
     rm: &RouteMethod,
     needs_state: bool,
     has_guards: bool,
-    meta_mod: &syn::Ident,
     krate: &TokenStream,
 ) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let identity_index = rm.identity_param.as_ref().map(|p| p.index);
+    let identity_marker = identity_marker_for(&rm.fn_item.sig.ident);
     let mut params: Vec<TokenStream> = Vec::new();
     let mut args: Vec<TokenStream> = Vec::new();
     if needs_state {
         params.push(quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>
+            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>
         });
         args.push(quote! { __state });
     }
@@ -1247,8 +1304,16 @@ fn route_axum_params_and_args(
     {
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
-        params.push(quote! { #arg: #ty });
-        args.push(quote! { #arg });
+        if Some(*i) == identity_index {
+            // Param-level identity: extracted through `FromRequestPartsVia`
+            // (bean-backed, witness in the marker) and unwrapped before the
+            // invocation call, so the route method keeps the plain type.
+            params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            args.push(quote! { #arg.0 });
+        } else {
+            params.push(quote! { #arg: #ty });
+            args.push(quote! { #arg });
+        }
     }
     (params, args)
 }
@@ -1269,7 +1334,7 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     let needs_state = has_guards || has_managed || has_intercepts;
 
     let (closure_params, fwd_args) =
-        route_axum_params_and_args(rm, needs_state, has_guards, &meta_mod, &krate);
+        route_axum_params_and_args(rm, needs_state, has_guards, &krate);
 
     // Splice __ctrl into the inner-handler call after the axum-extracted
     // prefix (state + optional guard-context params), matching the inner
@@ -1289,10 +1354,11 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     // One per-request `Arc` increment: axum clones the `Fn`-once closure per
     // request (cloning `__core_capture`), then this body moves that clone into
     // `bind_request`. There is no second explicit `.clone()`.
+    let md = data_marker();
     quote! {
         {
             let __core_capture = __ctrl.clone();
-            move |__r2e_data: #data_name, #(#closure_params),*| {
+            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
@@ -1321,7 +1387,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let mut fwd_args: Vec<TokenStream> = Vec::new();
     if has_guards {
         closure_params.push(quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<#meta_mod::State>
+            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>
         });
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
@@ -1331,19 +1397,27 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __raw_path_params });
     }
+    let identity_index = sm.identity_param.as_ref().map(|p| p.index);
+    let identity_marker = identity_marker_for(&sm.fn_item.sig.ident);
     for (i, pt) in extract_sig_params(&sm.fn_item.sig) {
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
-        closure_params.push(quote! { #arg: #ty });
-        fwd_args.push(quote! { #arg });
+        if Some(i) == identity_index {
+            closure_params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            fwd_args.push(quote! { #arg.0 });
+        } else {
+            closure_params.push(quote! { #arg: #ty });
+            fwd_args.push(quote! { #arg });
+        }
     }
 
     let prefix_len = if has_guards { 4 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    let md = data_marker();
     quote! {
         {
             let __core_capture = __ctrl.clone();
-            move |__r2e_data: #data_name, #(#closure_params),*| {
+            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
@@ -1374,7 +1448,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let mut fwd_args: Vec<TokenStream> = Vec::new();
     if has_guards {
         closure_params.push(quote! {
-            __state_ext: #krate::http::extract::State<#meta_mod::State>
+            __state_ext: #krate::http::extract::State<__R2eS>
         });
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
@@ -1384,24 +1458,32 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __raw_path_params });
     }
+    let identity_index = wm.identity_param.as_ref().map(|p| p.index);
+    let identity_marker = identity_marker_for(&wm.fn_item.sig.ident);
     for (i, pt) in extract_sig_params(&wm.fn_item.sig) {
         if Some(i) == ws_param_index {
             continue;
         }
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
-        closure_params.push(quote! { #arg: #ty });
-        fwd_args.push(quote! { #arg });
+        if Some(i) == identity_index {
+            closure_params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            fwd_args.push(quote! { #arg.0 });
+        } else {
+            closure_params.push(quote! { #arg: #ty });
+            fwd_args.push(quote! { #arg });
+        }
     }
     closure_params.push(quote! { __ws_upgrade: #krate::http::ws::WebSocketUpgrade });
     fwd_args.push(quote! { __ws_upgrade });
 
+    let md = data_marker();
     let prefix_len = if has_guards { 4 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     quote! {
         {
             let __core_capture = __ctrl.clone();
-            move |__r2e_data: #data_name, #(#closure_params),*| {
+            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     #inner(
                         #(#prefix,)*

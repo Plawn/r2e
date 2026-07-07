@@ -7,6 +7,7 @@ pub mod controller;
 pub mod dev;
 pub mod error;
 pub mod event_subscriber;
+pub mod extract;
 pub mod guards;
 pub mod health;
 pub mod http;
@@ -36,7 +37,9 @@ pub mod ws;
 
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
 pub use lazy::Lazy;
-pub use builder::{AppBuilder, PreparedApp, TaskRegistryHandle};
+pub use builder::{
+    AppBuilder, PreparedApp, RegisterController, RegisterControllers, TaskRegistryHandle,
+};
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
     DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,
@@ -44,7 +47,8 @@ pub use config::{
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,
 };
-pub use controller::{Controller, StatefulConstruct};
+pub use controller::{ContextConstruct, Controller, StatefulConstruct};
+pub use extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt};
 pub use error::{HttpError, HttpErrorExt};
 pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
@@ -64,8 +68,8 @@ pub use secure_headers::SecureHeaders;
 pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{
-    AllSatisfied, BeanAccess, BuildHList, Contains, ControllerTuple, HCons, HNil, HasBean, Here,
-    PluginDeps, TAppend, TCons, TNil, There,
+    AllSatisfied, BeanAccess, BeanLookup, BuildHList, Contains, ControllerTuple, HCons, HNil,
+    HasBean, Here, PluginDeps, TAppend, TCons, TNil, There,
 };
 
 // Dev-reload helpers

@@ -8,10 +8,7 @@ use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::prelude::*;
 use tower::ServiceExt;
 
-#[derive(Clone)]
-struct AppState;
-
-#[controller(state = AppState)]
+#[controller]
 struct AlphaController;
 
 #[routes]
@@ -22,7 +19,7 @@ impl AlphaController {
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct BetaController;
 
 #[routes]
@@ -33,7 +30,7 @@ impl BetaController {
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct GammaController;
 
 #[routes]
@@ -61,7 +58,8 @@ async fn get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String)
 #[r2e_core::test]
 async fn register_controllers_tuple_wires_all_routes() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(AppState)
+        .build_state()
+        .await
         .register_controllers::<(AlphaController, BetaController, GammaController)>()
         .build();
 
@@ -76,7 +74,8 @@ async fn register_controllers_tuple_wires_all_routes() {
 #[r2e_core::test]
 async fn register_controllers_single_element_tuple() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(AppState)
+        .build_state()
+        .await
         .register_controllers::<(AlphaController,)>()
         .build();
 

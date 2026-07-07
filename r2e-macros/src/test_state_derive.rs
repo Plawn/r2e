@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use crate::bean_state_derive::generate_from_ref_impls;
+use crate::bean_state_derive::{generate_from_ref_impls, generate_state_bridge_impls};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -35,8 +35,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let from_ref_impls = generate_from_ref_impls(name, fields, "test_state");
+    let bridge_impls = generate_state_bridge_impls(name, fields, "test_state");
 
     Ok(quote! {
         #(#from_ref_impls)*
+
+        #bridge_impls
     })
 }

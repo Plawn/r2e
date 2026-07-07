@@ -27,8 +27,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
-    let register_consumers_fn = generate_consumer_registrations(def, name, &meta_mod);
-    let scheduled_tasks_fn = generate_scheduled_tasks(def, name, &meta_mod);
+    let register_consumers_fn = generate_consumer_registrations(def);
+    let scheduled_tasks_fn = generate_scheduled_tasks(def, name);
 
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
@@ -62,12 +62,90 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         }
     };
 
+    // ── State-generic impl assembly ─────────────────────────────────────
+    //
+    // The impl is generic over the state `__R2eS` plus one opaque marker per
+    // extraction site: `__R2eMd` for the request-data struct (a tuple of
+    // per-field markers, shape known only to `#[controller]`) and one
+    // `__R2eMp_<fn>` per param-level `#[inject(identity)]`. The markers are
+    // folded into the `Controller<S, W>` witness parameter so registration can
+    // infer them (E0207 forbids leaving them unconstrained on the impl).
+    let state_ident = super::handlers::state_generic();
+    let md = super::handlers::data_marker();
+    let data_name = format_ident!("__R2eRequestData_{}", name);
+    let state_bounds = super::handlers::state_bounds(&krate);
+
+    let mut param_markers: Vec<syn::Ident> = Vec::new();
+    let mut param_marker_bounds: Vec<TokenStream> = Vec::new();
+    {
+        let mut push_identity = |fn_item: &syn::ImplItemFn, index: usize| {
+            let marker = super::handlers::identity_marker_for(&fn_item.sig.ident);
+            let declared_ty = fn_item
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|arg| match arg {
+                    syn::FnArg::Typed(pt) => Some(pt),
+                    syn::FnArg::Receiver(_) => None,
+                })
+                .nth(index)
+                .map(|pt| (*pt.ty).clone())
+                .expect("identity parameter index out of range");
+            param_marker_bounds.push(quote! {
+                #declared_ty: #krate::extract::FromRequestPartsVia<#state_ident, #marker>
+            });
+            param_markers.push(marker);
+        };
+        for rm in &def.route_methods {
+            if let Some(ref p) = rm.identity_param {
+                push_identity(&rm.fn_item, p.index);
+            }
+        }
+        for sm in &def.sse_methods {
+            if let Some(ref p) = sm.identity_param {
+                push_identity(&sm.fn_item, p.index);
+            }
+        }
+        for wm in &def.ws_methods {
+            if let Some(ref p) = wm.identity_param {
+                push_identity(&wm.fn_item, p.index);
+            }
+        }
+    }
+
+    // Managed resource bounds, deduplicated by type tokens.
+    let mut managed_seen = std::collections::HashSet::new();
+    let mut managed_bounds: Vec<TokenStream> = Vec::new();
+    for rm in &def.route_methods {
+        for mp in &rm.managed_params {
+            let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+            if managed_seen.insert(quote!(#ty).to_string()) {
+                managed_bounds.push(quote! { #ty: #krate::ManagedResource<#state_ident> });
+            }
+        }
+    }
+
     quote! {
-        impl #krate::Controller<#meta_mod::State> for #name {
+        impl<#state_ident, #md, #(#param_markers),*>
+            #krate::Controller<#state_ident, (#md, #(#param_markers,)*)> for #name
+        where
+            #state_ident: #state_bounds,
+            #md: Send + Sync + 'static,
+            #(#param_markers: Send + Sync + 'static,)*
+            #data_name<#md>: #krate::http::extract::FromRequestParts<#state_ident>,
+            #(#param_marker_bounds,)*
+            #(#managed_bounds,)*
+        {
+            type Deps = <#name as #krate::ContextConstruct>::Deps;
+
+            fn construct(_state: &#state_ident, __ctx: &#krate::beans::BeanContext) -> Self {
+                <#name as #krate::ContextConstruct>::from_context(__ctx)
+            }
+
             fn routes(
-                __state: &#meta_mod::State,
+                __state: &#state_ident,
                 __core: ::std::sync::Arc<Self>,
-            ) -> #krate::http::Router<#meta_mod::State> {
+            ) -> #krate::http::Router<#state_ident> {
                 (#application_router_body)(__core)
             }
 
@@ -552,11 +630,7 @@ fn extract_body_type_info(ty: &syn::Type) -> Option<(String, syn::Type)> {
 }
 
 /// Generate consumer registration function.
-fn generate_consumer_registrations(
-    def: &RoutesImplDef,
-    _name: &syn::Ident,
-    meta_mod: &syn::Ident,
-) -> TokenStream {
+fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
     if def.consumer_methods.is_empty() {
         return quote! {};
     }
@@ -659,7 +733,7 @@ fn generate_consumer_registrations(
 
             quote! {
                 {
-                    let __event_bus = __state.#bus_field.clone();
+                    let __event_bus = __core.#bus_field.clone();
                     let __event_bus_ref = __event_bus.clone();
                     #register_topic
                     let __handle = #subscribe_call;
@@ -672,9 +746,10 @@ fn generate_consumer_registrations(
         })
         .collect();
 
+    let state_ident = super::handlers::state_generic();
     quote! {
         fn register_consumers(
-            __state: #meta_mod::State,
+            _state: #state_ident,
             __core: ::std::sync::Arc<Self>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
             Box::pin(async move {
@@ -695,16 +770,13 @@ fn generate_consumer_registrations(
 /// 2. `Box<dyn Any + Send>` - for type erasure in core
 ///
 /// This allows the scheduler to downcast back to `Box<dyn ScheduledTask>` and call `start()`.
-fn generate_scheduled_tasks(
-    def: &RoutesImplDef,
-    name: &syn::Ident,
-    meta_mod: &syn::Ident,
-) -> TokenStream {
+fn generate_scheduled_tasks(def: &RoutesImplDef, name: &syn::Ident) -> TokenStream {
     if def.scheduled_methods.is_empty() {
         return quote! {};
     }
 
     let sched_krate = r2e_scheduler_path();
+    let state_ident = super::handlers::state_generic();
     let controller_name_str = name.to_string();
     let task_defs: Vec<TokenStream> = def
         .scheduled_methods
@@ -734,7 +806,7 @@ fn generate_scheduled_tasks(
                         name: #task_name.to_string(),
                         schedule: #schedule_expr,
                         state: __state.clone(),
-                        task: Box::new(move |_state: #meta_mod::State| {
+                        task: Box::new(move |_state: #state_ident| {
                             let __ctrl = __task_core.clone();
                             Box::pin(async move {
                                 #sched_krate::ScheduledResult::log_if_err(
@@ -754,7 +826,7 @@ fn generate_scheduled_tasks(
 
     quote! {
         fn scheduled_tasks_boxed(
-            __state: &#meta_mod::State,
+            __state: &#state_ident,
             __core: ::std::sync::Arc<Self>,
         ) -> Vec<Box<dyn std::any::Any + Send>> {
             vec![#(#task_defs),*]

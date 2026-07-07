@@ -1,6 +1,5 @@
 use crate::error::AppError;
 use crate::models::UserEntity;
-use crate::state::Services;
 use r2e::prelude::*;
 
 #[derive(Params)]
@@ -13,7 +12,7 @@ pub struct SearchParams {
     pub email: Option<String>,
 }
 
-#[controller(path = "/data/users", state = Services)]
+#[controller(path = "/data/users")]
 pub struct DataController {
     #[inject]
     pool: sqlx::SqlitePool,

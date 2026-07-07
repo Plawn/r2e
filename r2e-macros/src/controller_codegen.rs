@@ -13,16 +13,22 @@ use crate::field_resolver::{config_init_panic, config_section_init_panic};
 ///
 /// Emits, per controller:
 /// - the physical core struct (app/config fields only);
-/// - `mod __r2e_meta_<Name>` (state alias, path prefix, identity metadata,
-///   `guard_identity`, `bind_request`, config validation);
-/// - `struct __R2eRequestData_<Name>` + `FromRequestParts` (request-scoped values);
+/// - `mod __r2e_meta_<Name>` (path prefix, identity metadata, `guard_identity`,
+///   `bind_request`, config validation; plus a `State` alias on the legacy
+///   named-state path);
+/// - `struct __R2eRequestData_<Name><__M>` + a state-generic
+///   `FromRequestParts` impl (request-scoped values, extracted through
+///   `FromRequestPartsVia` with the per-field markers folded into `__M`);
 /// - `struct __R2eRequest_<Name>` + `Deref<Target = Core>` (the request façade);
-/// - `impl StatefulConstruct<State>` for the core (always — the core has no
-///   request-scoped fields, so it is always buildable from state).
+/// - `impl ContextConstruct` for the core (always — cores are built by type
+///   from the resolved bean graph);
+/// - `impl StatefulConstruct<State>` additionally on the legacy named-state
+///   path (`state = ...`), used by gRPC codegen and the typed-state transition.
 pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) -> TokenStream {
     let meta_module = generate_meta_module(def);
     let request_data = generate_request_data(def);
     let facade = generate_facade(def);
+    let context_construct = generate_context_construct(def);
     let stateful_construct = generate_stateful_construct(def);
 
     quote! {
@@ -30,16 +36,17 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
         #meta_module
         #request_data
         #facade
+        #context_construct
         #stateful_construct
     }
 }
 
-/// Generate `mod __r2e_meta_<Name>` with State type alias, PATH_PREFIX,
-/// IdentityType, and guard_identity.
+/// Generate `mod __r2e_meta_<Name>` with PATH_PREFIX, IdentityType,
+/// guard_identity, bind_request, and config validation (plus a `State` type
+/// alias on the legacy named-state path).
 fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.name;
-    let state_type = &def.state_type;
     let mod_name = format_ident!("__r2e_meta_{}", name);
 
     let path_prefix = match &def.prefix {
@@ -49,6 +56,14 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 
     let facade_name = format_ident!("__R2eRequest_{}", name);
     let data_name = format_ident!("__R2eRequestData_{}", name);
+
+    // Legacy named-state path: keep the `State` alias for gRPC codegen and
+    // hand-written code that names it. State-generic controllers have no
+    // nameable state type.
+    let state_alias = match &def.state_type {
+        Some(state_type) => quote! { pub type State = #state_type; },
+        None => quote! {},
+    };
 
     // `guard_identity` reads the identity field off the request façade, never the
     // core (which no longer holds it). Non-identity `#[inject(request)]` fields
@@ -83,6 +98,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     // Move request-scoped values from the extracted request-data type onto the
     // façade, which also owns an `Arc` to the application core. Generated here
     // (by the struct macro) so `#[routes]` never needs to know the façade fields.
+    // Generic over the data marker `__M` — `#[routes]` threads it opaquely.
     let rs_field_names: Vec<&syn::Ident> = def
         .request_scoped_fields()
         .into_iter()
@@ -90,9 +106,9 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         .collect();
     let bind_request_fn = quote! {
         #[inline]
-        pub fn bind_request(
+        pub fn bind_request<__M>(
             __core: ::std::sync::Arc<super::#name>,
-            __data: super::#data_name,
+            __data: super::#data_name<__M>,
         ) -> super::#facade_name {
             super::#facade_name {
                 __core,
@@ -166,7 +182,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         #[allow(non_snake_case)]
         mod #mod_name {
             use super::*;
-            pub type State = #state_type;
+            #state_alias
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
@@ -177,12 +193,19 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     }
 }
 
-/// Generate `struct __R2eRequestData_<Name>` + `impl FromRequestParts<State>`.
+/// Generate `struct __R2eRequestData_<Name><__M>` + a state-generic
+/// `impl FromRequestParts<S>`.
 ///
 /// Holds every request-scoped field (identity + `#[inject(request)]`), each
-/// extracted via its own `FromRequestParts`. For controllers with no
-/// request-scoped fields this is a zero-sized type with an infallible extractor,
-/// so the single dispatch path compiles to a no-op there.
+/// extracted through [`FromRequestPartsVia`] so bean-backed extractors can
+/// park their `HasBean` index witnesses in the marker. The single `__M`
+/// parameter is the tuple of per-field markers — `#[routes]` threads it as one
+/// opaque generic without knowing the field count; the impl here (which knows
+/// the fields) destructures it.
+///
+/// For controllers with no request-scoped fields the struct is marker-only and
+/// the extractor (implemented for `__M = ()`) is infallible, so the single
+/// dispatch path compiles to a no-op there.
 ///
 /// NOTE (OpenAPI): `#[inject(request)]` fields are intentionally NOT modeled in
 /// the generated OpenAPI spec in this pass. Only identity drives the security
@@ -191,7 +214,6 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.name;
-    let state_type = &def.state_type;
     let data_name = format_ident!("__R2eRequestData_{}", name);
 
     let fields = def.request_scoped_fields();
@@ -200,17 +222,24 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
         return quote! {
             #[doc(hidden)]
             #[allow(non_camel_case_types)]
-            struct #data_name;
+            struct #data_name<__M> {
+                __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
+            }
 
-            impl #krate::http::extract::FromRequestParts<#state_type> for #data_name {
+            impl<__R2eS> #krate::http::extract::FromRequestParts<__R2eS> for #data_name<()>
+            where
+                __R2eS: Send + Sync,
+            {
                 type Rejection = ::std::convert::Infallible;
 
                 #[inline(always)]
                 async fn from_request_parts(
                     _parts: &mut #krate::http::header::Parts,
-                    _state: &#state_type,
+                    _state: &__R2eS,
                 ) -> Result<Self, Self::Rejection> {
-                    Ok(#data_name)
+                    Ok(#data_name {
+                        __r2e_markers: ::std::marker::PhantomData,
+                    })
                 }
             }
         };
@@ -221,15 +250,28 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
         .map(|(field_name, field_ty)| quote! { #field_name: #field_ty })
         .collect();
 
+    let marker_idents: Vec<syn::Ident> = (0..fields.len())
+        .map(|i| format_ident!("__M{}", i))
+        .collect();
+
     let extractions: Vec<TokenStream> = fields
         .iter()
-        .map(|(field_name, field_ty)| {
+        .zip(marker_idents.iter())
+        .map(|((field_name, field_ty), marker)| {
             quote! {
-                let #field_name = <#field_ty as #krate::http::extract::FromRequestParts<#state_type>>
-                    ::from_request_parts(__parts, __state)
+                let #field_name = <#field_ty as #krate::extract::FromRequestPartsVia<__R2eS, #marker>>
+                    ::from_request_parts_via(__parts, __state)
                     .await
                     .map_err(#krate::http::response::IntoResponse::into_response)?;
             }
+        })
+        .collect();
+
+    let via_bounds: Vec<TokenStream> = fields
+        .iter()
+        .zip(marker_idents.iter())
+        .map(|((_, field_ty), marker)| {
+            quote! { #field_ty: #krate::extract::FromRequestPartsVia<__R2eS, #marker> }
         })
         .collect();
 
@@ -238,19 +280,28 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types, dead_code)]
-        struct #data_name {
+        struct #data_name<__M> {
             #(#field_decls,)*
+            __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
         }
 
-        impl #krate::http::extract::FromRequestParts<#state_type> for #data_name {
+        impl<__R2eS, #(#marker_idents),*> #krate::http::extract::FromRequestParts<__R2eS>
+            for #data_name<(#(#marker_idents,)*)>
+        where
+            __R2eS: Send + Sync,
+            #(#via_bounds,)*
+        {
             type Rejection = #krate::http::response::Response;
 
             async fn from_request_parts(
                 __parts: &mut #krate::http::header::Parts,
-                __state: &#state_type,
+                __state: &__R2eS,
             ) -> Result<Self, Self::Rejection> {
                 #(#extractions)*
-                Ok(Self { #(#field_inits),* })
+                Ok(Self {
+                    #(#field_inits,)*
+                    __r2e_markers: ::std::marker::PhantomData,
+                })
             }
         }
     }
@@ -292,16 +343,104 @@ fn generate_facade(def: &ControllerStructDef) -> TokenStream {
     }
 }
 
-/// Generate `impl StatefulConstruct<State> for Name`.
+/// Generate `impl ContextConstruct for Name`.
 ///
-/// Always emitted: the physical core holds only app/config-scoped fields (every
-/// request-scoped field moved to the façade), so it is always buildable from
-/// state. `AppBuilder` constructs it once and shares it between routes,
-/// consumers, and scheduled tasks.
-fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
+/// Always emitted: the physical core holds only app/config-scoped fields
+/// (every request-scoped field moved to the façade), so it is buildable from
+/// the resolved bean graph by type. `register_controller()` constructs it once
+/// from the retained `BeanContext` and shares it between routes, consumers,
+/// and scheduled tasks.
+///
+/// `Deps` lists the injected bean types (plus `R2eConfig` when config fields
+/// are present) so a missing bean is a compile error at the registration call
+/// site.
+fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.name;
-    let state_type = &def.state_type;
+
+    let inject_inits: Vec<TokenStream> = def
+        .injected_fields
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            let field_ty = &f.ty;
+            quote! { #field_name: __ctx.get::<#field_ty>() }
+        })
+        .collect();
+
+    let controller_name_str = name.to_string();
+    let config_inits: Vec<TokenStream> = def
+        .config_fields
+        .iter()
+        .map(|f| config_init_panic(&f.name, &f.key, &f.env_hint, &controller_name_str))
+        .collect();
+
+    let config_section_inits: Vec<TokenStream> = def
+        .config_section_fields
+        .iter()
+        .map(|f| config_section_init_panic(&f.name, &f.ty, &f.prefix, &controller_name_str, &krate))
+        .collect();
+
+    let has_any_config = !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let config_prelude = if has_any_config {
+        quote! {
+            let __cfg = __ctx.get::<#krate::R2eConfig>();
+        }
+    } else {
+        quote! {}
+    };
+
+    let all_inits: Vec<&TokenStream> = inject_inits
+        .iter()
+        .chain(config_inits.iter())
+        .chain(config_section_inits.iter())
+        .collect();
+
+    let struct_init = if def.is_unit_struct {
+        quote! { #name }
+    } else {
+        quote! { Self { #(#all_inits,)* } }
+    };
+
+    // Deps: unique injected field types, plus R2eConfig when config fields
+    // exist. Duplicates are excluded — a duplicate requirement is harmless for
+    // the check but noisy in errors.
+    let mut deps_seen = std::collections::HashSet::new();
+    let mut deps_types: Vec<TokenStream> = Vec::new();
+    for f in &def.injected_fields {
+        let ty = &f.ty;
+        let key = quote!(#ty).to_string().replace(' ', "");
+        if deps_seen.insert(key) {
+            deps_types.push(quote! { #ty });
+        }
+    }
+    if has_any_config {
+        deps_types.push(quote! { #krate::R2eConfig });
+    }
+    let deps_list = crate::type_list_gen::build_tcons_type(&deps_types, &krate);
+
+    quote! {
+        impl #krate::ContextConstruct for #name {
+            type Deps = #deps_list;
+
+            fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
+                #config_prelude
+                #struct_init
+            }
+        }
+    }
+}
+
+/// Generate `impl StatefulConstruct<State> for Name` — legacy named-state path
+/// only (`state = ...` present). Used by gRPC codegen and kept during the
+/// typed-state transition; state-generic controllers construct exclusively via
+/// [`ContextConstruct`].
+fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
+    let Some(state_type) = &def.state_type else {
+        return quote! {};
+    };
+    let krate = r2e_core_path();
+    let name = &def.name;
 
     let inject_inits: Vec<TokenStream> = def
         .injected_fields

@@ -39,16 +39,19 @@ pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
     ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::HttpError>> + Send;
 }
 
-/// Generate `FromRequestParts` and `OptionalFromRequestParts` implementations
-/// for an identity type that implements [`ClaimsIdentity`].
+/// Generate [`FromRequestPartsVia`](r2e_core::extract::FromRequestPartsVia)
+/// and [`OptionalFromRequestPartsVia`](r2e_core::extract::OptionalFromRequestPartsVia)
+/// implementations for an identity type that implements [`ClaimsIdentity`].
 ///
-/// This macro eliminates the boilerplate of manually implementing these traits.
-/// It extracts and validates the JWT using `JwtClaimsValidator`, then delegates to
-/// `ClaimsIdentity::from_jwt_claims` for custom construction.
+/// This macro eliminates the boilerplate of manually implementing extraction.
+/// It pulls the `Arc<JwtClaimsValidator>` bean from the application state (via
+/// a `HasBean` bound whose index witness is parked in the `ViaBean` marker),
+/// validates the JWT, then delegates to `ClaimsIdentity::from_jwt_claims` for
+/// custom construction.
 ///
-/// The `OptionalFromRequestParts` impl enables `Option<YourIdentity>` as a handler
-/// parameter: returns `None` when no `Authorization` header is present, and errors
-/// on invalid JWTs.
+/// The optional impl enables `Option<YourIdentity>` as a handler parameter:
+/// returns `None` when no `Authorization` header is present, and errors on
+/// invalid JWTs.
 ///
 /// # Usage
 ///
@@ -58,15 +61,15 @@ pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
 #[macro_export]
 macro_rules! impl_claims_identity_extractor {
     ($identity:ty) => {
-        impl<S> $crate::__macro_support::http::extract::FromRequestParts<S> for $identity
+        impl<S, I> $crate::__macro_support::FromRequestPartsVia<S, $crate::__macro_support::ViaBean<I>> for $identity
         where
-            S: Send + Sync,
+            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I> + Send + Sync,
+            I: Send + Sync,
             Self: $crate::ClaimsIdentity<S>,
-            std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
         {
             type Rejection = $crate::__macro_support::HttpError;
 
-            async fn from_request_parts(
+            async fn from_request_parts_via(
                 parts: &mut $crate::__macro_support::http::header::Parts,
                 state: &S,
             ) -> Result<Self, Self::Rejection> {
@@ -75,15 +78,15 @@ macro_rules! impl_claims_identity_extractor {
             }
         }
 
-        impl<S> $crate::__macro_support::http::extract::OptionalFromRequestParts<S> for $identity
+        impl<S, I> $crate::__macro_support::OptionalFromRequestPartsVia<S, $crate::__macro_support::ViaBean<I>> for $identity
         where
-            S: Send + Sync,
+            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I> + Send + Sync,
+            I: Send + Sync,
             Self: $crate::ClaimsIdentity<S>,
-            std::sync::Arc<$crate::JwtClaimsValidator>: $crate::__macro_support::http::extract::FromRef<S>,
         {
             type Rejection = $crate::__macro_support::HttpError;
 
-            async fn from_request_parts(
+            async fn from_request_parts_via(
                 parts: &mut $crate::__macro_support::http::header::Parts,
                 state: &S,
             ) -> Result<Option<Self>, Self::Rejection> {

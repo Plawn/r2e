@@ -166,3 +166,25 @@ pub fn parse_config_section_prefix(attr: &syn::Attribute) -> syn::Result<String>
         )
     })
 }
+
+/// Rewrite every `'_` (inferred) lifetime in a type to `'static`, so the type
+/// can appear in a where-clause bound (E0637 forbids `'_` there).
+///
+/// Used for `#[managed]` parameter types like `&mut Tx<'_, Sqlite>`: the
+/// handler's expression position infers the lifetime, but the generated
+/// `Ty: ManagedResource<S>` bound must name it — and `ManagedResource`
+/// resources are `'static` by construction.
+pub fn staticize_lifetimes(ty: &Type) -> Type {
+    use syn::visit_mut::VisitMut;
+    struct Staticize;
+    impl VisitMut for Staticize {
+        fn visit_lifetime_mut(&mut self, lt: &mut syn::Lifetime) {
+            if lt.ident == "_" {
+                lt.ident = syn::Ident::new("static", lt.ident.span());
+            }
+        }
+    }
+    let mut ty = ty.clone();
+    Staticize.visit_type_mut(&mut ty);
+    ty
+}

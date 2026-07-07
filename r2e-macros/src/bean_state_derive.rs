@@ -98,6 +98,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .collect();
 
     let from_ref_impls = generate_from_ref_impls(name, fields, "bean_state");
+    let bridge_impls = generate_state_bridge_impls(name, fields, "bean_state");
 
     // The state's requirements list: the chain of unique field types. Folded
     // into the builder's requirement list and checked via `AllSatisfied` at
@@ -125,7 +126,72 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         #(#from_ref_impls)*
+
+        #bridge_impls
     })
+}
+
+/// Transitional bridge to the HList state model (Phase 4): typed state
+/// structs satisfy the same by-type access bounds as HList states —
+/// `HasBean<T, ByField>` + `Contains<T, ByField>` per unique field type
+/// (used by the state-generic controller codegen and the `Deps` presence
+/// check at `register_controller`), plus `BeanLookup` for guards and
+/// managed resources that look beans up dynamically.
+///
+/// Fields skipped for `FromRef` (`#[<attr>(skip)]` / `skip_from_ref`) are
+/// skipped here too. Shared between `BeanState` and `TestState` derives.
+pub fn generate_state_bridge_impls(
+    name: &Ident,
+    fields: &Punctuated<Field, Comma>,
+    skip_attr_name: &str,
+) -> TokenStream2 {
+    let krate = r2e_core_path();
+    let mut bridge_seen = HashSet::new();
+    let mut has_bean_impls: Vec<TokenStream2> = Vec::new();
+    let mut lookup_arms: Vec<TokenStream2> = Vec::new();
+    for field in fields {
+        let field_name = field.ident.as_ref().unwrap();
+        let field_type = &field.ty;
+        let skip = field.attrs.iter().any(|attr| {
+            if !attr.path().is_ident(skip_attr_name) {
+                return false;
+            }
+            attr.parse_args::<syn::Ident>()
+                .map(|ident| ident == "skip" || ident == "skip_from_ref")
+                .unwrap_or(false)
+        });
+        if skip || !bridge_seen.insert(type_to_string(field_type)) {
+            continue;
+        }
+        has_bean_impls.push(quote! {
+            impl #krate::type_list::HasBean<#field_type, #krate::type_list::ByField> for #name {
+                #[inline]
+                fn get_bean(&self) -> #field_type {
+                    self.#field_name.clone()
+                }
+            }
+
+            impl #krate::type_list::Contains<#field_type, #krate::type_list::ByField> for #name {}
+        });
+        lookup_arms.push(quote! {
+            if ::std::any::TypeId::of::<#field_type>() == tid {
+                return Some(&self.#field_name);
+            }
+        });
+    }
+    quote! {
+        #(#has_bean_impls)*
+
+        impl #krate::type_list::BeanLookup for #name {
+            fn lookup_bean(
+                &self,
+                tid: ::std::any::TypeId,
+            ) -> Option<&(dyn ::std::any::Any + Send + Sync)> {
+                #(#lookup_arms)*
+                None
+            }
+        }
+    }
 }
 
 /// Produce a stable string representation of a type for dedup purposes.

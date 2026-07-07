@@ -368,38 +368,40 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .and_then(|boxed| boxed.downcast_ref::<D>())
     }
 
-    /// Register a [`Controller`] whose routes will be merged into the application.
-    ///
-    /// This also collects event consumers and scheduled task definitions
-    /// declared on the controller, so that they are started automatically
-    /// by `serve()`.
+    /// Registration backend with all witnesses explicit: the public face is
+    /// [`RegisterController::register_controller`](super::RegisterController::register_controller),
+    /// which infers `W` (extraction markers) and `DepIdx` (dependency indices).
     ///
     /// # Panics
     ///
     /// Panics if config keys or sections declared on the controller fail
-    /// validation. Use [`try_register_controller`](Self::try_register_controller)
-    /// for a non-panicking alternative.
-    pub fn register_controller<C: Controller<T>>(self) -> Self {
-        self.try_register_controller::<C>().unwrap_or_else(|err| {
-            panic!(
-                "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
-                std::any::type_name::<C>(),
-                err
-            )
-        })
+    /// validation.
+    #[doc(hidden)]
+    pub fn register_controller_impl<C, W, DepIdx>(self) -> Self
+    where
+        C: Controller<T, W>,
+        C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
+    {
+        self.try_register_controller_impl::<C, W, DepIdx>()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
+                    std::any::type_name::<C>(),
+                    err
+                )
+            })
     }
 
-    /// Register a [`Controller`], returning config-validation errors instead
-    /// of panicking.
-    ///
-    /// Behaves exactly like [`register_controller`](Self::register_controller)
-    /// on success. On failure, the controller's aggregated
-    /// [`ConfigValidationError`](crate::config::ConfigValidationError) is
-    /// returned and the builder is consumed (startup wiring cannot proceed
-    /// with a misconfigured controller).
-    pub fn try_register_controller<C: Controller<T>>(
+    /// Non-panicking registration backend; see
+    /// [`register_controller_impl`](Self::register_controller_impl).
+    #[doc(hidden)]
+    pub fn try_register_controller_impl<C, W, DepIdx>(
         mut self,
-    ) -> Result<Self, crate::config::ConfigValidationError> {
+    ) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: Controller<T, W>,
+        C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
+    {
         C::register_meta(&mut self.meta_registry);
 
         // Auto-validate config keys and sections declared on this controller
@@ -412,8 +414,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Construct and bind app-scoped controllers only after config
         // validation, so configuration errors retain their aggregated report.
+        // State-generic controllers construct from the retained bean context
+        // (by type); named-state controllers read the typed state.
         let state = &self.state;
-        let core = Arc::new(C::from_state(state));
+        let core = Arc::new(C::construct(state, &self.bean_context));
         self.routes.push(C::routes(state, Arc::clone(&core)));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
@@ -440,24 +444,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }));
 
         Ok(self)
-    }
-
-    /// Register several [`Controller`]s in one call.
-    ///
-    /// Folds every element of the tuple through
-    /// [`register_controller`](Self::register_controller), preserving tuple
-    /// order, so `register_controllers::<(A, B, C)>()` is equivalent to
-    /// `register_controller::<A>().register_controller::<B>().register_controller::<C>()`.
-    /// Supports tuples of arity 1..=16; each element must implement
-    /// [`Controller<T>`], so a non-controller in the tuple is a compile error.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// app.register_controllers::<(UserController, AccountController, DataController)>()
-    /// ```
-    pub fn register_controllers<Tup: crate::type_list::ControllerTuple<T>>(self) -> Self {
-        Tup::register_all(self)
     }
 
     /// Register a bean's event subscriptions.

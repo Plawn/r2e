@@ -8,9 +8,8 @@ use r2e::http::ws::Message;
 use r2e::ws::WsStream;
 
 use crate::services::NotificationService;
-use crate::state::Services;
 
-#[controller(path = "/notifications", state = Services)]
+#[controller(path = "/notifications")]
 pub struct NotificationController {
     #[inject]
     notification_service: NotificationService,

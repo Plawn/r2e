@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use r2e::config::R2eConfig;
 use r2e::prelude::*;
-use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e::r2e_security::AuthenticatedUser;
 use r2e::{Guard, GuardContext, Identity, PreAuthGuard, PreAuthGuardContext};
 use r2e_test::{TestApp, TestJwt};
 
@@ -141,17 +141,9 @@ impl<S: Send + Sync> PreAuthGuard<S> for ApiKeyPreAuthGuard {
     }
 }
 
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct GuardTestState {
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-
 // ─── Controller with various guard scenarios ───
 
-#[controller(path = "/guarded", state = GuardTestState)]
+#[controller(path = "/guarded")]
 pub struct GuardTestController;
 
 #[routes]
@@ -218,15 +210,12 @@ async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let config = R2eConfig::empty();
 
-    let state = GuardTestState {
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     let app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<GuardTestController>(),
     );

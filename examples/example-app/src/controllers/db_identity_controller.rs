@@ -9,13 +9,12 @@
 use r2e::prelude::*;
 
 use crate::db_identity::DbUser;
-use crate::state::Services;
 
 /// Controller comparing light vs full identity extraction.
 ///
 /// This is a "mixed" controller using parameter-level identity injection,
 /// allowing different identity types per endpoint.
-#[controller(path = "/identity", state = Services)]
+#[controller(path = "/identity")]
 pub struct IdentityController;
 
 #[routes]
@@ -41,7 +40,7 @@ impl IdentityController {
     #[get("/light")]
     async fn light(
         &self,
-        user: AuthenticatedUser,
+        #[inject(identity)] user: AuthenticatedUser,
     ) -> Json<AuthenticatedUser> {
         // No DB query — just the JWT claims
         Json(user)
@@ -75,7 +74,7 @@ impl IdentityController {
     #[get("/full")]
     async fn full(
         &self,
-         user: DbUser,
+         #[inject(identity)] user: DbUser,
     ) -> Json<DbUser> {
         // Includes DB lookup for user profile
         Json(user)

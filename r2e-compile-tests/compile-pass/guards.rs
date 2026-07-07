@@ -87,10 +87,10 @@ impl ProjectGuard {
     }
 }
 
-impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
+impl<S: Send + Sync> Guard<S, AuthenticatedUser> for ProjectGuard {
     fn check(
         &self,
-        _state: &AppState,
+        _state: &S,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -121,10 +121,10 @@ impl SbomGuard {
     }
 }
 
-impl Guard<AppState, AuthenticatedUser> for SbomGuard {
+impl<S: Send + Sync> Guard<S, AuthenticatedUser> for SbomGuard {
     fn check(
         &self,
-        _state: &AppState,
+        _state: &S,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {

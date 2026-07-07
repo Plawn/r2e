@@ -10,7 +10,8 @@
 //! and that no `Arc<Controller>` is ever stashed in request extensions.
 
 use http_body_util::BodyExt;
-use r2e_core::http::extract::{FromRequestParts, OptionalFromRequestParts};
+use r2e_core::extract::OptionalFromRequestPartsVia;
+use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::prelude::*;
@@ -51,10 +52,21 @@ impl<S: Send + Sync> FromRequestParts<S> for Subject {
     }
 }
 
-impl<S: Send + Sync> OptionalFromRequestParts<S> for Subject {
+/// Marker so `Option<Subject>` resolves through a single `ViaOpt` path.
+///
+/// If `Subject` implemented axum's `OptionalFromRequestParts` instead, the
+/// `ViaAxum` bridge would *also* make `Option<Subject>: FromRequestParts` (via
+/// axum's blanket `Option<T>` impl), leaving two candidate marker impls for
+/// `FromRequestPartsVia` — an ambiguity. Implementing the `Via` trait directly,
+/// exactly like real bean-backed identities (`AuthenticatedUser`) do, keeps the
+/// optional path unambiguous while `Subject`'s required-identity `FromRequestParts`
+/// impl above still bridges through `ViaAxum`.
+struct SubjectViaOpt;
+
+impl<S: Send + Sync> OptionalFromRequestPartsVia<S, SubjectViaOpt> for Subject {
     type Rejection = Response;
 
-    async fn from_request_parts(
+    async fn from_request_parts_via(
         parts: &mut r2e_core::http::header::Parts,
         _state: &S,
     ) -> Result<Option<Self>, Self::Rejection> {
@@ -117,12 +129,7 @@ async fn req(
 
 // ── 1. Concurrent identity isolation ───────────────────────────────────────
 
-#[derive(Clone)]
-struct ConcurrentState {
-    barrier: Arc<tokio::sync::Barrier>,
-}
-
-#[controller(state = ConcurrentState)]
+#[controller]
 struct ConcurrentController {
     // Injected core field, reached through the façade `Deref` from the route.
     #[inject]
@@ -146,11 +153,11 @@ impl ConcurrentController {
 #[r2e_core::test]
 async fn concurrent_identities_are_isolated() {
     const N: usize = 8;
-    let state = ConcurrentState {
-        barrier: Arc::new(tokio::sync::Barrier::new(N)),
-    };
+    let barrier = Arc::new(tokio::sync::Barrier::new(N));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(barrier)
+        .build_state()
+        .await
         .register_controller::<ConcurrentController>()
         .build();
 
@@ -173,12 +180,7 @@ async fn concurrent_identities_are_isolated() {
 
 // ── 2. Generic #[inject(request)] scope, isolated per request ───────────────
 
-#[derive(Clone)]
-struct TenantState {
-    barrier: Arc<tokio::sync::Barrier>,
-}
-
-#[controller(state = TenantState)]
+#[controller]
 struct TenantController {
     #[inject]
     barrier: Arc<tokio::sync::Barrier>,
@@ -198,11 +200,11 @@ impl TenantController {
 #[r2e_core::test]
 async fn request_scope_field_is_isolated() {
     const N: usize = 8;
-    let state = TenantState {
-        barrier: Arc::new(tokio::sync::Barrier::new(N)),
-    };
+    let barrier = Arc::new(tokio::sync::Barrier::new(N));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(barrier)
+        .build_state()
+        .await
         .register_controller::<TenantController>()
         .build();
 
@@ -227,11 +229,11 @@ async fn request_scope_field_is_isolated() {
 
 #[r2e_core::test]
 async fn request_scope_field_rejection_propagates() {
-    let state = TenantState {
-        barrier: Arc::new(tokio::sync::Barrier::new(1)),
-    };
+    let barrier = Arc::new(tokio::sync::Barrier::new(1));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(barrier)
+        .build_state()
+        .await
         .register_controller::<TenantController>()
         .build();
 
@@ -255,21 +257,28 @@ impl Clone for CloneTracked {
     }
 }
 
-struct ParamState {
-    dep: CloneTracked,
+/// A structurally identical probe that the controller does **not** inject.
+///
+/// In the HList application-state model every provided bean — including the
+/// controller's injected `dep` — is a member of the state, so routine
+/// per-request state cloning also clones `dep`. This probe lives in the same
+/// state and absorbs that identical per-request cloning, but is never pulled by
+/// the core's `from_context`. Comparing the two counters therefore isolates
+/// core (re)construction from routine state cloning.
+struct StateOnlyProbe {
+    clones: Arc<AtomicUsize>,
 }
 
-impl Clone for ParamState {
+impl Clone for StateOnlyProbe {
     fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
         Self {
-            dep: CloneTracked {
-                clones: Arc::clone(&self.dep.clones),
-            },
+            clones: Arc::clone(&self.clones),
         }
     }
 }
 
-#[controller(state = ParamState)]
+#[controller]
 struct ParamIdentityController {
     #[inject]
     #[allow(dead_code)]
@@ -286,37 +295,47 @@ impl ParamIdentityController {
 
 #[r2e_core::test]
 async fn parameter_identity_keeps_core_app_scoped() {
-    let clones = Arc::new(AtomicUsize::new(0));
-    let state = ParamState {
-        dep: CloneTracked {
-            clones: Arc::clone(&clones),
-        },
-    };
+    let core_clones = Arc::new(AtomicUsize::new(0));
+    let state_clones = Arc::new(AtomicUsize::new(0));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(CloneTracked {
+            clones: Arc::clone(&core_clones),
+        })
+        .provide(StateOnlyProbe {
+            clones: Arc::clone(&state_clones),
+        })
+        .build_state()
+        .await
         .register_controller::<ParamIdentityController>()
         .build();
 
-    let after_build = clones.load(Ordering::SeqCst);
+    // Baselines after build. `dep` is additionally cloned by the core's
+    // `from_context`, so `core_clones` may exceed `state_clones` by a fixed
+    // build-time amount — which we subtract out below.
+    let core_base = core_clones.load(Ordering::SeqCst);
+    let state_base = state_clones.load(Ordering::SeqCst);
     for i in 0..5 {
         let user = format!("p{i}");
         let (status, body) = req(router.clone(), "/me", Some(&user), None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, user);
     }
+    // Both counters absorb identical per-request state cloning, so their
+    // per-request growth must match exactly. Divergence would mean the core was
+    // rebuilt per request — an extra `from_context` clone of `dep` that the
+    // state-only probe never sees.
+    let core_delta = core_clones.load(Ordering::SeqCst) - core_base;
+    let state_delta = state_clones.load(Ordering::SeqCst) - state_base;
     assert_eq!(
-        clones.load(Ordering::SeqCst),
-        after_build,
-        "param-level identity must not make the core request-scoped"
+        core_delta, state_delta,
+        "param-level identity must not make the core request-scoped \
+         (core dep clones grew by {core_delta}, state-only probe by {state_delta})"
     );
 }
 
 // ── 4. Optional struct identity: authenticated + anonymous ──────────────────
 
-#[derive(Clone)]
-struct OptState;
-
-#[controller(state = OptState)]
+#[controller]
 struct OptionalController {
     #[inject(identity)]
     user: Option<Subject>,
@@ -336,7 +355,8 @@ impl OptionalController {
 #[r2e_core::test]
 async fn optional_struct_identity_auth_and_anon() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(OptState)
+        .build_state()
+        .await
         .register_controller::<OptionalController>()
         .build();
 
@@ -351,20 +371,17 @@ async fn optional_struct_identity_auth_and_anon() {
 
 // ── 5. Guard sees the same identity as the method ───────────────────────────
 
-#[derive(Clone)]
-struct GuardState {
-    saw: Arc<Mutex<Vec<String>>>,
-}
-
 struct RecordingGuard;
 
-impl Guard<GuardState, Subject> for RecordingGuard {
+impl<S: Send + Sync + r2e_core::type_list::BeanLookup> Guard<S, Subject> for RecordingGuard {
     fn check(
         &self,
-        state: &GuardState,
+        state: &S,
         ctx: &GuardContext<'_, Subject>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        let saw = state.saw.clone();
+        let saw = state
+            .bean::<Arc<Mutex<Vec<String>>>>()
+            .expect("saw handle must be provided");
         let sub = ctx.identity.map(|i| i.sub().to_string());
         async move {
             if let Some(s) = sub {
@@ -375,7 +392,7 @@ impl Guard<GuardState, Subject> for RecordingGuard {
     }
 }
 
-#[controller(state = GuardState)]
+#[controller]
 struct GuardedIdentityController {
     #[inject(identity)]
     user: Subject,
@@ -392,10 +409,11 @@ impl GuardedIdentityController {
 
 #[r2e_core::test]
 async fn guard_sees_same_identity_as_method() {
-    let saw = Arc::new(Mutex::new(Vec::new()));
-    let state = GuardState { saw: saw.clone() };
+    let saw: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(saw.clone())
+        .build_state()
+        .await
         .register_controller::<GuardedIdentityController>()
         .build();
 
@@ -409,23 +427,25 @@ async fn guard_sees_same_identity_as_method() {
 
 // ── 6. Pre-auth runs before identity extraction ─────────────────────────────
 
+/// `allow` flag as a distinct bean type (the state has two `Arc<AtomicBool>`
+/// values, which cannot coexist by type — newtype one of them).
 #[derive(Clone)]
-struct PreAuthState {
-    identity_ran: Arc<AtomicBool>,
-    allow: Arc<AtomicBool>,
-}
+struct Allow(Arc<AtomicBool>);
 
 /// Identity that records whether it was ever extracted.
 struct FlaggingId(String);
 
-impl FromRequestParts<PreAuthState> for FlaggingId {
+impl<S: Send + Sync + r2e_core::type_list::BeanLookup> FromRequestParts<S> for FlaggingId {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut r2e_core::http::header::Parts,
-        state: &PreAuthState,
+        state: &S,
     ) -> Result<Self, Self::Rejection> {
-        state.identity_ran.store(true, Ordering::SeqCst);
+        state
+            .bean_ref::<Arc<AtomicBool>>()
+            .expect("identity_ran flag must be provided")
+            .store(true, Ordering::SeqCst);
         parts
             .headers
             .get("x-user")
@@ -437,13 +457,17 @@ impl FromRequestParts<PreAuthState> for FlaggingId {
 
 struct GatePre;
 
-impl PreAuthGuard<PreAuthState> for GatePre {
+impl<S: Send + Sync + r2e_core::type_list::BeanLookup> PreAuthGuard<S> for GatePre {
     fn check(
         &self,
-        state: &PreAuthState,
+        state: &S,
         _ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        let allow = state.allow.load(Ordering::SeqCst);
+        let allow = state
+            .bean_ref::<Allow>()
+            .expect("allow flag must be provided")
+            .0
+            .load(Ordering::SeqCst);
         async move {
             if allow {
                 Ok(())
@@ -454,7 +478,7 @@ impl PreAuthGuard<PreAuthState> for GatePre {
     }
 }
 
-#[controller(state = PreAuthState)]
+#[controller]
 struct PreAuthController {
     #[inject(identity)]
     user: FlaggingId,
@@ -472,13 +496,13 @@ impl PreAuthController {
 #[r2e_core::test]
 async fn pre_auth_runs_before_identity_extraction() {
     // Denied: pre-auth fires first, identity extraction must never run.
-    let denied_state = PreAuthState {
-        identity_ran: Arc::new(AtomicBool::new(false)),
-        allow: Arc::new(AtomicBool::new(false)),
-    };
-    let identity_ran = denied_state.identity_ran.clone();
+    let identity_ran = Arc::new(AtomicBool::new(false));
+    let allow = Allow(Arc::new(AtomicBool::new(false)));
     let router = r2e_core::AppBuilder::new()
-        .with_state(denied_state)
+        .provide(identity_ran.clone())
+        .provide(allow)
+        .build_state()
+        .await
         .register_controller::<PreAuthController>()
         .build();
 
@@ -490,13 +514,13 @@ async fn pre_auth_runs_before_identity_extraction() {
     );
 
     // Allowed: pre-auth passes, identity extraction then runs.
-    let ok_state = PreAuthState {
-        identity_ran: Arc::new(AtomicBool::new(false)),
-        allow: Arc::new(AtomicBool::new(true)),
-    };
-    let identity_ran = ok_state.identity_ran.clone();
+    let identity_ran = Arc::new(AtomicBool::new(false));
+    let allow = Allow(Arc::new(AtomicBool::new(true)));
     let router = r2e_core::AppBuilder::new()
-        .with_state(ok_state)
+        .provide(identity_ran.clone())
+        .provide(allow)
+        .build_state()
+        .await
         .register_controller::<PreAuthController>()
         .build();
 
@@ -508,26 +532,32 @@ async fn pre_auth_runs_before_identity_extraction() {
 
 // ── 7. Interceptor runs once, before and after ──────────────────────────────
 
+/// `after` counter as a distinct bean type (the state has two `Arc<AtomicUsize>`
+/// values, which cannot coexist by type — newtype one of them).
 #[derive(Clone)]
-struct IxState {
-    before: Arc<AtomicUsize>,
-    after: Arc<AtomicUsize>,
-}
+struct After(Arc<AtomicUsize>);
 
 struct Counting;
 
-impl<R: Send> Interceptor<R, IxState> for Counting {
+impl<R: Send, S: Send + Sync + r2e_core::type_list::BeanLookup> Interceptor<R, S> for Counting {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext<'_, IxState>,
+        ctx: InterceptorContext<'_, S>,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        let before = ctx.state.before.clone();
-        let after = ctx.state.after.clone();
+        let before = ctx
+            .state
+            .bean::<Arc<AtomicUsize>>()
+            .expect("before counter must be provided");
+        let after = ctx
+            .state
+            .bean::<After>()
+            .expect("after counter must be provided")
+            .0;
         async move {
             before.fetch_add(1, Ordering::SeqCst);
             let r = next().await;
@@ -537,7 +567,7 @@ impl<R: Send> Interceptor<R, IxState> for Counting {
     }
 }
 
-#[controller(state = IxState)]
+#[controller]
 struct InterceptedIdentityController {
     #[inject(identity)]
     user: Subject,
@@ -554,14 +584,13 @@ impl InterceptedIdentityController {
 
 #[r2e_core::test]
 async fn interceptor_runs_once_around() {
-    let state = IxState {
-        before: Arc::new(AtomicUsize::new(0)),
-        after: Arc::new(AtomicUsize::new(0)),
-    };
-    let before = state.before.clone();
-    let after = state.after.clone();
+    let before = Arc::new(AtomicUsize::new(0));
+    let after = Arc::new(AtomicUsize::new(0));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(before.clone())
+        .provide(After(after.clone()))
+        .build_state()
+        .await
         .register_controller::<InterceptedIdentityController>()
         .build();
 
@@ -576,21 +605,18 @@ async fn interceptor_runs_once_around() {
 
 // ── 8. Managed resource commit / rollback on the façade ─────────────────────
 
-#[derive(Clone)]
-struct ManagedState {
-    released: Arc<Mutex<Vec<bool>>>,
-}
-
 struct Txn {
     released: Arc<Mutex<Vec<bool>>>,
 }
 
-impl ManagedResource<ManagedState> for Txn {
+impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for Txn {
     type Error = ManagedErr<r2e_core::HttpError>;
 
-    async fn acquire(state: &ManagedState) -> Result<Self, Self::Error> {
+    async fn acquire(state: &S) -> Result<Self, Self::Error> {
         Ok(Txn {
-            released: state.released.clone(),
+            released: state
+                .bean::<Arc<Mutex<Vec<bool>>>>()
+                .expect("released handle must be provided"),
         })
     }
 
@@ -600,7 +626,7 @@ impl ManagedResource<ManagedState> for Txn {
     }
 }
 
-#[controller(state = ManagedState)]
+#[controller]
 struct ManagedIdentityController {
     #[inject(identity)]
     user: Subject,
@@ -622,12 +648,11 @@ impl ManagedIdentityController {
 
 #[r2e_core::test]
 async fn managed_resource_commit_and_rollback() {
-    let released = Arc::new(Mutex::new(Vec::new()));
-    let state = ManagedState {
-        released: released.clone(),
-    };
+    let released: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(released.clone())
+        .build_state()
+        .await
         .register_controller::<ManagedIdentityController>()
         .build();
 
@@ -647,10 +672,7 @@ async fn managed_resource_commit_and_rollback() {
 
 // ── 9. SSE identity ─────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-struct SseState;
-
-#[controller(state = SseState)]
+#[controller]
 struct SseIdentityController {
     #[inject(identity)]
     user: Subject,
@@ -678,7 +700,8 @@ impl SseIdentityController {
 #[r2e_core::test]
 async fn sse_identity_is_correct() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(SseState)
+        .build_state()
+        .await
         .register_controller::<SseIdentityController>()
         .build();
 
@@ -700,11 +723,7 @@ async fn sse_identity_is_correct() {
 // `cargo test -p r2e-core --test controller_facade --features ws`.
 
 #[cfg(feature = "ws")]
-#[derive(Clone)]
-struct WsState;
-
-#[cfg(feature = "ws")]
-#[controller(state = WsState)]
+#[controller]
 struct WsIdentityController {
     #[inject(identity)]
     user: Subject,
@@ -743,7 +762,8 @@ async fn ws_upgrade(router: r2e_core::http::Router, user: Option<&str>) -> Statu
 #[r2e_core::test]
 async fn ws_identity_extracted_on_upgrade() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(WsState)
+        .build_state()
+        .await
         .register_controller::<WsIdentityController>()
         .build();
 
@@ -768,12 +788,7 @@ async fn ws_identity_extracted_on_upgrade() {
 
 // ── 11. Core injected fields reachable via Deref ────────────────────────────
 
-#[derive(Clone)]
-struct DerefState {
-    label: String,
-}
-
-#[controller(state = DerefState)]
+#[controller]
 struct DerefController {
     #[inject]
     label: String,
@@ -793,11 +808,10 @@ impl DerefController {
 
 #[r2e_core::test]
 async fn core_fields_reachable_via_deref() {
-    let state = DerefState {
-        label: "core".to_string(),
-    };
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide("core".to_string())
+        .build_state()
+        .await
         .register_controller::<DerefController>()
         .build();
 
@@ -808,10 +822,7 @@ async fn core_fields_reachable_via_deref() {
 
 // ── 12. No Arc<Controller> request extension is installed ────────────────────
 
-#[derive(Clone)]
-struct NoExtState;
-
-#[controller(state = NoExtState)]
+#[controller]
 struct NoExtController {
     #[inject(identity)]
     user: Subject,
@@ -840,7 +851,8 @@ impl NoExtController {
 #[r2e_core::test]
 async fn no_controller_arc_request_extension() {
     let router = r2e_core::AppBuilder::new()
-        .with_state(NoExtState)
+        .build_state()
+        .await
         .register_controller::<NoExtController>()
         .build();
 

@@ -1,9 +1,8 @@
 use crate::models::User;
 use crate::services::UserService;
-use crate::state::Services;
 use r2e::prelude::*;
 
-#[controller(state = Services)]
+#[controller]
 pub struct AccountController {
     #[inject]
     user_service: UserService,

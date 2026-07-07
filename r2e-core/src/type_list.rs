@@ -96,6 +96,15 @@ pub struct Here;
 /// the head, but somewhere deeper in the list at index `I`.
 pub struct There<T>(PhantomData<fn() -> T>);
 
+/// Witness used by `#[derive(BeanState)]` structs: the element is present as a
+/// **named field** of a hand-written state struct rather than at a positional
+/// slot of an HList.
+///
+/// Transitional — lets typed-state structs satisfy the same
+/// [`Contains`]/[`HasBean`] bounds as HList states while the typed-state path
+/// is being phased out.
+pub struct ByField;
+
 /// Compile-time witness that type `H` is present in the type-level list `Self`,
 /// located at position `Idx`.
 ///
@@ -220,6 +229,54 @@ impl<S, Idx> BeanAccess<Idx> for S {
 // same `AllSatisfied` machinery used against the provision list `P`.
 impl<H, T> Contains<H, Here> for HCons<H, T> {}
 impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+
+/// Dynamic (`TypeId`-based) bean access over a value-level HList state.
+///
+/// The witness-free complement of [`HasBean`], for generic code that **cannot
+/// carry an index witness**: trait impls where the witness would be an
+/// unconstrained impl parameter (E0207) and the concrete implementor type is
+/// not nameable by generated code — guard impls
+/// (`impl<S: BeanLookup, I> Guard<S, I> for RateLimitGuard`), interceptors,
+/// and `ManagedResource` providers like `HasPool`.
+///
+/// Resolution monomorphizes to a chain of constant `TypeId` comparisons (no
+/// hashing, no heap), so a lookup costs at most one integer compare per state
+/// slot. Prefer [`HasBean`] / [`BeanAccess::get`] wherever a witness can be
+/// threaded — it compiles to a direct field access and turns a missing bean
+/// into a compile error, whereas `BeanLookup` reports absence at runtime via
+/// `None`.
+pub trait BeanLookup {
+    /// Borrow the bean with the given `TypeId`, if present.
+    fn lookup_bean(&self, tid: std::any::TypeId) -> Option<&(dyn std::any::Any + Send + Sync)>;
+
+    /// Borrow the bean of type `T`, if present.
+    fn bean_ref<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.lookup_bean(std::any::TypeId::of::<T>())?.downcast_ref()
+    }
+
+    /// Clone the bean of type `T` out of the state, if present.
+    fn bean<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.bean_ref::<T>().cloned()
+    }
+}
+
+impl BeanLookup for HNil {
+    #[inline(always)]
+    fn lookup_bean(&self, _tid: std::any::TypeId) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        None
+    }
+}
+
+impl<H: Send + Sync + 'static, T: BeanLookup> BeanLookup for HCons<H, T> {
+    #[inline(always)]
+    fn lookup_bean(&self, tid: std::any::TypeId) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        if std::any::TypeId::of::<H>() == tid {
+            Some(&self.head)
+        } else {
+            self.tail.lookup_bean(tid)
+        }
+    }
+}
 
 /// Materialize a type-level provision list into a value-level HList state by
 /// pulling each slot from the resolved [`BeanContext`](crate::beans::BeanContext).
@@ -417,52 +474,191 @@ impl_plugin_deps!(A, B, C, D, E, F, G, H);
 /// Registers a tuple of controllers into an [`AppBuilder`](crate::AppBuilder) in
 /// one call.
 ///
-/// This backs [`AppBuilder::register_controllers`](crate::AppBuilder::register_controllers),
-/// which folds every tuple element through the single-controller
-/// `register_controller::<C>()` path, preserving tuple order. Implemented for
-/// tuples of arity 1..=16; each element must implement
-/// [`Controller<T>`](crate::controller::Controller), so a non-controller in the
-/// tuple is a clear compile error.
+/// This backs
+/// [`RegisterControllers::register_controllers`](crate::builder::RegisterControllers::register_controllers),
+/// which folds every tuple element through the single-controller registration
+/// path, preserving tuple order. Implemented for tuples of arity 1..=16; each
+/// element must implement [`Controller<T, Wi>`](crate::controller::Controller)
+/// with its dependency list satisfied by the state, so a non-controller in the
+/// tuple — or a controller with a missing bean — is a clear compile error.
+///
+/// `W` collects one `(Wi, Di)` witness pair per element (extraction markers +
+/// dependency indices); it is always inferred.
 ///
 /// ```ignore
 /// app.register_controllers::<(UserController, AccountController, DataController)>()
 /// ```
-pub trait ControllerTuple<T: Clone + Send + Sync + 'static> {
+pub trait ControllerTuple<T: Clone + Send + Sync + 'static, W> {
     /// Fold every controller in the tuple through
     /// `register_controller`, in tuple order.
     fn register_all(builder: crate::builder::AppBuilder<T>) -> crate::builder::AppBuilder<T>;
 }
 
 macro_rules! impl_controller_tuple {
-    ($($C:ident),+) => {
-        impl<T, $($C),+> ControllerTuple<T> for ($($C,)+)
+    ($(($C:ident, $W:ident, $D:ident)),+) => {
+        impl<T, $($C, $W, $D),+> ControllerTuple<T, ($(($W, $D),)+)> for ($($C,)+)
         where
             T: Clone + Send + Sync + 'static,
-            $($C: crate::controller::Controller<T>),+
+            $(
+                $C: crate::controller::Controller<T, $W>,
+                <$C as crate::controller::Controller<T, $W>>::Deps: AllSatisfied<T, $D>,
+            )+
         {
             fn register_all(
                 builder: crate::builder::AppBuilder<T>,
             ) -> crate::builder::AppBuilder<T> {
                 builder
-                    $(.register_controller::<$C>())+
+                    $(.register_controller_impl::<$C, $W, $D>())+
             }
         }
     };
 }
 
-impl_controller_tuple!(C0);
-impl_controller_tuple!(C0, C1);
-impl_controller_tuple!(C0, C1, C2);
-impl_controller_tuple!(C0, C1, C2, C3);
-impl_controller_tuple!(C0, C1, C2, C3, C4);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14);
-impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15);
+impl_controller_tuple!((C0, W0, D0));
+impl_controller_tuple!((C0, W0, D0), (C1, W1, D1));
+impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2));
+impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2), (C3, W3, D3));
+impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2), (C3, W3, D3), (C4, W4, D4));
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10),
+    (C11, W11, D11)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10),
+    (C11, W11, D11),
+    (C12, W12, D12)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10),
+    (C11, W11, D11),
+    (C12, W12, D12),
+    (C13, W13, D13)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10),
+    (C11, W11, D11),
+    (C12, W12, D12),
+    (C13, W13, D13),
+    (C14, W14, D14)
+);
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4),
+    (C5, W5, D5),
+    (C6, W6, D6),
+    (C7, W7, D7),
+    (C8, W8, D8),
+    (C9, W9, D9),
+    (C10, W10, D10),
+    (C11, W11, D11),
+    (C12, W12, D12),
+    (C13, W13, D13),
+    (C14, W14, D14),
+    (C15, W15, D15)
+);

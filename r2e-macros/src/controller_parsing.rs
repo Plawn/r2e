@@ -6,7 +6,9 @@ use crate::types::*;
 /// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
     pub name: syn::Ident,
-    pub state_type: syn::Path,
+    /// Named state type from `state = ...` — legacy typed-state model. `None`
+    /// for state-generic controllers (the standard model).
+    pub state_type: Option<syn::Path>,
     pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
@@ -73,7 +75,7 @@ fn inject_qualifier_is(attr: &syn::Attribute, want: &str) -> bool {
 pub fn parse_controller_args(
     args: proc_macro2::TokenStream,
     span: proc_macro2::Span,
-) -> syn::Result<(syn::Path, Option<String>)> {
+) -> syn::Result<(Option<syn::Path>, Option<String>)> {
     let mut state_type: Option<syn::Path> = None;
     let mut prefix: Option<String> = None;
 
@@ -92,14 +94,7 @@ pub fn parse_controller_args(
         }
     });
     parser.parse2(args)?;
-
-    let state_type = state_type.ok_or_else(|| {
-        syn::Error::new(
-            span,
-            "#[controller(state = ...)] is required\n\
-             example: #[controller(path = \"/users\", state = AppState)]",
-        )
-    })?;
+    let _ = span;
 
     Ok((state_type, prefix))
 }
@@ -109,7 +104,7 @@ pub fn parse_controller_args(
 /// `state_type`/`prefix` come from the attribute arguments; field scopes are
 /// read from the struct's named fields.
 pub fn parse(
-    state_type: syn::Path,
+    state_type: Option<syn::Path>,
     prefix: Option<String>,
     item: &syn::ItemStruct,
 ) -> syn::Result<ControllerStructDef> {
@@ -175,7 +170,10 @@ pub fn parse(
                 ));
             } else {
                 // #[inject] -> app-scoped (clone from state)
-                injected_fields.push(InjectedField { name: field_name });
+                injected_fields.push(InjectedField {
+                    name: field_name,
+                    ty: field_type,
+                });
             }
         } else if let Some(attr) = config_attr {
             let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;

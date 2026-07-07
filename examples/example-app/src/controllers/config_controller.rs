@@ -1,4 +1,3 @@
-use crate::state::Services;
 use r2e::prelude::*;
 
 /// Nested config section for app-specific settings.
@@ -25,7 +24,7 @@ pub struct RootConfig {
     pub app: AppConfig,
 }
 
-#[controller(state = Services)]
+#[controller]
 pub struct ConfigController {
     #[inject]
     root_config: RootConfig,

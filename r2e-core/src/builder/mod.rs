@@ -9,10 +9,12 @@
 
 mod nostate;
 mod prepared;
+mod registration;
 mod task_registry;
 mod typed;
 
 pub use prepared::PreparedApp;
+pub use registration::{RegisterController, RegisterControllers};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer, Registrable};

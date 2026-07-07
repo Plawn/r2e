@@ -11,8 +11,7 @@
 //! macro to reduce boilerplate. Compare with the manual `FromRequestParts` approach
 //! documented in `r2e-security/src/extractor.rs`.
 
-use r2e::http::extract::FromRef;
-use r2e::Identity;
+use r2e::{BeanLookup, Identity};
 use r2e::r2e_security::{
     impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
 };
@@ -75,8 +74,7 @@ impl DbUser {
 
 impl<S> ClaimsIdentity<S> for DbUser
 where
-    S: Send + Sync,
-    sqlx::SqlitePool: FromRef<S>,
+    S: BeanLookup + Send + Sync,
 {
     async fn from_jwt_claims(
         claims: serde_json::Value,
@@ -85,7 +83,9 @@ where
         let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
         let auth = AuthenticatedUser::from_claims(claims);
 
-        let pool = sqlx::SqlitePool::from_ref(state);
+        let pool = state
+            .bean::<sqlx::SqlitePool>()
+            .ok_or_else(|| r2e::HttpError::internal("SqlitePool bean not found in state"))?;
         let row: Option<(i64, String, String)> =
             sqlx::query_as("SELECT id, name, email FROM users WHERE sub = ?")
                 .bind(&sub)

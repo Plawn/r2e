@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use crate::models::UserCreatedEvent;
-use crate::state::Services;
 use r2e::prelude::*;
 
-#[controller(state = Services)]
+#[controller]
 pub struct UserEventConsumer {
     #[inject]
     event_bus: LocalEventBus,

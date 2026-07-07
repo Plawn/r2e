@@ -1,9 +1,8 @@
 use r2e::prelude::*;
 use r2e::ws::WsStream;
 
-use crate::state::Services;
 
-#[controller(path = "/ws", state = Services)]
+#[controller(path = "/ws")]
 pub struct WsEchoController;
 
 #[routes]

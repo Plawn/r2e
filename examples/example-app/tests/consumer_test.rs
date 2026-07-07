@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,6 +9,26 @@ use r2e::r2e_events::LocalEventBus;
 // Import the Controller trait explicitly (prelude exports the derive macro with the same name)
 use r2e::Controller as ControllerTrait;
 
+// ─── Helper: call the generated `register_consumers` while letting the compiler
+// infer the extraction-marker witness `W` (same pattern as `RegisterController`).
+// In the state-generic model the `Controller<S, W>` impl carries opaque
+// extraction markers in `W`, so a fully-qualified `<C as Controller<S>>::…`
+// call no longer resolves. ───
+
+trait ConsumerExt<S, W>: Sized {
+    fn start_consumers(state: S, core: Arc<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+}
+
+impl<C, S, W> ConsumerExt<S, W> for C
+where
+    C: ControllerTrait<S, W>,
+    S: Clone + Send + Sync + 'static,
+{
+    fn start_consumers(state: S, core: Arc<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        <C as ControllerTrait<S, W>>::register_consumers(state, core)
+    }
+}
+
 // ─── Test event type ───
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -14,26 +36,9 @@ struct TestConsumerEvent {
     pub message: String,
 }
 
-// ─── Test state ───
-
-#[derive(Clone, TestState)]
-struct ConsumerTestState {
-    pub event_bus: LocalEventBus,
-    pub counter: Arc<AtomicUsize>,
-    pub received: Arc<tokio::sync::Mutex<Option<String>>>,
-}
-
-fn make_state() -> ConsumerTestState {
-    ConsumerTestState {
-        event_bus: LocalEventBus::new(),
-        counter: Arc::new(AtomicUsize::new(0)),
-        received: Arc::new(tokio::sync::Mutex::new(None)),
-    }
-}
-
 // ─── Consumer controllers ───
 
-#[controller(state = ConsumerTestState)]
+#[controller]
 pub struct CountingConsumer {
     #[inject]
     event_bus: LocalEventBus,
@@ -49,7 +54,7 @@ impl CountingConsumer {
     }
 }
 
-#[controller(state = ConsumerTestState)]
+#[controller]
 pub struct DataCapturingConsumer {
     #[inject]
     event_bus: LocalEventBus,
@@ -65,7 +70,7 @@ impl DataCapturingConsumer {
     }
 }
 
-#[controller(state = ConsumerTestState)]
+#[controller]
 pub struct SecondCountingConsumer {
     #[inject]
     event_bus: LocalEventBus,
@@ -96,24 +101,7 @@ impl Clone for CloneTrackedConsumerDep {
     }
 }
 
-struct ReuseConsumerState {
-    event_bus: LocalEventBus,
-    dep: CloneTrackedConsumerDep,
-}
-
-impl Clone for ReuseConsumerState {
-    fn clone(&self) -> Self {
-        Self {
-            event_bus: self.event_bus.clone(),
-            dep: CloneTrackedConsumerDep {
-                clones: Arc::clone(&self.dep.clones),
-                handled: Arc::clone(&self.dep.handled),
-            },
-        }
-    }
-}
-
-#[controller(state = ReuseConsumerState)]
+#[controller]
 struct ReuseConsumer {
     #[inject]
     event_bus: LocalEventBus,
@@ -133,19 +121,20 @@ impl ReuseConsumer {
 
 #[r2e::test]
 async fn test_consumer_method_invoked() {
-    let state = make_state();
-    let core = Arc::new(CountingConsumer::from_state(&state));
+    let event_bus = LocalEventBus::new();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let builder = AppBuilder::new()
+        .provide(event_bus.clone())
+        .provide(counter.clone())
+        .build_state()
+        .await;
+    let core = Arc::new(CountingConsumer::from_context(builder.bean_context()));
 
     // Register macro-generated consumer
-    <CountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(
-        state.clone(),
-        core,
-    )
-    .await;
+    CountingConsumer::start_consumers(builder.state().clone(), core).await;
 
     // Emit event
-    let _ = state
-        .event_bus
+    let _ = event_bus
         .emit(TestConsumerEvent {
             message: "hello".into(),
         })
@@ -154,22 +143,24 @@ async fn test_consumer_method_invoked() {
     // Wait for async consumer to process
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert_eq!(state.counter.load(Ordering::SeqCst), 1);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 #[r2e::test]
 async fn test_consumer_receives_correct_data() {
-    let state = make_state();
-    let core = Arc::new(DataCapturingConsumer::from_state(&state));
+    let event_bus = LocalEventBus::new();
+    let received: Arc<tokio::sync::Mutex<Option<String>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+    let builder = AppBuilder::new()
+        .provide(event_bus.clone())
+        .provide(received.clone())
+        .build_state()
+        .await;
+    let core = Arc::new(DataCapturingConsumer::from_context(builder.bean_context()));
 
-    <DataCapturingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(
-        state.clone(),
-        core,
-    )
-    .await;
+    DataCapturingConsumer::start_consumers(builder.state().clone(), core).await;
 
-    let _ = state
-        .event_bus
+    let _ = event_bus
         .emit(TestConsumerEvent {
             message: "important payload".into(),
         })
@@ -177,26 +168,27 @@ async fn test_consumer_receives_correct_data() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let captured = state.received.lock().await;
+    let captured = received.lock().await;
     assert_eq!(captured.as_deref(), Some("important payload"));
 }
 
 #[r2e::test]
 async fn test_consumer_with_injected_deps() {
-    let state = make_state();
-    let core = Arc::new(CountingConsumer::from_state(&state));
+    let event_bus = LocalEventBus::new();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let builder = AppBuilder::new()
+        .provide(event_bus.clone())
+        .provide(counter.clone())
+        .build_state()
+        .await;
+    let core = Arc::new(CountingConsumer::from_context(builder.bean_context()));
 
     // Register CountingConsumer — its handler uses the injected `counter` dep
-    <CountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(
-        state.clone(),
-        core,
-    )
-    .await;
+    CountingConsumer::start_consumers(builder.state().clone(), core).await;
 
     // Emit multiple events to verify injected state is correctly shared
     for _ in 0..5 {
-        let _ = state
-            .event_bus
+        let _ = event_bus
             .emit(TestConsumerEvent {
                 message: "tick".into(),
             })
@@ -206,29 +198,26 @@ async fn test_consumer_with_injected_deps() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // The injected counter should have been incremented by each invocation
-    assert_eq!(state.counter.load(Ordering::SeqCst), 5);
+    assert_eq!(counter.load(Ordering::SeqCst), 5);
 }
 
 #[r2e::test]
 async fn test_multiple_consumers_same_event() {
-    let state = make_state();
-    let first_core = Arc::new(CountingConsumer::from_state(&state));
-    let second_core = Arc::new(SecondCountingConsumer::from_state(&state));
+    let event_bus = LocalEventBus::new();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let builder = AppBuilder::new()
+        .provide(event_bus.clone())
+        .provide(counter.clone())
+        .build_state()
+        .await;
+    let first_core = Arc::new(CountingConsumer::from_context(builder.bean_context()));
+    let second_core = Arc::new(SecondCountingConsumer::from_context(builder.bean_context()));
 
     // Register two different consumer controllers for the same event type
-    <CountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(
-        state.clone(),
-        first_core,
-    )
-    .await;
-    <SecondCountingConsumer as ControllerTrait<ConsumerTestState>>::register_consumers(
-        state.clone(),
-        second_core,
-    )
-    .await;
+    CountingConsumer::start_consumers(builder.state().clone(), first_core).await;
+    SecondCountingConsumer::start_consumers(builder.state().clone(), second_core).await;
 
-    let _ = state
-        .event_bus
+    let _ = event_bus
         .emit(TestConsumerEvent {
             message: "broadcast".into(),
         })
@@ -237,29 +226,40 @@ async fn test_multiple_consumers_same_event() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Both consumers increment the same counter, so it should be 2
-    assert_eq!(state.counter.load(Ordering::SeqCst), 2);
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
 
 #[r2e::test]
 async fn consumer_reuses_supplied_core_for_every_event() {
     let clones = Arc::new(AtomicUsize::new(0));
     let handled = Arc::new(AtomicUsize::new(0));
-    let state = ReuseConsumerState {
-        event_bus: LocalEventBus::new(),
-        dep: CloneTrackedConsumerDep {
-            clones: Arc::clone(&clones),
-            handled: Arc::clone(&handled),
-        },
+    let event_bus = LocalEventBus::new();
+    let dep = CloneTrackedConsumerDep {
+        clones: Arc::clone(&clones),
+        handled: Arc::clone(&handled),
     };
-    let core = Arc::new(ReuseConsumer::from_state(&state));
-    assert_eq!(clones.load(Ordering::SeqCst), 1);
 
-    <ReuseConsumer as ControllerTrait<ReuseConsumerState>>::register_consumers(state.clone(), core)
+    let builder = AppBuilder::new()
+        .provide(event_bus.clone())
+        .provide(dep)
+        .build_state()
         .await;
+    let core = Arc::new(ReuseConsumer::from_context(builder.bean_context()));
+
+    // Pass a dep-free state to `register_consumers` (the state argument is
+    // unused by the generated registration) so the clone counter tracks only
+    // core (re)construction, not incidental state clones.
+    let empty_builder = AppBuilder::new().build_state().await;
+    let empty_state = empty_builder.state().clone();
+
+    ReuseConsumer::start_consumers(empty_state, core).await;
+
+    // Baseline: all dep clones from building state + constructing the core have
+    // happened by now. Handling events must not add more.
+    let base = clones.load(Ordering::SeqCst);
 
     for _ in 0..5 {
-        let _ = state
-            .event_bus
+        let _ = event_bus
             .emit(TestConsumerEvent {
                 message: "reuse".into(),
             })
@@ -270,7 +270,7 @@ async fn consumer_reuses_supplied_core_for_every_event() {
     assert_eq!(handled.load(Ordering::SeqCst), 5);
     assert_eq!(
         clones.load(Ordering::SeqCst),
-        1,
+        base,
         "consumer events must not reconstruct the controller core"
     );
 }

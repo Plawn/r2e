@@ -3,8 +3,8 @@
 use crate::error::OpenFgaError;
 use crate::registry::OpenFgaRegistry;
 use r2e_core::guards::{Guard, GuardContext, Identity};
-use r2e_core::http::extract::FromRef;
 use r2e_core::http::response::IntoResponse;
+use r2e_core::type_list::BeanLookup;
 
 /// How to resolve the object ID for authorization checks.
 #[derive(Debug, Clone)]
@@ -205,16 +205,15 @@ impl FgaGuard {
     }
 }
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for FgaGuard
-where
-    OpenFgaRegistry: FromRef<S>,
-{
+impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for FgaGuard {
     fn check(
         &self,
         state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
-        let registry = <OpenFgaRegistry as FromRef<S>>::from_ref(state);
+        let registry = state
+            .bean::<OpenFgaRegistry>()
+            .expect("OpenFgaRegistry bean not found in application state — install the OpenFga plugin before build_state()");
         let relation = self.relation;
         let object_result = self.resolve_object(ctx);
 
