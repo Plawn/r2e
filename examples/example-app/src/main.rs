@@ -121,7 +121,7 @@ async fn setup() -> AppEnv {
 
 #[r2e::main]
 async fn main(env: AppEnv) {
-    AppBuilder::new()
+    let app = AppBuilder::new()
         .plugin(Scheduler)
         .plugin(Prometheus::builder()
             .endpoint("/metrics")
@@ -136,8 +136,9 @@ async fn main(env: AppEnv) {
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(env.sse_broadcaster)
         .provide(env.notification_service)
-        .register::<UserService>()
-        .build_state::<Services, _, _>()
+        .register::<UserService>();
+
+    build_state!(app, Services)
         .await
         .with(Health)
         .with(RequestIdPlugin)

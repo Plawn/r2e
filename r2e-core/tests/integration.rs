@@ -284,7 +284,7 @@ async fn cors_preflight_returns_200() {
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, BeanState, Producer, Registrable};
-use r2e_core::type_list::{BuildableFrom, Contains, TNil};
+use r2e_core::type_list::{TCons, TNil};
 use std::any::TypeId;
 
 #[derive(Clone, Debug)]
@@ -297,6 +297,7 @@ struct SingleDepState {
 }
 
 impl BeanState for SingleDepState {
+    type Requires = TCons<TestDep, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             dep: ctx.get::<TestDep>(),
@@ -304,17 +305,11 @@ impl BeanState for SingleDepState {
     }
 }
 
-impl<P, I0> BuildableFrom<P, (I0,)> for SingleDepState
-where
-    P: Contains<TestDep, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
-        .build_state::<SingleDepState, _, _>()
+        .build_state::<SingleDepState, _>()
         .await
         .with(Health)
         .build();
@@ -355,6 +350,7 @@ struct BeanTestState {
 }
 
 impl BeanState for BeanTestState {
+    type Requires = TCons<TestService, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             service: ctx.get::<TestService>(),
@@ -362,17 +358,11 @@ impl BeanState for BeanTestState {
     }
 }
 
-impl<P, I0> BuildableFrom<P, (I0,)> for BeanTestState
-where
-    P: Contains<TestService, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .register::<TestService>()
-        .build_state::<BeanTestState, _, _>()
+        .build_state::<BeanTestState, _>()
         .await
         .with(Health)
         .build();
@@ -410,6 +400,7 @@ struct AsyncBeanTestState {
 }
 
 impl BeanState for AsyncBeanTestState {
+    type Requires = TCons<AsyncService, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             service: ctx.get::<AsyncService>(),
@@ -417,17 +408,11 @@ impl BeanState for AsyncBeanTestState {
     }
 }
 
-impl<P, I0> BuildableFrom<P, (I0,)> for AsyncBeanTestState
-where
-    P: Contains<AsyncService, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .register::<AsyncService>()
-        .build_state::<AsyncBeanTestState, _, _>()
+        .build_state::<AsyncBeanTestState, _>()
         .await
         .with(Health)
         .build();
@@ -468,6 +453,7 @@ struct ProducerTestState {
 }
 
 impl BeanState for ProducerTestState {
+    type Requires = TCons<ProducedValue, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             value: ctx.get::<ProducedValue>(),
@@ -475,17 +461,11 @@ impl BeanState for ProducerTestState {
     }
 }
 
-impl<P, I0> BuildableFrom<P, (I0,)> for ProducerTestState
-where
-    P: Contains<ProducedValue, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .register::<TestProducer>()
-        .build_state::<ProducerTestState, _, _>()
+        .build_state::<ProducerTestState, _>()
         .await
         .with(Health)
         .build();
@@ -503,7 +483,7 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
-        .build_state::<SingleDepState, _, _>()
+        .build_state::<SingleDepState, _>()
         .await
         .with(Health)
         .build();
@@ -521,6 +501,8 @@ struct OptionalDepState {
 }
 
 impl BeanState for OptionalDepState {
+    // Only TestDep is required — TestService is optional (pulled via `try_get`).
+    type Requires = TCons<TestDep, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             dep: ctx.get::<TestDep>(),
@@ -529,19 +511,12 @@ impl BeanState for OptionalDepState {
     }
 }
 
-// Only TestDep is required — TestService is optional
-impl<P, I0> BuildableFrom<P, (I0,)> for OptionalDepState
-where
-    P: Contains<TestDep, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn with_bean_when_true_provides_some() {
     let app = AppBuilder::new()
         .provide(TestDep(1))
         .with_bean_when::<TestService>(true)
-        .build_state::<OptionalDepState, _, _>()
+        .build_state::<OptionalDepState, _>()
         .await
         .with(Health)
         .build();
@@ -554,7 +529,7 @@ async fn with_bean_when_false_provides_none() {
     let app = AppBuilder::new()
         .provide(TestDep(2))
         .with_bean_when::<TestService>(false)
-        .build_state::<OptionalDepState, _, _>()
+        .build_state::<OptionalDepState, _>()
         .await
         .with(Health)
         .build();
@@ -570,15 +545,15 @@ async fn with_async_bean_when_true() {
         service: Option<AsyncService>,
     }
     impl BeanState for OptionalAsyncState {
+        type Requires = TNil;
         fn from_context(ctx: &BeanContext) -> Self {
             Self { service: ctx.try_get::<AsyncService>() }
         }
     }
-    impl<P> BuildableFrom<P, ()> for OptionalAsyncState {}
 
     let app = AppBuilder::new()
         .with_async_bean_when::<AsyncService>(true)
-        .build_state::<OptionalAsyncState, _, _>()
+        .build_state::<OptionalAsyncState, _>()
         .await
         .with(Health)
         .build();
@@ -593,15 +568,15 @@ async fn with_producer_when_false() {
         value: Option<ProducedValue>,
     }
     impl BeanState for OptionalProducedState {
+        type Requires = TNil;
         fn from_context(ctx: &BeanContext) -> Self {
             Self { value: ctx.try_get::<ProducedValue>() }
         }
     }
-    impl<P> BuildableFrom<P, ()> for OptionalProducedState {}
 
     let app = AppBuilder::new()
         .with_producer_when::<TestProducer>(false)
-        .build_state::<OptionalProducedState, _, _>()
+        .build_state::<OptionalProducedState, _>()
         .await
         .with(Health)
         .build();
@@ -620,7 +595,7 @@ async fn with_bean_on_config_enabled() {
         .with_config(config)
         .provide(TestDep(10))
         .with_bean_on_config::<TestService>("features.test-service")
-        .build_state::<OptionalDepState, _, _>()
+        .build_state::<OptionalDepState, _>()
         .await
         .with(Health)
         .build();
@@ -639,7 +614,7 @@ async fn with_bean_on_config_disabled() {
         .with_config(config)
         .provide(TestDep(11))
         .with_bean_on_config::<TestService>("features.test-service")
-        .build_state::<OptionalDepState, _, _>()
+        .build_state::<OptionalDepState, _>()
         .await
         .with(Health)
         .build();
@@ -657,7 +632,7 @@ async fn with_bean_on_config_missing_key_defaults_to_false() {
         .with_config(config)
         .provide(TestDep(12))
         .with_bean_on_config::<TestService>("features.nonexistent")
-        .build_state::<OptionalDepState, _, _>()
+        .build_state::<OptionalDepState, _>()
         .await
         .with(Health)
         .build();

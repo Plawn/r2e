@@ -1,4 +1,4 @@
-use r2e_core::{AppBuilder, BeanContext, BeanState, BuildableFrom, Contains};
+use r2e_core::{AppBuilder, BeanContext, BeanState, TCons, TNil};
 use r2e_prometheus::prometheus::IntCounter;
 use r2e_prometheus::{Prometheus, PrometheusRegistry};
 
@@ -11,17 +11,12 @@ struct TestState {
 }
 
 impl BeanState for TestState {
+    type Requires = TCons<PrometheusRegistry, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             registry: ctx.get::<PrometheusRegistry>(),
         }
     }
-}
-
-impl<P, I0> BuildableFrom<P, (I0,)> for TestState
-where
-    P: Contains<PrometheusRegistry, I0>,
-{
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -30,7 +25,7 @@ where
 async fn plugin_provides_prometheus_registry() {
     let _app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     // If we get here, the plugin successfully provided PrometheusRegistry
@@ -49,7 +44,7 @@ async fn builder_register_includes_custom_collectors() {
                 .register(Box::new(counter_clone))
                 .build(),
         )
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     // Increment the counter and verify it shows up in encoded output
@@ -65,7 +60,7 @@ async fn builder_register_includes_custom_collectors() {
 async fn registry_bean_can_register_at_runtime() {
     let app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     // Access the registry through the global function

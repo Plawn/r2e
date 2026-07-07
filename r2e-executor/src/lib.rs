@@ -12,7 +12,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(Executor)
-//!     .build_state::<Services, _, _>()
+//!     .build_state::<Services, _>()
 //!     .await
 //!     .register_controller::<MyController>()
 //!     .serve("0.0.0.0:3000")

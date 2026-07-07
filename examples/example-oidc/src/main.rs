@@ -130,7 +130,7 @@ async fn setup() -> AppEnv {
 async fn main(env: AppEnv) {
     AppBuilder::new()
         .plugin(env.oidc.clone())
-        .build_state::<Services, _, _>()
+        .build_state::<Services, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

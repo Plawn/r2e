@@ -23,7 +23,7 @@ async fn main() {
     AppBuilder::new()
         .with_config(config)
         .register::<services::ProductService>()
-        .build_state::<ProductState, _, _>()
+        .build_state::<ProductState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

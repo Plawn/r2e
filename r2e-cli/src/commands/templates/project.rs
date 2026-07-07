@@ -108,7 +108,7 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
     imports.push_str("use state::AppState;\n");
 
     let mut builder_lines = Vec::new();
-    builder_lines.push("    AppBuilder::new()".to_string());
+    builder_lines.push("    let app = AppBuilder::new()".to_string());
 
     if opts.scheduler {
         builder_lines.push("        .plugin(Scheduler)".to_string());
@@ -117,7 +117,13 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
         builder_lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
     }
 
-    builder_lines.push("        .build_state::<AppState, _, _>()".to_string());
+    // Close the NoState phase, then resolve the state via the zero-underscore
+    // `build_state!` façade.
+    if let Some(last) = builder_lines.last_mut() {
+        last.push(';');
+    }
+    builder_lines.push("".to_string());
+    builder_lines.push("    build_state!(app, AppState)".to_string());
     builder_lines.push("        .await".to_string());
     builder_lines.push("        .with(Health)".to_string());
     builder_lines.push("        .with(Tracing)".to_string());

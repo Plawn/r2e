@@ -24,7 +24,7 @@ pub enum GrpcTransport {
 /// AppBuilder::new()
 ///     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
 ///     // or: .plugin(GrpcServer::multiplexed())
-///     .build_state::<Services, _, _>()
+///     .build_state::<Services, _>()
 ///     .await
 ///     .register_grpc_service::<UserGrpcService>()
 ///     .serve("0.0.0.0:3000")

@@ -83,7 +83,7 @@ async fn main() {
     AppBuilder::new()
         .with_config(config)
         .provide(pool)
-        .build_state::<Services, _, _>()
+        .build_state::<Services, _>()
         .await
         .register_controller::<BenchController>()
         .serve_auto()

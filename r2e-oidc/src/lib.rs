@@ -22,7 +22,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(oidc)
-//!     .build_state::<Services, _, _>().await
+//!     .build_state::<Services, _>().await
 //!     .register_controller::<UserController>()
 //!     .serve("0.0.0.0:3000").await.unwrap();
 //! ```
@@ -43,7 +43,7 @@
 //! // main(env) — called on each hot-patch
 //! AppBuilder::new()
 //!     .plugin(oidc.clone()) // same keys, same state
-//!     .build_state::<Services, _, _>().await
+//!     .build_state::<Services, _>().await
 //! ```
 
 pub mod client;
@@ -186,7 +186,7 @@ impl OidcServer {
 /// // main(env) — hot-patched, called multiple times
 /// AppBuilder::new()
 ///     .plugin(oidc.clone())
-///     .build_state::<S, _, _>().await
+///     .build_state::<S, _>().await
 /// ```
 #[derive(Clone)]
 pub struct OidcRuntime {

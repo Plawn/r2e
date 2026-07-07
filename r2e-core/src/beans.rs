@@ -229,6 +229,19 @@ pub trait PostConstruct: Clone + Send + Sync + 'static {
     note = "add `#[derive(BeanState)]` to your state struct"
 )]
 pub trait BeanState: Clone + Send + Sync + 'static {
+    /// Type-level list ([`TCons`](crate::type_list::TCons) /
+    /// [`TNil`](crate::type_list::TNil)) of the field types this state requires
+    /// from the builder's provisions.
+    ///
+    /// [`AppBuilder::build_state`](crate::AppBuilder::build_state) folds this
+    /// list into its requirement list and verifies — in a single
+    /// [`AllSatisfied`](crate::type_list::AllSatisfied) check — that every
+    /// required type is present in the provisions. `#[derive(BeanState)]` sets
+    /// this to the chain of unique field types; hand-written impls set it to the
+    /// types they pull via [`BeanContext::get`] (use `TNil` when every field is
+    /// optional / pulled via `try_get`).
+    type Requires;
+
     /// Construct the state struct by pulling every field from the context.
     fn from_context(ctx: &BeanContext) -> Self;
 }

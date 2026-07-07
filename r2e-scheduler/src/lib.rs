@@ -159,7 +159,7 @@ impl Default for ScheduledJobRegistry {
 ///
 /// AppBuilder::new()
 ///     .plugin(Scheduler)  // Before build_state()!
-///     .build_state::<Services, _, _>()
+///     .build_state::<Services, _>()
 ///     .await
 ///     .register_controller::<ScheduledJobs>()
 ///     .serve("0.0.0.0:3000")

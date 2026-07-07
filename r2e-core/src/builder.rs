@@ -4,7 +4,7 @@ use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
-use crate::type_list::{AllSatisfied, BuildableFrom, TAppend, TCons, TNil};
+use crate::type_list::{AllSatisfied, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -459,7 +459,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///         let url = config.get::<String>("redis.url").unwrap();
     ///         RedisClient::new(&url)
     ///     })
-    ///     .build_state::<Services, _, _>().await
+    ///     .build_state::<Services, _>().await
     /// ```
     pub fn with_bean_factory<B, F>(mut self, factory: F) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<TCons<crate::config::R2eConfig, TNil>>>::Output>
     where
@@ -484,7 +484,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// let config = R2eConfig::load()?;
     /// AppBuilder::new()
     ///     .with_config(config)
-    ///     .build_state::<Services, _, _>()
+    ///     .build_state::<Services, _>()
     ///     .await
     /// ```
     pub fn with_config(
@@ -579,7 +579,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// AppBuilder::new()
     ///     .plugin(Scheduler)  // Provides CancellationToken + ScheduledJobRegistry
-    ///     .build_state::<Services, _, _>()
+    ///     .build_state::<Services, _>()
     ///     .await
     /// ```
     pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
@@ -657,24 +657,26 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Panics if the bean graph has cycles, missing dependencies, or
     /// duplicate registrations. Use [`try_build_state`](Self::try_build_state)
     /// for a non-panicking alternative.
-    pub async fn build_state<S, Idx, RIdx>(self) -> AppBuilder<S>
+    pub async fn build_state<S, W>(self) -> AppBuilder<S>
     where
-        S: BeanState + BuildableFrom<P, Idx>,
-        R: AllSatisfied<P, RIdx>,
+        S: BeanState,
+        R: TAppend<S::Requires>,
+        <R as TAppend<S::Requires>>::Output: AllSatisfied<P, W>,
     {
-        self.try_build_state()
+        self.try_build_state::<S, W>()
             .await
             .expect("Failed to resolve bean dependency graph")
     }
 
     /// Resolve the bean dependency graph and build the application state,
     /// returning an error instead of panicking on resolution failure.
-    pub async fn try_build_state<S, Idx, RIdx>(
+    pub async fn try_build_state<S, W>(
         mut self,
     ) -> Result<AppBuilder<S>, crate::beans::BeanError>
     where
-        S: BeanState + BuildableFrom<P, Idx>,
-        R: AllSatisfied<P, RIdx>,
+        S: BeanState,
+        R: TAppend<S::Requires>,
+        <R as TAppend<S::Requires>>::Output: AllSatisfied<P, W>,
     {
         #[cfg(feature = "dev-reload")]
         {
@@ -754,6 +756,38 @@ impl Default for AppBuilder<NoState, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolve the bean graph and build the application state — zero-underscore
+/// façade over [`AppBuilder::build_state`].
+///
+/// [`build_state`](AppBuilder::build_state) carries a single inferred witness
+/// type parameter (`build_state::<S, _>()`). This macro hides it so call sites
+/// read cleanly:
+///
+/// ```ignore
+/// let app = build_state!(builder, Services).await;
+/// // expands to: builder.build_state::<Services, _>().await
+/// ```
+#[macro_export]
+macro_rules! build_state {
+    ($app:expr, $state:ty $(,)?) => {
+        $app.build_state::<$state, _>()
+    };
+}
+
+/// Non-panicking variant of [`build_state!`] — façade over
+/// [`AppBuilder::try_build_state`].
+///
+/// ```ignore
+/// let app = try_build_state!(builder, Services).await?;
+/// // expands to: builder.try_build_state::<Services, _>().await
+/// ```
+#[macro_export]
+macro_rules! try_build_state {
+    ($app:expr, $state:ty $(,)?) => {
+        $app.try_build_state::<$state, _>()
+    };
 }
 
 // ── Typed phase (state resolved) ────────────────────────────────────────────
@@ -1050,7 +1084,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .build_state::<Services, _, _>().await
+    ///     .build_state::<Services, _>().await
     ///     .spawn_service::<MetricsExporter>()
     ///     .serve("0.0.0.0:3000").await
     /// ```
@@ -1159,7 +1193,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .build_state::<Services, _, _>().await
+    ///     .build_state::<Services, _>().await
     ///     .register_subscriber::<NotificationService>()
     ///     .serve("0.0.0.0:3000").await.unwrap();
     /// ```

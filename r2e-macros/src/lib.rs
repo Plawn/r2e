@@ -824,7 +824,7 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 /// AppBuilder::new()
 ///     .provide(config)
 ///     .with_producer::<CreatePool>()   // registers SqlitePool
-///     .build_state::<Services, _, _>()
+///     .build_state::<Services, _>()
 ///     .await
 /// ```
 #[proc_macro_attribute]
@@ -917,8 +917,8 @@ pub fn derive_bean_state(input: TokenStream) -> TokenStream {
 /// Derive macro for test state structs — generates `FromRef` impls for
 /// each field, eliminating boilerplate in test files.
 ///
-/// Unlike [`BeanState`], this does **not** generate `BeanState::from_context()`
-/// or `BuildableFrom` impls — only `FromRef`.
+/// Unlike [`BeanState`], this does **not** generate the `BeanState` impl
+/// (`from_context` / `Requires`) — only `FromRef`.
 ///
 /// Use `#[test_state(skip)]` on a field to suppress its `FromRef` impl.
 ///
@@ -1210,7 +1210,7 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// #[r2e::main]
 /// async fn main() {
 ///     AppBuilder::new()
-///         .build_state::<Services, _, _>().await
+///         .build_state::<Services, _>().await
 ///         .serve("0.0.0.0:8080").await.unwrap();
 /// }
 ///

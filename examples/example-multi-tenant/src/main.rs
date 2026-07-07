@@ -105,7 +105,7 @@ async fn main() {
         .provide(pool)
         .provide(Arc::new(claims_validator))
         .register::<services::ProjectService>()
-        .build_state::<AppState, _, _>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

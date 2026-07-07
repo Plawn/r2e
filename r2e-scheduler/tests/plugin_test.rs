@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_core::builder::TaskRegistryHandle;
-use r2e_core::{AppBuilder, BeanContext, BeanState, BuildableFrom, Contains};
+use r2e_core::{AppBuilder, BeanContext, BeanState, TCons, TNil};
 use r2e_scheduler::{
     extract_tasks, ScheduleConfig, Scheduler, ScheduledTask, ScheduledTaskDef,
 };
@@ -18,14 +18,13 @@ struct TestState {
 }
 
 impl BeanState for TestState {
+    type Requires = TCons<CancellationToken, TNil>;
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             cancel: ctx.get::<CancellationToken>(),
         }
     }
 }
-
-impl<P, I0> BuildableFrom<P, (I0,)> for TestState where P: Contains<CancellationToken, I0> {}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -59,7 +58,7 @@ fn boxed_task(
 async fn scheduler_plugin_provides_token() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     let data = app.get_plugin_data::<TaskRegistryHandle>();
@@ -71,7 +70,7 @@ async fn scheduler_plugin_provides_token() {
 async fn scheduler_plugin_stores_registry() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     let registry = app.get_plugin_data::<TaskRegistryHandle>();
@@ -82,7 +81,7 @@ async fn scheduler_plugin_stores_registry() {
 async fn registry_collects_and_extracts() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     let registry = app
@@ -107,7 +106,7 @@ async fn registry_collects_and_extracts() {
 async fn full_lifecycle_without_serve() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
-        .build_state::<TestState, _, _>()
+        .build_state::<TestState, _>()
         .await;
 
     let registry = app

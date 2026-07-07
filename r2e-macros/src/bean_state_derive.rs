@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use syn::{parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Fields, Ident, Type};
 
 use crate::crate_path::r2e_core_path;
+use crate::type_list_gen::build_tcons_type;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -98,44 +99,30 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let from_ref_impls = generate_from_ref_impls(name, fields, "bean_state");
 
-    // `Option<T>` fields produce a bound on `Option<T>` itself — a producer
-    // must register `Option<T>` for the state to build.
-    let mut buildable_seen = HashSet::new();
-    let mut idx_params = Vec::new();
-    let mut buildable_bounds = Vec::new();
-    let mut idx_counter = 0usize;
+    // The state's requirements list: the chain of unique field types. Folded
+    // into the builder's requirement list and checked via `AllSatisfied` at
+    // `build_state()`. `Option<T>` fields require `Option<T>` itself — a
+    // producer must register `Option<T>` for the state to build.
+    let mut requires_seen = HashSet::new();
+    let mut requires_types: Vec<TokenStream2> = Vec::new();
     for field in fields {
         let field_type = &field.ty;
-        if buildable_seen.insert(type_to_string(field_type)) {
-            let idx_ident = quote::format_ident!("__I{}", idx_counter);
-            idx_counter += 1;
-            idx_params.push(quote! { #idx_ident });
-            buildable_bounds.push(quote! {
-                __P: #krate::type_list::Contains<#field_type, #idx_ident>
-            });
+        if requires_seen.insert(type_to_string(field_type)) {
+            requires_types.push(quote! { #field_type });
         }
     }
-
-    // Bundle index witnesses into a tuple for the Indices parameter.
-    let indices_tuple = if idx_params.is_empty() {
-        quote! { () }
-    } else {
-        quote! { (#(#idx_params,)*) }
-    };
+    let requires_list = build_tcons_type(&requires_types, &krate);
 
     Ok(quote! {
         impl #krate::beans::BeanState for #name {
+            type Requires = #requires_list;
+
             fn from_context(ctx: &#krate::beans::BeanContext) -> Self {
                 Self {
                     #(#field_inits,)*
                 }
             }
         }
-
-        impl<__P, #(#idx_params,)*> #krate::type_list::BuildableFrom<__P, #indices_tuple> for #name
-        where
-            #(#buildable_bounds,)*
-        {}
 
         #(#from_ref_impls)*
     })
