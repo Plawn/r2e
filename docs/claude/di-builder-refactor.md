@@ -1,7 +1,24 @@
 # DI & Builder Refactor — DX + Compile-Time Roadmap
 
-Status: in progress. Tracks a multi-phase refactor of the DI subsystem and
-`AppBuilder`. Each phase ends with a quality-review gate before the next starts.
+Status: **Phase 1 complete** (landed on `refactor/di-builder-dx-ct`); Phase 2 & 3
+pending. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
+phase ends with a quality-review gate before the next starts.
+
+| Phase | Item | Status |
+|---|---|---|
+| 0 | RegMeta foundation | ✅ done |
+| 1a | Unified `.register::<T>()` | ✅ done |
+| 1b | Fused witnesses + `build_state!` | ✅ done |
+| 1c | Guaranteed `state: T` | ✅ done |
+| 1d | `.when()` + collapsed zoo | ✅ done |
+| 1e | Duplicate detection | ✅ decided: runtime |
+| 1f | Controller tuples | ✅ done |
+| 2a | `BuiltApp<T>` struct | ⏳ pending |
+| 2b | Split `builder.rs` | ⏳ pending |
+| 3 | Correctness & cleanup | ⏳ pending |
+
+Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
+46-file docs alignment pass.
 
 ## Motivation
 
@@ -52,7 +69,7 @@ The real compile-time lever is **1d** (close the `with_bean_when` hole) + **1c**
 (`FingerprintReg`) registrations so dedup / alternative resolution / topological
 sort are written once. Committed. `Registrable` and `describe_graph` build on it.
 
-## Phase 1 — Builder DX + compile-time (priority)
+## Phase 1 — Builder DX + compile-time (priority) ✅ COMPLETE
 
 ### 1a — Unified `.register::<T>()`
 - New `Registrable` trait in `beans.rs`: `type Provided; type Deps;
