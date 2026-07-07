@@ -283,7 +283,7 @@ async fn cors_preflight_returns_200() {
 
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
-use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanState, Producer};
+use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, BeanState, Producer, Registrable};
 use r2e_core::type_list::{BuildableFrom, Contains, TNil};
 use std::any::TypeId;
 
@@ -341,6 +341,14 @@ impl Bean for TestService {
     }
 }
 
+impl Registrable for TestService {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
 #[derive(Clone)]
 struct BeanTestState {
     service: TestService,
@@ -363,7 +371,7 @@ where
 #[r2e_core::test]
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
-        .with_bean::<TestService>()
+        .register::<TestService>()
         .build_state::<BeanTestState, _, _>()
         .await
         .with(Health)
@@ -385,6 +393,14 @@ impl AsyncBean for AsyncService {
     }
     fn build(_ctx: &BeanContext) -> impl std::future::Future<Output = Self> + Send + '_ {
         async { AsyncService { label: "async-built".into() } }
+    }
+}
+
+impl Registrable for AsyncService {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register_async::<Self>();
     }
 }
 
@@ -410,7 +426,7 @@ where
 #[r2e_core::test]
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
-        .with_async_bean::<AsyncService>()
+        .register::<AsyncService>()
         .build_state::<AsyncBeanTestState, _, _>()
         .await
         .with(Health)
@@ -438,6 +454,14 @@ impl Producer for TestProducer {
     }
 }
 
+impl Registrable for TestProducer {
+    type Provided = ProducedValue;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register_producer::<Self>();
+    }
+}
+
 #[derive(Clone)]
 struct ProducerTestState {
     value: ProducedValue,
@@ -460,7 +484,7 @@ where
 #[r2e_core::test]
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
-        .with_producer::<TestProducer>()
+        .register::<TestProducer>()
         .build_state::<ProducerTestState, _, _>()
         .await
         .with(Health)

@@ -233,6 +233,32 @@ pub trait BeanState: Clone + Send + Sync + 'static {
     fn from_context(ctx: &BeanContext) -> Self;
 }
 
+/// Unified registration entry point for beans, async beans, and producers.
+///
+/// Implemented automatically by `#[bean]`, `#[derive(Bean)]`, and `#[producer]`
+/// as an inherent per-type impl (never a blanket impl, to avoid overlap). It
+/// lets [`AppBuilder::register`](crate::AppBuilder::register) register any of
+/// the three registration kinds through a single method:
+///
+/// - `#[bean]` (sync) / `#[derive(Bean)]` → `Provided = Self`,
+///   `Deps = <Self as Bean>::Deps`.
+/// - `#[bean]` (async) → `Provided = Self`, `Deps = <Self as AsyncBean>::Deps`.
+/// - `#[producer]` → `Provided = <Self as Producer>::Output`,
+///   `Deps = <Self as Producer>::Deps`.
+pub trait Registrable {
+    /// The type made available in the [`BeanContext`] once registered.
+    ///
+    /// For beans this is `Self`; for producers it is the producer's `Output`.
+    /// Tracked in the builder's compile-time provision list.
+    type Provided: Clone + Send + Sync + 'static;
+
+    /// The type-level list of dependency types required to construct the value.
+    type Deps;
+
+    /// Register this type into the given [`BeanRegistry`].
+    fn register_into(registry: &mut BeanRegistry);
+}
+
 // ── BeanContext ─────────────────────────────────────────────────────────────
 
 /// Read-only container holding all resolved bean instances.
@@ -536,7 +562,7 @@ impl fmt::Display for BeanError {
                 write!(
                     f,
                     "Missing dependency for bean '{}': type '{}' is not registered. \
-                     Use .provide(instance) or .with_bean::<Type>()",
+                     Use .provide(instance) or .register::<Type>()",
                     bean, dependency
                 )
             }

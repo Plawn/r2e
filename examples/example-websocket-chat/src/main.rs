@@ -36,7 +36,7 @@ async fn main() {
         .provide(event_bus)
         .provide(ws_rooms)
         .provide(pool)
-        .with_bean::<services::ChatService>()
+        .register::<services::ChatService>()
         .build_state::<AppState, _, _>()
         .await
         .with(Health)

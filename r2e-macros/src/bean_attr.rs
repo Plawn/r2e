@@ -274,8 +274,26 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
         }
     };
 
+    // Unified registration entry point (see `Registrable` in r2e-core).
+    let register_call = if is_async {
+        quote! { registry.register_async::<Self>(); }
+    } else {
+        quote! { registry.register::<Self>(); }
+    };
+    let registrable_impl = quote! {
+        impl #krate::beans::Registrable for #self_ty {
+            type Provided = Self;
+            type Deps = #deps_type;
+
+            fn register_into(registry: &mut #krate::beans::BeanRegistry) {
+                #register_call
+            }
+        }
+    };
+
     Ok(quote! {
         #bean_impl
+        #registrable_impl
         #post_construct_impl
         #subscriber_impl
     })

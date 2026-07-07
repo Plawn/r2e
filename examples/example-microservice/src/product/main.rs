@@ -22,7 +22,7 @@ async fn main() {
 
     AppBuilder::new()
         .with_config(config)
-        .with_bean::<services::ProductService>()
+        .register::<services::ProductService>()
         .build_state::<ProductState, _, _>()
         .await
         .with(Health)

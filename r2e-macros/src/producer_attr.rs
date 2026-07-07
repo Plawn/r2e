@@ -272,5 +272,14 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 #produce_expr
             }
         }
+
+        impl #krate::beans::Registrable for #struct_ident {
+            type Provided = #effective_output_ty;
+            type Deps = #deps_type;
+
+            fn register_into(registry: &mut #krate::beans::BeanRegistry) {
+                registry.register_producer::<Self>();
+            }
+        }
     })
 }

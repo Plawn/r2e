@@ -136,7 +136,7 @@ async fn main(env: AppEnv) {
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(env.sse_broadcaster)
         .provide(env.notification_service)
-        .with_bean::<UserService>()
+        .register::<UserService>()
         .build_state::<Services, _, _>()
         .await
         .with(Health)

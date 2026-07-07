@@ -120,7 +120,7 @@ pub struct There<T>(PhantomData<fn() -> T>);
 /// ```
 #[diagnostic::on_unimplemented(
     message = "type `{H}` was not provided to the AppBuilder",
-    label = "missing `.provide::<{H}>()` or `.with_bean::<{H}>()`",
+    label = "missing `.provide::<{H}>()` or `.register::<{H}>()`",
     note = "every field type in the BeanState struct must be provided or registered as a bean before calling `build_state()`"
 )]
 pub trait Contains<H, Idx> {}
@@ -165,7 +165,7 @@ impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {
 /// time that both `UserService` and `Pool` have been provided.
 #[diagnostic::on_unimplemented(
     message = "cannot build state `{Self}` from the current provisions",
-    note = "one or more field types are missing — add `.provide(value)` or `.with_bean::<Type>()` calls before `.build_state()`"
+    note = "one or more field types are missing — add `.provide(value)` or `.register::<Type>()` calls before `.build_state()`"
 )]
 pub trait BuildableFrom<P, Indices> {}
 
@@ -206,7 +206,7 @@ where
 /// `Indices` is an opaque witness tuple inferred by the compiler.
 #[diagnostic::on_unimplemented(
     message = "one or more bean dependencies are missing from the AppBuilder",
-    note = "a registered bean has a dependency that was not provided — add `.provide(value)` or `.with_bean::<Type>()` for the missing type"
+    note = "a registered bean has a dependency that was not provided — add `.provide(value)` or `.register::<Type>()` for the missing type"
 )]
 pub trait AllSatisfied<P, Indices> {}
 

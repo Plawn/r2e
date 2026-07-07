@@ -23,8 +23,8 @@ async fn main() {
 
     AppBuilder::new()
         .with_config(config)
-        .with_producer::<CreatePool>()
-        .with_bean::<services::ArticleService>()
+        .register::<CreatePool>()
+        .register::<services::ArticleService>()
         .build_state::<AppState, _, _>()
         .await
         .with(Health)

@@ -104,7 +104,7 @@ async fn main() {
         .with_config(config)
         .provide(pool)
         .provide(Arc::new(claims_validator))
-        .with_bean::<services::ProjectService>()
+        .register::<services::ProjectService>()
         .build_state::<AppState, _, _>()
         .await
         .with(Health)

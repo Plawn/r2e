@@ -1,4 +1,4 @@
-use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer};
+use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer, Registrable};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
@@ -202,40 +202,26 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self.with_updated_types()
     }
 
-    /// Register a (sync) bean type for automatic construction.
+    /// Register a bean, async bean, or producer for automatic construction.
     ///
-    /// The bean's dependencies will be resolved from other beans and
-    /// provided instances when [`build_state`](Self::build_state) is called.
-    pub fn with_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
-    where
-        R: TAppend<B::Deps>,
-    {
-        self.shared.bean_registry.register::<B>();
-        self.with_updated_types()
-    }
-
-    /// Register an async bean type for automatic construction.
+    /// Unified entry point over the three registration kinds. The type must
+    /// implement [`Registrable`], which is emitted automatically by `#[bean]`,
+    /// `#[derive(Bean)]`, and `#[producer]`:
     ///
-    /// The bean's async constructor will be awaited during
-    /// [`build_state`](Self::build_state).
-    pub fn with_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
-    where
-        R: TAppend<B::Deps>,
-    {
-        self.shared.bean_registry.register_async::<B>();
-        self.with_updated_types()
-    }
-
-    /// Register a producer for automatic construction of its output type.
+    /// - `#[bean]` (sync) / `#[derive(Bean)]` register a sync bean.
+    /// - `#[bean]` (async) registers an async bean, awaited during
+    ///   [`build_state`](Self::build_state).
+    /// - `#[producer]` registers the producer's output type (not the producer
+    ///   struct) in the provision list.
     ///
-    /// The producer creates an instance of `Pr::Output` during
-    /// [`build_state`](Self::build_state). The output type (not the producer
-    /// struct) is tracked in the provision list.
-    pub fn with_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>, <R as TAppend<Pr::Deps>>::Output>
+    /// The provided type (`T::Provided`) is tracked in the compile-time
+    /// provision list and its dependencies (`T::Deps`) are appended to the
+    /// requirement list.
+    pub fn register<T: Registrable>(mut self) -> AppBuilder<NoState, TCons<T::Provided, P>, <R as TAppend<T::Deps>>::Output>
     where
-        R: TAppend<Pr::Deps>,
+        R: TAppend<T::Deps>,
     {
-        self.shared.bean_registry.register_producer::<Pr>();
+        T::register_into(&mut self.shared.bean_registry);
         self.with_updated_types()
     }
 

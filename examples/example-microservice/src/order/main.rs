@@ -22,8 +22,8 @@ async fn main() {
 
     AppBuilder::new()
         .with_config(config)
-        .with_bean::<services::ProductClient>()
-        .with_bean::<services::OrderService>()
+        .register::<services::ProductClient>()
+        .register::<services::OrderService>()
         .build_state::<OrderState, _, _>()
         .await
         .with(Health)
