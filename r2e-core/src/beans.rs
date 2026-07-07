@@ -447,6 +447,66 @@ struct BeanRegistration {
     overridable: bool,
 }
 
+/// Read-only view shared by eager ([`BeanRegistration`]) and lazy
+/// ([`LazyBeanRegistration`]) registrations so that deduplication, alternative
+/// resolution, and topological sorting are written once instead of being
+/// duplicated per registration kind.
+trait RegMeta {
+    fn reg_type_id(&self) -> TypeId;
+    fn reg_type_name(&self) -> &'static str;
+    fn reg_dependencies(&self) -> &[(TypeId, &'static str)];
+    /// Whether a later registration of the same `TypeId` may supersede this
+    /// one. Sorting-only views (e.g. fingerprint snapshots) return `false`.
+    fn reg_overridable(&self) -> bool;
+}
+
+impl RegMeta for BeanRegistration {
+    fn reg_type_id(&self) -> TypeId {
+        self.type_id
+    }
+    fn reg_type_name(&self) -> &'static str {
+        self.type_name
+    }
+    fn reg_dependencies(&self) -> &[(TypeId, &'static str)] {
+        &self.dependencies
+    }
+    fn reg_overridable(&self) -> bool {
+        self.overridable
+    }
+}
+
+impl RegMeta for LazyBeanRegistration {
+    fn reg_type_id(&self) -> TypeId {
+        self.type_id
+    }
+    fn reg_type_name(&self) -> &'static str {
+        self.type_name
+    }
+    fn reg_dependencies(&self) -> &[(TypeId, &'static str)] {
+        &self.dependencies
+    }
+    fn reg_overridable(&self) -> bool {
+        self.overridable
+    }
+}
+
+#[cfg(feature = "dev-reload")]
+impl RegMeta for FingerprintReg<'_> {
+    fn reg_type_id(&self) -> TypeId {
+        self.type_id
+    }
+    fn reg_type_name(&self) -> &'static str {
+        self.type_name
+    }
+    fn reg_dependencies(&self) -> &[(TypeId, &'static str)] {
+        self.dependencies.as_slice()
+    }
+    // Fingerprint snapshots are built after dedup; ordering never consults this.
+    fn reg_overridable(&self) -> bool {
+        false
+    }
+}
+
 /// Errors that can occur during bean graph resolution.
 #[derive(Debug)]
 pub enum BeanError {
@@ -750,7 +810,7 @@ impl BeanRegistry {
         // Work on a snapshot of bean metadata to handle deduplication
         // without mutating self (resolve() will do the real dedup later).
         let alt_remove = Self::overridable_indices_to_remove(&self.beans);
-        let lazy_alt_remove = Self::overridable_lazy_indices_to_remove(&self.lazy_beans);
+        let lazy_alt_remove = Self::overridable_indices_to_remove(&self.lazy_beans);
 
         let mut beans: Vec<FingerprintReg<'_>> = if self.allow_overrides {
             // Deduplicate: keep only the last registration per TypeId
@@ -823,52 +883,8 @@ impl BeanRegistry {
             return Ok((0, Vec::new()));
         }
 
-        // Build type index for the (possibly deduplicated) bean list
-        let id_to_idx: HashMap<TypeId, usize> = beans
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.type_id, i))
-            .collect();
-
-        // Topological sort (checks for cycles)
-        let in_degree: Vec<usize> = beans
-            .iter()
-            .map(|reg| {
-                reg.dependencies
-                    .iter()
-                    .filter(|(d, _)| id_to_idx.contains_key(d))
-                    .count()
-            })
-            .collect();
-        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
-        for (i, reg) in beans.iter().enumerate() {
-            for (dep_id, _) in reg.dependencies {
-                if let Some(&dep_idx) = id_to_idx.get(dep_id) {
-                    dependents[dep_idx].push(i);
-                }
-            }
-        }
-        let mut in_degree = in_degree;
-        let mut queue: Vec<usize> = (0..bean_count)
-            .filter(|&i| in_degree[i] == 0)
-            .collect();
-        let mut sorted_order: Vec<usize> = Vec::with_capacity(bean_count);
-        while let Some(idx) = queue.pop() {
-            sorted_order.push(idx);
-            for &dep_idx in &dependents[idx] {
-                in_degree[dep_idx] -= 1;
-                if in_degree[dep_idx] == 0 {
-                    queue.push(dep_idx);
-                }
-            }
-        }
-        if sorted_order.len() != bean_count {
-            let cycle: Vec<String> = (0..bean_count)
-                .filter(|i| in_degree[*i] > 0)
-                .map(|i| beans[i].type_name.to_string())
-                .collect();
-            return Err(BeanError::CyclicDependency { cycle });
-        }
+        // Topological sort (shared generic with resolve(); detects cycles).
+        let sorted_order = Self::topological_sort(&beans)?;
 
         // Compute fingerprints — we need config for this
         let config = self.provided
@@ -907,12 +923,12 @@ impl BeanRegistry {
         // Resolve default/alternative beans: remove overridable registrations
         // that have been superseded by a later registration of the same TypeId.
         Self::resolve_alternatives(&mut self.beans);
-        Self::resolve_lazy_alternatives(&mut self.lazy_beans);
+        Self::resolve_alternatives(&mut self.lazy_beans);
 
         // When overrides are allowed, deduplicate beans (last registration wins).
         if self.allow_overrides {
-            Self::deduplicate_beans(&mut self.beans, &mut entries);
-            Self::deduplicate_lazy_beans(&mut self.lazy_beans, &mut entries);
+            Self::deduplicate_regs(&mut self.beans, &mut entries);
+            Self::deduplicate_regs(&mut self.lazy_beans, &mut entries);
         }
 
         let bean_count = self.beans.len();
@@ -945,8 +961,8 @@ impl BeanRegistry {
             // Validate config keys before construction
             Self::validate_config_keys(&self.beans, &entries)?;
 
-            // Topological sort
-            let sorted_order = Self::topological_sort(&self.beans, &id_to_idx, bean_count)?;
+            // Topological sort (shared generic; builds its own type index).
+            let sorted_order = Self::topological_sort(&self.beans)?;
 
             // Extract post-construct fns before consuming beans
             let pc_fns: Vec<Option<PostConstructFn>> = sorted_order
@@ -1046,47 +1062,18 @@ impl BeanRegistry {
 
     /// Compute the set of indices whose registrations are overridable and
     /// have been superseded by a later registration of the same `TypeId`.
-    fn overridable_indices_to_remove(beans: &[BeanRegistration]) -> HashSet<usize> {
-        if !beans.iter().any(|r| r.overridable) {
+    /// Works uniformly for eager and lazy registrations via [`RegMeta`].
+    fn overridable_indices_to_remove<R: RegMeta>(regs: &[R]) -> HashSet<usize> {
+        if !regs.iter().any(|r| r.reg_overridable()) {
             return HashSet::new();
         }
 
         let mut type_indices: HashMap<TypeId, Vec<(usize, bool)>> = HashMap::new();
-        for (i, reg) in beans.iter().enumerate() {
+        for (i, reg) in regs.iter().enumerate() {
             type_indices
-                .entry(reg.type_id)
+                .entry(reg.reg_type_id())
                 .or_default()
-                .push((i, reg.overridable));
-        }
-
-        let mut remove = HashSet::new();
-        for indices in type_indices.values() {
-            if indices.len() <= 1 {
-                continue;
-            }
-            let last_idx = indices.last().unwrap().0;
-            for &(idx, overridable) in indices {
-                if idx != last_idx && overridable {
-                    remove.insert(idx);
-                }
-            }
-        }
-        remove
-    }
-
-    /// Compute the set of indices whose lazy registrations are overridable and
-    /// have been superseded by a later registration of the same `TypeId`.
-    fn overridable_lazy_indices_to_remove(lazy_beans: &[LazyBeanRegistration]) -> HashSet<usize> {
-        if !lazy_beans.iter().any(|r| r.overridable) {
-            return HashSet::new();
-        }
-
-        let mut type_indices: HashMap<TypeId, Vec<(usize, bool)>> = HashMap::new();
-        for (i, reg) in lazy_beans.iter().enumerate() {
-            type_indices
-                .entry(reg.type_id)
-                .or_default()
-                .push((i, reg.overridable));
+                .push((i, reg.reg_overridable()));
         }
 
         let mut remove = HashSet::new();
@@ -1109,11 +1096,12 @@ impl BeanRegistry {
     ///
     /// This runs before the global deduplication / duplicate-check so that
     /// the default/alternative pattern works regardless of `allow_overrides`.
-    fn resolve_alternatives(beans: &mut Vec<BeanRegistration>) {
-        let remove = Self::overridable_indices_to_remove(beans);
+    /// Works uniformly for eager and lazy registrations via [`RegMeta`].
+    fn resolve_alternatives<R: RegMeta>(regs: &mut Vec<R>) {
+        let remove = Self::overridable_indices_to_remove(regs);
         if !remove.is_empty() {
             let mut idx = 0;
-            beans.retain(|_| {
+            regs.retain(|_| {
                 let keep = !remove.contains(&idx);
                 idx += 1;
                 keep
@@ -1121,66 +1109,28 @@ impl BeanRegistry {
         }
     }
 
-    /// Remove overridable (default) lazy registrations that have been superseded
-    /// by a later (alternative) registration of the same `TypeId`.
-    fn resolve_lazy_alternatives(lazy_beans: &mut Vec<LazyBeanRegistration>) {
-        let remove = Self::overridable_lazy_indices_to_remove(lazy_beans);
-        if !remove.is_empty() {
-            let mut idx = 0;
-            lazy_beans.retain(|_| {
-                let keep = !remove.contains(&idx);
-                idx += 1;
-                keep
-            });
-        }
-    }
-
-    /// Deduplicate beans when overrides are enabled: last registration wins.
-    /// Also removes beans whose type_id already exists in provided entries.
-    fn deduplicate_beans(
-        beans: &mut Vec<BeanRegistration>,
+    /// Deduplicate registrations when overrides are enabled: last registration
+    /// wins. Also removes provided entries whose `TypeId` matches a surviving
+    /// registration (the registration's factory is constructed instead).
+    /// Works uniformly for eager and lazy registrations via [`RegMeta`].
+    fn deduplicate_regs<R: RegMeta>(
+        regs: &mut Vec<R>,
         entries: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     ) {
-        // Remove beans that conflict with provided instances (provided wins by default,
-        // but with overrides a later bean should win over an earlier provide).
-        // Strategy: iterate in order; for each type_id, keep the last occurrence.
+        // Iterate in order; for each type_id keep the last occurrence.
         let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
-        for (i, reg) in beans.iter().enumerate() {
-            last_seen.insert(reg.type_id, i);
+        for (i, reg) in regs.iter().enumerate() {
+            last_seen.insert(reg.reg_type_id(), i);
         }
-        let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
+        let keep: HashSet<usize> = last_seen.values().copied().collect();
         let mut idx = 0;
-        beans.retain(|_| {
+        regs.retain(|_| {
             let kept = keep.contains(&idx);
             idx += 1;
             kept
         });
-        // If a bean type also exists in provided, remove the provided entry
-        // (the bean factory will be constructed instead).
-        for reg in beans.iter() {
-            entries.remove(&reg.type_id);
-        }
-    }
-
-    /// Deduplicate lazy beans when overrides are enabled: last registration wins.
-    /// Also removes provided instances with the same type_id (lazy bean wins).
-    fn deduplicate_lazy_beans(
-        lazy_beans: &mut Vec<LazyBeanRegistration>,
-        entries: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    ) {
-        let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
-        for (i, reg) in lazy_beans.iter().enumerate() {
-            last_seen.insert(reg.type_id, i);
-        }
-        let keep: std::collections::HashSet<usize> = last_seen.values().copied().collect();
-        let mut idx = 0;
-        lazy_beans.retain(|_| {
-            let kept = keep.contains(&idx);
-            idx += 1;
-            kept
-        });
-        for reg in lazy_beans.iter() {
-            entries.remove(&reg.type_id);
+        for reg in regs.iter() {
+            entries.remove(&reg.reg_type_id());
         }
     }
 
@@ -1282,39 +1232,45 @@ impl BeanRegistry {
         Self::do_validate_config_keys(&all_keys, config)
     }
 
-    /// Perform topological sort using Kahn's algorithm.
-    fn topological_sort(
-        beans: &[BeanRegistration],
-        id_to_idx: &HashMap<TypeId, usize>,
-        bean_count: usize,
-    ) -> Result<Vec<usize>, BeanError> {
-        // in_degree = number of deps that are other beans (not provided).
-        let mut in_degree: Vec<usize> = beans
+    /// Perform a topological sort (Kahn's algorithm) over any slice of
+    /// registrations. Returns construction order, or a [`BeanError::CyclicDependency`]
+    /// listing the nodes left in a cycle. Dependencies pointing outside the
+    /// slice (provided instances) are ignored for ordering.
+    ///
+    /// Shared by [`resolve`](Self::resolve) and (under `dev-reload`)
+    /// [`compute_fingerprint`](Self::compute_fingerprint) so both stay in lockstep.
+    fn topological_sort<R: RegMeta>(nodes: &[R]) -> Result<Vec<usize>, BeanError> {
+        let n = nodes.len();
+        let id_to_idx: HashMap<TypeId, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.reg_type_id(), i))
+            .collect();
+
+        // in_degree = number of deps that are other nodes (not provided).
+        let mut in_degree: Vec<usize> = nodes
             .iter()
             .map(|reg| {
-                reg.dependencies
+                reg.reg_dependencies()
                     .iter()
                     .filter(|(d, _)| id_to_idx.contains_key(d))
                     .count()
             })
             .collect();
 
-        // Dependents: for each bean index, which other bean indices depend on it.
-        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); bean_count];
-        for (i, reg) in beans.iter().enumerate() {
-            for (dep_id, _) in &reg.dependencies {
+        // Dependents: for each node index, which other node indices depend on it.
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, reg) in nodes.iter().enumerate() {
+            for (dep_id, _) in reg.reg_dependencies() {
                 if let Some(&dep_idx) = id_to_idx.get(dep_id) {
                     dependents[dep_idx].push(i);
                 }
             }
         }
 
-        // Seed queue with beans whose deps are all already provided.
-        let mut queue: Vec<usize> = (0..bean_count)
-            .filter(|&i| in_degree[i] == 0)
-            .collect();
-
-        let mut sorted_order: Vec<usize> = Vec::with_capacity(bean_count);
+        // Seed queue with nodes whose deps are all already provided.
+        let mut queue: Vec<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+        let mut sorted_order: Vec<usize> = Vec::with_capacity(n);
 
         while let Some(idx) = queue.pop() {
             sorted_order.push(idx);
@@ -1326,11 +1282,11 @@ impl BeanRegistry {
             }
         }
 
-        // If not all beans were sorted, there's a cycle.
-        if sorted_order.len() != bean_count {
-            let cycle: Vec<String> = (0..bean_count)
+        // If not all nodes were sorted, there's a cycle.
+        if sorted_order.len() != n {
+            let cycle: Vec<String> = (0..n)
                 .filter(|i| in_degree[*i] > 0)
-                .map(|i| beans[i].type_name.to_string())
+                .map(|i| nodes[i].reg_type_name().to_string())
                 .collect();
             return Err(BeanError::CyclicDependency { cycle });
         }
