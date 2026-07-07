@@ -222,6 +222,11 @@ context), `bean_state_derive.rs` (role change), `r2e-security` extractor
 
 (A3 feasibility is **resolved** — see the spike result above.)
 
+**DECIDED (user, 2026-07-07): when A3 lands, the hand-written typed state path
+(`Services` struct + `#[derive(BeanState)]` + typed-struct `build_state`) is
+REMOVED ENTIRELY — HList state becomes the single state model. No optional
+legacy path; migrate all call sites (example-app, tests, docs) in Phase 4.**
+
 1. How `build_state!` reshapes without a user state struct (state type inferred
    from `P`; likely a generated HList marker).
 2. Threading controller inject-deps into `R` for compile-time missing-dep detection.
