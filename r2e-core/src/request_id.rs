@@ -52,18 +52,13 @@ impl std::fmt::Display for RequestId {
 impl<S: Send + Sync> FromRequestParts<S> for RequestId {
     type Rejection = std::convert::Infallible;
 
-    fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
-        async move {
-            let id = parts
-                .extensions
-                .get::<RequestId>()
-                .cloned()
-                .unwrap_or_else(|| RequestId(uuid::Uuid::new_v4().to_string()));
-            Ok(id)
-        }
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let id = parts
+            .extensions
+            .get::<RequestId>()
+            .cloned()
+            .unwrap_or_else(|| RequestId(uuid::Uuid::new_v4().to_string()));
+        Ok(id)
     }
 }
 

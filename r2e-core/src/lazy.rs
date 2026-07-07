@@ -5,6 +5,9 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
 
+/// Boxed async factory for a lazy bean, held until first access.
+type LazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
+
 thread_local! {
     /// Stack of lazy-bean `(TypeId, type_name)` pairs currently being resolved
     /// on this thread. Used to detect circular lazy dependencies and turn the
@@ -74,9 +77,7 @@ pub(crate) trait LazyResolve: Send + Sync {
 /// current-thread runtime).
 pub(crate) struct LazySlot<T: Clone + Send + Sync + 'static> {
     cell: OnceLock<T>,
-    factory: std::sync::Mutex<
-        Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>>,
-    >,
+    factory: std::sync::Mutex<Option<LazyFactory<T>>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> LazySlot<T> {
@@ -114,9 +115,7 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
     }
 }
 
-fn resolve_lazy_factory<T>(
-    factory: Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>,
-) -> T
+fn resolve_lazy_factory<T>(factory: LazyFactory<T>) -> T
 where
     T: Send + 'static,
 {
@@ -219,7 +218,7 @@ where
 /// visibility hacks. Not part of the public API.
 #[doc(hidden)]
 pub fn __resolve_lazy_factory_for_tests<T>(
-    factory: Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>,
+    factory: LazyFactory<T>,
 ) -> T
 where
     T: Send + 'static,
@@ -272,9 +271,7 @@ struct LazyInner<T: Clone + Send + Sync + 'static> {
     /// Holds the factory until first access. Uses `std::sync::Mutex` (not
     /// tokio) because the critical section is just `Option::take()` — no
     /// `.await` while holding the lock.
-    factory: std::sync::Mutex<
-        Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>>,
-    >,
+    factory: std::sync::Mutex<Option<LazyFactory<T>>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> Lazy<T> {

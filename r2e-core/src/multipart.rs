@@ -159,29 +159,24 @@ impl MultipartFields {
             let content_type = field.content_type().map(|s| s.to_string());
 
             let mut buf = BytesMut::new();
-            loop {
-                match field
-                    .chunk()
-                    .await
-                    .map_err(|e| MultipartError::ReadError(e.to_string()))?
-                {
-                    Some(chunk) => {
-                        if buf.len().saturating_add(chunk.len()) > limits.per_field {
-                            return Err(MultipartError::FieldTooLarge {
-                                field: name,
-                                limit: limits.per_field,
-                            });
-                        }
-                        if total_bytes.saturating_add(chunk.len()) > limits.total {
-                            return Err(MultipartError::PayloadTooLarge {
-                                limit: limits.total,
-                            });
-                        }
-                        total_bytes += chunk.len();
-                        buf.extend_from_slice(&chunk);
-                    }
-                    None => break,
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|e| MultipartError::ReadError(e.to_string()))?
+            {
+                if buf.len().saturating_add(chunk.len()) > limits.per_field {
+                    return Err(MultipartError::FieldTooLarge {
+                        field: name,
+                        limit: limits.per_field,
+                    });
                 }
+                if total_bytes.saturating_add(chunk.len()) > limits.total {
+                    return Err(MultipartError::PayloadTooLarge {
+                        limit: limits.total,
+                    });
+                }
+                total_bytes += chunk.len();
+                buf.extend_from_slice(&chunk);
             }
             let data = buf.freeze();
 

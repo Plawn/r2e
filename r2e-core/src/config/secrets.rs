@@ -48,10 +48,7 @@ pub fn resolve_placeholders(
             .ok_or_else(|| ConfigError::Load(format!("Unclosed placeholder in: {}", value)))?;
         let reference = &result[start + 2..start + end];
 
-        let resolved = match resolve_with_default(reference, resolver) {
-            Ok(val) => val,
-            Err(e) => return Err(e),
-        };
+        let resolved = resolve_with_default(reference, resolver)?;
 
         result = format!("{}{}{}", &result[..start], resolved, &result[start + end + 1..]);
     }

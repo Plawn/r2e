@@ -99,7 +99,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// The provided type (`T::Provided`) is tracked in the compile-time
     /// provision list and its dependencies (`T::Deps`) are appended to the
     /// requirement list.
-    pub fn register<T: Registrable>(mut self) -> AppBuilder<NoState, TCons<T::Provided, P>, <R as TAppend<T::Deps>>::Output>
+    pub fn register<T: Registrable>(mut self) -> Registered<T::Provided, T::Deps, P, R>
     where
         R: TAppend<T::Deps>,
     {
@@ -164,7 +164,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// The bean IS added to the provision list (guaranteed to be present). A
     /// later [`register`](Self::register) of the same type silently replaces
     /// this registration (last-wins), without changing the provision list.
-    pub fn with_default_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    pub fn with_default_bean<B: Bean>(mut self) -> Registered<B, B::Deps, P, R>
     where
         R: TAppend<B::Deps>,
     {
@@ -175,7 +175,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Register a default async bean that can be overridden by alternatives.
     ///
     /// The bean IS added to the provision list (guaranteed to be present).
-    pub fn with_default_async_bean<B: AsyncBean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
+    pub fn with_default_async_bean<B: AsyncBean>(mut self) -> Registered<B, B::Deps, P, R>
     where
         R: TAppend<B::Deps>,
     {
@@ -186,7 +186,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Register a default producer that can be overridden by alternatives.
     ///
     /// The producer's output IS added to the provision list (guaranteed to be present).
-    pub fn with_default_producer<Pr: Producer>(mut self) -> AppBuilder<NoState, TCons<Pr::Output, P>, <R as TAppend<Pr::Deps>>::Output>
+    pub fn with_default_producer<Pr: Producer>(mut self) -> Registered<Pr::Output, Pr::Deps, P, R>
     where
         R: TAppend<Pr::Deps>,
     {
@@ -211,7 +211,10 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///     })
     ///     .build_state::<Services, _>().await
     /// ```
-    pub fn with_bean_factory<B, F>(mut self, factory: F) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<TCons<crate::config::R2eConfig, TNil>>>::Output>
+    pub fn with_bean_factory<B, F>(
+        mut self,
+        factory: F,
+    ) -> Registered<B, TCons<crate::config::R2eConfig, TNil>, P, R>
     where
         B: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> B + Send + 'static,
@@ -272,7 +275,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```
     pub fn load_config<C: crate::config::LoadableConfig>(
         mut self,
-    ) -> AppBuilder<NoState, TCons<C, TCons<crate::config::R2eConfig, <C::Children as TAppend<P>>::Output>>, R>
+    ) -> WithLoadedConfig<C, P, R>
     where
         C::Children: TAppend<P>,
     {
@@ -335,7 +338,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
-    ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
+    ) -> WithPluginInstalled<Pl, P, R>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
@@ -353,7 +356,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn with_plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
-    ) -> AppBuilder<NoState, <P as TAppend<Pl::Provisions>>::Output, <R as TAppend<Pl::Required>>::Output>
+    ) -> WithPluginInstalled<Pl, P, R>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
@@ -430,7 +433,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     {
         #[cfg(feature = "dev-reload")]
         {
-            let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
+            let registry = std::mem::take(&mut self.shared.bean_registry);
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
@@ -480,12 +483,12 @@ impl<P, R> AppBuilder<NoState, P, R> {
             crate::dev::cache_state(&state);
             crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
-            return Ok(AppBuilder::<S>::from_pre(self.shared, state));
+            Ok(AppBuilder::<S>::from_pre(self.shared, state))
         }
 
         #[cfg(not(feature = "dev-reload"))]
         {
-            let registry = std::mem::replace(&mut self.shared.bean_registry, BeanRegistry::new());
+            let registry = std::mem::take(&mut self.shared.bean_registry);
             let ctx = registry.resolve().await?;
             let state = S::from_context(&ctx);
 

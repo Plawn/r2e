@@ -222,10 +222,7 @@ pub(crate) fn get_cached_graph_fingerprint() -> Option<u64> {
 
 /// Store the current graph fingerprint and per-bean fingerprints.
 #[cfg(feature = "dev-reload")]
-pub(crate) fn cache_graph_fingerprint(
-    fp: u64,
-    per_bean: Vec<(std::any::TypeId, &'static str, u64)>,
-) {
+pub(crate) fn cache_graph_fingerprint(fp: u64, per_bean: crate::beans::BeanFingerprints) {
     let store = GRAPH_FINGERPRINT.get_or_init(|| Mutex::new(None));
     let mut guard = store.lock().expect("graph fingerprint cache poisoned");
     *guard = Some(fp);

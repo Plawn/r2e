@@ -255,7 +255,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // In dev-reload mode, the endpoint is cached so the UDP socket
         // survives across hot-patches without port conflicts.
         #[cfg(feature = "quic")]
-        let quic_handle = self.quic_server_config.take().map(|(addr, server_config)| {
+        let quic_handle = self.quic_server_config.take().and_then(|(addr, server_config)| {
             let router = self.router.clone();
             let token = cancel_token.clone();
 
@@ -291,7 +291,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     None
                 }
             }
-        }).flatten();
+        });
 
         let cancel_for_shutdown = cancel_token.clone();
         let shutdown_future = async move {

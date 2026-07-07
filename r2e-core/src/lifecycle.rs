@@ -9,6 +9,13 @@ pub type StartupHook<T> =
 pub type ShutdownHook<T> =
     Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
+/// Boxed future returned by fallible lifecycle methods
+/// ([`LifecycleController::on_start`],
+/// [`PostConstruct::post_construct`](crate::beans::PostConstruct::post_construct)).
+pub type LifecycleFuture<'a> = Pin<
+    Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
+>;
+
 /// Trait for controllers that define lifecycle methods.
 ///
 /// Controllers implementing this trait can provide startup and shutdown
@@ -37,9 +44,7 @@ pub trait LifecycleController<T: Clone + Send + Sync + 'static> {
     /// Called once before the server starts listening.
     ///
     /// Default implementation does nothing.
-    fn on_start(
-        _state: &T,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>> {
+    fn on_start(_state: &T) -> LifecycleFuture<'_> {
         Box::pin(async { Ok(()) })
     }
 

@@ -213,10 +213,13 @@ pub trait Producer: Send + 'static {
 ///
 /// Implement this trait (typically via `#[post_construct]` on a `#[bean]`
 /// method) to run initialization logic that requires the fully assembled bean.
+/// Per-bean fingerprint entries — `(type id, type name, fingerprint)` — used
+/// by the dev-reload graph cache to log which beans changed.
+#[cfg(feature = "dev-reload")]
+pub type BeanFingerprints = Vec<(TypeId, &'static str, u64)>;
+
 pub trait PostConstruct: Clone + Send + Sync + 'static {
-    fn post_construct(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>>;
+    fn post_construct(&self) -> crate::lifecycle::LifecycleFuture<'_>;
 }
 
 /// Trait for state structs that can be assembled from a [`BeanContext`].
@@ -852,7 +855,7 @@ impl BeanRegistry {
     ///
     /// Returns `(graph_fingerprint, per_bean_fingerprints)`.
     #[cfg(feature = "dev-reload")]
-    pub fn compute_fingerprint(&self) -> Result<(u64, Vec<(TypeId, &'static str, u64)>), BeanError> {
+    pub fn compute_fingerprint(&self) -> Result<(u64, BeanFingerprints), BeanError> {
         // Work on a snapshot of bean metadata to handle deduplication
         // without mutating self (resolve() will do the real dedup later).
         let alt_remove = Self::overridable_indices_to_remove(&self.beans);
@@ -938,7 +941,7 @@ impl BeanRegistry {
             .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
 
         let mut dep_fingerprints: HashMap<TypeId, u64> = HashMap::new();
-        let mut per_bean: Vec<(TypeId, &'static str, u64)> = Vec::new();
+        let mut per_bean: BeanFingerprints = Vec::new();
         let mut graph_hasher = std::collections::hash_map::DefaultHasher::new();
 
 

@@ -30,6 +30,36 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+/// Builder returned by the NoState registration methods
+/// ([`register`](AppBuilder::register), [`with_default_bean`](AppBuilder::with_default_bean), …):
+/// `Provided` is pushed onto the provision list `P` and `Deps` is appended to
+/// the requirement list `R`.
+pub type Registered<Provided, Deps, P, R> =
+    AppBuilder<NoState, TCons<Provided, P>, <R as TAppend<Deps>>::Output>;
+
+/// Builder returned by [`load_config`](AppBuilder::load_config): pushes the
+/// typed config `C`, the raw [`R2eConfig`](crate::config::R2eConfig), and
+/// `C`'s nested section types (`C::Children`) onto the provision list.
+pub type WithLoadedConfig<C, P, R> = AppBuilder<
+    NoState,
+    TCons<
+        C,
+        TCons<
+            crate::config::R2eConfig,
+            <<C as crate::config::LoadableConfig>::Children as TAppend<P>>::Output,
+        >,
+    >,
+    R,
+>;
+
+/// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
+/// `Provisions` and `Required` lists are appended to `P` and `R`.
+pub type WithPluginInstalled<Pl, P, R> = AppBuilder<
+    NoState,
+    <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
+    <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
+>;
+
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 

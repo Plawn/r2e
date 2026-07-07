@@ -291,7 +291,7 @@ pub trait RawPreStatePlugin: Send + 'static {
     fn install<P, R>(
         self,
         app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    ) -> crate::builder::WithPluginInstalled<Self, P, R>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>;
@@ -305,7 +305,7 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
     fn install<P, R>(
         self,
         app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    ) -> crate::builder::WithPluginInstalled<Self, P, R>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
