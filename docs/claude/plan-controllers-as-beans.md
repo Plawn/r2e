@@ -108,11 +108,62 @@ supply app deps to these extractors. Two options:
   3. **Compile-time ergonomics.** Deep `TCons` chains (large apps) → big types in
      errors and longer compile times (the frunk-style Achilles heel). Measure.
 
-**Recommendation:** target **A3** — it's the only option that keeps both
-per-request perf (monomorphized indexed access) and clean DX (no hand-written
-struct), and it unifies the runtime state with the `P` list Phase 1 already
-tracks. Keep **A1** (context-as-state) and **A2** (typed struct) as fallbacks if
-the spike surfaces a blocker (trait coherence or HList compile-time cost).
+**Recommendation:** target **A3**. A Fable spike (below) **validated it on stable
+Rust** — provably struct-speed access with no hand-written struct and
+compile-time missing-dep errors. Keep **A1** / **A2** only as documented
+fallbacks; both are strictly worse (A1 pays a per-request TypeId lookup, A2 keeps
+the manual struct).
+
+### A3 spike result — VALIDATED (stable Rust)
+
+Feasible, with two design constraints found (both with clean workarounds, no
+blockers):
+
+- **Monomorphization confirmed.** `state.get::<T>()` compiles with only the bean
+  type in the turbofish (no `_`, no visible witness) by putting `Idx` on a helper
+  trait and `T` on the method:
+  ```rust
+  pub trait BeanAccess<Idx> { fn get<T>(&self) -> T where Self: HasBean<T, Idx>; }
+  impl<S, Idx> BeanAccess<Idx> for S { /* delegates to HasBean::get_bean */ }
+  ```
+  Release asm: each lookup is a single fixed-offset load + `ret` — even element 63
+  of a 64-element state (`ldr x0, [x0, #0x100]; ret`). No TypeId compare, hash, or
+  branch. Exactly struct field access.
+
+- **Constraint 1 — coherence / E0207 (fold into codegen).** As predicted,
+  `impl<S,T,I> FromRef<S> for T where S: HasBean<T,I>` fails E0119 (clashes with
+  axum's reflexive `impl<T:Clone> FromRef<T> for T`) — so **do not reuse
+  `FromRef`**. New finding: the naive R2E-owned
+  `impl<S,I> FromReq<S> for Auth where S: HasBean<Validator, I>` also fails, with
+  **E0207** — a where-clause does not *constrain* an impl type parameter; the
+  witness `I` must appear in the **trait generics** or the **`Self` type**. Two
+  working patterns (both keep witnesses out of user code — generated handlers
+  thread them as inferred generics):
+  - (a) marker slot on an R2E-owned trait: `trait FromReq<S, M>` +
+    `impl<S,I> FromReq<S, I> for Auth where S: HasBean<Validator, I>`;
+  - (b) witness in `Self` via a hidden generated wrapper:
+    `struct BeanExtract<T, I>(T, PhantomData<I>)` +
+    `impl<S,T,I> FromRequestParts<S> for BeanExtract<T,I> where S: HasBean<T,I>`
+    (use this where real axum `FromRequestParts` is unavoidable).
+  - **Consequence for `r2e-security`:** `AuthenticatedUser`'s direct
+    `FromRequestParts<S>` impl cannot take a bare `S: HasBean<…, I>` bound — it
+    must go through pattern (b) or R2E-generated glue.
+
+- **Missing-dep error is intelligible** with `#[diagnostic::on_unimplemented]` on
+  `HasBean`: *"bean `NotRegistered` is not registered … add
+  `.register::<NotRegistered>()`"*. Even on a 64-element state the error is ~33
+  lines (rustc collapses the recursion).
+
+- **Materialization works.** A recursive `BuildHList` drains the resolved
+  `HashMap<TypeId, Box<dyn Any + Send + Sync>>` by `remove` + downcast in one
+  startup pass (order-independent), verified for 3- and 64-element states.
+
+- **Constraint 2 — recursion_limit (document).** Compile cost is ~linear:
+  N=8 → 0.40 s, N=64 → 2.0 s, N=256 → 7.0 s. But N=256 hits **E0275** (the
+  `There` chain exceeds the default `recursion_limit = 128`). Fix:
+  `#![recursion_limit = "512"]` in the **app crate** — a crate-level attribute a
+  macro can't inject, so it must be **documented** (only matters past ~127 beans;
+  64 needs nothing).
 
 ## Per-request performance (corrected, authoritative)
 
@@ -167,15 +218,15 @@ existing `AllSatisfied<P>` check at `build_state` still catches a missing dep.
 context), `bean_state_derive.rs` (role change), `r2e-security` extractor
 (A1 blanket FromRef). OpenAPI generation currently keys off the state — assess.
 
-## Open questions for the spike
+## Remaining design questions for Phase 4 implementation
 
-1. **A3 feasibility (primary):** the `HasBean` trait coherence (R2E-owned access
-   trait vs axum `FromRef`), migrating request extractors to `S: HasBean<Dep>`,
-   the `BuildHList` materialization step, and the compile-time cost of deep
-   `TCons` state for a large app (benchmark build time + inspect error messages).
-2. If A3 is blocked → A1 vs A2: benchmark the per-request TypeId lookup on a
-   secured endpoint.
-3. How `build_state!` reshapes without a user state struct (state type inferred
-   from `P`).
-4. Threading controller inject-deps into `R` for compile-time missing-dep detection.
-5. OpenAPI + any plugin that assumed a typed state struct.
+(A3 feasibility is **resolved** — see the spike result above.)
+
+1. How `build_state!` reshapes without a user state struct (state type inferred
+   from `P`; likely a generated HList marker).
+2. Threading controller inject-deps into `R` for compile-time missing-dep detection.
+3. OpenAPI + any plugin that assumed a typed state struct.
+4. Exact `r2e-security` extractor rework (pattern (b) `BeanExtract<T,I>` wrapper vs
+   R2E-generated glue) so `AuthenticatedUser` keeps a clean call site.
+5. Where to document the `#![recursion_limit = "512"]` requirement for apps with
+   >~127 beans (CLI template `main.rs`? `r2e doctor` warning?).

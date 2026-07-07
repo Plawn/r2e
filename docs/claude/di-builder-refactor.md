@@ -16,7 +16,7 @@ phase ends with a quality-review gate before the next starts.
 | 2a | `BuiltApp<T>` struct | ⏳ pending |
 | 2b | Split `builder.rs` | ⏳ pending |
 | 3 | Correctness & cleanup | ⏳ pending |
-| 4 | Controllers as graph-resolved beans | 📋 planned — see `plan-controllers-as-beans.md` |
+| 4 | Controllers as graph-resolved beans | 📋 planned — approach **A3 validated by spike**, see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
@@ -190,8 +190,10 @@ Two forward-looking, higher-ambition changes have their own plan files:
   any other" and the manual `Services` struct disappears. Recommended path (A3):
   the state is the provision list `P` materialized as a type-level HList, giving
   monomorphized indexed access (per-request perf iso) **and** no hand-written
-  struct. Fallbacks A1 (context-as-state, small per-request lookup) / A2 (typed
-  struct) if the spike hits a coherence or compile-time blocker — see that plan.
+  struct. **A3 was validated by a Fable spike** (monomorphized to single-load
+  field access even at depth 63; two constraints folded into the plan: extractor
+  impls carry the index witness in trait/`Self` generics, and apps >~127 beans
+  need `#![recursion_limit]`). Fallbacks A1/A2 documented but strictly worse.
 - **Phase 5 — Feature modules** (`plan-feature-modules.md`): Spring/NestJS-style
   `@Module` bundles (providers + controllers + imports/exports) with **compile-time
   encapsulation**. Depends on Phase 4.
