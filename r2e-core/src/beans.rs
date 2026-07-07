@@ -1328,16 +1328,89 @@ impl BeanRegistry {
             }
         }
 
-        // If not all nodes were sorted, there's a cycle.
+        // If not all nodes were sorted, there's a cycle. Walk the stuck
+        // subgraph (nodes with `in_degree > 0`) to extract one concrete
+        // cycle path, so the error reads "A -> B -> C -> A" instead of
+        // listing every node tangled in the strongly connected component.
         if sorted_order.len() != n {
-            let cycle: Vec<String> = (0..n)
-                .filter(|i| in_degree[*i] > 0)
-                .map(|i| nodes[i].reg_type_name().to_string())
-                .collect();
+            let cycle = Self::find_cycle(nodes, &id_to_idx, &in_degree);
             return Err(BeanError::CyclicDependency { cycle });
         }
 
         Ok(sorted_order)
+    }
+
+    /// Extract one concrete dependency cycle from the subgraph left unsorted
+    /// by Kahn's algorithm, as type names ending with a repeat of the first
+    /// element (`[A, B, C, A]`).
+    ///
+    /// After Kahn's algorithm stalls, exactly the unsorted nodes have
+    /// `in_degree > 0`, and every cycle lies entirely within them, so the DFS
+    /// only follows edges between such nodes. The first back-edge to a node on
+    /// the current DFS path closes a cycle.
+    fn find_cycle<R: RegMeta>(
+        nodes: &[R],
+        id_to_idx: &HashMap<TypeId, usize>,
+        in_degree: &[usize],
+    ) -> Vec<String> {
+        // 0 = unvisited, 1 = on the current DFS path, 2 = fully explored.
+        const ON_PATH: u8 = 1;
+        const DONE: u8 = 2;
+
+        fn dfs<R: RegMeta>(
+            i: usize,
+            nodes: &[R],
+            id_to_idx: &HashMap<TypeId, usize>,
+            in_degree: &[usize],
+            color: &mut [u8],
+            path: &mut Vec<usize>,
+        ) -> Option<Vec<usize>> {
+            color[i] = ON_PATH;
+            path.push(i);
+            for (dep_id, _) in nodes[i].reg_dependencies() {
+                let Some(&j) = id_to_idx.get(dep_id) else { continue };
+                if in_degree[j] == 0 {
+                    continue; // sorted node — cannot be part of a cycle
+                }
+                match color[j] {
+                    ON_PATH => {
+                        let start = path.iter().position(|&x| x == j).unwrap();
+                        let mut cycle = path[start..].to_vec();
+                        cycle.push(j);
+                        return Some(cycle);
+                    }
+                    DONE => {}
+                    _ => {
+                        if let Some(cycle) = dfs(j, nodes, id_to_idx, in_degree, color, path) {
+                            return Some(cycle);
+                        }
+                    }
+                }
+            }
+            path.pop();
+            color[i] = DONE;
+            None
+        }
+
+        let mut color = vec![0u8; nodes.len()];
+        let mut path = Vec::new();
+        for i in 0..nodes.len() {
+            if in_degree[i] > 0 && color[i] == 0 {
+                if let Some(cycle) = dfs(i, nodes, id_to_idx, in_degree, &mut color, &mut path) {
+                    return cycle
+                        .into_iter()
+                        .map(|idx| nodes[idx].reg_type_name().to_string())
+                        .collect();
+                }
+            }
+        }
+
+        // Unreachable when called after a stalled Kahn sort, but degrade
+        // gracefully: report the stuck nodes as before.
+        (0..nodes.len())
+            .filter(|&i| in_degree[i] > 0)
+            .map(|i| nodes[i].reg_type_name().to_string())
+            .collect()
     }
 
     /// Compute a full fingerprint for a bean, incorporating its own config
