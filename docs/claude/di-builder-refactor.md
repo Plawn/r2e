@@ -1,6 +1,6 @@
 # DI & Builder Refactor — DX + Compile-Time Roadmap
 
-Status: **Phase 1 complete** (landed on `refactor/di-builder-dx-ct`); Phase 2 & 3
+Status: **Phases 1 & 2 complete** (landed on `refactor/di-builder-dx-ct`); Phase 3
 pending. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
 phase ends with a quality-review gate before the next starts.
 
@@ -13,8 +13,8 @@ phase ends with a quality-review gate before the next starts.
 | 1d | `.when()` + collapsed zoo | ✅ done |
 | 1e | Duplicate detection | ✅ decided: runtime |
 | 1f | Controller tuples | ✅ done |
-| 2a | `BuiltApp<T>` struct | ⏳ pending |
-| 2b | Split `builder.rs` | ⏳ pending |
+| 2a | `BuiltApp<T>` struct | ✅ done |
+| 2b | Split `builder.rs` | ✅ done |
 | 3 | Correctness & cleanup | ⏳ pending |
 | 4 | Controllers as graph-resolved beans | 📋 planned — approach **A3 validated by spike**, see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
@@ -140,15 +140,17 @@ sort are written once. Committed. `Registrable` and `describe_graph` build on it
 
 ## Phase 2 — Builder structure
 
-### 2a — `BuiltApp<T>` instead of the 10-tuple
-Replace `build_inner`'s return (builder.rs:1228) with a named struct; update
-`build()` (uses `.0` → `.router`) and `prepare()` (destructures all → `PreparedApp`).
+### 2a — `BuiltApp<T>` instead of the 10-tuple ✅
+Replaced `build_inner`'s 10-element tuple return with a private `BuiltApp<T>`
+struct; `build()` takes `.router`, `prepare()` destructures it into `PreparedApp`.
 
-### 2b — Split `builder.rs` (1981 LOC)
+### 2b — Split `builder.rs` (1981 LOC) ✅
 Pure moves, no API change: `builder/nostate.rs` (NoState phase),
-`builder/typed.rs` (typed phase), `builder/prepared.rs` (`PreparedApp` +
-`ServeStrategy`), `builder/task_registry.rs` (`TaskRegistryHandle`),
-`builder/mod.rs` (`AppBuilder`, `NoState`, shared types).
+`builder/typed.rs` (typed phase + `BuiltApp`), `builder/prepared.rs`
+(`PreparedApp` + `ServeStrategy`), `builder/task_registry.rs`
+(`TaskRegistryHandle`), `builder/mod.rs` (`AppBuilder`, `NoState`,
+`BuilderConfig`, shared type aliases, `build_state!` macros). Children use
+`use super::*`; `from_pre` and `PreparedApp` fields are `pub(super)`.
 
 ## Phase 3 — Correctness & cleanup
 
@@ -157,15 +159,16 @@ Pure moves, no API change: `builder/nostate.rs` (NoState phase),
 - **Real cycle path**: in `topological_sort` (beans.rs:1286-1292), replace "all
   nodes with `in_degree>0`" with a DFS extracting the actual A→B→C→A path.
 - **panic → Result**: `try_register_controller() -> Result<Self,
-  ConfigValidationError>`; `register_controller` wraps it (ends panic at
-  builder.rs:1124).
+  ConfigValidationError>`; `register_controller` wraps it (ends the panic in
+  `builder/typed.rs` `register_controller`).
 - **`result_large_err`**: `Result<(), Box<Response>>` in `validation.rs:37/53`
   (+ `.map_err(Box::new)` at :44) and deref in the generated handler
   (`r2e-macros/src/codegen/handlers.rs:169`: `return *__validation_err;`).
-- **Clippy**: `mem::take` (builder.rs:695 dev-reload + 750), `question_mark`
-  (secrets.rs:51), `manual_async_fn` (request_id.rs:55), feature-gated
-  `map_flatten` (builder.rs:1730, `quic`) and `while_let_loop` (multipart.rs:162,
-  `multipart`). `BuiltApp` clears one `type_complexity`; others get type aliases.
+- **Clippy**: `mem::take` (`builder/nostate.rs` `try_build_state` + dev-reload
+  path), `question_mark` (secrets.rs:51), `manual_async_fn` (request_id.rs:55),
+  feature-gated `map_flatten` (`builder/prepared.rs` `run_inner`, `quic`) and
+  `while_let_loop` (multipart.rs:162, `multipart`). `BuiltApp` cleared one
+  `type_complexity`; others get type aliases.
 
 ## Verification
 
