@@ -73,22 +73,55 @@ supply app deps to these extractors. Two options:
   `FromRef` on a typed struct (fast, no per-request lookup).
 - CON: the typed struct still must exist (shrinks to only request-extractor
   deps, not all controller deps) — does not fully remove the manual struct.
-- NOTE: a proc-macro **cannot** auto-generate a single app-wide state struct
-  (no whole-program view across the separate `register` calls), so full
-  auto-generation is infeasible — this is why R2E makes the struct explicit.
+- NOTE: a proc-macro **cannot** auto-generate a single app-wide state *struct*
+  (no whole-program view across the separate `register` calls). A3 sidesteps
+  this — it doesn't generate a struct; it uses the type-level provision list `P`
+  the builder already tracks.
 
-**Recommendation:** decide via a spike. A1 maximizes DX (no struct) at a small,
-bounded per-request cost on secured endpoints; A2 preserves per-request perf
-exactly but keeps a (smaller) struct. A1 is likely acceptable since the lookup
-is negligible next to auth cost — but **measure it** before committing.
+**Option A3 — State = the provision list `P` materialized as a type-level HList (RECOMMENDED).**
+- The axum state is an HList of resolved bean values whose *shape equals `P`*
+  (the phantom provision list the builder already threads through `.register()`
+  in Phase 1). The state type is **inferred** by the builder chain — the dev
+  writes no struct.
+- Access via an **R2E-owned** trait (not `FromRef`), indexed at the type level
+  with the existing `Here`/`There`/`Contains` witnesses (`type_list.rs`):
+  ```rust
+  trait HasBean<T, Idx> { fn get(&self) -> T; }
+  impl<H: Clone, Tl> HasBean<H, Here>     for HCons<H, Tl> { fn get(&self)->H { self.head.clone() } }        // → .head
+  impl<H, Tl, T, I>  HasBean<T, There<I>> for HCons<H, Tl> where Tl: HasBean<T,I> { fn get(&self)->T { self.tail.get() } } // → .tail…head
+  ```
+  `state.get::<Validator>()` **monomorphizes to a fixed-offset field access**
+  (`.tail.tail.head`) — struct-speed, **no lookup / hash / downcast** — while the
+  HList is assembled automatically from `.register()` calls. **Both perf and DX.**
+- PRO: no manual struct AND per-request perf iso with the typed struct. A missing
+  dep is a **compile error** (via the `HasBean` bound + `on_unimplemented`),
+  strictly better than A1's runtime absence.
+- Three pitfalls to validate in the spike:
+  1. **Coherence.** A blanket `impl<T> FromRef<HList> for T` overlaps axum's
+     reflexive `impl<T: Clone> FromRef<T> for T` → rejected on stable (no
+     specialization). Fix: access via the **R2E-owned** `HasBean<T>` trait and
+     migrate request extractors from `Arc<Validator>: FromRef<S>` to
+     `S: HasBean<Arc<Validator>>` (R2E owns its extractors → no orphan clash).
+  2. **Materialization.** The graph resolves dynamically into a `HashMap`
+     (runtime topological order). A `BuildHList` step must pull each `P`-member
+     via `ctx.get::<T>()` **once at startup** to fill the HList slots. One-time.
+  3. **Compile-time ergonomics.** Deep `TCons` chains (large apps) → big types in
+     errors and longer compile times (the frunk-style Achilles heel). Measure.
+
+**Recommendation:** target **A3** — it's the only option that keeps both
+per-request perf (monomorphized indexed access) and clean DX (no hand-written
+struct), and it unifies the runtime state with the `P` list Phase 1 already
+tracks. Keep **A1** (context-as-state) and **A2** (typed struct) as fallbacks if
+the spike surfaces a blocker (trait coherence or HList compile-time cost).
 
 ## Per-request performance (corrected, authoritative)
 
-| Path | Baseline | This plan (A1) | This plan (A2) |
-|---|---|---|---|
-| Core `#[inject]` resolution | 1× startup (`from_state`) | 1× startup (`from_context`) | 1× startup |
-| Request extractor app-dep access | `FromRef` direct clone (0 lookup) | `ctx.get` TypeId lookup **per req** | `FromRef` (iso) |
-| Arc-core clone + `FromRequestParts` | — | unchanged | unchanged |
+| Path | Baseline | A1 (context-state) | A2 (typed struct) | A3 (HList = `P`) |
+|---|---|---|---|---|
+| Core `#[inject]` resolution | 1× startup (`from_state`) | 1× startup (`from_context`) | 1× startup | 1× startup |
+| Request extractor app-dep access | `FromRef` direct clone (0 lookup) | `ctx.get` TypeId lookup **per req** | `FromRef` (iso) | `HasBean` indexed field access (iso, monomorphized) |
+| Arc-core clone + `FromRequestParts` | — | unchanged | unchanged | unchanged |
+| Manual state struct | required | none | smaller struct | **none** |
 
 INVARIANT (must hold in any option): the core stays built **once** in an `Arc`;
 request scope stays a `FromRequestParts` concern on the stack — **never** a graph
@@ -136,7 +169,13 @@ context), `bean_state_derive.rs` (role change), `r2e-security` extractor
 
 ## Open questions for the spike
 
-1. A1 vs A2 — benchmark the per-request TypeId lookup on a secured endpoint.
-2. How `build_state!` reshapes without a user state struct.
-3. Threading controller inject-deps into `R` for compile-time missing-dep detection.
-4. OpenAPI + any plugin that assumed a typed state struct.
+1. **A3 feasibility (primary):** the `HasBean` trait coherence (R2E-owned access
+   trait vs axum `FromRef`), migrating request extractors to `S: HasBean<Dep>`,
+   the `BuildHList` materialization step, and the compile-time cost of deep
+   `TCons` state for a large app (benchmark build time + inspect error messages).
+2. If A3 is blocked → A1 vs A2: benchmark the per-request TypeId lookup on a
+   secured endpoint.
+3. How `build_state!` reshapes without a user state struct (state type inferred
+   from `P`).
+4. Threading controller inject-deps into `R` for compile-time missing-dep detection.
+5. OpenAPI + any plugin that assumed a typed state struct.

@@ -187,9 +187,11 @@ Two forward-looking, higher-ambition changes have their own plan files:
 - **Phase 4 — Controllers as graph-resolved beans** (`plan-controllers-as-beans.md`):
   build controller cores from the `BeanContext` by type (`ctx.get`) instead of
   from a hand-written state struct by field name, so a controller is "a bean like
-  any other" and the manual `Services` struct shrinks or disappears. Per-request
-  perf stays iso **except** the axum-state design choice (context-as-state adds a
-  small TypeId lookup per request to secured-endpoint extractors) — see that plan.
+  any other" and the manual `Services` struct disappears. Recommended path (A3):
+  the state is the provision list `P` materialized as a type-level HList, giving
+  monomorphized indexed access (per-request perf iso) **and** no hand-written
+  struct. Fallbacks A1 (context-as-state, small per-request lookup) / A2 (typed
+  struct) if the spike hits a coherence or compile-time blocker — see that plan.
 - **Phase 5 — Feature modules** (`plan-feature-modules.md`): Spring/NestJS-style
   `@Module` bundles (providers + controllers + imports/exports) with **compile-time
   encapsulation**. Depends on Phase 4.
