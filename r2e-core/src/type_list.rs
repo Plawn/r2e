@@ -126,6 +126,145 @@ impl<H, T> Contains<H, Here> for TCons<H, T> {}
 // Recursive case: H is somewhere in the tail.
 impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {}
 
+// ── Value-level HList (the application state) ────────────────────────────
+
+/// Empty value-level list. The state of an app with no provisions.
+///
+/// Value-level counterpart of [`TNil`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HNil;
+
+/// Value-level cons cell: `head` is a resolved bean instance, `tail` is the
+/// rest of the state.
+///
+/// Value-level counterpart of [`TCons`]. The application state produced by
+/// [`AppBuilder::build_state`](crate::AppBuilder::build_state) is an `HCons`
+/// chain whose shape mirrors the builder's provision list `P`, assembled via
+/// [`BuildHList`]. Beans are accessed by type through [`HasBean`] /
+/// [`BeanAccess::get`], which monomorphize to a fixed-offset field access.
+#[derive(Clone, Copy, Debug)]
+pub struct HCons<H, T> {
+    /// The resolved bean instance at this slot.
+    pub head: H,
+    /// The rest of the state.
+    pub tail: T,
+}
+
+/// Compile-time indexed access to a bean of type `T` stored in a value-level
+/// HList state.
+///
+/// `Idx` is an index witness ([`Here`] / [`There`]) that guides trait
+/// resolution, exactly like [`Contains`] — it is always inferred, never
+/// written by users. Prefer calling [`BeanAccess::get`], which hides the
+/// witness entirely: `state.get::<T>()`.
+///
+/// Resolution monomorphizes to a direct field access (`.tail.tail.head`) —
+/// struct-speed, no `TypeId` lookup, hash, or downcast.
+#[diagnostic::on_unimplemented(
+    message = "bean `{T}` is not present in the application state",
+    label = "`{T}` was never provided or registered on the AppBuilder",
+    note = "add `.provide(value)` or `.register::<{T}>()` before `build_state()` so the bean is part of the provision list"
+)]
+pub trait HasBean<T, Idx> {
+    /// Clone the bean of type `T` out of the state.
+    fn get_bean(&self) -> T;
+}
+
+// Base case: T is the head of the list.
+impl<H: Clone, Tail> HasBean<H, Here> for HCons<H, Tail> {
+    #[inline(always)]
+    fn get_bean(&self) -> H {
+        self.head.clone()
+    }
+}
+
+// Recursive case: T is somewhere in the tail.
+impl<H, Tail, T, I> HasBean<T, There<I>> for HCons<H, Tail>
+where
+    Tail: HasBean<T, I>,
+{
+    #[inline(always)]
+    fn get_bean(&self) -> T {
+        self.tail.get_bean()
+    }
+}
+
+/// Witness-free façade over [`HasBean`]: `state.get::<T>()`.
+///
+/// The index witness lives on the trait (`Idx`) while the bean type lives on
+/// the method (`T`), so call sites name only the bean type — the compiler
+/// infers `Idx` from the `Self: HasBean<T, Idx>` bound:
+///
+/// ```ignore
+/// let service = state.get::<UserService>();
+/// ```
+pub trait BeanAccess<Idx> {
+    /// Clone the bean of type `T` out of the state.
+    fn get<T>(&self) -> T
+    where
+        Self: HasBean<T, Idx>;
+}
+
+impl<S, Idx> BeanAccess<Idx> for S {
+    #[inline(always)]
+    fn get<T>(&self) -> T
+    where
+        Self: HasBean<T, Idx>,
+    {
+        self.get_bean()
+    }
+}
+
+// `Contains` also holds for the value-level HList, so requirement lists
+// (`TCons` chains) can be checked against the materialized state type with the
+// same `AllSatisfied` machinery used against the provision list `P`.
+impl<H, T> Contains<H, Here> for HCons<H, T> {}
+impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+
+/// Materialize a type-level provision list into a value-level HList state by
+/// pulling each slot from the resolved [`BeanContext`](crate::beans::BeanContext).
+///
+/// Implemented for `TNil` / `TCons` chains. `build_state()` calls this **once
+/// at startup** — one `ctx.get::<T>()` (a `TypeId` lookup + clone) per slot —
+/// after which all state access is monomorphized field access via [`HasBean`].
+pub trait BuildHList {
+    /// The value-level HList with the same shape as this type-level list.
+    type Output: Clone + Send + Sync + 'static;
+
+    /// Pull every slot from the context, preserving list order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a slot's type is absent from the context. This should never
+    /// happen: every type in the provision list `P` was registered or provided
+    /// on the builder, and graph resolution fails earlier (with a proper
+    /// error) if a bean could not be constructed.
+    fn build_hlist(ctx: &crate::beans::BeanContext) -> Self::Output;
+}
+
+impl BuildHList for TNil {
+    type Output = HNil;
+
+    fn build_hlist(_ctx: &crate::beans::BeanContext) -> HNil {
+        HNil
+    }
+}
+
+impl<H, T> BuildHList for TCons<H, T>
+where
+    H: Clone + Send + Sync + 'static,
+    T: BuildHList,
+{
+    type Output = HCons<H, T::Output>;
+
+    fn build_hlist(ctx: &crate::beans::BeanContext) -> Self::Output {
+        HCons {
+            head: ctx.get::<H>(),
+            tail: T::build_hlist(ctx),
+        }
+    }
+}
+
 // ── Type-level list concatenation ────────────────────────────────────────
 
 /// Concatenate two type-level lists.
