@@ -24,7 +24,7 @@ async fn main() {
         .with_config(config)
         .register::<services::ProductClient>()
         .register::<services::OrderService>()
-        .build_state::<OrderState, _>()
+        .build_typed_state::<OrderState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

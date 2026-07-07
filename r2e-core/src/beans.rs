@@ -322,6 +322,15 @@ impl fmt::Debug for BeanContext {
 }
 
 impl BeanContext {
+    /// Create an empty context (no beans).
+    ///
+    /// Used as the placeholder before graph resolution and for the
+    /// [`with_state`](crate::AppBuilder::with_state) path, which bypasses the
+    /// bean graph entirely.
+    pub fn empty() -> Self {
+        Self::new(HashMap::new())
+    }
+
     /// Create a new BeanContext wrapping the given entries as the shared base.
     fn new(entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> Self {
         Self {

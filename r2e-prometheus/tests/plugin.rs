@@ -25,7 +25,7 @@ impl BeanState for TestState {
 async fn plugin_provides_prometheus_registry() {
     let _app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))
-        .build_state::<TestState, _>()
+        .build_typed_state::<TestState, _>()
         .await;
 
     // If we get here, the plugin successfully provided PrometheusRegistry
@@ -44,7 +44,7 @@ async fn builder_register_includes_custom_collectors() {
                 .register(Box::new(counter_clone))
                 .build(),
         )
-        .build_state::<TestState, _>()
+        .build_typed_state::<TestState, _>()
         .await;
 
     // Increment the counter and verify it shows up in encoded output
@@ -60,7 +60,7 @@ async fn builder_register_includes_custom_collectors() {
 async fn registry_bean_can_register_at_runtime() {
     let app = AppBuilder::new()
         .plugin(Prometheus::new("/metrics"))
-        .build_state::<TestState, _>()
+        .build_typed_state::<TestState, _>()
         .await;
 
     // Access the registry through the global function

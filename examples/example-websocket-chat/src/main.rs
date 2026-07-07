@@ -37,7 +37,7 @@ async fn main() {
         .provide(ws_rooms)
         .provide(pool)
         .register::<services::ChatService>()
-        .build_state::<AppState, _>()
+        .build_typed_state::<AppState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

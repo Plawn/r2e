@@ -309,7 +309,7 @@ impl BeanState for SingleDepState {
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
-        .build_state::<SingleDepState, _>()
+        .build_typed_state::<SingleDepState, _>()
         .await
         .with(Health)
         .build();
@@ -362,7 +362,7 @@ impl BeanState for BeanTestState {
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .register::<TestService>()
-        .build_state::<BeanTestState, _>()
+        .build_typed_state::<BeanTestState, _>()
         .await
         .with(Health)
         .build();
@@ -412,7 +412,7 @@ impl BeanState for AsyncBeanTestState {
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .register::<AsyncService>()
-        .build_state::<AsyncBeanTestState, _>()
+        .build_typed_state::<AsyncBeanTestState, _>()
         .await
         .with(Health)
         .build();
@@ -465,7 +465,7 @@ impl BeanState for ProducerTestState {
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .register::<TestProducer>()
-        .build_state::<ProducerTestState, _>()
+        .build_typed_state::<ProducerTestState, _>()
         .await
         .with(Health)
         .build();
@@ -483,7 +483,7 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
-        .build_state::<SingleDepState, _>()
+        .build_typed_state::<SingleDepState, _>()
         .await
         .with(Health)
         .build();
@@ -551,7 +551,7 @@ async fn producer_option_present_when_flag_true() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeServiceProducer>()
-        .build_state::<MaybeServiceState, _>()
+        .build_typed_state::<MaybeServiceState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
@@ -566,7 +566,7 @@ async fn producer_option_absent_when_flag_false() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(false))
         .register::<MaybeServiceProducer>()
-        .build_state::<MaybeServiceState, _>()
+        .build_typed_state::<MaybeServiceState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
@@ -623,7 +623,7 @@ async fn async_producer_option_present() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeAsyncProducer>()
-        .build_state::<MaybeAsyncState, _>()
+        .build_typed_state::<MaybeAsyncState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
@@ -646,7 +646,7 @@ async fn producer_option_present_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_state::<MaybeServiceState, _>()
+        .build_typed_state::<MaybeServiceState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
@@ -667,7 +667,7 @@ async fn producer_option_absent_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_state::<MaybeServiceState, _>()
+        .build_typed_state::<MaybeServiceState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
@@ -686,7 +686,7 @@ async fn config_flag_missing_key_defaults_to_false() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_state::<MaybeServiceState, _>()
+        .build_typed_state::<MaybeServiceState, _>()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");

@@ -21,7 +21,7 @@ use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
-use crate::type_list::{AllSatisfied, TAppend, TCons, TNil};
+use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -151,6 +151,11 @@ struct BuilderConfig {
 pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil> {
     shared: BuilderConfig,
     state: T,
+    /// The resolved bean graph, retained through the typed phase so controller
+    /// cores (and background services) can be constructed by type via
+    /// `ctx.get::<T>()`. An empty placeholder before `build_state()` and on the
+    /// `with_state` path.
+    bean_context: Arc<crate::beans::BeanContext>,
     routes: Vec<crate::http::Router<T>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
@@ -199,34 +204,35 @@ impl Default for AppBuilder<NoState, TNil, TNil> {
     }
 }
 
-/// Resolve the bean graph and build the application state — zero-underscore
-/// façade over [`AppBuilder::build_state`].
+/// Legacy façade over the typed-struct state path
+/// ([`AppBuilder::build_typed_state`]), hiding its inferred witness parameter.
 ///
-/// [`build_state`](AppBuilder::build_state) carries a single inferred witness
-/// type parameter (`build_state::<S, _>()`). This macro hides it so call sites
-/// read cleanly:
+/// **Deprecated path**: the hand-written state struct model is being replaced
+/// by the HList state built by [`AppBuilder::build_state`] (Phase 4); this
+/// macro and the typed-struct path will be removed once all call sites are
+/// migrated.
 ///
 /// ```ignore
 /// let app = build_state!(builder, Services).await;
-/// // expands to: builder.build_state::<Services, _>().await
+/// // expands to: builder.build_typed_state::<Services, _>().await
 /// ```
 #[macro_export]
 macro_rules! build_state {
     ($app:expr, $state:ty $(,)?) => {
-        $app.build_state::<$state, _>()
+        $app.build_typed_state::<$state, _>()
     };
 }
 
 /// Non-panicking variant of [`build_state!`] — façade over
-/// [`AppBuilder::try_build_state`].
+/// [`AppBuilder::try_build_typed_state`]. Deprecated path, see [`build_state!`].
 ///
 /// ```ignore
 /// let app = try_build_state!(builder, Services).await?;
-/// // expands to: builder.try_build_state::<Services, _>().await
+/// // expands to: builder.try_build_typed_state::<Services, _>().await
 /// ```
 #[macro_export]
 macro_rules! try_build_state {
     ($app:expr, $state:ty $(,)?) => {
-        $app.try_build_state::<$state, _>()
+        $app.try_build_typed_state::<$state, _>()
     };
 }

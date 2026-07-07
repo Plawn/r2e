@@ -22,6 +22,7 @@ impl AppBuilder<NoState, TNil, TNil> {
                 active_profile: "default".to_string(),
             },
             state: NoState,
+            bean_context: Arc::new(crate::beans::BeanContext::empty()),
             routes: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
@@ -60,6 +61,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
         AppBuilder {
             shared: self.shared,
             state: NoState,
+            bean_context: self.bean_context,
             routes: self.routes,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
@@ -394,36 +396,163 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self
     }
 
+    /// Register a bean, async bean, or producer as an **override** of an
+    /// existing registration of the same provided type — typically one added
+    /// via [`with_default_bean`](Self::with_default_bean) /
+    /// [`with_default_async_bean`](Self::with_default_async_bean) /
+    /// [`with_default_producer`](Self::with_default_producer).
+    ///
+    /// Unlike [`register`](Self::register), this does **not** push the type
+    /// onto the compile-time provision list `P` — the default registration
+    /// already guarantees presence, and a duplicate slot would make
+    /// `state.get::<T>()` ambiguous. The registry resolves the pair with
+    /// last-wins semantics (the default is dropped).
+    pub fn register_override<T: Registrable>(mut self) -> Self {
+        T::register_into(&mut self.shared.bean_registry);
+        self
+    }
+
     /// Resolve the bean dependency graph and build the application state.
     ///
     /// Consumes the bean registry, topologically sorts all beans, constructs
-    /// them in order (awaiting async beans/producers), and assembles the
-    /// state struct via [`BeanState::from_context()`](crate::beans::BeanState::from_context).
+    /// them in order (awaiting async beans/producers), then materializes the
+    /// state: a type-level HList mirroring the provision list `P`, with one
+    /// resolved bean instance per slot (see
+    /// [`BuildHList`](crate::type_list::BuildHList)). The state type is fully
+    /// inferred from the builder chain — there is no hand-written state struct.
     ///
-    /// The `R` (requirements) type parameter is checked against `P` (provisions)
-    /// at compile time via the [`AllSatisfied`] bound: every bean dependency
-    /// must be present in the provision list. If a dependency is missing, the
-    /// compiler emits an error.
+    /// Beans are read out of the state by type via
+    /// [`BeanAccess::get`](crate::type_list::BeanAccess::get)
+    /// (`state.get::<T>()`), which monomorphizes to a fixed-offset field
+    /// access.
+    ///
+    /// The `R` (requirements) list is checked against `P` (provisions) at
+    /// compile time via the [`AllSatisfied`] bound: every bean dependency must
+    /// be present in the provision list, or the compiler emits an error.
+    ///
+    /// Note: apps with more than ~127 registrations may need
+    /// `#![recursion_limit = "512"]` at the crate root (the index-witness
+    /// chains exceed rustc's default recursion limit).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bean graph has cycles, missing dependencies, or duplicate
+    /// registrations. Use [`try_build_state`](Self::try_build_state) for a
+    /// non-panicking alternative.
+    pub async fn build_state<W>(self) -> AppBuilder<<P as BuildHList>::Output>
+    where
+        P: BuildHList,
+        R: AllSatisfied<P, W>,
+    {
+        self.try_build_state::<W>()
+            .await
+            .unwrap_or_else(|e| panic!("Failed to resolve bean dependency graph: {e}"))
+    }
+
+    /// Resolve the bean dependency graph and build the HList application
+    /// state, returning an error instead of panicking on resolution failure.
+    ///
+    /// See [`build_state`](Self::build_state).
+    pub async fn try_build_state<W>(
+        mut self,
+    ) -> Result<AppBuilder<<P as BuildHList>::Output>, crate::beans::BeanError>
+    where
+        P: BuildHList,
+        R: AllSatisfied<P, W>,
+    {
+        #[cfg(feature = "dev-reload")]
+        {
+            type Cached<P> = (
+                <P as BuildHList>::Output,
+                Arc<crate::beans::BeanContext>,
+            );
+
+            let registry = std::mem::take(&mut self.shared.bean_registry);
+
+            // Phase 1: compute graph fingerprint (cheap — no bean construction)
+            let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
+            let cached_fp = crate::dev::get_cached_graph_fingerprint();
+
+            // If fingerprint matches and we have a cached state → reuse it
+            if let (Some(old_fp), Some((cached_state, cached_ctx))) =
+                (cached_fp, crate::dev::get_cached_state::<Cached<P>>())
+            {
+                if old_fp == new_fp {
+                    tracing::debug!(
+                        "dev-reload: graph fingerprint unchanged, reusing cached state"
+                    );
+                    return Ok(AppBuilder::from_pre(self.shared, cached_state, cached_ctx));
+                }
+
+                // Fingerprint changed — log only the beans that actually changed
+                tracing::info!(
+                    "dev-reload: graph fingerprint changed ({:#018x} → {:#018x}), rebuilding all beans",
+                    old_fp,
+                    new_fp
+                );
+                let old_per_bean = crate::dev::get_cached_per_bean_fingerprints();
+                for (type_id, name, bean_fp) in &per_bean_fps {
+                    let changed = old_per_bean
+                        .get(type_id)
+                        .map(|&old| old != *bean_fp)
+                        .unwrap_or(true); // new bean = changed
+                    if changed {
+                        tracing::info!(
+                            bean = name,
+                            "dev-reload: bean changed — triggering rebuild"
+                        );
+                    }
+                }
+
+                crate::dev::clear_state_cache();
+            }
+
+            // Phase 2: full resolution (construct all beans)
+            let ctx = registry.resolve().await?;
+            let state = <P as BuildHList>::build_hlist(&ctx);
+            let ctx = Arc::new(ctx);
+
+            crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
+            crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
+
+            Ok(AppBuilder::from_pre(self.shared, state, ctx))
+        }
+
+        #[cfg(not(feature = "dev-reload"))]
+        {
+            let registry = std::mem::take(&mut self.shared.bean_registry);
+            let ctx = registry.resolve().await?;
+            let state = <P as BuildHList>::build_hlist(&ctx);
+
+            Ok(AppBuilder::from_pre(self.shared, state, Arc::new(ctx)))
+        }
+    }
+
+    /// Resolve the bean dependency graph and assemble a hand-written state
+    /// struct via [`BeanState::from_context()`](crate::beans::BeanState::from_context).
+    ///
+    /// **Deprecated path**: superseded by the HList state built by
+    /// [`build_state`](Self::build_state); removed once all call sites are
+    /// migrated (Phase 4).
     ///
     /// # Panics
     ///
     /// Panics if the bean graph has cycles, missing dependencies, or
-    /// duplicate registrations. Use [`try_build_state`](Self::try_build_state)
-    /// for a non-panicking alternative.
-    pub async fn build_state<S, W>(self) -> AppBuilder<S>
+    /// duplicate registrations.
+    pub async fn build_typed_state<S, W>(self) -> AppBuilder<S>
     where
         S: BeanState,
         R: TAppend<S::Requires>,
         <R as TAppend<S::Requires>>::Output: AllSatisfied<P, W>,
     {
-        self.try_build_state::<S, W>()
+        self.try_build_typed_state::<S, W>()
             .await
             .unwrap_or_else(|e| panic!("Failed to resolve bean dependency graph: {e}"))
     }
 
-    /// Resolve the bean dependency graph and build the application state,
-    /// returning an error instead of panicking on resolution failure.
-    pub async fn try_build_state<S, W>(
+    /// Non-panicking variant of [`build_typed_state`](Self::build_typed_state).
+    /// Deprecated path, see there.
+    pub async fn try_build_typed_state<S, W>(
         mut self,
     ) -> Result<AppBuilder<S>, crate::beans::BeanError>
     where
@@ -447,7 +576,11 @@ impl<P, R> AppBuilder<NoState, P, R> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
-                    return Ok(AppBuilder::<S>::from_pre(self.shared, cached_state));
+                    return Ok(AppBuilder::<S>::from_pre(
+                        self.shared,
+                        cached_state,
+                        Arc::new(crate::beans::BeanContext::empty()),
+                    ));
                 }
 
                 // Fingerprint changed — log only the beans that actually changed
@@ -483,7 +616,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
             crate::dev::cache_state(&state);
             crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
-            Ok(AppBuilder::<S>::from_pre(self.shared, state))
+            Ok(AppBuilder::<S>::from_pre(self.shared, state, Arc::new(ctx)))
         }
 
         #[cfg(not(feature = "dev-reload"))]
@@ -492,15 +625,20 @@ impl<P, R> AppBuilder<NoState, P, R> {
             let ctx = registry.resolve().await?;
             let state = S::from_context(&ctx);
 
-            Ok(AppBuilder::<S>::from_pre(self.shared, state))
+            Ok(AppBuilder::<S>::from_pre(self.shared, state, Arc::new(ctx)))
         }
     }
 
     /// Provide a pre-built state directly (backward-compatible path).
     ///
-    /// This skips the bean graph entirely. The bean registry is discarded.
-    /// No compile-time provision checking is performed.
+    /// This skips the bean graph entirely. The bean registry is discarded and
+    /// the retained bean context is empty. No compile-time provision checking
+    /// is performed.
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
-        AppBuilder::<S>::from_pre(self.shared, state)
+        AppBuilder::<S>::from_pre(
+            self.shared,
+            state,
+            Arc::new(crate::beans::BeanContext::empty()),
+        )
     }
 }

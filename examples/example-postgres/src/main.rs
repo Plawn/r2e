@@ -25,7 +25,7 @@ async fn main() {
         .with_config(config)
         .register::<CreatePool>()
         .register::<services::ArticleService>()
-        .build_state::<AppState, _>()
+        .build_typed_state::<AppState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

@@ -118,7 +118,7 @@ async fn main() {
         .with_config(R2eConfig::empty())
         .plugin(Executor)
         .provide(Arc::new(AtomicU64::new(0)))
-        .build_state::<Services, _>()
+        .build_typed_state::<Services, _>()
         .await
         .with(Health)
         .with(Cors::permissive())

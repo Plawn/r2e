@@ -104,7 +104,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
     let app = AppBuilder::new()
         .with_config(config)
         .plugin(Scheduler)
-        .build_state::<TestState, _>()
+        .build_typed_state::<TestState, _>()
         .await;
 
     // Register a fast interval task through the scheduler registry; the serve

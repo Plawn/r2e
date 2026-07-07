@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = AppBuilder::new()
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
         .provide(prefix)
-        .build_state::<Services, _>()
+        .build_typed_state::<Services, _>()
         .await
         .register_grpc_service::<GreeterService>()
         .register_controller::<HealthController>();

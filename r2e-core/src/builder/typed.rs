@@ -7,7 +7,15 @@ use super::*;
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Internal: construct a typed builder from the pre-state shared config.
-    pub(super) fn from_pre(mut shared: BuilderConfig, state: T) -> Self {
+    ///
+    /// `bean_context` is the resolved bean graph (retained so controllers and
+    /// background services can be constructed by type); the `with_state` path
+    /// passes an empty context.
+    pub(super) fn from_pre(
+        mut shared: BuilderConfig,
+        state: T,
+        bean_context: Arc<crate::beans::BeanContext>,
+    ) -> Self {
         // Take the deferred actions before creating the builder.
         let deferred_actions = std::mem::take(&mut shared.deferred_actions);
 
@@ -17,6 +25,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let mut builder = Self {
             shared,
             state,
+            bean_context,
             routes: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
@@ -65,6 +74,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// [`with_config()`](AppBuilder::with_config) has been called.
     pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
         self.shared.config.as_ref()
+    }
+
+    /// The application state.
+    ///
+    /// After [`build_state`](AppBuilder::build_state) this is the HList of
+    /// resolved beans; read individual beans with `state().get::<T>()`
+    /// (see [`BeanAccess`](crate::type_list::BeanAccess)).
+    pub fn state(&self) -> &T {
+        &self.state
+    }
+
+    /// The resolved bean graph, retained through the typed phase.
+    ///
+    /// Controller cores and background services are constructed from this
+    /// context by type. Empty on the [`with_state`](AppBuilder::with_state)
+    /// path.
+    pub fn bean_context(&self) -> &Arc<crate::beans::BeanContext> {
+        &self.bean_context
     }
 
     /// Whether the DevReload plugin has already been applied.
