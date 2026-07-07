@@ -43,9 +43,7 @@ async fn main() {
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling)
-        .register_controller::<ChatController>()
-        .register_controller::<HistoryController>()
-        .register_controller::<MessagePersistenceConsumer>()
+        .register_controllers::<(ChatController, HistoryController, MessagePersistenceConsumer)>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

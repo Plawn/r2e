@@ -166,18 +166,20 @@ async fn main(env: AppEnv) {
         .on_stop(|_| async {
             tracing::info!("R2E example-app shutdown hook executed");
         })
-        .register_controller::<UserController>()
-        .register_controller::<AccountController>()
-        .register_controller::<ConfigController>()
-        .register_controller::<DataController>()
-        .register_controller::<UserEventConsumer>()
-        .register_controller::<MixedController>()
-        .register_controller::<IdentityController>()
-        .register_controller::<ScheduledJobs>()
-        .register_controller::<SseController>()
-        .register_controller::<WsEchoController>()
-        .register_controller::<NotificationController>()
-        .register_controller::<UploadController>()
+        .register_controllers::<(
+            UserController,
+            AccountController,
+            ConfigController,
+            DataController,
+            UserEventConsumer,
+            MixedController,
+            IdentityController,
+            ScheduledJobs,
+            SseController,
+            WsEchoController,
+            NotificationController,
+            UploadController,
+        )>()
         .with(NormalizePath)
         .serve("0.0.0.0:3001")
         .await

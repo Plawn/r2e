@@ -274,3 +274,56 @@ impl_plugin_deps!(A, B, C, D, E);
 impl_plugin_deps!(A, B, C, D, E, F);
 impl_plugin_deps!(A, B, C, D, E, F, G);
 impl_plugin_deps!(A, B, C, D, E, F, G, H);
+
+/// Registers a tuple of controllers into an [`AppBuilder`](crate::AppBuilder) in
+/// one call.
+///
+/// This backs [`AppBuilder::register_controllers`](crate::AppBuilder::register_controllers),
+/// which folds every tuple element through the single-controller
+/// `register_controller::<C>()` path, preserving tuple order. Implemented for
+/// tuples of arity 1..=16; each element must implement
+/// [`Controller<T>`](crate::controller::Controller), so a non-controller in the
+/// tuple is a clear compile error.
+///
+/// ```ignore
+/// app.register_controllers::<(UserController, AccountController, DataController)>()
+/// ```
+pub trait ControllerTuple<T: Clone + Send + Sync + 'static> {
+    /// Fold every controller in the tuple through
+    /// `register_controller`, in tuple order.
+    fn register_all(builder: crate::builder::AppBuilder<T>) -> crate::builder::AppBuilder<T>;
+}
+
+macro_rules! impl_controller_tuple {
+    ($($C:ident),+) => {
+        impl<T, $($C),+> ControllerTuple<T> for ($($C,)+)
+        where
+            T: Clone + Send + Sync + 'static,
+            $($C: crate::controller::Controller<T>),+
+        {
+            fn register_all(
+                builder: crate::builder::AppBuilder<T>,
+            ) -> crate::builder::AppBuilder<T> {
+                builder
+                    $(.register_controller::<$C>())+
+            }
+        }
+    };
+}
+
+impl_controller_tuple!(C0);
+impl_controller_tuple!(C0, C1);
+impl_controller_tuple!(C0, C1, C2);
+impl_controller_tuple!(C0, C1, C2, C3);
+impl_controller_tuple!(C0, C1, C2, C3, C4);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14);
+impl_controller_tuple!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15);

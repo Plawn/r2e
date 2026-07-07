@@ -346,9 +346,11 @@ async fn setup() -> (TestApp, TestJwt) {
             .with(NormalizePath)
             .with(DevReload)
             .with(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))
-            .register_controller::<TestUserController>()
-            .register_controller::<TestSearchController>()
-            .register_controller::<NestedParamsController>(),
+            .register_controllers::<(
+                TestUserController,
+                TestSearchController,
+                NestedParamsController,
+            )>(),
     );
 
     (app, jwt)

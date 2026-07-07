@@ -64,7 +64,7 @@ pub use secure_headers::SecureHeaders;
 pub use service::ServiceComponent;
 pub use state::R2eState;
 pub use type_list::{
-    AllSatisfied, Contains, Here, PluginDeps, TAppend, TCons, TNil, There,
+    AllSatisfied, Contains, ControllerTuple, Here, PluginDeps, TAppend, TCons, TNil, There,
 };
 
 // Dev-reload helpers

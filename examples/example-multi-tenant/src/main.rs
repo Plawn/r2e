@@ -116,8 +116,7 @@ async fn main() {
                 .with_description("Tenant isolation via JWT claims and custom guards")
                 .with_docs_ui(true),
         ))
-        .register_controller::<TenantController>()
-        .register_controller::<AdminController>()
+        .register_controllers::<(TenantController, AdminController)>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

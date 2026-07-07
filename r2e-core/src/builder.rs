@@ -1074,6 +1074,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Register several [`Controller`]s in one call.
+    ///
+    /// Folds every element of the tuple through
+    /// [`register_controller`](Self::register_controller), preserving tuple
+    /// order, so `register_controllers::<(A, B, C)>()` is equivalent to
+    /// `register_controller::<A>().register_controller::<B>().register_controller::<C>()`.
+    /// Supports tuples of arity 1..=16; each element must implement
+    /// [`Controller<T>`], so a non-controller in the tuple is a compile error.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// app.register_controllers::<(UserController, AccountController, DataController)>()
+    /// ```
+    pub fn register_controllers<Tup: crate::type_list::ControllerTuple<T>>(self) -> Self {
+        Tup::register_all(self)
+    }
+
     /// Register a bean's event subscriptions.
     ///
     /// The bean is extracted from state via `FromRef` and its
