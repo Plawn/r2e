@@ -103,7 +103,7 @@ struct BuilderConfig {
 /// or `.serve()`.
 pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil> {
     shared: BuilderConfig,
-    state: Option<T>,
+    state: T,
     routes: Vec<crate::http::Router<T>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
@@ -139,7 +139,7 @@ impl AppBuilder<NoState, TNil, TNil> {
                 shutdown_grace_period: None,
                 active_profile: "default".to_string(),
             },
-            state: None,
+            state: NoState,
             routes: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
@@ -177,7 +177,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR> {
         AppBuilder {
             shared: self.shared,
-            state: None,
+            state: NoState,
             routes: self.routes,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
@@ -803,7 +803,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         let mut builder = Self {
             shared,
-            state: Some(state),
+            state,
             routes: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
@@ -1151,17 +1151,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Construct and bind app-scoped controllers only after config
         // validation, so configuration errors retain their aggregated report.
-        let state = self
-            .state
-            .as_ref()
-            .expect("AppBuilder: state must be set before registering a controller");
+        let state = &self.state;
         let core = Arc::new(C::from_state(state));
         self.routes.push(C::routes(state, Arc::clone(&core)));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
-        if let Some(state) = &self.state {
-            let boxed_tasks = C::scheduled_tasks_boxed(state, Arc::clone(&core));
+        {
+            let boxed_tasks = C::scheduled_tasks_boxed(&self.state, Arc::clone(&core));
             if !boxed_tasks.is_empty() {
                 if let Some(registry) = self.get_plugin_data::<TaskRegistryHandle>() {
                     registry.add_boxed_for::<ScheduledTaskMarker>(boxed_tasks);
@@ -1234,11 +1231,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     /// Assemble the final `axum::Router` from all registered routes and layers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`with_state`](AppBuilder::<NoState>::with_state) or
-    /// [`build_state`](AppBuilder::<NoState>::build_state) was never called.
     pub fn build(self) -> crate::http::Router {
         self.build_inner().0
     }
@@ -1257,9 +1249,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         T,
         Option<Duration>,
     ) {
-        let state = self
-            .state
-            .expect("AppBuilder: state must be set before build");
+        let state = self.state;
 
         let mut router = crate::http::Router::new();
 
