@@ -1,7 +1,7 @@
 # DI & Builder Refactor — DX + Compile-Time Roadmap
 
-Status: **Phases 1 & 2 complete** (landed on `refactor/di-builder-dx-ct`); Phase 3
-pending. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
+Status: **Phases 1–3 complete** (landed on `refactor/di-builder-dx-ct`); Phase 4
+next. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
 phase ends with a quality-review gate before the next starts.
 
 | Phase | Item | Status |
@@ -15,7 +15,7 @@ phase ends with a quality-review gate before the next starts.
 | 1f | Controller tuples | ✅ done |
 | 2a | `BuiltApp<T>` struct | ✅ done |
 | 2b | Split `builder.rs` | ✅ done |
-| 3 | Correctness & cleanup | ⏳ pending |
+| 3 | Correctness & cleanup | ✅ done |
 | 4 | Controllers as graph-resolved beans | 📋 planned — approach **A3 validated by spike**, see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
 
@@ -152,12 +152,16 @@ Pure moves, no API change: `builder/nostate.rs` (NoState phase),
 `BuilderConfig`, shared type aliases, `build_state!` macros). Children use
 `use super::*`; `from_pre` and `PreparedApp` fields are `pub(super)`.
 
-## Phase 3 — Correctness & cleanup
+## Phase 3 — Correctness & cleanup ✅
+
+All landed; `cargo clippy -p r2e-core` is at **0 warnings including
+`--all-features`**. Review gate passed (no correctness findings).
 
 - **Readable `build_state` panic**: `.unwrap_or_else(|e| panic!("...: {e}"))` —
-  `Display` exists (beans.rs:525) but `.expect` uses `Debug` and swallows it.
-- **Real cycle path**: in `topological_sort` (beans.rs:1286-1292), replace "all
-  nodes with `in_degree>0`" with a DFS extracting the actual A→B→C→A path.
+  `Display` exists (beans.rs:525) but `.expect` used `Debug` and swallowed it.
+- **Real cycle path**: `topological_sort` now calls `find_cycle` (three-color
+  DFS over the stuck `in_degree>0` subgraph) reporting one concrete
+  `A -> B -> A` path.
 - **panic → Result**: `try_register_controller() -> Result<Self,
   ConfigValidationError>`; `register_controller` wraps it (ends the panic in
   `builder/typed.rs` `register_controller`).
