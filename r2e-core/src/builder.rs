@@ -1143,23 +1143,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Assemble the final `axum::Router` from all registered routes and layers.
     pub fn build(self) -> crate::http::Router {
-        self.build_inner().0
+        self.build_inner().router
     }
 
-    fn build_inner(
-        self,
-    ) -> (
-        crate::http::Router,
-        Vec<StartupHook<T>>,
-        Vec<ShutdownHook<T>>,
-        Vec<ConsumerReg<T>>,
-        Vec<ServeHook>,
-        Vec<Box<dyn FnOnce() + Send>>,
-        Vec<crate::plugin::AsyncShutdownHook>,
-        HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-        T,
-        Option<Duration>,
-    ) {
+    fn build_inner(self) -> BuiltApp<T> {
         let state = self.state;
 
         let mut router = crate::http::Router::new();
@@ -1216,18 +1203,18 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // responses instead of crashing the process.
         app = app.layer(crate::layers::catch_panic_layer());
 
-        (
-            app,
-            self.startup_hooks,
-            self.shutdown_hooks,
-            self.consumer_registrations,
-            self.serve_hooks,
-            self.plugin_shutdown_hooks,
-            self.plugin_async_shutdown_hooks,
-            self.shared.plugin_data,
+        BuiltApp {
+            router: app,
+            startup_hooks: self.startup_hooks,
+            shutdown_hooks: self.shutdown_hooks,
+            consumer_registrations: self.consumer_registrations,
+            serve_hooks: self.serve_hooks,
+            plugin_shutdown_hooks: self.plugin_shutdown_hooks,
+            plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
+            plugin_data: self.shared.plugin_data,
             state,
-            self.shared.shutdown_grace_period,
-        )
+            shutdown_grace_period: self.shared.shutdown_grace_period,
+        }
     }
 
     /// Build the application without starting the server.
@@ -1294,33 +1281,33 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // is carried on `PreparedApp` and surfaced at `run()` time.
         let workers = crate::sharded::parse_workers(this.shared.config.as_ref());
 
-        let (
-            app,
+        let BuiltApp {
+            router,
             startup_hooks,
             shutdown_hooks,
-            consumer_regs,
+            consumer_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
             plugin_async_shutdown_hooks,
             plugin_data,
             state,
             shutdown_grace_period,
-        ) = this.build_inner();
+        } = this.build_inner();
 
         #[cfg(feature = "quic")]
-        let app = if let Some((ref addr, _)) = quic_server_config {
-            crate::http::quic::apply_alt_svc(app, addr.port(), quic_alt_svc_max_age)
+        let router = if let Some((ref quic_addr, _)) = quic_server_config {
+            crate::http::quic::apply_alt_svc(router, quic_addr.port(), quic_alt_svc_max_age)
         } else {
-            app
+            router
         };
 
         PreparedApp {
-            router: app,
+            router,
             state,
             addr: addr.to_string(),
             startup_hooks,
             shutdown_hooks,
-            consumer_registrations: consumer_regs,
+            consumer_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
             plugin_async_shutdown_hooks,
@@ -1359,6 +1346,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         };
         self.prepare(&addr).run().await
     }
+}
+
+/// Output of [`AppBuilder::build_inner`]: the assembled router plus everything
+/// the serving layer needs (hooks, state, plugin data).
+///
+/// Internal — `build()` keeps only the router, `prepare()` lifts the rest into
+/// a [`PreparedApp`] together with the address and server tuning options.
+struct BuiltApp<T: Clone + Send + Sync + 'static> {
+    router: crate::http::Router,
+    startup_hooks: Vec<StartupHook<T>>,
+    shutdown_hooks: Vec<ShutdownHook<T>>,
+    consumer_registrations: Vec<ConsumerReg<T>>,
+    serve_hooks: Vec<ServeHook>,
+    plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
+    plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
+    plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    state: T,
+    shutdown_grace_period: Option<Duration>,
 }
 
 /// A fully configured R2E app ready to be served.
