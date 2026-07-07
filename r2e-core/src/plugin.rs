@@ -220,7 +220,7 @@ pub trait PreStatePlugin: Send + 'static {
     ///
     /// **Constraint:** plugin install runs *before* the bean graph is built,
     /// so every type listed here must be a `.provide(instance)` value, not a
-    /// `.with_bean::<T>()` registration. If a `with_bean`-registered type
+    /// `.register::<T>()` registration. If a `register`-ed (factory-built) type
     /// appears in `Deps`, runtime resolution panics with a clear message.
     type Deps: crate::type_list::PluginDeps;
 
@@ -236,7 +236,7 @@ pub trait PreStatePlugin: Send + 'static {
 ///
 /// Implement this trait when your plugin needs to:
 /// - Provide **multiple** bean types (via `type Provisions = TCons<A, TCons<B, TNil>>`)
-/// - Call arbitrary builder methods (`.with_bean()`, `.with_producer()`, etc.)
+/// - Call arbitrary builder methods (`.register()`, `.provide()`, etc.)
 ///
 /// Most plugins should implement [`PreStatePlugin`] instead — it's simpler and
 /// automatically provides a `RawPreStatePlugin` impl via a blanket implementation.

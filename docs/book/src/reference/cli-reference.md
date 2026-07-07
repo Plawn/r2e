@@ -100,7 +100,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(Scheduler)
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-        .build_state::<AppState, _, _>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Tracing)

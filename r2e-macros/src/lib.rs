@@ -823,7 +823,7 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 /// // Use with the builder:
 /// AppBuilder::new()
 ///     .provide(config)
-///     .with_producer::<CreatePool>()   // registers SqlitePool
+///     .register::<CreatePool>()   // registers SqlitePool
 ///     .build_state::<Services, _>()
 ///     .await
 /// ```

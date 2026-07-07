@@ -34,7 +34,7 @@ schemars = "1"
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<Services, _, _>()
+    .build_state::<Services, _>()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("Mon API", "0.1.0")

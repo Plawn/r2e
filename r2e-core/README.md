@@ -16,10 +16,10 @@ AppBuilder::new()
     .plugin(Scheduler)                     // pre-state plugin
     .load_config::<AppConfig>()             // load yaml + type + provide (or .with_config(config))
     .provide(my_pool.clone())              // pre-built instance
-    .with_bean::<UserService>()            // sync bean
-    .with_async_bean::<MyAsyncService>()   // async bean
-    .with_producer::<CreatePool>()         // async producer
-    .build_state::<Services, _, _>().await    // resolve bean graph → phase 2
+    .register::<UserService>()            // sync bean
+    .register::<MyAsyncService>()   // async bean
+    .register::<CreatePool>()         // async producer
+    .build_state::<Services, _>().await    // resolve bean graph → phase 2
 
     // Phase 2: post-state (plugins, routes, lifecycle)
     .with(Health)
@@ -42,9 +42,9 @@ Three bean traits resolved at compile time:
 
 | Trait | Constructor | Registration |
 |-------|-----------|-------------|
-| `Bean` | `fn build(ctx) -> Self` | `.with_bean::<T>()` |
-| `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` |
-| `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` |
+| `Bean` | `fn build(ctx) -> Self` | `.register::<T>()` |
+| `AsyncBean` | `async fn build(ctx) -> Self` | `.register::<T>()` |
+| `Producer` | `async fn produce(ctx) -> Output` | `.register::<P>()` |
 
 A producer can declare `type Output = Option<T>` (the `#[producer]` macro
 infers this from the return type) to express conditional availability —

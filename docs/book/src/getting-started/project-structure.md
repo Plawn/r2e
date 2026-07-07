@@ -41,8 +41,8 @@ async fn main() {
 
     AppBuilder::new()
         .load_config::<()>()
-        .with_bean::<UserService>()
-        .build_state::<AppState, _, _>()
+        .register::<UserService>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Cors::permissive())
@@ -131,6 +131,6 @@ database:
 
 R2E follows a few conventions:
 - Controllers live in `src/controllers/` and are registered explicitly via `register_controller::<T>()`
-- Services live in `src/services/` and are registered as beans via `with_bean::<T>()`
+- Services live in `src/services/` and are registered as beans via `register::<T>()`
 - Configuration is loaded from `application.yaml` (with env var overlay)
 - The state struct uses `#[derive(BeanState)]` for automatic `FromRef` implementations

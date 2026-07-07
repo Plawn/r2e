@@ -11,18 +11,17 @@ AppBuilder::new()
     .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children
     // or: .with_config(config)            // provide a pre-loaded R2eConfig (no child auto-registration)
     .provide(services.pool.clone())        // provide beans
-    .with_producer::<CreatePool>()         // async producer (registers SqlitePool)
-    .with_async_bean::<MyAsyncService>()   // async bean constructor
-    .with_bean::<UserService>()            // sync bean (unchanged)
-    // ── Conditional registration (NOT in provision list P — consumers use Option<T>) ──
-    .with_bean_when::<RedisCache>(use_redis)            // register if runtime bool is true
-    .with_async_bean_when::<SmtpMailer>(smtp_enabled)   // async variant
-    .with_producer_when::<CreateMetrics>(has_metrics)    // producer variant
-    .with_bean_on_config::<MetricsCollector>("metrics.enabled")  // register if config key is truthy
-    .with_async_bean_on_config::<SmtpMailer>("smtp.enabled")     // async + config key
-    // config sections are auto-registered as beans by load_config (inject with #[inject])
-    .build_state::<Services, _, _>()       // resolve bean graph (async — .await required)
-    .await
+    .register::<CreatePool>()              // async producer (registers SqlitePool)
+    .register::<MyAsyncService>()          // async bean constructor
+    .register::<UserService>()             // sync bean — one unified register()
+    // ── Conditional Self->Self assembly (plugins/layers, provision list P unchanged) ──
+    .when(dev_mode, |b| b.with(DevReload))              // runtime bool
+    .when(b.config_flag("metrics.enabled"), |b| b.with(Prometheus::default()))
+    // For conditional *bean* presence: register a `#[producer] -> Option<T>`
+    // (slot always in P; producer returns Some/None). config sections are
+    // auto-registered as beans by load_config (inject with #[inject]).
+    .build_state::<Services, _>()          // resolve bean graph (async — .await required)
+    .await                                 // idiomatic: `build_state!(app, Services).await` — zero-underscore macro façade
     // ── Post-state phase ──
     .with(Health)                          // /health → 200 "OK"
     .with(Cors::permissive())              // or Cors::new(custom_layer)
@@ -37,6 +36,7 @@ AppBuilder::new()
     .register_controller::<UserController>()
     .register_controller::<AccountController>()
     .register_controller::<ScheduledJobs>() // auto-discovers #[scheduled] methods
+    // or register several at once: .register_controllers::<(UserController, AccountController, ScheduledJobs)>()
     .register_subscriber::<NotificationService>() // bean event subscribers
     .build()                               // → Router
     // or .serve("0.0.0.0:3000").await     // build + listen + graceful shutdown
@@ -317,7 +317,7 @@ Scheduled tasks are auto-discovered via `register_controller()`, following the s
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)                        // install scheduler runtime (provides CancellationToken)
-    .build_state::<Services, _, _>()
+    .build_state::<Services, _>()
     .await
     .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
     .serve("0.0.0.0:3000")

@@ -91,7 +91,7 @@ struct BuilderConfig {
 /// # Two-phase builder
 ///
 /// The builder starts in the `NoState` phase (`AppBuilder<NoState>`), where
-/// you can call [`provide()`](Self::provide), [`with_bean()`](Self::with_bean),
+/// you can call [`provide()`](Self::provide), [`register()`](Self::register),
 /// and state-independent configuration methods. Transition to a typed phase
 /// via:
 ///

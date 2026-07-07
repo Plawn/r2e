@@ -125,8 +125,8 @@ Wire it up in `main.rs`:
 async fn main() {
     AppBuilder::new()
         .load_config::<()>()
-        .with_bean::<UserService>()
-        .build_state::<AppState, _, _>()
+        .register::<UserService>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)           // GET /health
         .with(Cors::permissive())
@@ -329,7 +329,7 @@ Register the scheduler plugin **before** `build_state()`:
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
@@ -378,7 +378,7 @@ let config = R2eConfig::load().unwrap(); // loads application.yaml + .env + env 
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")

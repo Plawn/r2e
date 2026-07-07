@@ -66,7 +66,7 @@ async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .build_state::<AppState, _, _>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Tracing)

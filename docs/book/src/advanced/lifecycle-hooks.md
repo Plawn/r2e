@@ -8,7 +8,7 @@ Runs before the server starts listening. Receives the application state:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .on_start(|state| async move {
         // Verify database connectivity
@@ -47,7 +47,7 @@ A common pattern is seeding an initial admin user at startup. `on_start` gives y
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .on_start(|state| async move {
         // R2eConfig maps ADMIN_EMAIL → admin.email automatically
@@ -109,7 +109,7 @@ Register multiple hooks — they execute in registration order:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .on_start(|state| async move {
         tracing::info!("Hook 1: check DB");
@@ -136,7 +136,7 @@ By default, R2E waits indefinitely for shutdown hooks to complete. Use `shutdown
 use std::time::Duration;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .shutdown_grace_period(Duration::from_secs(5))
     .on_stop(|_state| async {

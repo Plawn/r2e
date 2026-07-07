@@ -227,7 +227,7 @@ Install the `ErrorHandling` plugin to catch panics and return JSON 500 responses
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(ErrorHandling)
     // ...

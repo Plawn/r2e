@@ -10,7 +10,7 @@ The `Tracing` plugin initializes structured logging and adds HTTP-level trace sp
 use r2e::prelude::*;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(Tracing)
     .serve("0.0.0.0:3000")
@@ -92,7 +92,7 @@ let tracing_config = TracingConfig::default()
     .with_filter("debug,hyper=warn");
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(Tracing::configured(tracing_config))
     .serve("0.0.0.0:3000")
@@ -106,7 +106,7 @@ When using `load_config`, you can read `TracingConfig` directly from your YAML:
 ```rust
 AppBuilder::new()
     .load_config::<RootConfig>()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(Tracing::from_config(&app.r2e_config().unwrap()))
     .serve("0.0.0.0:3000")
@@ -128,7 +128,7 @@ The `RequestIdPlugin` assigns a unique identifier to every request, enabling cor
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(RequestIdPlugin)
     .with(Tracing)
@@ -251,7 +251,7 @@ use r2e::prelude::*;
 // Application setup
 AppBuilder::new()
     .load_config::<RootConfig>()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(RequestIdPlugin)                                // Assign request IDs
     .with(Tracing::from_config(&app.r2e_config().unwrap()))  // Configurable tracing

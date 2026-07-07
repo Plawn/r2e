@@ -85,7 +85,7 @@ async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .build_state::<AppState, _, _>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Tracing)
@@ -226,8 +226,8 @@ async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .with_bean::<services::UserService>()
-        .build_state::<AppState, _, _>()
+        .register::<services::UserService>()
+        .build_state::<AppState, _>()
         .await
         .with(Health)
         .with(Tracing)

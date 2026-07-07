@@ -94,12 +94,24 @@ sort are written once. Committed. `Registrable` and `describe_graph` build on it
   compile-time-safe path is `#[producer] -> Option<T>` (slot always in `P`).
   Keep the default/alternative pattern (distinct override semantics).
 
-### 1e — Compile-time duplicate detection (SPIKE, risky)
-- Goal: `.register::<T>()` of a `T` already in `P` → compile error (instead of
-  runtime `DuplicateBean`, beans.rs:1138).
-- Hard on stable Rust (no negative bounds / specialization). Spike a type-level
-  uniqueness marker; **explicit fallback**: keep the runtime `DuplicateBean`
-  check if no clean stable approach emerges within a bounded spike.
+### 1e — Duplicate detection: RUNTIME (decided)
+- A spike proved compile-time detection IS feasible on stable Rust via an
+  inference-ambiguity trick, but the costs outweigh the benefit:
+  - it adds a `_` witness to `.register::<T, _>()` (undoes 1b's zero-underscore
+    goal);
+  - the error is a cryptic E0283 "type annotations needed" that
+    `#[diagnostic::on_unimplemented]` cannot improve (it's an ambiguity, not an
+    unsatisfied bound);
+  - it rejects the intentional default/override pattern (kept in 1d) and would
+    require a dual `.override_bean::<T>()`;
+  - it taxes every generic wrapper over `P` and is incompatible with the runtime
+    `allow_bean_override()` mode.
+- The only error it catches — the same type registered twice — is already caught
+  loudly at startup by the runtime `DuplicateBean` check (the first thing
+  `build_state` does), with a clear `Display` message.
+- **Decision: keep the runtime check.** Its message was improved to point at the
+  fix (remove the duplicate, or use `.with_default_bean()` / `.allow_bean_override()`
+  for intentional overrides). No type-level change.
 
 ### 1f — Controller tuples
 - `register_controllers::<(A, B, ...)>()` via a trait implemented for tuples of

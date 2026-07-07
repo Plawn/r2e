@@ -58,8 +58,8 @@ async fn setup() -> (TestApp, TestJwt) {
     let app = TestApp::from_builder(
         AppBuilder::new()
             .provide(Arc::new(jwt.claims_validator()))
-            .with_bean::<UserService>()
-            .build_state::<TestServices, _, _>()
+            .register::<UserService>()
+            .build_state::<TestServices, _>()
             .await
             .with(Health)
             .with(ErrorHandling)

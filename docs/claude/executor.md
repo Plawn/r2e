@@ -35,7 +35,7 @@ AppBuilder::new()
     .plugin(Executor)              // installs PoolExecutor as a bean
     .with_config(config)
     // ...
-    .build_state::<Services, _, _>().await
+    .build_state::<Services, _>().await
 ```
 
 The plugin reads the `executor.*` section of `R2eConfig`:
@@ -175,7 +175,7 @@ impl EmailWorker {
 // Register — uses the existing AppBuilder::spawn_service pipeline.
 AppBuilder::new()
     .plugin(Executor)
-    .build_state::<Services, _, _>().await
+    .build_state::<Services, _>().await
     .spawn_service::<EmailWorker>()
     .serve_auto().await?;
 ```

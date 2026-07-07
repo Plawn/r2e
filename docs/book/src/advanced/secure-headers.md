@@ -8,7 +8,7 @@ The `SecureHeaders` plugin automatically adds security-related HTTP headers to e
 use r2e::prelude::*;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(SecureHeaders::default())   // sensible defaults
     .serve("0.0.0.0:3000")
@@ -145,7 +145,7 @@ async fn main() {
         .build();
 
     AppBuilder::new()
-        .build_state::<AppState, _, _>()
+        .build_state::<AppState, _>()
         .await
         .with(Tracing)
         .with(ErrorHandling)

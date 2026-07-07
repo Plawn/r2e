@@ -185,13 +185,19 @@ Controllers are registered with the application builder:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .register_controller::<UserController>()
     .register_controller::<AccountController>()
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
+```
+
+To register several controllers at once, use `register_controllers::<(A, B, ...)>()` (tuples of arity 1..=16). It is equivalent to the sequential `register_controller` calls above, preserving order:
+
+```rust
+    .register_controllers::<(UserController, AccountController)>()
 ```
 
 ## What gets generated

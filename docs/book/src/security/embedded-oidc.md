@@ -35,7 +35,7 @@ let oidc = OidcServer::new()
 
 AppBuilder::new()
     .plugin(oidc)                              // pre-state: provides Arc<JwtClaimsValidator>
-    .build_state::<Services, _, _>().await
+    .build_state::<Services, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -77,7 +77,7 @@ let oidc = OidcServer::new()
 // main(env) — called on each hot-patch
 AppBuilder::new()
     .plugin(oidc.clone()) // reuses the same keys and state
-    .build_state::<Services, _, _>().await
+    .build_state::<Services, _>().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -384,8 +384,8 @@ async fn main() {
 
     AppBuilder::new()
         .plugin(oidc)
-        .with_bean::<UserService>()
-        .build_state::<Services, _, _>().await
+        .register::<UserService>()
+        .build_state::<Services, _>().await
         .with(Health)
         .with(Tracing)
         .register_controller::<ApiController>()
@@ -412,7 +412,7 @@ let oidc = OidcServer::new().with_user_store(users);
 
 let app = AppBuilder::new()
     .plugin(oidc)
-    .build_state::<TestState, _, _>().await
+    .build_state::<TestState, _>().await
     .register_controller::<MyController>()
     .build();
 

@@ -41,7 +41,7 @@ impl UserService {
 }
 ```
 
-Register with `.with_bean::<UserService>()`.
+Register with `.register::<UserService>()`.
 
 ### `AsyncBean` — Asynchronous construction
 
@@ -62,7 +62,7 @@ impl CacheService {
 }
 ```
 
-Register with `.with_async_bean::<CacheService>()`. The `#[bean]` macro auto-detects async constructors and generates `impl AsyncBean` instead of `impl Bean`.
+Register with `.register::<CacheService>()`. The `#[bean]` macro auto-detects async constructors and generates `impl AsyncBean` instead of `impl Bean`.
 
 ### `Producer` — Factory for types you don't own
 
@@ -75,7 +75,7 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 }
 ```
 
-This generates a struct `CreatePool` (PascalCase of the function name) with `impl Producer`. Register with `.with_producer::<CreatePool>()`. The struct is just a vehicle for the trait impl — you never instantiate it yourself.
+This generates a struct `CreatePool` (PascalCase of the function name) with `impl Producer`. Register with `.register::<CreatePool>()`. The struct is just a vehicle for the trait impl — you never instantiate it yourself.
 
 Producer parameters can be **bean dependencies**, **config values**, or both:
 
@@ -89,7 +89,7 @@ async fn create_notifier(
     NotificationClient::new(&url, timeout, bus).await
 }
 // Generates: CreateNotifier with deps [LocalEventBus, R2eConfig]
-// Register: .with_producer::<CreateNotifier>()
+// Register: .register::<CreateNotifier>()
 ```
 
 Parameters without `#[config]` are treated as bean dependencies (pulled from `ctx.get::<T>()`). Parameters with `#[config("key")]` are resolved from `R2eConfig` — and `R2eConfig` is automatically added to the dependency list when any `#[config]` param is present.
@@ -121,7 +121,7 @@ impl ChatService {
 }
 ```
 
-This gives you a single, honest knob: the producer encapsulates the decision, the consumer handles both branches, and the compile-time dependency graph catches missing registrations. Prefer this pattern over `with_producer_when` / `with_bean_when` for anything consumed by macro-derived beans.
+This gives you a single, honest knob: the producer encapsulates the decision, the consumer handles both branches, and the compile-time dependency graph catches missing registrations. This is the blessed pattern for conditional beans consumed by macro-derived beans — the `Option<T>` slot is always registered, so the graph stays complete regardless of the runtime decision. (For conditional plugins or layers that don't change the provision list, use `.when(cond, |b| ...)` with the `config_flag(key)` / `profile_is(profile)` helpers.)
 
 ### `#[derive(Bean)]` — Derive-based beans
 
@@ -202,18 +202,18 @@ The `build_state()` method resolves the bean graph in dependency order:
 AppBuilder::new()
     .provide(event_bus)                    // provide pre-built instances
     .provide(pool)
-    .with_producer::<CreatePool>()         // async producer
-    .with_async_bean::<CacheService>()     // async bean
-    .with_bean::<UserService>()            // sync bean
+    .register::<CreatePool>()         // async producer
+    .register::<CacheService>()     // async bean
+    .register::<UserService>()            // sync bean
     // config sections are auto-registered by load_config (available as bean deps)
-    .build_state::<AppState, _, _>()          // resolve the graph
+    .build_state::<AppState, _>()          // resolve the graph
     .await                                 // async because graph may contain async beans
 ```
 
-### `provide()` vs `with_bean()`
+### `provide()` vs `register()`
 
 - `provide(value)` — injects a pre-built instance directly into the graph
-- `with_bean::<T>()` — registers a factory; R2E constructs it from its dependencies
+- `register::<T>()` — registers a factory (bean, async bean, or producer); R2E constructs it from its dependencies
 
 Use `provide()` for values constructed outside the bean graph (e.g., configuration, tokens, pre-existing pools).
 
@@ -250,10 +250,10 @@ async fn main() {
     AppBuilder::new()
         .load_config::<()>()
         .provide(event_bus)
-        .with_producer::<CreatePool>()
-        .with_bean::<UserService>()
-        .with_bean::<NotificationService>()
-        .build_state::<AppState, _, _>()
+        .register::<CreatePool>()
+        .register::<UserService>()
+        .register::<NotificationService>()
+        .build_state::<AppState, _>()
         .await
         // ... register controllers, plugins, etc.
         .serve("0.0.0.0:3000")

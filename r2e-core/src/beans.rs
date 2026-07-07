@@ -55,7 +55,7 @@ pub trait Bean: Clone + Send + Sync + 'static {
     /// when none is available (or when running on a current-thread runtime).
     ///
     /// Consumers use `Self` directly — no wrapper type needed.
-    /// Register with `.with_bean::<T>()` / `.with_async_bean::<T>()`
+    /// Register with `.register::<T>()`
     /// as usual; the builder auto-detects the `LAZY` flag.
     const LAZY: bool = false;
 
@@ -89,7 +89,7 @@ pub trait Bean: Clone + Send + Sync + 'static {
 /// Trait for beans that require async initialization (e.g. DB pools, HTTP clients).
 ///
 /// Use `#[bean]` on an `impl` block with an `async fn new(...)` constructor,
-/// or implement this trait manually. Register with `.with_async_bean::<T>()`.
+/// or implement this trait manually. Register with `.register::<T>()`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not registered as an AsyncBean",
     label = "this type is not an async bean",
@@ -152,7 +152,7 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
 /// (e.g. `SqlitePool`, third-party clients).
 ///
 /// Use the `#[producer]` attribute macro on a free function to generate
-/// this implementation automatically. Register with `.with_producer::<P>()`.
+/// this implementation automatically. Register with `.register::<P>()`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not registered as a Producer",
     label = "this type is not a producer",
@@ -580,7 +580,14 @@ impl fmt::Display for BeanError {
                 )
             }
             BeanError::DuplicateBean { type_name } => {
-                write!(f, "Bean of type '{}' registered twice", type_name)
+                write!(
+                    f,
+                    "Bean of type '{}' is registered more than once. Remove the \
+                     duplicate .register()/.provide(). For an intentional override, \
+                     register the base with .with_default_bean() (last-wins) or opt \
+                     into overrides with .allow_bean_override()",
+                    type_name
+                )
             }
             BeanError::MissingConfigKeys(err) => {
                 write!(f, "{}", err)
@@ -621,7 +628,7 @@ impl BeanRegistry {
     }
 
     /// Returns `true` if a bean (eager or lazy) of type `T` is registered
-    /// (via `with_bean` / `with_async_bean`) but not yet materialized.
+    /// (via `register`) but not yet materialized.
     ///
     /// Used by plugin dependency resolution to produce a clear error when
     /// a plugin asks for a bean that exists only as a registration at

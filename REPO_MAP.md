@@ -100,7 +100,7 @@ AppBuilder, controllers, guards, interceptors, plugins, configuration, DI, and H
 ```
 src/
   lib.rs                    Entry point — re-exports all public types
-  builder.rs                AppBuilder fluent API (provide, with_bean, build_state, register_controller, serve)
+  builder.rs                AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
   controller.rs             Controller<S> and StatefulConstruct<S> trait definitions
   beans.rs                  DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry
   error.rs                  HttpError enum (BadRequest, NotFound, Unauthorized, Forbidden, Internal)
@@ -119,7 +119,7 @@ src/
   sse.rs                    SseBroadcaster, SseStream for Server-Sent Events
   ws.rs                     WsStream, WsHandler, WsBroadcaster, WsRooms (feature = "ws")
   state.rs                  R2eState wrapper type
-  type_list.rs              Heterogeneous type list (TNil, TCons, Contains, BuildableFrom) for compile-time DI
+  type_list.rs              Heterogeneous type list (TNil, TCons, Contains, AllSatisfied) for compile-time DI
   types.rs                  Shared type definitions
   prelude.rs                Convenience re-exports
   validation.rs             Automatic validation via garde (autoref specialization)

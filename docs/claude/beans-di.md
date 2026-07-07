@@ -4,13 +4,15 @@
 
 | Trait | Constructor | Registration | Use case |
 |-------|-----------|-------------|----------|
-| `Bean` | `fn build(ctx) -> Self` (sync) | `.with_bean::<T>()` | Simple services |
-| `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` | Services needing async init |
-| `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` | Types you don't own (pools, clients) |
+| `Bean` | `fn build(ctx) -> Self` (sync) | `.register::<T>()` | Simple services |
+| `AsyncBean` | `async fn build(ctx) -> Self` | `.register::<T>()` | Services needing async init |
+| `Producer` | `async fn produce(ctx) -> Output` | `.register::<P>()` | Types you don't own (pools, clients) |
+
+All three kinds register through the single unified `.register::<T>()` method — the type implements `Registrable`, which `#[bean]`, `#[derive(Bean)]`, and `#[producer]` emit automatically. `#[bean]` picks sync vs async `Bean`/`AsyncBean` for you; `#[producer]` registers the producer's **output** type.
 
 All three traits have an associated `type Deps` that declares their dependencies as a type-level list. **This is auto-generated** by the `#[bean]`, `#[derive(Bean)]`, and `#[producer]` macros — you never write `Deps` manually. For manual trait impls without dependencies, use `type Deps = TNil;`.
 
-**`build_state()` is async** — it must be `.await`ed because the bean graph may contain async beans or producers. It takes 3 generic args: `build_state::<S, _, _>()` (state type, provisions, requirements).
+**`build_state` is async** — it must be `.await`ed because the bean graph may contain async beans or producers. The method carries a single inferred witness parameter: in a fluent builder chain, call `.build_state::<S, _>()` (one underscore) directly. If you have bound the builder to a variable, prefer the zero-underscore macros `build_state!(app, S)` / `try_build_state!(app, S)` (non-panicking), which hide the witness entirely.
 
 ## `#[bean]` attribute macro
 
@@ -80,13 +82,15 @@ Internally:
   declare the param as `llm: Arc<LlmClient>` — but this still requires a
   producer that returns `Arc<LlmClient>` directly (not `Option<...>`).
 
-**Why not `with_producer_when`?** The conditional builder methods
-(`with_producer_when`, `with_bean_when`, etc.) skip registration entirely
-when the condition is false. This leaves the `Option<T>` slot missing,
-which is a compile-time-enforced `MissingDependency` for any macro consumer
-that declares `Option<T>` as a dep. Use those APIs only with manual
-`Bean` impls that call `ctx.try_get::<T>()` directly. For macro-derived
-consumers, prefer `#[producer] -> Option<T>` and always register.
+**Conditional bean presence:** keep the slot in the provision list and let
+the producer decide. A `#[producer] -> Option<T>` always registers the
+`Option<T>` slot, so macro-derived consumers that declare `Option<T>` as a
+dep always compile; the value reflects config/runtime state. This is the
+blessed path — there is no `_when`-style builder method that skips
+registration (those would leave the slot missing and break the compile-time
+graph). For coarse `Self -> Self` toggles that do **not** change the
+provision list (plugins, layers), use `.when(cond, |b| ...)` with the
+`config_flag(key)` / `profile_is(profile)` helpers.
 
 ## Auto-registered config beans
 
@@ -178,35 +182,33 @@ async fn create_pool(metrics: Option<MetricsCollector>) -> SqlitePool {
 #[derive(Clone, BeanState)]
 struct AppState {
     user_service: UserService,
-    cache: Option<RedisCache>, // generates BuildableFrom bound for Option<RedisCache>
+    cache: Option<RedisCache>, // adds Option<RedisCache> to `type Requires`
 }
 ```
 
-The derive emits `BuildableFrom<P, ...>` bounds for both `UserService` and
-`Option<RedisCache>` — `P` must contain the `Option<RedisCache>` slot,
-which is typically provided by a `#[producer] -> Option<RedisCache>`.
+`#[derive(BeanState)]` exposes each field type through the state's
+`type Requires` list. The compile-time check routes through `AllSatisfied`:
+every entry in `Requires` (here `UserService` and `Option<RedisCache>`) must
+be present in the builder's provision list `P`. The `Option<RedisCache>` slot
+is typically provided by a `#[producer] -> Option<RedisCache>`.
 
-### Why not `with_bean_when` / `with_producer_when`?
+### Conditional beans: always register, decide inside the producer
 
-The conditional builder methods skip registration entirely when the
-condition is false. In the first-class model, this leaves the `Option<T>`
-slot missing, which is a `MissingDependency` error for any macro-derived
-consumer that depends on `Option<T>`. Those APIs remain useful for coarse
-enable/disable with **manual** `Bean` impls that call `ctx.try_get::<T>()`
-directly — but the blessed pattern for macro consumers is to always
-register a `#[producer] -> Option<T>` and let it decide `Some`/`None`
-internally:
+The blessed pattern for macro consumers is to always register a
+`#[producer] -> Option<T>` and let it decide `Some`/`None` internally. The
+slot stays in the provision list, so any consumer that depends on `Option<T>`
+compiles; the value reflects config or runtime state:
 
 ```rust
-// ✅ Preferred — slot always present, value reflects config
+// Slot always present, value reflects config
 #[producer]
 async fn create_cache(#[config("cache.enabled")] on: bool) -> Option<Cache> {
     on.then(Cache::new)
 }
 
-AppBuilder::new()
-    .with_producer::<CreateCache>()            // always — no `_when`
-    .build_state::<AppState, _, _>().await
+let app = AppBuilder::new()
+    .register::<CreateCache>();            // always registered
+build_state!(app, AppState).await
 ```
 
 ## `#[config("key")]` in beans
@@ -315,10 +317,10 @@ The `#[bean]` macro generates:
 ## Key files
 
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
-- `r2e-core/src/builder.rs` — `with_bean()`, `with_async_bean()`, `with_producer()`, async `build_state()`
+- `r2e-core/src/builder.rs` — unified `register()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()` (last-wins override), async `build_state()` + the `build_state!` / `try_build_state!` macros
 - `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
-- `r2e-macros/src/bean_state_derive.rs` — `#[derive(BeanState)]` (`Option<T>` field support — `try_get` + skips `BuildableFrom` bounds)
+- `r2e-macros/src/bean_state_derive.rs` — `#[derive(BeanState)]` (`Option<T>` field support — `try_get` + emits the field types into `type Requires`, checked via `AllSatisfied`)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)

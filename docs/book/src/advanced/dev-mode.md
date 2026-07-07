@@ -37,8 +37,8 @@ async fn main(env: AppEnv) {
         .with_config(env.config)
         .provide(env.event_bus)
         .provide(env.pool)
-        .with_bean::<UserService>()
-        .build_state::<MyState, _, _>().await
+        .register::<UserService>()
+        .build_state::<MyState, _>().await
         .with(Health)
         .with(Cors::permissive())
         .with(DevReload)
@@ -178,7 +178,7 @@ The `DevReload` plugin adds development-mode endpoints and response headers:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .with(DevReload)
     // ...

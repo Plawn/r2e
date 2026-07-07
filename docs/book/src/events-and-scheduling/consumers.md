@@ -54,7 +54,7 @@ Register consumer controllers like any other controller:
 ```rust
 AppBuilder::new()
     .provide(event_bus)
-    .build_state::<AppState, _, _>()
+    .build_state::<AppState, _>()
     .await
     .register_controller::<UserEventConsumer>()
     // ...
@@ -160,8 +160,8 @@ The `#[bean]` macro generates an `EventSubscriber` impl when `#[consumer]` metho
 ```rust
 AppBuilder::new()
     .provide(event_bus)
-    .with_bean::<NotificationService>()
-    .build_state::<AppState, _, _>()
+    .register::<NotificationService>()
+    .build_state::<AppState, _>()
     .await
     .register_subscriber::<NotificationService>()
     // ...

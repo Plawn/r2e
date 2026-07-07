@@ -10,13 +10,13 @@
 //! - [`TNil`]: Represents an empty list
 //! - [`TCons<H, T>`]: A "cons cell" where `H` is the head type and `T` is the tail
 //!
-//! When you call `.provide::<T>()` or `.with_bean::<T>()` on the builder, the
+//! When you call `.provide::<T>()` or `.register::<T>()` on the builder, the
 //! provision type parameter grows:
 //!
 //! ```text
 //! AppBuilder<NoState, TNil>                    // Initial: empty list
 //!     .provide(pool)                           // → AppBuilder<NoState, TCons<Pool, TNil>>
-//!     .with_bean::<UserService>()              // → AppBuilder<NoState, TCons<UserService, TCons<Pool, TNil>>>
+//!     .register::<UserService>()              // → AppBuilder<NoState, TCons<UserService, TCons<Pool, TNil>>>
 //! ```
 //!
 //! # Compile-Time Verification
@@ -37,7 +37,7 @@
 //! // This compiles:
 //! AppBuilder::new()
 //!     .provide(pool)
-//!     .with_bean::<UserService>()
+//!     .register::<UserService>()
 //!     .build_state::<Services>()  // ✓ Pool and UserService are both provided
 //!     .await
 //!
@@ -47,7 +47,7 @@
 //!     .build_state::<Services>()  // ✗ UserService not provided
 //!     .await
 //! // Error: type `UserService` was not provided to the AppBuilder
-//! //        missing `.provide::<UserService>()` or `.with_bean::<UserService>()`
+//! //        missing `.provide::<UserService>()` or `.register::<UserService>()`
 //! ```
 //!
 //! # Index Witnesses
@@ -70,7 +70,7 @@ pub struct TNil;
 
 /// Cons cell: `H` is a provided type, `T` is the rest of the list.
 ///
-/// Each call to `.provide::<T>()` or `.with_bean::<T>()` wraps the current
+/// Each call to `.provide::<T>()` or `.register::<T>()` wraps the current
 /// list in a new `TCons`:
 ///
 /// ```text
@@ -158,7 +158,7 @@ where
 /// This trait is checked on [`AppBuilder::build_state()`] to ensure that all
 /// bean dependencies are satisfied by the current provisions. If a bean
 /// declares a dependency that was never `.provide()`-d or registered via
-/// `.with_bean()`, the compiler will emit an error at the call site.
+/// `.register()`, the compiler will emit an error at the call site.
 ///
 /// `Indices` is an opaque witness tuple inferred by the compiler.
 #[diagnostic::on_unimplemented(
@@ -244,7 +244,7 @@ macro_rules! impl_plugin_deps {
                         .unwrap_or_else(|| {
                             if registry.is_bean_registered(std::any::TypeId::of::<$T>()) {
                                 panic!(
-                                    "PluginDeps: bean `{name}` is registered via `.with_bean::<{name}>()` but not \
+                                    "PluginDeps: bean `{name}` is registered via `.register::<{name}>()` but not \
                                      yet materialized — plugin `Deps` can only reference types supplied via \
                                      `.provide(instance)` at plugin-install time (beans are built later, after all \
                                      plugins install). Change the provider to `.provide(...)` or move the plugin \
