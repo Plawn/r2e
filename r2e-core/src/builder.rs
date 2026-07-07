@@ -121,6 +121,31 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     _required: PhantomData<R>,
 }
 
+// ── Conditional assembly (any phase) ────────────────────────────────────────
+
+impl<T: Clone + Send + Sync + 'static, P, R> AppBuilder<T, P, R> {
+    /// Conditionally apply a builder transformation.
+    ///
+    /// `f` must return the **same** builder type, so it may call `Self -> Self`
+    /// methods (custom layers, plugins, config toggles) but **not** type-changing
+    /// methods like `register`: a runtime flag cannot change the compile-time
+    /// provision list `P`. For conditional *bean* presence, use a
+    /// `#[producer] -> Option<T>` — the slot is always in `P` and the producer
+    /// decides `Some`/`None` internally.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .when(cfg!(debug_assertions), |b| b.with(DevReload))
+    /// ```
+    pub fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
+    }
+}
+
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
 impl AppBuilder<NoState, TNil, TNil> {
@@ -225,127 +250,32 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self.with_updated_types()
     }
 
-    /// Conditionally register a bean based on a runtime boolean.
+    /// Check whether a config key is truthy (a boolean `true`).
     ///
-    /// Does NOT add to the provision list. Downstream consumers must inspect
-    /// the context at runtime via `ctx.try_get::<T>()` — they cannot declare
-    /// a compile-time dependency on the bean.
-    ///
-    /// # For Option-valued conditional availability, prefer `#[producer]`
-    ///
-    /// If the consumer wants to hold an `Option<T>` field, the recommended
-    /// pattern is a `#[producer]` that returns `Option<T>` and decides
-    /// internally whether to emit `Some`/`None` — the slot is then always
-    /// registered and consumers can hard-depend on `Option<T>`:
+    /// Requires [`load_config`](Self::load_config) or
+    /// [`with_config`](Self::with_config) to have been called first. Combine it
+    /// with [`when`](Self::when) for conditional assembly, or use it to compute
+    /// the flag a `#[producer] -> Option<T>` keys off:
     ///
     /// ```ignore
-    /// #[producer]
-    /// async fn create_cache(#[config("app.cache.enabled")] enabled: bool) -> Option<Cache> {
-    ///     enabled.then(Cache::new)
-    /// }
+    /// let b = AppBuilder::new().load_config::<AppConfig>();
+    /// let enabled = b.config_flag("features.cache");
+    /// b.provide(CacheEnabled(enabled)).register::<CacheProducer>()
     /// ```
     ///
-    /// `with_bean_when` is reserved for coarser-grained conditional assembly
-    /// where a consumer is built out of hand (manual `Bean` impl using
-    /// `ctx.try_get`) rather than through the `#[bean]` / `#[derive(Bean)]`
-    /// macros.
-    pub fn with_bean_when<B: Bean>(mut self, condition: bool) -> Self {
-        if condition {
-            self.shared.bean_registry.register::<B>();
-        }
-        self
-    }
-
-    /// Conditionally register an async bean based on a runtime boolean.
-    ///
-    /// See [`with_bean_when`](Self::with_bean_when) for semantics and the
-    /// recommended `#[producer] -> Option<T>` pattern for macro-derived
-    /// consumers.
-    pub fn with_async_bean_when<B: AsyncBean>(mut self, condition: bool) -> Self {
-        if condition {
-            self.shared.bean_registry.register_async::<B>();
-        }
-        self
-    }
-
-    /// Conditionally register a producer based on a runtime boolean.
-    ///
-    /// Does NOT add to the provision list. When `condition` is `false`, the
-    /// producer's output is simply absent from the context — downstream
-    /// consumers must inspect the context via `ctx.try_get::<Pr::Output>()`
-    /// in a manual `Bean` impl.
-    ///
-    /// # Prefer `#[producer] -> Option<T>` for macro-derived consumers
-    ///
-    /// The macro path (`#[derive(BeanState)]`, `#[bean]` with `Option<T>`
-    /// params, `#[derive(Bean)]` with `Option<T>` fields) treats `Option<T>`
-    /// as a first-class bean type and hard-depends on `Option<T>`. Such
-    /// consumers do **not** compose with `with_producer_when` — use a
-    /// producer that always registers but decides `Some`/`None` internally:
-    ///
-    /// ```ignore
-    /// #[producer]
-    /// async fn create_cache(#[config("app.cache.enabled")] enabled: bool) -> Option<Cache> {
-    ///     enabled.then(Cache::new)
-    /// }
-    /// // Always: .with_producer::<CreateCache>()
-    /// ```
-    pub fn with_producer_when<Pr: Producer>(mut self, condition: bool) -> Self {
-        if condition {
-            self.shared.bean_registry.register_producer::<Pr>();
-        }
-        self
-    }
-
-    /// Register a bean only if a config key is truthy (`true`, non-empty string, etc.).
-    ///
-    /// Requires `.load_config()` or `.with_config()` to have been called first.
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
-    ///
     /// # Panics
     ///
     /// Panics if no config has been loaded.
-    pub fn with_bean_on_config<B: Bean>(self, key: &str) -> Self {
-        let enabled = self.is_config_enabled(key);
-        self.with_bean_when::<B>(enabled)
-    }
-
-    /// Register an async bean only if a config key is truthy.
-    ///
-    /// Requires `.load_config()` or `.with_config()` to have been called first.
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no config has been loaded.
-    pub fn with_async_bean_on_config<B: AsyncBean>(self, key: &str) -> Self {
-        let enabled = self.is_config_enabled(key);
-        self.with_async_bean_when::<B>(enabled)
-    }
-
-    /// Register a producer only if a config key is truthy.
-    ///
-    /// Requires `.load_config()` or `.with_config()` to have been called first.
-    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if no config has been loaded.
-    pub fn with_producer_on_config<Pr: Producer>(self, key: &str) -> Self {
-        let enabled = self.is_config_enabled(key);
-        self.with_producer_when::<Pr>(enabled)
-    }
-
-    /// Check if a config key is truthy (bool `true`). Panics if no config loaded.
-    fn is_config_enabled(&self, key: &str) -> bool {
-        self.shared.config
+    pub fn config_flag(&self, key: &str) -> bool {
+        self.shared
+            .config
             .as_ref()
-            .expect("conditional config registration requires config — call .load_config() first")
+            .expect("config_flag requires config — call .load_config() or .with_config() first")
             .try_get::<bool>(key)
             .unwrap_or(false)
     }
 
-    // ── Profile-based registration ─────────────────────────────────────
+    // ── Profile inspection ─────────────────────────────────────────────
 
     /// Returns the active profile name.
     ///
@@ -361,37 +291,22 @@ impl<P, R> AppBuilder<NoState, P, R> {
         &self.shared.active_profile
     }
 
-    /// Register a bean only if the active profile matches.
+    /// Returns `true` if the active profile matches `profile`.
     ///
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
-    pub fn with_bean_for_profile<B: Bean>(self, profile: &str) -> Self {
-        let matches = self.shared.active_profile == profile;
-        self.with_bean_when::<B>(matches)
+    /// Convenience over [`active_profile`](Self::active_profile) for use with
+    /// [`when`](Self::when) or to compute a flag a `#[producer] -> Option<T>`
+    /// keys off.
+    pub fn profile_is(&self, profile: &str) -> bool {
+        self.shared.active_profile == profile
     }
 
-    /// Register an async bean only if the active profile matches.
-    ///
-    /// Does NOT add to the provision list — consumers must use `Option<T>`.
-    pub fn with_async_bean_for_profile<B: AsyncBean>(self, profile: &str) -> Self {
-        let matches = self.shared.active_profile == profile;
-        self.with_async_bean_when::<B>(matches)
-    }
+    // ── Default bean registration (last-wins override) ─────────────────
 
-    /// Register a producer only if the active profile matches.
+    /// Register a default bean that a later registration can override.
     ///
-    /// Does NOT add to the provision list — consumers must use `Option<Pr::Output>`.
-    pub fn with_producer_for_profile<Pr: Producer>(self, profile: &str) -> Self {
-        let matches = self.shared.active_profile == profile;
-        self.with_producer_when::<Pr>(matches)
-    }
-
-    // ── Default / Alternative bean registration ────────────────────────
-
-    /// Register a default bean that can be overridden by alternatives.
-    ///
-    /// The bean IS added to the provision list (guaranteed to be present).
-    /// A later call to [`with_alternative_bean_when`](Self::with_alternative_bean_when)
-    /// for the same type will silently replace this registration.
+    /// The bean IS added to the provision list (guaranteed to be present). A
+    /// later [`register`](Self::register) of the same type silently replaces
+    /// this registration (last-wins), without changing the provision list.
     pub fn with_default_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, <R as TAppend<B::Deps>>::Output>
     where
         R: TAppend<B::Deps>,
@@ -420,28 +335,6 @@ impl<P, R> AppBuilder<NoState, P, R> {
     {
         self.shared.bean_registry.register_producer_default::<Pr>();
         self.with_updated_types()
-    }
-
-    /// Register an alternative bean that replaces the default when the condition is true.
-    ///
-    /// Does NOT change the provision list — the default already covers it.
-    /// If the condition is false, the default remains.
-    pub fn with_alternative_bean_when<B: Bean>(self, condition: bool) -> Self {
-        self.with_bean_when::<B>(condition)
-    }
-
-    /// Register an alternative async bean that replaces the default when the condition is true.
-    ///
-    /// Does NOT change the provision list — the default already covers it.
-    pub fn with_alternative_async_bean_when<B: AsyncBean>(self, condition: bool) -> Self {
-        self.with_async_bean_when::<B>(condition)
-    }
-
-    /// Register an alternative producer that replaces the default when the condition is true.
-    ///
-    /// Does NOT change the provision list — the default already covers it.
-    pub fn with_alternative_producer_when<Pr: Producer>(self, condition: bool) -> Self {
-        self.with_producer_when::<Pr>(condition)
     }
 
     /// Register a bean via factory closure with access to [`R2eConfig`](crate::config::R2eConfig).
