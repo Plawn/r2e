@@ -346,19 +346,40 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// This also collects event consumers and scheduled task definitions
     /// declared on the controller, so that they are started automatically
     /// by `serve()`.
-    pub fn register_controller<C: Controller<T>>(mut self) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if config keys or sections declared on the controller fail
+    /// validation. Use [`try_register_controller`](Self::try_register_controller)
+    /// for a non-panicking alternative.
+    pub fn register_controller<C: Controller<T>>(self) -> Self {
+        self.try_register_controller::<C>().unwrap_or_else(|err| {
+            panic!(
+                "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
+                std::any::type_name::<C>(),
+                err
+            )
+        })
+    }
+
+    /// Register a [`Controller`], returning config-validation errors instead
+    /// of panicking.
+    ///
+    /// Behaves exactly like [`register_controller`](Self::register_controller)
+    /// on success. On failure, the controller's aggregated
+    /// [`ConfigValidationError`](crate::config::ConfigValidationError) is
+    /// returned and the builder is consumed (startup wiring cannot proceed
+    /// with a misconfigured controller).
+    pub fn try_register_controller<C: Controller<T>>(
+        mut self,
+    ) -> Result<Self, crate::config::ConfigValidationError> {
         C::register_meta(&mut self.meta_registry);
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
             let errors = C::validate_config(config);
             if !errors.is_empty() {
-                let err = crate::config::ConfigValidationError { errors };
-                panic!(
-                    "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
-                    std::any::type_name::<C>(),
-                    err
-                );
+                return Err(crate::config::ConfigValidationError { errors });
             }
         }
 
@@ -391,7 +412,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             C::register_consumers(state, core)
         }));
 
-        self
+        Ok(self)
     }
 
     /// Register several [`Controller`]s in one call.

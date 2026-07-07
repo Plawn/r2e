@@ -415,7 +415,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     {
         self.try_build_state::<S, W>()
             .await
-            .expect("Failed to resolve bean dependency graph")
+            .unwrap_or_else(|e| panic!("Failed to resolve bean dependency graph: {e}"))
     }
 
     /// Resolve the bean dependency graph and build the application state,
