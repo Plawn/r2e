@@ -1,7 +1,7 @@
 //! Method wrapping for transactional behavior.
 //!
-//! Interceptor wrapping has moved to `handlers.rs` where it has access
-//! to the application state (needed by `InterceptorContext<'_, S>`).
+//! Interceptor wrapping for routes lives in `handlers.rs` (interceptors are
+//! prebuilt decorator-set fields there).
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -249,8 +249,13 @@ fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) 
     }
 }
 
-/// Apply interceptor chain without state (for scheduled tasks).
-/// Uses a unit-type `()` state since scheduled tasks don't have HTTP state.
+/// Apply interceptor chain for scheduled tasks.
+///
+/// Scheduled methods run on the core, outside the handler path — there is no
+/// wiring-time bean context here, so the interceptor expression is used
+/// directly (it must BE the interceptor, i.e. a `SelfBuilt` decorator like
+/// `Logged`/`Timed`; bean-reading config specs such as `Cache` are not
+/// applicable to scheduled methods).
 fn wrap_with_interceptors_no_state(
     mut body: TokenStream,
     fn_name_str: &str,
@@ -286,7 +291,6 @@ fn wrap_with_interceptors_no_state(
             let __ctx = #krate::InterceptorContext {
                 method_name: #fn_name_str,
                 controller_name: #controller_name_str,
-                state: &(),
             };
             #body
         }

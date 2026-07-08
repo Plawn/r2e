@@ -180,7 +180,6 @@ fn wrap_with_interceptors(
                     #krate::InterceptorContext {
                         method_name: #fn_name_str,
                         controller_name: #controller_name_str,
-                        state: &self.ctx,
                     },
                     #wrapped
                 ).await
@@ -198,7 +197,6 @@ fn wrap_with_interceptors(
                 #krate::InterceptorContext {
                     method_name: #fn_name_str,
                     controller_name: #controller_name_str,
-                    state: &self.ctx,
                 },
                 #wrapped
             ).await

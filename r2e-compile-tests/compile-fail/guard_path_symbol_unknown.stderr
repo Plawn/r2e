@@ -1,5 +1,5 @@
 error[E0425]: cannot find value `missing` in module `path`
-  --> compile-fail/guard_path_symbol_unknown.rs:46:40
+  --> compile-fail/guard_path_symbol_unknown.rs:47:40
    |
-46 |     #[guard(ProjectGuard::viewer(path::missing))]
+47 |     #[guard(ProjectGuard::viewer(path::missing))]
    |                                        ^^^^^^^ not found in `path`

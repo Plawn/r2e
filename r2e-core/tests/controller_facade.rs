@@ -371,21 +371,32 @@ async fn optional_struct_identity_auth_and_anon() {
 
 // ── 5. Guard sees the same identity as the method ───────────────────────────
 
+/// Spec named by the attribute; its bean dep is pulled once at wiring time
+/// into the product guard (the graph-resolved decorator path).
 struct RecordingGuard;
 
-impl<S: Send + Sync + r2e_core::type_list::BeanLookup> Guard<S, Subject> for RecordingGuard {
+struct RecordingGuardReady {
+    saw: Arc<Mutex<Vec<String>>>,
+}
+
+impl r2e_core::DecoratorSpec for RecordingGuard {
+    type Product = RecordingGuardReady;
+    type Deps = r2e_core::type_list::TCons<Arc<Mutex<Vec<String>>>, r2e_core::type_list::TNil>;
+
+    fn build(self, ctx: &r2e_core::BeanContext) -> RecordingGuardReady {
+        RecordingGuardReady { saw: ctx.get() }
+    }
+}
+
+impl Guard<Subject> for RecordingGuardReady {
     fn check(
         &self,
-        state: &S,
         ctx: &GuardContext<'_, Subject>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        let saw = state
-            .bean::<Arc<Mutex<Vec<String>>>>()
-            .expect("saw handle must be provided");
         let sub = ctx.identity.map(|i| i.sub().to_string());
         async move {
             if let Some(s) = sub {
-                saw.lock().unwrap().push(s);
+                self.saw.lock().unwrap().push(s);
             }
             Ok(())
         }
@@ -457,17 +468,22 @@ impl<S: Send + Sync + r2e_core::type_list::BeanLookup> FromRequestParts<S> for F
 
 struct GatePre;
 
-impl<S: Send + Sync + r2e_core::type_list::BeanLookup> PreAuthGuard<S> for GatePre {
-    fn check(
-        &self,
-        state: &S,
-        _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
-        let allow = state
-            .bean_ref::<Allow>()
-            .expect("allow flag must be provided")
-            .0
-            .load(Ordering::SeqCst);
+struct GatePreReady {
+    allow: Allow,
+}
+
+impl r2e_core::DecoratorSpec for GatePre {
+    type Product = GatePreReady;
+    type Deps = r2e_core::type_list::TCons<Allow, r2e_core::type_list::TNil>;
+
+    fn build(self, ctx: &r2e_core::BeanContext) -> GatePreReady {
+        GatePreReady { allow: ctx.get() }
+    }
+}
+
+impl PreAuthGuard for GatePreReady {
+    fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
+        let allow = self.allow.0.load(Ordering::SeqCst);
         async move {
             if allow {
                 Ok(())
@@ -539,29 +555,36 @@ struct After(Arc<AtomicUsize>);
 
 struct Counting;
 
-impl<R: Send, S: Send + Sync + r2e_core::type_list::BeanLookup> Interceptor<R, S> for Counting {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext<'_, S>,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+struct CountingReady {
+    before: Arc<AtomicUsize>,
+    after: After,
+}
+
+impl r2e_core::DecoratorSpec for Counting {
+    type Product = CountingReady;
+    type Deps = r2e_core::type_list::TCons<
+        Arc<AtomicUsize>,
+        r2e_core::type_list::TCons<After, r2e_core::type_list::TNil>,
+    >;
+
+    fn build(self, ctx: &r2e_core::BeanContext) -> CountingReady {
+        CountingReady {
+            before: ctx.get(),
+            after: ctx.get(),
+        }
+    }
+}
+
+impl<R: Send> Interceptor<R> for CountingReady {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        let before = ctx
-            .state
-            .bean::<Arc<AtomicUsize>>()
-            .expect("before counter must be provided");
-        let after = ctx
-            .state
-            .bean::<After>()
-            .expect("after counter must be provided")
-            .0;
         async move {
-            before.fetch_add(1, Ordering::SeqCst);
+            self.before.fetch_add(1, Ordering::SeqCst);
             let r = next().await;
-            after.fetch_add(1, Ordering::SeqCst);
+            self.after.0.fetch_add(1, Ordering::SeqCst);
             r
         }
     }

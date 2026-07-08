@@ -4,10 +4,16 @@ pub fn interceptor(name: &str) -> String {
 use std::future::Future;
 
 /// Custom interceptor: {name}
+///
+/// Self-contained (no bean deps) — the `SelfBuilt` opt-in makes it usable in
+/// `#[intercept({name})]`. To read beans instead, hold them as fields and
+/// implement `DecoratorSpec` on a config type (see the r2e book).
 pub struct {name};
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for {name} {{
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl SelfBuilt for {name} {{}}
+
+impl<R: Send> Interceptor<R> for {name} {{
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,

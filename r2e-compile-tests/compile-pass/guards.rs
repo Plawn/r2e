@@ -20,10 +20,11 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
 
 pub struct CustomGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for CustomGuard {
+impl SelfBuilt for CustomGuard {}
+
+impl<I: Identity> Guard<I> for CustomGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
@@ -87,10 +88,11 @@ impl ProjectGuard {
     }
 }
 
-impl<S: Send + Sync> Guard<S, AuthenticatedUser> for ProjectGuard {
+impl SelfBuilt for ProjectGuard {}
+
+impl Guard<AuthenticatedUser> for ProjectGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -121,10 +123,11 @@ impl SbomGuard {
     }
 }
 
-impl<S: Send + Sync> Guard<S, AuthenticatedUser> for SbomGuard {
+impl SelfBuilt for SbomGuard {}
+
+impl Guard<AuthenticatedUser> for SbomGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {

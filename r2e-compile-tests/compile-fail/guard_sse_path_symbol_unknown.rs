@@ -15,10 +15,11 @@ impl StreamGuard {
     }
 }
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for StreamGuard {
+impl SelfBuilt for StreamGuard {}
+
+impl<I: Identity> Guard<I> for StreamGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }

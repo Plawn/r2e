@@ -466,7 +466,7 @@ fn generate_middleware_has_interceptor() {
 
     let content = fs::read_to_string("src/middleware/audit_log.rs").unwrap();
     assert!(content.contains("pub struct AuditLog"));
-    assert!(content.contains("Interceptor<R, S>"));
+    assert!(content.contains("Interceptor<R>"));
     assert!(content.contains("fn around"));
 }
 

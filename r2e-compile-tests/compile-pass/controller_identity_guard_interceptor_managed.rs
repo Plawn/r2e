@@ -19,10 +19,11 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
 
 pub struct Allow;
 
-impl<S: Send + Sync> Guard<S, AuthenticatedUser> for Allow {
+impl SelfBuilt for Allow {}
+
+impl Guard<AuthenticatedUser> for Allow {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
@@ -31,10 +32,12 @@ impl<S: Send + Sync> Guard<S, AuthenticatedUser> for Allow {
 
 pub struct PassThrough;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for PassThrough {
+impl SelfBuilt for PassThrough {}
+
+impl<R: Send> Interceptor<R> for PassThrough {
     fn around<F, Fut>(
         &self,
-        _ctx: InterceptorContext<'_, S>,
+        _ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where

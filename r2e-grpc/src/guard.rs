@@ -40,10 +40,9 @@ impl<'a, I: Identity> GrpcGuardContext<'a, I> {
 /// ```ignore
 /// struct AdminGuard;
 ///
-/// impl<S: Send + Sync, I: RoleBasedIdentity> GrpcGuard<S, I> for AdminGuard {
+/// impl<I: RoleBasedIdentity> GrpcGuard<I> for AdminGuard {
 ///     fn check(
 ///         &self,
-///         state: &S,
 ///         ctx: &GrpcGuardContext<'_, I>,
 ///     ) -> impl Future<Output = Result<(), Status>> + Send {
 ///         async move {
@@ -59,14 +58,13 @@ impl<'a, I: Identity> GrpcGuardContext<'a, I> {
 /// }
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `GrpcGuard<{S}, {I}>`",
+    message = "`{Self}` does not implement `GrpcGuard<{I}>`",
     label = "this type cannot be used as a gRPC guard",
-    note = "implement `GrpcGuard<S, I>` for your type and apply it with `#[guard(YourGuard)]`"
+    note = "implement `GrpcGuard<I>` for your type and apply it with `#[guard(YourGuard)]`"
 )]
-pub trait GrpcGuard<S, I: Identity>: Send + Sync {
+pub trait GrpcGuard<I: Identity>: Send + Sync {
     fn check(
         &self,
-        state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Status>> + Send;
 }
@@ -79,10 +77,9 @@ pub struct GrpcRolesGuard {
     pub required_roles: &'static [&'static str],
 }
 
-impl<S: Send + Sync, I: Identity + GrpcRoleBasedIdentity> GrpcGuard<S, I> for GrpcRolesGuard {
+impl<I: Identity + GrpcRoleBasedIdentity> GrpcGuard<I> for GrpcRolesGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Status>> + Send {
         let result = (|| {

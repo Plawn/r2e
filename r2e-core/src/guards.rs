@@ -228,16 +228,18 @@ impl<'a, I: Identity> GuardContext<'a, I> {
 /// Built-in guards: `RolesGuard` (in `r2e-security`), `RateLimitGuard` (in `r2e-rate-limit`).
 /// Users can implement custom guards and apply them with `#[guard(expr)]`.
 ///
-/// Generic over both the application state `S` and the identity type `I`.
+/// Guards are built **once, at controller registration**, from the resolved
+/// bean graph (see [`DecoratorSpec`](crate::decorator::DecoratorSpec)) — a
+/// guard that reads beans holds them as fields; there is no state access at
+/// request time. Generic over the identity type `I`.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `Guard<{S}, {I}>`",
+    message = "`{Self}` does not implement `Guard<{I}>`",
     label = "this type cannot be used as a guard",
-    note = "implement `Guard<S, I>` for your type and apply it with `#[guard(YourGuard)]`"
+    note = "implement `Guard<I>` for your type; if it reads beans, hold them as fields and implement `DecoratorSpec` on its config type, otherwise add `impl SelfBuilt for {Self} {{}}`"
 )]
-pub trait Guard<S, I: Identity>: Send + Sync {
+pub trait Guard<I: Identity>: Send + Sync {
     fn check(
         &self,
-        state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
 }
@@ -370,17 +372,19 @@ impl From<GuardError> for Response {
 /// Use this for checks that don't need identity (e.g., global or IP-based rate limiting).
 /// This avoids wasting effort on JWT validation when the request will be rejected anyway.
 ///
+/// Like [`Guard`], pre-auth guards are built once at registration from the
+/// resolved bean graph — bean deps are fields, not state lookups.
+///
 /// Apply via `#[pre_guard(MyPreGuard)]` or automatically for `#[rate_limited]` with
 /// `key = "global"` or `key = "ip"`.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `PreAuthGuard<{S}>`",
+    message = "`{Self}` does not implement `PreAuthGuard`",
     label = "this type cannot be used as a pre-auth guard",
-    note = "implement `PreAuthGuard<S>` for your type and apply it with `#[pre_guard(YourGuard)]`"
+    note = "implement `PreAuthGuard` for your type and apply it with `#[pre_guard(YourGuard)]`"
 )]
-pub trait PreAuthGuard<S>: Send + Sync {
+pub trait PreAuthGuard: Send + Sync {
     fn check(
         &self,
-        state: &S,
         ctx: &PreAuthGuardContext<'_>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
 }

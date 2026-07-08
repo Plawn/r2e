@@ -376,15 +376,15 @@ fn generate_path_param_module(
     }
 }
 
-/// Generate guard check statements.
-fn generate_guard_checks(guard_fns: &[syn::Expr], krate: &TokenStream) -> Vec<TokenStream> {
-    guard_fns
+/// Generate guard check statements. Guards are prebuilt fields of the
+/// method's decorator set (`__deco`), constructed once at wiring time.
+fn generate_guard_checks(guard_fields: &[syn::Ident], krate: &TokenStream) -> Vec<TokenStream> {
+    guard_fields
         .iter()
-        .map(|guard_expr| {
+        .map(|field| {
             quote! {
                 if let Err(__resp) = #krate::Guard::check(
-                    &#guard_expr,
-                    &__state,
+                    &__deco.#field,
                     &__guard_ctx,
                 ).await {
                     return __resp;
@@ -524,26 +524,26 @@ fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
 
 /// Wrap a body expression with the interceptor chain at handler level.
 ///
-/// Uses `__state_ref: &S` (which is `Copy`) to construct `InterceptorContext`
-/// at each layer. The `move || async move { ... }` closures capture
-/// `__state_ref` by copy and other variables by move.
+/// Interceptors are prebuilt fields of the method's decorator set; `__deco`
+/// is a `&` reference (`Copy`), so the `move || async move { ... }` closures
+/// capture it by copy and other variables by move.
 fn wrap_with_handler_interceptors(
     body: TokenStream,
     fn_name_str: &str,
     controller_name_str: &str,
-    def: &RoutesImplDef,
-    method_intercepts: &[syn::Expr],
+    intercept_fields: &[syn::Ident],
     krate: &TokenStream,
 ) -> TokenStream {
-    let all_intercepts: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(method_intercepts.iter())
-        .collect();
-
-    if all_intercepts.is_empty() {
+    if intercept_fields.is_empty() {
         return body;
     }
+
+    let intercept_ctx = quote! {
+        #krate::InterceptorContext {
+            method_name: #fn_name_str,
+            controller_name: #controller_name_str,
+        }
+    };
 
     // Start with the innermost: the body wrapped in a move closure
     let mut wrapped = quote! {
@@ -551,17 +551,12 @@ fn wrap_with_handler_interceptors(
     };
 
     // Wrap from innermost interceptor to second interceptor (skip outermost)
-    for intercept_expr in all_intercepts[1..].iter().rev() {
+    for field in intercept_fields[1..].iter().rev() {
         wrapped = quote! {
             move || async move {
-                let __interceptor = #intercept_expr;
                 #krate::Interceptor::around(
-                    &__interceptor,
-                    #krate::InterceptorContext {
-                        method_name: #fn_name_str,
-                        controller_name: #controller_name_str,
-                        state: __state_ref,
-                    },
+                    &__deco.#field,
+                    #intercept_ctx,
                     #wrapped
                 ).await
             }
@@ -569,18 +564,12 @@ fn wrap_with_handler_interceptors(
     }
 
     // Apply the outermost interceptor directly (not wrapped in a closure)
-    let outermost = &all_intercepts[0];
+    let outermost = &intercept_fields[0];
     quote! {
         {
-            let __state_ref: &_ = &__state;
-            let __interceptor = #outermost;
             #krate::Interceptor::around(
-                &__interceptor,
-                #krate::InterceptorContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    state: __state_ref,
-                },
+                &__deco.#outermost,
+                #intercept_ctx,
                 #wrapped
             ).await
         }
@@ -622,6 +611,11 @@ fn generate_managed_acquire_ref(
 /// | 2b   | No             | Yes          | Yes        | Response         |
 /// | 3    | Yes            | Optional     | Optional   | Response         |
 ///
+/// Guards and interceptors are prebuilt fields of the method's decorator set
+/// (`__deco`, one `Arc` per route, built from the bean context at wiring
+/// time); the invocation function is generic over the state (`__R2eS`) only
+/// when `#[managed]` params are present.
+///
 /// # Design invariant
 ///
 /// When interceptors are present, they **always wrap the raw handler call** — the
@@ -655,15 +649,38 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         quote! { __ctrl.#fn_name(#(#call_args),*) }
     };
 
-    let has_guards = !rm.decorators.guard_fns.is_empty();
     let has_managed = !rm.managed_params.is_empty();
-    let has_intercepts = has_interceptors(def, rm);
-    let needs_response = has_guards || has_managed;
-    let needs_state = needs_response || has_intercepts;
 
     let invocation_name = &ctx.invocation_name;
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
+
+    // Decorator set: one hidden struct per method holding the built
+    // guards/interceptors, plus its constructor (see codegen/decorators.rs).
+    let intercept_exprs: Vec<&syn::Expr> = def
+        .controller_intercepts
+        .iter()
+        .chain(rm.decorators.intercept_fns.iter())
+        .collect();
+    let deco_path_module = generate_path_param_module(&rm.path, &rm.fn_item.sig, &krate);
+    let (deco_items, deco_set) = super::decorators::generate_deco_items(
+        def,
+        ctx.fn_name,
+        &rm.decorators.guard_fns,
+        &intercept_exprs,
+        deco_path_module,
+    );
+    let (predeco_items, _) =
+        super::decorators::generate_predeco_items(def, ctx.fn_name, &rm.decorators);
+
+    // On a failed spec extraction, `deco_items` carries the compile_error and
+    // the handler falls back to the no-decorator shape.
+    let has_guards = !rm.decorators.guard_fns.is_empty() && deco_set.is_some();
+    let has_intercepts = has_interceptors(def, rm) && deco_set.is_some();
+    let needs_response = has_guards || has_managed;
+    // The state is only threaded through for `#[managed]` params — guards
+    // and interceptors are prebuilt decorator fields (no state access).
+    let needs_state = has_managed;
 
     // Generate validation calls for all non-managed, non-identity parameters
     let identity_param_index = rm.identity_param.as_ref().map(|p| p.index);
@@ -686,13 +703,18 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         invocation_prefix_params
             .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
     }
+    if let Some(ref set) = deco_set {
+        let deco_ty = set.ty();
+        invocation_prefix_params.push(quote! { __deco: &#deco_ty });
+    }
 
     let invocation_extra_params = &handler_extra_params;
 
-    let (invocation_return, invocation_body) = if !needs_state && !has_validation {
+    let is_simple = !needs_response && !has_intercepts;
+    let (invocation_return, invocation_body) = if is_simple && !has_validation {
         // Case 1a: Simple handler — no guards, no managed, no interceptors, no validation
         (quote! { #return_type }, quote! { #call_expr })
-    } else if !needs_state && has_validation {
+    } else if is_simple && has_validation {
         // Case 1b: Simple handler with validation — returns Response
         (
             quote! { -> #krate::http::response::Response },
@@ -707,8 +729,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             call_expr,
             fn_name_str,
             controller_name_str,
-            def,
-            &rm.decorators.intercept_fns,
+            deco_intercept_fields(&deco_set),
             &krate,
         );
 
@@ -721,8 +742,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             call_expr.clone(),
             fn_name_str,
             controller_name_str,
-            def,
-            &rm.decorators.intercept_fns,
+            deco_intercept_fields(&deco_set),
             &krate,
         );
         let interceptor_body = quote! {
@@ -738,12 +758,9 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         )
     } else {
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
-        let guard_checks = generate_guard_checks(&rm.decorators.guard_fns, &krate);
-        let path_param_module = if has_guards {
-            generate_path_param_module(&rm.path, &rm.fn_item.sig, &krate)
-        } else {
-            quote! {}
-        };
+        // The method's `path` module lives in the decorator constructor now —
+        // guard expressions are evaluated there, once, at wiring time.
+        let guard_checks = generate_guard_checks(deco_guard_fields(&deco_set), &krate);
         let guard_context_construction = if has_guards {
             generate_guard_context(&ctx, rm, &krate)
         } else {
@@ -769,14 +786,21 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     #(#managed_acquire_ref)*
                     #body_and_release
                 };
-                wrap_with_handler_interceptors(
+                let wrapped = wrap_with_handler_interceptors(
                     managed_body,
                     fn_name_str,
                     controller_name_str,
-                    def,
-                    &rm.decorators.intercept_fns,
+                    deco_intercept_fields(&deco_set),
                     &krate,
-                )
+                );
+                // `__state_ref` is `Copy`, so the nested interceptor closures
+                // can capture it for the managed acquire calls.
+                quote! {
+                    {
+                        let __state_ref: &_ = &__state;
+                        #wrapped
+                    }
+                }
             } else {
                 // Apply into_response AFTER the interceptor chain so interceptors
                 // see the handler's raw return type (e.g. Json<T>), not Response.
@@ -785,8 +809,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     call_expr.clone(),
                     fn_name_str,
                     controller_name_str,
-                    def,
-                    &rm.decorators.intercept_fns,
+                    deco_intercept_fields(&deco_set),
                     &krate,
                 );
                 quote! {
@@ -815,7 +838,6 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             quote! { -> #krate::http::response::Response },
             quote! {
                 #guard_context_construction
-                #path_param_module
                 #(#guard_checks)*
                 #(#validation_calls)*
                 #inner_body
@@ -842,6 +864,9 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         (quote! {}, quote! {})
     };
     quote! {
+        #deco_items
+        #predeco_items
+
         #[allow(non_snake_case)]
         async fn #invocation_name #fn_generics(
             #(#invocation_prefix_params,)*
@@ -851,6 +876,18 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             #invocation_body
         }
     }
+}
+
+/// Guard field idents of a decorator set (empty when there is none).
+fn deco_guard_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ident] {
+    set.as_ref().map(|s| s.guard_fields.as_slice()).unwrap_or(&[])
+}
+
+/// Interceptor field idents of a decorator set (empty when there is none).
+fn deco_intercept_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ident] {
+    set.as_ref()
+        .map(|s| s.intercept_fields.as_slice())
+        .unwrap_or(&[])
 }
 
 fn is_result_type(return_type: &syn::ReturnType) -> bool {
@@ -920,7 +957,17 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         }
     };
 
-    let has_guards = !sm.decorators.guard_fns.is_empty();
+    // Decorator set (guards only — SSE endpoints don't run interceptors).
+    let deco_path_module = generate_path_param_module(&sm.path, &sm.fn_item.sig, &krate);
+    let (deco_items, deco_set) = super::decorators::generate_deco_items(
+        def,
+        fn_name,
+        &sm.decorators.guard_fns,
+        &[],
+        deco_path_module,
+    );
+    let (predeco_items, _) = super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
+    let has_guards = !sm.decorators.guard_fns.is_empty() && deco_set.is_some();
 
     let mut invocation_prefix_params = Vec::new();
 
@@ -933,14 +980,14 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
             },
         )
     } else {
-        invocation_prefix_params.push(quote! { __state: __R2eS });
         invocation_prefix_params.push(quote! { __headers: #krate::http::HeaderMap });
         invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
         invocation_prefix_params
             .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+        invocation_prefix_params.push(quote! { __deco: &#deco_ty });
 
-        let guard_checks = generate_guard_checks(&sm.decorators.guard_fns, &krate);
-        let path_param_module = generate_path_param_module(&sm.path, &sm.fn_item.sig, &krate);
+        let guard_checks = generate_guard_checks(deco_guard_fields(&deco_set), &krate);
 
         let guard_context = if let Some(ref id_param) = sm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);
@@ -977,7 +1024,6 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         (
             quote! { -> #krate::http::response::Response },
             quote! {
-                #path_param_module
                 #guard_context
                 #(#guard_checks)*
                 let __stream = #call_expr;
@@ -989,19 +1035,16 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let invocation_extra_params = &handler_extra_params;
 
     let facade_name = facade_ident_for(controller_name);
-    let (fn_generics, fn_where) = if has_guards {
-        let sb = state_bounds(&krate);
-        (quote! { <__R2eS> }, quote! { where __R2eS: #sb })
-    } else {
-        (quote! {}, quote! {})
-    };
     quote! {
+        #deco_items
+        #predeco_items
+
         #[allow(non_snake_case)]
-        async fn #invocation_name #fn_generics(
+        async fn #invocation_name(
             #(#invocation_prefix_params,)*
             __ctrl: &#facade_name,
             #(#invocation_extra_params,)*
-        ) #invocation_return #fn_where {
+        ) #invocation_return {
             #invocation_body
         }
     }
@@ -1046,7 +1089,17 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         })
         .collect();
 
-    let has_guards = !wm.decorators.guard_fns.is_empty();
+    // Decorator set (guards only — WS endpoints don't run interceptors).
+    let deco_path_module = generate_path_param_module(&wm.path, &wm.fn_item.sig, &krate);
+    let (deco_items, deco_set) = super::decorators::generate_deco_items(
+        def,
+        fn_name,
+        &wm.decorators.guard_fns,
+        &[],
+        deco_path_module,
+    );
+    let (predeco_items, _) = super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
+    let has_guards = !wm.decorators.guard_fns.is_empty() && deco_set.is_some();
 
     // Build the shared post-upgrade invocation body. Controller ownership
     // remains in the thin adapter's `on_upgrade` closure; this function only
@@ -1107,17 +1160,13 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         }
     };
 
-    let ws_state_bounds = state_bounds(&krate);
     let (preflight, preflight_call) = if has_guards {
-        let guard_checks: Vec<TokenStream> = wm
-            .decorators
-            .guard_fns
+        let guard_checks: Vec<TokenStream> = deco_guard_fields(&deco_set)
             .iter()
-            .map(|guard_expr| {
+            .map(|field| {
                 quote! {
                     if let Err(__resp) = #krate::Guard::check(
-                        &#guard_expr,
-                        &__state,
+                        &__deco.#field,
                         &__guard_ctx,
                     ).await {
                         return Err(__resp);
@@ -1125,7 +1174,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 }
             })
             .collect();
-        let path_param_module = generate_path_param_module(&wm.path, &wm.fn_item.sig, &krate);
+        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
 
         let (identity_decl, identity_call, identity_expr) =
             if let Some(ref id_param) = wm.identity_param {
@@ -1168,18 +1217,14 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         (
             quote! {
                 #[allow(non_snake_case)]
-                async fn #preflight_name<__R2eS>(
-                    __state: __R2eS,
+                async fn #preflight_name(
+                    __deco: &#deco_ty,
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
                     __raw_path_params: #krate::http::extract::RawPathParams,
                     __ctrl: &#facade_name,
                     #identity_decl
-                ) -> Result<(), #krate::http::response::Response>
-                where
-                    __R2eS: #ws_state_bounds,
-                {
-                    #path_param_module
+                ) -> Result<(), #krate::http::response::Response> {
                     #guard_context
                     #(#guard_checks)*
                     Ok(())
@@ -1187,7 +1232,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             },
             quote! {
                 if let Err(__response) = #preflight_name(
-                    __state,
+                    &__deco,
                     __headers,
                     __uri,
                     __raw_path_params,
@@ -1203,9 +1248,12 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     };
 
     let handler_name = handler_ident_for(controller_name, fn_name);
+    // The decorator set arrives first (an `Arc` captured by the route
+    // closure), then the request-extracted guard-context values.
     let guard_params = if has_guards {
+        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
         quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>,
+            __deco: ::std::sync::Arc<#deco_ty>,
             __headers: #krate::http::HeaderMap,
             __uri: #krate::http::Uri,
             __raw_path_params: #krate::http::extract::RawPathParams,
@@ -1219,13 +1267,10 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         quote! {}
     };
 
-    let (wrapper_generics, wrapper_where) = if has_guards {
-        let sb = state_bounds(&krate);
-        (quote! { <__R2eS> }, quote! { where __R2eS: #sb })
-    } else {
-        (quote! {}, quote! {})
-    };
     quote! {
+        #deco_items
+        #predeco_items
+
         #[allow(non_snake_case)]
         async fn #invocation_name(
             __ctrl: &#facade_name,
@@ -1237,12 +1282,12 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         #preflight
         #[allow(non_snake_case)]
-        async fn #handler_name #wrapper_generics(
+        async fn #handler_name(
             #guard_params
             __facade: #facade_name,
             #(#handler_extra_params,)*
             __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
-        ) -> #krate::http::response::Response #wrapper_where {
+        ) -> #krate::http::response::Response {
             // Guard checks borrow the façade; the upgrade callback then owns it
             // for the whole socket lifetime (façade owns its Arc + request data,
             // so nothing is borrowed across the upgrade boundary).
@@ -1331,26 +1376,24 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     let has_guards = !rm.decorators.guard_fns.is_empty();
     let has_managed = !rm.managed_params.is_empty();
     let has_intercepts = has_interceptors(def, rm);
-    let needs_state = has_guards || has_managed || has_intercepts;
+    let needs_state = has_managed;
+    let has_deco = has_guards || has_intercepts;
 
     let (closure_params, fwd_args) =
         route_axum_params_and_args(rm, needs_state, has_guards, &krate);
 
-    // Splice __ctrl into the inner-handler call after the axum-extracted
-    // prefix (state + optional guard-context params), matching the inner
-    // handler's signature: `(State?, [HeaderMap, Uri, RawPathParams]?, __ctrl, extras...)`.
-    let prefix_len = if has_guards {
-        if needs_state {
-            4
-        } else {
-            3
-        }
-    } else if needs_state {
-        1
-    } else {
-        0
-    };
+    // Splice __deco/__ctrl into the inner-handler call after the
+    // axum-extracted prefix, matching the inner handler's signature:
+    // `(State?, [HeaderMap, Uri, RawPathParams]?, __deco?, __ctrl, extras...)`.
+    let prefix_len = usize::from(needs_state) + if has_guards { 3 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    // The method's decorator set is built once here — at wiring time, from
+    // the resolved graph — and captured by the closure as one `Arc`.
+    let deco_setup = has_deco.then(|| {
+        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
+        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
+    });
+    let deco_arg = has_deco.then(|| quote! { &__deco_capture, });
     // One per-request `Arc` increment: axum clones the `Fn`-once closure per
     // request (cloning `__core_capture`), then this body moves that clone into
     // `bind_request`. There is no second explicit `.clone()`.
@@ -1358,11 +1401,13 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
                         #(#prefix,)*
+                        #deco_arg
                         &__facade,
                         #(#suffix),*
                     ).await
@@ -1386,13 +1431,9 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
     if has_guards {
-        closure_params.push(quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>
-        });
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
         closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        fwd_args.push(quote! { __state });
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __raw_path_params });
@@ -1411,17 +1452,24 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         }
     }
 
-    let prefix_len = if has_guards { 4 } else { 0 };
+    let prefix_len = if has_guards { 3 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    let deco_setup = has_guards.then(|| {
+        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
+        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
+    });
+    let deco_arg = has_guards.then(|| quote! { &__deco_capture, });
     let md = data_marker();
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
                         #(#prefix,)*
+                        #deco_arg
                         &__facade,
                         #(#suffix),*
                     ).await
@@ -1447,13 +1495,10 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
     if has_guards {
-        closure_params.push(quote! {
-            __state_ext: #krate::http::extract::State<__R2eS>
-        });
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
         closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        fwd_args.push(quote! { __state_ext });
+        fwd_args.push(quote! { __deco_capture.clone() });
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __raw_path_params });
@@ -1480,9 +1525,14 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let md = data_marker();
     let prefix_len = if has_guards { 4 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    let deco_setup = has_guards.then(|| {
+        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
+        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
+    });
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     #inner(

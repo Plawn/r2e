@@ -1,23 +1,17 @@
 use r2e_core::interceptors::{Interceptor, InterceptorContext};
 use r2e_utils::{Cache, CacheInvalidate, Logged, LogLevel, Timed};
 
-// A dummy state for tests.
-#[derive(Clone)]
-struct TestState;
-
-fn test_ctx(state: &TestState) -> InterceptorContext<'_, TestState> {
+fn test_ctx() -> InterceptorContext {
     InterceptorContext {
         method_name: "test_method",
         controller_name: "TestController",
-        state,
     }
 }
 
 #[r2e_core::test]
 async fn test_logged_interceptor() {
     let logged = Logged::info();
-    let state = TestState;
-    let result = logged.around(test_ctx(&state), || async { 42 }).await;
+    let result = logged.around(test_ctx(), || async { 42 }).await;
     assert_eq!(result, 42);
 }
 
@@ -35,19 +29,16 @@ async fn test_logged_constructors() {
 #[r2e_core::test]
 async fn test_timed_interceptor() {
     let timed = Timed::info();
-    let state = TestState;
-    let result = timed.around(test_ctx(&state), || async { "hello" }).await;
+    let result = timed.around(test_ctx(), || async { "hello" }).await;
     assert_eq!(result, "hello");
 }
 
 #[r2e_core::test]
 async fn test_timed_with_threshold() {
     let timed = Timed::threshold_warn(1000);
-    let state = TestState;
     let ctx = InterceptorContext {
         method_name: "fast_method",
         controller_name: "TestController",
-        state: &state,
     };
     // Fast call should not log (threshold not exceeded)
     let result = timed.around(ctx, || async { 99 }).await;
@@ -70,13 +61,11 @@ async fn test_timed_constructors() {
 async fn test_nested_interceptors() {
     let logged = Logged::debug();
     let timed = Timed::info();
-    let state = TestState;
-    let state_ref: &_ = &state;
 
     let result = logged
-        .around(test_ctx(state_ref), move || async move {
+        .around(test_ctx(), move || async move {
             timed
-                .around(test_ctx(state_ref), || async move { "nested_result" })
+                .around(test_ctx(), || async move { "nested_result" })
                 .await
         })
         .await;
@@ -85,11 +74,9 @@ async fn test_nested_interceptors() {
 
 #[r2e_core::test]
 async fn test_cache_interceptor() {
-    let state = TestState;
     let ctx = InterceptorContext {
         method_name: "cached_method",
         controller_name: "TestController",
-        state: &state,
     };
 
     let cache = Cache::ttl(60);
@@ -106,7 +93,6 @@ async fn test_cache_interceptor() {
     let ctx2 = InterceptorContext {
         method_name: "cached_method",
         controller_name: "TestController",
-        state: &state,
     };
     let result2: r2e_core::http::Json<Vec<String>> = cache2
         .around(ctx2, || async {
@@ -119,11 +105,9 @@ async fn test_cache_interceptor() {
 
 #[r2e_core::test]
 async fn test_cache_invalidate_interceptor() {
-    let state = TestState;
     let ctx = InterceptorContext {
         method_name: "create",
         controller_name: "TestController",
-        state: &state,
     };
 
     // Pre-populate cache under group prefix

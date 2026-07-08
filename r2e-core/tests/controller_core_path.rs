@@ -83,12 +83,9 @@ async fn assert_no_controller_extension(
 // ── 2. Guarded controller (Case 3) ─────────────────────────────────────────
 
 struct AllowAll;
-impl<S: Send + Sync, I: Identity> Guard<S, I> for AllowAll {
-    fn check(
-        &self,
-        _state: &S,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+impl r2e_core::SelfBuilt for AllowAll {}
+impl<I: Identity> Guard<I> for AllowAll {
+    fn check(&self, _ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
@@ -112,13 +109,10 @@ impl GuardedController {
 // ── 3. Intercepted controller (Case 2a) ────────────────────────────────────
 
 struct PassThrough;
+impl r2e_core::SelfBuilt for PassThrough {}
 
-impl<R: Send, S: Send + Sync> r2e_core::Interceptor<R, S> for PassThrough {
-    fn around<F, Fut>(
-        &self,
-        _ctx: InterceptorContext<'_, S>,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+impl<R: Send> r2e_core::Interceptor<R> for PassThrough {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -207,12 +201,9 @@ impl SseController {
 // ── 6. Pre-auth-guarded controller ─────────────────────────────────────────
 
 struct AllowAllPre;
-impl<S: Send + Sync> PreAuthGuard<S> for AllowAllPre {
-    fn check(
-        &self,
-        _state: &S,
-        _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+impl r2e_core::SelfBuilt for AllowAllPre {}
+impl PreAuthGuard for AllowAllPre {
+    fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }

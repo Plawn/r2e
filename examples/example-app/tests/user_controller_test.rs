@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use r2e::config::{ConfigValue, R2eConfig};
 use r2e::prelude::*;
-use r2e::r2e_rate_limit::RateLimit;
+use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 use r2e::r2e_security::AuthenticatedUser;
 use r2e_test::{TestApp, TestJwt};
 use sqlx::SqlitePool;
@@ -257,7 +257,7 @@ impl TestUserController {
     }
 
     #[post("/users/rate-limited")]
-    #[pre_guard(RateLimit::global(3, 60))]
+    #[pre_guard(PreRateLimit::global(3, 60))]
     async fn create_rate_limited(
         &self,
         Json(body): Json<CreateUserRequest>,

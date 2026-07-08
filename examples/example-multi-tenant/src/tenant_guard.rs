@@ -7,10 +7,11 @@ use crate::tenant_identity::TenantUser;
 /// Super-admins bypass this check.
 pub struct TenantGuard;
 
-impl<S: Send + Sync> Guard<S, TenantUser> for TenantGuard {
+impl r2e::SelfBuilt for TenantGuard {}
+
+impl Guard<TenantUser> for TenantGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, TenantUser>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         async move {

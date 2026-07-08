@@ -58,15 +58,12 @@ fn result_from_cache_wraps_ok() {
 
 #[test]
 fn interceptor_context_accessors() {
-    let state = 42u32;
     let ctx = InterceptorContext {
         method_name: "create",
         controller_name: "UserCtrl",
-        state: &state,
     };
     assert_eq!(ctx.method_name, "create");
     assert_eq!(ctx.controller_name, "UserCtrl");
-    assert_eq!(*ctx.state, 42u32);
 }
 
 #[test]

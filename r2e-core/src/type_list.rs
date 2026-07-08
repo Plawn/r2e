@@ -236,9 +236,10 @@ impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {
 /// The witness-free complement of [`HasBean`], for generic code that **cannot
 /// carry an index witness**: trait impls where the witness would be an
 /// unconstrained impl parameter (E0207) and the concrete implementor type is
-/// not nameable by generated code — guard impls
-/// (`impl<S: BeanLookup, I> Guard<S, I> for RateLimitGuard`), interceptors,
-/// and `ManagedResource` providers like `HasPool`.
+/// not nameable by generated code — `ManagedResource` providers like
+/// `HasPool`. (Guards and interceptors no longer read the state: they are
+/// built once from the `BeanContext` via `DecoratorSpec` and hold their beans
+/// as fields.)
 ///
 /// Resolution monomorphizes to a chain of constant `TypeId` comparisons (no
 /// hashing, no heap), so a lookup costs at most one integer compare per state

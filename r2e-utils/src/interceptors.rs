@@ -63,8 +63,10 @@ impl Default for Logged {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Logged {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Logged {}
+
+impl<R: Send> Interceptor<R> for Logged {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -119,8 +121,10 @@ impl Default for Timed {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Timed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Timed {}
+
+impl<R: Send> Interceptor<R> for Timed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -201,13 +205,15 @@ impl Cache {
     }
 }
 
-impl<R, S: Send + Sync> Interceptor<R, S> for Cache
+impl r2e_core::SelfBuilt for Cache {}
+
+impl<R> Interceptor<R> for Cache
 where
     R: r2e_core::Cacheable,
 {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext<'_, S>,
+        ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -258,8 +264,10 @@ impl CacheInvalidate {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for CacheInvalidate {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for CacheInvalidate {}
+
+impl<R: Send> Interceptor<R> for CacheInvalidate {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -307,8 +315,10 @@ impl Counted {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Counted {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Counted {}
+
+impl<R: Send> Interceptor<R> for Counted {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -360,8 +370,10 @@ impl MetricTimed {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for MetricTimed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for MetricTimed {}
+
+impl<R: Send> Interceptor<R> for MetricTimed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,

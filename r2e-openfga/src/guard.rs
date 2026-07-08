@@ -2,9 +2,11 @@
 
 use crate::error::OpenFgaError;
 use crate::registry::OpenFgaRegistry;
+use r2e_core::beans::BeanContext;
 use r2e_core::guards::{Guard, GuardContext, Identity};
 use r2e_core::http::response::IntoResponse;
-use r2e_core::type_list::BeanLookup;
+use r2e_core::type_list::{TCons, TNil};
+use r2e_core::DecoratorSpec;
 
 /// How to resolve the object ID for authorization checks.
 #[derive(Debug, Clone)]
@@ -19,7 +21,13 @@ pub enum ObjectResolver {
     Fixed(&'static str),
 }
 
-/// Builder for FGA check guards.
+/// FGA authorization check config.
+///
+/// A plain config value produced by the `FgaCheck::relation(...).on(...)`
+/// builder chain and used with `#[guard(...)]`. Its [`DecoratorSpec`] impl
+/// pulls the [`OpenFgaRegistry`] bean from the graph at controller
+/// registration and moves it into the built [`FgaGuard`]. The check itself
+/// (object resolution) is pure and needs no bean, so it lives here.
 ///
 /// # Examples
 ///
@@ -35,108 +43,18 @@ pub enum ObjectResolver {
 /// // Check using fixed object
 /// #[guard(FgaCheck::relation("member").on("organization").fixed("org:acme"))]
 /// ```
-pub struct FgaCheck;
+pub struct FgaCheck {
+    pub relation: &'static str,
+    pub object_type: &'static str,
+    pub resolver: ObjectResolver,
+}
 
 impl FgaCheck {
     /// Start building a check for the given relation.
     pub fn relation(relation: &'static str) -> FgaCheckBuilder {
         FgaCheckBuilder { relation }
     }
-}
 
-/// Builder step: relation has been set, object type needed.
-pub struct FgaCheckBuilder {
-    relation: &'static str,
-}
-
-impl FgaCheckBuilder {
-    /// Set the object type. You must then specify how to resolve the object ID.
-    pub fn on(self, object_type: &'static str) -> FgaObjectBuilder {
-        FgaObjectBuilder {
-            relation: self.relation,
-            object_type,
-        }
-    }
-}
-
-/// Builder step: object type has been set, resolution method needed.
-pub struct FgaObjectBuilder {
-    relation: &'static str,
-    object_type: &'static str,
-}
-
-impl FgaObjectBuilder {
-    /// Extract object ID from a path parameter.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // GET /api/documents/{doc_id}
-    /// #[guard(FgaCheck::relation("viewer").on("document").from_path("doc_id"))]
-    /// ```
-    pub fn from_path(self, param: &'static str) -> FgaGuard {
-        FgaGuard {
-            relation: self.relation,
-            object_type: self.object_type,
-            resolver: ObjectResolver::PathParam(param),
-        }
-    }
-
-    /// Extract object ID from a query string parameter.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // GET /api/documents?doc_id=123
-    /// #[guard(FgaCheck::relation("viewer").on("document").from_query("doc_id"))]
-    /// ```
-    pub fn from_query(self, param: &'static str) -> FgaGuard {
-        FgaGuard {
-            relation: self.relation,
-            object_type: self.object_type,
-            resolver: ObjectResolver::QueryParam(param),
-        }
-    }
-
-    /// Extract object ID from a request header.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Header: X-Document-Id: 123
-    /// #[guard(FgaCheck::relation("viewer").on("document").from_header("X-Document-Id"))]
-    /// ```
-    pub fn from_header(self, header: &'static str) -> FgaGuard {
-        FgaGuard {
-            relation: self.relation,
-            object_type: self.object_type,
-            resolver: ObjectResolver::Header(header),
-        }
-    }
-
-    /// Use a fixed object ID.
-    ///
-    /// # Example
-    /// ```ignore
-    /// #[guard(FgaCheck::relation("admin").on("system").fixed("system:global"))]
-    /// ```
-    pub fn fixed(self, object: &'static str) -> FgaGuard {
-        FgaGuard {
-            relation: self.relation,
-            object_type: self.object_type,
-            resolver: ObjectResolver::Fixed(object),
-        }
-    }
-}
-
-/// OpenFGA authorization guard.
-///
-/// Checks if the current user has the specified relation to an object.
-/// The object ID is resolved from the request using the configured resolver.
-pub struct FgaGuard {
-    pub relation: &'static str,
-    pub object_type: &'static str,
-    pub resolver: ObjectResolver,
-}
-
-impl FgaGuard {
     /// Resolve the object ID from the request context.
     ///
     /// For dynamic resolvers (`PathParam`, `QueryParam`, `Header`), the resolved
@@ -205,34 +123,126 @@ impl FgaGuard {
     }
 }
 
-impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for FgaGuard {
+impl DecoratorSpec for FgaCheck {
+    type Product = FgaGuard;
+    type Deps = TCons<OpenFgaRegistry, TNil>;
+
+    fn build(self, ctx: &BeanContext) -> FgaGuard {
+        FgaGuard {
+            registry: ctx.get::<OpenFgaRegistry>(),
+            check: self,
+        }
+    }
+}
+
+/// Builder step: relation has been set, object type needed.
+pub struct FgaCheckBuilder {
+    relation: &'static str,
+}
+
+impl FgaCheckBuilder {
+    /// Set the object type. You must then specify how to resolve the object ID.
+    pub fn on(self, object_type: &'static str) -> FgaObjectBuilder {
+        FgaObjectBuilder {
+            relation: self.relation,
+            object_type,
+        }
+    }
+}
+
+/// Builder step: object type has been set, resolution method needed.
+pub struct FgaObjectBuilder {
+    relation: &'static str,
+    object_type: &'static str,
+}
+
+impl FgaObjectBuilder {
+    /// Extract object ID from a path parameter.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // GET /api/documents/{doc_id}
+    /// #[guard(FgaCheck::relation("viewer").on("document").from_path("doc_id"))]
+    /// ```
+    pub fn from_path(self, param: &'static str) -> FgaCheck {
+        FgaCheck {
+            relation: self.relation,
+            object_type: self.object_type,
+            resolver: ObjectResolver::PathParam(param),
+        }
+    }
+
+    /// Extract object ID from a query string parameter.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // GET /api/documents?doc_id=123
+    /// #[guard(FgaCheck::relation("viewer").on("document").from_query("doc_id"))]
+    /// ```
+    pub fn from_query(self, param: &'static str) -> FgaCheck {
+        FgaCheck {
+            relation: self.relation,
+            object_type: self.object_type,
+            resolver: ObjectResolver::QueryParam(param),
+        }
+    }
+
+    /// Extract object ID from a request header.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Header: X-Document-Id: 123
+    /// #[guard(FgaCheck::relation("viewer").on("document").from_header("X-Document-Id"))]
+    /// ```
+    pub fn from_header(self, header: &'static str) -> FgaCheck {
+        FgaCheck {
+            relation: self.relation,
+            object_type: self.object_type,
+            resolver: ObjectResolver::Header(header),
+        }
+    }
+
+    /// Use a fixed object ID.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[guard(FgaCheck::relation("admin").on("system").fixed("system:global"))]
+    /// ```
+    pub fn fixed(self, object: &'static str) -> FgaCheck {
+        FgaCheck {
+            relation: self.relation,
+            object_type: self.object_type,
+            resolver: ObjectResolver::Fixed(object),
+        }
+    }
+}
+
+/// OpenFGA authorization guard.
+///
+/// Checks if the current user has the specified relation to an object.
+/// The object ID is resolved from the request using the configured resolver.
+///
+/// Holds the [`OpenFgaRegistry`] as a field (resolved once at controller
+/// registration via [`FgaCheck`]'s [`DecoratorSpec`] impl) — there is no state
+/// lookup at request time.
+pub struct FgaGuard {
+    pub registry: OpenFgaRegistry,
+    pub check: FgaCheck,
+}
+
+impl<I: Identity> Guard<I> for FgaGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
-        let registry = state.bean::<OpenFgaRegistry>();
-        let relation = self.relation;
-        let object_result = self.resolve_object(ctx);
+        let registry = &self.registry;
+        let relation = self.check.relation;
+        let object_result = self.check.resolve_object(ctx);
 
         // Get user ID from identity
         let user = ctx.identity.map(|i| format!("user:{}", i.sub()));
 
         async move {
-            let registry = registry.ok_or_else(|| {
-                tracing::error!(
-                    "OpenFgaRegistry bean not found in application state — \
-                     install the OpenFga plugin before build_state()"
-                );
-                (
-                    r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    r2e_core::http::Json(serde_json::json!({
-                        "error": "Authorization backend not configured"
-                    })),
-                )
-                    .into_response()
-            })?;
-
             let user = user.ok_or_else(|| {
                 (
                     r2e_core::http::StatusCode::UNAUTHORIZED,

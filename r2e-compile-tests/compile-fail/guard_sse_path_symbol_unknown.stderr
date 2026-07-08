@@ -1,5 +1,5 @@
 error[E0425]: cannot find value `missing` in module `path`
-  --> compile-fail/guard_sse_path_symbol_unknown.rs:34:39
+  --> compile-fail/guard_sse_path_symbol_unknown.rs:35:39
    |
-34 |     #[guard(StreamGuard::viewer(path::missing))]
+35 |     #[guard(StreamGuard::viewer(path::missing))]
    |                                       ^^^^^^^ not found in `path`

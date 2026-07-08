@@ -247,6 +247,28 @@ Consequences in `codegen/handlers.rs`:
 | `r2e-utils` | All interceptors: `Product = Self`; `Cache`/`CacheInvalidate` gain store dep |
 | `example-app`, CLI templates, `r2e-test`, book | Custom guards move `state.bean::<T>()` → injected fields + `#[derive(GuardBean)]` |
 
+## Known gaps (recorded during 6b/6c implementation)
+
+- **Module controllers' decorator deps are not compile-checked.** App-level
+  controllers get the full `AllSatisfied` check on the folded
+  `Controller::Deps`. Module controllers register through the unchecked
+  backend (they may inject private beans), and the module-local
+  encapsulation check (`ControllerDepsList`) walks `ContextConstruct::Deps`
+  — core deps only, not decorator deps (it cannot name `Controller<T, W>`
+  without witnesses). A module controller whose guard reads a bean outside
+  the module graph therefore panics at `build_state()` (BeanContext::get)
+  instead of failing compilation. Follow-up: emit a state-independent
+  "decorator deps" carrier the module fold can check.
+- **Scheduled-method and gRPC interceptors bypass `DecoratorSpec`.** They
+  run outside the handler path with no wiring-time `BeanContext`, so the
+  `#[intercept(expr)]` expression is used directly as the interceptor —
+  fine for `SelfBuilt` decorators (`Logged`, `Timed`, …), a compile error
+  for config specs like `Cache` (which never made sense there anyway).
+- **Pre-existing bug fixed in passing**: SSE/WS methods with `#[pre_guard]`
+  used to be filtered out of normal registration but never registered by the
+  pre-auth path — the route silently vanished. They now go through the same
+  pre-auth middleware wiring as HTTP routes.
+
 ## Open questions — resolved by the 6a spike
 
 1. **Coherence layout** → d1: `SelfBuilt` marker + blanket, works

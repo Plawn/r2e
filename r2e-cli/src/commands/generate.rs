@@ -642,7 +642,7 @@ impl {name}Service {{
 
 /// Generate a middleware/interceptor skeleton.
 ///
-/// Creates `src/middleware/<snake_name>.rs` with an `Interceptor<R, S>`
+/// Creates `src/middleware/<snake_name>.rs` with an `Interceptor<R>`
 /// implementation and updates `src/middleware/mod.rs`.
 ///
 /// Returns an error if the file already exists.
