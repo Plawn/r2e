@@ -259,6 +259,9 @@ tracking and the guaranteed `state: T` phase remain.
    improvement available without redesign: evaluate guard expressions once at
    router-build time and add a `Guard::startup_check(&state)` hook so
    misconfiguration fails at **boot**, not on first request.
+   → **Design proposed** in `plan-guards-as-beans.md` (Phase 6): guards and
+   interceptors as graph-resolved decorators, compile-checked deps,
+   once-at-registration construction; supersedes the `startup_check` idea.
 
 ## Phase 5 — Feature modules ✅ COMPLETE
 

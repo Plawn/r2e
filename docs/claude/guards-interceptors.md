@@ -91,17 +91,13 @@ Inline codegen (no trait):
 
 Other built-in interceptors (`Logged`, `Timed`, `CacheInvalidate`, `Counted`, `MetricTimed`) only require `R: Send` and work with any return type.
 
-<<<<<<< HEAD
 ```rust
 #[intercept(Counted::new("user_list_total"))]           // count invocations
 #[intercept(MetricTimed::new("user_list_duration"))]    // record duration as named metric
 async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-### Combining interceptors with guards/roles
-=======
 ## Combining interceptors with guards/roles
->>>>>>> ddb4ccb (documentation update)
 
 `#[intercept(Cache)]` + `#[roles]` (or any `#[guard]`) works correctly — guards run first, then interceptors see the raw type:
 ```rust
