@@ -203,21 +203,25 @@ An `id INTEGER PRIMARY KEY AUTOINCREMENT` column is always generated automatical
 r2e generate middleware AuditLog
 ```
 
-Generates `src/middleware/audit_log.rs` with an `Interceptor<R, S>` implementation:
+Generates `src/middleware/audit_log.rs` with a self-contained `Interceptor<R>`
+implementation (the `SelfBuilt` opt-in makes it usable in `#[intercept(...)]`):
 
 ```rust
 pub struct AuditLog;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl SelfBuilt for AuditLog {}
+
+impl<R: Send> Interceptor<R> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
         async move {
-            tracing::info!("AuditLog: before");
+            tracing::info!(method = method_name, "AuditLog: before");
             let result = next().await;
-            tracing::info!("AuditLog: after");
+            tracing::info!(method = method_name, "AuditLog: after");
             result
         }
     }

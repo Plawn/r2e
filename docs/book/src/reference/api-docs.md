@@ -20,13 +20,15 @@ This generates and opens documentation for all R2E crates.
 | `HttpError` | Built-in error type with HTTP status mapping |
 | `R2eConfig` | YAML + env var configuration |
 | `Controller` | Trait for route registration |
-| `Guard<S, I>` | Post-auth guard trait |
-| `PreAuthGuard<S>` | Pre-auth guard trait |
+| `Guard<I>` | Post-auth guard trait (built once from the bean graph) |
+| `PreAuthGuard` | Pre-auth guard trait |
 | `GuardContext<I>` | Guard context with identity |
 | `PreAuthGuardContext` | Guard context without identity |
 | `Identity` | Identity trait for guards |
-| `Interceptor<R, S>` | AOP interceptor trait, generic over the state `S` |
-| `InterceptorContext` | Interceptor context |
+| `Interceptor<R>` | AOP interceptor trait, generic over the return type `R` |
+| `InterceptorContext` | Interceptor context (`Copy`: method + controller name) |
+| `DecoratorSpec` | Build contract for guards/interceptors (Product + Deps + build) |
+| `SelfBuilt` | Marker for self-contained decorators (no bean deps) |
 | `ManagedResource<S>` | Managed resource lifecycle trait |
 | `ManagedErr<E>` | Error wrapper for managed resources |
 | `Plugin<S>` | Post-state plugin trait |

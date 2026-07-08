@@ -34,7 +34,7 @@ The following types are exported by `r2e-grpc` and ready for use:
 
 | Type | Description |
 |------|-------------|
-| `GrpcGuard<S, I>` | Guard trait for gRPC methods (analog of `Guard<S, I>` for HTTP) |
+| `GrpcGuard<I>` | Guard trait for gRPC methods (analog of `Guard<I>` for HTTP) |
 | `GrpcGuardContext<'a, I>` | Context passed to guards (service name, method name, metadata, identity) |
 | `GrpcRolesGuard` | Built-in guard that checks required roles |
 | `GrpcRoleBasedIdentity` | Extension trait for identity types that carry roles |
@@ -146,10 +146,9 @@ use tonic::Status;
 
 struct TenantGuard;
 
-impl<S: Send + Sync, I: Identity> GrpcGuard<S, I> for TenantGuard {
+impl<I: Identity> GrpcGuard<I> for TenantGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Status>> + Send {
         async move {
@@ -178,28 +177,31 @@ async fn create_user(
 }
 ```
 
-### Guards with state access (planned)
+### Guards that need beans (planned)
 
-Guards receive the application state, enabling database lookups:
+Unlike HTTP guards, gRPC guards do **not** go through `DecoratorSpec` — they are
+plain `GrpcGuard<I>` implementations. A guard that needs a database pool (or any
+service) holds it as a **field**, constructed by the caller who wires the guard
+onto the service:
 
 ```rust
-struct ActiveUserGuard;
+struct ActiveUserGuard {
+    pool: SqlitePool,   // resolved by the caller, held as a field
+}
 
-impl<S: BeanLookup + Send + Sync, I: Identity> GrpcGuard<S, I> for ActiveUserGuard {
+impl<I: Identity> GrpcGuard<I> for ActiveUserGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Status>> + Send {
         async move {
-            let pool = state.bean::<SqlitePool>().expect("SqlitePool bean not registered");
             let sub = ctx.identity_sub().unwrap_or("");
 
             let active = sqlx::query_scalar::<_, bool>(
                 "SELECT active FROM users WHERE sub = ?"
             )
             .bind(sub)
-            .fetch_optional(&pool)
+            .fetch_optional(&self.pool)
             .await
             .map_err(|_| Status::internal("Database error"))?;
 
@@ -234,7 +236,7 @@ Execution order: roles check first, then custom guards in declaration order. Sho
 
 | | HTTP | gRPC |
 |-|------|------|
-| Guard trait | `Guard<S, I>` | `GrpcGuard<S, I>` |
+| Guard trait | `Guard<I>` | `GrpcGuard<I>` |
 | Error type | `Response` (HTTP response) | `tonic::Status` |
 | Context type | `GuardContext` | `GrpcGuardContext` |
 | Request metadata | `&HeaderMap` + `&Uri` | `&MetadataMap` |

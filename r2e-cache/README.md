@@ -40,20 +40,31 @@ cache.evict_expired(); // clean up expired entries
 
 Pluggable async cache backend trait. Default implementation: `InMemoryStore` (DashMap-backed).
 
+The store is a **bean** (`Arc<dyn CacheStore>`). Provide one on the builder so
+the `Cache` / `CacheInvalidate` interceptors can resolve it from the graph:
+
 ```rust
-use r2e::r2e_cache::{CacheStore, InMemoryStore, set_cache_backend};
+use r2e::r2e_cache::InMemoryStore;
 
-// Use the default in-memory store
-set_cache_backend(InMemoryStore::new());
+AppBuilder::new()
+    .provide(InMemoryStore::shared())   // Arc<dyn CacheStore>
+    // ... other beans ...
+    .build_state()
+    .await;
 
-// Or implement CacheStore for your own backend (Redis, etc.)
+// Or implement CacheStore for your own backend (Redis, etc.) and provide that.
 ```
+
+> There is no global cache store — the old `cache_backend()` / `set_cache_backend()`
+> functions have been removed. The store is always a bean.
 
 Operations: `get`, `set`, `remove`, `clear`, `remove_by_prefix`.
 
 ### Interceptor integration
 
-When used with [`r2e-utils`](../r2e-utils), caching can be applied declaratively:
+When used with [`r2e-utils`](../r2e-utils), caching can be applied declaratively.
+The `Cache` and `CacheInvalidate` interceptors read the `Arc<dyn CacheStore>`
+bean from the graph — a missing store is a compile error at `register_controller()`:
 
 ```rust
 #[get("/")]

@@ -33,6 +33,23 @@ async fn slow_query(&self) -> Json<Vec<User>> { /* ... */ }
 
 ### `Cache` — Response caching
 
+`Cache` reads a cache store from the bean graph, so the store must be provided
+as a bean (an `Arc<dyn CacheStore>`). A missing store is a **compile error at
+`register_controller()`**. Provide one on the builder:
+
+```rust
+use r2e::r2e_cache::InMemoryStore;
+
+AppBuilder::new()
+    .provide(InMemoryStore::shared())   // Arc<dyn CacheStore>
+    // ... other beans ...
+    .build_state()
+    .await;
+```
+
+> There is no global cache store anymore — the old `cache_backend()` /
+> `set_cache_backend()` functions have been removed. The store is always a bean.
+
 ```rust
 #[get("/")]
 #[intercept(Cache::ttl(30))]                     // Cache for 30 seconds
@@ -42,6 +59,10 @@ async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 #[intercept(Cache::ttl(30).group("users"))]      // Named cache group
 async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
+
+`Cache` and `CacheInvalidate` are the only built-in interceptors that read a
+bean. `Logged`, `Timed`, `Counted`, and `MetricTimed` are self-contained and
+need no beans.
 
 ### `CacheInvalidate` — Clear cache groups
 
@@ -102,17 +123,22 @@ Interceptors always see the handler's **raw return type** (`Json<T>`, `Result<Js
 async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-> **Known limitation:** `#[managed]` parameters combined with type-constrained interceptors (e.g., `Cache`) don't work because the managed resource lifecycle wraps `into_response` inside the interceptor closure. Workaround: use `cache_backend()` manually in the handler body.
+> **Known limitation:** `#[managed]` parameters combined with type-constrained interceptors (e.g., `Cache`) don't work because the managed resource lifecycle wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: inject the store bean (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the handler body.
 
 ## Writing custom interceptors
 
 Implement the `Interceptor<R>` trait:
 
+A self-contained interceptor (no bean dependencies) opts in with one line,
+`impl SelfBuilt for AuditLog {}`:
+
 ```rust
-use r2e::prelude::*; // Interceptor, InterceptorContext
+use r2e::prelude::*; // Interceptor, InterceptorContext, SelfBuilt
 use std::future::Future;
 
 pub struct AuditLog;
+
+impl SelfBuilt for AuditLog {}
 
 impl<R: Send> Interceptor<R> for AuditLog {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
@@ -146,7 +172,12 @@ Apply it:
 async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-The type must be constructable as a bare path expression (unit struct or constant).
+The `#[intercept(...)]` attribute's leading type path names the decorator spec.
+For a self-contained interceptor, that type is the interceptor itself
+(`impl SelfBuilt`). An interceptor that needs beans holds them as fields and
+implements `DecoratorSpec` on a config type that pulls the beans in `build` —
+the same spec/product pattern used by `Cache` (see
+[Custom Guards](./custom-guards.md#guards-that-read-beans)).
 
 ### `InterceptorContext`
 

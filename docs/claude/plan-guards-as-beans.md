@@ -1,6 +1,6 @@
 # Plan — Guards & Interceptors as Graph-Resolved Decorators (Phase 6)
 
-Status: **6a spike DONE** (decisions recorded below); 6b–6e pending
+Status: **COMPLETE** (6a spike → 6b core traits → 6c codegen → 6d built-ins/examples → 6e docs+diagnostics; landed 2026-07-08). The "Known gaps" section below records the accepted limitations.
 
 ## Spike decisions (6a, `r2e-core/tests/decorator_spike.rs`, 2026-07-08)
 

@@ -4,24 +4,12 @@
 
 - **7 tests** (all inline in `src/lib.rs`)
 - **Coverage**: ~44% — basic get/set/remove/clear tested
-- **Critical issue**: Global `CACHE_BACKEND` singleton causes test isolation problems
-- **Gap**: Expiry verification, evict_expired, concurrent access, singleton behavior
+- **Gap**: Expiry verification, evict_expired, concurrent access
 
----
-
-## Phase 0: Fix Test Isolation (Prerequisite)
-
-**Problem**: All tests share the `OnceLock<Arc<dyn CacheStore>>` singleton. Tests pollute each other's cache state.
-
-**Solution Options**:
-1. Add a `#[cfg(test)] fn reset_cache_backend()` that resets the `OnceLock` (unsafe but pragmatic)
-2. Move integration tests to separate test binaries (each gets its own process/singleton)
-3. Use a per-test `InMemoryStore` instance directly instead of the global singleton
-
-| Task | Description |
-|------|-------------|
-| `add_test_reset_function` | `#[cfg(test)]` function to reset global singleton between tests |
-| `verify_tests_pass_in_any_order` | Run tests with `--test-threads=1` and verify no order-dependent failures |
+> The global `CACHE_BACKEND` singleton (`cache_backend()` / `set_cache_backend()`)
+> has been **removed** — the cache store is now a bean (`Arc<dyn CacheStore>`
+> provided via `.provide(InMemoryStore::shared())`). Each test constructs its own
+> `InMemoryStore` instance, so there is no shared-singleton isolation problem.
 
 ---
 
@@ -94,20 +82,7 @@
 
 ---
 
-## Phase 4: Global Singleton Behavior
-
-**File**: `src/lib.rs` — extend tests (or in separate test binary)
-
-| Test | Description |
-|------|-------------|
-| `set_cache_backend_once` | First call to `set_cache_backend()` succeeds |
-| `set_cache_backend_twice_ignored` | Second call silently ignored (no panic) |
-| `cache_backend_default_lazy_init` | `cache_backend()` without prior `set_cache_backend()` → returns `InMemoryStore` |
-| `cache_backend_returns_custom` | After `set_cache_backend(custom)` → `cache_backend()` returns custom |
-
----
-
-## Phase 5: CacheStore Trait Compliance
+## Phase 4: CacheStore Trait Compliance
 
 **File**: `tests/custom_store_test.rs` (new)
 
@@ -127,10 +102,8 @@ Verify the trait contract with a mock implementation.
 
 | Phase | Tests | Effort | Dependencies |
 |-------|-------|--------|-------------|
-| Phase 0 | 2 | 1h | None |
 | Phase 1 | 8 | 1.5h | None |
 | Phase 2 | 6 | 1h | None |
 | Phase 3 | 4 | 1.5h | tokio multi-thread |
-| Phase 4 | 4 | 1h | Separate test binary |
-| Phase 5 | 5 | 1h | None |
-| **Total** | **29** | **~7h** | |
+| Phase 4 | 5 | 1h | None |
+| **Total** | **23** | **~5h** | |

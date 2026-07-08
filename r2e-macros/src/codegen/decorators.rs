@@ -94,6 +94,16 @@ pub(super) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
     }
 }
 
+/// Whether every decorator expression's spec type is inferable. Closure
+/// generation uses this to degrade to the same no-decorator shape as the
+/// invocation function when extraction fails, so the only error the user
+/// sees is the spec-type one (no arity-mismatch cascade).
+pub(super) fn all_specs_inferable<'a>(
+    exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> bool {
+    exprs.into_iter().all(|e| spec_type_of(e).is_ok())
+}
+
 /// A generated per-method decorator set: hidden struct + build function.
 pub(super) struct DecoSet {
     pub struct_ident: syn::Ident,

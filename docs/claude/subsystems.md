@@ -378,13 +378,13 @@ impl AdminController {
 
 `TtlCache<K, V>` — thread-safe TTL cache backed by `DashMap`. Supports get, insert, remove, clear, evict_expired.
 
-`CacheStore` trait — pluggable async cache backend. Default: `InMemoryStore` (DashMap-backed). Supports get, set, remove, clear, remove_by_prefix. Global singleton via `set_cache_backend()` / `cache_backend()`.
+`CacheStore` trait — pluggable async cache backend. Default: `InMemoryStore` (DashMap-backed). Supports get, set, remove, clear, remove_by_prefix. The store is an application **bean** (`Arc<dyn CacheStore>`): provide one with `.provide(InMemoryStore::shared())`. (The old global `set_cache_backend()`/`cache_backend()` singleton was deleted in Phase 6.)
 
-The `Cache` interceptor (in `r2e-utils`) uses the global `CacheStore` backend. `#[intercept(Cache::ttl(30).group("users"))]` stores in a named group; `#[intercept(CacheInvalidate::group("users"))]` clears by prefix.
+The `Cache` interceptor (in `r2e-utils`) resolves the store bean at controller registration (`DecoratorSpec` — a missing store is a compile error at `register_controller()`). `#[intercept(Cache::ttl(30).group("users"))]` stores in a named group; `#[intercept(CacheInvalidate::group("users"))]` clears by prefix.
 
 ## Rate Limiting (r2e-rate-limit)
 
-`RateLimiter<K>` — generic token-bucket rate limiter keyed by arbitrary type. `RateLimitBackend` trait for pluggable backends (default: `InMemoryRateLimiter`). `RateLimitRegistry` — clonable handle stored in app state, used by the generated `RateLimitGuard`.
+`RateLimiter<K>` — generic token-bucket rate limiter keyed by arbitrary type. `RateLimitBackend` trait for pluggable backends (default: `InMemoryRateLimiter`). `RateLimitRegistry` — clonable bean; the `RateLimit`/`PreRateLimit` specs pull it once at controller registration into the built guards.
 
 Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"ip"` (per X-Forwarded-For).
 

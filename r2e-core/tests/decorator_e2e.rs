@@ -1,31 +1,22 @@
-//! Phase 6a SPIKE — guards & interceptors as graph-resolved decorators.
+//! End-to-end coverage for graph-resolved decorators (Phase 6).
 //!
-//! Validates the type-level design from `docs/claude/plan-guards-as-beans.md`
-//! before committing to an API (6b/6c). Everything decorator-shaped in this
-//! file is a **local prototype** of what 6b moves into r2e-core proper:
+//! A hand-written `Controller` impl mirroring exactly what `#[routes]`
+//! emits: decorators built **once** inside `routes(state, core, ctx)` via
+//! `<Spec as DecoratorSpec>::build(expr, ctx)`, wrapped in one `Arc` per
+//! route and captured by the handler closure. Asserts the properties the
+//! macro-level tests cannot see directly:
 //!
-//! - `Guard2<I>` / `Interceptor2<R>`: the request-time traits without the
-//!   state parameter — deps are fields, injected at construction.
-//! - `DecoratorSpec`: the construction/dep contract (`Product` / `Deps` /
-//!   `build(self, ctx)`). Config values (`RateLimitCfg`, `AuditCfg`)
-//!   implement it with bean deps; self-contained decorators
-//!   (`RequireHeader`) with `Product = Self, Deps = TNil`.
-//! - The `Deps` fold: core `ContextConstruct::Deps` ++ every site's
-//!   `Spec::Deps`, exposed as `Controller::Deps` and checked by the real
-//!   `AllSatisfied` bound at the real `register_controller()` call.
-//! - The runtime shape 6c will emit: decorators built **once** from the
-//!   `BeanContext`, wrapped in one `Arc` per route, captured by the handler
-//!   closure; per-request cost = Arc clone + monomorphized calls.
+//! - build-once (the spec's `build` runs exactly once across N requests);
+//! - the `Deps` fold shape (`ContextConstruct::Deps` ++ every site's
+//!   `Spec::Deps`) accepted by the real `AllSatisfied` bound at
+//!   `register_controller()`;
+//! - spec build is independent of the state provision list `P`
+//!   (module-private guard deps behave like private core deps);
+//! - guard declaration order, short-circuit before interceptors, and the
+//!   per-request cost model (one `Arc` clone + monomorphized calls).
 //!
-//! Simulation notes: the hand-written `Controller` impl below mirrors what
-//! `#[routes]` will emit in 6c — decorators built once inside
-//! `routes(state, core, ctx)` (the `ctx` parameter landed with 6b) and moved
-//! into the handler closures.
-//! - Spec coherence: a blanket `impl<D: SelfBuilt> DecoratorSpec for D` was
-//!   expected to conflict (E0119) with the config-type impls, but modern
-//!   negative coherence accepts it — including cross-crate (validated with a
-//!   two-crate scratch probe). Self-contained decorators opt in with one
-//!   line: `impl SelfBuilt for MyGuard {}`.
+//! (Origin: the Phase 6a spike; kept as a permanent regression test, now on
+//! the real `Guard`/`Interceptor` traits.)
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,39 +28,6 @@ use r2e_core::http::{HeaderMap, Router, StatusCode, Uri};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{AppBuilder, Controller, DecoratorSpec, Identity, NoIdentity, SelfBuilt};
-
-// ── Prototype: request-time traits without the state parameter ────────────
-
-/// `Guard` after 6b: no `S` — a guard reads request metadata and its own
-/// fields, nothing else.
-trait Guard2<I: Identity>: Send + Sync {
-    fn check(
-        &self,
-        ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
-}
-
-/// `InterceptorContext` after 6b: no `state` field, hence no `S` and no
-/// lifetime.
-struct InterceptorContext2 {
-    method_name: &'static str,
-    #[allow(dead_code)]
-    controller_name: &'static str,
-}
-
-/// `Interceptor` after 6b: no `S`.
-trait Interceptor2<R>: Send + Sync {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext2,
-        next: F,
-    ) -> impl std::future::Future<Output = R> + Send
-    where
-        F: FnOnce() -> Fut + Send,
-        Fut: std::future::Future<Output = R> + Send;
-}
-
-// ── DecoratorSpec: now the real trait (landed in 6b) ───────────────────────
 
 // ── Beans ──────────────────────────────────────────────────────────────────
 
@@ -131,7 +89,7 @@ impl DecoratorSpec for RateLimitCfg {
     }
 }
 
-impl<I: Identity> Guard2<I> for SpikeRateLimitGuard {
+impl<I: Identity> Guard<I> for SpikeRateLimitGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
@@ -173,10 +131,10 @@ impl DecoratorSpec for AuditCfg {
     }
 }
 
-impl<R: Send> Interceptor2<R> for AuditInterceptor {
+impl<R: Send> Interceptor<R> for AuditInterceptor {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext2,
+        ctx: InterceptorContext,
         next: F,
     ) -> impl std::future::Future<Output = R> + Send
     where
@@ -206,7 +164,7 @@ struct RequireHeader(&'static str);
 
 impl SelfBuilt for RequireHeader {}
 
-impl<I: Identity> Guard2<I> for RequireHeader {
+impl<I: Identity> Guard<I> for RequireHeader {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
@@ -317,7 +275,7 @@ where
                     let out = deco
                         .i_audit
                         .around(
-                            InterceptorContext2 {
+                            InterceptorContext {
                                 method_name: "list",
                                 controller_name: "SpikeController",
                             },

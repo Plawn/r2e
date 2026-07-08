@@ -212,15 +212,19 @@ The closure binds the façade from the captured core `Arc` and the extracted req
 
 ### Guarded handler (with `#[roles]`)
 
+Guards are **built once at registration** from the resolved `BeanContext` (via
+`DecoratorSpec::build`) and captured by the route closure in a decorator bundle
+(`__deco`) — one `Arc` per route, no state access at request time:
+
 ```rust
 move |
-    axum::extract::State(__state): axum::extract::State<S>,   // S = the inferred HList state
     __headers: axum::http::HeaderMap,
     __uri: axum::http::Uri,
     __data: __R2eRequestData_UserController<()>,
     Path(id): Path<i64>,
 | {
     let core = core.clone();
+    let __deco = __deco.clone();     // prebuilt guards/interceptors
     async move {
         let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
 
@@ -233,7 +237,8 @@ move |
             &__uri,
             __identity_ref,
         );
-        r2e::Guard::check(&r2e::RolesGuard::new(&["admin"]), &__state, &__guard_ctx)
+        // The guard was built at registration; check() takes no state.
+        r2e::Guard::check(&__deco.__g0, &__guard_ctx)
             .await
             .map_err(/* ... */)?;
 
@@ -243,7 +248,10 @@ move |
 }
 ```
 
-Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardContext`. `guard_identity` reads the identity directly from the façade.
+Guarded handlers extract `HeaderMap` and `Uri` to build a `GuardContext`.
+`guard_identity` reads the identity directly from the façade. The guard itself
+(`__deco.__g0`) was constructed once at registration, so there is no `State`
+extraction and no per-request DI.
 
 ### `Controller<S, W>` impl
 
@@ -257,8 +265,10 @@ where
     S: Clone + Send + Sync + 'static + r2e::type_list::BeanLookup,
     // ... plus the inferred `HasBean` bounds carried by W
 {
-    // #[inject] types checked against S's provisions via AllSatisfied.
-    type Deps = <Self as r2e::ContextConstruct>::Deps;
+    // #[inject] types PLUS every guard/interceptor spec's `Deps`, folded into
+    // one list and checked against S's provisions via AllSatisfied — so a bean
+    // a guard needs is a compile error here too.
+    type Deps = /* ContextConstruct::Deps ++ each DecoratorSpec::Deps */;
 
     // Build the core once from the resolved bean graph.
     fn construct(_state: &S, ctx: &r2e::beans::BeanContext) -> Self {
@@ -268,9 +278,13 @@ where
     fn routes(
         state: &S,
         core: std::sync::Arc<Self>,
+        ctx: &r2e::beans::BeanContext,   // resolved graph — guards/interceptors are built here
     ) -> axum::Router<S> {
+        // Guards and interceptors are built ONCE from `ctx` via
+        // `<Spec as DecoratorSpec>::build(expr, ctx)`, then captured by the
+        // route closures (see the guarded-handler shape above).
         axum::Router::new()
-            // Each generated closure captures core.clone().
+            // Each generated closure captures core.clone() (and any built decorators).
             .route("/users/", axum::routing::get(/* generated closure */))
             .route("/users/{id}", axum::routing::get(/* generated closure */))
     }

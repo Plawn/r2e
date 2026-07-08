@@ -301,10 +301,15 @@ use r2e::prelude::*;
 use std::future::Future;
 
 /// Custom interceptor: AuditLog
+///
+/// Self-contained (no bean deps) — the `SelfBuilt` opt-in makes it usable in
+/// `#[intercept(AuditLog)]`.
 pub struct AuditLog;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl SelfBuilt for AuditLog {}
+
+impl<R: Send> Interceptor<R> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,

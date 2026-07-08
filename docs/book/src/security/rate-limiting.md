@@ -32,11 +32,14 @@ AppBuilder::new()
 
 Shared bucket across all requests. Runs before JWT validation:
 
+Pre-auth strategies (`global`, `per_ip`) live on the `PreRateLimit` type;
+the post-auth per-user strategy lives on `RateLimit`.
+
 ```rust
-use r2e::r2e_rate_limit::RateLimit;
+use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 
 #[get("/")]
-#[pre_guard(RateLimit::global(100, 60))]  // 100 requests per 60 seconds total
+#[pre_guard(PreRateLimit::global(100, 60))]  // 100 requests per 60 seconds total
 async fn list(&self) -> Json<Vec<Item>> { /* ... */ }
 ```
 
@@ -46,7 +49,7 @@ Separate bucket per client IP. Runs before JWT validation:
 
 ```rust
 #[get("/")]
-#[pre_guard(RateLimit::per_ip(10, 60))]  // 10 requests per 60 seconds per IP
+#[pre_guard(PreRateLimit::per_ip(10, 60))]  // 10 requests per 60 seconds per IP
 async fn list(&self) -> Json<Vec<Item>> { /* ... */ }
 ```
 
@@ -68,16 +71,16 @@ User is identified by the `sub` claim from the JWT token.
 
 | Strategy | Attribute | Runs when | Needs identity |
 |----------|-----------|-----------|---------------|
-| `RateLimit::global(max, window)` | `#[pre_guard(...)]` | Before JWT | No |
-| `RateLimit::per_ip(max, window)` | `#[pre_guard(...)]` | Before JWT | No |
+| `PreRateLimit::global(max, window)` | `#[pre_guard(...)]` | Before JWT | No |
+| `PreRateLimit::per_ip(max, window)` | `#[pre_guard(...)]` | Before JWT | No |
 | `RateLimit::per_user(max, window)` | `#[guard(...)]` | After JWT | Yes |
 
 ## Combining rate limits
 
 ```rust
 #[post("/upload")]
-#[pre_guard(RateLimit::global(1000, 60))]     // 1000 total uploads/min
-#[pre_guard(RateLimit::per_ip(50, 60))]       // 50 uploads/min per IP
+#[pre_guard(PreRateLimit::global(1000, 60))]  // 1000 total uploads/min
+#[pre_guard(PreRateLimit::per_ip(50, 60))]    // 50 uploads/min per IP
 #[guard(RateLimit::per_user(10, 60))]         // 10 uploads/min per user
 async fn upload(&self, body: Bytes) -> Result<(), HttpError> { /* ... */ }
 ```

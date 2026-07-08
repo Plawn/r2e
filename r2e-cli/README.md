@@ -149,7 +149,7 @@ Optional fields (`Option<T>`) produce nullable columns (no `NOT NULL` constraint
 r2e generate middleware AuditLog
 ```
 
-Creates `src/middleware/audit_log.rs` with an `Interceptor<R, S>` implementation skeleton (before/after logging with `tracing`). Updates `src/middleware/mod.rs`.
+Creates `src/middleware/audit_log.rs` with a self-contained `Interceptor<R>` implementation skeleton (before/after logging with `tracing`, plus the `SelfBuilt` opt-in). Updates `src/middleware/mod.rs`.
 
 #### `r2e generate grpc-service <Name> [--package <pkg>]`
 

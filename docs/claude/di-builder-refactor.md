@@ -18,6 +18,7 @@ phase ends with a quality-review gate before the next starts.
 | 3 | Correctness & cleanup | ✅ done |
 | 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model; review gate passed (no blocking findings; ambiguity + guard-panic fixes applied), see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | ✅ done — `FeatureModule` + `register_module` + `#[module]`; compile-time encapsulation (deps ⊆ Provides ∪ Imports, exports-only leakage to `P`); see `plan-feature-modules.md` |
+| 6 | Guards & interceptors as graph-resolved decorators | ✅ done — `Guard<I>`/`PreAuthGuard`/`Interceptor<R>` lost the state param; `DecoratorSpec` + `SelfBuilt`; sites built once at wiring time, deps folded into `Controller::Deps` (compile-checked); `cache_backend()` global deleted; see `plan-guards-as-beans.md` |
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
 46-file docs alignment pass.
@@ -244,7 +245,9 @@ tracking and the guaranteed `state: T` phase remain.
    on bean-backed extractors having no axum impls. A future pass should either
    enforce it (sealed marker discipline) or make marker selection
    deterministic.
-2. **Guard/interceptor bean deps are runtime-checked, not compile-checked.**
+2. **RESOLVED by Phase 6** (guards & interceptors as graph-resolved
+   decorators, see `plan-guards-as-beans.md`) — original entry kept below
+   for history. ~~Guard/interceptor bean deps are runtime-checked, not compile-checked.~~
    `RateLimitGuard`/`FgaGuard` (and bean-reading interceptors like a DB audit
    log) fetch their beans via `BeanLookup`; a missing bean is a per-request
    500 (clean, but runtime). The blocker is NOT E0207 (solvable by a marker

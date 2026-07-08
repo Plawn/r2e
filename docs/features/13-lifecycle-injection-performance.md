@@ -270,10 +270,12 @@ move |data: __R2eRequestData_UserController, /* ... params */| {
 
 ```rust
 let core = core.clone();
-move |State(state): State<S>,  // S = etat HList infere (jamais ecrit par l'utilisateur)
-      headers: HeaderMap,
+let deco = deco.clone();   // guards/interceptors built once from the BeanContext at registration
+move |headers: HeaderMap,
+      uri: Uri,
       data: __R2eRequestData_UserController| {
     let core = core.clone();
+    let deco = deco.clone();
     async move {
         let ctrl = __r2e_meta_UserController::bind_request(core, data);
 
@@ -281,11 +283,13 @@ move |State(state): State<S>,  // S = etat HList infere (jamais ecrit par l'util
             method_name: "admin_list",
             controller_name: "UserController",
             headers: &headers,
+            uri: &uri,
+            path_params: PathParams::EMPTY,
             identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, lu sur la façade
         };
 
-        // Short-circuit si le guard echoue
-        if let Err(resp) = Guard::check(&RolesGuard { required_roles: &["admin"] }, &state, &guard_ctx) {
+        // Guard built at registration (deco.g0); check() takes no state, and is async.
+        if let Err(resp) = Guard::check(&deco.g0, &guard_ctx).await {
             return resp;
         }
 
@@ -294,7 +298,7 @@ move |State(state): State<S>,  // S = etat HList infere (jamais ecrit par l'util
 }
 ```
 
-**Implications**: in guarded mode, Axum also extracts `State` and `HeaderMap` in addition to the request-data extractor. State extraction is an additional clone (but cheap — it is an internal `Arc` clone). In all modes the per-request cost is one `Arc` clone of the core plus one request-data extraction; the core itself is built once at registration.
+**Implications**: in guarded mode, Axum extracts `HeaderMap` and `Uri` in addition to the request-data extractor, to build the `GuardContext`. There is **no `State` extraction** — the guard was constructed once at registration and is captured by the closure. In all modes the per-request cost is one `Arc` clone of the core, one clone of the prebuilt decorator bundle, and one request-data extraction; the core and the guards are built once at registration.
 
 ---
 
@@ -506,21 +510,25 @@ pub struct GuardContext<'a, I: Identity> {
     pub method_name: &'static str,
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
+    pub uri: &'a Uri,
+    pub path_params: PathParams<'a>,
     pub identity: Option<&'a I>,
 }
 
-pub trait Guard<S, I: Identity>: Send + Sync {
-    fn check(&self, state: &S, ctx: &GuardContext<'_, I>) -> Result<(), Response>;
+pub trait Guard<I: Identity>: Send + Sync {
+    fn check(&self, ctx: &GuardContext<'_, I>)
+        -> impl Future<Output = Result<(), Response>> + Send;
 }
 ```
 
 The `Identity` trait decouples guards from the concrete `AuthenticatedUser` type. Built-in guards (`RolesGuard`, `RateLimitGuard`) are generic over `I: Identity`.
 
-Guards are also **generic over the state `S`** (the inferred HList): a guard that never
-touches state needs only `S: Send + Sync`; a guard that reads a bean adds `S: BeanLookup`
-and calls `state.bean::<T>() -> Option<T>` (in the prelude). For witness-checked,
-fixed-offset access there is also `state.get::<T>()` via `BeanAccess` — deliberately **not**
-in the prelude, import it explicitly with `use r2e_core::type_list::BeanAccess;`.
+Guards are **graph-resolved decorators** (Phase 6): they are built **once, at controller
+registration**, from the resolved `BeanContext` — never per request, and `check` takes
+**no state parameter**. A guard that reads no beans is self-contained (`impl SelfBuilt for
+MyGuard {}`); a guard that needs a bean holds it as a field, and a spec type named by the
+`#[guard(...)]` expression implements `DecoratorSpec` (Product + Deps + build) to pull the
+bean from the graph. A missing bean is a compile error at `register_controller()`.
 
 ### 5.2 Identity Source for Guards
 

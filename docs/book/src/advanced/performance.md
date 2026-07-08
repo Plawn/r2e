@@ -165,11 +165,11 @@ threshold.
 
 ```rust
 // Bad: blocks the Tokio runtime
-impl<S, I: Identity> Guard<S, I> for SlowGuard {
-    fn check(&self, state: &S, ctx: &GuardContext<'_, I>) -> impl Future<...> + Send {
+impl<I: Identity> Guard<I> for SlowGuard {
+    fn check(&self, ctx: &GuardContext<'_, I>) -> impl Future<...> + Send {
         async move {
             // This is a database query on EVERY request
-            let result = sqlx::query("SELECT ...").fetch_one(&pool).await;
+            let result = sqlx::query("SELECT ...").fetch_one(&self.pool).await;
             // ...
         }
     }

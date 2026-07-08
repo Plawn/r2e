@@ -1373,9 +1373,20 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     let data_name = request_data_ident_for(controller_name);
     let invocation = invocation_ident_for(controller_name, fn_name);
 
-    let has_guards = !rm.decorators.guard_fns.is_empty();
+    // Mirror generate_single_handler's fallback: if a spec type is not
+    // inferable, the invoke fn degrades to the no-decorator shape, so the
+    // closure must too (avoids an arity-mismatch cascade after the real
+    // spec-type error).
+    let specs_ok = super::decorators::all_specs_inferable(
+        rm.decorators
+            .guard_fns
+            .iter()
+            .chain(def.controller_intercepts.iter())
+            .chain(rm.decorators.intercept_fns.iter()),
+    );
+    let has_guards = !rm.decorators.guard_fns.is_empty() && specs_ok;
     let has_managed = !rm.managed_params.is_empty();
-    let has_intercepts = has_interceptors(def, rm);
+    let has_intercepts = has_interceptors(def, rm) && specs_ok;
     let needs_state = has_managed;
     let has_deco = has_guards || has_intercepts;
 
@@ -1426,7 +1437,8 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let data_name = request_data_ident_for(controller_name);
     let invocation = invocation_ident_for(controller_name, fn_name);
-    let has_guards = !sm.decorators.guard_fns.is_empty();
+    let has_guards = !sm.decorators.guard_fns.is_empty()
+        && super::decorators::all_specs_inferable(sm.decorators.guard_fns.iter());
 
     let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
@@ -1489,7 +1501,8 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let data_name = request_data_ident_for(controller_name);
     let inner = handler_ident_for(controller_name, fn_name);
-    let has_guards = !wm.decorators.guard_fns.is_empty();
+    let has_guards = !wm.decorators.guard_fns.is_empty()
+        && super::decorators::all_specs_inferable(wm.decorators.guard_fns.iter());
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
 
     let mut closure_params: Vec<TokenStream> = Vec::new();

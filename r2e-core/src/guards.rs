@@ -304,7 +304,7 @@ impl<'a> PreAuthGuardContext<'a> {
 /// ```ignore
 /// use r2e_core::guards::GuardError;
 ///
-/// async fn check(&self, _state: &S, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+/// async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
 ///     if ctx.identity.is_none() {
 ///         return Err(GuardError::new(StatusCode::FORBIDDEN, "access denied").into());
 ///     }
