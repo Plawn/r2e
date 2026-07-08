@@ -7,8 +7,9 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ — all done. Items 6/8/9/10 are opportunistic.
-Item 7 is **rejected** (user decision — do not re-propose).
+~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ — all done. Items 6/8/9/10 are opportunistic;
+item 11 is **user-requested** (next session). Item 7 is **rejected** (user
+decision — do not re-propose).
 
 ---
 
@@ -239,3 +240,32 @@ shape is known: a `GrpcServiceDeps` carrier emitted by `#[grpc_routes]`
 (fold: `ContextConstruct::Deps` ++ Σ spec deps, mirroring `ControllerDeps`)
 and an `AllSatisfied` bound on `register_grpc_service`. Fail-early-at-startup
 makes this less urgent than the controller case was.
+
+## 11. (User-requested, next session) Sync scheduled methods: async bridge for direct-call interception
+
+Requested 2026-07-08, right after the item-5 DecoSlot follow-up. Today a
+**sync** `#[scheduled]` method with interceptors runs its chain only around
+scheduler ticks — the body can't await the chain, so direct in-code calls
+bypass it (async methods already intercept every call path).
+
+Bridge options analyzed (2026-07-08):
+
+- **`block_on` in the sync body — REJECTED.** The body already runs on a
+  tokio worker (tick = async task, direct call = async handler);
+  `Handle::block_on` panics inside a runtime, `block_in_place` starves the
+  worker and panics on `current_thread`. Never in generated code.
+- **`tokio::spawn` fire-and-forget — weak.** No deadlock, but the caller no
+  longer observes completion and a `Result` return's error is lost (only
+  loggable). Tolerable for `()`, wrong for `Result`.
+- **Async promotion of the dispatch wrapper — RECOMMENDED.** Generate the
+  same hidden-inner + dispatch-wrapper split as async methods, but emit the
+  wrapper as `async fn` even though the source is `fn`. Direct callers (all
+  in async contexts anyway) get a clear "consider using `.await`" error;
+  result propagation and completion semantics preserved; zero runtime risk.
+  Cost is DX only: a generated signature differing from the source — must be
+  clearly documented (book + guards-interceptors.md), ideally with a macro
+  note pointing at the promotion when a caller forgets `.await`. Also update
+  the "sync methods keep the task-level chain" carve-outs added by item 5
+  (wrapping.rs `generate_scheduled_method`, controller_impl.rs
+  `generate_scheduled_tasks` sync arm — the task-level chain becomes
+  unnecessary since the task can call the now-async wrapper).
