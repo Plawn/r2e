@@ -438,9 +438,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         M::Controllers: ControllerDepsList,
         // Encapsulation: provider deps, exports, and controller deps must
         // resolve inside the module scope (Provided ∪ Imports).
-        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
-        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
-        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>,
     {

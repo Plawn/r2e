@@ -1,0 +1,25 @@
+error[E0277]: `Pool` is exported but not provided by this feature module
+  --> compile-fail/module_export_not_provided.rs:30:54
+   |
+30 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+   |                                                      ^^^^^^^^^ no provider in the module's `Providers` outputs `Pool`
+   |
+   = help: the trait `ProvidedByModule<Pool, _>` is not implemented for `TNil`
+   = note: `Exports` must be a subset of the providers' provided types — add a provider for `Pool` or remove it from the module's `Exports`
+help: the following other types implement trait `ProvidedByModule<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/module.rs
+   |
+   | impl<H, T> ProvidedByModule<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `ProvidedByModule<H, Here>`
+   | impl<H, X, T, I> ProvidedByModule<H, There<I>> for TCons<X, T> where T: ProvidedByModule<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `ProvidedByModule<H, There<I>>`
+   = note: required for `TCons<Svc, TNil>` to implement `ProvidedByModule<Pool, There<_>>`
+   = note: required for `TCons<Pool, TNil>` to implement `ExportsProvided<TCons<Svc, TNil>, (There<_>, ())>`
+note: required by a bound in `register_module`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
+   |        --------------- required by a bound in this associated function
+...
+   |         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterModule::register_module`

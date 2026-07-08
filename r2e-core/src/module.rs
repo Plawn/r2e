@@ -36,7 +36,7 @@
 use crate::beans::{BeanRegistry, Registrable};
 use crate::builder::AppBuilder;
 use crate::controller::{ContextConstruct, Controller};
-use crate::type_list::{TAppend, TCons, TNil};
+use crate::type_list::{Here, TAppend, TCons, TNil, There};
 
 /// A feature module: a closed subgraph of providers + controllers with
 /// declared imports and exports.
@@ -136,6 +136,75 @@ where
 pub type ModuleScope<M> = <<<M as FeatureModule>::Providers as BeanList>::Provided as TAppend<
     <M as FeatureModule>::Imports,
 >>::Output;
+
+// ── Encapsulation checks ────────────────────────────────────────────────────
+//
+// Structurally these mirror `Contains`/`AllSatisfied` (type_list.rs), but as
+// dedicated traits: the compile errors a user sees on an encapsulation
+// violation are the innermost unsatisfied bound, and the `Contains`
+// diagnostic ("add `.provide(value)` on the AppBuilder") would point at the
+// wrong fix — module violations are fixed by editing the module declaration.
+
+/// Compile-time witness that dependency `H` is inside a module's scope
+/// (`Self` — the provided ∪ imported list), located at `Idx`.
+#[diagnostic::on_unimplemented(
+    message = "`{H}` is not in this feature module's scope",
+    label = "the module neither provides nor imports `{H}`",
+    note = "a module's providers and controllers may depend only on the module's own provided types plus its declared `Imports`",
+    note = "add a provider for `{H}` to the module's `Providers`, or declare it in the module's `Imports`"
+)]
+pub trait InModuleScope<H, Idx> {}
+
+impl<H, T> InModuleScope<H, Here> for TCons<H, T> {}
+impl<H, X, T, I> InModuleScope<H, There<I>> for TCons<X, T> where T: InModuleScope<H, I> {}
+
+/// Compile-time verification that every dependency in `Self` (a provider or
+/// controller dependency list) is inside the module scope `Scope`.
+///
+/// `Indices` is an opaque witness tuple inferred by the compiler.
+#[diagnostic::on_unimplemented(
+    message = "one or more dependencies are outside this feature module's scope",
+    note = "each provider/controller dependency must be provided by the module itself or declared in its `Imports`"
+)]
+pub trait ModuleDepsSatisfied<Scope, Indices> {}
+
+impl<S> ModuleDepsSatisfied<S, ()> for TNil {}
+impl<H, T, S, IH, IT> ModuleDepsSatisfied<S, (IH, IT)> for TCons<H, T>
+where
+    S: InModuleScope<H, IH>,
+    T: ModuleDepsSatisfied<S, IT>,
+{
+}
+
+/// Compile-time witness that exported type `H` is among a module's provided
+/// types (`Self`), located at `Idx`.
+#[diagnostic::on_unimplemented(
+    message = "`{H}` is exported but not provided by this feature module",
+    label = "no provider in the module's `Providers` outputs `{H}`",
+    note = "`Exports` must be a subset of the providers' provided types — add a provider for `{H}` or remove it from the module's `Exports`"
+)]
+pub trait ProvidedByModule<H, Idx> {}
+
+impl<H, T> ProvidedByModule<H, Here> for TCons<H, T> {}
+impl<H, X, T, I> ProvidedByModule<H, There<I>> for TCons<X, T> where T: ProvidedByModule<H, I> {}
+
+/// Compile-time verification that every type in `Self` (a module's export
+/// list) is among the module's provided types `Provided`.
+///
+/// `Indices` is an opaque witness tuple inferred by the compiler.
+#[diagnostic::on_unimplemented(
+    message = "one or more exported types are not provided by this feature module",
+    note = "`Exports` must be a subset of the providers' provided types"
+)]
+pub trait ExportsProvided<Provided, Indices> {}
+
+impl<P> ExportsProvided<P, ()> for TNil {}
+impl<H, T, P, IH, IT> ExportsProvided<P, (IH, IT)> for TCons<H, T>
+where
+    P: ProvidedByModule<H, IH>,
+    T: ExportsProvided<P, IT>,
+{
+}
 
 /// Aggregate the state-independent dependency lists
 /// ([`ContextConstruct::Deps`]) of a controller tuple.

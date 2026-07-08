@@ -19,7 +19,10 @@ pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
-use crate::module::{BeanList, ControllerDepsList, FeatureModule, ModuleList, ModuleScope};
+use crate::module::{
+    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
+    ModuleScope,
+};
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;

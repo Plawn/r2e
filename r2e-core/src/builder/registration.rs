@@ -64,9 +64,9 @@ pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>: Sized {
         M::Providers: BeanList,
         <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
-        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
-        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
-        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>;
 }
@@ -80,9 +80,9 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx> RegisterModule<P, R, Mods, DepIdx, Exp
         M::Providers: BeanList,
         <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
-        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
-        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
-        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>,
     {
