@@ -233,6 +233,33 @@ Revisits **1b/1c** as predicted: `build_state!` and `BeanState::Requires` are
 gone (the state type is inferred from `P`); the `P`/`AllSatisfied` presence
 tracking and the guaranteed `state: T` phase remain.
 
+### Phase 4 tech debt (deferred, recorded 2026-07-08)
+
+1. **Extraction-bridge overlap fragility.** The `Option<T>` ambiguity fix
+   removed the blanket `OptionalFromRequestPartsVia<_, ViaAxum>` bridge; the
+   invariant is now *implicit*: a type must NOT implement both axum's
+   `OptionalFromRequestParts` (generically) and R2E's
+   `OptionalFromRequestPartsVia`, or its `Option<T>` marker becomes ambiguous
+   (E0283) at `register_controller`. Nothing enforces this; the design relies
+   on bean-backed extractors having no axum impls. A future pass should either
+   enforce it (sealed marker discipline) or make marker selection
+   deterministic.
+2. **Guard/interceptor bean deps are runtime-checked, not compile-checked.**
+   `RateLimitGuard`/`FgaGuard` (and bean-reading interceptors like a DB audit
+   log) fetch their beans via `BeanLookup`; a missing bean is a per-request
+   500 (clean, but runtime). The blocker is NOT E0207 (solvable by a marker
+   slot on `Guard`, like `FromRequestPartsVia`): it is that `#[guard(expr)]`
+   takes an arbitrary **expression whose type the macro cannot name**, and
+   every witness-threading bound needs the type name (identity params work
+   because the parameter has a declared type in the signature). Moving this to
+   compile time requires an API redesign — candidates: (a) type-naming syntax
+   `#[guard(RateLimitGuard = RateLimit::per_user(5, 60))]`; (b) guards as
+   beans/factories resolved from the graph (deps become `Deps`, checked by
+   `AllSatisfied`); (c) marker slot + typed syntax. Cheap intermediate
+   improvement available without redesign: evaluate guard expressions once at
+   router-build time and add a `Guard::startup_check(&state)` hook so
+   misconfiguration fails at **boot**, not on first request.
+
 ## Phase 5 — planned separately
 
 - **Phase 5 — Feature modules** (`plan-feature-modules.md`): Spring/NestJS-style
