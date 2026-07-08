@@ -244,7 +244,11 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
         .await;
     let core = Arc::new(AuditedScheduled::from_context(builder.bean_context()));
 
-    let boxed = AuditedScheduled::boxed_tasks(builder.state(), core, builder.bean_context());
+    let boxed = AuditedScheduled::boxed_tasks(
+        builder.state(),
+        Arc::clone(&core),
+        builder.bean_context(),
+    );
     let tasks = extract_tasks(boxed);
     assert_eq!(tasks.len(), 2);
 
@@ -271,6 +275,37 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
             .iter()
             .all(|e| e == "sched:tick" || e == "sync:sync_noop"),
         "{entries:?}"
+    );
+    let entries_before_direct = entries.len();
+    drop(entries);
+
+    // Direct in-code call on a REGISTERED core: the async method's body reads
+    // the prebuilt set from the core's DecoSlot, so the chain runs here too.
+    core.tick().await;
+    let entries = audit.entries.lock().unwrap();
+    assert_eq!(entries.len(), entries_before_direct + 1);
+    assert_eq!(entries.last().map(String::as_str), Some("sched:tick"));
+}
+
+#[r2e::test]
+async fn direct_call_on_unregistered_core_is_undecorated() {
+    // A core built via from_context but never registered has an empty
+    // DecoSlot: the method body runs, the interceptor chain does not.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let audit = TickAudit::default();
+    let builder = AppBuilder::new()
+        .provide(counter.clone())
+        .provide(audit.clone())
+        .build_state()
+        .await;
+    let core = AuditedScheduled::from_context(builder.bean_context());
+
+    core.tick().await;
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "body must run");
+    assert!(
+        audit.entries.lock().unwrap().is_empty(),
+        "unregistered core must not intercept"
     );
 }
 

@@ -264,9 +264,11 @@ Consequences in `codegen/handlers.rs`:
 - ~~**Scheduled-method and gRPC interceptors bypass `DecoratorSpec`.**~~
   **CLOSED (2026-07-08, di-next-steps item 5).** `scheduled_tasks_boxed`
   now receives the retained `BeanContext` and builds each scheduled
-  method's interceptor set once (deps folded into `ControllerDeps`); gRPC
-  sites are prebuilt into the wrapper at `into_router` from the same
-  context. Bean-reading specs work everywhere `#[intercept]` is accepted.
+  method's interceptor set once into the core's hidden `DecoSlot` (deps
+  folded into `ControllerDeps`); async scheduled methods run the chain in
+  their body, so direct calls are intercepted too. gRPC sites are prebuilt
+  into the wrapper at `into_router` from the same context. Bean-reading
+  specs work everywhere `#[intercept]` is accepted.
 - **Pre-existing bug fixed in passing**: SSE/WS methods with `#[pre_guard]`
   used to be filtered out of normal registration but never registered by the
   pre-auth path — the route silently vanished. They now go through the same

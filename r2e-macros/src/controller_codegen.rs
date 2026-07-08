@@ -23,6 +23,7 @@ use crate::field_resolver::{config_init_panic, config_section_init_panic};
 /// - `impl ContextConstruct` for the core (always — cores are built by type
 ///   from the resolved bean graph).
 pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) -> TokenStream {
+    let physical_struct = add_deco_slot_field(physical_struct.clone());
     let meta_module = generate_meta_module(def);
     let request_data = generate_request_data(def);
     let facade = generate_facade(def);
@@ -35,6 +36,34 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
         #facade
         #context_construct
     }
+}
+
+/// Add the hidden `__r2e_decos: DecoSlot` field to the physical core.
+///
+/// The slot carries the prebuilt scheduled-method decorator sets so the
+/// method bodies (which only have `&self`) can run their interceptor chain on
+/// direct calls too — `scheduled_tasks_boxed` fills it at registration. Every
+/// core gets the field (`#[routes]` can rely on it unconditionally); a unit
+/// struct becomes a named struct holding just the slot. `DecoSlot` implements
+/// `Clone`/`Debug`/`Default` so user derives keep working; cores are no
+/// longer literal-constructible (use `ContextConstruct::from_context`).
+fn add_deco_slot_field(mut item: syn::ItemStruct) -> syn::ItemStruct {
+    let krate = r2e_core_path();
+    let fields_named: syn::FieldsNamed = syn::parse_quote!({
+        #[doc(hidden)]
+        __r2e_decos: #krate::decorator::DecoSlot
+    });
+    match &mut item.fields {
+        syn::Fields::Named(named) => {
+            named.named.extend(fields_named.named);
+        }
+        syn::Fields::Unit => {
+            item.fields = syn::Fields::Named(fields_named);
+        }
+        // Tuple-struct controllers are rejected at parse time.
+        syn::Fields::Unnamed(_) => {}
+    }
+    item
 }
 
 /// Generate `mod __r2e_meta_<Name>` with PATH_PREFIX, IdentityType,
@@ -382,10 +411,14 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         .chain(config_section_inits.iter())
         .collect();
 
-    let struct_init = if def.is_unit_struct {
-        quote! { #name }
-    } else {
-        quote! { Self { #(#all_inits,)* } }
+    // The physical core always has the hidden `__r2e_decos` slot (added by
+    // `add_deco_slot_field`), so construction is always a braced literal —
+    // including for source-level unit structs.
+    let struct_init = quote! {
+        Self {
+            #(#all_inits,)*
+            __r2e_decos: ::core::default::Default::default(),
+        }
     };
 
     // Deps: unique injected field types, plus R2eConfig when config fields

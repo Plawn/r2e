@@ -4,4 +4,4 @@ error[E0609]: no field `user` on type `&AccountController`
 42 |         let _ = (&event.name, &self.user);
    |                                     ^^^^ unknown field
    |
-   = note: available field is: `event_bus`
+   = note: available fields are: `event_bus`, `__r2e_decos`

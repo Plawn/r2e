@@ -12,7 +12,6 @@ pub struct ControllerStructDef {
     pub request_fields: Vec<RequestField>,
     pub config_fields: Vec<ConfigField>,
     pub config_section_fields: Vec<ConfigSectionField>,
-    pub is_unit_struct: bool,
 }
 
 impl ControllerStructDef {
@@ -107,9 +106,9 @@ pub fn parse(
 ) -> syn::Result<ControllerStructDef> {
     let name = item.ident.clone();
 
-    let (fields, is_unit_struct): (Vec<&syn::Field>, bool) = match &item.fields {
-        syn::Fields::Named(named) => (named.named.iter().collect(), false),
-        syn::Fields::Unit => (Vec::new(), true),
+    let fields: Vec<&syn::Field> = match &item.fields {
+        syn::Fields::Named(named) => named.named.iter().collect(),
+        syn::Fields::Unit => Vec::new(),
         syn::Fields::Unnamed(_) => {
             return Err(syn::Error::new(
                 name.span(),
@@ -217,7 +216,6 @@ pub fn parse(
         request_fields,
         config_fields,
         config_section_fields,
-        is_unit_struct,
     })
 }
 

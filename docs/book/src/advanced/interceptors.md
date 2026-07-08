@@ -120,12 +120,19 @@ impl ReportJobs {
 }
 ```
 
-Two differences from HTTP routes:
+Differences from HTTP routes:
 
 - Guards don't apply (there is no request to reject) — only interceptors.
 - Type-constrained interceptors must match the method's return type: a
   scheduled method returns `()` or `Result<(), E>`, so `Cache` (which needs a
   `Cacheable` return) doesn't apply there.
+- **Async scheduled methods run their interceptors on direct calls too**:
+  the chain wraps the method body itself, so calling `self.refresh()` from
+  another method (say, an admin route forcing a run) still goes through the
+  interceptors. Two caveats: a *sync* scheduled method's chain only runs
+  around scheduler ticks (a sync body can't await the chain), and a
+  controller built by hand in a test — without going through registration —
+  runs its scheduled methods undecorated.
 
 ## Execution order
 

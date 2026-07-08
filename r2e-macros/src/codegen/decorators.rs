@@ -297,6 +297,29 @@ pub(super) fn generate_predeco_items(
     (items, Some(set))
 }
 
+/// The hidden container holding every scheduled-method decorator set of one
+/// controller. Stored in the core's `DecoSlot` at registration
+/// (`scheduled_tasks_boxed`), read back (downcast by this type) both by the
+/// scheduled method bodies (direct-call interception) and by the generated
+/// task closures.
+pub(super) fn sched_container_ident(controller_name: &syn::Ident) -> syn::Ident {
+    format_ident!("__R2eSchedDecos_{}", controller_name)
+}
+
+/// The container field holding one scheduled method's prebuilt set.
+pub(super) fn sched_field_ident(fn_name: &syn::Ident) -> syn::Ident {
+    format_ident!("__deco_{}", fn_name)
+}
+
+/// The interceptor-site field idents of a scheduled method's decorator set,
+/// recomputed from the site count. The method-emission pass (`wrapping.rs`)
+/// and the registration pass (`controller_impl.rs`) both need them; the
+/// idents are positional (`__i0..`), matching [`generate_named_deco_items`]'s
+/// `DecoSet` layout.
+pub(super) fn intercept_field_idents(count: usize) -> Vec<syn::Ident> {
+    (0..count).map(|i| format_ident!("__i{}", i)).collect()
+}
+
 /// Wrap a body expression with the interceptor chain of a prebuilt decorator
 /// set.
 ///

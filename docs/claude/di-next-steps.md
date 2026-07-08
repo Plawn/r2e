@@ -153,10 +153,33 @@ Behavior change: interceptor instances on scheduled/gRPC methods are now
 **built once** (state persists across ticks/calls) instead of re-evaluating
 the site expression per invocation — same semantics as routes.
 
+**Direct-call interception (user decision, follow-up to the initial land):**
+unlike routes, a scheduled method's interceptors must also run on DIRECT
+in-code calls (e.g. an admin route calling `self.tick()`). Mechanism: every
+physical core gets a hidden `__r2e_decos: DecoSlot` field
+(`r2e_core::decorator::DecoSlot`, type-erased OnceLock; manual
+Clone/Debug/Default keep user derives working; unit-struct controllers become
+named structs — cores are no longer literal-constructible, use
+`from_context`). `scheduled_tasks_boxed` fills the slot with a per-controller
+container `__R2eSchedDecos_<Name>` (sets now emitted at module scope).
+**Async** scheduled methods split into hidden `__r2e_sched_<fn>_inner` + a
+dispatch wrapper that reads the slot and runs the chain in the body — every
+call path intercepted; **sync** methods can't await a chain in their body, so
+their chain stays at the task level (scheduler ticks only — documented).
+Known edge: a core built via `from_context` but never registered has an
+empty slot → direct calls run undecorated (test-only situation in practice).
+gRPC methods keep entry-point interception (tonic dispatch) — direct calls
+to gRPC methods as helpers are rare; not worth the machinery (user-approved
+scope).
+
 Tests: `example-app/tests/scheduled_test.rs`
-(`scheduled_interceptor_is_built_from_the_bean_graph`, async + sync methods),
+(`scheduled_interceptor_is_built_from_the_bean_graph` — async + sync + direct
+call on a registered core; `direct_call_on_unregistered_core_is_undecorated`),
 `example-grpc/tests/grpc_intercept.rs` (live tonic round-trip), compile-fail
 `scheduled_intercept_missing_dep.rs` (same `Contains` diagnostic as routes).
+The hidden field shows up in one rustc diagnostic
+(`consumer_uses_request_field.stderr`: "available fields are: …,
+`__r2e_decos`") — accepted noise.
 
 **Origin:** "Known gaps" in `plan-guards-as-beans.md` (closed there too).
 

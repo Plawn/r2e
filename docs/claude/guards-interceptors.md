@@ -225,15 +225,22 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   sees `Response` instead of the raw type. Workaround: read the store bean
   (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the body.
 - **Scheduled and gRPC method interceptors are graph-built too** (since
-  di-next-steps item 5). `#[intercept(...)]` on a `#[scheduled]` method is
-  built once inside `scheduled_tasks_boxed(state, core, ctx)` and wraps the
-  task invocation; gRPC sites are prebuilt into the hidden `__R2eGrpc<Name>`
-  wrapper at `into_router`. Bean-reading specs work in both places.
-  Scheduled spec deps are folded into `ControllerDeps` and compile-checked
-  like route decorator deps; gRPC deps (core AND decorators) are NOT
-  compile-checked — `register_grpc_service` resolves from the retained
-  context at runtime, so a missing bean panics there (pre-existing gRPC
-  behavior, unchanged).
+  di-next-steps item 5). Scheduled sets are built once inside
+  `scheduled_tasks_boxed(state, core, ctx)` and stored in the core's hidden
+  `DecoSlot` field (added by `#[controller]` to every core); gRPC sites are
+  prebuilt into the hidden `__R2eGrpc<Name>` wrapper at `into_router`.
+  Bean-reading specs work in both places. Scheduled spec deps are folded
+  into `ControllerDeps` and compile-checked like route decorator deps; gRPC
+  deps (core AND decorators) are NOT compile-checked —
+  `register_grpc_service` resolves from the retained context at runtime, so
+  a missing bean panics there (pre-existing gRPC behavior, unchanged).
+- **Async scheduled methods intercept DIRECT calls too** (user decision):
+  the chain runs in the method body (slot lookup), so `self.tick()` from
+  another method goes through the interceptors — unlike routes, whose
+  interceptors live in the handler. Two edges: a **sync** scheduled method's
+  chain runs only around scheduler ticks (a sync body can't await), and a
+  core that never went through registration (hand-built `from_context` in a
+  test) has an empty slot → direct calls run undecorated.
 - **Module controllers' decorator deps ARE compile-checked** (since the
   post-Phase-6 `ControllerDeps` carrier): they register through the
   unchecked backend, but the module-scope check folds the full

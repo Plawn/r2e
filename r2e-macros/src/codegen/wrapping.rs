@@ -62,17 +62,16 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         })
         .collect();
 
-    // Scheduled methods are emitted as-is: their `#[intercept(...)]` sites are
-    // built once from the bean context inside `scheduled_tasks_boxed`
-    // (controller_impl.rs) and wrap the task invocation there, exactly like
-    // route decorators wrap the handler call.
+    // Scheduled methods: `#[intercept(...)]` sets are built once from the
+    // bean context inside `scheduled_tasks_boxed` (controller_impl.rs) and
+    // stored in the core's hidden `DecoSlot`. Async methods run the chain in
+    // their own body (slot lookup), so DIRECT in-code calls are intercepted
+    // too — not just scheduler ticks. Sync methods can't await the chain and
+    // are emitted as-is (their chain runs at the task level only).
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
-        .map(|sm| {
-            let f = &sm.fn_item;
-            quote! { #f }
-        })
+        .map(|sm| generate_scheduled_method(sm, def))
         .collect();
 
     let async_exec_fns: Vec<TokenStream> = def
@@ -115,6 +114,76 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     quote! {
         #facade_impl
         #core_impl
+    }
+}
+
+/// Emit one scheduled method.
+///
+/// Async methods with (inferable) interceptor sites split into a hidden
+/// renamed inner fn plus a dispatch wrapper: the wrapper reads the prebuilt
+/// set from the core's `DecoSlot` (filled at registration by
+/// `scheduled_tasks_boxed`) and runs the chain around the inner call, so the
+/// chain applies on every call path. An unregistered core (slot empty — e.g.
+/// a hand-built test core) runs the inner body undecorated.
+///
+/// Sync methods, methods without interceptors, and methods whose spec type
+/// is not inferable (the compile_error is emitted by the registration pass)
+/// are emitted unchanged.
+fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
+    let fn_item = &sm.fn_item;
+    let is_async = fn_item.sig.asyncness.is_some();
+    let intercept_exprs: Vec<&syn::Expr> = def
+        .controller_intercepts
+        .iter()
+        .chain(sm.intercept_fns.iter())
+        .collect();
+
+    if !is_async
+        || intercept_exprs.is_empty()
+        || !super::decorators::all_specs_inferable(intercept_exprs.iter().copied())
+    {
+        return quote! { #fn_item };
+    }
+
+    let krate = r2e_core_path();
+    let fn_name = &fn_item.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let controller_name_str = def.controller_name.to_string();
+    let container = super::decorators::sched_container_ident(&def.controller_name);
+    let field = super::decorators::sched_field_ident(fn_name);
+    let intercept_fields = super::decorators::intercept_field_idents(intercept_exprs.len());
+    let inner_name = format_ident!("__r2e_sched_{}_inner", fn_name);
+
+    let mut inner_fn = fn_item.clone();
+    inner_fn.sig.ident = inner_name.clone();
+    inner_fn.attrs = vec![syn::parse_quote!(#[doc(hidden)])];
+    inner_fn.vis = syn::Visibility::Inherited;
+
+    let attrs = &fn_item.attrs;
+    let vis = &fn_item.vis;
+    let sig = &fn_item.sig;
+
+    let chain = super::decorators::wrap_with_deco_interceptors(
+        quote! { self.#inner_name().await },
+        &fn_name_str,
+        &controller_name_str,
+        &intercept_fields,
+        &krate,
+    );
+
+    quote! {
+        #inner_fn
+
+        #(#attrs)*
+        #vis #sig {
+            match self.__r2e_decos.get::<#container>() {
+                Some(__decos) => {
+                    let __deco = &__decos.#field;
+                    #chain
+                }
+                None => self.#inner_name().await,
+            }
+        }
     }
 }
 

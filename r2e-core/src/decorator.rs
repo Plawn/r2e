@@ -41,6 +41,57 @@
 use crate::beans::BeanContext;
 use crate::type_list::TNil;
 
+/// Hidden per-core storage for prebuilt decorator sets that must be reachable
+/// from `&self`.
+///
+/// Scheduled-method interceptor chains run inside the method body so that
+/// **direct in-code calls** are intercepted too (not just scheduler ticks),
+/// and the body's only handle is the core. `#[controller]` adds a `DecoSlot`
+/// field to every physical core; the generated `scheduled_tasks_boxed` fills
+/// it at registration with the sets built from the resolved graph
+/// ([`DecoratorSpec::build`]), so build-once semantics are preserved.
+///
+/// A core that was never registered (hand-built via
+/// [`ContextConstruct::from_context`](crate::ContextConstruct::from_context)
+/// in a test) has an empty slot: its scheduled methods run undecorated when
+/// called directly. Cloning a core yields a fresh empty slot — the clone is
+/// not registered.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct DecoSlot(std::sync::OnceLock<Box<dyn std::any::Any + Send + Sync>>);
+
+impl DecoSlot {
+    pub fn new() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+
+    /// Fill the slot. Later calls are ignored — the first registration wins,
+    /// and a core is only ever registered once.
+    pub fn fill<T: Send + Sync + 'static>(&self, sets: T) {
+        let _ = self.0.set(Box::new(sets));
+    }
+
+    /// The prebuilt sets, if the core went through registration.
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.0.get().and_then(|b| b.downcast_ref::<T>())
+    }
+}
+
+/// A cloned core is a new, unregistered core: fresh empty slot. Keeps
+/// `#[derive(Clone)]` on user controller structs working.
+impl Clone for DecoSlot {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+/// Keeps `#[derive(Debug)]` on user controller structs working.
+impl std::fmt::Debug for DecoSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DecoSlot")
+    }
+}
+
 /// Construction contract for guards and interceptors.
 ///
 /// Implemented by the type named by the attribute expression's leading type

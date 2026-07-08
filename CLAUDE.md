@@ -120,7 +120,7 @@ impl UserController {
 ```
 
 **Generated items (hidden):**
-- A physical **core** struct (the source struct with request-scoped fields stripped) — holds only `#[inject]` + `#[config]` fields, built once into an `Arc` by `register_controller()`.
+- A physical **core** struct (the source struct with request-scoped fields stripped) — holds `#[inject]` + `#[config]` fields plus a hidden `__r2e_decos: DecoSlot` (prebuilt scheduled-method interceptor sets, filled at registration), built once into an `Arc` by `register_controller()`. Cores are not literal-constructible — build via `ContextConstruct::from_context`.
 - `mod __r2e_meta_<Name>` — `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn validate_config()`.
 - `struct __R2eRequestData_<Name><__M>` — state-generic `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`), extracted through `FromRequestPartsVia<S, M>` (R2E-owned trait with a marker slot where bean-backed extractors park their `HasBean` index witnesses — E0207). Marker-only + infallible when there are none.
 - `struct __R2eRequest_<Name>` — the per-request façade: `{ __core: Arc<Core>, <request-scoped fields> }`, with `Deref<Target = Core>`. Route methods run on this; `self.<injected/config>` resolves through `Deref`, `self.<identity/request>` is a direct façade field.
