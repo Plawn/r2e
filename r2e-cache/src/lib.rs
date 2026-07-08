@@ -60,13 +60,19 @@ impl<K: Eq + Hash + Clone, V: Clone> TtlCache<K, V> {
 }
 
 // ---------------------------------------------------------------------------
-// CacheStore trait + InMemoryStore + global singleton
+// CacheStore trait + InMemoryStore
 // ---------------------------------------------------------------------------
 
 /// Pluggable cache backend trait.
 ///
-/// Implement this to swap the default in-memory store for Redis, Memcached, etc.
-/// Register your implementation at startup via [`set_cache_backend`].
+/// Implement this to swap the default in-memory store for Redis, Memcached,
+/// etc. The store is an application **bean** (`Arc<dyn CacheStore>`) —
+/// provide one on the builder and the `Cache`/`CacheInvalidate` interceptors
+/// resolve it from the graph at controller registration:
+///
+/// ```ignore
+/// AppBuilder::new().provide(InMemoryStore::shared())
+/// ```
 pub trait CacheStore: Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<Bytes>> + Send + 'a>>;
     fn set<'a>(&'a self, key: &'a str, value: Bytes, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -88,6 +94,15 @@ impl InMemoryStore {
         Self {
             inner: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Ready-to-provide store bean: `Arc<dyn CacheStore>`.
+    ///
+    /// ```ignore
+    /// AppBuilder::new().provide(InMemoryStore::shared())
+    /// ```
+    pub fn shared() -> Arc<dyn CacheStore> {
+        Arc::new(Self::new())
     }
 }
 
@@ -137,27 +152,3 @@ impl CacheStore for InMemoryStore {
     }
 }
 
-// Global singleton
-use std::sync::OnceLock;
-
-static CACHE_BACKEND: OnceLock<Arc<dyn CacheStore>> = OnceLock::new();
-
-/// Set a custom cache backend. Must be called before any cache operations.
-/// Typically called once at application startup.
-pub fn set_cache_backend(store: impl CacheStore) {
-    let _ = CACHE_BACKEND.set(Arc::new(store));
-}
-
-/// Get the current cache backend. Defaults to [`InMemoryStore`] if none was set.
-pub fn cache_backend() -> Arc<dyn CacheStore> {
-    CACHE_BACKEND
-        .get()
-        .cloned()
-        .unwrap_or_else(|| {
-            // Lazy-init with InMemoryStore on first access
-            let store: Arc<dyn CacheStore> = Arc::new(InMemoryStore::new());
-            // Try to set it; if another thread beat us, use theirs
-            let _ = CACHE_BACKEND.set(store.clone());
-            CACHE_BACKEND.get().cloned().unwrap_or(store)
-        })
-}

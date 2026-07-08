@@ -1,4 +1,5 @@
 use r2e_core::interceptors::{Interceptor, InterceptorContext};
+use r2e_core::DecoratorSpec;
 use r2e_utils::{Cache, CacheInvalidate, Logged, LogLevel, Timed};
 
 fn test_ctx() -> InterceptorContext {
@@ -6,6 +7,16 @@ fn test_ctx() -> InterceptorContext {
         method_name: "test_method",
         controller_name: "TestController",
     }
+}
+
+/// Resolve a bean context holding a shared in-memory cache store, mirroring
+/// what `register_controller()` gives `DecoratorSpec::build`.
+async fn store_ctx(
+    store: std::sync::Arc<dyn r2e_cache::CacheStore>,
+) -> r2e_core::beans::BeanContext {
+    let mut registry = r2e_core::BeanRegistry::new();
+    registry.provide(store);
+    registry.resolve().await.expect("graph must resolve")
 }
 
 #[r2e_core::test]
@@ -74,12 +85,15 @@ async fn test_nested_interceptors() {
 
 #[r2e_core::test]
 async fn test_cache_interceptor() {
+    let store = r2e_cache::InMemoryStore::shared();
+    let bean_ctx = store_ctx(store).await;
+
     let ctx = InterceptorContext {
         method_name: "cached_method",
         controller_name: "TestController",
     };
 
-    let cache = Cache::ttl(60);
+    let cache = Cache::ttl(60).build(&bean_ctx);
     // First call -- cache miss
     let result: r2e_core::http::Json<Vec<String>> = cache
         .around(ctx, || async {
@@ -88,8 +102,8 @@ async fn test_cache_interceptor() {
         .await;
     assert_eq!(result.0, vec!["a".to_string(), "b".to_string()]);
 
-    // Second call -- cache hit (same key)
-    let cache2 = Cache::ttl(60);
+    // Second call -- cache hit (same key, same store)
+    let cache2 = Cache::ttl(60).build(&bean_ctx);
     let ctx2 = InterceptorContext {
         method_name: "cached_method",
         controller_name: "TestController",
@@ -105,18 +119,20 @@ async fn test_cache_interceptor() {
 
 #[r2e_core::test]
 async fn test_cache_invalidate_interceptor() {
+    let store = r2e_cache::InMemoryStore::shared();
+    let bean_ctx = store_ctx(store.clone()).await;
+
     let ctx = InterceptorContext {
         method_name: "create",
         controller_name: "TestController",
     };
 
     // Pre-populate cache under group prefix
-    let store = r2e_cache::cache_backend();
     store
         .set("mygroup:item1", bytes::Bytes::from("\"val\""), std::time::Duration::from_secs(60))
         .await;
 
-    let invalidator = CacheInvalidate::group("mygroup");
+    let invalidator = CacheInvalidate::group("mygroup").build(&bean_ctx);
     let result = invalidator
         .around(ctx, || async { 42 })
         .await;

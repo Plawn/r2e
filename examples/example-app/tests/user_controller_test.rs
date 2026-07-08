@@ -319,6 +319,7 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(pool)
             .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
+            .provide(r2e::r2e_cache::InMemoryStore::shared())
             .build_state()
             .await
             .with(Health)

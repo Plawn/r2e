@@ -144,6 +144,7 @@ async fn main(env: AppEnv) {
         .provide(env.pool)
         .provide(env.claims_validator)
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
+        .provide(r2e::r2e_cache::InMemoryStore::shared())
         .provide(env.sse_broadcaster)
         .provide(env.notification_service)
         .register_module::<UserModule>();
