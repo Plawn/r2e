@@ -30,7 +30,7 @@ use std::pin::Pin;
 ///
 /// ```ignore
 /// AppBuilder::new()
-///     .build_state::<Services, _>().await
+///     .build_state().await
 ///     .register_subscriber::<NotificationService>()
 ///     .serve("0.0.0.0:3000").await.unwrap();
 /// ```

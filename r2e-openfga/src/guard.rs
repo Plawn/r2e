@@ -211,9 +211,7 @@ impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for FgaGuard {
         state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
-        let registry = state
-            .bean::<OpenFgaRegistry>()
-            .expect("OpenFgaRegistry bean not found in application state — install the OpenFga plugin before build_state()");
+        let registry = state.bean::<OpenFgaRegistry>();
         let relation = self.relation;
         let object_result = self.resolve_object(ctx);
 
@@ -221,6 +219,20 @@ impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for FgaGuard {
         let user = ctx.identity.map(|i| format!("user:{}", i.sub()));
 
         async move {
+            let registry = registry.ok_or_else(|| {
+                tracing::error!(
+                    "OpenFgaRegistry bean not found in application state — \
+                     install the OpenFga plugin before build_state()"
+                );
+                (
+                    r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    r2e_core::http::Json(serde_json::json!({
+                        "error": "Authorization backend not configured"
+                    })),
+                )
+                    .into_response()
+            })?;
+
             let user = user.ok_or_else(|| {
                 (
                     r2e_core::http::StatusCode::UNAUTHORIZED,

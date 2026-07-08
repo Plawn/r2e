@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::crate_path::{r2e_core_path, r2e_grpc_path, r2e_security_path};
+use crate::crate_path::{r2e_core_path, r2e_grpc_path};
 use crate::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 
 /// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc<Name>`.
@@ -57,8 +57,8 @@ fn generate_method_impl(
     let controller_name_str = controller_name.to_string();
     let fn_name_str = fn_name.to_string();
 
-    // Determine identity extraction and guard context
-    let has_guards = !method.decorators.guard_fns.is_empty() || !method.decorators.roles.is_empty();
+    // Determine identity extraction. Guards/roles are rejected on gRPC methods
+    // at parse time (`validate_grpc_attrs`), so there is no guard codegen here.
     let has_identity = method.identity_param.is_some();
     let has_intercepts =
         !method.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
@@ -72,15 +72,8 @@ fn generate_method_impl(
     };
 
     // Build identity extraction code
-    let identity_extraction = if has_identity || has_guards {
+    let identity_extraction = if has_identity {
         generate_identity_extraction(method, grpc_krate)
-    } else {
-        quote! {}
-    };
-
-    // Build guard checks
-    let guard_checks = if has_guards {
-        generate_grpc_guard_checks(method, def, grpc_krate, &controller_name_str, &fn_name_str)
     } else {
         quote! {}
     };
@@ -119,7 +112,6 @@ fn generate_method_impl(
     quote! {
         async fn #fn_name(&self, #request_param_tokens) #return_type {
             #identity_extraction
-            #guard_checks
             #construct_controller
             #body
         }
@@ -151,67 +143,6 @@ fn generate_identity_extraction(method: &GrpcMethod, grpc_krate: &TokenStream) -
         }
     } else {
         quote! {}
-    }
-}
-
-/// Generate gRPC guard checks.
-fn generate_grpc_guard_checks(
-    method: &GrpcMethod,
-    def: &GrpcRoutesImplDef,
-    grpc_krate: &TokenStream,
-    controller_name_str: &str,
-    fn_name_str: &str,
-) -> TokenStream {
-    let security_krate = r2e_security_path();
-
-    // Build roles guard if needed
-    let roles_guard = if !method.decorators.roles.is_empty() {
-        let roles = &method.decorators.roles;
-        Some(quote! {
-            {
-                let __roles_guard = #grpc_krate::GrpcRolesGuard {
-                    required_roles: &[#(#roles),*],
-                };
-                let __guard_ctx = #grpc_krate::GrpcGuardContext {
-                    service_name: #controller_name_str,
-                    method_name: #fn_name_str,
-                    metadata: request.metadata(),
-                    identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
-                };
-                // Note: roles guard requires identity — this is a simplified version.
-                // The full version would extract identity first and pass it.
-            }
-        })
-    } else {
-        None
-    };
-
-    // Build custom guard checks
-    let custom_guards: Vec<TokenStream> = method
-        .decorators
-        .guard_fns
-        .iter()
-        .map(|guard_expr| {
-            quote! {
-                {
-                    let __guard = #guard_expr;
-                    let __guard_ctx = #grpc_krate::GrpcGuardContext {
-                        service_name: #controller_name_str,
-                        method_name: #fn_name_str,
-                        metadata: request.metadata(),
-                        identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
-                    };
-                    if let Err(__status) = #grpc_krate::GrpcGuard::check(&__guard, &self.ctx, &__guard_ctx).await {
-                        return Err(__status);
-                    }
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        #roles_guard
-        #(#custom_guards)*
     }
 }
 

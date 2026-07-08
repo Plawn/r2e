@@ -31,7 +31,7 @@
 
 use std::marker::PhantomData;
 
-use crate::http::extract::{FromRequestParts, OptionalFromRequestParts};
+use crate::http::extract::FromRequestParts;
 use crate::http::header::Parts;
 use crate::type_list::HasBean;
 
@@ -99,25 +99,19 @@ where
     }
 }
 
-// Blanket bridge for the optional trait.
-impl<S, T> OptionalFromRequestPartsVia<S, ViaAxum> for T
-where
-    S: Send + Sync,
-    T: OptionalFromRequestParts<S>,
-{
-    type Rejection = <T as OptionalFromRequestParts<S>>::Rejection;
-
-    fn from_request_parts_via(
-        parts: &mut Parts,
-        state: &S,
-    ) -> impl std::future::Future<Output = Result<Option<Self>, Self::Rejection>> + Send {
-        <T as OptionalFromRequestParts<S>>::from_request_parts(parts, state)
-    }
-}
+// NOTE: there is deliberately NO blanket
+// `impl<T: OptionalFromRequestParts<S>> OptionalFromRequestPartsVia<S, ViaAxum> for T`.
+// `Option<E>` for a plain axum extractor `E` already resolves through the
+// `ViaAxum` bridge above (axum provides
+// `impl FromRequestParts for Option<T> where T: OptionalFromRequestParts`);
+// a second route through `ViaOpt<ViaAxum>` would make the field marker
+// ambiguous (E0283) at `register_controller` whenever both apply. Bean-backed
+// extractors implement `OptionalFromRequestPartsVia` directly (e.g.
+// `AuthenticatedUser` with the `ViaBean<I>` marker) and are reached through
+// the `ViaOpt` impl below — they have no axum impl, so no overlap.
 
 // `Option<T>` extracts through the optional trait (marker records the inner
-// impl's marker). Disjoint from the `ViaAxum` bridge because the marker shapes
-// differ.
+// impl's marker).
 impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
 where
     S: Send + Sync,

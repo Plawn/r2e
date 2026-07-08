@@ -211,7 +211,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///         let url = config.get::<String>("redis.url").unwrap();
     ///         RedisClient::new(&url)
     ///     })
-    ///     .build_state::<Services, _>().await
+    ///     .build_state().await
     /// ```
     pub fn with_bean_factory<B, F>(
         mut self,
@@ -239,7 +239,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// let config = R2eConfig::load()?;
     /// AppBuilder::new()
     ///     .with_config(config)
-    ///     .build_state::<Services, _>()
+    ///     .build_state()
     ///     .await
     /// ```
     pub fn with_config(
@@ -334,7 +334,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// AppBuilder::new()
     ///     .plugin(Scheduler)  // Provides CancellationToken + ScheduledJobRegistry
-    ///     .build_state::<Services, _>()
+    ///     .build_state()
     ///     .await
     /// ```
     pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
@@ -533,6 +533,11 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// This skips the bean graph entirely. The bean registry is discarded and
     /// the retained bean context is empty. No compile-time provision checking
     /// is performed.
+    ///
+    /// **Controllers are not supported on this path**: controller cores are
+    /// constructed from the bean context, which is empty here — registering a
+    /// controller with `#[inject]` fields panics at startup. Use it only for
+    /// plugin/raw-router apps (`register_routes`, `merge_router`).
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
         AppBuilder::<S>::from_pre(
             self.shared,

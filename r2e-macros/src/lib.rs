@@ -74,7 +74,7 @@ pub(crate) mod field_resolver;
 /// #[controller(path = "/api", state = Services)]
 /// pub struct MixedController {
 ///     #[inject] user_service: UserService,
-///     // No identity on struct → StatefulConstruct is generated
+///     // No identity on struct → ContextConstruct is generated
 /// }
 ///
 /// #[routes]
@@ -107,7 +107,7 @@ pub(crate) mod field_resolver;
 /// - The request façade (`__R2eRequest_<Name>`) — owns `Arc<Name>` plus the
 ///   request-scoped values, with `Deref<Target = Name>`. Route methods run on
 ///   it; app/config fields and core helpers are reached through `Deref`.
-/// - `impl StatefulConstruct<State> for Name` — **always** (the core has no
+/// - `impl ContextConstruct<State> for Name` — **always** (the core has no
 ///   request-scoped fields), so the core is built once per registration and
 ///   reused by every request, consumer, and scheduled task.
 #[proc_macro_attribute]
@@ -824,7 +824,7 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 /// AppBuilder::new()
 ///     .provide(config)
 ///     .register::<CreatePool>()   // registers SqlitePool
-///     .build_state::<Services, _>()
+///     .build_state()
 ///     .await
 /// ```
 #[proc_macro_attribute]
@@ -1184,7 +1184,7 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// #[r2e::main]
 /// async fn main() {
 ///     AppBuilder::new()
-///         .build_state::<Services, _>().await
+///         .build_state().await
 ///         .serve("0.0.0.0:8080").await.unwrap();
 /// }
 ///

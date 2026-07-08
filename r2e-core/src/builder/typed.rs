@@ -119,7 +119,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// use r2e_core::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload};
     ///
     /// AppBuilder::new()
-    ///     .build_state::<Services>()
+    ///     .build_state()
     ///     .await
     ///     .with(Health)
     ///     .with(Cors::permissive())

@@ -21,9 +21,7 @@ use crate::field_resolver::{config_init_panic, config_section_init_panic};
 ///   `FromRequestPartsVia` with the per-field markers folded into `__M`);
 /// - `struct __R2eRequest_<Name>` + `Deref<Target = Core>` (the request façade);
 /// - `impl ContextConstruct` for the core (always — cores are built by type
-///   from the resolved bean graph);
-/// - `impl StatefulConstruct<State>` additionally on the legacy named-state
-///   path (`state = ...`), used by gRPC codegen and the typed-state transition.
+///   from the resolved bean graph).
 pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) -> TokenStream {
     let meta_module = generate_meta_module(def);
     let request_data = generate_request_data(def);
@@ -40,8 +38,7 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
 }
 
 /// Generate `mod __r2e_meta_<Name>` with PATH_PREFIX, IdentityType,
-/// guard_identity, bind_request, and config validation (plus a `State` type
-/// alias on the legacy named-state path).
+/// guard_identity, bind_request, and config validation.
 fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     let krate = r2e_core_path();
     let name = &def.name;

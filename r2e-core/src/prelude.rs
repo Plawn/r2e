@@ -3,7 +3,7 @@
 //! ```ignore
 //! use r2e_core::prelude::*;
 //!
-//! #[controller(state = MyState)]
+//! #[controller(path = "/my")]
 //! pub struct MyController {
 //!     #[inject]  my_service: MyService,
 //!     #[inject(identity)] user: AuthenticatedUser,
@@ -22,7 +22,7 @@
 // ── Macros (from r2e-macros) ────────────────────────────────────────────
 
 /// Attribute macro — emits the physical struct plus its metadata, Axum
-/// request façade, extractor, and `StatefulConstruct` impl.
+/// request façade, extractor, and `ContextConstruct` impl.
 pub use r2e_macros::controller;
 
 /// Attribute macro on `impl` blocks — generates Axum handlers, route wiring,

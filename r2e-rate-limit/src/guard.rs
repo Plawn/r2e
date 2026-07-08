@@ -67,16 +67,27 @@ pub struct RateLimitGuard {
     pub key: RateLimitKeyKind,
 }
 
+/// 500 returned when the registry bean is absent — a misconfigured app
+/// (missing `.provide(RateLimitRegistry::default())`), reported per request
+/// instead of panicking.
+fn registry_missing_response() -> r2e_core::http::Response {
+    (
+        r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
+        r2e_core::http::Json(serde_json::json!({ "error": "Rate limiter not configured" })),
+    )
+        .into_response()
+}
+
 impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for RateLimitGuard {
     fn check(
         &self,
         state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
+        let Some(registry) = state.bean::<crate::RateLimitRegistry>() else {
+            return std::future::ready(Err(registry_missing_response()));
+        };
         let result = {
-            let registry = state
-                .bean::<crate::RateLimitRegistry>()
-                .expect("RateLimitRegistry bean not found in application state — .provide(RateLimitRegistry::default()) before build_state()");
             let method = ctx.method_name;
             let key = match self.key {
                 RateLimitKeyKind::Global => format!("{}:global", method),
@@ -128,10 +139,10 @@ impl<S: BeanLookup + Send + Sync> PreAuthGuard<S> for PreAuthRateLimitGuard {
         state: &S,
         ctx: &PreAuthGuardContext<'_>,
     ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
+        let Some(registry) = state.bean::<crate::RateLimitRegistry>() else {
+            return std::future::ready(Err(registry_missing_response()));
+        };
         let result = {
-            let registry = state
-                .bean::<crate::RateLimitRegistry>()
-                .expect("RateLimitRegistry bean not found in application state — .provide(RateLimitRegistry::default()) before build_state()");
             let method = ctx.method_name;
             let key = match self.key {
                 RateLimitKeyKind::Global => format!("{}:global", method),

@@ -145,7 +145,7 @@ struct BuilderConfig {
 /// via:
 ///
 /// - [`.with_state(state)`](AppBuilder::<NoState>::with_state) — provide a pre-built state directly.
-/// - [`.build_state::<S>()`](AppBuilder::<NoState>::build_state) — resolve the bean graph and build state.
+/// - [`.build_state()`](AppBuilder::<NoState>::build_state) — resolve the bean graph and build state.
 ///
 /// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
 /// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`

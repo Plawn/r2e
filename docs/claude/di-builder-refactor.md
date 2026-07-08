@@ -16,7 +16,7 @@ phase ends with a quality-review gate before the next starts.
 | 2a | `BuiltApp<T>` struct | ✅ done |
 | 2b | Split `builder.rs` | ✅ done |
 | 3 | Correctness & cleanup | ✅ done |
-| 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model, see `plan-controllers-as-beans.md` |
+| 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model; review gate passed (no blocking findings; ambiguity + guard-panic fixes applied), see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
