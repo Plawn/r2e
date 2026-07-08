@@ -5,7 +5,7 @@ use super::*;
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
-impl AppBuilder<NoState, TNil, TNil> {
+impl AppBuilder<NoState, TNil, TNil, TNil> {
     /// Create a new, empty builder in the pre-state phase.
     pub fn new() -> Self {
         Self {
@@ -34,11 +34,12 @@ impl AppBuilder<NoState, TNil, TNil> {
             plugin_async_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
             _required: PhantomData,
+            _modules: PhantomData,
         }
     }
 }
 
-impl<P, R> AppBuilder<NoState, P, R> {
+impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Access the bean registry (for internal use by the blanket PreStatePlugin impl).
     pub(crate) fn bean_registry(&self) -> &BeanRegistry {
         &self.shared.bean_registry
@@ -56,8 +57,17 @@ impl<P, R> AppBuilder<NoState, P, R> {
     ///
     /// Since `P` and `R` are phantom types used only for compile-time bean graph
     /// validation, this is a zero-cost conversion that just changes the markers.
+    /// The pending-module list `Mods` is preserved.
     #[doc(hidden)]
-    pub fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR> {
+    pub fn with_updated_types<NewP, NewR>(self) -> AppBuilder<NoState, NewP, NewR, Mods> {
+        self.with_updated_types_full()
+    }
+
+    /// [`with_updated_types`](Self::with_updated_types), but also rewriting
+    /// the pending-module list. Internal — only `register_module` grows `Mods`.
+    fn with_updated_types_full<NewP, NewR, NewMods>(
+        self,
+    ) -> AppBuilder<NoState, NewP, NewR, NewMods> {
         AppBuilder {
             shared: self.shared,
             state: NoState,
@@ -73,6 +83,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
             plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
             _provided: PhantomData,
             _required: PhantomData,
+            _modules: PhantomData,
         }
     }
 
@@ -81,7 +92,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
     /// for beans that depend on type `B`, and will be pulled into the state
     /// struct when [`build_state`](Self::build_state) is called.
-    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>, R> {
+    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
         self.shared.bean_registry.provide(bean);
         self.with_updated_types()
     }
@@ -101,7 +112,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// The provided type (`T::Provided`) is tracked in the compile-time
     /// provision list and its dependencies (`T::Deps`) are appended to the
     /// requirement list.
-    pub fn register<T: Registrable>(mut self) -> Registered<T::Provided, T::Deps, P, R>
+    pub fn register<T: Registrable>(mut self) -> Registered<T::Provided, T::Deps, P, R, Mods>
     where
         R: TAppend<T::Deps>,
     {
@@ -166,7 +177,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// The bean IS added to the provision list (guaranteed to be present). A
     /// later [`register`](Self::register) of the same type silently replaces
     /// this registration (last-wins), without changing the provision list.
-    pub fn with_default_bean<B: Bean>(mut self) -> Registered<B, B::Deps, P, R>
+    pub fn with_default_bean<B: Bean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
     where
         R: TAppend<B::Deps>,
     {
@@ -177,7 +188,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Register a default async bean that can be overridden by alternatives.
     ///
     /// The bean IS added to the provision list (guaranteed to be present).
-    pub fn with_default_async_bean<B: AsyncBean>(mut self) -> Registered<B, B::Deps, P, R>
+    pub fn with_default_async_bean<B: AsyncBean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
     where
         R: TAppend<B::Deps>,
     {
@@ -188,7 +199,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Register a default producer that can be overridden by alternatives.
     ///
     /// The producer's output IS added to the provision list (guaranteed to be present).
-    pub fn with_default_producer<Pr: Producer>(mut self) -> Registered<Pr::Output, Pr::Deps, P, R>
+    pub fn with_default_producer<Pr: Producer>(mut self) -> Registered<Pr::Output, Pr::Deps, P, R, Mods>
     where
         R: TAppend<Pr::Deps>,
     {
@@ -216,7 +227,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn with_bean_factory<B, F>(
         mut self,
         factory: F,
-    ) -> Registered<B, TCons<crate::config::R2eConfig, TNil>, P, R>
+    ) -> Registered<B, TCons<crate::config::R2eConfig, TNil>, P, R, Mods>
     where
         B: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> B + Send + 'static,
@@ -245,7 +256,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn with_config(
         mut self,
         config: crate::config::R2eConfig,
-    ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R> {
+    ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R, Mods> {
         self.shared.active_profile = resolve_profile(&config);
         self.shared.config = Some(config.clone());
         self.shared.bean_registry.provide(config);
@@ -277,7 +288,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// ```
     pub fn load_config<C: crate::config::LoadableConfig>(
         mut self,
-    ) -> WithLoadedConfig<C, P, R>
+    ) -> WithLoadedConfig<C, P, R, Mods>
     where
         C::Children: TAppend<P>,
     {
@@ -340,7 +351,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
-    ) -> WithPluginInstalled<Pl, P, R>
+    ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
@@ -358,7 +369,7 @@ impl<P, R> AppBuilder<NoState, P, R> {
     pub fn with_plugin<Pl: RawPreStatePlugin, RIdx>(
         self,
         plugin: Pl,
-    ) -> WithPluginInstalled<Pl, P, R>
+    ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
         R: TAppend<Pl::Required>,
@@ -412,6 +423,34 @@ impl<P, R> AppBuilder<NoState, P, R> {
         self
     }
 
+    /// Registration backend for feature modules, with all witnesses explicit:
+    /// the public face is
+    /// [`RegisterModule::register_module`](super::RegisterModule::register_module),
+    /// which infers them.
+    #[doc(hidden)]
+    pub fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx>(
+        mut self,
+    ) -> ModuleRegistered<M, P, R, Mods>
+    where
+        M: FeatureModule,
+        M::Providers: BeanList,
+        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        M::Controllers: ControllerDepsList,
+        // Encapsulation: provider deps, exports, and controller deps must
+        // resolve inside the module scope (Provided ∪ Imports).
+        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        M::Exports: TAppend<P>,
+        R: TAppend<M::Imports>,
+    {
+        <M::Providers as BeanList>::register_into(&mut self.shared.bean_registry);
+        // Exports join P, imports join R, and M is queued on Mods. Provider
+        // -internal deps are consumed by the module-local check above — they
+        // must NOT join the global R (private providers are absent from P).
+        self.with_updated_types_full()
+    }
+
     /// Resolve the bean dependency graph and build the application state.
     ///
     /// Consumes the bean registry, topologically sorts all beans, constructs
@@ -439,12 +478,13 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// Panics if the bean graph has cycles, missing dependencies, or duplicate
     /// registrations. Use [`try_build_state`](Self::try_build_state) for a
     /// non-panicking alternative.
-    pub async fn build_state<W>(self) -> AppBuilder<<P as BuildHList>::Output>
+    pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
     where
         P: BuildHList,
         R: AllSatisfied<P, W>,
+        Mods: ModuleList<<P as BuildHList>::Output, MW>,
     {
-        self.try_build_state::<W>()
+        self.try_build_state::<W, MW>()
             .await
             .unwrap_or_else(|e| panic!("Failed to resolve bean dependency graph: {e}"))
     }
@@ -453,12 +493,13 @@ impl<P, R> AppBuilder<NoState, P, R> {
     /// state, returning an error instead of panicking on resolution failure.
     ///
     /// See [`build_state`](Self::build_state).
-    pub async fn try_build_state<W>(
+    pub async fn try_build_state<W, MW>(
         mut self,
     ) -> Result<AppBuilder<<P as BuildHList>::Output>, crate::beans::BeanError>
     where
         P: BuildHList,
         R: AllSatisfied<P, W>,
+        Mods: ModuleList<<P as BuildHList>::Output, MW>,
     {
         #[cfg(feature = "dev-reload")]
         {
@@ -481,7 +522,11 @@ impl<P, R> AppBuilder<NoState, P, R> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
-                    return Ok(AppBuilder::from_pre(self.shared, cached_state, cached_ctx));
+                    return Ok(Mods::register_controllers(AppBuilder::from_pre(
+                        self.shared,
+                        cached_state,
+                        cached_ctx,
+                    )));
                 }
 
                 // Fingerprint changed — log only the beans that actually changed
@@ -515,7 +560,11 @@ impl<P, R> AppBuilder<NoState, P, R> {
             crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
             crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
-            Ok(AppBuilder::from_pre(self.shared, state, ctx))
+            Ok(Mods::register_controllers(AppBuilder::from_pre(
+                self.shared,
+                state,
+                ctx,
+            )))
         }
 
         #[cfg(not(feature = "dev-reload"))]
@@ -524,10 +573,20 @@ impl<P, R> AppBuilder<NoState, P, R> {
             let ctx = registry.resolve().await?;
             let state = <P as BuildHList>::build_hlist(&ctx);
 
-            Ok(AppBuilder::from_pre(self.shared, state, Arc::new(ctx)))
+            Ok(Mods::register_controllers(AppBuilder::from_pre(
+                self.shared,
+                state,
+                Arc::new(ctx),
+            )))
         }
     }
 
+}
+
+// `with_state` bypasses the bean graph entirely, so it cannot support pending
+// feature modules (their controllers construct from the resolved context) —
+// it is only available while `Mods = TNil`.
+impl<P, R> AppBuilder<NoState, P, R, TNil> {
     /// Provide a pre-built state directly (backward-compatible path).
     ///
     /// This skips the bean graph entirely. The bean registry is discarded and

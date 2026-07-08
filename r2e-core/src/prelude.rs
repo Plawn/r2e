@@ -66,13 +66,14 @@ pub use r2e_macros::ApiError;
 
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
-pub use crate::builder::{AppBuilder, PreparedApp, RegisterController, RegisterControllers};
+pub use crate::builder::{AppBuilder, PreparedApp, RegisterController, RegisterControllers, RegisterModule};
 // NOTE: `BeanAccess` is deliberately NOT in the prelude: its blanket impl puts
 // a `get` method on every type, which would shadow inherent `get`s reached
 // through `Deref` (e.g. `Arc<DashMap>::get`). Import it explicitly where
 // needed: `use r2e_core::type_list::BeanAccess;`.
 pub use crate::type_list::BeanLookup;
 pub use crate::controller::ContextConstruct;
+pub use crate::module::FeatureModule;
 pub use crate::extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via};
 pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue};
 pub use crate::controller::Controller as ControllerTrait;

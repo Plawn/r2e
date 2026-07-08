@@ -16,6 +16,7 @@ pub mod layers;
 pub mod lifecycle;
 pub mod managed;
 pub mod meta;
+pub mod module;
 pub mod plugin;
 pub mod plugins;
 pub mod prelude;
@@ -38,7 +39,8 @@ pub mod ws;
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
 pub use lazy::Lazy;
 pub use builder::{
-    AppBuilder, PreparedApp, RegisterController, RegisterControllers, TaskRegistryHandle,
+    AppBuilder, PreparedApp, RegisterController, RegisterControllers, RegisterModule,
+    TaskRegistryHandle,
 };
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
@@ -48,6 +50,7 @@ pub use config::{
     validate_keys, validate_section,
 };
 pub use controller::{ContextConstruct, Controller};
+pub use module::FeatureModule;
 pub use extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt};
 pub use error::{HttpError, HttpErrorExt};
 pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext};

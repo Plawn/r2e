@@ -37,6 +37,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_async_shutdown_hooks: Vec::new(),
             _provided: PhantomData,
             _required: PhantomData,
+            _modules: PhantomData,
         };
 
         // Execute deferred actions (new API).
@@ -383,7 +384,41 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         C: Controller<T, W>,
         C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
     {
-        self.try_register_controller_impl::<C, W, DepIdx>()
+        self.register_controller_unchecked_impl::<C, W>()
+    }
+
+    /// Non-panicking registration backend; see
+    /// [`register_controller_impl`](Self::register_controller_impl).
+    #[doc(hidden)]
+    pub fn try_register_controller_impl<C, W, DepIdx>(
+        self,
+    ) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: Controller<T, W>,
+        C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
+    {
+        self.try_register_controller_unchecked_impl::<C, W>()
+    }
+
+    /// Registration backend **without** the global dependency check.
+    ///
+    /// Used by the feature-module fold
+    /// ([`ModuleList`](crate::module::ModuleList)): module controllers are
+    /// dependency-checked module-locally at `register_module` (their deps may
+    /// include private module beans, absent from the state); their cores
+    /// construct from the retained bean context, where those beans exist.
+    /// Everything else must go through the checked variants above.
+    ///
+    /// # Panics
+    ///
+    /// Panics if config keys or sections declared on the controller fail
+    /// validation.
+    #[doc(hidden)]
+    pub fn register_controller_unchecked_impl<C, W>(self) -> Self
+    where
+        C: Controller<T, W>,
+    {
+        self.try_register_controller_unchecked_impl::<C, W>()
             .unwrap_or_else(|err| {
                 panic!(
                     "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
@@ -393,15 +428,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             })
     }
 
-    /// Non-panicking registration backend; see
-    /// [`register_controller_impl`](Self::register_controller_impl).
+    /// Non-panicking variant of
+    /// [`register_controller_unchecked_impl`](Self::register_controller_unchecked_impl).
     #[doc(hidden)]
-    pub fn try_register_controller_impl<C, W, DepIdx>(
+    pub fn try_register_controller_unchecked_impl<C, W>(
         mut self,
     ) -> Result<Self, crate::config::ConfigValidationError>
     where
         C: Controller<T, W>,
-        C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
     {
         C::register_meta(&mut self.meta_registry);
 

@@ -255,8 +255,8 @@ pub trait PreStatePlugin: Send + 'static {
 ///     type Provisions = TCons<CancellationToken, TCons<JobRegistry, TNil>>;
 ///     type Required = TNil;
 ///
-///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
-///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+///     fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
+///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
 ///     where
 ///         P: TAppend<Self::Provisions>,
 ///         R: TAppend<Self::Required>,
@@ -288,10 +288,13 @@ pub trait RawPreStatePlugin: Send + 'static {
     type Required;
 
     /// Install the plugin in the pre-state phase with full builder access.
-    fn install<P, R>(
+    ///
+    /// `Mods` is the builder's pending feature-module list — plugins carry it
+    /// through unchanged.
+    fn install<P, R, Mods>(
         self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> crate::builder::WithPluginInstalled<Self, P, R>
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>;
@@ -302,10 +305,10 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
     type Provisions = TCons<T::Provided, crate::type_list::TNil>;
     type Required = <T::Deps as crate::type_list::PluginDeps>::AsList;
 
-    fn install<P, R>(
+    fn install<P, R, Mods>(
         self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> crate::builder::WithPluginInstalled<Self, P, R>
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,

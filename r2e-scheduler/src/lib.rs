@@ -189,10 +189,10 @@ impl RawPreStatePlugin for Scheduler {
     type Provisions = TCons<CancellationToken, TCons<ScheduledJobRegistry, TNil>>;
     type Required = TNil;
 
-    fn install<P, R>(
+    fn install<P, R, Mods>(
         self,
-        app: AppBuilder<r2e_core::builder::NoState, P, R>,
-    ) -> AppBuilder<r2e_core::builder::NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+        app: AppBuilder<r2e_core::builder::NoState, P, R, Mods>,
+    ) -> AppBuilder<r2e_core::builder::NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,

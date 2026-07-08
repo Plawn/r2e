@@ -23,6 +23,73 @@
 use super::*;
 use crate::type_list::ControllerTuple;
 
+/// Registers a [`FeatureModule`] on the NoState builder, inferring the
+/// encapsulation-check witnesses.
+///
+/// One call registers the module's providers, queues its controllers for
+/// registration at `build_state()`, and applies the closed-subgraph
+/// encapsulation checks at compile time:
+///
+/// - every provider dependency must be another provider's output or a
+///   declared import (`Deps ⊆ Provided ∪ Imports`);
+/// - every controller `#[inject]` dependency must be in the same module
+///   scope;
+/// - `Exports ⊆ Provided` — a module cannot export what it does not provide.
+///
+/// Only `Exports` join the app-global provision list `P` (the application
+/// state); other providers stay private — depending on them from outside the
+/// module is a compile error. `Imports` join the requirement list `R`,
+/// checked against the final provisions at `build_state()`.
+///
+/// Note: private providers still live in the global, `TypeId`-keyed graph.
+/// Two modules must not each register a private provider of the same
+/// concrete type — that is a loud
+/// [`DuplicateBean`](crate::beans::BeanError::DuplicateBean) error at
+/// startup. Use newtypes for same-shaped private beans.
+///
+/// ```ignore
+/// AppBuilder::new()
+///     .provide(db_pool)
+///     .register_module::<UserModule>()
+///     .register_module::<OrderModule>()
+///     .build_state()
+///     .await
+/// ```
+pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>: Sized {
+    /// Register a [`FeatureModule`]: its providers, controllers, and
+    /// import/export declarations, in one call.
+    fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
+    where
+        M: FeatureModule,
+        M::Providers: BeanList,
+        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        M::Controllers: ControllerDepsList,
+        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        M::Exports: TAppend<P>,
+        R: TAppend<M::Imports>;
+}
+
+impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx> RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>
+    for AppBuilder<NoState, P, R, Mods>
+{
+    fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
+    where
+        M: FeatureModule,
+        M::Providers: BeanList,
+        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        M::Controllers: ControllerDepsList,
+        <M::Providers as BeanList>::Deps: AllSatisfied<ModuleScope<M>, DepIdx>,
+        M::Exports: AllSatisfied<<M::Providers as BeanList>::Provided, ExpIdx>,
+        <M::Controllers as ControllerDepsList>::Deps: AllSatisfied<ModuleScope<M>, CtrlIdx>,
+        M::Exports: TAppend<P>,
+        R: TAppend<M::Imports>,
+    {
+        self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx>()
+    }
+}
+
 /// Registers a single [`Controller`], inferring its witnesses.
 ///
 /// A controller injecting a bean that is absent from the application state is

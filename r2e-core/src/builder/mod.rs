@@ -14,11 +14,12 @@ mod task_registry;
 mod typed;
 
 pub use prepared::PreparedApp;
-pub use registration::{RegisterController, RegisterControllers};
+pub use registration::{RegisterController, RegisterControllers, RegisterModule};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
+use crate::module::{BeanList, ControllerDepsList, FeatureModule, ModuleList, ModuleScope};
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
@@ -36,13 +37,13 @@ use tracing::info;
 /// ([`register`](AppBuilder::register), [`with_default_bean`](AppBuilder::with_default_bean), …):
 /// `Provided` is pushed onto the provision list `P` and `Deps` is appended to
 /// the requirement list `R`.
-pub type Registered<Provided, Deps, P, R> =
-    AppBuilder<NoState, TCons<Provided, P>, <R as TAppend<Deps>>::Output>;
+pub type Registered<Provided, Deps, P, R, Mods> =
+    AppBuilder<NoState, TCons<Provided, P>, <R as TAppend<Deps>>::Output, Mods>;
 
 /// Builder returned by [`load_config`](AppBuilder::load_config): pushes the
 /// typed config `C`, the raw [`R2eConfig`](crate::config::R2eConfig), and
 /// `C`'s nested section types (`C::Children`) onto the provision list.
-pub type WithLoadedConfig<C, P, R> = AppBuilder<
+pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
     NoState,
     TCons<
         C,
@@ -52,14 +53,28 @@ pub type WithLoadedConfig<C, P, R> = AppBuilder<
         >,
     >,
     R,
+    Mods,
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
 /// `Provisions` and `Required` lists are appended to `P` and `R`.
-pub type WithPluginInstalled<Pl, P, R> = AppBuilder<
+pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
     <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
     <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
+    Mods,
+>;
+
+/// Builder returned by
+/// [`register_module`](registration::RegisterModule::register_module): the
+/// module's `Exports` join the provision list `P`, its `Imports` join the
+/// requirement list `R`, and the module is queued on `Mods` so
+/// `build_state()` registers its controllers.
+pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
+    NoState,
+    <<M as FeatureModule>::Exports as TAppend<P>>::Output,
+    <R as TAppend<<M as FeatureModule>::Imports>>::Output,
+    TCons<M, Mods>,
 >;
 
 type ConsumerReg<T> =
@@ -150,7 +165,7 @@ struct BuilderConfig {
 /// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
 /// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
 /// or `.serve()`.
-pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil> {
+pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil, Mods = TNil> {
     shared: BuilderConfig,
     state: T,
     /// The resolved bean graph, retained through the typed phase so controller
@@ -173,11 +188,13 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     _provided: PhantomData<P>,
     _required: PhantomData<R>,
+    /// Pending feature modules whose controllers `build_state()` registers.
+    _modules: PhantomData<Mods>,
 }
 
 // ── Conditional assembly (any phase) ────────────────────────────────────────
 
-impl<T: Clone + Send + Sync + 'static, P, R> AppBuilder<T, P, R> {
+impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     /// Conditionally apply a builder transformation.
     ///
     /// `f` must return the **same** builder type, so it may call `Self -> Self`
@@ -200,7 +217,7 @@ impl<T: Clone + Send + Sync + 'static, P, R> AppBuilder<T, P, R> {
     }
 }
 
-impl Default for AppBuilder<NoState, TNil, TNil> {
+impl Default for AppBuilder<NoState, TNil, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }
