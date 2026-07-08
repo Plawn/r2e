@@ -49,6 +49,7 @@ pub use r2e_macros::main;
 
 // Bean / DI macros
 pub use r2e_macros::bean;
+pub use r2e_macros::module;
 pub use r2e_macros::producer;
 pub use r2e_macros::Bean;
 pub use r2e_macros::TestState;

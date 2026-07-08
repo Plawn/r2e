@@ -12,6 +12,7 @@ pub(crate) mod bean_derive;
 pub(crate) mod bean_state_derive;
 pub(crate) mod bg_service_derive;
 pub(crate) mod test_state_derive;
+pub(crate) mod module_attr;
 pub(crate) mod producer_attr;
 pub(crate) mod type_list_gen;
 pub(crate) mod controller_attr;
@@ -830,6 +831,37 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
     producer_attr::expand(args, input)
+}
+
+/// Attribute macro on a struct — generates a
+/// [`FeatureModule`](r2e_core::module::FeatureModule) impl from a
+/// declarative listing of providers, controllers, exports, and imports.
+///
+/// Every key is optional and defaults to empty. Register the module with
+/// `.register_module::<M>()` on the builder — providers join the bean graph,
+/// controllers are wired automatically at `build_state()`, and the
+/// closed-subgraph encapsulation checks run at compile time.
+///
+/// # Example
+///
+/// ```ignore
+/// #[module(
+///     providers(UserRepo, UserService),
+///     controllers(UserController, AdminController),
+///     exports(UserService),      // UserRepo stays private to the module
+///     imports(DbPool),           // supplied by the app or another module
+/// )]
+/// pub struct UserModule;
+///
+/// AppBuilder::new()
+///     .provide(db_pool)
+///     .register_module::<UserModule>()
+///     .build_state()
+///     .await
+/// ```
+#[proc_macro_attribute]
+pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
+    module_attr::expand(args, input)
 }
 
 /// Derive macro for simple beans whose `#[inject]` fields are resolved

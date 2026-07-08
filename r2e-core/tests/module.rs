@@ -118,24 +118,19 @@ impl OrderController {
     }
 }
 
+/// Declared via the `#[module]` macro (UserModule above keeps the
+/// hand-written impl so both forms stay covered).
+#[module(
+    providers(OrderService),
+    controllers(OrderController),
+    exports(OrderService),
+    imports(UserService)
+)]
 struct OrderModule;
 
-impl FeatureModule for OrderModule {
-    type Providers = TCons<OrderService, TNil>;
-    type Controllers = (OrderController,);
-    type Exports = TCons<OrderService, TNil>;
-    type Imports = TCons<UserService, TNil>;
-}
-
 /// A providers-only module: no controllers (`Controllers = ()`).
+#[module]
 struct HeadlessModule;
-
-impl FeatureModule for HeadlessModule {
-    type Providers = TNil;
-    type Controllers = ();
-    type Exports = TNil;
-    type Imports = TNil;
-}
 
 // ── App-level controller consuming a module export ─────────────────────────
 

@@ -3,7 +3,6 @@
 //! app-level controller consuming the export — all through the `r2e` facade.
 
 use r2e::prelude::*;
-use r2e::type_list::{TCons, TNil};
 
 #[derive(Clone)]
 pub struct Pool;
@@ -49,14 +48,13 @@ impl UserController {
     }
 }
 
+#[module(
+    providers(Repo, Svc),
+    controllers(UserController),
+    exports(Svc),
+    imports(Pool)
+)]
 pub struct UserModule;
-
-impl FeatureModule for UserModule {
-    type Providers = TCons<Repo, TCons<Svc, TNil>>;
-    type Controllers = (UserController,);
-    type Exports = TCons<Svc, TNil>;
-    type Imports = TCons<Pool, TNil>;
-}
 
 #[controller(path = "/app")]
 pub struct AppController {
