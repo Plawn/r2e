@@ -138,11 +138,32 @@ impl AuditedScheduled {
         self.counter.fetch_add(1, Ordering::SeqCst);
     }
 
-    // Sync scheduled method with an interceptor: pins the non-async shape of
-    // the generated chain (the interval is long enough to never fire here).
+    // Sync scheduled method with an interceptor: its dispatch wrapper is
+    // PROMOTED to `async fn` (di-next-steps item 11) so direct calls run the
+    // chain too — hence the `.await` at the call sites below (the interval
+    // is long enough that the scheduler never fires it past the initial
+    // tick).
     #[scheduled(every = 3600, name = "sync_noop")]
     #[intercept(AuditTick::spec("sync"))]
     fn sync_noop(&self) {}
+}
+
+// Controller-level `#[intercept]` alone also promotes a sync scheduled
+// method's wrapper to `async fn` — the applicable-site list is
+// controller-level ++ method-level.
+#[controller]
+pub struct CtrlLevelScheduled {
+    #[inject]
+    counter: Arc<AtomicUsize>,
+}
+
+#[routes]
+#[intercept(AuditTick::spec("ctrl"))]
+impl CtrlLevelScheduled {
+    #[scheduled(every = 3600, name = "ctrl_sync_tick")]
+    fn sync_tick(&self) {
+        self.counter.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 // ─── Tests ───
@@ -279,12 +300,21 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
     let entries_before_direct = entries.len();
     drop(entries);
 
-    // Direct in-code call on a REGISTERED core: the async method's body reads
-    // the prebuilt set from the core's DecoSlot, so the chain runs here too.
+    // Direct in-code call on a REGISTERED core: the method's dispatch
+    // wrapper reads the prebuilt set from the core's DecoSlot, so the chain
+    // runs here too.
     core.tick().await;
     let entries = audit.entries.lock().unwrap();
     assert_eq!(entries.len(), entries_before_direct + 1);
     assert_eq!(entries.last().map(String::as_str), Some("sched:tick"));
+    drop(entries);
+
+    // Same for the SYNC method: its wrapper was promoted to `async fn`, so a
+    // direct call awaits the chain instead of bypassing it.
+    core.sync_noop().await;
+    let entries = audit.entries.lock().unwrap();
+    assert_eq!(entries.len(), entries_before_direct + 2);
+    assert_eq!(entries.last().map(String::as_str), Some("sync:sync_noop"));
 }
 
 #[r2e::test]
@@ -301,12 +331,42 @@ async fn direct_call_on_unregistered_core_is_undecorated() {
     let core = AuditedScheduled::from_context(builder.bean_context());
 
     core.tick().await;
+    core.sync_noop().await;
 
     assert_eq!(counter.load(Ordering::SeqCst), 1, "body must run");
     assert!(
         audit.entries.lock().unwrap().is_empty(),
         "unregistered core must not intercept"
     );
+}
+
+#[r2e::test]
+async fn controller_level_intercept_promotes_sync_scheduled_method() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let audit = TickAudit::default();
+    let builder = AppBuilder::new()
+        .provide(counter.clone())
+        .provide(audit.clone())
+        .build_state()
+        .await;
+    let core = Arc::new(CtrlLevelScheduled::from_context(builder.bean_context()));
+
+    // Fill the core's DecoSlot (the registration path) without starting the
+    // scheduler tasks.
+    let _tasks = CtrlLevelScheduled::boxed_tasks(
+        builder.state(),
+        Arc::clone(&core),
+        builder.bean_context(),
+    );
+
+    // `sync_tick` has NO method-level `#[intercept]`; the controller-level
+    // one alone promoted the wrapper — hence the `.await` — and its chain
+    // runs on the direct call.
+    core.sync_tick().await;
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "body must run");
+    let entries = audit.entries.lock().unwrap();
+    assert_eq!(entries.as_slice(), ["ctrl:sync_tick"]);
 }
 
 #[r2e::test]

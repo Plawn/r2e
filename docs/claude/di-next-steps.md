@@ -7,9 +7,8 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ — all done. Items 6/8/9/10 are opportunistic;
-item 11 is **user-requested** (next session). Item 7 is **rejected** (user
-decision — do not re-propose).
+~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ ~~11~~ — all done. Items 6/8/9/10 are
+opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
 
 ---
 
@@ -163,10 +162,10 @@ Clone/Debug/Default keep user derives working; unit-struct controllers become
 named structs — cores are no longer literal-constructible, use
 `from_context`). `scheduled_tasks_boxed` fills the slot with a per-controller
 container `__R2eSchedDecos_<Name>` (sets now emitted at module scope).
-**Async** scheduled methods split into hidden `__r2e_sched_<fn>_inner` + a
+Intercepted scheduled methods split into hidden `__r2e_sched_<fn>_inner` + a
 dispatch wrapper that reads the slot and runs the chain in the body — every
-call path intercepted; **sync** methods can't await a chain in their body, so
-their chain stays at the task level (scheduler ticks only — documented).
+call path intercepted; **sync** methods get their wrapper promoted to
+`async fn` (item 11) so the body can await the chain.
 Known edge: a core built via `from_context` but never registered has an
 empty slot → direct calls run undecorated (test-only situation in practice).
 gRPC methods keep entry-point interception (tonic dispatch) — direct calls
@@ -241,31 +240,26 @@ shape is known: a `GrpcServiceDeps` carrier emitted by `#[grpc_routes]`
 and an `AllSatisfied` bound on `register_grpc_service`. Fail-early-at-startup
 makes this less urgent than the controller case was.
 
-## 11. (User-requested, next session) Sync scheduled methods: async bridge for direct-call interception
+## 11. ~~Sync scheduled methods: async bridge for direct-call interception~~ — ✅ DONE (2026-07-09)
 
-Requested 2026-07-08, right after the item-5 DecoSlot follow-up. Today a
-**sync** `#[scheduled]` method with interceptors runs its chain only around
-scheduler ticks — the body can't await the chain, so direct in-code calls
-bypass it (async methods already intercept every call path).
+Implemented as the recommended **async promotion of the dispatch wrapper**
+(`block_on` was rejected — panics/starves inside the runtime; `tokio::spawn`
+fire-and-forget was rejected — loses `Result` errors and completion):
 
-Bridge options analyzed (2026-07-08):
-
-- **`block_on` in the sync body — REJECTED.** The body already runs on a
-  tokio worker (tick = async task, direct call = async handler);
-  `Handle::block_on` panics inside a runtime, `block_in_place` starves the
-  worker and panics on `current_thread`. Never in generated code.
-- **`tokio::spawn` fire-and-forget — weak.** No deadlock, but the caller no
-  longer observes completion and a `Result` return's error is lost (only
-  loggable). Tolerable for `()`, wrong for `Result`.
-- **Async promotion of the dispatch wrapper — RECOMMENDED.** Generate the
-  same hidden-inner + dispatch-wrapper split as async methods, but emit the
-  wrapper as `async fn` even though the source is `fn`. Direct callers (all
-  in async contexts anyway) get a clear "consider using `.await`" error;
-  result propagation and completion semantics preserved; zero runtime risk.
-  Cost is DX only: a generated signature differing from the source — must be
-  clearly documented (book + guards-interceptors.md), ideally with a macro
-  note pointing at the promotion when a caller forgets `.await`. Also update
-  the "sync methods keep the task-level chain" carve-outs added by item 5
-  (wrapping.rs `generate_scheduled_method`, controller_impl.rs
-  `generate_scheduled_tasks` sync arm — the task-level chain becomes
-  unnecessary since the task can call the now-async wrapper).
+- `wrapping.rs generate_scheduled_method` now splits EVERY intercepted
+  scheduled method (inferable specs) into hidden inner + dispatch wrapper; a
+  sync source keeps a sync inner fn but the wrapper is emitted as
+  `async fn` (`sig.asyncness` promoted), with a generated rustdoc note
+  explaining the promotion ("call with `.await`"). Direct callers that
+  forget `.await` get the standard rustc "consider using `.await`"
+  diagnostics.
+- `controller_impl.rs generate_scheduled_tasks`: the sync-arm task-level
+  chain is GONE — the task closure is a bare call, awaited when the emitted
+  method is async (source-async or promoted). The `DecoSlot` fill is
+  unchanged; the slot remains the single chain-run site.
+- Breaking (DX): a sync `#[scheduled]` method with `#[intercept]` sites has
+  an async generated signature. Without interceptors it stays sync.
+- Docs: guards-interceptors.md scheduled bullet, book
+  `advanced/interceptors.md`. Tests: `scheduled_test.rs` — direct
+  `core.sync_noop().await` intercepted on a registered core, undecorated on
+  an unregistered one.

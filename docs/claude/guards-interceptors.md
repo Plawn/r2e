@@ -234,11 +234,14 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   deps (core AND decorators) are NOT compile-checked —
   `register_grpc_service` resolves from the retained context at runtime, so
   a missing bean panics there (pre-existing gRPC behavior, unchanged).
-- **Async scheduled methods intercept DIRECT calls too** (user decision):
-  the chain runs in the method body (slot lookup), so `self.tick()` from
-  another method goes through the interceptors — unlike routes, whose
-  interceptors live in the handler. Two edges: a **sync** scheduled method's
-  chain runs only around scheduler ticks (a sync body can't await), and a
+- **Scheduled methods intercept DIRECT calls too** (user decision): the
+  chain runs in the method's dispatch wrapper (slot lookup), so
+  `self.tick().await` from another method goes through the interceptors —
+  unlike routes, whose interceptors live in the handler. A **sync**
+  `#[scheduled]` method with `#[intercept]` sites gets its wrapper
+  **promoted to `async fn`** (di-next-steps item 11): the source `fn` body
+  stays sync (hidden inner fn), but callers must `.await` the generated
+  method — the promotion is flagged in the generated rustdoc. One edge: a
   core that never went through registration (hand-built `from_context` in a
   test) has an empty slot → direct calls run undecorated.
 - **Module controllers' decorator deps ARE compile-checked** (since the

@@ -64,10 +64,11 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 
     // Scheduled methods: `#[intercept(...)]` sets are built once from the
     // bean context inside `scheduled_tasks_boxed` (controller_impl.rs) and
-    // stored in the core's hidden `DecoSlot`. Async methods run the chain in
-    // their own body (slot lookup), so DIRECT in-code calls are intercepted
-    // too — not just scheduler ticks. Sync methods can't await the chain and
-    // are emitted as-is (their chain runs at the task level only).
+    // stored in the core's hidden `DecoSlot`. Intercepted methods run the
+    // chain in their own body (slot lookup), so DIRECT in-code calls are
+    // intercepted too — not just scheduler ticks. A sync source method gets
+    // its dispatch wrapper PROMOTED to `async fn` so the body can await the
+    // chain (di-next-steps item 11).
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
@@ -119,16 +120,21 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 
 /// Emit one scheduled method.
 ///
-/// Async methods with (inferable) interceptor sites split into a hidden
-/// renamed inner fn plus a dispatch wrapper: the wrapper reads the prebuilt
-/// set from the core's `DecoSlot` (filled at registration by
-/// `scheduled_tasks_boxed`) and runs the chain around the inner call, so the
-/// chain applies on every call path. An unregistered core (slot empty — e.g.
-/// a hand-built test core) runs the inner body undecorated.
+/// Methods with (inferable) interceptor sites split into a hidden renamed
+/// inner fn plus a dispatch wrapper: the wrapper reads the prebuilt set from
+/// the core's `DecoSlot` (filled at registration by `scheduled_tasks_boxed`)
+/// and runs the chain around the inner call, so the chain applies on every
+/// call path. An unregistered core (slot empty — e.g. a hand-built test
+/// core) runs the inner body undecorated.
 ///
-/// Sync methods, methods without interceptors, and methods whose spec type
-/// is not inferable (the compile_error is emitted by the registration pass)
-/// are emitted unchanged.
+/// A **sync** source method's wrapper is PROMOTED to `async fn` — the chain
+/// can only run in an async body, and every direct caller already sits in an
+/// async context (handlers, consumers, tasks). The inner fn keeps the source
+/// signature; the promotion is flagged in the wrapper's rustdoc.
+///
+/// Methods without interceptors and methods whose spec type is not
+/// inferable (the compile_error is emitted by the registration pass) are
+/// emitted unchanged.
 fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
     let fn_item = &sm.fn_item;
     let is_async = fn_item.sig.asyncness.is_some();
@@ -138,8 +144,7 @@ fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> Token
         .chain(sm.intercept_fns.iter())
         .collect();
 
-    if !is_async
-        || intercept_exprs.is_empty()
+    if intercept_exprs.is_empty()
         || !super::decorators::all_specs_inferable(intercept_exprs.iter().copied())
     {
         return quote! { #fn_item };
@@ -161,10 +166,31 @@ fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> Token
 
     let attrs = &fn_item.attrs;
     let vis = &fn_item.vis;
-    let sig = &fn_item.sig;
+
+    // Async promotion: a sync source keeps a sync inner fn, but the wrapper
+    // must be async to await the chain. Direct callers get the usual
+    // "consider `.await`" diagnostics; the rustdoc note explains why.
+    let mut sig = fn_item.sig.clone();
+    let promotion_doc = if is_async {
+        quote! {}
+    } else {
+        sig.asyncness = Some(Default::default());
+        quote! {
+            #[doc = ""]
+            #[doc = "*R2E:* promoted to `async fn` by `#[routes]` — this sync `#[scheduled]` \
+                     method has `#[intercept]` sites, and the chain (which must be awaited) \
+                     runs on direct calls too. Call with `.await`."]
+        }
+    };
+
+    let inner_call = if is_async {
+        quote! { self.#inner_name().await }
+    } else {
+        quote! { self.#inner_name() }
+    };
 
     let chain = super::decorators::wrap_with_deco_interceptors(
-        quote! { self.#inner_name().await },
+        inner_call.clone(),
         &fn_name_str,
         &controller_name_str,
         &intercept_fields,
@@ -175,13 +201,14 @@ fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> Token
         #inner_fn
 
         #(#attrs)*
+        #promotion_doc
         #vis #sig {
             match self.__r2e_decos.get::<#container>() {
                 Some(__decos) => {
                     let __deco = &__decos.#field;
                     #chain
                 }
-                None => self.#inner_name().await,
+                None => #inner_call,
             }
         }
     }

@@ -126,13 +126,20 @@ Differences from HTTP routes:
 - Type-constrained interceptors must match the method's return type: a
   scheduled method returns `()` or `Result<(), E>`, so `Cache` (which needs a
   `Cacheable` return) doesn't apply there.
-- **Async scheduled methods run their interceptors on direct calls too**:
-  the chain wraps the method body itself, so calling `self.refresh()` from
+- **Scheduled methods run their interceptors on direct calls too**: the
+  chain wraps the method body itself, so calling `self.refresh().await` from
   another method (say, an admin route forcing a run) still goes through the
-  interceptors. Two caveats: a *sync* scheduled method's chain only runs
-  around scheduler ticks (a sync body can't await the chain), and a
-  controller built by hand in a test — without going through registration —
-  runs its scheduled methods undecorated.
+  interceptors.
+- **A sync `#[scheduled]` method with interceptors becomes `async`**: the
+  chain must be awaited, so the macro promotes the generated method to
+  `async fn` (the body you wrote still runs synchronously inside it). Call
+  it with `.await`; the generated rustdoc carries a note explaining the
+  promotion. Controller-level `#[intercept]` counts too — a sync scheduled
+  method in a controller carrying one is promoted even without a
+  method-level site. Without any applicable interceptor the method stays
+  sync.
+- One caveat: a controller built by hand in a test — without going through
+  registration — runs its scheduled methods undecorated.
 
 ## Execution order
 

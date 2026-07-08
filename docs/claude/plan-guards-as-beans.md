@@ -265,8 +265,9 @@ Consequences in `codegen/handlers.rs`:
   **CLOSED (2026-07-08, di-next-steps item 5).** `scheduled_tasks_boxed`
   now receives the retained `BeanContext` and builds each scheduled
   method's interceptor set once into the core's hidden `DecoSlot` (deps
-  folded into `ControllerDeps`); async scheduled methods run the chain in
-  their body, so direct calls are intercepted too. gRPC sites are prebuilt
+  folded into `ControllerDeps`); scheduled methods run the chain in their
+  dispatch wrapper (sync sources promoted to `async fn`, di-next-steps
+  item 11), so direct calls are intercepted too. gRPC sites are prebuilt
   into the wrapper at `into_router` from the same context. Bean-reading
   specs work everywhere `#[intercept]` is accepted.
 - **Pre-existing bug fixed in passing**: SSE/WS methods with `#[pre_guard]`

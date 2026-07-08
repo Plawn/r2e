@@ -797,11 +797,10 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
 /// `DecoratorSpec::build` path as route decorators, so bean-reading config
 /// specs work and their `Deps` are folded into `ControllerDeps`. The built
 /// sets go into the core's hidden `DecoSlot` (one container struct per
-/// controller): **async** scheduled methods read the slot in their own body
-/// (see `wrapping.rs`), so direct in-code calls run the chain too, and the
-/// task closure just calls the method; **sync** methods can't await the
-/// chain in their body, so their chain runs here, around the task
-/// invocation only.
+/// controller): intercepted scheduled methods read the slot in their own
+/// dispatch wrapper (see `wrapping.rs` — sync sources are promoted to
+/// `async fn` there), so direct in-code calls run the chain too, and the
+/// task closure is always a bare awaited call.
 ///
 /// Returns `(module-scope items, trait fn)` — the sets and their container
 /// are module-scope because the method bodies downcast the slot by the
@@ -899,37 +898,15 @@ fn generate_scheduled_tasks(
 
             let schedule_expr = generate_schedule_expr(sm, &sched_krate);
 
+            // Intercepted methods self-intercept in their dispatch wrapper
+            // (slot lookup there; sync sources are promoted to `async fn`),
+            // so the task closure is a bare call — awaited whenever the
+            // emitted method is async (source-async or promoted).
             let is_async = sm.fn_item.sig.asyncness.is_some();
-            let call_expr = if is_async {
+            let result_expr = if is_async || deco_set.is_some() {
                 quote! { __ctrl.#fn_name().await }
             } else {
                 quote! { __ctrl.#fn_name() }
-            };
-
-            // Async methods self-intercept in their body (slot lookup there);
-            // the bare call is the whole story. Sync methods run their chain
-            // here — the only place an async chain can run for them.
-            let result_expr = match deco_set {
-                Some(set) if !is_async => {
-                    let field = super::decorators::sched_field_ident(fn_name);
-                    let chain = super::decorators::wrap_with_deco_interceptors(
-                        call_expr.clone(),
-                        &fn_name_str,
-                        &controller_name_str,
-                        &set.intercept_fields,
-                        &krate,
-                    );
-                    quote! {
-                        match __ctrl.__r2e_decos.get::<#container>() {
-                            Some(__decos) => {
-                                let __deco = &__decos.#field;
-                                #chain
-                            }
-                            None => #call_expr,
-                        }
-                    }
-                }
-                _ => call_expr,
             };
 
             quote! {
@@ -940,13 +917,8 @@ fn generate_scheduled_tasks(
                         schedule: #schedule_expr,
                         state: __state.clone(),
                         task: Box::new(move |_state: #state_ident| {
-                            let __ctrl_arc = __task_core.clone();
+                            let __ctrl = __task_core.clone();
                             Box::pin(async move {
-                                // `__ctrl` is a plain `&Core` (Copy) so the
-                                // sync-method interceptor chain's move
-                                // closures don't move the Arc out from under
-                                // the slot borrow.
-                                let __ctrl = &*__ctrl_arc;
                                 #sched_krate::ScheduledResult::log_if_err(
                                     #result_expr,
                                     #task_name,
