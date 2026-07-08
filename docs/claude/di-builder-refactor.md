@@ -20,6 +20,10 @@ phase ends with a quality-review gate before the next starts.
 | 5 | Feature modules (closed subgraphs) | ✅ done — `FeatureModule` + `register_module` + `#[module]`; compile-time encapsulation (deps ⊆ Provides ∪ Imports, exports-only leakage to `P`); see `plan-feature-modules.md` |
 | 6 | Guards & interceptors as graph-resolved decorators | ✅ done — `Guard<I>`/`PreAuthGuard`/`Interceptor<R>` lost the state param; `DecoratorSpec` + `SelfBuilt`; sites built once at wiring time, deps folded into `Controller::Deps` (compile-checked); `cache_backend()` global deleted; see `plan-guards-as-beans.md` |
 
+**Next steps:** the prioritized post-Phase-6 backlog is in `di-next-steps.md`
+(module decorator-deps carrier, bridge-overlap invariant, spec DX, scheduled/
+gRPC ctx; qualifiers rejected — newtypes by design).
+
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
 46-file docs alignment pass.
 

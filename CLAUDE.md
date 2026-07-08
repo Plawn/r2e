@@ -166,6 +166,7 @@ impl UserController {
 | DI/builder refactor status & phases, `.register()`, `build_state()`, HList state, `HasBean`/`BeanLookup`/`BeanAccess`, `FromRequestPartsVia`, `.when()`, `register_controllers`, unified registration, `recursion_limit` | `docs/claude/di-builder-refactor.md` |
 | feature modules, `#[module]`, `register_module`, closed subgraph, module imports/exports/encapsulation, controllers as beans, `from_context`, `ContextConstruct`, context-as-state | `docs/claude/plan-controllers-as-beans.md`, `docs/claude/plan-feature-modules.md` |
 | guards/interceptors as beans, `DecoratorSpec`, `GuardBean`, guard compile-time deps, once-at-registration guard construction, `Guard<I>`/`Interceptor<R>` redesign | `docs/claude/plan-guards-as-beans.md` |
+| DI backlog / next steps, module decorator deps carrier, bridge-overlap invariant, `#[derive(GuardBean)]`, scheduled/gRPC intercept ctx, newtypes-over-qualifiers decision | `docs/claude/di-next-steps.md` |
 
 **Rules:**
 1. Match keywords from your task to the left column. Read **only** the matched file(s).
