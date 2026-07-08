@@ -146,6 +146,11 @@ Method body level (trait-based, via `Interceptor::around`):
 3. Controller-level interceptors (declaration order)
 4. Method-level interceptors (declaration order)
 
+Instance lifetime: every site (including controller-level ones, which are
+instantiated **once per route method**) is built at registration and lives
+for the app's lifetime — a stateful interceptor keeps its state across
+requests, and controller-level state is per-method, not shared.
+
 Inline codegen (no trait):
 5. `transactional` (wraps body in tx begin/commit)
 6. Original method body

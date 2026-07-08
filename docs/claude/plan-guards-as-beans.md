@@ -195,10 +195,13 @@ appended to the generated **core struct** as hidden fields (one per site,
   `register_controller` then rejects a missing guard/interceptor bean at
   compile time, naming the type. Phase 5 `InModuleScope` checks apply
   unchanged.
-- Handlers already receive `__ctrl: &Facade` which `Deref`s to the core, so
-  the emitted check becomes `__ctrl.__r2e_g_list_0.check(&__guard_ctx)` and
-  the interceptor wrap references `&__ctrl.__r2e_i_list_0` — **zero new
-  plumbing**, no second `Arc`.
+- Controller-level `#[intercept]` sites are re-evaluated **per route
+  method** (each method's decorator set holds its own product instance,
+  built once at registration). As-landed semantics, confirmed at the review
+  gate: a stateful controller-level interceptor gets per-method state that
+  now persists across requests (previously it was rebuilt per request). No
+  built-in interceptor holds per-instance mutable state, so no behavior
+  change for built-ins.
 - Since `#[routes]` (not `#[controller]`) sees the sites, the decorator
   values cannot live on the core struct emitted by `#[controller]`.
   **Spike decision d2/d3**: no runtime side struct at all —

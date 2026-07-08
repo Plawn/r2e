@@ -1114,6 +1114,32 @@ fn pre_auth_registration(
     closure: TokenStream,
 ) -> TokenStream {
     let krate = r2e_core_path();
+
+    // Mirror the post-auth degrade: when a pre-guard spec type is not
+    // inferable, `generate_predeco_items` emitted the compile_error and no
+    // ctor — register the route without the pre-auth layer so the only
+    // error the user sees is the spec-type one.
+    if !super::decorators::all_specs_inferable(decorators.pre_auth_guard_fns.iter()) {
+        let middleware_layers: Vec<_> = decorators
+            .middleware_fns
+            .iter()
+            .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
+            .collect();
+        let direct_layers: Vec<_> = decorators
+            .layer_exprs
+            .iter()
+            .map(|expr| quote! { .layer(#expr) })
+            .collect();
+        return quote! {
+            __inner = __inner.route(
+                #path,
+                #krate::http::routing::#method_fn(#closure)
+                    #(#middleware_layers)*
+                    #(#direct_layers)*
+            );
+        };
+    }
+
     let controller_name_str = name.to_string();
     let fn_name_str = fn_ident.to_string();
     let controller_name = &def.controller_name;
