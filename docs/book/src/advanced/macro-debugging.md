@@ -281,7 +281,7 @@ where
         ctx: &r2e::beans::BeanContext,   // resolved graph — guards/interceptors are built here
     ) -> axum::Router<S> {
         // Guards and interceptors are built ONCE from `ctx` via
-        // `<Spec as DecoratorSpec>::build(expr, ctx)`, then captured by the
+        // `build_decorator::<_, Spec>(expr, ctx)`, then captured by the
         // route closures (see the guarded-handler shape above).
         axum::Router::new()
             // Each generated closure captures core.clone() (and any built decorators).

@@ -29,6 +29,7 @@ This generates and opens documentation for all R2E crates.
 | `InterceptorContext` | Interceptor context (`Copy`: method + controller name) |
 | `DecoratorSpec` | Build contract for guards/interceptors (Product + Deps + build) |
 | `SelfBuilt` | Marker for self-contained decorators (no bean deps) |
+| `DecoratorBean` (derive) | Generates the `DecoratorSpec` plumbing for a bean-reading guard/interceptor (`#[inject]` fields + `Type::spec(...)` constructor) |
 | `ManagedResource<S>` | Managed resource lifecycle trait |
 | `ManagedErr<E>` | Error wrapper for managed resources |
 | `Plugin<S>` | Post-state plugin trait |

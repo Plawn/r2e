@@ -9,6 +9,7 @@ pub(crate) mod extract;
 pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
+pub(crate) mod decorator_bean_derive;
 pub(crate) mod bean_state_derive;
 pub(crate) mod bg_service_derive;
 pub(crate) mod test_state_derive;
@@ -882,6 +883,45 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Bean, attributes(inject, config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
+}
+
+/// Derive macro for guards/interceptors with bean deps — generates the
+/// [`DecoratorSpec`](r2e_core::DecoratorSpec) plumbing so the type can be
+/// used in `#[guard(...)]` / `#[pre_guard(...)]` / `#[intercept(...)]`
+/// without hand-writing a config spec + product pair.
+///
+/// The derived struct is the finished guard/interceptor (implement
+/// `Guard<I>` / `Interceptor<R>` on it). Field attributes:
+/// - `#[inject]` — resolved from the bean graph at controller registration
+///   (compile-checked, like a controller `#[inject]`)
+/// - `#[config("key")]` / `#[config_section(prefix = "...")]` — resolved
+///   from `R2eConfig`
+/// - plain fields — config set at the attribute site via the generated
+///   `Type::spec(...)` constructor (declaration order)
+///
+/// Caveats: a *misspelled* field attribute is not rejected — the field
+/// silently becomes a `spec(...)` constructor argument (the site then fails
+/// to compile with an arity/type error rather than an attribute error). And
+/// since `spec(...)` shares the struct's visibility, plain-field types must
+/// be at least as visible as the struct (E0446 otherwise).
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(DecoratorBean)]
+/// pub struct DbAuditLog {
+///     #[inject] pool: SqlitePool,
+///     prefix: String,
+/// }
+///
+/// impl<R: Send> Interceptor<R> for DbAuditLog { /* uses self.pool */ }
+///
+/// #[intercept(DbAuditLog::spec("api".into()))]
+/// async fn create(&self) -> Json<User> { ... }
+/// ```
+#[proc_macro_derive(DecoratorBean, attributes(inject, config, config_section))]
+pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
+    decorator_bean_derive::expand(input)
 }
 
 /// Derive macro for background services — generates

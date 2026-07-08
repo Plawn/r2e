@@ -1,7 +1,6 @@
 use crate::error::AppError;
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
-use r2e::BeanContext;
 use r2e::prelude::*;
 use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;
@@ -42,32 +41,23 @@ impl<R: Send> Interceptor<R> for AuditLog {
 /// A bean-reading interceptor: writes an audit row using the database pool.
 ///
 /// Unlike `AuditLog` (which never touches beans), this one holds the pool as
-/// a field. The attribute names the *spec* type (`DbAuditLog`); its
-/// [`DecoratorSpec`] impl declares the pool in `Deps` (checked at
-/// `register_controller()` — a missing bean is a compile error) and pulls it
-/// **once at wiring time** into the built product. No per-request lookups.
+/// a field. `#[derive(DecoratorBean)]` generates the spec plumbing: the pool
+/// is declared as a dep (checked at `register_controller()` — a missing bean
+/// is a compile error) and pulled **once at wiring time** into the built
+/// interceptor. No per-request lookups.
 ///
 /// # Usage
 /// ```ignore
-/// #[intercept(DbAuditLog)]
+/// #[intercept(DbAuditLog::spec())]
 /// async fn create(&self, body: Json<User>) -> Result<Json<User>, HttpError> { ... }
 /// ```
-pub struct DbAuditLog;
-
-pub struct DbAuditLogReady {
+#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject]
     pool: sqlx::SqlitePool,
 }
 
-impl DecoratorSpec for DbAuditLog {
-    type Product = DbAuditLogReady;
-    type Deps = r2e::r2e_core::type_list::TCons<sqlx::SqlitePool, r2e::r2e_core::type_list::TNil>;
-
-    fn build(self, ctx: &BeanContext) -> DbAuditLogReady {
-        DbAuditLogReady { pool: ctx.get() }
-    }
-}
-
-impl<R: Send> Interceptor<R> for DbAuditLogReady {
+impl<R: Send> Interceptor<R> for DbAuditLog {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
@@ -196,7 +186,7 @@ impl UserController {
 
     // Demo: stateful interceptor that accesses ctx.state (writes audit log to DB)
     #[get("/db-audited")]
-    #[intercept(DbAuditLog)]
+    #[intercept(DbAuditLog::spec())]
     async fn db_audited_list(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
         Json(users)

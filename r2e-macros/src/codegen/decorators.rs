@@ -2,21 +2,25 @@
 //!
 //! Every `#[guard(...)]` / `#[pre_guard(...)]` / `#[intercept(...)]` site is
 //! built **once**, inside `Controller::routes(state, core, ctx)`, through
-//! `<Spec as DecoratorSpec>::build(expr, ctx)` — never per request. The spec
+//! `build_decorator::<_, Spec>(expr, ctx)` — never per request. The spec
 //! type is the expression's **leading type path**:
 //!
 //! | attribute expression               | spec type    |
 //! |------------------------------------|--------------|
 //! | `MyGuard`                          | `MyGuard`    |
+//! | `MyGuard("key")`                   | `MyGuard`    |
 //! | `RolesGuard { .. }`                | `RolesGuard` |
 //! | `RateLimit::per_user(5, 60)`       | `RateLimit`  |
 //! | `Cache::ttl(30).group("x")`        | `Cache`      |
 //! | `MyGuard = make_guard()` (escape)  | `MyGuard`    |
 //!
-//! The expression must evaluate to the spec type (builder chains return
-//! `Self`). For each method, a hidden struct holds the built products; one
-//! `Arc` of it is captured by the handler closure. The specs' `Deps` are
-//! folded into `Controller::Deps`, so a missing bean is a compile error at
+//! The expression must evaluate either to the spec type itself (builder
+//! chains return `Self`) or — for `#[derive(DecoratorBean)]` constructors
+//! like `DbAuditLog::spec(..)` — to a companion spec with the same
+//! `Product`/`Deps`; `build_decorator` enforces the equivalence. For each
+//! method, a hidden struct holds the built products; one `Arc` of it is
+//! captured by the handler closure. The specs' `Deps` are folded into
+//! `Controller::Deps`, so a missing bean is a compile error at
 //! `register_controller()`.
 
 use proc_macro2::TokenStream;
@@ -55,7 +59,13 @@ pub(super) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
         // `RolesGuard { .. }` — struct literal.
         syn::Expr::Struct(s) => Some(s.path.clone()),
         // `RateLimit::per_user(5, 60)` — associated constructor: drop the
-        // final (function) segment.
+        // final (function) segment. `MyGuard("key")` — a single-segment
+        // uppercase call is treated as a tuple-struct constructor: the path
+        // IS the spec type. The uppercase filter below rejects lowercase
+        // free functions; an uppercase-named non-type (free fn, glob-
+        // imported enum-variant ctor) slips through and errors downstream
+        // at the `DecoratorSpec` bound instead of the "name it explicitly"
+        // message.
         syn::Expr::Call(call) => match call.func.as_ref() {
             syn::Expr::Path(p) if p.path.segments.len() >= 2 => {
                 let segments: Vec<syn::PathSegment> =
@@ -65,6 +75,7 @@ pub(super) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
                     segments: segments[..segments.len() - 1].iter().cloned().collect(),
                 })
             }
+            syn::Expr::Path(p) => Some(p.path.clone()),
             _ => None,
         },
         _ => None,
@@ -172,7 +183,7 @@ pub(super) fn generate_deco_items(
             #field: <#spec_ty as #krate::DecoratorSpec>::Product
         });
         field_inits.push(quote! {
-            #field: <#spec_ty as #krate::DecoratorSpec>::build(#value_expr, __ctx)
+            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
         });
     }
 
@@ -235,7 +246,7 @@ pub(super) fn generate_predeco_items(
             #field: <#spec_ty as #krate::DecoratorSpec>::Product
         });
         field_inits.push(quote! {
-            #field: <#spec_ty as #krate::DecoratorSpec>::build(#value_expr, __ctx)
+            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
         });
     }
 

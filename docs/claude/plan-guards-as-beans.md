@@ -12,7 +12,7 @@ Status: **COMPLETE** (6a spike → 6b core traits → 6c codegen → 6d built-in
   type with no `SelfBuilt` impl cannot gain one elsewhere (orphan rules).
   Self-contained decorators opt in with one line
   (`impl SelfBuilt for MyGuard {}`); no derive strictly needed (a
-  `#[derive(GuardBean)]` for dep-carrying user guards remains a 6b
+  `#[derive(DecoratorBean)]` for dep-carrying user guards remains a 6b
   nice-to-have). Caveat: a type cannot be both `SelfBuilt` and a manual
   spec — the compiler rejects the ambiguity, which is what we want.
 - **(d2) Decorators build from the `BeanContext`, not the state.** Keeps
@@ -148,13 +148,14 @@ pub trait DecoratorSpec: Sized {
   `build` moves the registry into the guard. `Cache`/`CacheInvalidate` gain
   `Deps = <the CacheStore bean>` and drop the `cache_backend()` global.
 - **User guards with deps**: symmetric with controllers via a field-attr
-  derive:
+  derive — **shipped post-Phase-6 as `#[derive(DecoratorBean)]`**
+  (di-next-steps item 4; site syntax `AuditGuard::spec(...)`):
 
   ```rust
-  #[derive(GuardBean)]           // generates the DecoratorSpec impl:
+  #[derive(DecoratorBean)]       // generates the DecoratorSpec plumbing:
   pub struct AuditGuard {        //   Deps from #[inject] fields,
-      #[inject] pool: PgPool,    //   build via ctx.get::<PgPool>()
-  }
+      #[inject] pool: PgPool,    //   build via ctx.get::<PgPool>(),
+  }                              //   hidden companion spec + ::spec() ctor
   ```
 
 ### 3. Syntax — unchanged in the common case
@@ -248,7 +249,7 @@ Consequences in `codegen/handlers.rs`:
 | `r2e-openfga` | `FgaGuard` spec with FGA client in `Deps` |
 | `r2e-security` | `RolesGuard`: `DecoratorSpec` with `Product = Self` |
 | `r2e-utils` | All interceptors: `Product = Self`; `Cache`/`CacheInvalidate` gain store dep |
-| `example-app`, CLI templates, `r2e-test`, book | Custom guards move `state.bean::<T>()` → injected fields + `#[derive(GuardBean)]` |
+| `example-app`, CLI templates, `r2e-test`, book | Custom guards move `state.bean::<T>()` → injected fields + `#[derive(DecoratorBean)]` |
 
 ## Known gaps (recorded during 6b/6c implementation)
 

@@ -83,36 +83,21 @@ async fn list(&self) -> Json<Vec<Item>> { /* ... */ }
 
 Guards are built **once, at controller registration**, from the resolved bean
 graph — never per request, and there is no state access at request time. A guard
-that needs a database pool (or any bean) holds it as a **field**, and a separate
-**spec** type — named by the `#[guard(...)]` attribute expression — pulls the
-beans out of the `BeanContext` in `build`. The bean
-deps are declared at the type level in `Deps`, so a missing bean is a **compile
-error at `register_controller()`** naming the type — exactly like a missing
-`#[inject]` field.
+that needs a database pool (or any bean) holds it as a **field**, marked
+`#[inject]`, and derives `DecoratorBean`. The bean deps are declared at the type
+level, so a missing bean is a **compile error at `register_controller()`**
+naming the type — exactly like a missing controller `#[inject]` field.
 
 ```rust
-use r2e::prelude::*; // Guard, GuardContext, Identity, DecoratorSpec, HttpError, IntoResponse, Response
-use r2e::beans::BeanContext;
-use r2e::type_list::{TCons, TNil};
+use r2e::prelude::*; // Guard, GuardContext, Identity, DecoratorBean, HttpError, IntoResponse, Response
 
-// Spec: the value the attribute expression evaluates to. Reads no request data.
-struct ActiveUserGuard;
-
-// Product: the finished guard, holding the resolved beans as fields.
-struct ActiveUserGuardReady {
-    pool: SqlitePool,
+#[derive(DecoratorBean)]
+struct ActiveUserGuard {
+    #[inject]
+    pool: SqlitePool,   // resolved from the bean graph at registration
 }
 
-impl DecoratorSpec for ActiveUserGuard {
-    type Product = ActiveUserGuardReady;
-    type Deps = TCons<SqlitePool, TNil>;   // beans build() pulls — compile-checked
-
-    fn build(self, ctx: &BeanContext) -> ActiveUserGuardReady {
-        ActiveUserGuardReady { pool: ctx.get::<SqlitePool>() }
-    }
-}
-
-impl<I: Identity> Guard<I> for ActiveUserGuardReady {
+impl<I: Identity> Guard<I> for ActiveUserGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
@@ -137,19 +122,43 @@ impl<I: Identity> Guard<I> for ActiveUserGuardReady {
 }
 ```
 
-Apply the spec by its type; the macro builds the product once and captures it in
-the route closure:
+Apply it with the generated `spec()` constructor; the macro builds the guard
+once and captures it in the route closure:
 
 ```rust
 #[get("/me")]
-#[guard(ActiveUserGuard)]
+#[guard(ActiveUserGuard::spec())]
 async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<User> { /* ... */ }
 ```
 
-> If your guard is self-contained (no beans), skip the spec/product split and
-> just `impl SelfBuilt for MyGuard {}` as shown above. For a free function or a
+Fields **without** `#[inject]` are configuration, passed to `spec(...)` in
+declaration order at the attribute site — and `#[config("key")]` /
+`#[config_section(prefix = "...")]` fields resolve from `R2eConfig`:
+
+```rust
+#[derive(DecoratorBean)]
+struct QuotaGuard {
+    #[inject]
+    registry: QuotaRegistry,
+    #[config("quota.window_secs")]
+    window: u64,
+    max: u64,               // plain field → spec(max)
+}
+
+#[get("/")]
+#[guard(QuotaGuard::spec(100))]   // max = 100 for this route
+async fn list(&self) -> Json<Vec<Item>> { /* ... */ }
+```
+
+> If your guard is self-contained (no beans), skip the derive and just
+> `impl SelfBuilt for MyGuard {}` as shown above — tuple-struct config works
+> directly: `#[guard(RequireApiKey("x-api-key"))]`. For a free function or a
 > local variable that produces the guard, use the escape hatch
 > `#[guard(MyGuard = make_guard())]`, where the leading path names the spec type.
+>
+> Under the hood the derive generates a `DecoratorSpec` impl — the low-level
+> contract (`Product` + `Deps` + `build(ctx)`) you can still implement by hand
+> on a config type when the derive doesn't fit (generics, custom construction).
 
 ## Guard context
 

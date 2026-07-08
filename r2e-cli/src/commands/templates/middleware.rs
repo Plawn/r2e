@@ -6,8 +6,9 @@ use std::future::Future;
 /// Custom interceptor: {name}
 ///
 /// Self-contained (no bean deps) — the `SelfBuilt` opt-in makes it usable in
-/// `#[intercept({name})]`. To read beans instead, hold them as fields and
-/// implement `DecoratorSpec` on a config type (see the r2e book).
+/// `#[intercept({name})]`. To read beans instead, replace `SelfBuilt` with
+/// `#[derive(DecoratorBean)]`, mark the bean fields `#[inject]`, and apply
+/// with `#[intercept({name}::spec(...))]` (see the r2e book).
 pub struct {name};
 
 impl SelfBuilt for {name} {{}}

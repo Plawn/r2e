@@ -174,10 +174,28 @@ async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 
 The `#[intercept(...)]` attribute's leading type path names the decorator spec.
 For a self-contained interceptor, that type is the interceptor itself
-(`impl SelfBuilt`). An interceptor that needs beans holds them as fields and
-implements `DecoratorSpec` on a config type that pulls the beans in `build` —
-the same spec/product pattern used by `Cache` (see
-[Custom Guards](./custom-guards.md#guards-that-read-beans)).
+(`impl SelfBuilt`). An interceptor that needs beans holds them as `#[inject]`
+fields and derives `DecoratorBean` — plain fields become config passed to the
+generated `spec(...)` constructor at the attribute site:
+
+```rust
+#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject]
+    pool: SqlitePool,     // from the bean graph, compile-checked
+    prefix: String,       // config, set at the site
+}
+
+impl<R: Send> Interceptor<R> for DbAuditLog { /* uses self.pool */ }
+
+#[get("/")]
+#[intercept(DbAuditLog::spec("api".into()))]
+async fn list(&self) -> Json<Vec<User>> { /* ... */ }
+```
+
+See [Custom Guards](./custom-guards.md#guards-that-read-beans) for the full
+field-attribute reference (`#[inject]`, `#[config]`, plain fields) and the
+low-level `DecoratorSpec` contract the derive expands to.
 
 ### `InterceptorContext`
 

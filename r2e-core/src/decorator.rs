@@ -89,3 +89,22 @@ impl<D: SelfBuilt + Send + Sync + 'static> DecoratorSpec for D {
         self
     }
 }
+
+/// Build one decorator site: `spec` is the attribute expression's value,
+/// `Named` the spec type extracted from its leading path. `#[routes]` emits
+/// every site through this function.
+///
+/// For hand-written specs the two coincide (`S = Named`). With
+/// `#[derive(DecoratorBean)]` they split — the expression
+/// (`DbAuditLog::spec(..)`) evaluates to a hidden config type while the
+/// leading path names the product — and the equality bounds keep the split
+/// honest: whatever the expression builds must have exactly the `Product`
+/// and `Deps` declared by the named type, so the controller's dep fold
+/// (which uses `Named::Deps`) always covers what `build` pulls.
+pub fn build_decorator<S, Named>(spec: S, ctx: &BeanContext) -> Named::Product
+where
+    Named: DecoratorSpec,
+    S: DecoratorSpec<Product = Named::Product, Deps = Named::Deps>,
+{
+    spec.build(ctx)
+}

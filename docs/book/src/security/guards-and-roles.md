@@ -100,6 +100,9 @@ enum ProjectRole {
 
 // Spec: the value the `#[guard(...)]` expression evaluates to. Holds config
 // (the path-param name + minimum role); reads the AuthzService bean in build().
+// This one is hand-written (instead of `#[derive(DecoratorBean)]`) because the
+// domain constructors (`viewer(path::pid)`, …) ARE the config surface — the
+// derive's generated `spec(...)` would lose that vocabulary.
 struct ProjectGuard {
     param: &'static str,
     min_role: ProjectRole,
@@ -251,31 +254,17 @@ Pre-auth guards run **before** JWT extraction, avoiding wasted token validation.
 
 Guards can perform async operations like database lookups:
 
-A guard that needs a database pool holds it as a field. The spec pulls the bean
-from the graph once, at registration:
+A guard that needs a database pool holds it as an `#[inject]` field;
+`#[derive(DecoratorBean)]` pulls the bean from the graph once, at registration:
 
 ```rust
-use r2e::beans::BeanContext;
-use r2e::type_list::{TCons, TNil};
-
-// Spec (named by the attribute) — reads the pool bean in build().
-struct DatabaseGuard;
-
-// Product — holds the resolved pool.
-struct DatabaseGuardReady {
+#[derive(DecoratorBean)]
+struct DatabaseGuard {
+    #[inject]
     pool: sqlx::SqlitePool,
 }
 
-impl DecoratorSpec for DatabaseGuard {
-    type Product = DatabaseGuardReady;
-    type Deps = TCons<sqlx::SqlitePool, TNil>;
-
-    fn build(self, ctx: &BeanContext) -> DatabaseGuardReady {
-        DatabaseGuardReady { pool: ctx.get::<sqlx::SqlitePool>() }
-    }
-}
-
-impl<I: Identity> Guard<I> for DatabaseGuardReady {
+impl<I: Identity> Guard<I> for DatabaseGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
@@ -297,6 +286,9 @@ impl<I: Identity> Guard<I> for DatabaseGuardReady {
     }
 }
 ```
+
+Applied with `#[guard(DatabaseGuard::spec())]` — the generated constructor
+takes the non-injected fields (none here).
 
 > The database query still runs **per request** inside `check`. What changed is
 > that the pool is resolved **once** at registration and held as a field — there

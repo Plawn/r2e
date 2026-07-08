@@ -17,14 +17,20 @@ expression must evaluate to it:
 | Attribute expression | Spec type |
 |---|---|
 | `#[guard(MyGuard)]` | `MyGuard` |
+| `#[guard(MyGuard("key"))]` | `MyGuard` (single-segment uppercase call = tuple-struct ctor) |
 | `#[roles("admin")]` → `RolesGuard { .. }` | `RolesGuard` |
 | `#[guard(RateLimit::per_user(5, 60))]` | `RateLimit` |
 | `#[intercept(Cache::ttl(30).group("x"))]` | `Cache` (builder chains return `Self`) |
+| `#[intercept(DbAudit::spec("api"))]` | `DbAudit` (`#[derive(DecoratorBean)]` constructor) |
 | `#[guard(MyGuard = make_guard())]` | `MyGuard` (escape hatch for free fns/vars) |
 
-`#[routes]` emits `<Spec as DecoratorSpec>::build(expr, ctx)` per site inside
+`#[routes]` emits `build_decorator::<_, Spec>(expr, ctx)` per site inside
 `Controller::routes(state, core, ctx)`, and folds `<Spec as
-DecoratorSpec>::Deps` into `Controller::Deps`.
+DecoratorSpec>::Deps` into `Controller::Deps`. `build_decorator`
+(`r2e-core/src/decorator.rs`) bounds the expression's own spec type to the
+named one with `Product`/`Deps` equality — for hand-written specs the two
+coincide; `#[derive(DecoratorBean)]` splits them (see below) and the bounds
+keep the dep fold exact.
 
 ```rust
 pub trait DecoratorSpec: Sized {
@@ -34,14 +40,38 @@ pub trait DecoratorSpec: Sized {
 }
 ```
 
-Two ways to satisfy it:
+Three ways to satisfy it:
 
 - **Self-contained** (no bean deps — the expression already is the finished
   decorator): one line, `impl SelfBuilt for MyGuard {}` (blanket impl gives
   `Product = Self, Deps = TNil`). The blanket coexists with downstream
   config-type impls (negative coherence; a type must not be both).
-- **Bean-reading**: the expression evaluates to a pure config value whose
-  impl names the product and pulls beans in `build`:
+- **Bean-reading — `#[derive(DecoratorBean)]`** (the normal route): one
+  struct, fields split by attribute; the derive generates the spec plumbing:
+
+```rust
+#[derive(DecoratorBean)]
+pub struct DbAudit {
+    #[inject] pool: PgPool,          // from the bean graph (compile-checked)
+    #[config("audit.channel")] channel: String, // from R2eConfig
+    tag: &'static str,               // plain = config, set at the site
+}
+
+impl<R: Send> Interceptor<R> for DbAudit { /* uses self.pool */ }
+
+// at the site — plain fields in declaration order:
+#[intercept(DbAudit::spec("api"))]
+```
+
+  Generated: a hidden companion spec `__R2eSpec_DbAudit` (plain fields)
+  returned by `DbAudit::spec(...)`, its real `DecoratorSpec` impl, and an
+  identity `DecoratorSpec` impl on `DbAudit` itself carrying the same `Deps`
+  (what the controller fold reads, and what makes the
+  `#[guard(DbAudit = prebuilt)]` escape hatch work). Not supported: enums,
+  tuple structs, generics.
+- **Bean-reading — manual spec** (low-level; what the derive expands to):
+  the expression evaluates to a pure config value whose impl names the
+  product and pulls beans in `build`:
 
 ```rust
 pub struct DbAudit;                       // spec (named by the attribute)
@@ -109,9 +139,12 @@ the middleware closure). SSE and WS endpoints support `#[pre_guard]` too.
 - Post-auth: implement `Guard<I: Identity>` (async via RPITIT), apply with
   `#[guard(MyGuard)]`.
 - Pre-auth: implement `PreAuthGuard`, apply with `#[pre_guard(MyPreGuard)]`.
-- No bean deps → add `impl SelfBuilt for MyGuard {}`.
-- Bean deps → hold them as fields and implement `DecoratorSpec` on the
-  config type (see the contract above). Never look beans up at request time.
+- No bean deps → add `impl SelfBuilt for MyGuard {}`. Tuple-struct config
+  works directly: `#[guard(RequireApiKey("x-api-key"))]`.
+- Bean deps → `#[derive(DecoratorBean)]` with `#[inject]` fields, applied
+  with `#[guard(MyGuard::spec(...))]`; hand-write `DecoratorSpec` on a
+  config type only when the derive doesn't fit (see the contract above).
+  Never look beans up at request time.
 
 ## Interceptors
 
@@ -211,6 +244,8 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 #[pre_guard(PreRateLimit::per_ip(5, 60))]    // per-IP rate limit (pre-auth)
 #[guard(RateLimit::per_user(5, 60))]         // per-user rate limit (post-auth, requires identity)
 #[guard(MyCustomGuard)]                      // custom post-auth guard (SelfBuilt or spec)
+#[guard(RequireApiKey("x-api-key"))]         // SelfBuilt tuple-struct guard with config
+#[guard(MyBeanGuard::spec(5))]               // #[derive(DecoratorBean)] guard (plain fields as args)
 #[guard(MyGuard = make_guard())]             // escape hatch: explicit spec type
 #[pre_guard(MyPreAuthGuard)]                 // custom pre-auth guard (runs before JWT)
 #[intercept(MyInterceptor)]                  // user-defined decorator

@@ -7,8 +7,8 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ (done) → (3 + 4 as one DX pass) → 2 → 5. Items 6/8/9 are
-opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
+~~1~~ ~~3~~ ~~4~~ (done) → 2 → 5. Items 6/8/9 are opportunistic. Item 7 is
+**rejected** (user decision — do not re-propose).
 
 ---
 
@@ -50,45 +50,53 @@ selection deterministic. Do not silently re-add blanket bridges to
 
 **Origin:** `di-builder-refactor.md` § "Phase 4 tech debt", item 1.
 
-## 3. DX: spec-type inference for single-segment tuple-struct constructors
+## 3. ~~DX: spec-type inference for single-segment tuple-struct ctors~~ — ✅ DONE (2026-07-08)
 
-**Problem.** `spec_type_of` (`r2e-macros/src/codegen/decorators.rs`) rejects
-`#[guard(MyGuard(config))]`: for `Expr::Call` it requires ≥2 path segments
-(it drops the last segment, the associated-fn name). A single-segment call
-on an uppercase path is a tuple-struct constructor — unambiguously the type
-itself — but today it forces the `MyGuard = MyGuard(config)` escape hatch.
+`spec_type_of` (`r2e-macros/src/codegen/decorators.rs`) now accepts a
+single-segment uppercase call as a tuple-struct constructor:
+`#[guard(RequireApiKey("x-api-key"))]` infers spec type `RequireApiKey`
+directly (lowercase single-segment calls — free functions — still require
+the `MyGuard = expr` escape hatch). Compile-pass test:
+`guard_tuple_struct_ctor.rs`; runtime coverage in
+`r2e-core/tests/decorator_bean.rs`.
 
-**Direction.** In the `Expr::Call` arm: if the func path has exactly one
-segment AND it starts uppercase, use the path as-is as the spec type.
-Few-line fix + a compile-pass test.
+## 4. ~~`#[derive(DecoratorBean)]` — kill the spec/product boilerplate~~ — ✅ DONE (2026-07-08)
 
-**Origin:** Phase 6 review gate (flagged as intentional narrowing, worth
-lifting).
-
-## 4. `#[derive(GuardBean)]` — kill the spec/product boilerplate
-
-**Problem.** A user guard with bean deps hand-writes two types (config spec
-+ product) plus a manual `DecoratorSpec` impl (see `DbAuditLog` /
-`DbAuditLogReady` in example-app). Self-contained guards are already
-one-line (`impl SelfBuilt for X {}`), but bean-reading ones are verbose.
-
-**Direction.** A derive symmetric with controllers:
+Named `DecoratorBean` (user decision — one derive serves guards AND
+interceptors; the underlying trait is `DecoratorSpec`). Site syntax (user
+decision): a generated associated constructor, `Name::spec(<plain fields in
+declaration order>)`, returning a **hidden** companion spec
+`__R2eSpec_<Name>` — nothing leaks into the user's API surface.
 
 ```rust
-#[derive(GuardBean)]                 // or DecoratorBean, naming TBD
-struct AuditGuard {
-    #[inject] pool: PgPool,
-    max: u64,                        // plain fields = config, set by ctor
+#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject] pool: SqlitePool,             // bean graph (compile-checked)
+    #[config("audit.channel")] chan: String,// R2eConfig (adds R2eConfig dep)
+    tag: &'static str,                      // plain = config, ctor arg
 }
+// site: #[intercept(DbAuditLog::spec("t1"))]
 ```
 
-generating the hidden config type (non-`#[inject]` fields + constructors?)
-or — simpler first cut — generating `DecoratorSpec` for a companion
-builder. Design question to settle first: how the *expression* provides the
-config fields while `#[inject]` fields come from the graph. Planned as a 6b
-nice-to-have, never implemented.
+Mechanics (`r2e-macros/src/decorator_bean_derive.rs`): the derive emits the
+hidden spec (plain fields), `Name::spec(...)`, the real `DecoratorSpec` impl
+on the spec (`Product = Name`), and an **identity `DecoratorSpec` impl on
+`Name` itself** carrying the same `Deps` — that impl is what the
+controller's dep fold reads (`spec_type_of` extracts `Name` from
+`Name::spec(...)`) and what keeps the `#[guard(Name = prebuilt)]` escape
+hatch working. The codegen now emits sites through
+`r2e_core::decorator::build_decorator::<S, Named>` (`S` inferred from the
+expression, `Named` from the leading path) whose
+`S: DecoratorSpec<Product = Named::Product, Deps = Named::Deps>` equality
+bounds guarantee the fold covers exactly what `build` pulls — the
+compile-check invariant survives the spec/expression split. Unsupported
+(clear errors): enums, tuple structs, generics.
 
-**Origin:** `plan-guards-as-beans.md` § 2.
+Tests: `r2e-core/tests/decorator_bean.rs` (e2e: inject+config+plain guard &
+interceptor through a real controller), compile-fail
+`decorator_bean_missing_dep.rs` (same `Contains` diagnostic as hand-written
+specs) + `decorator_bean_unsupported.rs`. example-app's
+`DbAuditLog`/`DbAuditLogReady` pair collapsed to one derived struct.
 
 ## 5. Wiring-time `BeanContext` for scheduled/gRPC interceptors
 
