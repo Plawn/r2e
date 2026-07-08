@@ -25,7 +25,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for StreamGuard {
     }
 }
 
-#[controller(path = "/events", state = AppState)]
+#[controller(path = "/events")]
 pub struct EventsController;
 
 #[routes]

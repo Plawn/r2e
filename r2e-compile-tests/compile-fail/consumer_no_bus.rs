@@ -9,7 +9,7 @@ pub struct AppState {
 #[derive(Debug, Clone)]
 pub struct MyEvent;
 
-#[controller(state = AppState)]
+#[controller]
 pub struct MyConsumer {
     #[inject]
     event_bus: LocalEventBus,

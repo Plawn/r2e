@@ -47,20 +47,23 @@ fn generate_impl_block(def: &GrpcRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate the wrapper struct that holds the app state.
+/// Generate the wrapper struct that holds the controller core + bean context.
 ///
-/// The wrapper is what actually implements the tonic trait. It constructs
-/// the controller from state via `StatefulConstruct` for each request.
+/// The wrapper is what actually implements the tonic trait. The controller
+/// core is built ONCE from the bean graph (`ContextConstruct`) when the
+/// service is registered; requests share it through the `Arc`. The context is
+/// retained for guards/interceptors that look up beans dynamically.
 fn generate_wrapper_struct(def: &GrpcRoutesImplDef) -> TokenStream {
     let controller_name = &def.controller_name;
     let wrapper_name = quote::format_ident!("__R2eGrpc{}", controller_name);
-    let meta_mod = quote::format_ident!("__r2e_meta_{}", controller_name);
+    let krate = crate::crate_path::r2e_core_path();
 
     quote! {
         #[doc(hidden)]
         #[derive(Clone)]
         pub struct #wrapper_name {
-            state: #meta_mod::State,
+            core: ::std::sync::Arc<#controller_name>,
+            ctx: ::std::sync::Arc<#krate::beans::BeanContext>,
         }
     }
 }

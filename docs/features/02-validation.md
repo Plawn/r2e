@@ -51,7 +51,7 @@ Use `Json<T>` as usual — validation is automatic:
 ```rust
 use r2e::prelude::*;
 
-#[controller(state = Services)]
+#[controller(path = "/")]
 pub struct UserController {
     #[inject]
     user_service: UserService,

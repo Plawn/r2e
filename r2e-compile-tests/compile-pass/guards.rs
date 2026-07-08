@@ -138,7 +138,7 @@ impl<S: Send + Sync> Guard<S, AuthenticatedUser> for SbomGuard {
     }
 }
 
-#[controller(path = "/guarded", state = AppState)]
+#[controller(path = "/guarded")]
 pub struct GuardedController;
 
 #[routes]
@@ -172,7 +172,7 @@ impl GuardedController {
     }
 }
 
-#[controller(path = "/projects/{pid}", state = AppState)]
+#[controller(path = "/projects/{pid}")]
 pub struct SbomController;
 
 #[routes]

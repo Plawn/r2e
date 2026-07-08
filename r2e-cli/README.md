@@ -64,8 +64,7 @@ my-app/
   proto/
     greeter.proto               # Sample gRPC service definition
   src/
-    main.rs                     # #[tokio::main] with AppBuilder + .serve()
-    state.rs                    # AppState with BeanState derive
+    main.rs                     # #[r2e::main] with AppBuilder + producers + .serve()
     controllers/
       mod.rs
       hello.rs                  # Hello world controller
@@ -80,7 +79,6 @@ my-app/
   application.yaml
   src/
     main.rs
-    state.rs
     controllers/
       mod.rs
       hello.rs
@@ -99,7 +97,7 @@ r2e generate controller UserController
 ```
 
 Creates `src/controllers/user_controller.rs` with:
-- `#[controller(state = AppState)]` struct
+- `#[controller]` struct (no `state = ...`; `#[inject]` fields resolve from the bean graph by type)
 - `#[routes]` impl block with a placeholder `#[get]` endpoint
 
 Automatically appends `pub mod user_controller;` to `src/controllers/mod.rs` (if it exists).

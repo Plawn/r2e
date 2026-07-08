@@ -5,12 +5,10 @@ use sqlx::SqlitePool;
 mod controllers;
 mod models;
 mod services;
-mod state;
 
 use controllers::chat_controller::ChatController;
 use controllers::consumer::MessagePersistenceConsumer;
 use controllers::history_controller::HistoryController;
-use state::AppState;
 
 #[r2e::main]
 async fn main() {
@@ -37,7 +35,7 @@ async fn main() {
         .provide(ws_rooms)
         .provide(pool)
         .register::<services::ChatService>()
-        .build_typed_state::<AppState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

@@ -33,7 +33,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for StreamGuard {
     }
 }
 
-#[controller(path = "/projects/{pid}", state = AppState)]
+#[controller(path = "/projects/{pid}")]
 pub struct RealtimeController;
 
 #[routes]

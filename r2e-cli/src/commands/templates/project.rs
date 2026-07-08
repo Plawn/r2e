@@ -100,102 +100,111 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
         imports.push_str("use r2e::r2e_scheduler::Scheduler;\n");
     }
     if opts.grpc {
-        imports.push_str("use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};\n");
+        imports.push_str("use r2e::r2e_grpc::GrpcServer;\n");
+    }
+    if opts.auth {
+        imports.push_str("use std::sync::Arc;\n");
+        imports
+            .push_str("use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};\n");
     }
 
-    imports.push_str("\nmod controllers;\nmod state;\n\n");
+    imports.push_str("\nmod controllers;\n\n");
     imports.push_str("use controllers::hello::HelloController;\n");
-    imports.push_str("use state::AppState;\n");
 
-    let mut builder_lines = Vec::new();
-    builder_lines.push("    let app = AppBuilder::new()".to_string());
+    // Producers — construct config-driven beans that feed the DI graph.
+    // Each `#[producer] async fn foo(...)` generates a `Foo` bean type
+    // registered below with `.register::<Foo>()`.
+    let mut producers = String::new();
+    if let Some(db) = &opts.db {
+        let pool_ty = match db {
+            DbKind::Sqlite => "sqlx::SqlitePool",
+            DbKind::Postgres => "sqlx::PgPool",
+            DbKind::Mysql => "sqlx::MySqlPool",
+        };
+        producers.push_str(&format!(
+            r#"
+#[producer]
+async fn create_pool(#[config("database.url")] url: String) -> {pool_ty} {{
+    {pool_ty}::connect(&url)
+        .await
+        .expect("Failed to connect to the database")
+}}
+"#
+        ));
+    }
+    if opts.auth {
+        producers.push_str(
+            r#"
+#[producer]
+async fn jwt_validator(
+    #[config("security.jwt.jwks-url")] jwks_url: String,
+    #[config("security.jwt.issuer")] issuer: String,
+    #[config("security.jwt.audience")] audience: String,
+) -> Arc<JwtClaimsValidator> {
+    let config = SecurityConfig::new(jwks_url, issuer, audience);
+    let jwks = Arc::new(
+        JwksCache::new(config.clone())
+            .await
+            .expect("Failed to initialize JWKS cache"),
+    );
+    Arc::new(JwtClaimsValidator::new(jwks, config))
+}
+"#,
+        );
+    }
+
+    // Builder chain. Beans are `.provide()`-d or `.register()`-ed before
+    // `.build_state().await`, which infers the application state from the
+    // provision list. Plugins and controllers are wired afterward.
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("    AppBuilder::new()".to_string());
 
     if opts.scheduler {
-        builder_lines.push("        .plugin(Scheduler)".to_string());
+        lines.push("        .plugin(Scheduler)".to_string());
     }
     if opts.grpc {
-        builder_lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
+        lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
+    }
+    if opts.db.is_some() || opts.auth {
+        // Config-driven producers need the runtime config loaded first.
+        lines.push("        .load_config::<()>()".to_string());
+    }
+    if opts.events {
+        lines.push("        .provide(LocalEventBus::new())".to_string());
+    }
+    if opts.db.is_some() {
+        lines.push("        .register::<CreatePool>()".to_string());
+    }
+    if opts.auth {
+        lines.push("        .register::<JwtValidator>()".to_string());
     }
 
-    // Close the NoState phase, then resolve the state via the zero-underscore
-    // `build_state!` façade.
-    if let Some(last) = builder_lines.last_mut() {
-        last.push(';');
-    }
-    builder_lines.push("".to_string());
-    builder_lines.push("    build_state!(app, AppState)".to_string());
-    builder_lines.push("        .await".to_string());
-    builder_lines.push("        .with(Health)".to_string());
-    builder_lines.push("        .with(Tracing)".to_string());
+    lines.push("        .build_state()".to_string());
+    lines.push("        .await".to_string());
+    lines.push("        .with(Health)".to_string());
+    lines.push("        .with(Tracing)".to_string());
 
     if opts.openapi {
-        builder_lines.push(
+        lines.push(
             "        .with(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
                 .to_string(),
         );
     }
 
-    builder_lines.push("        .register_controller::<HelloController>()".to_string());
-    builder_lines.push("        .serve(\"0.0.0.0:3000\")".to_string());
-    builder_lines.push("        .await".to_string());
-    builder_lines.push("        .unwrap();".to_string());
+    lines.push("        .register_controller::<HelloController>()".to_string());
+    lines.push("        .serve(\"0.0.0.0:3000\")".to_string());
+    lines.push("        .await".to_string());
+    lines.push("        .unwrap();".to_string());
 
-    let builder = builder_lines.join("\n");
+    let builder = lines.join("\n");
 
     format!(
-        r#"{imports}
+        r#"// #![recursion_limit = "512"]  // uncomment if you register more than ~127 beans
+{imports}{producers}
 #[r2e::main]
 async fn main() {{
 {builder}
 }}
-"#
-    )
-}
-
-pub fn state_rs(opts: &ProjectOptions) -> String {
-    let mut fields = String::new();
-    let mut extra_imports = String::new();
-
-    if opts.db.is_some() {
-        match &opts.db {
-            Some(DbKind::Sqlite) => {
-                extra_imports.push_str("use sqlx::SqlitePool;\n");
-                fields.push_str("    pub pool: SqlitePool,\n");
-            }
-            Some(DbKind::Postgres) => {
-                extra_imports.push_str("use sqlx::PgPool;\n");
-                fields.push_str("    pub pool: PgPool,\n");
-            }
-            Some(DbKind::Mysql) => {
-                extra_imports.push_str("use sqlx::MySqlPool;\n");
-                fields.push_str("    pub pool: MySqlPool,\n");
-            }
-            None => {}
-        }
-    }
-
-    if opts.events {
-        extra_imports.push_str("use r2e::r2e_events::LocalEventBus;\n");
-        fields.push_str("    pub event_bus: LocalEventBus,\n");
-    }
-
-    if opts.auth {
-        extra_imports.push_str("use r2e::r2e_security::JwtClaimsValidator;\n");
-        extra_imports.push_str("use std::sync::Arc;\n");
-        fields.push_str("    pub jwt_validator: Arc<JwtClaimsValidator>,\n");
-    }
-
-    let fields_block = if fields.is_empty() {
-        String::new()
-    } else {
-        format!("\n{}", fields)
-    };
-
-    format!(
-        r#"use r2e::prelude::*;
-{extra_imports}
-#[derive(Clone, BeanState)]
-pub struct AppState {{{fields_block}}}
 "#
     )
 }
@@ -238,10 +247,9 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
 }
 
 pub fn hello_controller() -> &'static str {
-    r#"use crate::state::AppState;
-use r2e::prelude::*;
+    r#"use r2e::prelude::*;
 
-#[controller(path = "/", state = AppState)]
+#[controller(path = "/")]
 pub struct HelloController;
 
 #[routes]

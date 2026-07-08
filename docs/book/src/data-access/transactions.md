@@ -36,17 +36,26 @@ async fn create(
 
 ### Requirements
 
-Your state must implement `HasPool`:
+`Tx` fetches its pool from the bean graph **by type** — its `acquire` calls
+`state.bean::<Pool<DB>>()`. So the only requirement is that the pool is a bean in
+your application. Provide it before `build_state()`:
 
 ```rust
-use r2e::r2e_data_sqlx::HasPool;
+let pool: Pool<Sqlite> = SqlitePool::connect(&url).await?;
 
-impl HasPool<Sqlite> for AppState {
-    fn pool(&self) -> &Pool<Sqlite> {
-        &self.pool
-    }
-}
+AppBuilder::new()
+    .provide(pool)                 // now `Pool<Sqlite>` is resolvable by type
+    // ...
+    .build_state()
+    .await
+    // ...
 ```
+
+There is no `HasPool` state impl to write — the state type is the inferred HList
+of provisions, and `#[managed] tx: &mut Tx<'_, Sqlite>` "just works" once
+`Pool<Sqlite>` has been provided. (If the pool is missing, `acquire` fails at
+request time with a message telling you to `.provide(pool)` before
+`build_state()`.)
 
 ## `#[transactional]` — Simple wrapping
 
@@ -76,19 +85,21 @@ Use `#[transactional(pool = "custom_pool")]` if your pool field has a different 
 Implement `ManagedResource<S>` for any type that needs acquire/release lifecycle:
 
 ```rust
-use r2e::prelude::*; // ManagedResource, ManagedErr
+use r2e::prelude::*; // ManagedResource, ManagedErr, BeanLookup
 
 pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
 
 impl<S, DB> ManagedResource<S> for Tx<'static, DB>
 where
     DB: Database,
-    S: HasPool<DB> + Send + Sync,
+    S: BeanLookup + Send + Sync,
 {
     type Error = ManagedErr<MyHttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let tx = state.pool().begin().await
+        let pool = state.bean::<Pool<DB>>()
+            .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
+        let tx = pool.begin().await
             .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         Ok(Tx(tx))
     }

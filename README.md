@@ -3,7 +3,7 @@
 An ergonomic enterprise framework for Rust, inspired by Quarkus. Declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on [Axum](https://github.com/tokio-rs/axum) via the `r2e-http` abstraction layer.
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]           user_service: UserService,
     #[inject(identity)] user: AuthenticatedUser,
@@ -30,7 +30,7 @@ impl UserController {
 ## Features
 
 - **Declarative controllers** — `#[controller]` + `#[routes]` generate Axum handlers with zero boilerplate
-- **Compile-time DI** — `#[inject]` for services, `#[inject(identity)]`/`#[inject(request)]` for request-scoped fields, `#[config("key")]` for configuration
+- **Compile-time DI** — `#[inject]` resolves beans from the graph by type, `#[inject(identity)]`/`#[inject(request)]` for request-scoped fields, `#[config("key")]` for configuration. The application state is an inferred HList of everything you `.provide(...)`/`.register::<T>()` — you never hand-write a state struct.
 - **JWT/OIDC security** — `AuthenticatedUser` extractor with JWKS caching, role-based access via `#[roles("admin")]`
 - **Guards** — Pre-auth and post-auth guards (`#[guard(...)]`, `#[pre_guard(...)]`) for custom authorization logic
 - **Interceptors** — AOP-style `#[intercept(...)]` for logging, timing, caching, and custom cross-cutting concerns
@@ -64,16 +64,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Define your state and service:
+Define a service. R2E has no hand-written state struct — every bean you register
+becomes part of an inferred HList state:
 
 ```rust
 use r2e::prelude::*;
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub config: R2eConfig,
-}
 
 #[derive(Clone)]
 pub struct UserService { /* ... */ }
@@ -86,12 +81,13 @@ impl UserService {
 }
 ```
 
-Define a controller:
+Define a controller (no `state = ...`; `#[inject]` fields resolve from the bean
+graph by type):
 
 ```rust
 use r2e::prelude::*;
 
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]
     user_service: UserService,
@@ -123,21 +119,32 @@ Wire it up in `main.rs`:
 ```rust
 #[r2e::main]
 async fn main() {
-    AppBuilder::new()
-        .load_config::<()>()
-        .register::<UserService>()
-        .build_state::<AppState, _>()
+    let app = AppBuilder::new()
+        .load_config::<()>()          // typed config; use with_config(...) for raw config
+        .register::<UserService>();   // register a #[bean]/#[producer]/AsyncBean type
+
+    app.build_state()                 // no type args; async — resolves the bean graph
         .await
-        .with(Health)           // GET /health
+        .with(Health)                 // GET /health
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling)
-        .register_controller::<UserController>()
+        .register_controller::<UserController>()   // after build_state
         .serve("0.0.0.0:3000")
         .await
         .unwrap();
 }
 ```
+
+`build_state()` takes **no type arguments** and is `async` — it resolves the
+bean dependency graph (topological sort) and materializes the inferred HList
+state. Use `try_build_state()` for the non-panicking `Result` variant. Provide
+pre-built values with `.provide(value)` and registered types with
+`.register::<T>()`; a `#[controller]`'s `#[inject]` fields are then satisfied by
+type — a missing bean is a **compile error naming the type**.
+
+Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the
+crate root; `r2e doctor` warns as the bean count approaches that threshold.
 
 ## Injection scopes
 
@@ -145,15 +152,15 @@ All injection is resolved at compile time — no runtime reflection, no trait ob
 
 | Attribute | Scope | Description |
 |-----------|-------|-------------|
-| `#[inject]` | App | Cloned from application state. Type must be `Clone + Send + Sync`. |
-| `#[inject(identity)]` | Request | Extracted via `FromRequestParts` (e.g. `AuthenticatedUser`). |
+| `#[inject]` | App | Resolved from the bean graph by type. Type must be `Clone + Send + Sync`. |
+| `#[inject(identity)]` | Request | Extracted via `FromRequestPartsVia` (e.g. `AuthenticatedUser`); plain axum `FromRequestParts` extractors bridge automatically. |
 | `#[config("key")]` | App | Resolved from `R2eConfig`. Supports `String`, `i64`, `f64`, `bool`, `Option<T>`. |
 
 `#[inject(identity)]` can be placed on struct fields (all endpoints require auth) or on handler parameters (mixed public/protected endpoints):
 
 ```rust
 // Mixed controller — some endpoints public, some protected
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -254,11 +261,14 @@ impl UserController {
 
 Custom interceptors:
 
+Interceptors are generic over the state `S`. Stay `S: Send + Sync` if you never
+touch state, or add `S: BeanLookup` to read a bean by type via `ctx.state.bean::<T>()`:
+
 ```rust
 pub struct AuditLog;
 
-impl<R: Send> Interceptor<R> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -286,7 +296,7 @@ pub struct UserCreatedEvent {
 self.event_bus.emit(UserCreatedEvent { user_id: 1, name: "Alice".into() }).await;
 
 // Declarative consumer
-#[controller(state = AppState)]
+#[controller]
 pub struct UserEventConsumer {
     #[inject] event_bus: EventBus,
 }
@@ -303,7 +313,7 @@ impl UserEventConsumer {
 ## Scheduling
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
 }
@@ -329,7 +339,8 @@ Register the scheduler plugin **before** `build_state()`:
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)
-    .build_state::<AppState, _>()
+    .register::<UserService>()
+    .build_state()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
@@ -355,6 +366,10 @@ async fn create(
 }
 ```
 
+`Tx` fetches the connection pool from the bean graph by type — just
+`.provide(pool)` your `sqlx::Pool<DB>` and `#[managed] tx: &mut Tx<'_, DB>` works.
+There is no `HasPool` trait to implement.
+
 ## Configuration
 
 YAML-based with environment variable overlay:
@@ -378,7 +393,8 @@ let config = R2eConfig::load().unwrap(); // loads application.yaml + .env + env 
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .register::<UserService>()
+    .build_state()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")
@@ -404,7 +420,10 @@ async fn test_list_users() {
     let jwt = TestJwt::new();
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_state(test_state(&jwt))
+            .provide(std::sync::Arc::new(jwt.claims_validator()))  // Arc<JwtClaimsValidator> bean
+            .register::<UserService>()
+            .build_state()
+            .await
             .with(Health)
             .with(ErrorHandling)
             .register_controller::<UserController>(),
@@ -462,7 +481,7 @@ r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
 r2e-events        In-process typed EventBus with pub/sub
 r2e-scheduler     Background task scheduling (interval, cron)
 r2e-data          Database: Entity, Repository, QueryBuilder, Pageable/Page
-r2e-data-sqlx     SQLx backend: SqlxRepository, Tx, HasPool (sqlite/postgres/mysql)
+r2e-data-sqlx     SQLx backend: SqlxRepository, Tx (sqlite/postgres/mysql)
 r2e-data-diesel   Diesel backend (skeleton): DieselRepository (sqlite/postgres/mysql)
 r2e-cache         TTL cache with pluggable backends
 r2e-rate-limit    Token-bucket rate limiting with pluggable backends

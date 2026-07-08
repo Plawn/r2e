@@ -12,7 +12,7 @@ pub struct UserCreated {
     pub name: String,
 }
 
-#[controller(state = AppState)]
+#[controller]
 pub struct EventConsumer {
     #[inject]
     event_bus: LocalEventBus,

@@ -12,7 +12,7 @@ Plugin to install in `AppBuilder` before `build_state()`. Two transport modes ar
 
 ### `#[grpc_routes]`
 
-Attribute macro analogous to `#[routes]` for gRPC services. It generates a wrapper that implements the tonic service trait, with controller construction via `StatefulConstruct` and interceptor wrapping.
+Attribute macro analogous to `#[routes]` for gRPC services. It generates a wrapper that implements the tonic service trait, with controller construction via `ContextConstruct` (built from the bean context, by type) and interceptor wrapping.
 
 ### Dependency Injection
 
@@ -95,14 +95,14 @@ The string passed to `include_proto!` must match the `package` name in the `.pro
 
 A gRPC service in R2E follows the same pattern as an HTTP controller:
 
-1. Define a struct with `#[controller(state = ...)]`
+1. Define a struct with bare `#[controller]` — a gRPC service is state-only (no path); its `#[inject]` fields resolve from the bean graph by type
 2. Implement the tonic service trait with `#[grpc_routes(path::to::ServiceTrait)]`
 
 ```rust
 use r2e::prelude::*;
 use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
-#[controller(state = Services)]
+#[controller]
 pub struct GreeterService {
     #[inject] greeting_prefix: GreetingPrefix,
 }
@@ -137,18 +137,18 @@ impl GreeterService {
 
 The macro produces:
 
-- A wrapper struct `__R2eGrpc_<Name>` containing the application state
+- A wrapper struct `__R2eGrpc_<Name>` holding the retained `Arc<BeanContext>`
 - An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`)
-- An implementation of the `GrpcService<T>` trait that wires everything into the builder
+- An implementation of the `GrpcService` trait (no state generic) that wires everything into the builder via `into_router(&Arc<BeanContext>)`
 
-Each method goes through the pipeline: controller construction via `StatefulConstruct`, interceptor wrapping, then the method body.
+Each method goes through the pipeline: controller construction via `ContextConstruct` (from the bean context, by type), interceptor wrapping, then the method body.
 
 ### 6. Dependency Injection
 
 gRPC services support the same injection as HTTP controllers:
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct UserGrpcService {
     #[inject] user_service: UserService,
     #[inject] event_bus: LocalEventBus,
@@ -156,10 +156,10 @@ pub struct UserGrpcService {
 }
 ```
 
-- `#[inject]` — cloned from the application state (services, pools, shared types)
-- `#[config("key")]` — resolved from `R2eConfig`
+- `#[inject]` — resolved from the bean graph by type (services, pools, shared types)
+- `#[config("key")]` — resolved from `R2eConfig` (itself a bean in the graph)
 
-The controller is constructed from the state via `StatefulConstruct` for each request.
+The service core is constructed once from the bean context via `ContextConstruct` (by type) and shared across requests.
 
 ### 7. Interceptors
 
@@ -197,7 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = AppBuilder::new()
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
         .provide(prefix)
-        .build_state::<Services, _>()
+        .build_state()
         .await
         .register_grpc_service::<GreeterService>();
 
@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Register gRPC services with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP.
+`build_state()` takes no type arguments and is async — `.await` it. Register gRPC services **after** `build_state()` with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP (both are extension-trait methods on the built phase).
 
 ## Transport Modes
 
@@ -252,7 +252,7 @@ A single application can serve HTTP controllers and gRPC services:
 let app = AppBuilder::new()
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .provide(prefix)
-    .build_state::<Services, _>()
+    .build_state()
     .await
     .register_grpc_service::<GreeterService>()    // gRPC
     .register_controller::<HealthController>()     // HTTP
@@ -261,7 +261,7 @@ let app = AppBuilder::new()
 app.serve("0.0.0.0:3000").await
 ```
 
-HTTP controllers use `#[routes]`, gRPC services use `#[grpc_routes]`. Both share the same application state and the same dependency injection graph.
+HTTP controllers use `#[routes]`, gRPC services use `#[grpc_routes]`. Both draw from the same bean graph (`Arc<BeanContext>`) — the same dependency injection graph.
 
 ## gRPC Reflection
 
@@ -309,7 +309,7 @@ AppBuilder::new()
 
 ## Prerequisites
 
-- gRPC service structs must **not** have `#[inject(identity)]` fields at the struct level (they require `StatefulConstruct`)
+- gRPC service structs must **not** have `#[inject(identity)]` fields at the struct level: gRPC services construct from the bean context outside any HTTP request (via `ContextConstruct`), where no request identity is available. Use handler-level identity if needed.
 - The `GrpcServer` plugin must be installed before `build_state()`
 - Proto files are compiled at build time — changes to `.proto` files require a `cargo build`
 

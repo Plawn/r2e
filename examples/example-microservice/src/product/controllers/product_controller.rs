@@ -2,9 +2,8 @@ use r2e::prelude::*;
 
 use crate::models::{AvailabilityResponse, ProductInfo};
 use crate::services::ProductService;
-use crate::state::ProductState;
 
-#[controller(path = "/products", state = ProductState)]
+#[controller(path = "/products")]
 pub struct ProductController {
     #[inject]
     product_service: ProductService,

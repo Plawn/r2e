@@ -3,7 +3,6 @@ use r2e::r2e_security::{
     impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
 };
 use serde::Serialize;
-use std::sync::Arc;
 
 /// A tenant-aware identity that includes the tenant_id from JWT claims.
 // Not `Deserialize`: a trusted identity must never be constructible from a

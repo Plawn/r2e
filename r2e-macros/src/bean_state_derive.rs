@@ -1,19 +1,13 @@
-use proc_macro::TokenStream;
+//! Shared helpers for state-struct derives (`TestState`): per-field `FromRef`
+//! impls and the HList-model bridge impls (`HasBean<T, ByField>` /
+//! `Contains` / `BeanLookup`).
+
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use std::collections::HashSet;
-use syn::{parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Fields, Ident, Type};
+use syn::{punctuated::Punctuated, token::Comma, Field, Ident, Type};
 
 use crate::crate_path::r2e_core_path;
-use crate::type_list_gen::build_tcons_type;
-
-pub fn expand(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    match generate(&input) {
-        Ok(output) => output.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
 
 /// Generate `FromRef` impls for each unique field type, skipping fields
 /// annotated with `#[<skip_attr_name>(skip)]` or `#[<skip_attr_name>(skip_from_ref)]`.
@@ -64,73 +58,6 @@ pub fn generate_from_ref_impls(
     from_ref_impls
 }
 
-fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let name = &input.ident;
-
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "#[derive(BeanState)] only works on structs with named fields:\n\
-                     \n  #[derive(BeanState, Clone)]\n  struct AppState {\n      service: MyService,\n      pool: SqlitePool,\n  }",
-                ))
-            }
-        },
-        _ => {
-            return Err(syn::Error::new_spanned(
-                name,
-                "#[derive(BeanState)] only works on structs — enums and unions are not supported",
-            ))
-        }
-    };
-
-    let krate = r2e_core_path();
-
-    let field_inits: Vec<TokenStream2> = fields
-        .iter()
-        .map(|f| {
-            let field_name = f.ident.as_ref().unwrap();
-            let field_type = &f.ty;
-            quote! { #field_name: ctx.get::<#field_type>() }
-        })
-        .collect();
-
-    let from_ref_impls = generate_from_ref_impls(name, fields, "bean_state");
-    let bridge_impls = generate_state_bridge_impls(name, fields, "bean_state");
-
-    // The state's requirements list: the chain of unique field types. Folded
-    // into the builder's requirement list and checked via `AllSatisfied` at
-    // `build_state()`. `Option<T>` fields require `Option<T>` itself — a
-    // producer must register `Option<T>` for the state to build.
-    let mut requires_seen = HashSet::new();
-    let mut requires_types: Vec<TokenStream2> = Vec::new();
-    for field in fields {
-        let field_type = &field.ty;
-        if requires_seen.insert(type_to_string(field_type)) {
-            requires_types.push(quote! { #field_type });
-        }
-    }
-    let requires_list = build_tcons_type(&requires_types, &krate);
-
-    Ok(quote! {
-        impl #krate::beans::BeanState for #name {
-            type Requires = #requires_list;
-
-            fn from_context(ctx: &#krate::beans::BeanContext) -> Self {
-                Self {
-                    #(#field_inits,)*
-                }
-            }
-        }
-
-        #(#from_ref_impls)*
-
-        #bridge_impls
-    })
-}
-
 /// Transitional bridge to the HList state model (Phase 4): typed state
 /// structs satisfy the same by-type access bounds as HList states —
 /// `HasBean<T, ByField>` + `Contains<T, ByField>` per unique field type
@@ -139,7 +66,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 /// managed resources that look beans up dynamically.
 ///
 /// Fields skipped for `FromRef` (`#[<attr>(skip)]` / `skip_from_ref`) are
-/// skipped here too. Shared between `BeanState` and `TestState` derives.
+/// skipped here too. Used by the `TestState` derive.
 pub fn generate_state_bridge_impls(
     name: &Ident,
     fields: &Punctuated<Field, Comma>,

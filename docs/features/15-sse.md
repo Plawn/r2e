@@ -48,7 +48,7 @@ use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-#[controller(path = "/sse", state = AppState)]
+#[controller(path = "/sse")]
 pub struct SseController {
     #[inject]
     broadcaster: SseBroadcaster,
@@ -124,28 +124,17 @@ Both methods return `Result<(), SendError>`. The error occurs only when there ar
 
 ### 5. Global Broadcaster (single shared stream)
 
-Register a single `SseBroadcaster` as a bean and inject it everywhere:
-
-```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub config: R2eConfig,
-    pub sse_broadcaster: SseBroadcaster,
-}
-```
-
-Construction at startup:
+Provide a single `SseBroadcaster` as a bean and inject it everywhere. There is no hand-written state struct — the state is an inferred HList, and beans are registered on the builder:
 
 ```rust
 let broadcaster = SseBroadcaster::new(128);
 
-let state = AppState {
-    config,
-    sse_broadcaster: broadcaster.clone(),
-};
+AppBuilder::new()
+    .provide(broadcaster)   // SseBroadcaster is now a bean, resolved by type
+    // ...
 ```
 
-Any service or controller that injects `SseBroadcaster` shares the same channel.
+Any service or controller that injects `SseBroadcaster` shares the same channel. (`R2eConfig` is itself a bean in the graph, so it needs no manual wiring.)
 
 ### 6. Per-Resource Broadcasters (user channels, rooms)
 
@@ -190,7 +179,7 @@ impl NotificationService {
 Integration in a controller:
 
 ```rust
-#[controller(path = "/notifications", state = AppState)]
+#[controller(path = "/notifications")]
 pub struct NotificationController {
     #[inject]
     notification_service: NotificationService,
@@ -231,17 +220,9 @@ use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-// -- State --
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub config: R2eConfig,
-    pub broadcaster: SseBroadcaster,
-}
-
 // -- Controleur --
 
-#[controller(path = "/sse", state = AppState)]
+#[controller(path = "/sse")]
 pub struct LiveController {
     #[inject]
     broadcaster: SseBroadcaster,
@@ -272,17 +253,12 @@ struct BroadcastRequest {
 
 #[tokio::main]
 async fn main() {
-    let config = R2eConfig::load().unwrap();
     let broadcaster = SseBroadcaster::new(256);
 
-    let state = AppState {
-        config: config.clone(),
-        broadcaster,
-    };
-
     AppBuilder::new()
-        .with_config(config)
-        .with_state(state)
+        .provide(broadcaster)
+        .build_state()
+        .await
         .with(ErrorHandling)
         .register_controller::<LiveController>()
         .serve_auto()

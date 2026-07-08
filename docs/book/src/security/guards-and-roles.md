@@ -108,10 +108,10 @@ impl ProjectGuard {
     }
 }
 
-impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
+impl<S: BeanLookup + Send + Sync> Guard<S, AuthenticatedUser> for ProjectGuard {
     fn check(
         &self,
-        state: &AppState,
+        state: &S,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -120,8 +120,11 @@ impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
                 .ok_or_else(|| GuardError::unauthorized("identity required"))?;
             let project_id: ProjectId = ctx.parse_path_param(self.param)?;
 
-            state
-                .authz
+            // Read the authorization service out of the state by type.
+            let authz = state
+                .bean::<AuthzService>()
+                .expect("AuthzService bean not registered");
+            authz
                 .require_project_role(user.sub(), project_id, self.min_role)
                 .await
                 .map_err(|_| Response::from(GuardError::forbidden("insufficient project role")))
@@ -228,17 +231,16 @@ Guards can perform async operations like database lookups:
 ```rust
 struct DatabaseGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for DatabaseGuard
-where
-    sqlx::SqlitePool: FromRef<S>,
-{
+impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for DatabaseGuard {
     fn check(
         &self,
         state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
-            let pool = sqlx::SqlitePool::from_ref(state);
+            let pool = state
+                .bean::<sqlx::SqlitePool>()
+                .expect("SqlitePool bean not registered");
             let allowed = sqlx::query_scalar::<_, bool>(
                 "SELECT active FROM users WHERE sub = ?"
             )

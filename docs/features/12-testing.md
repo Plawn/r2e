@@ -26,9 +26,12 @@ Cookie-persisting session that automatically captures `Set-Cookie` headers and s
 
 JWT token generator for tests, with a corresponding pre-configured `JwtValidator`.
 
-### TestState derive
+### Test state
 
-`#[derive(TestState)]` auto-generates `FromRef` impls for test state structs, eliminating boilerplate.
+Tests build their state exactly like production: `.provide(...)` /
+`.register::<T>()` on an `AppBuilder`, then `.build_state().await`. The state
+is the inferred HList of provided beans — there is no hand-written test state
+struct to maintain.
 
 ## Usage
 
@@ -45,13 +48,6 @@ r2e-test = { path = "../r2e-test" }
 use r2e::prelude::*;
 use r2e_test::{TestApp, TestJwt};
 
-#[derive(Clone, TestState)]
-struct TestServices {
-    user_service: UserService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
 
@@ -59,7 +55,7 @@ async fn setup() -> (TestApp, TestJwt) {
         AppBuilder::new()
             .provide(Arc::new(jwt.claims_validator()))
             .register::<UserService>()
-            .build_state::<TestServices, _>()
+            .build_state()
             .await
             .with(Health)
             .with(ErrorHandling)
@@ -69,6 +65,11 @@ async fn setup() -> (TestApp, TestJwt) {
     (app, jwt)
 }
 ```
+
+`.build_state()` takes no type arguments — the test state is inferred from
+what you `.provide()` / `.register()`, just like in production. Register
+several controllers at once with
+`.register_controllers::<(A, B, C)>()`.
 
 ### 3. Writing Tests
 

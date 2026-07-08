@@ -5,24 +5,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use r2e_core::http::extract::FromRef;
 use r2e_core::prelude::*;
 use r2e_executor::{ExecutorConfig, JobHandle, PoolExecutor, RejectedError};
 
-#[derive(Clone)]
-struct Services {
-    executor: PoolExecutor,
-    counter: Arc<AtomicU32>,
-}
-
-impl FromRef<Services> for PoolExecutor {
-    fn from_ref(s: &Services) -> Self { s.executor.clone() }
-}
-impl FromRef<Services> for Arc<AtomicU32> {
-    fn from_ref(s: &Services) -> Self { s.counter.clone() }
-}
-
-#[controller(state = Services)]
+#[controller]
 #[derive(Clone)]
 struct Worker {
     #[inject] executor: PoolExecutor,
@@ -40,15 +26,17 @@ impl Worker {
 
 #[tokio::test]
 async fn async_exec_returns_join_handle() {
-    let services = Services {
-        executor: PoolExecutor::new(ExecutorConfig::default()),
-        counter: Arc::new(AtomicU32::new(0)),
-    };
+    let counter = Arc::new(AtomicU32::new(0));
 
-    let worker = Worker::from_state(&services);
+    let mut registry = r2e_core::BeanRegistry::new();
+    registry.provide(PoolExecutor::new(ExecutorConfig::default()));
+    registry.provide(counter.clone());
+    let ctx = registry.resolve().await.unwrap();
+
+    let worker = <Worker as r2e_core::ContextConstruct>::from_context(&ctx);
     let handle: Result<JobHandle<u32>, RejectedError> = worker.compute(21);
     let result = handle.expect("submit ok").await.expect("job succeeds");
 
     assert_eq!(result, 42);
-    assert_eq!(services.counter.load(Ordering::SeqCst), 1);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }

@@ -25,7 +25,7 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for StreamGuard {
     }
 }
 
-#[controller(path = "/socket", state = AppState)]
+#[controller(path = "/socket")]
 pub struct SocketController;
 
 #[routes]

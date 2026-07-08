@@ -34,15 +34,15 @@ schemars = "1"
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<Services, _>()
+    .register::<UserService>()      // register the beans your controllers inject
+    .build_state()                  // no type args — the state is the inferred HList
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("Mon API", "0.1.0")
             .with_description("Description de mon API")
             .with_docs_ui(true),
     ))
-    .register_controller::<UserController>()
-    .register_controller::<ConfigController>()
+    .register_controllers::<(UserController, ConfigController)>()
     .serve("0.0.0.0:3000")
     .await
     .unwrap();

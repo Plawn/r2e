@@ -1,7 +1,10 @@
 # Plan — Feature Modules (Closed Subgraphs)
 
 > Implementation plan for a **future session**. Not started. **Depends on**
-> `docs/claude/plan-controllers-as-beans.md` (Direction A).
+> `docs/claude/plan-controllers-as-beans.md` (Direction A) — which has now
+> **landed** (Phase 4, A3): controllers resolve from the graph/context and the
+> state is the inferred HList of the provision list `P`. The single-pass
+> assumption below therefore holds; this plan is unblocked.
 
 ## Context / motivation
 
@@ -47,11 +50,11 @@ trait FeatureModule {
 
 ## Two-phase reconciliation (why this depends on Direction A)
 
-If controllers resolve from the graph/context (Direction A), a module registers
-beans **and** controllers in one graph pass — no user-visible two-phase split,
-one `.register_module` call. Without Direction A, a module must split into a
-pre-state half (providers) + a typed half (controllers) → two calls. So land
-`plan-controllers-as-beans.md` first.
+Because controllers now resolve from the graph/context (Direction A, landed in
+Phase 4), a module can register beans **and** controllers in one graph pass — no
+user-visible two-phase split, one `.register_module` call. (Before Direction A a
+module would have had to split into a pre-state half (providers) + a typed half
+(controllers) → two calls; that constraint is now gone.)
 
 ## API / codegen
 

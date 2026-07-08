@@ -43,7 +43,7 @@ let registry = OpenFgaRegistry::connect(config).await?;
 ```rust
 AppBuilder::new()
     .provide(registry)
-    .build_state::<AppState, _>()
+    .build_state()
     .await
     .register_controller::<DocumentController>()
     .serve("0.0.0.0:3000")
@@ -57,7 +57,7 @@ AppBuilder::new()
 ```rust
 use r2e::r2e_openfga::OpenFgaRegistry;
 
-#[controller(path = "/documents", state = AppState)]
+#[controller(path = "/documents")]
 pub struct DocumentController {
     #[inject] fga: OpenFgaRegistry,
 }

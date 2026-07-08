@@ -1,6 +1,6 @@
 # DI & Builder Refactor — DX + Compile-Time Roadmap
 
-Status: **Phases 1–3 complete** (landed on `refactor/di-builder-dx-ct`); Phase 4
+Status: **Phases 1–4 complete** (landed on `refactor/di-builder-dx-ct`); Phase 5
 next. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
 phase ends with a quality-review gate before the next starts.
 
@@ -16,7 +16,7 @@ phase ends with a quality-review gate before the next starts.
 | 2a | `BuiltApp<T>` struct | ✅ done |
 | 2b | Split `builder.rs` | ✅ done |
 | 3 | Correctness & cleanup | ✅ done |
-| 4 | Controllers as graph-resolved beans | 📋 planned — approach **A3 validated by spike**, see `plan-controllers-as-beans.md` |
+| 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model, see `plan-controllers-as-beans.md` |
 | 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
@@ -187,26 +187,54 @@ All landed; `cargo clippy -p r2e-core` is at **0 warnings including
 - `r2e-compile-tests` (trybuild) — update expected error messages for removed
   methods and new compile errors.
 
-## Phases 4 & 5 — planned separately (fresh session)
+## Phase 4 — Controllers as graph-resolved beans ✅ COMPLETE (A3)
 
-Two forward-looking, higher-ambition changes have their own plan files:
+Landed as designed in `plan-controllers-as-beans.md` (approach A3), with the
+user decision applied: **the typed state path was removed entirely** — HList
+state is the single state model.
 
-- **Phase 4 — Controllers as graph-resolved beans** (`plan-controllers-as-beans.md`):
-  build controller cores from the `BeanContext` by type (`ctx.get`) instead of
-  from a hand-written state struct by field name, so a controller is "a bean like
-  any other" and the manual `Services` struct disappears. Recommended path (A3):
-  the state is the provision list `P` materialized as a type-level HList, giving
-  monomorphized indexed access (per-request perf iso) **and** no hand-written
-  struct. **A3 was validated by a Fable spike** (monomorphized to single-load
-  field access even at depth 63; two constraints folded into the plan: extractor
-  impls carry the index witness in trait/`Self` generics, and apps >~127 beans
-  need `#![recursion_limit]`). Fallbacks A1/A2 documented but strictly worse.
+- **4a — HList machinery** (`type_list.rs`): value-level `HNil`/`HCons`;
+  `HasBean<T, Idx>` (fixed-offset monomorphized access, friendly
+  `on_unimplemented`); witness-free `BeanAccess::get` (`state.get::<T>()`, NOT
+  in the prelude — its blanket `get` would shadow `Deref`-reached inherent
+  `get`s); `BuildHList` (materializes `P` from the resolved `BeanContext`, one
+  `ctx.get` per slot at startup); `BeanLookup` (witness-free dynamic access —
+  monomorphized TypeId-compare chain — the vocabulary for guards, interceptors,
+  `ManagedResource`).
+- **4b — Builder**: `build_state()` (no type args) materializes `P` into the
+  HList state and retains the graph as `Arc<BeanContext>` through the typed
+  phase (`bean_context()` / `state()` accessors); dev-reload caches
+  `(state, ctx)`. `register_override::<T>()` overrides a default registration
+  without adding a duplicate `P` slot.
+- **4c — Codegen**: `ContextConstruct` (by-type `ctx.get`) replaces
+  `StatefulConstruct` (removed); the generated `Controller<S, W>` impl is
+  generic over the state (`S: Clone + Send + Sync + 'static + BeanLookup`),
+  with `W` carrying inferred extraction markers. `Controller::Deps` (unique
+  `#[inject]` types + `R2eConfig`) is checked via `AllSatisfied` at
+  `register_controller` — a missing bean is a compile error naming the type.
+  Registration moved to extension traits `RegisterController` /
+  `RegisterControllers` (witnesses on the trait, inferred at call sites).
+- **4d — Extraction** (`r2e-core/src/extract.rs`): `FromRequestPartsVia<S, M>`
+  / `OptionalFromRequestPartsVia<S, M>` with a marker slot for `HasBean`
+  witnesses (E0207); blanket `ViaAxum` bridge for plain axum extractors;
+  `Via<T, M>` adapter in generated closures; `BeanExtract<T, I>` for
+  hand-written handlers. `r2e-security` extracts via
+  `HasBean<Arc<JwtClaimsValidator>, I>` parked in `ViaBean<I>`.
+- **4e — Removal + sweep**: `BeanState` (trait + derive), `build_typed_state`,
+  `build_state!`/`try_build_state!`, `StatefulConstruct`,
+  `#[controller(state = ...)]`, `#[service(state = ...)]` all removed
+  (rejected with migration-hint compile errors where applicable).
+  `ServiceComponent`/`#[derive(BackgroundService)]`, `register_subscriber`,
+  and gRPC services construct from the context by type. All examples, tests,
+  CLI templates migrated; `r2e doctor` warns when the bean count approaches
+  the `#![recursion_limit = "512"]` threshold (>~127 registrations).
+
+Revisits **1b/1c** as predicted: `build_state!` and `BeanState::Requires` are
+gone (the state type is inferred from `P`); the `P`/`AllSatisfied` presence
+tracking and the guaranteed `state: T` phase remain.
+
+## Phase 5 — planned separately
+
 - **Phase 5 — Feature modules** (`plan-feature-modules.md`): Spring/NestJS-style
   `@Module` bundles (providers + controllers + imports/exports) with **compile-time
-  encapsulation**. Depends on Phase 4.
-
-**Ordering recommendation:** do Phase 2 (BuiltApp + `builder.rs` split) and Phase 3
-(correctness/clippy) first — small, orthogonal, low-risk. Then Phase 4, then Phase 5.
-Phase 4 will **revisit the 1b model**: with context-as-state, the user `BeanState`
-struct + `#[derive(BeanState)]` become optional/internal, while `build_state!` and
-the `P`/`AllSatisfied` bean-presence tracking remain.
+  encapsulation**. Depends on Phase 4 (done).

@@ -18,12 +18,17 @@ Hook executed **after** the server's graceful shutdown (Ctrl+C signal or SIGTERM
 
 ### 1. Startup Hook
 
+Hooks are registered on the built phase, after `.build_state().await`. The state is the inferred bean HList — read beans from it by type with `state.bean::<T>()` (`BeanLookup`, in the prelude):
+
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .provide(pool)
+    .build_state()
+    .await
     .on_start(|state| async move {
         // Verifier la connexion a la base de donnees
-        sqlx::query("SELECT 1").execute(&state.pool).await?;
+        let pool = state.bean::<sqlx::SqlitePool>().expect("pool bean");
+        sqlx::query("SELECT 1").execute(&pool).await?;
         tracing::info!("Connexion DB verifiee");
 
         // Initialiser des donnees
@@ -41,34 +46,39 @@ AppBuilder::new()
 FnOnce(T) -> Future<Output = Result<(), Box<dyn Error + Send + Sync>>>
 ```
 
-- Receives `T` (the application state, cloned)
+- Receives `T` (the application state, cloned) — the inferred HList of resolved beans; access individual beans with `state.bean::<T>()`
 - Must return `Ok(())` to allow startup to proceed
 - If it returns `Err(...)`, the server does not start and the error is propagated
 
 ### Example: Seeding an admin user from environment variables
 
-A common pattern is to create an initial admin user at startup. `on_start` gives access to the full state (resolved DI services), and `R2eConfig` automatically overlays environment variables (`ADMIN_EMAIL` -> `admin.email`) — no need for `std::env::var()` or manually reconstructing repositories:
+A common pattern is to create an initial admin user at startup. `on_start` gives access to the full state (the resolved bean graph), and `R2eConfig` — itself a bean in the graph — automatically overlays environment variables (`ADMIN_EMAIL` -> `admin.email`) — no need for `std::env::var()` or manually reconstructing repositories:
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .load_config::<RootConfig>()
+    .register::<UserRepo>()
+    .build_state()
+    .await
     .on_start(|state| async move {
         // R2eConfig mappe ADMIN_EMAIL → admin.email automatiquement
-        let email: String = state.config.get("admin.email").unwrap_or_default();
-        let password: String = state.config.get("admin.password").unwrap_or_default();
+        let config = state.bean::<R2eConfig>().expect("config bean");
+        let email: String = config.get("admin.email").unwrap_or_default();
+        let password: String = config.get("admin.password").unwrap_or_default();
 
         if email.is_empty() || password.is_empty() {
             return Ok(()); // pas de seed demande
         }
 
-        // user_repo est deja dans le state via DI
-        if state.user_repo.find_by_email(&email).await?.is_some() {
+        // UserRepo est deja dans le graphe via DI
+        let user_repo = state.bean::<UserRepo>().expect("user repo bean");
+        if user_repo.find_by_email(&email).await?.is_some() {
             tracing::debug!("Admin seed skipped — {} already exists", email);
             return Ok(());
         }
 
         let hash = hash_password(&password)?;
-        state.user_repo.create(&NewUser {
+        user_repo.create(&NewUser {
             email: email.clone(),
             role: Role::Admin,
             password_hash: Some(hash),
@@ -84,15 +94,16 @@ AppBuilder::new()
 ```
 
 Key points:
-- **No `std::env::var()`** — use `state.config.get()`. Environment variables are automatically mapped (`ADMIN_EMAIL` -> `admin.email`).
-- **No manual repository construction** — services are already available in the state via DI.
+- **No `std::env::var()`** — use `R2eConfig` (a bean: `state.bean::<R2eConfig>()`). Environment variables are automatically mapped (`ADMIN_EMAIL` -> `admin.email`).
+- **No manual repository construction** — beans are already resolved in the graph; fetch them by type with `state.bean::<T>()`.
 - **Use `?` for error propagation** — `on_start` returns `Result`, so errors cleanly block startup instead of being silently logged.
 
 ### 2. Shutdown Hook
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .build_state()
+    .await
     .on_stop(|_state| async {
         tracing::info!("Arret en cours...");
         // Nettoyage, flush des logs, fermeture de connexions...
@@ -118,10 +129,13 @@ Both methods can be called multiple times. Hooks are executed in registration or
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .provide(pool)
+    .build_state()
+    .await
     .on_start(|state| async move {
         tracing::info!("Hook 1 : verification DB");
-        sqlx::query("SELECT 1").execute(&state.pool).await?;
+        let pool = state.bean::<sqlx::SqlitePool>().expect("pool bean");
+        sqlx::query("SELECT 1").execute(&pool).await?;
         Ok(())
     })
     .on_start(|_state| async move {
@@ -147,7 +161,8 @@ By default, R2E waits indefinitely for shutdown hooks to complete. Use `shutdown
 use std::time::Duration;
 
 AppBuilder::new()
-    .with_state(services)
+    .build_state()
+    .await
     .shutdown_grace_period(Duration::from_secs(5))
     .on_stop(|_state| async {
         tracing::info!("Nettoyage...");
@@ -202,18 +217,18 @@ If an `on_start` hook returns `Err`, execution stops immediately:
 
 ## LifecycleController Trait
 
-For more advanced cases, the `LifecycleController` trait allows defining hooks directly on a controller:
+For more advanced cases, the `LifecycleController` trait allows defining hooks directly on a controller. The state type is inferred (HList), so the impl is **generic over the state** — bound it with `BeanLookup` if the hook reads beans:
 
 ```rust
-impl LifecycleController<Services> for MyController {
-    fn on_start(state: &Services) -> Pin<Box<dyn Future<Output = Result<...>> + Send + '_>> {
+impl<S: BeanLookup + Clone + Send + Sync + 'static> LifecycleController<S> for MyController {
+    fn on_start(state: &S) -> Pin<Box<dyn Future<Output = Result<...>> + Send + '_>> {
         Box::pin(async move {
             tracing::info!("MyController starting");
             Ok(())
         })
     }
 
-    fn on_stop(_state: &Services) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn on_stop(_state: &S) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {
             tracing::info!("MyController stopping");
         })

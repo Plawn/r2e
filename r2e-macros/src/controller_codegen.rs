@@ -29,7 +29,6 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
     let request_data = generate_request_data(def);
     let facade = generate_facade(def);
     let context_construct = generate_context_construct(def);
-    let stateful_construct = generate_stateful_construct(def);
 
     quote! {
         #physical_struct
@@ -37,7 +36,6 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
         #request_data
         #facade
         #context_construct
-        #stateful_construct
     }
 }
 
@@ -56,14 +54,6 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
 
     let facade_name = format_ident!("__R2eRequest_{}", name);
     let data_name = format_ident!("__R2eRequestData_{}", name);
-
-    // Legacy named-state path: keep the `State` alias for gRPC codegen and
-    // hand-written code that names it. State-generic controllers have no
-    // nameable state type.
-    let state_alias = match &def.state_type {
-        Some(state_type) => quote! { pub type State = #state_type; },
-        None => quote! {},
-    };
 
     // `guard_identity` reads the identity field off the request façade, never the
     // core (which no longer holds it). Non-identity `#[inject(request)]` fields
@@ -182,7 +172,6 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         #[allow(non_snake_case)]
         mod #mod_name {
             use super::*;
-            #state_alias
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             #identity_type
@@ -424,70 +413,6 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
             type Deps = #deps_list;
 
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
-                #config_prelude
-                #struct_init
-            }
-        }
-    }
-}
-
-/// Generate `impl StatefulConstruct<State> for Name` — legacy named-state path
-/// only (`state = ...` present). Used by gRPC codegen and kept during the
-/// typed-state transition; state-generic controllers construct exclusively via
-/// [`ContextConstruct`].
-fn generate_stateful_construct(def: &ControllerStructDef) -> TokenStream {
-    let Some(state_type) = &def.state_type else {
-        return quote! {};
-    };
-    let krate = r2e_core_path();
-    let name = &def.name;
-
-    let inject_inits: Vec<TokenStream> = def
-        .injected_fields
-        .iter()
-        .map(|f| {
-            let field_name = &f.name;
-            quote! { #field_name: __state.#field_name.clone() }
-        })
-        .collect();
-
-    let controller_name_str = name.to_string();
-    let config_inits: Vec<TokenStream> = def
-        .config_fields
-        .iter()
-        .map(|f| config_init_panic(&f.name, &f.key, &f.env_hint, &controller_name_str))
-        .collect();
-
-    let config_section_inits: Vec<TokenStream> = def
-        .config_section_fields
-        .iter()
-        .map(|f| config_section_init_panic(&f.name, &f.ty, &f.prefix, &controller_name_str, &krate))
-        .collect();
-
-    let has_any_config = !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
-    let config_prelude = if has_any_config {
-        quote! {
-            let __cfg = <#krate::R2eConfig as #krate::http::extract::FromRef<#state_type>>::from_ref(__state);
-        }
-    } else {
-        quote! {}
-    };
-
-    let all_inits: Vec<&TokenStream> = inject_inits
-        .iter()
-        .chain(config_inits.iter())
-        .chain(config_section_inits.iter())
-        .collect();
-
-    let struct_init = if def.is_unit_struct {
-        quote! { #name }
-    } else {
-        quote! { Self { #(#all_inits,)* } }
-    };
-
-    quote! {
-        impl #krate::StatefulConstruct<#state_type> for #name {
-            fn from_state(__state: &#state_type) -> Self {
                 #config_prelude
                 #struct_init
             }

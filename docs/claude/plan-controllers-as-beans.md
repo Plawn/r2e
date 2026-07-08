@@ -1,7 +1,8 @@
 # Plan — Controllers as Graph-Resolved Beans (Direction A)
 
-> Implementation plan for a **future session**. Not started. Builds on the
-> completed Phase 1 (`docs/claude/di-builder-refactor.md`).
+> **STATUS: IMPLEMENTED (Phase 4, A3).** Landed on `refactor/di-builder-dx-ct`;
+> the typed state path was removed entirely per the 2026-07-07 decision. See
+> `di-builder-refactor.md` Phase 4 for what shipped. Kept for design rationale.
 
 ## Context / motivation
 

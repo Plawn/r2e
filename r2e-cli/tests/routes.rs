@@ -29,7 +29,7 @@ impl Drop for CwdGuard {
 #[test]
 fn extracts_controller_path() {
     let content = r#"
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController;
 "#;
     assert_eq!(
@@ -41,7 +41,7 @@ pub struct UserController;
 #[test]
 fn extracts_controller_path_no_path() {
     let content = r#"
-#[controller(state = AppState)]
+#[controller]
 pub struct UserController;
 "#;
     assert_eq!(extract_controller_path(content), None);
@@ -50,7 +50,7 @@ pub struct UserController;
 #[test]
 fn extracts_controller_path_different_order() {
     let content = r#"
-#[controller(state = AppState, path = "/api/users")]
+#[controller(path = "/api/users")]
 "#;
     assert_eq!(
         extract_controller_path(content),
@@ -125,7 +125,7 @@ fn parses_routes_from_controller_file() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController;
 
 #[routes]
@@ -178,7 +178,7 @@ fn parses_routes_combines_paths() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController;
 
 #[routes]
@@ -204,7 +204,7 @@ fn parses_routes_root_path_uses_base() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/hello", state = AppState)]
+#[controller(path = "/hello")]
 pub struct HelloController;
 
 #[routes]
@@ -230,7 +230,7 @@ fn parses_routes_extracts_roles() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/admin", state = AppState)]
+#[controller(path = "/admin")]
 pub struct AdminController;
 
 #[routes]
@@ -257,7 +257,7 @@ fn parses_routes_extracts_handler_name() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/test", state = AppState)]
+#[controller(path = "/test")]
 pub struct TestController;
 
 #[routes]
@@ -318,7 +318,7 @@ fn routes_run_with_controllers() {
     fs::write(
         "src/controllers/user.rs",
         r#"
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController;
 
 #[routes]
@@ -342,7 +342,7 @@ fn parses_patch_method() {
     fs::write(
         &file_path,
         r#"
-#[controller(path = "/items", state = AppState)]
+#[controller(path = "/items")]
 pub struct ItemController;
 
 #[routes]

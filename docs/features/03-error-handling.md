@@ -123,8 +123,10 @@ Enable panic capture in the `AppBuilder`:
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
-    .with_error_handling()  // Enables catch_panic_layer
+    // .provide(...) / .register::<...>() ...
+    .build_state()
+    .await
+    .with(ErrorHandling)  // Enables catch_panic_layer
     // ...
 ```
 

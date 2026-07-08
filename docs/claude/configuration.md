@@ -186,7 +186,7 @@ Reads one scalar from `R2eConfig`. The key is a full dot-separated path. Type mu
 When using `load_config::<RootConfig>()`, all `#[config(section)]` children are auto-registered as beans. Inject them directly with `#[inject]`:
 
 ```rust
-#[controller(state = Services)]
+#[controller(path = "/my")]
 pub struct MyController {
     #[inject]
     root_config: RootConfig,          // injected from state (auto-registered by load_config)
@@ -211,7 +211,7 @@ Reads an entire struct from `R2eConfig` at request time. Type must implement `Co
 ### In controllers
 
 ```rust
-#[controller(state = Services)]
+#[controller(path = "/my")]
 pub struct MyController {
     #[config("app.name")]
     name: String,

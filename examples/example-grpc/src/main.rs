@@ -9,17 +9,12 @@ use proto::{HelloReply, HelloRequest};
 
 // ── State ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, BeanState)]
-pub struct Services {
-    pub greeting_prefix: GreetingPrefix,
-}
-
 #[derive(Clone)]
 pub struct GreetingPrefix(pub String);
 
 // ── gRPC Service ───────────────────────────────────────────────────────
 
-#[controller(state = Services)]
+#[controller]
 pub struct GreeterService {
     #[inject]
     greeting_prefix: GreetingPrefix,
@@ -52,7 +47,7 @@ impl GreeterService {
 
 // ── HTTP Controller (to show multiplexing) ─────────────────────────────
 
-#[controller(path = "/api", state = Services)]
+#[controller(path = "/api")]
 pub struct HealthController;
 
 #[routes]
@@ -72,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = AppBuilder::new()
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
         .provide(prefix)
-        .build_typed_state::<Services, _>()
+        .build_state()
         .await
         .register_grpc_service::<GreeterService>()
         .register_controller::<HealthController>();

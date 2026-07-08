@@ -125,7 +125,7 @@ pub struct ByField;
 #[diagnostic::on_unimplemented(
     message = "type `{H}` was not provided to the AppBuilder",
     label = "missing `.provide::<{H}>()` or `.register::<{H}>()`",
-    note = "every field type in the BeanState struct must be provided or registered as a bean before calling `build_state()`"
+    note = "every dependency must be provided or registered as a bean before calling `build_state()`"
 )]
 pub trait Contains<H, Idx> {}
 

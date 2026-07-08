@@ -35,7 +35,7 @@ AppBuilder::new()
     .plugin(Executor)              // installs PoolExecutor as a bean
     .with_config(config)
     // ...
-    .build_state::<Services, _>().await
+    .build_state().await
 ```
 
 The plugin reads the `executor.*` section of `R2eConfig`:
@@ -91,7 +91,7 @@ generated wrapper:
 - Is **not** `async` — the synchronous handle resolves to the result.
 
 ```rust
-#[controller(state = Services)]
+#[controller(path = "/")]
 #[derive(Clone)]
 pub struct ReportController {
     #[inject] executor: PoolExecutor,
@@ -139,16 +139,16 @@ block.
 
 ## `#[derive(BackgroundService)]`
 
-Generates `impl ServiceComponent<State>` from the same `#[inject]` /
-`#[config]` field syntax used by `#[controller]`. The user supplies
-an `async fn run(&self, CancellationToken)` method; the derived `start`
-just forwards to it.
+Generates `impl ServiceComponent` (no state generic) from the same `#[inject]` /
+`#[config]` field syntax used by `#[controller]`. The component is built from
+the resolved bean graph via `from_context(&BeanContext)` — each `#[inject]`
+field resolved by type. The user supplies an `async fn run(&self,
+CancellationToken)` method; the derived `start` just forwards to it.
 
 ```rust
 use tokio_util::sync::CancellationToken;
 
 #[derive(BackgroundService, Clone)]
-#[service(state = Services)]
 pub struct EmailWorker {
     #[inject] executor: PoolExecutor,
     #[inject] mailer: Mailer,
@@ -175,7 +175,7 @@ impl EmailWorker {
 // Register — uses the existing AppBuilder::spawn_service pipeline.
 AppBuilder::new()
     .plugin(Executor)
-    .build_state::<Services, _>().await
+    .build_state().await
     .spawn_service::<EmailWorker>()
     .serve_auto().await?;
 ```
@@ -185,8 +185,11 @@ awaits the worker. The cancellation token is cancelled on shutdown
 signal; the worker is expected to observe `shutdown.cancelled()` and
 exit promptly.
 
-`#[service(state = ...)]` is required and must match the state type
-configured on `AppBuilder::build_state`.
+`#[derive(BackgroundService)]` takes **no** attribute — there is no
+`#[service(state = ...)]`. The service resolves its `#[inject]` fields from the
+bean graph by type (like a controller core), so it works with the inferred HList
+state; each injected type must be present in the graph or `spawn_service::<C>()`
+is a compile error naming the missing type.
 
 ## Cookbook — pick the right primitive
 

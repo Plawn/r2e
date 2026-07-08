@@ -13,12 +13,11 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
     let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
 
     let method_impls: Vec<TokenStream> = def
         .methods
         .iter()
-        .map(|m| generate_method_impl(m, def, &krate, &grpc_krate, controller_name, &meta_mod))
+        .map(|m| generate_method_impl(m, def, &krate, &grpc_krate, controller_name))
         .collect();
 
     quote! {
@@ -36,7 +35,6 @@ fn generate_method_impl(
     krate: &TokenStream,
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
-    meta_mod: &syn::Ident,
 ) -> TokenStream {
     let fn_name = &method.name;
     let fn_item = &method.fn_item;
@@ -87,9 +85,9 @@ fn generate_method_impl(
         quote! {}
     };
 
-    // Build the controller construction
+    // The core is shared — built once at registration, cloned per call site.
     let construct_controller = quote! {
-        let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&self.state);
+        let __ctrl = ::std::sync::Arc::clone(&self.core);
     };
 
     // Build the method call
@@ -203,7 +201,7 @@ fn generate_grpc_guard_checks(
                         metadata: request.metadata(),
                         identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
                     };
-                    if let Err(__status) = #grpc_krate::GrpcGuard::check(&__guard, &self.state, &__guard_ctx).await {
+                    if let Err(__status) = #grpc_krate::GrpcGuard::check(&__guard, &self.ctx, &__guard_ctx).await {
                         return Err(__status);
                     }
                 }
@@ -251,7 +249,7 @@ fn wrap_with_interceptors(
                     #krate::InterceptorContext {
                         method_name: #fn_name_str,
                         controller_name: #controller_name_str,
-                        state: &self.state,
+                        state: &self.ctx,
                     },
                     #wrapped
                 ).await
@@ -269,7 +267,7 @@ fn wrap_with_interceptors(
                 #krate::InterceptorContext {
                     method_name: #fn_name_str,
                     controller_name: #controller_name_str,
-                    state: &self.state,
+                    state: &self.ctx,
                 },
                 #wrapped
             ).await

@@ -44,7 +44,7 @@ For authorization checks that don't require identity (e.g., IP-based rate limiti
 - Post-auth: implement `Guard<S, I: Identity>` (async via RPITIT) and apply via `#[guard(MyGuard)]`
 - Pre-auth: implement `PreAuthGuard<S>` and apply via `#[pre_guard(MyPreAuthGuard)]`
 
-**Async guard:** implement `Guard<S, I: Identity>` with async `check()` that returns `impl Future<Output = Result<(), Response>> + Send`. Can use `FromRef<S>` to access state (e.g., database pools).
+**Async guard:** implement `Guard<S, I: Identity>` with async `check()` that returns `impl Future<Output = Result<(), Response>> + Send`. To read a bean from state (e.g. a database pool), bound the impl `S: BeanLookup + Send + Sync` and call `state.bean::<Pool>()` (dynamic lookup, in the prelude). A guard that never touches state stays generic over `S: Send + Sync`. (Guards no longer use `FromRef<S>` — the state is an inferred HList, accessed through `BeanLookup`/`BeanAccess`.)
 
 ## Interceptors
 

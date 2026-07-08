@@ -79,17 +79,16 @@ Guards can access the application state for database lookups or configuration:
 ```rust
 struct ActiveUserGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for ActiveUserGuard
-where
-    SqlitePool: FromRef<S>,
-{
+impl<S: BeanLookup + Send + Sync, I: Identity> Guard<S, I> for ActiveUserGuard {
     fn check(
         &self,
         state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
-            let pool = SqlitePool::from_ref(state);
+            let pool = state
+                .bean::<SqlitePool>()
+                .expect("SqlitePool bean not registered");
             let sub = ctx.identity_sub().unwrap_or("");
 
             let active = sqlx::query_scalar::<_, bool>(

@@ -47,7 +47,7 @@ bus.emit_and_wait(UserCreated { name: "Bob".into() }).await;
 Use `#[consumer]` in a `#[routes]` impl block for automatic event subscription:
 
 ```rust
-#[controller(path = "/notifications", state = AppState)]
+#[controller(path = "/notifications")]
 pub struct NotificationController {
     #[inject] bus: EventBus,
     #[inject] mailer: MailService,
@@ -62,7 +62,11 @@ impl NotificationController {
 }
 ```
 
-Consumers are registered automatically during `register_controller()`. They run on the controller core, which always implements `StatefulConstruct`, so they work regardless of any `#[inject(identity)]` fields.
+Consumers are registered automatically during `register_controller()`. They run on the controller core, which always implements `ContextConstruct` (built from the resolved `BeanContext` by type), so they work regardless of any `#[inject(identity)]` fields.
+
+Standalone event subscribers (types that are not controllers) register **after**
+`build_state()` with `.register_subscriber::<S>()`; the subscriber type `S` must
+itself be registered/provided as a bean, since it is resolved from the graph.
 
 ## Key properties
 

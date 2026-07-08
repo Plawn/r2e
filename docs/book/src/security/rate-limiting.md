@@ -10,24 +10,20 @@ Enable the rate-limit feature:
 r2e = { version = "0.1", features = ["rate-limit"] }
 ```
 
-Add `RateLimitRegistry` to your state:
+Provide a `RateLimitRegistry` as a bean. There is no hand-written state struct —
+the registry becomes part of the inferred state and rate-limit guards resolve it
+from the bean graph by type:
 
 ```rust
 use r2e::r2e_rate_limit::RateLimitRegistry;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub rate_limiter: RateLimitRegistry,
-    // ...
-}
-```
-
-Provide a default instance:
-
-```rust
 AppBuilder::new()
     .provide(RateLimitRegistry::default())
-    // ...
+    // ... other beans ...
+    .build_state()
+    .await
+    // ... plugins, controllers, serve ...
+    ;
 ```
 
 ## Rate limit strategies

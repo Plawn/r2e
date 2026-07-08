@@ -59,7 +59,7 @@ impl<S: Send + Sync> ManagedResource<S> for RequestResource {
     }
 }
 
-#[controller(path = "/combined", state = AppState)]
+#[controller(path = "/combined")]
 pub struct CombinedController;
 
 #[routes]

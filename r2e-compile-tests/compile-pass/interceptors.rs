@@ -21,7 +21,7 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
     }
 }
 
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct InterceptedController;
 
 #[routes]

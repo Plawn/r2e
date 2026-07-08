@@ -10,11 +10,8 @@ mod controllers;
 mod models;
 #[path = "services/mod.rs"]
 mod services;
-#[path = "state.rs"]
-mod state;
 
 use controllers::product_controller::ProductController;
-use state::ProductState;
 
 #[r2e::main]
 async fn main() {
@@ -23,7 +20,7 @@ async fn main() {
     AppBuilder::new()
         .with_config(config)
         .register::<services::ProductService>()
-        .build_typed_state::<ProductState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

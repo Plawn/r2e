@@ -2,21 +2,39 @@
 
 R2E's dependency injection is built on a bean graph — a set of factories that produce your application services in dependency order.
 
-## Application state
+## Application state is inferred — you never write it
 
-Your state struct holds all app-scoped dependencies. Derive `BeanState` to generate `FromRef` implementations:
+There is no hand-written state struct. You do not define a `Services`/`AppState`
+type, and there is no `#[derive(BeanState)]`. Instead:
+
+1. **Beans form the graph.** Each `.provide(value)` or `.register::<T>()` call adds
+   a node. The builder threads the set of provided types through the chain at the
+   type level (the *provision list*).
+2. **State is the provision list materialized as an HList.** `build_state()`
+   resolves the graph in dependency order and packs every provided value into a
+   heterogeneous list whose shape is inferred from your `.provide` / `.register`
+   calls. The state **type is inferred** — you never spell it out.
+3. **You read beans out of the state by type**, not by field name (see
+   [Reading beans from state](#reading-beans-from-state)).
 
 ```rust
 use r2e::prelude::*;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub pool: SqlitePool,
-    pub event_bus: LocalEventBus,
-    pub config: R2eConfig,
-}
+let app = AppBuilder::new()
+    .provide(event_bus)            // LocalEventBus becomes a bean
+    .provide(pool)                 // SqlitePool becomes a bean
+    .register::<UserService>();    // a #[bean] type, constructed from the graph
+
+app.build_state()                  // NO type args; async — resolves the graph
+    .await
+    // ... plugins, controllers, serve ...
+    ;
 ```
+
+> Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the
+> crate root (in `main.rs`) — the inferred HList is a deeply nested type and the
+> default recursion limit (128) is not enough. `r2e doctor` warns as the bean
+> count approaches the threshold. Fewer than ~127 beans needs nothing.
 
 ## Bean traits
 
@@ -194,21 +212,53 @@ Key points:
 
 **Don't** use it for: construction logic (belongs in the constructor), event subscriptions (`#[consumer]`), periodic work (`#[scheduled]`).
 
+## Reading beans from state
+
+Because the state is an inferred HList (not a struct with named fields), you read
+beans out of it **by type**. Controller `#[inject]` fields resolve this way
+automatically at registration time. Code that holds the state directly — guards,
+interceptors, `ManagedResource`, plugins — uses one of two accessors:
+
+- `state.bean::<T>() -> Option<T>` — dynamic lookup via the `BeanLookup` trait.
+  In the prelude. This is the vocabulary for guards / interceptors /
+  `ManagedResource`, which must be **generic over the state** (`S: BeanLookup`).
+- `state.get::<T>() -> T` — witness-free fixed-offset access via `BeanAccess`.
+  **Not** in the prelude (its blanket `get` would shadow `Deref`-reached inherent
+  `get`s). Import it explicitly: `use r2e_core::type_list::BeanAccess;`.
+
+```rust
+use r2e_core::type_list::BeanAccess;
+
+// generic over the state, reads a bean dynamically:
+let pool = state.bean::<SqlitePool>().expect("SqlitePool bean");
+
+// fixed-offset access when you hold a concrete state:
+let pool: SqlitePool = state.get::<SqlitePool>();
+```
+
+A type that is not in the graph is a **compile error naming the type** for
+`#[inject]` fields (checked via the controller's `Deps` against the provision
+list), and `None`/an unsatisfied bound for the accessors.
+
 ## Building state
 
-The `build_state()` method resolves the bean graph in dependency order:
+The `build_state()` method resolves the bean graph in dependency order and packs
+the resolved values into the inferred HList state. It takes **no type arguments**
+and is async (the graph may contain async beans):
 
 ```rust
 AppBuilder::new()
     .provide(event_bus)                    // provide pre-built instances
     .provide(pool)
-    .register::<CreatePool>()         // async producer
-    .register::<CacheService>()     // async bean
-    .register::<UserService>()            // sync bean
+    .register::<CreatePool>()              // async producer
+    .register::<CacheService>()            // async bean
+    .register::<UserService>()             // sync bean
     // config sections are auto-registered by load_config (available as bean deps)
-    .build_state::<AppState, _>()          // resolve the graph
+    .build_state()                         // resolve the graph — no type args
     .await                                 // async because graph may contain async beans
 ```
+
+`try_build_state()` is the non-panicking (`Result`) variant.
 
 ### `provide()` vs `register()`
 
@@ -222,21 +272,14 @@ Use `provide()` for values constructed outside the bean graph (e.g., configurati
 1. All `provide()`d values are available immediately
 2. `Bean` / `AsyncBean` / `Producer` factories run in dependency order
 3. If bean A depends on bean B, B is constructed first
-4. Circular dependencies cause a panic at startup
+4. Circular dependencies fail at startup with a concrete `A -> B -> A` path
 
 ## Complete example
 
 ```rust
-use r2e::prelude::*;
+#![recursion_limit = "512"] // only needed past ~127 beans; harmless otherwise
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub notification_service: NotificationService,
-    pub pool: SqlitePool,
-    pub event_bus: LocalEventBus,
-    pub config: R2eConfig,
-}
+use r2e::prelude::*;
 
 #[producer]
 async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
@@ -253,7 +296,7 @@ async fn main() {
         .register::<CreatePool>()
         .register::<UserService>()
         .register::<NotificationService>()
-        .build_state::<AppState, _>()
+        .build_state()                  // state type is inferred from the provisions
         .await
         // ... register controllers, plugins, etc.
         .serve("0.0.0.0:3000")

@@ -283,33 +283,18 @@ async fn cors_preflight_returns_200() {
 
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
-use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, BeanState, Producer, Registrable};
-use r2e_core::type_list::{TCons, TNil};
+use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, Producer, Registrable};
+use r2e_core::type_list::{BeanAccess, TCons, TNil};
 use std::any::TypeId;
 
 #[derive(Clone, Debug)]
 struct TestDep(i32);
 
-// State with a single dependency
-#[derive(Clone)]
-struct SingleDepState {
-    dep: TestDep,
-}
-
-impl BeanState for SingleDepState {
-    type Requires = TCons<TestDep, TNil>;
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            dep: ctx.get::<TestDep>(),
-        }
-    }
-}
-
 #[r2e_core::test]
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
-        .build_typed_state::<SingleDepState, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -344,25 +329,11 @@ impl Registrable for TestService {
     }
 }
 
-#[derive(Clone)]
-struct BeanTestState {
-    service: TestService,
-}
-
-impl BeanState for BeanTestState {
-    type Requires = TCons<TestService, TNil>;
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get::<TestService>(),
-        }
-    }
-}
-
 #[r2e_core::test]
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .register::<TestService>()
-        .build_typed_state::<BeanTestState, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -394,25 +365,11 @@ impl Registrable for AsyncService {
     }
 }
 
-#[derive(Clone)]
-struct AsyncBeanTestState {
-    service: AsyncService,
-}
-
-impl BeanState for AsyncBeanTestState {
-    type Requires = TCons<AsyncService, TNil>;
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get::<AsyncService>(),
-        }
-    }
-}
-
 #[r2e_core::test]
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .register::<AsyncService>()
-        .build_typed_state::<AsyncBeanTestState, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -447,25 +404,11 @@ impl Registrable for TestProducer {
     }
 }
 
-#[derive(Clone)]
-struct ProducerTestState {
-    value: ProducedValue,
-}
-
-impl BeanState for ProducerTestState {
-    type Requires = TCons<ProducedValue, TNil>;
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            value: ctx.get::<ProducedValue>(),
-        }
-    }
-}
-
 #[r2e_core::test]
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .register::<TestProducer>()
-        .build_typed_state::<ProducerTestState, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -483,7 +426,7 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
-        .build_typed_state::<SingleDepState, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -531,32 +474,17 @@ impl Registrable for MaybeServiceProducer {
     }
 }
 
-// State that hard-depends on `Option<TestService>` (not a soft `try_get`).
-#[derive(Clone)]
-struct MaybeServiceState {
-    service: Option<TestService>,
-}
-
-impl BeanState for MaybeServiceState {
-    type Requires = TCons<Option<TestService>, TNil>;
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get::<Option<TestService>>(),
-        }
-    }
-}
-
 #[r2e_core::test]
 async fn producer_option_present_when_flag_true() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeServiceProducer>()
-        .build_typed_state::<MaybeServiceState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
     assert!(
-        prepared.state().service.is_some(),
+        prepared.state().get::<Option<TestService>>().is_some(),
         "flag=true → Option<TestService> present"
     );
 }
@@ -566,12 +494,12 @@ async fn producer_option_absent_when_flag_false() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(false))
         .register::<MaybeServiceProducer>()
-        .build_typed_state::<MaybeServiceState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
     assert!(
-        prepared.state().service.is_none(),
+        prepared.state().get::<Option<TestService>>().is_none(),
         "flag=false → Option<TestService> absent"
     );
 }
@@ -607,27 +535,14 @@ async fn async_producer_option_present() {
         }
     }
 
-    #[derive(Clone)]
-    struct MaybeAsyncState {
-        service: Option<AsyncService>,
-    }
-    impl BeanState for MaybeAsyncState {
-        type Requires = TCons<Option<AsyncService>, TNil>;
-        fn from_context(ctx: &BeanContext) -> Self {
-            Self {
-                service: ctx.get::<Option<AsyncService>>(),
-            }
-        }
-    }
-
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeAsyncProducer>()
-        .build_typed_state::<MaybeAsyncState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
-    assert!(prepared.state().service.is_some());
+    assert!(prepared.state().get::<Option<AsyncService>>().is_some());
 }
 
 #[r2e_core::test]
@@ -646,11 +561,11 @@ async fn producer_option_present_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_typed_state::<MaybeServiceState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
-    assert!(prepared.state().service.is_some());
+    assert!(prepared.state().get::<Option<TestService>>().is_some());
 }
 
 #[r2e_core::test]
@@ -667,11 +582,11 @@ async fn producer_option_absent_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_typed_state::<MaybeServiceState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
-    assert!(prepared.state().service.is_none());
+    assert!(prepared.state().get::<Option<TestService>>().is_none());
 }
 
 #[r2e_core::test]
@@ -686,11 +601,11 @@ async fn config_flag_missing_key_defaults_to_false() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
-        .build_typed_state::<MaybeServiceState, _>()
+        .build_state()
         .await
         .with(Health)
         .prepare("127.0.0.1:0");
-    assert!(prepared.state().service.is_none());
+    assert!(prepared.state().get::<Option<TestService>>().is_none());
 }
 
 #[r2e_core::test]

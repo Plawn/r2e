@@ -39,13 +39,17 @@ my-app/
   application.yaml
   src/
     main.rs
-    state.rs
     controllers/
       mod.rs
       hello.rs
 ```
 
-With `--db sqlite`, you also get a `migrations/` directory and `SqlitePool` in `AppState`. With `--auth`, the state includes an `Arc<JwtClaimsValidator>`. With `--openapi`, the builder includes `OpenApiPlugin` and your API docs are served at `/docs`. With `--grpc`, you get a `proto/greeter.proto` sample, a `build.rs`, and `GrpcServer` plugin in the builder.
+With `--db sqlite`, you also get a `migrations/` directory and a `SqlitePool`
+provided as a bean in `main.rs`. With `--auth`, the builder provides an
+`Arc<JwtClaimsValidator>` bean. With `--openapi`, the builder includes
+`OpenApiPlugin` and your API docs are served at `/docs`. With `--grpc`, you get a
+`proto/greeter.proto` sample, a `build.rs`, and `GrpcServer` plugin in the
+builder.
 
 ### Generated `main.rs`
 
@@ -56,17 +60,15 @@ use r2e::prelude::*;
 use r2e::plugins::{Health, Tracing};
 
 mod controllers;
-mod state;
 
 use controllers::hello::HelloController;
-use state::AppState;
 
 #[tokio::main]
 async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .build_state::<AppState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Tracing)
@@ -77,7 +79,7 @@ async fn main() {
 }
 ```
 
-With `--full`, additional plugins are added automatically: `Scheduler`, `GrpcServer`, `OpenApiPlugin`, and the state includes `SqlitePool`, `LocalEventBus`, and `JwtClaimsValidator`.
+With `--full`, additional plugins are added automatically: `Scheduler`, `GrpcServer`, `OpenApiPlugin`, and `SqlitePool`, `LocalEventBus`, and `JwtClaimsValidator` are provided as beans.
 
 ### Generated `application.yaml`
 
@@ -121,7 +123,7 @@ r2e generate controller UserController
 Generates `src/controllers/user_controller.rs` with a skeleton controller:
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct UserController {
     // #[inject]
     // your_service: YourService,
@@ -191,7 +193,7 @@ An `id INTEGER PRIMARY KEY AUTOINCREMENT` column is always generated automatical
 **After generation, you need to:**
 
 1. Register the controller: `.register_controller::<ArticleController>()`
-2. Add `ArticleService` to your state (or wire it with `#[bean]`)
+2. Register the service as a bean: `.register::<ArticleService>()` (before `build_state()`)
 3. Run the SQL migration
 4. Run `cargo check`
 
@@ -248,7 +250,7 @@ service User {
 **`src/grpc/user.rs`** — Rust implementation with `#[grpc_routes]`:
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct UserService { ... }
 
 #[grpc_routes(proto::user_server::User)]

@@ -890,35 +890,9 @@ pub fn derive_background_service(input: TokenStream) -> TokenStream {
     bg_service_derive::expand(input)
 }
 
-/// Derive macro for state structs — generates
-/// [`BeanState::from_context()`](r2e_core::beans::BeanState) and
-/// `FromRef` impls for each field.
-///
-/// Every field is resolved from the [`BeanContext`] by type. If two fields
-/// share the same type, `FromRef` is generated only for the first one.
-/// Use `#[bean_state(skip_from_ref)]` on a field to suppress its `FromRef`
-/// impl.
-///
-/// # Example
-///
-/// ```ignore
-/// #[derive(Clone, BeanState)]
-/// pub struct Services {
-///     pub user_service: UserService,
-///     pub event_bus: EventBus,
-///     pub pool: SqlitePool,
-/// }
-/// ```
-#[proc_macro_derive(BeanState, attributes(bean_state))]
-pub fn derive_bean_state(input: TokenStream) -> TokenStream {
-    bean_state_derive::expand(input)
-}
-
 /// Derive macro for test state structs — generates `FromRef` impls for
 /// each field, eliminating boilerplate in test files.
 ///
-/// Unlike [`BeanState`], this does **not** generate the `BeanState` impl
-/// (`from_context` / `Requires`) — only `FromRef`.
 ///
 /// Use `#[test_state(skip)]` on a field to suppress its `FromRef` impl.
 ///

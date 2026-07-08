@@ -6,14 +6,13 @@ use quote::{format_ident, quote};
 use crate::crate_path::{r2e_core_path, r2e_grpc_path};
 use crate::grpc_routes_parsing::GrpcRoutesImplDef;
 
-/// Generate `impl GrpcService<State> for ControllerName`.
+/// Generate `impl GrpcService for ControllerName`.
 pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let krate = r2e_core_path();
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
     let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
 
     // Derive the server type path from the trait path.
     // Convention: if trait is `proto::user_service_server::UserService`,
@@ -28,13 +27,20 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef) -> TokenStream {
         .unwrap_or_default();
 
     quote! {
-        impl #grpc_krate::GrpcService<#meta_mod::State> for #controller_name {
+        impl #grpc_krate::GrpcService for #controller_name {
             fn service_name() -> &'static str {
                 #service_name
             }
 
-            fn into_router(state: &#meta_mod::State) -> #grpc_krate::tonic::transport::server::Router {
-                let wrapper = #wrapper_name { state: state.clone() };
+            fn into_router(
+                __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
+            ) -> #grpc_krate::tonic::transport::server::Router {
+                let wrapper = #wrapper_name {
+                    core: ::std::sync::Arc::new(
+                        <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
+                    ),
+                    ctx: ::std::sync::Arc::clone(__ctx),
+                };
                 #grpc_krate::tonic::transport::Server::builder()
                     .add_service(#server_path::new(wrapper))
             }

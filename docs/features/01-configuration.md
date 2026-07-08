@@ -98,7 +98,7 @@ The `#[config("key")]` field attribute on a controller automatically injects the
 ```rust
 use r2e_core::prelude::*;
 
-#[controller(state = Services)]
+#[controller(path = "/")]
 pub struct MyController {
     #[config("app.greeting")]
     greeting: String,
@@ -143,7 +143,7 @@ pub struct RootConfig {
     pub app: AppConfig,
 }
 
-#[controller(state = Services)]
+#[controller(path = "/config")]
 pub struct ConfigController {
     #[inject]
     root_config: RootConfig,     // auto-registered by load_config
@@ -159,15 +159,7 @@ Field attributes for `ConfigProperties`:
 
 ### Prerequisite for `#[config]`
 
-The state type (`Services`) must implement `FromRef<Services>` for `R2eConfig`:
-
-```rust
-impl axum::extract::FromRef<Services> for R2eConfig {
-    fn from_ref(state: &Services) -> Self {
-        state.config.clone()
-    }
-}
-```
+Nothing to wire by hand. `R2eConfig` is itself a bean in the resolved graph, so `#[config("key")]` fields resolve through it automatically once the app is built with `load_config::<C>()` (typed) or `with_config(R2eConfig::...)` (raw). No `FromRef` impl is needed. `#[config(...)]` fields and typed `#[config_section]` structs are unchanged.
 
 ### 6. Registering config in AppBuilder
 
@@ -182,6 +174,8 @@ AppBuilder::new()
     .with_config(config)
     // ...
 ```
+
+> **Large apps:** each typed config section and every provided/registered value is a bean. Apps with more than ~127 beans need `#![recursion_limit = "512"]` at the crate root (`main.rs`); `r2e doctor` warns as the bean count approaches the threshold.
 
 ## Secrets
 

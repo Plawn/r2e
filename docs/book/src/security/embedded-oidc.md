@@ -35,7 +35,7 @@ let oidc = OidcServer::new()
 
 AppBuilder::new()
     .plugin(oidc)                              // pre-state: provides Arc<JwtClaimsValidator>
-    .build_state::<Services, _>().await
+    .build_state().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -77,7 +77,7 @@ let oidc = OidcServer::new()
 // main(env) — called on each hot-patch
 AppBuilder::new()
     .plugin(oidc.clone()) // reuses the same keys and state
-    .build_state::<Services, _>().await
+    .build_state().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -334,13 +334,7 @@ use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser, ClientRegistry};
 use std::collections::HashMap;
 use serde_json::json;
 
-#[derive(Clone, BeanState)]
-pub struct Services {
-    pub claims_validator: Arc<JwtClaimsValidator>,
-    pub user_service: UserService,
-}
-
-#[controller(path = "/api", state = Services)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] user_service: UserService,
 }
@@ -385,7 +379,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(oidc)
         .register::<UserService>()
-        .build_state::<Services, _>().await
+        .build_state().await
         .with(Health)
         .with(Tracing)
         .register_controller::<ApiController>()
@@ -412,7 +406,7 @@ let oidc = OidcServer::new().with_user_store(users);
 
 let app = AppBuilder::new()
     .plugin(oidc)
-    .build_state::<TestState, _>().await
+    .build_state().await
     .register_controller::<MyController>()
     .build();
 

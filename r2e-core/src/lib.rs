@@ -35,7 +35,7 @@ pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BeanState, PostConstruct, Producer};
+pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
 pub use lazy::Lazy;
 pub use builder::{
     AppBuilder, PreparedApp, RegisterController, RegisterControllers, TaskRegistryHandle,
@@ -47,7 +47,7 @@ pub use config::{
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,
 };
-pub use controller::{ContextConstruct, Controller, StatefulConstruct};
+pub use controller::{ContextConstruct, Controller};
 pub use extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt};
 pub use error::{HttpError, HttpErrorExt};
 pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext};

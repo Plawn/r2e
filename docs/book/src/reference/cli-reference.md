@@ -60,7 +60,6 @@ my-app/
   application.yaml                app name + port
   src/
     main.rs                       #[tokio::main], AppBuilder, .serve()
-    state.rs                      AppState with #[derive(Clone, BeanState)]
     controllers/
       mod.rs                      pub mod hello;
       hello.rs                    HelloController at /
@@ -100,7 +99,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(Scheduler)
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-        .build_state::<AppState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Tracing)
@@ -150,7 +149,7 @@ r2e generate controller UserController
 use r2e::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[controller(state = AppState)]
+#[controller]
 pub struct UserController {
     // #[inject]
     // your_service: YourService,
@@ -257,7 +256,7 @@ CREATE TABLE IF NOT EXISTS users (
 #### Generated controller example
 
 ```rust
-#[controller(path = "/articles", state = AppState)]
+#[controller(path = "/articles")]
 pub struct ArticleController {
     #[inject]
     service: ArticleService,

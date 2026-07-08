@@ -1,5 +1,29 @@
 # Controller Identity Codegen Refactor Roadmap
 
+> **STATUS: COMPLETED (historical handoff).** This roadmap drove the earlier
+> request-façade refactor and is kept for its architecture rationale. Several
+> API specifics below were later superseded by the **Phase 4 DI refactor** (see
+> `di-builder-refactor.md`). When reading the code snippets, apply these deltas:
+> - `#[controller(path = "…", state = AppState)]` → `#[controller(path = "…")]`.
+>   The `state =` argument was **removed**; the state type is now the builder's
+>   provision list materialized as an inferred HList — no hand-written state
+>   struct.
+> - `StatefulConstruct<State>` → **`ContextConstruct`** (`from_context(&BeanContext)`,
+>   resolving `#[inject]` fields by type). `StatefulConstruct` was removed.
+> - `trait Controller<S> { fn routes_with_state(&S) -> Router<S> }` → the shipped
+>   trait is generic `Controller<S, W>` with `S: Clone + Send + Sync + 'static +
+>   BeanLookup` and a `routes` method; registration moved to the
+>   `RegisterController` / `RegisterControllers` extension traits, called **after**
+>   `.build_state().await`.
+> - The generated request-data extractor is no longer `FromRequestParts<AppState>`
+>   over a concrete state; identity/request extraction now goes through R2E's
+>   `FromRequestPartsVia<S, M>` / `OptionalFromRequestPartsVia<S, M>` (generic
+>   over `S`, with a marker slot carrying the `HasBean` witness), plus a blanket
+>   `ViaAxum` bridge for plain axum extractors.
+>
+> The façade architecture, method-placement rules, and scope invariants the
+> roadmap establishes are all still accurate.
+
 ## Audience and intent
 
 This document is a standalone implementation handoff for Claude Code or a fresh
@@ -20,7 +44,7 @@ implement Phase 1 only. Run the listed validation commands before stopping.
 The goal is to preserve the convenient controller syntax:
 
 ```rust
-#[controller(path = "/accounts", state = AppState)]
+#[controller(path = "/accounts")]
 pub struct AccountController {
     #[inject]
     service: AccountService,
@@ -146,13 +170,13 @@ This requires replacing the current combination:
 
 ```rust,ignore
 #[derive(Controller)]
-#[controller(path = "/accounts", state = AppState)]
+#[controller(path = "/accounts")]
 ```
 
 with a real attribute macro:
 
 ```rust,ignore
-#[controller(path = "/accounts", state = AppState)]
+#[controller(path = "/accounts")]
 ```
 
 The attribute macro sees and can transform the struct. A derive macro cannot
@@ -424,7 +448,7 @@ The attribute macro must:
 1. parse controller path/state and all field scopes;
 2. remove identity fields from the emitted physical controller;
 3. keep injected/config fields on the physical controller;
-4. generate `StatefulConstruct<State>` for the physical controller;
+4. generate `ContextConstruct` for the physical controller (was `StatefulConstruct<State>`);
 5. generate the stable request-data type;
 6. generate the stable request-façade type;
 7. generate `Deref<Target = Controller>`;
@@ -438,11 +462,11 @@ Migrate the entire workspace in one mechanical pass:
 ```rust,ignore
 // Before
 #[derive(Controller)]
-#[controller(path = "/x", state = AppState)]
+#[controller(path = "/x")]
 struct X { ... }
 
 // After
-#[controller(path = "/x", state = AppState)]
+#[controller(path = "/x")]
 struct X { ... }
 ```
 

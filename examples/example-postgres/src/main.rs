@@ -5,10 +5,8 @@ mod controllers;
 mod error;
 mod models;
 mod services;
-mod state;
 
 use controllers::article_controller::ArticleController;
-use state::AppState;
 
 #[producer]
 async fn create_pool(#[config("database.url")] url: String) -> sqlx::PgPool {
@@ -25,7 +23,7 @@ async fn main() {
         .with_config(config)
         .register::<CreatePool>()
         .register::<services::ArticleService>()
-        .build_typed_state::<AppState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())
@@ -38,8 +36,11 @@ async fn main() {
         ))
         .on_start(|state| async move {
             // Run migrations
+            let pool = state
+                .bean::<sqlx::PgPool>()
+                .expect("PgPool bean not found in state");
             sqlx::migrate!("./migrations")
-                .run(&state.pool)
+                .run(&pool)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             tracing::info!("Database migrations applied");

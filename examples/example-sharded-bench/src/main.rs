@@ -16,10 +16,8 @@ use r2e::prelude::*;
 use sqlx::sqlite::SqlitePoolOptions;
 
 mod controllers;
-mod state;
 
 use controllers::BenchController;
-use state::Services;
 
 /// Create a FILE-backed sqlite pool and seed a small table.
 ///
@@ -83,7 +81,7 @@ async fn main() {
     AppBuilder::new()
         .with_config(config)
         .provide(pool)
-        .build_typed_state::<Services, _>()
+        .build_state()
         .await
         .register_controller::<BenchController>()
         .serve_auto()

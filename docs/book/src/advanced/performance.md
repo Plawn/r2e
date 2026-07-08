@@ -66,13 +66,13 @@ Struct-level `#[inject(identity)]` runs JWT validation for **every** endpoint �
 
 ```rust
 // Bad: JWT validated for public endpoints too
-#[controller(state = AppState)]
+#[controller]
 pub struct ApiController {
     #[inject(identity)] user: AuthenticatedUser,  // validates on ALL endpoints
 }
 
 // Good: JWT only validated where needed
-#[controller(state = AppState)]
+#[controller]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -95,12 +95,16 @@ Each `#[config]` field is resolved into the controller core when the router is b
 
 ### 4. Pre-warm JWKS cache
 
-The first JWT validation with a JWKS endpoint incurs a ~50-200 ms HTTP roundtrip. Pre-warm in an `on_start` hook:
+The first JWT validation with a JWKS endpoint incurs a ~50-200 ms HTTP roundtrip. Pre-warm in an `on_start` hook. The hook receives the built state (the inferred bean HList), so pull the validator out by type with `bean::<T>()` (from `BeanLookup`, in the prelude):
 
 ```rust
 .on_start(|state| async move {
     // Trigger a JWKS cache refresh
-    state.validator.refresh_jwks().await?;
+    state
+        .bean::<Arc<JwtClaimsValidator>>()
+        .expect("JwtClaimsValidator bean")
+        .refresh_jwks()
+        .await?;
     Ok(())
 })
 ```
@@ -123,6 +127,27 @@ Guards run on every guarded request. Keep them fast:
 Avoid putting unrelated endpoints in the same controller. Each controller shares
 the same injection profile; unnecessary services increase retained core state
 and registration work.
+
+### 8. Large bean graphs and compile time
+
+The application state is the provision list `P` materialized as a type-level HList
+(one slot per `.provide()` / `.register()`). Bean access — `state.get::<T>()` and
+the by-type resolution behind `#[inject]` — monomorphizes to a **fixed-offset
+field load** (no hash, no `TypeId` compare, no branch), so it is struct-speed
+regardless of graph size. There is **no runtime cost** to a large graph.
+
+The trade-off is **compile time**: the `HasBean` witness recursion grows roughly
+linearly with the bean count (a few seconds even at ~256 beans). Past the default
+`recursion_limit = 128` (around ~127 provisions) the `There` witness chain
+overflows with `E0275`; add this crate-level attribute at the top of `main.rs`:
+
+```rust
+#![recursion_limit = "512"]
+```
+
+A macro cannot inject a crate-level attribute, so this must be added by hand. It
+is only needed for large apps; `r2e doctor` warns as the bean count approaches the
+threshold.
 
 ## Anti-patterns
 
@@ -189,7 +214,7 @@ These are compile-time constants — the Tokio runtime is built before any async
 | Aspect | Struct-level | Param-level |
 |--------|-------------|------------|
 | JWT validation | Every request | Only annotated endpoints |
-| `StatefulConstruct` | Generated (core) | Generated (core) |
+| `ContextConstruct` | Generated (core) | Generated (core) |
 | Consumers/Schedulers | Possible (run on core) | Possible (run on core) |
 | Identity access | `self.user` | Only in handler parameter |
 | Public endpoint overhead | JWT validation wasted | None |

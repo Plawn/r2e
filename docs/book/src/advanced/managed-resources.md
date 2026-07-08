@@ -40,8 +40,7 @@ async fn create(
 ## Implementing for transactions
 
 ```rust
-use r2e::prelude::*; // ManagedResource, ManagedErr
-use r2e::r2e_data_sqlx::HasPool;
+use r2e::prelude::*; // ManagedResource, ManagedErr, BeanLookup
 use sqlx::{Database, Transaction, Pool};
 
 pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
@@ -49,12 +48,17 @@ pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
 impl<S, DB> ManagedResource<S> for Tx<'static, DB>
 where
     DB: Database,
-    S: HasPool<DB> + Send + Sync,
+    S: BeanLookup + Send + Sync,
 {
     type Error = ManagedErr<MyHttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let tx = state.pool().begin().await
+        // The pool is fetched from the bean graph by type — there is no
+        // `HasPool` state trait to implement. Just `.provide(pool)` before
+        // `build_state()` so `Pool<DB>` is resolvable.
+        let pool = state.bean::<Pool<DB>>()
+            .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
+        let tx = pool.begin().await
             .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         Ok(Tx(tx))
     }

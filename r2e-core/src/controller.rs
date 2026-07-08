@@ -1,17 +1,3 @@
-/// Construct a controller from the application state alone (no HTTP context).
-///
-/// Legacy construction path for the named-state model
-/// (`#[controller(state = ...)]`); superseded by [`ContextConstruct`] for
-/// state-generic controllers. Also implemented by `#[derive(BackgroundService)]`
-/// components.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot be constructed from state alone",
-    note = "controller cores must use #[controller(...)] or implement StatefulConstruct manually"
-)]
-pub trait StatefulConstruct<S> {
-    fn from_state(state: &S) -> Self;
-}
-
 /// Construct a controller core (or service) from the resolved bean graph,
 /// **by type**.
 ///

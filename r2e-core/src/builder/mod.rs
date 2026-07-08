@@ -17,7 +17,7 @@ pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
-use crate::beans::{AsyncBean, Bean, BeanRegistry, BeanState, Producer, Registrable};
+use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::lifecycle::{ShutdownHook, StartupHook};
 use crate::meta::MetaRegistry;
@@ -204,37 +204,4 @@ impl Default for AppBuilder<NoState, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Legacy façade over the typed-struct state path
-/// ([`AppBuilder::build_typed_state`]), hiding its inferred witness parameter.
-///
-/// **Deprecated path**: the hand-written state struct model is being replaced
-/// by the HList state built by [`AppBuilder::build_state`] (Phase 4); this
-/// macro and the typed-struct path will be removed once all call sites are
-/// migrated.
-///
-/// ```ignore
-/// let app = build_state!(builder, Services).await;
-/// // expands to: builder.build_typed_state::<Services, _>().await
-/// ```
-#[macro_export]
-macro_rules! build_state {
-    ($app:expr, $state:ty $(,)?) => {
-        $app.build_typed_state::<$state, _>()
-    };
-}
-
-/// Non-panicking variant of [`build_state!`] — façade over
-/// [`AppBuilder::try_build_typed_state`]. Deprecated path, see [`build_state!`].
-///
-/// ```ignore
-/// let app = try_build_state!(builder, Services).await?;
-/// // expands to: builder.try_build_typed_state::<Services, _>().await
-/// ```
-#[macro_export]
-macro_rules! try_build_state {
-    ($app:expr, $state:ty $(,)?) => {
-        $app.try_build_typed_state::<$state, _>()
-    };
 }

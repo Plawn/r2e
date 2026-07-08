@@ -11,21 +11,21 @@ There are two places to inject identity in a controller:
 When `#[inject(identity)]` is on a struct field, **every endpoint** in the controller requires authentication. If the JWT is missing or invalid, the request is rejected before any handler runs.
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
     #[inject] service: UserService,
 }
 ```
 
-The identity field lives on the per-request façade, never on the controller core. The core still gets a `StatefulConstruct` impl (it always does), so the controller can also host `#[consumer]` / `#[scheduled]` methods — those run on the core and simply cannot access the request identity.
+The identity field lives on the per-request façade, never on the controller core. The core still gets a `ContextConstruct` impl (it always does), so the controller can also host `#[consumer]` / `#[scheduled]` methods — those run on the core and simply cannot access the request identity.
 
 ### Parameter-level identity
 
 When `#[inject(identity)]` is on a handler parameter instead, only the annotated endpoints require authentication. This is the recommended form for mixed public/protected controllers, since each endpoint opts into authentication individually.
 
 ```rust
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -94,7 +94,7 @@ This example shows a controller with public, protected, role-gated, and optional
 ```rust
 use r2e::prelude::*;
 
-#[controller(path = "/items", state = AppState)]
+#[controller(path = "/items")]
 pub struct ItemController {
     #[inject] item_service: ItemService,
 }
@@ -148,7 +148,7 @@ impl ItemController {
 | Every endpoint requires auth | Struct-level `#[inject(identity)]` |
 | Mix of public and protected endpoints | Parameter-level `#[inject(identity)]` |
 | Endpoint adapts to auth presence | `#[inject(identity)] user: Option<AuthenticatedUser>` |
-| Controller is also a consumer/scheduled task target | Parameter-level (preserves `StatefulConstruct`) |
+| Controller is also a consumer/scheduled task target | Parameter-level (keeps the core identity-free) |
 
 ## Combining with guards
 

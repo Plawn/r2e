@@ -1,8 +1,6 @@
 use r2e::prelude::*;
 use serde::Serialize;
 
-use crate::state::Services;
-
 /// Small JSON payload returned by `/json`. A few fields, representative of a
 /// typical small API response where serialization — not IO — dominates.
 #[derive(Serialize)]
@@ -20,7 +18,7 @@ struct Row {
     value: i64,
 }
 
-#[controller(path = "/", state = Services)]
+#[controller(path = "/")]
 pub struct BenchController {
     #[inject]
     pool: sqlx::SqlitePool,

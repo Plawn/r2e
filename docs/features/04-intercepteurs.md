@@ -6,7 +6,7 @@ Provide declarative attributes to enrich controller method behavior: logging, pe
 
 ## Architecture
 
-Interceptors are based on a generic `Interceptor<R>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). Built-in interceptors (`Logged`, `Timed`, `Cached`) are structs that implement this trait. All calls are monomorphized (no `dyn`) — zero-cost at runtime.
+Interceptors are based on a generic `Interceptor<R, S>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). `R` is the wrapped return type and `S` is the application state type. Built-in interceptors (`Logged`, `Timed`, `Cached`) are structs that implement this trait generically over `S`. All calls are monomorphized (no `dyn`) — zero-cost at runtime.
 
 Exceptions to this architecture:
 - **`rate_limited`** — handled at the handler level (short-circuits before the controller, like `#[roles]`)
@@ -42,7 +42,7 @@ These no-op declarations exist for three reasons:
 | `#[rate_limited(..., key = "ip")]` | Per-IP-address limit | `X-Forwarded-For` header |
 | `#[transactional]` | SQL transaction with auto-commit/rollback | Injected `pool` field |
 | `#[transactional(pool = "read_db")]` | Transaction on a specific pool | Corresponding injected field |
-| `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R>` |
+| `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R, S>` |
 
 ### Application order
 
@@ -79,26 +79,35 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 
 **Known limitation:** `#[managed]` + `#[intercept(Cache)]` does NOT work — the managed resource lifecycle (acquire/release with error handling) wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: use `cache_backend()` manually in the handler body.
 
-## The `Interceptor<R>` trait
+## The `Interceptor<R, S>` trait
 
 ```rust
-/// Context passed to each interceptor. Copy for capture by async move closures.
-#[derive(Clone, Copy)]
-pub struct InterceptorContext {
+/// Context passed to each interceptor, including a reference to the
+/// application state (through which beans are read).
+pub struct InterceptorContext<'a, S> {
     pub method_name: &'static str,
     pub controller_name: &'static str,
+    pub state: &'a S,
 }
 
-/// Trait generic over return type R.
-pub trait Interceptor<R> {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+/// Trait generic over return type `R` and application state `S`.
+pub trait Interceptor<R, S> {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send;
 }
 ```
 
-`InterceptorContext` is `Copy`, which allows it to be captured by each nested `async move` closure without ownership issues.
+The application state type is now **inferred** (an HList assembled from `.register()` / `.provide()`), not a hand-written struct, so interceptors are written **generically over `S`**:
+
+- An interceptor that never touches the state stays fully generic:
+  `impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog`.
+- An interceptor that **reads a bean** from the state adds the `BeanLookup` bound
+  and pulls the bean by type via `ctx.state.bean::<T>()`:
+  `impl<R: Send, S: BeanLookup + Send + Sync> Interceptor<R, S> for DbAuditLog`.
+
+`BeanLookup` is in the prelude. `bean::<T>()` returns `Option<T>` (a witness-free dynamic lookup). The witness-free fixed-offset accessor `state.get::<T>()` (trait `BeanAccess`) is *not* in the prelude — import it explicitly with `use r2e_core::type_list::BeanAccess;` when you need it. `ctx.method_name` and `ctx.controller_name` are `Copy`, so they can be captured by each nested `async move` closure; `ctx.state` is a borrow, so read the beans you need *before* the `async move`.
 
 ## `#[logged]`
 
@@ -281,25 +290,56 @@ async fn read_data(&self, ...) -> Result<...> { ... }
 
 ## `#[intercept(Type)]` — User-defined interceptors
 
-Users can create their own interceptors by implementing the `Interceptor<R>` trait:
+Users can create their own interceptors by implementing the `Interceptor<R, S>` trait. A stateless interceptor stays generic over both `R` and `S`:
 
 ```rust
 pub struct AuditLog;
 
-impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
+impl<R: Send, S: Send + Sync> r2e_core::Interceptor<R, S> for AuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: r2e_core::InterceptorContext,
+        ctx: r2e_core::InterceptorContext<'_, S>,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
         async move {
-            tracing::info!(method = ctx.method_name, "audit: entering");
+            tracing::info!(method = method_name, "audit: entering");
             let result = next().await;
-            tracing::info!(method = ctx.method_name, "audit: done");
+            tracing::info!(method = method_name, "audit: done");
+            result
+        }
+    }
+}
+```
+
+An interceptor that reads a bean adds the `BeanLookup` bound and fetches it by type from `ctx.state`:
+
+```rust
+pub struct DbAuditLog;
+
+impl<R: Send, S: BeanLookup + Send + Sync> Interceptor<R, S> for DbAuditLog {
+    fn around<F, Fut>(
+        &self,
+        ctx: InterceptorContext<'_, S>,
+        next: F,
+    ) -> impl Future<Output = R> + Send
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = R> + Send,
+    {
+        let method_name = ctx.method_name;
+        // Read the bean BEFORE the async move (ctx.state is a borrow).
+        let pool = ctx.state.bean::<sqlx::SqlitePool>().expect("SqlitePool bean");
+        async move {
+            let result = next().await;
+            let _ = sqlx::query("INSERT INTO audit_log (method, ts) VALUES (?, datetime('now'))")
+                .bind(method_name)
+                .execute(&pool)
+                .await;
             result
         }
     }
@@ -318,7 +358,7 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 ### Constraints
 
 - The type passed to `#[intercept(...)]` must be constructible as a path expression (unit struct or constant). Call syntax (`#[intercept(Foo::new())]`) does not work.
-- The interceptor is generic over `R` (or constrained to a specific type if needed).
+- The interceptor is generic over `R` and `S` (add `S: BeanLookup + Send + Sync` when it reads beans from the state).
 
 ## Complete example
 
@@ -329,21 +369,22 @@ use r2e_core::prelude::*;
 /// Custom interceptor
 pub struct AuditLog;
 
-impl<R: Send> Interceptor<R> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F)
+impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F)
         -> impl Future<Output = R> + Send
     where F: FnOnce() -> Fut + Send, Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
         async move {
-            tracing::info!(method = ctx.method_name, "audit: entering");
+            tracing::info!(method = method_name, "audit: entering");
             let result = next().await;
-            tracing::info!(method = ctx.method_name, "audit: done");
+            tracing::info!(method = method_name, "audit: done");
             result
         }
     }
 }
 
-#[controller(path = "/users", state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]
     user_service: UserService,

@@ -2,9 +2,8 @@ use r2e::prelude::*;
 
 use crate::models::{CreateOrderRequest, Order};
 use crate::services::OrderService;
-use crate::state::OrderState;
 
-#[controller(path = "/orders", state = OrderState)]
+#[controller(path = "/orders")]
 pub struct OrderController {
     #[inject]
     order_service: OrderService,

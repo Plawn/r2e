@@ -26,7 +26,7 @@ impl FromRef<AppState> for String {
     }
 }
 
-#[controller(path = "/helper", state = AppState)]
+#[controller(path = "/helper")]
 pub struct HelperController {
     #[inject]
     prefix: String,

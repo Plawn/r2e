@@ -315,8 +315,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Spawn a background [`ServiceComponent`] that participates in DI.
     ///
-    /// The service is constructed from the application state via
-    /// [`ServiceComponent::from_state`] and started in a Tokio task during
+    /// The service is constructed from the retained bean graph via
+    /// [`ServiceComponent::from_context`] and started in a Tokio task during
     /// `on_start`. A [`CancellationToken`] is provided and cancelled
     /// automatically during shutdown.
     ///
@@ -324,11 +324,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .build_state::<Services, _>().await
+    ///     .provide(pool)
+    ///     .build_state().await
     ///     .spawn_service::<MetricsExporter>()
     ///     .serve("0.0.0.0:3000").await
     /// ```
-    pub fn spawn_service<C: ServiceComponent<T>>(mut self) -> Self {
+    pub fn spawn_service<C: ServiceComponent>(mut self) -> Self {
         let token = CancellationToken::new();
         let shutdown_token = token.clone();
 
@@ -343,8 +344,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
 
-        self = self.on_start(move |state| async move {
-            let service = C::from_state(&state);
+        let service = C::from_context(&self.bean_context);
+        self = self.on_start(move |_state| async move {
             let join = crate::rt::spawn(service.start(token));
             handles.push(join);
             Ok(())
@@ -448,23 +449,35 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Register a bean's event subscriptions.
     ///
-    /// The bean is extracted from state via `FromRef` and its
+    /// The bean is pulled from the retained bean graph by type and its
     /// [`EventSubscriber::subscribe()`] method is called during server startup.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `S` was not provided/registered on the builder before
+    /// `build_state()`.
     ///
     /// # Example
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .build_state::<Services, _>().await
+    ///     .register::<NotificationService>()
+    ///     .build_state().await
     ///     .register_subscriber::<NotificationService>()
     ///     .serve("0.0.0.0:3000").await.unwrap();
     /// ```
     pub fn register_subscriber<S>(mut self) -> Self
     where
-        S: crate::EventSubscriber + crate::http::extract::FromRef<T>,
+        S: crate::EventSubscriber + Clone + 'static,
     {
-        self.consumer_registrations.push(Box::new(|state| {
-            let subscriber = S::from_ref(&state);
+        let subscriber = self.bean_context.try_get::<S>().unwrap_or_else(|| {
+            panic!(
+                "register_subscriber::<{ty}>(): bean not found in the resolved graph — \
+                 add `.register::<{ty}>()` or `.provide(...)` before `build_state()`",
+                ty = std::any::type_name::<S>()
+            )
+        });
+        self.consumer_registrations.push(Box::new(move |_state| {
             subscriber.subscribe()
         }));
         self

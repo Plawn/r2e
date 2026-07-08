@@ -9,13 +9,11 @@ use sqlx::SqlitePool;
 mod controllers;
 mod models;
 mod services;
-mod state;
 mod tenant_guard;
 mod tenant_identity;
 
 use controllers::admin_controller::AdminController;
 use controllers::tenant_controller::TenantController;
-use state::AppState;
 
 fn generate_token(secret: &[u8], sub: &str, tenant_id: &str, roles: &[&str]) -> String {
     let exp = std::time::SystemTime::now()
@@ -105,7 +103,7 @@ async fn main() {
         .provide(pool)
         .provide(Arc::new(claims_validator))
         .register::<services::ProjectService>()
-        .build_typed_state::<AppState, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

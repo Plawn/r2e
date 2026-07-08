@@ -117,7 +117,7 @@ let config = R2eConfig::load_with_resolver(&VaultResolver { /* ... */ }).unwrap(
 Inject individual values by their full dot-separated key. The field type must implement `FromConfigValue`.
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[config("app.greeting")] greeting: String,
     #[config("app.max-retries")] max_retries: i64,
@@ -357,7 +357,7 @@ If `app.name` is missing, the error includes: `-- The display name of the applic
 With `load_config::<RootConfig>()`, config types are auto-registered as beans. Inject them with `#[inject]`:
 
 ```rust
-#[controller(state = Services)]
+#[controller]
 pub struct ConfigController {
     #[inject]
     root_config: RootConfig,          // auto-registered by load_config
@@ -448,17 +448,12 @@ let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
 AppBuilder::new().with_config(config)
 ```
 
-Both methods store the raw config in the builder and provide `R2eConfig` in the bean registry.
-
-Your state type must implement `FromRef` for `R2eConfig`:
-
-```rust
-impl r2e::http::FromRef<AppState> for R2eConfig {
-    fn from_ref(state: &AppState) -> Self {
-        state.config.clone()
-    }
-}
-```
+Both methods store the raw config in the builder and provide `R2eConfig` in the
+bean registry. `R2eConfig` is therefore just another bean in the graph — nothing
+to wire by hand. It is available for `#[inject]`/`#[config(...)]` in controllers,
+as a dependency in `#[bean]`/`#[producer]` constructors, and from a `BeanContext`
+via `ctx.get::<R2eConfig>()`. (There is no state struct and no `FromRef` impl to
+write — the state type is inferred from the bean graph.)
 
 ## Startup validation
 

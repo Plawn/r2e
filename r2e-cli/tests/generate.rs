@@ -168,7 +168,9 @@ fn generate_controller_valid_content() {
     generate::controller("UserController").unwrap();
 
     let content = fs::read_to_string("src/controllers/user_controller.rs").unwrap();
-    assert!(content.contains("#[controller("));
+    assert!(content.contains("#[controller]"));
+    // New DI model: no typed state on the controller attribute.
+    assert!(!content.contains("state = AppState"));
     assert!(content.contains("pub struct UserController"));
     assert!(content.contains("#[routes]"));
     assert!(content.contains("impl UserController"));

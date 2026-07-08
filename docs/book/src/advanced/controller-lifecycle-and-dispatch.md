@@ -10,7 +10,7 @@ Controller fields do not all have the same lifetime:
 
 | Field kind | Available from | Natural lifetime | Lives on |
 |------------|----------------|------------------|----------|
-| `#[inject]` | Application state | Application | Core |
+| `#[inject]` | Bean graph (by type) | Application | Core |
 | `#[config(...)]` | Application configuration | Application | Core |
 | `#[inject(identity)]` | HTTP request credentials | Request | Façade |
 | `#[inject(request)]` | Any request `FromRequestParts` value | Request | Façade |
@@ -34,7 +34,7 @@ clone plus the extracted identity — is created per request.
 This applies to **struct-level** identity:
 
 ```rust
-#[controller(state = AppState)]
+#[controller(path = "/accounts")]
 struct AccountController {
     #[inject]
     service: AccountService,
@@ -49,7 +49,7 @@ Parameter-level identity is also request-scoped, but is passed as an explicit
 handler argument:
 
 ```rust
-#[controller(state = AppState)]
+#[controller(path = "/accounts")]
 struct AccountController {
     #[inject]
     service: AccountService,
@@ -82,17 +82,22 @@ the application dependencies per request.
 
 ## Normal registration path
 
-`AppBuilder::register_controller::<C>()` builds the core once, wraps it in an
-`Arc`, and passes that same instance to routes, consumers, and scheduled tasks:
+`.register_controller::<C>()` (from the `RegisterController` extension trait, in
+the prelude, called on the built app after `build_state().await`) builds the core
+once from the resolved bean graph, wraps it in an `Arc`, and passes that same
+instance to routes, consumers, and scheduled tasks:
 
 ```text
 register_controller
-  -> build the core once from state (StatefulConstruct::from_state)
+  -> build the core once from the BeanContext (ContextConstruct::from_context)
+       each #[inject] field is `ctx.get::<FieldType>()` — resolved BY TYPE
+       (Controller::Deps is checked against the state's provision list via
+        AllSatisfied at this call site — a missing bean is a COMPILE error)
   -> wrap it in Arc<Core>
-  -> routes(&state, core.clone())
+  -> routes(&state, core.clone())        // state is the inferred HList
        for each route, register a closure that:
          - captures an Arc clone of the core
-         - extracts __R2eRequestData_<Name> via FromRequestParts
+         - extracts __R2eRequestData_<Name> via FromRequestParts (state-generic)
          - binds a stack façade (bind_request)
          - invokes the route method on the façade
 ```
@@ -102,11 +107,12 @@ fields. A controller with no request-scoped fields simply binds a façade whose
 request-data extractor is zero-sized and infallible. There is no
 request-extension lookup and no controller reconstruction on this path.
 
-Code assembling a controller router directly must provide state and a core:
+Code assembling a controller router directly builds the core from the context and
+threads the inferred state `S`:
 
 ```rust,ignore
-let core = Arc::new(AccountController::from_state(&state));
-let router = <AccountController as Controller<AppState>>::routes(&state, core);
+let core = Arc::new(<AccountController as ContextConstruct>::from_context(&ctx));
+let router = <AccountController as Controller<S, _>>::routes(&state, core);
 ```
 
 There is no no-argument compatibility path. Controllers are never looked up
@@ -124,8 +130,8 @@ body.
 Conceptually, the expanded code is:
 
 ```rust,ignore
-// Built once at registration.
-let core: Arc<AccountController> = Arc::new(AccountController::from_state(&state));
+// Built once at registration, from the resolved bean graph (by type).
+let core: Arc<AccountController> = Arc::new(AccountController::from_context(&ctx));
 
 Router::new().route(
     "/me",

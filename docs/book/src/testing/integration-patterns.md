@@ -11,13 +11,6 @@ use r2e::prelude::*;
 use r2e_test::{TestApp, TestJwt};
 use std::sync::Arc;
 
-#[derive(Clone, TestState)]
-struct TestServices {
-    jwt_validator: Arc<JwtClaimsValidator>,
-    event_bus: LocalEventBus,
-    user_service: UserService,
-}
-
 async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let event_bus = LocalEventBus::new();
@@ -27,7 +20,7 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(event_bus)
             .register::<UserService>()
-            .build_state::<TestServices, _>()
+            .build_state()
             .await
             .with(Health)
             .with(ErrorHandling)
@@ -167,7 +160,7 @@ async fn setup_with_db() -> (TestApp, TestJwt) {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(pool)
             .register::<UserService>()
-            .build_state::<AppState, _>()
+            .build_state()
             .await
             .with(ErrorHandling)
             .register_controller::<UserController>(),
@@ -271,7 +264,7 @@ async fn test_event_emission() {
             .provide(Arc::new(jwt.claims_validator()))
             .provide(event_bus)
             .register::<UserService>()
-            .build_state::<AppState, _>()
+            .build_state()
             .await
             .register_controller::<UserController>(),
     );

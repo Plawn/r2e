@@ -5,9 +5,8 @@ use r2e::r2e_utils::interceptors::Logged;
 use crate::error::HttpError;
 use crate::models::{Article, CreateArticleRequest, UpdateArticleRequest};
 use crate::services::ArticleService;
-use crate::state::AppState;
 
-#[controller(path = "/articles", state = AppState)]
+#[controller(path = "/articles")]
 pub struct ArticleController {
     #[inject]
     article_service: ArticleService,

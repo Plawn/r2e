@@ -38,7 +38,7 @@ use r2e::ws::WsStream;
 Annotate a controller method with `#[ws("/path")]` and accept a `WsStream` parameter:
 
 ```rust
-#[controller(path = "/ws", state = AppState)]
+#[controller(path = "/ws")]
 pub struct EchoController;
 
 #[routes]
@@ -179,7 +179,7 @@ impl WsHandler for ChatHandler {
 When a `#[ws]` method has no `WsStream` parameter, the framework expects it to return an `impl WsHandler`:
 
 ```rust
-#[controller(path = "/ws", state = AppState)]
+#[controller(path = "/ws")]
 pub struct ChatController;
 
 #[routes]
@@ -203,15 +203,15 @@ use r2e::ws::WsBroadcaster;
 let broadcaster = WsBroadcaster::new(128); // capacite du canal
 ```
 
-Add to the state for injection:
+Provide it to the builder so it becomes an injectable bean — there is no hand-written state struct; the state is an inferred HList and controllers inject beans by type:
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub broadcaster: WsBroadcaster,
+AppBuilder::new()
+    .provide(broadcaster)   // WsBroadcaster is now a bean, resolved by type
     // ...
-}
 ```
+
+Any controller with `#[inject] broadcaster: WsBroadcaster` receives the same instance.
 
 #### Broadcasting Methods
 
@@ -271,14 +271,12 @@ use r2e::ws::WsRooms;
 let rooms = WsRooms::new(128); // capacite par salle
 ```
 
-Add to the state:
+Provide it to the builder so controllers can inject it by type:
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub ws_rooms: WsRooms,
+AppBuilder::new()
+    .provide(rooms)   // WsRooms is now a bean
     // ...
-}
 ```
 
 #### Room API
@@ -315,7 +313,7 @@ pub enum WsOutgoing {
     Leave { username: String, room: String },
 }
 
-#[controller(path = "/chat", state = AppState)]
+#[controller(path = "/chat")]
 pub struct ChatController {
     #[inject]
     ws_rooms: WsRooms,

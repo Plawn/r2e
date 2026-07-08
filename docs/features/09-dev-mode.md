@@ -25,7 +25,7 @@ The `boot_time` is a timestamp (milliseconds since Unix epoch) captured once at 
 
 ```rust
 AppBuilder::new()
-    .build_state::<Services, _>().await
+    .build_state().await
     .with(DevReload)  // Enables /__r2e_dev/* endpoints
     // ...
     .serve("0.0.0.0:3000")
@@ -95,7 +95,7 @@ async fn main(env: AppEnv) {
         .provide(env.event_bus)
         .provide(env.pool)
         .register::<UserService>()
-        .build_state::<MyState, _>().await
+        .build_state().await   // no type args — state inferred from the provisions
         .with(Health)
         .register_controller::<UserController>()
         .serve("0.0.0.0:3000").await.unwrap();
@@ -203,14 +203,24 @@ AppBuilder::new()
     .register::<UserService>()
     .register::<CacheService>()
     .register::<CreatePool>()
-    // 5. Build the state
-    .build_state::<Services, _>().await
-    // 6. Post-state: plugins, controllers, hooks
+    // 4. Build the state — no type args; the state type is the provision
+    //    list materialized as an HList, inferred by the builder chain
+    .build_state().await
+    // 5. Post-state: plugins, controllers, hooks
     .with(Health)
     .with(Cors::permissive())
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
+
+There is no hand-written state struct: `.build_state().await` materializes
+everything you `.provide()`d or `.register()`ed into an inferred HList state,
+and controllers resolve their `#[inject]` fields from it **by type** at
+`register_controller` time. A missing bean is a compile error naming the type.
+
+> **Note:** apps with more than ~127 beans need `#![recursion_limit = "512"]`
+> at the crate root (`main.rs`). `r2e doctor` warns as the bean count
+> approaches the threshold.
 
 ### Method reference
 
@@ -218,11 +228,9 @@ AppBuilder::new()
 |--------|---------|-------------|
 | `.with_config(config)` | Provide pre-loaded `R2eConfig` | Hot-reload (config loaded in setup) |
 | `.load_config::<C>()` | Load YAML + env overlay in one call | Simple apps without hot-reload |
-| `.provide(value)` | Inject a pre-built instance | Pools, event buses, validators, shared channels |
+| `.provide(value)` | Inject a pre-built instance as a bean (by type) | Pools, event buses, validators, shared channels |
 | `.load_config::<Root>()` | Load config + auto-register children as beans | Typed config sections needed by controllers/beans |
-| `.register::<T>()` | Register a sync bean factory | Services with `#[bean] impl T { fn new(...) }` |
-| `.register::<T>()` | Register an async bean factory | Services needing async init |
-| `.register::<T>()` | Register a producer (types you don't own) | Connection pools, external clients |
+| `.register::<T>()` | Register a `#[bean]` / `#[producer]` / `AsyncBean` type, resolved by the builder | Services, async-init beans, types you don't own |
 
 ### Anti-patterns
 

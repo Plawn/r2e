@@ -6,9 +6,6 @@ use crate::types::*;
 /// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
     pub name: syn::Ident,
-    /// Named state type from `state = ...` — legacy typed-state model. `None`
-    /// for state-generic controllers (the standard model).
-    pub state_type: Option<syn::Path>,
     pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
@@ -71,12 +68,11 @@ fn inject_qualifier_is(attr: &syn::Attribute, want: &str) -> bool {
     }
 }
 
-/// Parse the `#[controller(path = "...", state = ...)]` attribute arguments.
+/// Parse the `#[controller(path = "...")]` attribute arguments.
 pub fn parse_controller_args(
     args: proc_macro2::TokenStream,
     span: proc_macro2::Span,
-) -> syn::Result<(Option<syn::Path>, Option<String>)> {
-    let mut state_type: Option<syn::Path> = None;
+) -> syn::Result<Option<String>> {
     let mut prefix: Option<String> = None;
 
     let parser = syn::meta::parser(|meta| {
@@ -86,25 +82,26 @@ pub fn parse_controller_args(
             prefix = Some(lit.value());
             Ok(())
         } else if meta.path.is_ident("state") {
-            let value = meta.value()?;
-            state_type = Some(value.parse()?);
-            Ok(())
+            Err(meta.error(
+                "`state = ...` was removed — controllers are constructed from the bean graph \
+                 by type; drop the key and make sure every #[inject] field type is provided or \
+                 registered on the AppBuilder before build_state()",
+            ))
         } else {
-            Err(meta.error("unknown attribute in #[controller(...)]: expected `path` or `state`"))
+            Err(meta.error("unknown attribute in #[controller(...)]: expected `path`"))
         }
     });
     parser.parse2(args)?;
     let _ = span;
 
-    Ok((state_type, prefix))
+    Ok(prefix)
 }
 
 /// Parse a `#[controller]` struct into a [`ControllerStructDef`].
 ///
-/// `state_type`/`prefix` come from the attribute arguments; field scopes are
-/// read from the struct's named fields.
+/// `prefix` comes from the attribute arguments; field scopes are read from
+/// the struct's named fields.
 pub fn parse(
-    state_type: Option<syn::Path>,
     prefix: Option<String>,
     item: &syn::ItemStruct,
 ) -> syn::Result<ControllerStructDef> {
@@ -214,7 +211,6 @@ pub fn parse(
 
     Ok(ControllerStructDef {
         name,
-        state_type,
         prefix,
         injected_fields,
         identity_fields,

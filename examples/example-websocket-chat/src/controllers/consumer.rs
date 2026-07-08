@@ -4,10 +4,9 @@ use r2e::prelude::*;
 
 use crate::models::MessageSentEvent;
 use crate::services::ChatService;
-use crate::state::AppState;
 
 /// Event consumer that persists chat messages to the database.
-#[controller(state = AppState)]
+#[controller]
 pub struct MessagePersistenceConsumer {
     #[inject]
     event_bus: LocalEventBus,

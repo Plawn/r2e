@@ -36,27 +36,25 @@ let validator = JwtClaimsValidator::new(config);
 
 The JWKS keys are fetched and cached automatically. Cache misses trigger a background refresh.
 
-## Storing in application state
+## Providing the validator as a bean
 
-The validator must be stored as `Arc<JwtClaimsValidator>` in your state:
+The `AuthenticatedUser` extractor resolves `Arc<JwtClaimsValidator>` from the bean
+graph by type. Provide it during app assembly — there is no state struct to write:
 
 ```rust
 use std::sync::Arc;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub claims_validator: Arc<JwtClaimsValidator>,
-    // ... other fields
-}
-```
-
-Then provide it during app assembly:
-
-```rust
 AppBuilder::new()
-    .provide(Arc::new(validator))
+    .provide(Arc::new(validator))   // Arc<JwtClaimsValidator> becomes a bean
+    // ... other .provide / .register calls
+    .build_state()
+    .await
     // ...
 ```
+
+Any controller with `#[inject(identity)]` (or a handler-param `#[inject(identity)]`)
+picks the validator up automatically; if it is missing you get a compile error
+naming `Arc<JwtClaimsValidator>`.
 
 ## `AuthenticatedUser` extractor
 
@@ -65,7 +63,7 @@ AppBuilder::new()
 ```rust
 use r2e::r2e_security::AuthenticatedUser;
 
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
@@ -117,7 +115,7 @@ This is handled by the `DefaultRoleExtractor`. Custom extraction can be provided
 **Struct-level** — all endpoints require authentication:
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
@@ -126,7 +124,7 @@ pub struct UserController {
 **Param-level** — only annotated endpoints require authentication:
 
 ```rust
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }

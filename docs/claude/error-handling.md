@@ -218,7 +218,7 @@ impl UserController {
    - `success = true` if handler returned `Ok` or non-Result type
    - `success = false` if handler returned `Err`
 
-**Transaction wrapper pattern:** Define `Tx<'a, DB>` + `HasPool<DB>` trait, implement `ManagedResource` with `acquire` (begins tx) and `release` (commits on success, drops=rollback on failure). Use `ManagedErr<E>` as error type.
+**Transaction wrapper pattern:** implement `ManagedResource<S>` for `Tx<'a, DB>`, bounding `S: BeanLookup` so `acquire` can fetch the pool from the state by type (`state.bean::<Pool<DB>>()`) and begin a transaction; `release` commits on success and drops (rollback) on failure. Use `ManagedErr<E>` as the error type. You no longer implement a `HasPool<DB> for State` trait — the pool is resolved from the bean graph by type, so `#[managed] tx: &mut Tx<'_, DB>` just works once the `Pool<DB>` has been `.provide()`d. (`r2e-data-sqlx` ships this `Tx` impl.)
 
 **Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code.
 

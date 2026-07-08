@@ -5,7 +5,7 @@ Instead of manually calling `event_bus.subscribe()`, use `#[consumer]` for decla
 ## Controller consumers
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct UserEventConsumer {
     #[inject] event_bus: LocalEventBus,
 }
@@ -36,14 +36,14 @@ The `bus = "event_bus"` attribute refers to the **field name** on the controller
 1. `#[consumer(bus = "event_bus")]` tells R2E which event bus field to subscribe to
 2. The event type is inferred from the parameter type (`Arc<UserCreatedEvent>`)
 3. `register_controller::<UserEventConsumer>()` auto-discovers all `#[consumer]` methods
-4. At runtime, the controller is constructed from state via `StatefulConstruct` and each consumer method is subscribed to its event type
+4. At registration, the controller core is constructed from the bean graph via `ContextConstruct` (each `#[inject]` field resolved by type) and each consumer method is subscribed to its event type
 
 Under the hood, the `#[routes]` macro generates a `register_consumers()` method on the `Controller` trait impl. When `register_controller()` is called, it invokes this and subscribes each handler via `EventBus::subscribe()` (UFCS).
 
 ## Requirements
 
 - The controller must have a field implementing `EventBus` (named in the `bus = "..."` attribute)
-- Consumer methods run on the controller core (built via `StatefulConstruct`) and so cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable inside a consumer. A controller may still declare struct-level identity for its HTTP routes and have consumer methods that use only core (`#[inject]` / `#[config]`) fields.
+- Consumer methods run on the controller core (built from the bean graph via `ContextConstruct`) and so cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable inside a consumer. `ContextConstruct` is generated only when the controller declares **no** struct-level identity; a controller that needs both consumers and authenticated endpoints should use param-level identity (the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity)). Consumer methods use only core (`#[inject]` / `#[config]`) fields.
 - The consumer method must take `&self` and `Arc<EventType>`
 - Consumer controllers don't need a `path` in `#[controller]`
 
@@ -54,7 +54,7 @@ Register consumer controllers like any other controller:
 ```rust
 AppBuilder::new()
     .provide(event_bus)
-    .build_state::<AppState, _>()
+    .build_state()
     .await
     .register_controller::<UserEventConsumer>()
     // ...
@@ -67,7 +67,7 @@ Registration happens once at startup. All consumer methods on the controller are
 A controller can have both HTTP routes and consumers. This is common when a feature needs both a REST API and event-driven side-effects:
 
 ```rust
-#[controller(path = "/notifications", state = AppState)]
+#[controller(path = "/notifications")]
 pub struct NotificationController {
     #[inject] event_bus: LocalEventBus,
     #[inject] notification_service: NotificationService,
@@ -97,7 +97,7 @@ impl NotificationController {
 Consumer methods have access to all `#[inject]` fields on the controller, just like HTTP handlers. This makes it easy to reuse services:
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct OrderConsumer {
     #[inject] event_bus: LocalEventBus,
     #[inject] inventory_service: InventoryService,
@@ -161,13 +161,13 @@ The `#[bean]` macro generates an `EventSubscriber` impl when `#[consumer]` metho
 AppBuilder::new()
     .provide(event_bus)
     .register::<NotificationService>()
-    .build_state::<AppState, _>()
+    .build_state()
     .await
     .register_subscriber::<NotificationService>()
     // ...
 ```
 
-Bean consumers capture `self` directly (no `StatefulConstruct` reconstruction per event), making them slightly more efficient than controller consumers.
+`register_subscriber::<S>()` resolves `S` from the bean graph by type, so the type must be registered (`.register::<S>()`) or provided (`.provide(..)`) as a bean. Bean consumers capture `self` directly, so no per-event construction happens.
 
 ## Multiple buses
 
@@ -200,9 +200,9 @@ The generated code calls `EventBus::subscribe()` via UFCS on each field — full
 |-|-------------------------|--------------------|--------------------|
 | Wiring | `register_controller()` | `register_subscriber()` | Manual at startup |
 | Access to services | Via `#[inject]` fields | Via struct fields | Must capture in closure |
-| Reconstruction | Per-event (from state) | None (self captured) | N/A |
+| Construction | Once at registration (from bean graph) | None (self captured) | N/A |
 | Discovery | Declarative | Declarative | Scattered across init code |
-| Identity access | No (`StatefulConstruct`) | No | No (no HTTP context) |
+| Identity access | No (`ContextConstruct`) | No | No (no HTTP context) |
 
 Use `#[consumer]` on **beans** for services that primarily handle events. Use `#[consumer]` on **controllers** when you need both HTTP routes and event handlers on the same type. Use manual `subscribe()` when you need to register handlers dynamically.
 

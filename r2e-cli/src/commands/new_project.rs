@@ -51,7 +51,7 @@ impl CliNewOpts {
 /// - Otherwise, prompts interactively with `dialoguer`.
 ///
 /// Creates the project directory and all scaffold files (Cargo.toml, main.rs,
-/// state.rs, hello controller, application.yaml, etc.).
+/// hello controller, application.yaml, etc.).
 pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::Error>> {
     let opts = if cli_opts.full {
         ProjectOptions {
@@ -155,19 +155,13 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         templates::project::cargo_toml(opts),
     )?;
 
-    // 2. state.rs
-    fs::write(
-        project_dir.join("src/state.rs"),
-        templates::project::state_rs(opts),
-    )?;
-
-    // 3. main.rs
+    // 2. main.rs
     fs::write(
         project_dir.join("src/main.rs"),
         templates::project::main_rs(opts),
     )?;
 
-    // 4. Hello controller
+    // 3. Hello controller
     fs::write(
         project_dir.join("src/controllers/hello.rs"),
         templates::project::hello_controller(),
@@ -177,18 +171,18 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         "pub mod hello;\n",
     )?;
 
-    // 5. application.yaml
+    // 4. application.yaml
     fs::write(
         project_dir.join("application.yaml"),
         templates::project::application_yaml(opts),
     )?;
 
-    // 6. Migrations directory if DB selected
+    // 5. Migrations directory if DB selected
     if opts.db.is_some() {
         fs::create_dir_all(project_dir.join("migrations"))?;
     }
 
-    // 7. gRPC scaffolding
+    // 6. gRPC scaffolding
     if opts.grpc {
         fs::create_dir_all(project_dir.join("proto"))?;
         fs::write(
@@ -201,7 +195,7 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         )?;
     }
 
-    // 8. .gitignore
+    // 7. .gitignore
     fs::write(project_dir.join(".gitignore"), "/target\n")?;
 
     println!(

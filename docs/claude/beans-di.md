@@ -12,7 +12,19 @@ All three kinds register through the single unified `.register::<T>()` method �
 
 All three traits have an associated `type Deps` that declares their dependencies as a type-level list. **This is auto-generated** by the `#[bean]`, `#[derive(Bean)]`, and `#[producer]` macros — you never write `Deps` manually. For manual trait impls without dependencies, use `type Deps = TNil;`.
 
-**`build_state` is async** — it must be `.await`ed because the bean graph may contain async beans or producers. The method carries a single inferred witness parameter: in a fluent builder chain, call `.build_state::<S, _>()` (one underscore) directly. If you have bound the builder to a variable, prefer the zero-underscore macros `build_state!(app, S)` / `try_build_state!(app, S)` (non-panicking), which hide the witness entirely.
+**`build_state` is async and takes NO type arguments** — it must be `.await`ed because the bean graph may contain async beans or producers. The state type is **inferred**: it is the builder's provision list `P` (everything you `.provide()`/`.register()`) materialized as a type-level HList. You never write a state struct. Call `.build_state().await` directly; `.try_build_state().await` is the non-panicking (`Result`) variant.
+
+```rust
+let app = AppBuilder::new()
+    .load_config::<RootConfig>()
+    .provide(event_bus)
+    .provide(pool)
+    .register::<UserService>();
+
+let built = app.build_state().await;   // no turbofish, no state struct
+```
+
+**recursion_limit** — the HList access machinery recurses once per provision. Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the crate root (top of `main.rs`); below that the default limit is fine. `r2e doctor` warns as the bean count approaches the threshold.
 
 ## `#[bean]` attribute macro
 
@@ -176,21 +188,19 @@ async fn create_pool(metrics: Option<MetricsCollector>) -> SqlitePool {
 }
 ```
 
-### In `#[derive(BeanState)]`
+### In the inferred HList state
 
-```rust
-#[derive(Clone, BeanState)]
-struct AppState {
-    user_service: UserService,
-    cache: Option<RedisCache>, // adds Option<RedisCache> to `type Requires`
-}
-```
+There is **no hand-written state struct** (`#[derive(BeanState)]` and the
+`BeanState` trait were removed). The application state is the provision list
+`P` — everything `.provide()`/`.register()` — materialized as a type-level
+HList by `.build_state()`. An `Option<RedisCache>` provided by a
+`#[producer] -> Option<RedisCache>` is simply one more slot in `P`.
 
-`#[derive(BeanState)]` exposes each field type through the state's
-`type Requires` list. The compile-time check routes through `AllSatisfied`:
-every entry in `Requires` (here `UserService` and `Option<RedisCache>`) must
-be present in the builder's provision list `P`. The `Option<RedisCache>` slot
-is typically provided by a `#[producer] -> Option<RedisCache>`.
+The compile-time check still routes through `AllSatisfied`: a controller's
+`#[inject]` field types (its `Controller::Deps`) must all be present in `P`, or
+`register_controller` is a **compile error naming the missing type**. This is
+the same guarantee the old `BeanState::Requires` list gave, now derived
+automatically from the controller's fields instead of a manual struct.
 
 ### Conditional beans: always register, decide inside the producer
 
@@ -208,7 +218,7 @@ async fn create_cache(#[config("cache.enabled")] on: bool) -> Option<Cache> {
 
 let app = AppBuilder::new()
     .register::<CreateCache>();            // always registered
-build_state!(app, AppState).await
+app.build_state().await                    // state type inferred from P
 ```
 
 ## `#[config("key")]` in beans
@@ -270,7 +280,7 @@ Lifecycle hooks called **after the entire bean graph is resolved**. All dependen
 - Return type: `()` or `Result<(), Box<dyn Error + Send + Sync>>`.
 - Multiple `#[post_construct]` methods on a single bean are called in **declaration order**.
 - Execution order across beans: **topological order** (same as construction order).
-- If a hook returns `Err`, `build_state()` returns `BeanError::PostConstruct(String)`.
+- If a hook returns `Err`, `try_build_state()` yields `BeanError::PostConstruct(String)` (and `build_state()` panics with that message).
 
 ### Example
 
@@ -317,10 +327,10 @@ The `#[bean]` macro generates:
 ## Key files
 
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
-- `r2e-core/src/builder.rs` — unified `register()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()` (last-wins override), async `build_state()` + the `build_state!` / `try_build_state!` macros
+- `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
+- `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
 - `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
-- `r2e-macros/src/bean_state_derive.rs` — `#[derive(BeanState)]` (`Option<T>` field support — `try_get` + emits the field types into `type Requires`, checked via `AllSatisfied`)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)

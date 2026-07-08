@@ -327,8 +327,8 @@ standalone project**:
 - An own `Service` trait without mandatory `Send` (tower is unusable in `!Send`),
   own extractors (`FromRequestParts` is an axum trait), guards/interceptors as
   `LocalBoxFuture`, and an HTTP/1.1 (+h2?) codec on the target runtime.
-- A **per-core state model**: `StatefulConstruct` called once *per worker*,
-  `#[inject]` accepting `!Send` types — ntex's factory pattern.
+- A **per-core state model**: `ContextConstruct::from_context` called once *per
+  worker*, `#[inject]` accepting `!Send` types — ntex's factory pattern.
 - An **ecosystem split**: sqlx, rdkafka, lapin, quinn are all tokio-bound. A
   monoio backend cannot reuse `r2e-data-sqlx`, the event backends, or current QUIC
   without cross-runtime channel bridges (and the latency they imply).
@@ -340,7 +340,7 @@ standalone project**:
 
 A natural intermediate, if benchmarks ever prove **shared-state contention** (not
 accept scheduling) is the bottleneck under sharding, is a per-core bean scope
-(`#[inject(per_worker)]`: `StatefulConstruct` run once per worker so each core gets
-its own instance). Even then, axum still requires `Send` handlers, so per-worker
+(`#[inject(per_worker)]`: `ContextConstruct::from_context` run once per worker so
+each core gets its own instance). Even then, axum still requires `Send` handlers, so per-worker
 types must be `Send` — you gain non-contention, not `!Send` ergonomics (that is
 option C territory). Build none of this until a benchmark demands it.

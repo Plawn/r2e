@@ -3,7 +3,7 @@ use r2e::prelude::*;
 #[derive(Clone)]
 pub struct AppState;
 
-#[controller(path = "/unit", state = AppState)]
+#[controller(path = "/unit")]
 pub struct UnitController;
 
 #[routes]

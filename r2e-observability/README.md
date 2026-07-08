@@ -21,7 +21,7 @@ r2e = { version = "0.1", features = ["observability"] }
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 
 AppBuilder::new()
-    .build_state::<AppState, _>()
+    .build_state()
     .await
     .with(Observability::new(
         ObservabilityConfig::new("my-service")
