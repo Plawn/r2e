@@ -195,9 +195,12 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   wiring-time `BeanContext`), so their `#[intercept(expr)]` expression is
   used directly as the interceptor — self-built decorators (`Logged`,
   `Timed`, …) work; bean-reading specs (`Cache`, …) do not compile there.
-- **Module controllers** register through the unchecked path, so their
-  decorator bean deps are not compile-checked (a missing bean panics at
-  `build_state()`); app-level controllers get the full compile-time check.
+- **Module controllers' decorator deps ARE compile-checked** (since the
+  post-Phase-6 `ControllerDeps` carrier): they register through the
+  unchecked backend, but the module-scope check folds the full
+  `ControllerDeps::Deps` list (core ++ decorator deps), so a guard or
+  interceptor reading a bean outside `Provides ∪ Imports` is a compile
+  error at `register_module` — declare the bean in the module's `imports`.
 
 ## Configurable syntax
 

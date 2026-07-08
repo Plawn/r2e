@@ -25,8 +25,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let ws_route_registrations = generate_ws_route_registrations(def);
     let pre_auth_registrations = generate_pre_auth_registrations(def, name, &meta_mod);
     // Controller deps = core `ContextConstruct::Deps` ++ every decorator
-    // site's `<Spec as DecoratorSpec>::Deps` — checked by `AllSatisfied` at
-    // `register_controller()`.
+    // site's `<Spec as DecoratorSpec>::Deps`. Emitted once, on the
+    // `ControllerDeps` carrier — checked by `AllSatisfied` at
+    // `register_controller()` and by `ModuleDepsSatisfied` at
+    // `register_module()`.
     let deps_fold = super::decorators::controller_deps_fold(def);
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
@@ -131,6 +133,14 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     }
 
     quote! {
+        // State-independent carrier of the full dep list (core ++ decorator
+        // deps) — lets `register_module` check decorator deps in the NoState
+        // phase, where `Controller<S, W>::Deps` is not yet nameable.
+        #[doc(hidden)]
+        impl #krate::ControllerDeps for #name {
+            type Deps = #deps_fold;
+        }
+
         impl<#state_ident, #md, #(#param_markers),*>
             #krate::Controller<#state_ident, (#md, #(#param_markers,)*)> for #name
         where
@@ -141,7 +151,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             #(#param_marker_bounds,)*
             #(#managed_bounds,)*
         {
-            type Deps = #deps_fold;
+            type Deps = <#name as #krate::ControllerDeps>::Deps;
 
             fn construct(_state: &#state_ident, __ctx: &#krate::beans::BeanContext) -> Self {
                 <#name as #krate::ContextConstruct>::from_context(__ctx)

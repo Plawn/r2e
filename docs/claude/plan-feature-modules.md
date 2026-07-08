@@ -116,9 +116,12 @@ compile time:
 
 1. `<Providers as BeanList>::Deps ⊆ LocalScope` — provider encapsulation;
 2. `Exports ⊆ Provided` — can't export what you don't provide;
-3. controller deps ⊆ `LocalScope` — via **`ContextConstruct::Deps`** (crucially
+3. controller deps ⊆ `LocalScope` — via **`ControllerDeps::Deps`** (crucially
    state-independent, so checkable in the NoState phase before the state type
-   exists), folded over the controller tuple.
+   exists), folded over the controller tuple. Originally this walked
+   `ContextConstruct::Deps` (core `#[inject]` deps only); since the
+   post-Phase-6 `ControllerDeps` carrier it is the full list including
+   guard/interceptor `DecoratorSpec::Deps`.
 
 **Exports-only leakage**: `P` grows by `Exports` only; `R` grows by `Imports`
 only. **Key discovery**: provider-internal deps must NOT be appended to the

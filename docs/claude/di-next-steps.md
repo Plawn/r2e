@@ -7,33 +7,32 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-1 → (3 + 4 as one DX pass) → 2 → 5. Items 6/8/9 are opportunistic. Item 7 is
-**rejected** (user decision — do not re-propose).
+~~1~~ (done) → (3 + 4 as one DX pass) → 2 → 5. Items 6/8/9 are
+opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
 
 ---
 
-## 1. Module controllers' decorator deps — close the last compile-check hole
+## 1. ~~Module controllers' decorator deps~~ — ✅ DONE (2026-07-08)
 
-**Problem.** App-level controllers get the full `AllSatisfied` check on the
-folded `Controller::Deps` (core deps ++ decorator deps). Module controllers
-register through the **unchecked** backend (required: they may inject
-module-private beans), and the module-local encapsulation check
-(`ModuleDepsSatisfied` over `ControllerDepsList`) only walks
-`ContextConstruct::Deps` — core deps, not decorator deps. A module
-controller whose guard/interceptor reads a bean outside the module graph
-**panics at `build_state()`** (`BeanContext::get`) instead of failing
-compilation.
+The last compile-check hole is closed. `#[routes]` emits a
+state-independent carrier `impl r2e_core::ControllerDeps for <Name>
+{ type Deps = <full fold> }` (trait in `r2e-core/src/controller.rs`,
+`#[doc(hidden)]`; impl generated in `controller_impl.rs`) holding
+`ContextConstruct::Deps ++ Σ DecoratorSpec::Deps`; the generated
+`Controller<S, W>::Deps` points at it (single source of truth), and
+`ControllerDepsList` (`r2e-core/src/module.rs`) bounds `ControllerDeps`
+instead of `ContextConstruct`, so the module-scope check
+(`Deps ⊆ Provides ∪ Imports`) now covers guards/interceptors. An
+out-of-scope decorator dep is a compile error at `register_module` instead
+of a `build_state()` panic.
 
-**Direction.** Decorator deps are state-independent (unlike
-`Controller<T, W>`, which needs witnesses), so `#[routes]` can emit a
-state-independent carrier — e.g. a hidden trait/assoc-type
-`__R2eDecoratorDeps for <Name> { type Deps }` (the same `TAppend` fold it
-already computes) — and `ControllerDepsList` folds
-`ContextConstruct::Deps ++ DecoratorDeps` into the module-scope check
-(`Deps ⊆ Provides ∪ Imports`). Add trybuild coverage mirroring
-`module_controller_dep_not_in_scope.rs` but with the dep on a guard site.
-
-**Origin:** "Known gaps" in `plan-guards-as-beans.md`.
+Breaking: a hand-written controller placed in a `FeatureModule::Controllers`
+tuple must implement `ControllerDeps` (i.e. use `#[routes]`). Note the check
+is intentionally strict: example-app's `UserModule` had to declare
+`RateLimitRegistry` + `Arc<dyn CacheStore>` in `imports` for
+`UserController`'s decorators. Tests:
+`module_controller_guard_dep_not_in_scope.rs` (compile-fail) /
+`module_controller_guard_dep_in_scope.rs` (compile-pass).
 
 ## 2. Extraction-bridge overlap invariant (Phase 4 debt, item 1)
 
@@ -131,6 +130,17 @@ private beans across modules ⇒ newtype) remain the intended design.
 >~127 registrations need `#![recursion_limit = "512"]` (`r2e doctor`
 warns). No action needed now; if real apps grow, measure build times before
 designing anything (balanced type-lists, per-module partitioning of `P`).
+
+Related (recorded 2026-07-08, item-1 review): dep lists are NOT deduped at
+the bean level. `controller_deps_fold` dedups by *spec type* only, so a bean
+read by several specs — or by both a spec and an `#[inject]` field — appears
+multiple times in `ControllerDeps::Deps`, and `ControllerDepsList` folds
+those duplicates into the module-scope check (one extra linear
+`InModuleScope` walk per duplicate; longer type-lists count toward the
+recursion-depth budget above). The macro cannot dedup by bean —
+`DecoratorSpec::Deps` is an opaque associated type at expansion time; a
+type-level dedup trait would likely cost more than it saves. Harmless today;
+revisit only together with this item if build times ever matter.
 
 ## 9. (Watch) Bean disposal hooks
 

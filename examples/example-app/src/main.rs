@@ -33,12 +33,20 @@ use services::{NotificationService, UserService};
 /// The "users" vertical slice as a feature module: one `register_module`
 /// call registers the service and both controllers. `UserService` is
 /// exported (other controllers inject it); the imports are satisfied by the
-/// app's `.provide`/`.load_config` calls below.
+/// app's `.provide`/`.load_config` calls below. Decorator deps count too:
+/// `UserController`'s rate-limit guard and cache interceptor read
+/// `RateLimitRegistry` and the cache store bean, so the module imports them.
 #[module(
     providers(UserService),
     controllers(UserController, UserEventConsumer),
     exports(UserService),
-    imports(LocalEventBus, sqlx::SqlitePool, R2eConfig)
+    imports(
+        LocalEventBus,
+        sqlx::SqlitePool,
+        R2eConfig,
+        r2e::r2e_rate_limit::RateLimitRegistry,
+        std::sync::Arc<dyn r2e::r2e_cache::CacheStore>,
+    )
 )]
 struct UserModule;
 

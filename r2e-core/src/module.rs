@@ -35,7 +35,7 @@
 
 use crate::beans::{BeanRegistry, Registrable};
 use crate::builder::AppBuilder;
-use crate::controller::{ContextConstruct, Controller};
+use crate::controller::{Controller, ControllerDeps};
 use crate::type_list::{Here, TAppend, TCons, TNil, There};
 
 /// A feature module: a closed subgraph of providers + controllers with
@@ -215,14 +215,16 @@ where
 }
 
 /// Aggregate the state-independent dependency lists
-/// ([`ContextConstruct::Deps`]) of a controller tuple.
+/// ([`ControllerDeps::Deps`]) of a controller tuple.
 ///
 /// This is what lets `register_module` check controller dependencies in the
-/// NoState phase, before the state type exists: `ContextConstruct::Deps` and
-/// the state-generic `Controller::Deps` are the same list by construction.
+/// NoState phase, before the state type exists: `ControllerDeps::Deps` is the
+/// full list the state-generic `Controller::Deps` resolves to — core
+/// `#[inject]` deps plus every guard/interceptor site's `DecoratorSpec::Deps`
+/// — so the module-scope check covers decorators too.
 /// Implemented for `()` and tuples of arity 1..=16.
 pub trait ControllerDepsList {
-    /// Concatenation of every controller's `ContextConstruct::Deps`.
+    /// Concatenation of every controller's `ControllerDeps::Deps`.
     type Deps;
 }
 
@@ -232,7 +234,7 @@ impl ControllerDepsList for () {
 
 macro_rules! impl_controller_deps_list {
     ($C0:ident) => {
-        impl<$C0: ContextConstruct> ControllerDepsList for ($C0,)
+        impl<$C0: ControllerDeps> ControllerDepsList for ($C0,)
         where
             $C0::Deps: TAppend<TNil>,
         {
@@ -240,7 +242,7 @@ macro_rules! impl_controller_deps_list {
         }
     };
     ($C0:ident, $($Cs:ident),+) => {
-        impl<$C0: ContextConstruct, $($Cs: ContextConstruct),+> ControllerDepsList
+        impl<$C0: ControllerDeps, $($Cs: ControllerDeps),+> ControllerDepsList
             for ($C0, $($Cs),+)
         where
             ($($Cs,)+): ControllerDepsList,

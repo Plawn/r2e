@@ -21,8 +21,10 @@ phase ends with a quality-review gate before the next starts.
 | 6 | Guards & interceptors as graph-resolved decorators | ✅ done — `Guard<I>`/`PreAuthGuard`/`Interceptor<R>` lost the state param; `DecoratorSpec` + `SelfBuilt`; sites built once at wiring time, deps folded into `Controller::Deps` (compile-checked); `cache_backend()` global deleted; see `plan-guards-as-beans.md` |
 
 **Next steps:** the prioritized post-Phase-6 backlog is in `di-next-steps.md`
-(module decorator-deps carrier, bridge-overlap invariant, spec DX, scheduled/
-gRPC ctx; qualifiers rejected — newtypes by design).
+(bridge-overlap invariant, spec DX, scheduled/gRPC ctx; qualifiers rejected —
+newtypes by design). Item 1 (module decorator-deps carrier) landed 2026-07-08:
+`#[routes]` emits a state-independent `ControllerDeps` carrier of the full dep
+fold, consumed by both `Controller::Deps` and the module-scope check.
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
 46-file docs alignment pass.
@@ -280,7 +282,9 @@ Spring/NestJS cannot offer:
   (`Providers`/`Controllers`/`Exports`/`Imports`; no register body),
   `BeanList` fold (derives provided types + aggregate deps + registration
   from `Registrable`), `ControllerDepsList` (state-independent controller
-  deps via `ContextConstruct::Deps`), `ModuleControllers`/`ModuleList`
+  deps — originally via `ContextConstruct::Deps`; since the post-Phase-6
+  `ControllerDeps` carrier it folds the full list incl. decorator deps),
+  `ModuleControllers`/`ModuleList`
   (deferred controller folds). `AppBuilder` gained a 4th phantom param
   `Mods` (default `TNil`); `register_module` (extension trait
   `RegisterModule`, witnesses inferred) registers providers into the global

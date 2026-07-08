@@ -252,16 +252,14 @@ Consequences in `codegen/handlers.rs`:
 
 ## Known gaps (recorded during 6b/6c implementation)
 
-- **Module controllers' decorator deps are not compile-checked.** App-level
-  controllers get the full `AllSatisfied` check on the folded
-  `Controller::Deps`. Module controllers register through the unchecked
-  backend (they may inject private beans), and the module-local
-  encapsulation check (`ControllerDepsList`) walks `ContextConstruct::Deps`
-  — core deps only, not decorator deps (it cannot name `Controller<T, W>`
-  without witnesses). A module controller whose guard reads a bean outside
-  the module graph therefore panics at `build_state()` (BeanContext::get)
-  instead of failing compilation. Follow-up: emit a state-independent
-  "decorator deps" carrier the module fold can check.
+- ~~**Module controllers' decorator deps are not compile-checked.**~~
+  **CLOSED (2026-07-08, di-next-steps item 1).** `#[routes]` now emits a
+  state-independent `ControllerDeps` carrier (`r2e-core/src/controller.rs`)
+  holding the full fold (`ContextConstruct::Deps` ++ decorator deps);
+  `Controller::Deps` points at it and `ControllerDepsList` folds it, so the
+  module-scope check covers guards/interceptors. Out-of-scope decorator deps
+  are now a compile error at `register_module` (trybuild:
+  `module_controller_guard_dep_not_in_scope.rs`).
 - **Scheduled-method and gRPC interceptors bypass `DecoratorSpec`.** They
   run outside the handler path with no wiring-time `BeanContext`, so the
   `#[intercept(expr)]` expression is used directly as the interceptor —

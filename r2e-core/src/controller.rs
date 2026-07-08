@@ -24,6 +24,26 @@ pub trait ContextConstruct {
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 }
 
+/// State-independent carrier of a controller's **full** dependency list:
+/// [`ContextConstruct::Deps`] extended with every guard/interceptor site's
+/// [`DecoratorSpec::Deps`](crate::decorator::DecoratorSpec::Deps).
+///
+/// Emitted by `#[routes]` alongside the [`Controller`] impl. The list is the
+/// same one `Controller::Deps` resolves to, but nameable without a state type
+/// or extraction witnesses — which is what lets `register_module` check
+/// controller dependencies (including decorator deps) against the module scope
+/// in the NoState phase, before the state type exists.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no `#[routes]` impl",
+    note = "a controller placed in a module's `Controllers` needs a `#[routes]` block \
+            (or, for a hand-written controller, a manual `ControllerDeps` impl)"
+)]
+pub trait ControllerDeps {
+    /// Type-level list of every bean this controller's core and decorators read.
+    type Deps;
+}
+
 /// A registrable HTTP controller.
 ///
 /// `T` is the application state type. `W` is an opaque witness carrier for
