@@ -493,8 +493,9 @@ async fn direct_state_aware_routes_still_work() {
     use r2e_core::type_list::HNil;
     let core =
         Arc::new(<DirectRoutesController as r2e_core::ContextConstruct>::from_context(&ctx));
-    let router = <DirectRoutesController as r2e_core::Controller<HNil, _>>::routes(&HNil, core)
-        .with_state(HNil);
+    let router =
+        <DirectRoutesController as r2e_core::Controller<HNil, _>>::routes(&HNil, core, &ctx)
+            .with_state(HNil);
 
     let (status, body) = get(router, "/direct").await;
     assert_eq!(status, StatusCode::OK);

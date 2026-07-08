@@ -17,13 +17,10 @@
 //!   `BeanContext`, wrapped in one `Arc` per route, captured by the handler
 //!   closure; per-request cost = Arc clone + monomorphized calls.
 //!
-//! Simulation notes (what the real impl does differently):
-//! - The spike stores the decorator set on the hand-written core and builds
-//!   it in `construct` (we control the struct here). The real `#[routes]`
-//!   cannot add fields to the `#[controller]`-emitted core, so 6c builds the
-//!   per-site values inside `Controller::routes`, which gains a
-//!   `ctx: &BeanContext` parameter (breaking; registration has the retained
-//!   context in hand).
+//! Simulation notes: the hand-written `Controller` impl below mirrors what
+//! `#[routes]` will emit in 6c — decorators built once inside
+//! `routes(state, core, ctx)` (the `ctx` parameter landed with 6b) and moved
+//! into the handler closures.
 //! - Spec coherence: a blanket `impl<D: SelfBuilt> DecoratorSpec for D` was
 //!   expected to conflict (E0119) with the config-type impls, but modern
 //!   negative coherence accepts it — including cross-crate (validated with a
@@ -249,9 +246,6 @@ impl SpikeDecorators {
 
 struct SpikeController {
     service: SpikeService,
-    /// Spike-only placement (see module docs): 6c builds this in
-    /// `routes(state, core, ctx)` instead and captures it per route.
-    deco: Arc<SpikeDecorators>,
 }
 
 impl SpikeController {
@@ -266,7 +260,6 @@ impl ContextConstruct for SpikeController {
     fn from_context(ctx: &BeanContext) -> Self {
         Self {
             service: ctx.get(),
-            deco: Arc::new(SpikeDecorators::build(ctx)),
         }
     }
 }
@@ -292,12 +285,13 @@ where
         <Self as ContextConstruct>::from_context(ctx)
     }
 
-    fn routes(_state: &S, core: Arc<Self>) -> Router<S> {
-        // Per-route: one Arc of the site decorators moved into the closure.
-        // Axum requires handler closures to be Clone — Arc satisfies it; the
-        // per-request cost is the Arc clone (replaces today's per-request
-        // spec evaluation + BeanLookup TypeId chain).
-        let deco = core.deco.clone();
+    fn routes(_state: &S, core: Arc<Self>, ctx: &BeanContext) -> Router<S> {
+        // Decorators built HERE, once, from the resolved graph — then one
+        // Arc of the route's site set moved into the closure. Axum requires
+        // handler closures to be Clone — Arc satisfies it; the per-request
+        // cost is the Arc clone (replaces today's per-request spec
+        // evaluation + BeanLookup TypeId chain).
+        let deco = Arc::new(SpikeDecorators::build(ctx));
         Router::new().route(
             "/spike",
             r2e_core::http::routing::get(move |headers: HeaderMap, uri: Uri| {

@@ -48,8 +48,14 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     ///
     /// Generated controllers receive the shared core built by
     /// `register_controller()` and install pre-authentication guards before
-    /// state finalization.
-    fn routes(state: &T, core: std::sync::Arc<Self>) -> crate::http::Router<T>;
+    /// state finalization. `ctx` is the resolved bean graph: route decorators
+    /// (guards/interceptors, see [`DecoratorSpec`](crate::decorator::DecoratorSpec))
+    /// are built from it here, once, and moved into the handler closures.
+    fn routes(
+        state: &T,
+        core: std::sync::Arc<Self>,
+        ctx: &crate::beans::BeanContext,
+    ) -> crate::http::Router<T>;
 
     /// Push metadata about this controller's routes into the registry.
     ///

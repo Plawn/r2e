@@ -449,7 +449,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // (by type); named-state controllers read the typed state.
         let state = &self.state;
         let core = Arc::new(C::construct(state, &self.bean_context));
-        self.routes.push(C::routes(state, Arc::clone(&core)));
+        self.routes
+            .push(C::routes(state, Arc::clone(&core), &self.bean_context));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.

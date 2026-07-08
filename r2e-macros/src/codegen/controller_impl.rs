@@ -145,6 +145,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             fn routes(
                 __state: &#state_ident,
                 __core: ::std::sync::Arc<Self>,
+                _ctx: &#krate::beans::BeanContext,
             ) -> #krate::http::Router<#state_ident> {
                 (#application_router_body)(__core)
             }
