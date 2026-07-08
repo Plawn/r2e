@@ -1,7 +1,7 @@
 # DI & Builder Refactor — DX + Compile-Time Roadmap
 
-Status: **Phases 1–4 complete** (landed on `refactor/di-builder-dx-ct`); Phase 5
-next. Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
+Status: **Phases 1–5 complete** (landed on `refactor/di-builder-dx-ct`).
+Tracks a multi-phase refactor of the DI subsystem and `AppBuilder`. Each
 phase ends with a quality-review gate before the next starts.
 
 | Phase | Item | Status |
@@ -17,7 +17,7 @@ phase ends with a quality-review gate before the next starts.
 | 2b | Split `builder.rs` | ✅ done |
 | 3 | Correctness & cleanup | ✅ done |
 | 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model; review gate passed (no blocking findings; ambiguity + guard-panic fixes applied), see `plan-controllers-as-beans.md` |
-| 5 | Feature modules (closed subgraphs) | 📋 planned — see `plan-feature-modules.md` |
+| 5 | Feature modules (closed subgraphs) | ✅ done — `FeatureModule` + `register_module` + `#[module]`; compile-time encapsulation (deps ⊆ Provides ∪ Imports, exports-only leakage to `P`); see `plan-feature-modules.md` |
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
 46-file docs alignment pass.
@@ -260,8 +260,36 @@ tracking and the guaranteed `state: T` phase remain.
    router-build time and add a `Guard::startup_check(&state)` hook so
    misconfiguration fails at **boot**, not on first request.
 
-## Phase 5 — planned separately
+## Phase 5 — Feature modules ✅ COMPLETE
 
-- **Phase 5 — Feature modules** (`plan-feature-modules.md`): Spring/NestJS-style
-  `@Module` bundles (providers + controllers + imports/exports) with **compile-time
-  encapsulation**. Depends on Phase 4 (done).
+Landed as designed in `plan-feature-modules.md` (spike decisions recorded
+there). Spring/NestJS-style module bundles with **compile-time encapsulation**
+Spring/NestJS cannot offer:
+
+- **5a** — `r2e-core/src/module.rs`: declarative `FeatureModule`
+  (`Providers`/`Controllers`/`Exports`/`Imports`; no register body),
+  `BeanList` fold (derives provided types + aggregate deps + registration
+  from `Registrable`), `ControllerDepsList` (state-independent controller
+  deps via `ContextConstruct::Deps`), `ModuleControllers`/`ModuleList`
+  (deferred controller folds). `AppBuilder` gained a 4th phantom param
+  `Mods` (default `TNil`); `register_module` (extension trait
+  `RegisterModule`, witnesses inferred) registers providers into the global
+  graph, grows `P` by `Exports` only / `R` by `Imports` only, and queues the
+  module; `build_state()` folds `Mods` after materializing the state through
+  an **unchecked** registration backend (module controllers may inject
+  private beans — cores construct from the retained `BeanContext`).
+  Breaking: `RawPreStatePlugin::install` gained the `Mods` type param;
+  `with_state` is restricted to `Mods = TNil`.
+- **5b** — dedicated encapsulation-check traits with module-targeted
+  diagnostics (`InModuleScope`/`ModuleDepsSatisfied`,
+  `ProvidedByModule`/`ExportsProvided`); trybuild coverage for provider dep
+  out of scope, export not provided, controller dep out of scope, private
+  bean invisible to app controllers.
+- **5c** — `#[module(providers(...), controllers(...), exports(...),
+  imports(...))]` generates the `FeatureModule` impl (all keys optional).
+- **5d** — example-app users slice migrated to `UserModule`; docs updated.
+
+Same-typed **private** beans across modules collide at runtime
+(`DuplicateBean` at startup, by design — the graph is `TypeId`-keyed): use
+newtypes. Module-imports-module composition works via exported bean types; a
+first-class "imports = [OtherModule]" form is future work.

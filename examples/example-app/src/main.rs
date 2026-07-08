@@ -30,6 +30,18 @@ use controllers::upload_controller::UploadController;
 use controllers::ws_controller::WsEchoController;
 use services::{NotificationService, UserService};
 
+/// The "users" vertical slice as a feature module: one `register_module`
+/// call registers the service and both controllers. `UserService` is
+/// exported (other controllers inject it); the imports are satisfied by the
+/// app's `.provide`/`.load_config` calls below.
+#[module(
+    providers(UserService),
+    controllers(UserController, UserEventConsumer),
+    exports(UserService),
+    imports(LocalEventBus, sqlx::SqlitePool, R2eConfig)
+)]
+struct UserModule;
+
 fn generate_test_token(secret: &[u8]) -> String {
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -134,7 +146,7 @@ async fn main(env: AppEnv) {
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(env.sse_broadcaster)
         .provide(env.notification_service)
-        .register::<UserService>();
+        .register_module::<UserModule>();
 
     app.build_state()
         .await
@@ -165,11 +177,9 @@ async fn main(env: AppEnv) {
             tracing::info!("R2E example-app shutdown hook executed");
         })
         .register_controllers::<(
-            UserController,
             AccountController,
             ConfigController,
             DataController,
-            UserEventConsumer,
             MixedController,
             IdentityController,
             ScheduledJobs,

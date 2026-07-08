@@ -1,7 +1,14 @@
 # Plan — Feature Modules (Closed Subgraphs)
 
-> **In progress** (Phase 5). Spike complete (2026-07-08, see "Spike results"
-> below) — the API decisions are locked. **Depends on**
+> **✅ DONE** (Phase 5, landed 2026-07-08 on `refactor/di-builder-dx-ct`).
+> Implemented as designed below — spike decisions (see "Spike results") held
+> through implementation with no deviations. Landed surface: `FeatureModule`
+> + `BeanList` + encapsulation traits (`r2e-core/src/module.rs`),
+> `register_module` (`RegisterModule` extension trait) + `Mods` builder
+> param + `build_state` module fold (`r2e-core/src/builder/`), `#[module]`
+> macro (`r2e-macros/src/module_attr.rs`), tests
+> (`r2e-core/tests/module.rs`, trybuild cases in `r2e-compile-tests`),
+> example-app `UserModule`. **Depends on**
 > `docs/claude/plan-controllers-as-beans.md` (Direction A) — which has now
 > **landed** (Phase 4, A3): controllers resolve from the graph/context and the
 > state is the inferred HList of the provision list `P`. The single-pass
