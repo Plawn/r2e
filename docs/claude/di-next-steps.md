@@ -7,7 +7,7 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ (done) → 2 → 5. Items 6/8/9 are opportunistic. Item 7 is
+~~1~~ ~~3~~ ~~4~~ ~~2~~ (done) → 5. Items 6/8/9 are opportunistic. Item 7 is
 **rejected** (user decision — do not re-propose).
 
 ---
@@ -34,21 +34,44 @@ is intentionally strict: example-app's `UserModule` had to declare
 `module_controller_guard_dep_not_in_scope.rs` (compile-fail) /
 `module_controller_guard_dep_in_scope.rs` (compile-pass).
 
-## 2. Extraction-bridge overlap invariant (Phase 4 debt, item 1)
+## 2. ~~Extraction-bridge overlap invariant~~ — ✅ DONE (2026-07-08)
 
-**Problem.** Since the `Option<T>` ambiguity fix removed the blanket
-`OptionalFromRequestPartsVia<_, ViaAxum>` bridge, the invariant is
-*implicit*: a type must NOT implement both axum's
-`OptionalFromRequestParts` (generically) and R2E's
-`OptionalFromRequestPartsVia`, or its `Option<T>` marker becomes ambiguous
-(E0283) at `register_controller` — a cryptic error. Nothing enforces this;
-the design relies on bean-backed extractors having no axum impls.
+Resolved as a **checked invariant**, not a constructive exclusion: both
+suggested directions (sealed markers, deterministic selection) require the
+negative bound "`T` does NOT implement the axum trait", which stable Rust
+cannot express — any blanket re-bridge just moves the identical overlap one
+level down (from `Option<T>` to `T`). Instead:
 
-**Direction.** Either enforce it (sealed marker discipline) or make marker
-selection deterministic. Do not silently re-add blanket bridges to
-`r2e-core/src/extract.rs`.
+- `r2e_core::extract::assert_unambiguous_extractor<S, T, M>()` — public
+  inference probe; compiles iff `T` has exactly one extraction route (one
+  inferable marker) against `S`, fails with E0283 listing both impls
+  otherwise. Exported from `r2e_core` root; documented as the authoring
+  rule for extractor authors (probe `T` AND `Option<T>`). Known limit
+  (review-gate finding, documented in the docstring): the probe only sees
+  routes *reachable for `S`* — probing with a state that misses the
+  extractor's backing bean silently drops the bean-backed candidate, so
+  `S` must satisfy every `HasBean` bound the extractor carries.
+- First-party pins: `r2e-core/tests/extract.rs` (plain-axum + a local
+  bean-backed extractor), `r2e-security/tests/extractor.rs`
+  (`AuthenticatedUser`), `claims_identity_macro.rs` (macro-generated
+  identity).
+- trybuild pins: `extractor_dual_route_probe.rs` (localized E0283 at the
+  probe) + `extractor_dual_route_ambiguous.rs` (the real-world shape at
+  `register_controller` — rustc names both competing impls there too, so
+  the failure is diagnosable even without the probe) +
+  `extractor_option_no_route.rs` (zero-route `Option<T>`: the OUTER
+  `Option<T>: FromRequestPartsVia` bound surfaces, with the
+  `Option`-specific note — the `OptionalFromRequestPartsVia`
+  on_unimplemented itself is best-effort and rarely reachable).
+- Docs: invariant section in `extract.rs` module docs,
+  `#[diagnostic::on_unimplemented]` on `OptionalFromRequestPartsVia` + an
+  `Option<T>`-specific note on `FromRequestPartsVia`, book troubleshooting
+  row in `advanced/macro-debugging.md`.
 
-**Origin:** `di-builder-refactor.md` § "Phase 4 tech debt", item 1.
+Still true: do NOT re-add blanket bridges to `r2e-core/src/extract.rs`.
+
+**Origin:** `di-builder-refactor.md` § "Phase 4 tech debt", item 1
+(updated in place).
 
 ## 3. ~~DX: spec-type inference for single-segment tuple-struct ctors~~ — ✅ DONE (2026-07-08)
 

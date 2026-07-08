@@ -53,7 +53,10 @@ pub use config::{
 pub use controller::{ContextConstruct, Controller, ControllerDeps};
 pub use decorator::{DecoratorSpec, SelfBuilt};
 pub use module::FeatureModule;
-pub use extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt};
+pub use extract::{
+    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt,
+    assert_unambiguous_extractor,
+};
 pub use error::{HttpError, HttpErrorExt};
 pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext};
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};

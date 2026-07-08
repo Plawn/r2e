@@ -1,0 +1,19 @@
+error[E0283]: type annotations needed
+  --> compile-fail/extractor_dual_route_probe.rs:64:5
+   |
+64 |     assert_unambiguous_extractor::<S, Option<ApiKey>, _>();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type of the type parameter `M` declared on the function `assert_unambiguous_extractor`
+   |
+   = note: multiple `impl`s satisfying `std::option::Option<ApiKey>: FromRequestPartsVia<HCons<ApiKeys, HNil>, _>` found in the `r2e_core` crate:
+           - impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for std::option::Option<T>
+             where S: std::marker::Send, S: Sync, T: OptionalFromRequestPartsVia<S, M>;
+           - impl<S, T> FromRequestPartsVia<S, ViaAxum> for T
+             where S: std::marker::Send, S: Sync, T: FromRequestParts<S>;
+note: required by a bound in `assert_unambiguous_extractor`
+  --> $WORKSPACE/r2e-core/src/extract.rs
+   |
+   | pub fn assert_unambiguous_extractor<S, T, M>()
+   |        ---------------------------- required by a bound in this function
+   | where
+   |     T: FromRequestPartsVia<S, M>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_unambiguous_extractor`

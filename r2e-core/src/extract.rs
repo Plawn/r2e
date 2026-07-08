@@ -28,6 +28,33 @@
 //! [`BeanExtract`] is the standalone helper for hand-written axum handlers
 //! that need a bean from an HList state: the witness lives in the extractor's
 //! own type parameters (`Self`), which is the other E0207-safe position.
+//!
+//! # The bridge-overlap invariant
+//!
+//! Marker selection is driven by trait inference, so every extractable type
+//! must have **exactly one** route to [`FromRequestPartsVia`] for a given
+//! state:
+//!
+//! - plain axum extractors reach it through the blanket [`ViaAxum`] bridge;
+//! - bean-backed extractors implement it (and its optional twin) directly,
+//!   parking their `HasBean` witness in [`ViaBean`];
+//! - `Option<T>` reaches it either through the `ViaAxum` bridge as a whole
+//!   (axum provides `FromRequestParts for Option<T>` when
+//!   `T: OptionalFromRequestParts`) or through [`ViaOpt`] when
+//!   `T: OptionalFromRequestPartsVia` — never both.
+//!
+//! Consequently a type must NOT implement both axum's `FromRequestParts` /
+//! `OptionalFromRequestParts` (generically over the state) and R2E's
+//! `FromRequestPartsVia` / `OptionalFromRequestPartsVia`: two applicable
+//! routes make the marker ambiguous, and every controller using the type
+//! fails at `register_controller()` with an opaque `E0283: type annotations
+//! needed` on the inferred marker generics. Rust cannot express the negative
+//! bound that would rule this out at impl time, so the invariant is enforced
+//! by convention plus an inference probe: extractor authors should pin their
+//! type with [`assert_unambiguous_extractor`] in a test (R2E's own
+//! bean-backed extractors are pinned this way). Do NOT re-add a blanket
+//! `OptionalFromRequestPartsVia<_, ViaAxum>` bridge — it would give every
+//! plain axum extractor's `Option<T>` a second route.
 
 use std::marker::PhantomData;
 
@@ -56,7 +83,8 @@ pub struct ViaOpt<M>(PhantomData<fn() -> M>);
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be extracted from a request against this application state",
     note = "request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)",
-    note = "if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds"
+    note = "if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds",
+    note = "for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)"
 )]
 pub trait FromRequestPartsVia<S, M>: Sized {
     /// The rejection returned when extraction fails.
@@ -72,6 +100,16 @@ pub trait FromRequestPartsVia<S, M>: Sized {
 /// Optional variant of [`FromRequestPartsVia`], mirroring axum's
 /// [`OptionalFromRequestParts`]: absence of credentials yields `Ok(None)`
 /// instead of a rejection.
+///
+/// Implement this ONLY for bean-backed extractors that have no generic axum
+/// `OptionalFromRequestParts` impl — a type with both routes makes the
+/// `Option<T>` marker ambiguous (see the module docs on the bridge-overlap
+/// invariant, and pin your type with [`assert_unambiguous_extractor`]).
+#[diagnostic::on_unimplemented(
+    message = "`Option<{Self}>` cannot be extracted from a request against this application state",
+    note = "optional extraction requires `{Self}` to implement `OptionalFromRequestPartsVia` (bean-backed extractors) or axum's `OptionalFromRequestParts` for a generic state (bridged automatically)",
+    note = "if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds"
+)]
 pub trait OptionalFromRequestPartsVia<S, M>: Sized {
     /// The rejection returned when extraction fails (not when absent).
     type Rejection: crate::http::response::IntoResponse;
@@ -147,6 +185,45 @@ where
             .await
             .map(|value| Via(value, PhantomData))
     }
+}
+
+/// Compile-time probe asserting that `T` has exactly one extraction route
+/// (one inferable marker `M`) **against the state `S`**.
+///
+/// This is the enforcement tool for the bridge-overlap invariant (see the
+/// module docs): Rust cannot forbid a type from implementing both axum's
+/// extraction traits and R2E's `*Via` traits, but marker inference detects
+/// the overlap. Call this in a unit test with the marker left to inference —
+/// it compiles iff exactly one route exists against `S`, and fails with
+/// `E0283` listing the competing impls if the type has two:
+///
+/// ```ignore
+/// use r2e_core::extract::assert_unambiguous_extractor;
+/// use r2e_core::type_list::{HCons, HNil};
+///
+/// type S = HCons<Arc<JwtClaimsValidator>, HNil>;
+///
+/// assert_unambiguous_extractor::<S, AuthenticatedUser, _>();
+/// assert_unambiguous_extractor::<S, Option<AuthenticatedUser>, _>();
+/// ```
+///
+/// **`S` must satisfy every `HasBean` bound the extractor's `*Via` impls
+/// carry** (i.e. carry all the beans the extractor reads). The probe only
+/// sees the routes *reachable* for `S`: against a state missing the backing
+/// bean, the bean-backed route drops out of candidate selection, so a
+/// dual-route type would pass the probe on the surviving axum route alone —
+/// a silent false pass. A correctly-invariant bean-backed extractor probed
+/// with the wrong state fails loudly (E0277 on the missing bean), so build
+/// `S` first, then leave the marker to inference.
+///
+/// Every bean-backed extractor shipped by R2E is pinned this way; authors of
+/// custom identity types or `#[inject(request)]` extractors should do the
+/// same. Probing `Option<T>` matters even when only `T` is used today — the
+/// optional route is the historically fragile one.
+pub fn assert_unambiguous_extractor<S, T, M>()
+where
+    T: FromRequestPartsVia<S, M>,
+{
 }
 
 /// Standalone axum extractor that clones a bean of type `T` out of an HList

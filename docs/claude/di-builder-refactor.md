@@ -242,15 +242,27 @@ tracking and the guaranteed `state: T` phase remain.
 
 ### Phase 4 tech debt (deferred, recorded 2026-07-08)
 
-1. **Extraction-bridge overlap fragility.** The `Option<T>` ambiguity fix
-   removed the blanket `OptionalFromRequestPartsVia<_, ViaAxum>` bridge; the
-   invariant is now *implicit*: a type must NOT implement both axum's
-   `OptionalFromRequestParts` (generically) and R2E's
-   `OptionalFromRequestPartsVia`, or its `Option<T>` marker becomes ambiguous
-   (E0283) at `register_controller`. Nothing enforces this; the design relies
-   on bean-backed extractors having no axum impls. A future pass should either
-   enforce it (sealed marker discipline) or make marker selection
-   deterministic.
+1. **RESOLVED 2026-07-08** (di-next-steps item 2) — ~~Extraction-bridge
+   overlap fragility.~~ The invariant (a type must NOT implement both axum's
+   `FromRequestParts`/`OptionalFromRequestParts` generically and R2E's
+   `FromRequestPartsVia`/`OptionalFromRequestPartsVia`) **cannot be excluded
+   by construction**: both "sealed marker discipline" and "deterministic
+   marker selection" bottom out in a negative trait bound ("`T` does NOT
+   implement the axum trait"), which stable Rust cannot express, and any
+   blanket re-bridge just moves the same overlap one level down. It is now an
+   **actively checked** invariant instead of an implicit one:
+   `r2e_core::extract::assert_unambiguous_extractor<S, T, M>()` is an
+   inference probe that compiles iff `T` has exactly one extraction route
+   against `S`; all first-party bean-backed extractors are pinned with it
+   (`r2e-core/tests/extract.rs`, `r2e-security/tests/extractor.rs`,
+   `claims_identity_macro.rs`), and it is documented as the authoring tool
+   for third-party extractors (module docs in `extract.rs` + book
+   troubleshooting table in `advanced/macro-debugging.md`). The failure mode
+   is pinned by trybuild (`extractor_dual_route_probe.rs` — clean localized
+   E0283 listing both impls; `extractor_dual_route_ambiguous.rs` — the
+   real-world shape at `register_controller`, which also names both
+   competing impls). Still true: do NOT re-add a blanket
+   `OptionalFromRequestPartsVia<_, ViaAxum>` bridge.
 2. **RESOLVED by Phase 6** (guards & interceptors as graph-resolved
    decorators, see `plan-guards-as-beans.md`) — original entry kept below
    for history. ~~Guard/interceptor bean deps are runtime-checked, not compile-checked.~~

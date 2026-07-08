@@ -426,6 +426,7 @@ Both run on the controller core built via `ContextConstruct` (always available) 
 | `` `T` cannot be constructed from the bean context `` | `#[routes]` / `#[grpc_routes]` on a struct without `#[controller]` | Add `#[controller]` to the struct |
 | `` the trait bound `S: HasBean<T, _>` is not satisfied `` (bean `T` is not registered) | A `#[inject] T` field whose type was never registered as a bean | `.register::<T>()` or `.provide(T)` before `build_state()` |
 | `every controller field must be annotated` | Field without `#[inject]`, `#[config]`, etc. | Annotate the field with one of the supported attributes |
+| `E0283: type annotations needed` at `register_controller()`, with `multiple impls satisfying ...: FromRequestPartsVia` | A request-scoped type has **two extraction routes**: it implements both axum's `FromRequestParts`/`OptionalFromRequestParts` (generically) and R2E's `FromRequestPartsVia`/`OptionalFromRequestPartsVia` | Keep exactly one route (bean-backed extractors: the R2E `*Via` impls only). Extractor authors should pin the type with `r2e::extract::assert_unambiguous_extractor` in a test |
 
 ### Filtering expanded output
 

@@ -11,6 +11,7 @@ help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stam
    | ^^^^^^^^^^^^^^^^
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
 help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
   --> compile-fail/module_private_bean_cannot_back_extractor.rs:22:1
    |
@@ -58,6 +59,7 @@ help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stam
    | ^^^^^^^^^^^^^^^^
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
 help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
   --> compile-fail/module_private_bean_cannot_back_extractor.rs:22:1
    |
@@ -103,6 +105,7 @@ help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stam
    | ^^^^^^^^^^^^^^^^
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
 help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
   --> compile-fail/module_private_bean_cannot_back_extractor.rs:22:1
    |
