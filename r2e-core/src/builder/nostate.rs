@@ -427,8 +427,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// the public face is
     /// [`RegisterModule::register_module`](super::RegisterModule::register_module),
     /// which infers them.
-    #[doc(hidden)]
-    pub fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx>(
+    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx>(
         mut self,
     ) -> ModuleRegistered<M, P, R, Mods>
     where

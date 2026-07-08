@@ -83,6 +83,14 @@ pub trait FeatureModule {
     /// Only these join the app-global provision list `P` — i.e. the
     /// application state and other modules' imports. Everything else the
     /// module provides stays private.
+    ///
+    /// Note the asymmetry for **request-scoped extraction**: `#[inject]`
+    /// fields resolve from the retained bean context, so a *private*
+    /// provider can back them — but bean-backed request extractors (e.g. an
+    /// identity type whose `FromRequestPartsVia` impl has a `HasBean` bound)
+    /// resolve from the application **state** `P`. A bean backing such an
+    /// extractor must therefore be exported (or imported/provided at app
+    /// level); a private one fails the `HasBean` bound at `build_state()`.
     type Exports;
 
     /// Type-level list of bean types the module requires from outside

@@ -132,6 +132,58 @@ struct OrderModule;
 #[module]
 struct HeadlessModule;
 
+// ── A module controller with a bean-backed request extractor ───────────────
+//
+// `Stamp` mirrors how `AuthenticatedUser` extracts: a `FromRequestPartsVia`
+// impl whose `HasBean` bound resolves the backing bean from the application
+// **state** (not the context), with the index witness parked in `ViaBean<I>`.
+// The backing bean must therefore be in `P` — here it is a module **import**
+// satisfied by the app's `.provide`.
+
+#[derive(Clone)]
+struct StampSource(&'static str);
+
+struct Stamp(String);
+
+impl<S, I> r2e_core::extract::FromRequestPartsVia<S, r2e_core::extract::ViaBean<I>> for Stamp
+where
+    S: r2e_core::type_list::HasBean<StampSource, I> + Send + Sync,
+    I: Send + Sync,
+{
+    type Rejection = r2e_core::HttpError;
+
+    async fn from_request_parts_via(
+        _parts: &mut r2e_core::http::header::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Stamp(state.get_bean().0.to_string()))
+    }
+}
+
+#[controller(path = "/stamped")]
+struct StampedController {
+    #[inject]
+    service: UserService,
+    #[inject(request)]
+    stamp: Stamp,
+}
+
+#[routes]
+impl StampedController {
+    #[get("/")]
+    async fn index(&self) -> String {
+        format!("{}+{}", self.service.repo.pool.0, self.stamp.0)
+    }
+}
+
+#[module(
+    providers(),
+    controllers(StampedController),
+    exports(),
+    imports(UserService, StampSource)
+)]
+struct StampModule;
+
 // ── App-level controller consuming a module export ─────────────────────────
 
 #[controller(path = "/app")]
@@ -236,4 +288,42 @@ async fn modules_compose_with_each_other_and_app_controllers() {
         assert_eq!(status, r2e_core::http::StatusCode::OK, "route {path}");
         assert_eq!(body, expected, "route {path}");
     }
+}
+
+/// Registration order between modules does not matter: `OrderModule` imports
+/// `UserModule`'s export but is registered first. `P` accumulates all
+/// exports before requirements are checked at `build_state()`, and the
+/// runtime graph is one order-free topological sort.
+#[r2e_core::test]
+async fn module_registration_order_is_irrelevant() {
+    let app = r2e_core::AppBuilder::new()
+        .register_module::<OrderModule>()
+        .register_module::<UserModule>()
+        .provide(DbPool("mod-db"))
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/orders").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "orders for mod-db");
+}
+
+/// A module controller can use a bean-backed request extractor when the
+/// backing bean is an import (imports join `P`, so the `HasBean` bound
+/// against the state holds).
+#[r2e_core::test]
+async fn module_controller_with_bean_backed_extractor() {
+    let app = r2e_core::AppBuilder::new()
+        .provide(DbPool("mod-db"))
+        .provide(StampSource("stamp-1"))
+        .register_module::<UserModule>()
+        .register_module::<StampModule>()
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/stamped").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "mod-db+stamp-1");
 }

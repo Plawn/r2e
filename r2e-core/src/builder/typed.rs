@@ -378,8 +378,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Panics if config keys or sections declared on the controller fail
     /// validation.
-    #[doc(hidden)]
-    pub fn register_controller_impl<C, W, DepIdx>(self) -> Self
+    pub(crate) fn register_controller_impl<C, W, DepIdx>(self) -> Self
     where
         C: Controller<T, W>,
         C::Deps: crate::type_list::AllSatisfied<T, DepIdx>,
@@ -389,8 +388,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Non-panicking registration backend; see
     /// [`register_controller_impl`](Self::register_controller_impl).
-    #[doc(hidden)]
-    pub fn try_register_controller_impl<C, W, DepIdx>(
+    pub(crate) fn try_register_controller_impl<C, W, DepIdx>(
         self,
     ) -> Result<Self, crate::config::ConfigValidationError>
     where
@@ -413,8 +411,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Panics if config keys or sections declared on the controller fail
     /// validation.
-    #[doc(hidden)]
-    pub fn register_controller_unchecked_impl<C, W>(self) -> Self
+    pub(crate) fn register_controller_unchecked_impl<C, W>(self) -> Self
     where
         C: Controller<T, W>,
     {
@@ -430,8 +427,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Non-panicking variant of
     /// [`register_controller_unchecked_impl`](Self::register_controller_unchecked_impl).
-    #[doc(hidden)]
-    pub fn try_register_controller_unchecked_impl<C, W>(
+    pub(crate) fn try_register_controller_unchecked_impl<C, W>(
         mut self,
     ) -> Result<Self, crate::config::ConfigValidationError>
     where
