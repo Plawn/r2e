@@ -188,8 +188,8 @@ impl RawPreStatePlugin for MyAdvancedPlugin {
     type Provisions = TCons<CancellationToken, TCons<MyRegistry, TNil>>;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
+        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
