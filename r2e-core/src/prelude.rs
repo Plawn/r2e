@@ -74,6 +74,7 @@ pub use crate::builder::{AppBuilder, PreparedApp, RegisterController, RegisterCo
 // needed: `use r2e_core::type_list::BeanAccess;`.
 pub use crate::type_list::BeanLookup;
 pub use crate::controller::ContextConstruct;
+pub use crate::decorator::{DecoratorSpec, SelfBuilt};
 pub use crate::module::FeatureModule;
 pub use crate::extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via};
 pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue};

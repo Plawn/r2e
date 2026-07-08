@@ -4,6 +4,7 @@ pub mod rt;
 pub mod lazy;
 pub mod config;
 pub mod controller;
+pub mod decorator;
 pub mod dev;
 pub mod error;
 pub mod event_subscriber;
@@ -50,6 +51,7 @@ pub use config::{
     validate_keys, validate_section,
 };
 pub use controller::{ContextConstruct, Controller};
+pub use decorator::{DecoratorSpec, SelfBuilt};
 pub use module::FeatureModule;
 pub use extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt};
 pub use error::{HttpError, HttpErrorExt};

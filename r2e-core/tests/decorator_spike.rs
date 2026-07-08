@@ -39,7 +39,7 @@ use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::{HeaderMap, Router, StatusCode, Uri};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TAppend, TCons, TNil};
-use r2e_core::{AppBuilder, Controller, Identity, NoIdentity};
+use r2e_core::{AppBuilder, Controller, DecoratorSpec, Identity, NoIdentity, SelfBuilt};
 
 // ── Prototype: request-time traits without the state parameter ────────────
 
@@ -72,20 +72,7 @@ trait Interceptor2<R>: Send + Sync {
         Fut: std::future::Future<Output = R> + Send;
 }
 
-// ── Prototype: DecoratorSpec — the construction/dep contract ──────────────
-
-/// The type the macro names from the attribute's leading type path.
-/// `#[guard(RateLimitCfg::per_user(2))]` → spec type `RateLimitCfg`; the
-/// expression must evaluate to it. Built **once** at registration.
-trait DecoratorSpec: Sized {
-    /// The guard or interceptor this spec builds.
-    type Product: Send + Sync + 'static;
-    /// Type-level list of the beans `build` pulls — folded into the
-    /// controller's `Deps` and checked by `AllSatisfied` at registration.
-    type Deps;
-    /// Called once per site at registration, with the resolved graph.
-    fn build(self, ctx: &BeanContext) -> Self::Product;
-}
+// ── DecoratorSpec: now the real trait (landed in 6b) ───────────────────────
 
 // ── Beans ──────────────────────────────────────────────────────────────────
 
@@ -216,26 +203,7 @@ impl<R: Send> Interceptor2<R> for AuditInterceptor {
     }
 }
 
-// ── Self-contained decorators: SelfBuilt marker + blanket ──────────────────
-
-/// Opt-in marker for decorators that ARE their own spec (`RolesGuard`,
-/// `Logged`, `Timed`, unit guards, …): `Product = Self`, no deps.
-///
-/// Validated (here and in a two-crate scratch probe): the blanket below does
-/// NOT conflict with the config-type impls (`RateLimitCfg`, `AuditCfg`),
-/// even when those live in a downstream crate — modern negative coherence
-/// accepts it because a local type without a `SelfBuilt` impl cannot gain
-/// one from any other crate (orphan rules). One line per decorator, no
-/// derive needed.
-trait SelfBuilt {}
-
-impl<D: SelfBuilt + Send + Sync + 'static> DecoratorSpec for D {
-    type Product = D;
-    type Deps = TNil;
-    fn build(self, _ctx: &BeanContext) -> D {
-        self
-    }
-}
+// ── Self-contained decorator via the real SelfBuilt marker ─────────────────
 
 struct RequireHeader(&'static str);
 
