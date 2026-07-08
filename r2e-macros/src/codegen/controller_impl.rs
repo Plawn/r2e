@@ -786,14 +786,23 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
 /// 2. `Box<dyn Any + Send>` - for type erasure in core
 ///
 /// This allows the scheduler to downcast back to `Box<dyn ScheduledTask>` and call `start()`.
+///
+/// `#[intercept(...)]` sites (controller-level first, then method-level) are
+/// built once here, from the retained bean context — same
+/// `DecoratorSpec::build` path as route decorators, so bean-reading config
+/// specs work and their `Deps` are folded into `ControllerDeps`. Each task
+/// invocation clones one `Arc` of the prebuilt set and runs the chain around
+/// the method call.
 fn generate_scheduled_tasks(def: &RoutesImplDef, name: &syn::Ident) -> TokenStream {
     if def.scheduled_methods.is_empty() {
         return quote! {};
     }
 
+    let krate = r2e_core_path();
     let sched_krate = r2e_scheduler_path();
     let state_ident = super::handlers::state_generic();
     let controller_name_str = name.to_string();
+    let mut deco_items_all: Vec<TokenStream> = Vec::new();
     let task_defs: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
@@ -814,19 +823,62 @@ fn generate_scheduled_tasks(def: &RoutesImplDef, name: &syn::Ident) -> TokenStre
                 quote! { __ctrl.#fn_name() }
             };
 
-            // Task captures state via the `state` field
+            let intercept_exprs: Vec<&syn::Expr> = def
+                .controller_intercepts
+                .iter()
+                .chain(sm.intercept_fns.iter())
+                .collect();
+            let (deco_items, deco_set) = super::decorators::generate_named_deco_items(
+                name,
+                "Sched",
+                fn_name,
+                &[],
+                &intercept_exprs,
+                quote! {},
+            );
+            deco_items_all.push(deco_items);
+
+            // One task template; the deco set contributes three optional
+            // fragments. With interceptors, the set is built once from the
+            // context and the chain wraps the call (interceptors see the
+            // method's native return type; `log_if_err` runs on the chain
+            // output). Without (or on a spec-inference failure, whose
+            // compile_error! is already emitted), the fragments are empty and
+            // `result_expr` stays the bare call.
+            let (deco_build, deco_bind, deco_deref, result_expr) = match &deco_set {
+                Some(set) => {
+                    let ctor = &set.ctor_ident;
+                    (
+                        quote! { let __task_deco = ::std::sync::Arc::new(#ctor(__ctx)); },
+                        quote! { let __deco_arc = __task_deco.clone(); },
+                        quote! { let __deco = &*__deco_arc; },
+                        super::decorators::wrap_with_deco_interceptors(
+                            call_expr,
+                            &fn_name_str,
+                            &controller_name_str,
+                            &set.intercept_fields,
+                            &krate,
+                        ),
+                    )
+                }
+                None => (quote! {}, quote! {}, quote! {}, call_expr),
+            };
+
             quote! {
                 {
                     let __task_core = __core.clone();
+                    #deco_build
                     let __task_def = #sched_krate::ScheduledTaskDef {
                         name: #task_name.to_string(),
                         schedule: #schedule_expr,
                         state: __state.clone(),
                         task: Box::new(move |_state: #state_ident| {
                             let __ctrl = __task_core.clone();
+                            #deco_bind
                             Box::pin(async move {
+                                #deco_deref
                                 #sched_krate::ScheduledResult::log_if_err(
-                                    #call_expr,
+                                    #result_expr,
                                     #task_name,
                                 );
                             })
@@ -844,7 +896,11 @@ fn generate_scheduled_tasks(def: &RoutesImplDef, name: &syn::Ident) -> TokenStre
         fn scheduled_tasks_boxed(
             __state: &#state_ident,
             __core: ::std::sync::Arc<Self>,
+            __ctx: &#krate::beans::BeanContext,
         ) -> Vec<Box<dyn std::any::Any + Send>> {
+            // Hidden per-method decorator sets (struct + ctor), scoped to
+            // this fn body — they reference only module-level spec types.
+            #(#deco_items_all)*
             vec![#(#task_defs),*]
         }
     }

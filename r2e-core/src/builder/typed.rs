@@ -455,7 +455,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
         {
-            let boxed_tasks = C::scheduled_tasks_boxed(&self.state, Arc::clone(&core));
+            let boxed_tasks =
+                C::scheduled_tasks_boxed(&self.state, Arc::clone(&core), &self.bean_context);
             if !boxed_tasks.is_empty() {
                 if let Some(registry) = self.get_plugin_data::<TaskRegistryHandle>() {
                     registry.add_boxed_for::<ScheduledTaskMarker>(boxed_tasks);

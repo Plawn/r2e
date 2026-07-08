@@ -101,13 +101,16 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     /// without knowing the concrete state type.
     ///
     /// The `state` parameter is cloned into each task definition. Every task
-    /// execution receives the same shared controller core.
+    /// execution receives the same shared controller core. `ctx` is the
+    /// resolved bean graph: `#[intercept(...)]` sites on scheduled methods are
+    /// built from it here, once, exactly like route decorators.
     ///
     /// Called by `register_controller()` to collect tasks automatically.
     /// The default implementation returns an empty list.
     fn scheduled_tasks_boxed(
         state: &T,
         _core: std::sync::Arc<Self>,
+        _ctx: &crate::beans::BeanContext,
     ) -> Vec<Box<dyn std::any::Any + Send>> {
         let _ = state;
         Vec::new()

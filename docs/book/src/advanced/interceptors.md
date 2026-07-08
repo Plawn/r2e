@@ -102,6 +102,31 @@ impl UserController {
 }
 ```
 
+## Scheduled tasks and gRPC methods
+
+`#[intercept(...)]` also works on `#[scheduled]` methods and on methods in a
+`#[grpc_routes]` block, with the same construction model as HTTP routes: the
+interceptor is built **once at registration**, from the resolved bean graph,
+and wraps every task tick / RPC call. Bean-reading interceptors (e.g. one
+declared with `#[derive(DecoratorBean)]` and `#[inject]` fields) work there
+too:
+
+```rust
+#[routes]
+impl ReportJobs {
+    #[scheduled(every = 60)]
+    #[intercept(DbAuditLog::spec("nightly"))]  // reads beans — built from the graph
+    async fn refresh(&self) { /* ... */ }
+}
+```
+
+Two differences from HTTP routes:
+
+- Guards don't apply (there is no request to reject) — only interceptors.
+- Type-constrained interceptors must match the method's return type: a
+  scheduled method returns `()` or `Result<(), E>`, so `Cache` (which needs a
+  `Cacheable` return) doesn't apply there.
+
 ## Execution order
 
 When multiple interceptors are applied, they wrap in this order (outermost to innermost):

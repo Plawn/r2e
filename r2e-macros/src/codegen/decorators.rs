@@ -35,7 +35,7 @@ use crate::types::MethodDecorators;
 /// See the module table for the accepted shapes. Anything else (free
 /// function calls, lowercase paths, literals…) needs the explicit
 /// `SpecType = expr` form.
-pub(super) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Expr)> {
+pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Expr)> {
     // Escape hatch: `SpecType = expr`.
     if let syn::Expr::Assign(assign) = expr {
         if let syn::Expr::Path(p) = assign.left.as_ref() {
@@ -109,14 +109,14 @@ pub(super) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
 /// generation uses this to degrade to the same no-decorator shape as the
 /// invocation function when extraction fails, so the only error the user
 /// sees is the spec-type one (no arity-mismatch cascade).
-pub(super) fn all_specs_inferable<'a>(
+pub(crate) fn all_specs_inferable<'a>(
     exprs: impl IntoIterator<Item = &'a syn::Expr>,
 ) -> bool {
     exprs.into_iter().all(|e| spec_type_of(e).is_ok())
 }
 
 /// A generated per-method decorator set: hidden struct + build function.
-pub(super) struct DecoSet {
+pub(crate) struct DecoSet {
     pub struct_ident: syn::Ident,
     pub ctor_ident: syn::Ident,
     /// Field idents for guard sites, in `guard_fns` order.
@@ -149,14 +149,41 @@ pub(super) fn generate_deco_items(
     intercept_exprs: &[&syn::Expr],
     path_param_module: TokenStream,
 ) -> (TokenStream, Option<DecoSet>) {
+    generate_named_deco_items(
+        &def.controller_name,
+        "Deco",
+        fn_ident,
+        guard_exprs,
+        intercept_exprs,
+        path_param_module,
+    )
+}
+
+/// [`generate_deco_items`] with an explicit controller name and set-name
+/// discriminant (`__R2e<kind>_<Controller>_<fn>`), for callers outside the
+/// `#[routes]` HTTP path: scheduled tasks (`kind = "Sched"`) and gRPC
+/// methods (`kind = "GrpcDeco"`). Distinct kinds keep the hidden items
+/// collision free when one method name appears in several execution scopes.
+pub(crate) fn generate_named_deco_items(
+    controller_name: &syn::Ident,
+    kind: &str,
+    fn_ident: &syn::Ident,
+    guard_exprs: &[syn::Expr],
+    intercept_exprs: &[&syn::Expr],
+    path_param_module: TokenStream,
+) -> (TokenStream, Option<DecoSet>) {
     if guard_exprs.is_empty() && intercept_exprs.is_empty() {
         return (quote! {}, None);
     }
 
-    let controller_name = &def.controller_name;
     let set = DecoSet {
-        struct_ident: format_ident!("__R2eDeco_{}_{}", controller_name, fn_ident),
-        ctor_ident: format_ident!("__r2e_deco_{}_{}", controller_name, fn_ident),
+        struct_ident: format_ident!("__R2e{}_{}_{}", kind, controller_name, fn_ident),
+        ctor_ident: format_ident!(
+            "__r2e_{}_{}_{}",
+            kind.to_lowercase(),
+            controller_name,
+            fn_ident
+        ),
         guard_fields: (0..guard_exprs.len())
             .map(|i| format_ident!("__g{}", i))
             .collect(),
@@ -270,6 +297,62 @@ pub(super) fn generate_predeco_items(
     (items, Some(set))
 }
 
+/// Wrap a body expression with the interceptor chain of a prebuilt decorator
+/// set.
+///
+/// Interceptors are prebuilt fields of the method's decorator set; the caller
+/// binds `__deco` to a `&` reference to the set (`Copy`), so the
+/// `move || async move { ... }` closures capture it by copy and other
+/// variables by move.
+pub(crate) fn wrap_with_deco_interceptors(
+    body: TokenStream,
+    fn_name_str: &str,
+    controller_name_str: &str,
+    intercept_fields: &[syn::Ident],
+    krate: &TokenStream,
+) -> TokenStream {
+    if intercept_fields.is_empty() {
+        return body;
+    }
+
+    let intercept_ctx = quote! {
+        #krate::InterceptorContext {
+            method_name: #fn_name_str,
+            controller_name: #controller_name_str,
+        }
+    };
+
+    // Start with the innermost: the body wrapped in a move closure
+    let mut wrapped = quote! {
+        move || async move { #body }
+    };
+
+    // Wrap from innermost interceptor to second interceptor (skip outermost)
+    for field in intercept_fields[1..].iter().rev() {
+        wrapped = quote! {
+            move || async move {
+                #krate::Interceptor::around(
+                    &__deco.#field,
+                    #intercept_ctx,
+                    #wrapped
+                ).await
+            }
+        };
+    }
+
+    // Apply the outermost interceptor directly (not wrapped in a closure)
+    let outermost = &intercept_fields[0];
+    quote! {
+        {
+            #krate::Interceptor::around(
+                &__deco.#outermost,
+                #intercept_ctx,
+                #wrapped
+            ).await
+        }
+    }
+}
+
 /// The `Controller::Deps` fold: the core's `ContextConstruct::Deps` extended
 /// with every decorator site's `<Spec as DecoratorSpec>::Deps`, deduplicated
 /// by spec type. All lists are concrete, so the `TAppend` projections
@@ -290,16 +373,21 @@ pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
         }
     };
 
-    // Controller-level interceptors are only wired into HTTP route handlers
-    // (SSE/WS/scheduled do not run the interceptor chain), so their deps only
-    // matter when at least one route method exists.
-    if !def.route_methods.is_empty() {
+    // Controller-level interceptors are wired into HTTP route handlers and
+    // scheduled tasks (SSE/WS do not run the interceptor chain), so their
+    // deps only matter when at least one such method exists.
+    if !def.route_methods.is_empty() || !def.scheduled_methods.is_empty() {
         collect(&def.controller_intercepts);
     }
     for rm in &def.route_methods {
         collect(&rm.decorators.guard_fns);
         collect(&rm.decorators.pre_auth_guard_fns);
         collect(&rm.decorators.intercept_fns);
+    }
+    // Scheduled methods run interceptors (built once at registration, from
+    // the retained context, inside `scheduled_tasks_boxed`).
+    for sm in &def.scheduled_methods {
+        collect(&sm.intercept_fns);
     }
     // SSE/WS methods run guards (and pre-auth guards) but not interceptors.
     for sm in &def.sse_methods {

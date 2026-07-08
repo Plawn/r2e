@@ -1,7 +1,8 @@
 //! Method wrapping for transactional behavior.
 //!
-//! Interceptor wrapping for routes lives in `handlers.rs` (interceptors are
-//! prebuilt decorator-set fields there).
+//! Interceptor wrapping for routes lives in `handlers.rs`, and for scheduled
+//! tasks in `controller_impl.rs` (interceptors are prebuilt decorator-set
+//! fields in both cases).
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -61,10 +62,17 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         })
         .collect();
 
+    // Scheduled methods are emitted as-is: their `#[intercept(...)]` sites are
+    // built once from the bean context inside `scheduled_tasks_boxed`
+    // (controller_impl.rs) and wrap the task invocation there, exactly like
+    // route decorators wrap the handler call.
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
-        .map(|sm| generate_wrapped_scheduled_method(sm, def))
+        .map(|sm| {
+            let f = &sm.fn_item;
+            quote! { #f }
+        })
         .collect();
 
     let async_exec_fns: Vec<TokenStream> = def
@@ -214,85 +222,3 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
     }
 }
 
-/// Wrap a scheduled method with interceptors.
-/// Scheduled methods keep interceptor wrapping here because they don't
-/// go through the handler path (no State extraction).
-fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
-    let has_interceptors = !sm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
-
-    if !has_interceptors {
-        let f = &sm.fn_item;
-        return quote! { #f };
-    }
-
-    let fn_item = &sm.fn_item;
-    let attrs = &fn_item.attrs;
-    let vis = &fn_item.vis;
-    let sig = &fn_item.sig;
-    let fn_name_str = sig.ident.to_string();
-    let controller_name_str = def.controller_name.to_string();
-    let original_body = &fn_item.block;
-
-    let body = wrap_with_interceptors_no_state(
-        quote! { #original_body },
-        &fn_name_str,
-        &controller_name_str,
-        def,
-        &sm.intercept_fns,
-    );
-
-    quote! {
-        #(#attrs)*
-        #vis #sig {
-            #body
-        }
-    }
-}
-
-/// Apply interceptor chain for scheduled tasks.
-///
-/// Scheduled methods run on the core, outside the handler path — there is no
-/// wiring-time bean context here, so the interceptor expression is used
-/// directly (it must BE the interceptor, i.e. a `SelfBuilt` decorator like
-/// `Logged`/`Timed`; bean-reading config specs such as `Cache` are not
-/// applicable to scheduled methods).
-fn wrap_with_interceptors_no_state(
-    mut body: TokenStream,
-    fn_name_str: &str,
-    controller_name_str: &str,
-    def: &RoutesImplDef,
-    method_intercepts: &[syn::Expr],
-) -> TokenStream {
-    let all_intercepts: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(method_intercepts.iter())
-        .collect();
-
-    if all_intercepts.is_empty() {
-        return body;
-    }
-
-    let krate = r2e_core_path();
-
-    for intercept_expr in all_intercepts.iter().rev() {
-        body = quote! {
-            {
-                let __interceptor = #intercept_expr;
-                #krate::Interceptor::around(&__interceptor, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    quote! {
-        {
-            let __ctx = #krate::InterceptorContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-            };
-            #body
-        }
-    }
-}

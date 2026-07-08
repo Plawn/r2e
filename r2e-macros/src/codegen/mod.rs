@@ -8,7 +8,7 @@
 //! - `controller_impl`: Controller trait implementation generation
 
 mod controller_impl;
-mod decorators;
+pub(crate) mod decorators;
 mod handlers;
 mod wrapping;
 

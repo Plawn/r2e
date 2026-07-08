@@ -261,11 +261,12 @@ Consequences in `codegen/handlers.rs`:
   module-scope check covers guards/interceptors. Out-of-scope decorator deps
   are now a compile error at `register_module` (trybuild:
   `module_controller_guard_dep_not_in_scope.rs`).
-- **Scheduled-method and gRPC interceptors bypass `DecoratorSpec`.** They
-  run outside the handler path with no wiring-time `BeanContext`, so the
-  `#[intercept(expr)]` expression is used directly as the interceptor —
-  fine for `SelfBuilt` decorators (`Logged`, `Timed`, …), a compile error
-  for config specs like `Cache` (which never made sense there anyway).
+- ~~**Scheduled-method and gRPC interceptors bypass `DecoratorSpec`.**~~
+  **CLOSED (2026-07-08, di-next-steps item 5).** `scheduled_tasks_boxed`
+  now receives the retained `BeanContext` and builds each scheduled
+  method's interceptor set once (deps folded into `ControllerDeps`); gRPC
+  sites are prebuilt into the wrapper at `into_router` from the same
+  context. Bean-reading specs work everywhere `#[intercept]` is accepted.
 - **Pre-existing bug fixed in passing**: SSE/WS methods with `#[pre_guard]`
   used to be filtered out of normal registration but never registered by the
   pre-auth path — the route silently vanished. They now go through the same

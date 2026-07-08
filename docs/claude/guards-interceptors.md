@@ -224,10 +224,16 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   lifecycle wraps `into_response` inside the interceptor closure, so `Cache`
   sees `Response` instead of the raw type. Workaround: read the store bean
   (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the body.
-- **Scheduled methods and gRPC methods** run outside the handler path (no
-  wiring-time `BeanContext`), so their `#[intercept(expr)]` expression is
-  used directly as the interceptor — self-built decorators (`Logged`,
-  `Timed`, …) work; bean-reading specs (`Cache`, …) do not compile there.
+- **Scheduled and gRPC method interceptors are graph-built too** (since
+  di-next-steps item 5). `#[intercept(...)]` on a `#[scheduled]` method is
+  built once inside `scheduled_tasks_boxed(state, core, ctx)` and wraps the
+  task invocation; gRPC sites are prebuilt into the hidden `__R2eGrpc<Name>`
+  wrapper at `into_router`. Bean-reading specs work in both places.
+  Scheduled spec deps are folded into `ControllerDeps` and compile-checked
+  like route decorator deps; gRPC deps (core AND decorators) are NOT
+  compile-checked — `register_grpc_service` resolves from the retained
+  context at runtime, so a missing bean panics there (pre-existing gRPC
+  behavior, unchanged).
 - **Module controllers' decorator deps ARE compile-checked** (since the
   post-Phase-6 `ControllerDeps` carrier): they register through the
   unchecked backend, but the module-scope check folds the full

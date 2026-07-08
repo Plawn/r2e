@@ -7,8 +7,8 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ ~~2~~ (done) → 5. Items 6/8/9 are opportunistic. Item 7 is
-**rejected** (user decision — do not re-propose).
+~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ — all done. Items 6/8/9/10 are opportunistic.
+Item 7 is **rejected** (user decision — do not re-propose).
 
 ---
 
@@ -121,21 +121,44 @@ interceptor through a real controller), compile-fail
 specs) + `decorator_bean_unsupported.rs`. example-app's
 `DbAuditLog`/`DbAuditLogReady` pair collapsed to one derived struct.
 
-## 5. Wiring-time `BeanContext` for scheduled/gRPC interceptors
+## 5. ~~Wiring-time `BeanContext` for scheduled/gRPC interceptors~~ — ✅ DONE (2026-07-08)
 
-**Problem.** `#[intercept(...)]` on `#[scheduled]` methods and gRPC methods
-uses the expression directly as the interceptor (no wiring-time context in
-`wrapping.rs` / `grpc_codegen/trait_impl.rs`), so only `SelfBuilt`
-decorators work there; config specs (`Cache`, a DB audit interceptor…)
-don't compile.
+The last decorator asymmetry is gone — `#[intercept(...)]` on scheduled and
+gRPC methods now goes through `DecoratorSpec::build` like routes, so
+bean-reading specs work everywhere the attribute is accepted.
 
-**Direction.** Scheduled tasks are collected at registration
-(`scheduled_tasks_boxed`), where the retained context exists — thread it
-through so scheduled wrapping can `DecoratorSpec::build` like routes do.
-Same idea for gRPC services (they construct from the context by type
-already). Removes the last decorator asymmetry.
+- **Scheduled**: `Controller::scheduled_tasks_boxed(state, core, ctx)` gained
+  the retained `&BeanContext` (breaking for hand-written impls; call site:
+  `builder/typed.rs`). `generate_scheduled_tasks` (controller_impl.rs) emits a
+  hidden per-method set `__R2eSched_<C>_<fn>` **inside the fn body**, built
+  once via `build_decorator`, one `Arc` clone per tick; the chain wraps the
+  method call (native return type, `log_if_err` on the chain output). Body
+  wrapping in `wrapping.rs` was deleted. `controller_deps_fold` now collects
+  scheduled sites (and controller-level intercepts when scheduled methods
+  exist), so scheduled spec deps are compile-checked at
+  `register_controller`/`register_module`.
+- **gRPC**: per-method sets `__R2eGrpcDeco_<C>_<fn>` live in one hidden
+  container `__R2eGrpcDecos_<Name>` behind a single `Arc` field (`__decos`)
+  on the `__R2eGrpc<Name>` wrapper — one ref-count bump per wrapper clone
+  (tonic clones per call) regardless of method count. Built in `into_router`
+  from the same context that builds the core (the wrapper's now-unused raw
+  `ctx` field was dropped). Shared machinery: `generate_named_deco_items` /
+  `wrap_with_deco_interceptors` in `codegen/decorators.rs` (pub(crate), used
+  by handlers, scheduled, gRPC). Note gRPC deps (core AND decorators) remain
+  runtime-resolved — `register_grpc_service` has no `AllSatisfied` check
+  (pre-existing; a missing bean panics at registration, not per call); see
+  item 10.
 
-**Origin:** "Known gaps" in `plan-guards-as-beans.md`.
+Behavior change: interceptor instances on scheduled/gRPC methods are now
+**built once** (state persists across ticks/calls) instead of re-evaluating
+the site expression per invocation — same semantics as routes.
+
+Tests: `example-app/tests/scheduled_test.rs`
+(`scheduled_interceptor_is_built_from_the_bean_graph`, async + sync methods),
+`example-grpc/tests/grpc_intercept.rs` (live tonic round-trip), compile-fail
+`scheduled_intercept_missing_dep.rs` (same `Contains` diagnostic as routes).
+
+**Origin:** "Known gaps" in `plan-guards-as-beans.md` (closed there too).
 
 ## 6. (Opportunistic) Controller-level interceptor instance sharing
 
@@ -179,3 +202,17 @@ revisit only together with this item if build times ever matter.
 `@PreDestroy` equivalent (close a pool, flush a buffer on shutdown, in
 reverse dependency order). Independent, additive extension of the bean
 graph if the need materializes.
+
+## 10. (Opportunistic) Compile-check gRPC service deps
+
+Recorded 2026-07-08 during the item-5 review gate. gRPC is now the only
+decorator scope whose bean deps are not compile-checked:
+`register_grpc_service<S: GrpcService>` (r2e-grpc/src/lib.rs) has no
+`AllSatisfied` bound, so a missing bean — for the core's `#[inject]` fields
+AND for `#[intercept(...)]` specs — compiles clean and panics inside
+`into_router` at registration time (`BeanContext::get`). HTTP and scheduled
+sites reject the same mistake at `register_controller`. If this bites, the
+shape is known: a `GrpcServiceDeps` carrier emitted by `#[grpc_routes]`
+(fold: `ContextConstruct::Deps` ++ Σ spec deps, mirroring `ControllerDeps`)
+and an `AllSatisfied` bound on `register_grpc_service`. Fail-early-at-startup
+makes this less urgent than the controller case was.

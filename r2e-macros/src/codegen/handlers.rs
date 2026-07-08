@@ -522,59 +522,8 @@ fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
     !rm.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
 }
 
-/// Wrap a body expression with the interceptor chain at handler level.
-///
-/// Interceptors are prebuilt fields of the method's decorator set; `__deco`
-/// is a `&` reference (`Copy`), so the `move || async move { ... }` closures
-/// capture it by copy and other variables by move.
-fn wrap_with_handler_interceptors(
-    body: TokenStream,
-    fn_name_str: &str,
-    controller_name_str: &str,
-    intercept_fields: &[syn::Ident],
-    krate: &TokenStream,
-) -> TokenStream {
-    if intercept_fields.is_empty() {
-        return body;
-    }
-
-    let intercept_ctx = quote! {
-        #krate::InterceptorContext {
-            method_name: #fn_name_str,
-            controller_name: #controller_name_str,
-        }
-    };
-
-    // Start with the innermost: the body wrapped in a move closure
-    let mut wrapped = quote! {
-        move || async move { #body }
-    };
-
-    // Wrap from innermost interceptor to second interceptor (skip outermost)
-    for field in intercept_fields[1..].iter().rev() {
-        wrapped = quote! {
-            move || async move {
-                #krate::Interceptor::around(
-                    &__deco.#field,
-                    #intercept_ctx,
-                    #wrapped
-                ).await
-            }
-        };
-    }
-
-    // Apply the outermost interceptor directly (not wrapped in a closure)
-    let outermost = &intercept_fields[0];
-    quote! {
-        {
-            #krate::Interceptor::around(
-                &__deco.#outermost,
-                #intercept_ctx,
-                #wrapped
-            ).await
-        }
-    }
-}
+// Interceptor-chain wrapping is shared with scheduled tasks and gRPC
+// methods — see `super::decorators::wrap_with_deco_interceptors`.
 
 /// Generate managed resource acquisition using `__state_ref` (for use inside interceptor closures).
 fn generate_managed_acquire_ref(
@@ -725,7 +674,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         )
     } else if has_intercepts && !needs_response && !has_validation {
         // Case 2a: Interceptors only, no validation — returns method's own type
-        let interceptor_body = wrap_with_handler_interceptors(
+        let interceptor_body = super::decorators::wrap_with_deco_interceptors(
             call_expr,
             fn_name_str,
             controller_name_str,
@@ -738,7 +687,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         // Case 2b: Interceptors + validation — returns Response
         // Apply into_response AFTER the interceptor chain so interceptors
         // see the handler's raw return type (e.g. Json<T>), not Response.
-        let interceptor_body = wrap_with_handler_interceptors(
+        let interceptor_body = super::decorators::wrap_with_deco_interceptors(
             call_expr.clone(),
             fn_name_str,
             controller_name_str,
@@ -786,7 +735,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     #(#managed_acquire_ref)*
                     #body_and_release
                 };
-                let wrapped = wrap_with_handler_interceptors(
+                let wrapped = super::decorators::wrap_with_deco_interceptors(
                     managed_body,
                     fn_name_str,
                     controller_name_str,
@@ -805,7 +754,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 // Apply into_response AFTER the interceptor chain so interceptors
                 // see the handler's raw return type (e.g. Json<T>), not Response.
                 // This fixes #[intercept(Cache)] + #[roles] (or any guard) combinations.
-                let interceptor_body = wrap_with_handler_interceptors(
+                let interceptor_body = super::decorators::wrap_with_deco_interceptors(
                     call_expr.clone(),
                     fn_name_str,
                     controller_name_str,
