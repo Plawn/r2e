@@ -67,8 +67,11 @@ the three existing adapters — use them as references.
    - a guard trait with the wire's context and reject type (HTTP:
      `Guard<I>` → `HttpError`; gRPC: `GrpcGuard<I>` → `tonic::Status`),
    - error mapping and the serve loop / plugin (registry filled at
-     registration, drained by a serve hook — see `GrpcServiceRegistry`;
-     note di-next-steps item 12: the gRPC drain itself is not wired yet).
+     registration, drained ONCE at serve time — see `GrpcServiceRegistry`:
+     the `GrpcServer` plugin's `on_serve` hook drains it and spawns tonic on
+     the separate port, or an `add_layer` router transform mounts the
+     accumulated routes behind `MultiplexService` for the single-port mode;
+     wired in di-next-steps item 12).
 
 7. **Tests** — a trybuild compile-fail for a missing bean at the
    registration call site (model: `grpc_intercept_missing_dep.rs`, which

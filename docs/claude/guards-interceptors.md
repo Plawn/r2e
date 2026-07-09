@@ -228,7 +228,8 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   di-next-steps item 5). Scheduled sets are built once inside
   `scheduled_tasks_boxed(state, core, ctx)` and stored in the core's hidden
   `DecoSlot` field (added by `#[controller]` to every core); gRPC sites are
-  prebuilt into the hidden `__R2eGrpc<Name>` wrapper at `into_router`.
+  prebuilt into the hidden `__R2eGrpc<Name>` wrapper at `add_to_routes`
+  (named `into_router` before di-next-steps item 12).
   Bean-reading specs work in both places. Scheduled spec deps are folded
   into `EndpointDeps` and compile-checked like route decorator deps; gRPC
   deps (core AND `#[intercept]` specs) are compile-checked too since

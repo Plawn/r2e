@@ -83,17 +83,17 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
                 #service_name
             }
 
-            fn into_router(
+            fn add_to_routes(
+                __routes: #grpc_krate::tonic::service::Routes,
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
-            ) -> #grpc_krate::tonic::transport::server::Router {
+            ) -> #grpc_krate::tonic::service::Routes {
                 let wrapper = #wrapper_name {
                     core: ::std::sync::Arc::new(
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
                     ),
                     #decos_init
                 };
-                #grpc_krate::tonic::transport::Server::builder()
-                    .add_service(#server_path::new(wrapper))
+                __routes.add_service(#server_path::new(wrapper))
             }
         }
     }

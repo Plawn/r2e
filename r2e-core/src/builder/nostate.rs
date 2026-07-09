@@ -12,6 +12,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             shared: BuilderConfig {
                 config: None,
                 custom_layers: Vec::new(),
+                router_wraps: Vec::new(),
                 bean_registry: BeanRegistry::new(),
                 deferred_actions: Vec::new(),
                 plugin_data: HashMap::new(),

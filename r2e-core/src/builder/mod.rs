@@ -131,6 +131,13 @@ pub struct NoState;
 struct BuilderConfig {
     config: Option<crate::config::R2eConfig>,
     custom_layers: Vec<LayerFn>,
+    /// Transport-level router transforms, applied OUTERMOST — after
+    /// `custom_layers` and `catch_panic_layer`. The wrapped service sees
+    /// every request before any HTTP middleware; the inner HTTP router keeps
+    /// its full middleware stack. Used by transport multiplexers (e.g. gRPC
+    /// content-type routing) so non-HTTP traffic never crosses HTTP-shaped
+    /// layers.
+    router_wraps: Vec<LayerFn>,
     bean_registry: BeanRegistry,
     /// Deferred actions to be executed after state resolution.
     deferred_actions: Vec<DeferredAction>,

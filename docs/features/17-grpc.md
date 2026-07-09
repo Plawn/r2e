@@ -139,7 +139,7 @@ The macro produces:
 
 - A wrapper struct `__R2eGrpc_<Name>` holding the retained `Arc<BeanContext>`
 - An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`)
-- An implementation of the `GrpcService` trait (no state generic) that wires everything into the builder via `into_router(&Arc<BeanContext>)`
+- An implementation of the `GrpcService` trait (no state generic) that wires everything into the builder via `add_to_routes(Routes, &Arc<BeanContext>)` — each registered service folds into a single `tonic::service::Routes` collection, drained once by the `GrpcServer` plugin at serve time
 
 Each method goes through the pipeline: controller construction via `ContextConstruct` (from the bean context, by type), interceptor wrapping, then the method body.
 
@@ -221,7 +221,7 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // HTTP sur :3000
 ```
 
-Clients connect directly to the gRPC port:
+When `serve()` starts, the plugin binds the configured address and spawns the tonic server next to the HTTP one (graceful shutdown is tied to the application's shutdown sequence). Clients connect directly to the gRPC port:
 
 ```bash
 grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHello
@@ -240,7 +240,9 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // HTTP et gRPC sur :3000
 ```
 
-Requests with `content-type: application/grpc*` are routed to the gRPC server; others go to the Axum HTTP router. Routing is handled by `MultiplexService`, a Tower service that inspects the content-type header.
+Requests with `content-type: application/grpc*` are routed to the gRPC services; others go to the Axum HTTP router. Routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
+
+Since gRPC requires HTTP/2, plaintext clients must use h2c prior knowledge (tonic's default); the HTTP server accepts both HTTP/1.1 and h2c on the shared port.
 
 Use this when infrastructure constraints require a single port (e.g., certain PaaS environments).
 

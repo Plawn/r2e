@@ -121,7 +121,7 @@ The macro produces:
 
 - A wrapper struct `__R2eGrpc_<Name>` that holds an `Arc` to the service core
 - An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`)
-- A `GrpcService` trait implementation that wires everything into the builder (no state generic — it constructs from the `BeanContext` and exposes `into_router(&Arc<BeanContext>)`)
+- A `GrpcService` trait implementation that wires everything into the builder (no state generic — it constructs from the `BeanContext` and exposes `add_to_routes(Routes, &Arc<BeanContext>)`; each registered service folds into a single `tonic::service::Routes` collection, drained once by the `GrpcServer` plugin at serve time)
 
 Each method goes through the pipeline: core construction via `ContextConstruct` (`from_context` pulls each `#[inject]` field by type from the resolved bean graph, once at registration), interceptor wrapping, then the method body.
 
@@ -205,7 +205,7 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // HTTP on :3000
 ```
 
-Clients connect to the gRPC port directly:
+When `serve()` starts, the plugin binds the configured address and spawns the tonic server next to the HTTP one; graceful shutdown is tied to the application's shutdown sequence. Clients connect to the gRPC port directly:
 
 ```bash
 grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHello
@@ -224,7 +224,9 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // both HTTP and gRPC on :3000
 ```
 
-Requests with `content-type: application/grpc*` are routed to the gRPC server; all others go to the Axum HTTP router. The routing is handled by `MultiplexService`, a Tower service that inspects the content-type header.
+Requests with `content-type: application/grpc*` are routed to the gRPC services; all others go to the Axum HTTP router. The routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
+
+Since gRPC requires HTTP/2, plaintext clients must use h2c prior knowledge (tonic's default); the HTTP server accepts both HTTP/1.1 and h2c on the shared port.
 
 Use this when infrastructure constraints require a single port (e.g., certain PaaS environments).
 

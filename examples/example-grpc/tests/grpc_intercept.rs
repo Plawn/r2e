@@ -1,5 +1,5 @@
 //! Runtime proof for graph-built gRPC interceptors: `#[intercept(...)]`
-//! sites on gRPC methods are prebuilt ONCE at registration (`into_router`)
+//! sites on gRPC methods are prebuilt ONCE at registration (`add_to_routes`)
 //! from the resolved bean context — the same `DecoratorSpec::build` path as
 //! HTTP route interceptors — so bean-reading specs work on gRPC methods.
 
@@ -85,13 +85,20 @@ async fn grpc_interceptor_is_built_from_the_bean_graph() {
 
     // Registration path: the interceptor set is built here, once, from the
     // retained bean graph.
-    let router = TestGreeter::into_router(builder.bean_context());
+    let routes = TestGreeter::add_to_routes(
+        tonic::service::Routes::default(),
+        builder.bean_context(),
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
     tokio::spawn(async move {
-        router.serve_with_incoming(incoming).await.unwrap();
+        tonic::transport::Server::builder()
+            .add_routes(routes)
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
     });
 
     let mut client = GreeterClient::connect(format!("http://{addr}"))

@@ -268,7 +268,8 @@ Consequences in `codegen/handlers.rs`:
   folded into `ControllerDeps`); scheduled methods run the chain in their
   dispatch wrapper (sync sources promoted to `async fn`, di-next-steps
   item 11), so direct calls are intercepted too. gRPC sites are prebuilt
-  into the wrapper at `into_router` from the same context. Bean-reading
+  into the wrapper at `add_to_routes` (then named `into_router`) from the
+  same context. Bean-reading
   specs work everywhere `#[intercept]` is accepted.
 - **Pre-existing bug fixed in passing**: SSE/WS methods with `#[pre_guard]`
   used to be filtered out of normal registration but never registered by the

@@ -100,11 +100,9 @@ where
             )
             .clone();
 
-        let entry: Box<dyn std::any::Any + Send> = Box::new(service::GrpcServiceEntry {
-            name: S::service_name(),
-            router: S::into_router(self.bean_context()),
+        registry.add_service(S::service_name(), |routes| {
+            S::add_to_routes(routes, self.bean_context())
         });
-        registry.add(entry);
 
         tracing::debug!(
             service = S::service_name(),
@@ -113,26 +111,6 @@ where
 
         self
     }
-}
-
-/// Drain the registry and return every registered service's tonic router.
-///
-/// This is the serve-time consumer of [`GrpcServiceRegistry`]: whatever
-/// starts the gRPC server (see `GrpcTransport`) calls this once to collect
-/// the routers built at `register_grpc_service()` time.
-pub fn collect_grpc_services(
-    registry: &GrpcServiceRegistry,
-) -> Vec<(&'static str, tonic::transport::server::Router)> {
-    registry
-        .take_all()
-        .into_iter()
-        .filter_map(|factory_any| {
-            factory_any
-                .downcast::<service::GrpcServiceEntry>()
-                .ok()
-                .map(|entry| (entry.name, entry.router))
-        })
-        .collect()
 }
 
 /// Re-exports for generated code.
@@ -144,18 +122,6 @@ pub mod __macro_support {
     pub use crate::identity::{GrpcIdentityExtractor, JwtClaimsValidatorLike};
     pub use crate::service::GrpcService;
     pub use tonic;
-
-    /// Uninhabited placeholder identity used by generated guard scaffolding when
-    /// no concrete identity type is available (e.g. `None::<&NeverIdentity>`).
-    ///
-    /// Replaces the former `tonic::codegen::Never`, which was removed in tonic 0.14.
-    pub enum NeverIdentity {}
-
-    impl r2e_core::Identity for NeverIdentity {
-        fn sub(&self) -> &str {
-            match *self {}
-        }
-    }
 }
 
 pub mod prelude {

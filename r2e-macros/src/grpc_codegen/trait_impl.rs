@@ -100,7 +100,7 @@ fn generate_method_impl(
     let method_call = quote! { __ctrl.#fn_name(#(#call_args),*).await };
 
     // Interceptors are prebuilt wrapper fields (one set per method, built
-    // once from the bean graph in `into_router`); `deco_set` is `None` when
+    // once from the bean graph in `add_to_routes`); `deco_set` is `None` when
     // the method has no interceptor sites or when spec inference failed (the
     // `compile_error!` is already emitted — degrade to the unwrapped shape).
     let body = if let Some(set) = deco_set {

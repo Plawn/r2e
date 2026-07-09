@@ -44,6 +44,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         for action in deferred_actions {
             let mut ctx = DeferredContext {
                 layers: &mut builder.shared.custom_layers,
+                router_wraps: &mut builder.shared.router_wraps,
                 plugin_data: &mut builder.shared.plugin_data,
                 serve_hooks: &mut builder.serve_hooks,
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
@@ -597,10 +598,18 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = layer_fn(app);
         }
 
-        // Always install the CatchPanicLayer as the outermost layer so that
-        // panics anywhere in the stack are caught and turned into JSON 500
-        // responses instead of crashing the process.
+        // Always install the CatchPanicLayer as the outermost HTTP layer so
+        // that panics anywhere in the stack are caught and turned into JSON
+        // 500 responses instead of crashing the process.
         app = app.layer(crate::layers::catch_panic_layer());
+
+        // Transport-level wraps go outside EVERYTHING HTTP-shaped (custom
+        // layers and catch-panic included): a multiplexer's non-HTTP branch
+        // must never cross HTTP middleware — a JSON 500 is garbage to a gRPC
+        // client. See `DeferredContext::wrap_router`.
+        for wrap in self.shared.router_wraps {
+            app = wrap(app);
+        }
 
         BuiltApp {
             router: app,

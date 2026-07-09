@@ -7,8 +7,8 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ ~~11~~ ~~10~~ — all done. Items 6/8/9/12 are
-opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
+~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ ~~11~~ ~~10~~ ~~12~~ — all done. Items 6/8/9
+are opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
 
 Naming note (2026-07-09, item 10): the `ControllerDeps` carrier trait was
 renamed **`EndpointDeps`** when it became transport-neutral. Older items
@@ -145,6 +145,7 @@ bean-reading specs work everywhere the attribute is accepted.
   container `__R2eGrpcDecos_<Name>` behind a single `Arc` field (`__decos`)
   on the `__R2eGrpc<Name>` wrapper — one ref-count bump per wrapper clone
   (tonic clones per call) regardless of method count. Built in `into_router`
+  (renamed `add_to_routes` in item 12)
   from the same context that builds the core (the wrapper's now-unused raw
   `ctx` field was dropped). Shared machinery: `generate_named_deco_items` /
   `wrap_with_deco_interceptors` in `codegen/decorators.rs` (pub(crate), used
@@ -255,24 +256,74 @@ construction.
   documented on the trait; share logic via a bean instead.
 - Dead code deleted: `build_grpc_router` (broke multi-service merge by
   design — kept only the first router). `collect_grpc_services` kept as the
-  documented serve-time drain (see item 12).
+  documented serve-time drain (replaced by `GrpcServiceRegistry::take` in
+  item 12).
 - Tests: `grpc_intercept_missing_dep.rs` (compile-fail, with a hand-written
   tonic-server stand-in — no proto/build.rs needed). Recipe doc:
   `docs/claude/transport-adapters.md`.
 
-## 12. (Gap, found during item 10) gRPC serve path is unwired
+## 12. ~~(Gap, found during item 10) gRPC serve path is unwired~~ — ✅ DONE (2026-07-09)
 
-`register_grpc_service` fills `GrpcServiceRegistry` with built tonic
-routers, but **nothing drains it at serve time**: the `GrpcServer` plugin's
-`on_serve` hook is empty (r2e-grpc/src/server.rs — comment claims "handled
-by the serve() extension", which does not exist), `GrpcTransportConfig` is
-stored and never read (dead-code warning is real), and no caller invokes
-`collect_grpc_services`. The separate-port and multiplexed modes therefore
-never start a gRPC server through `AppBuilder::serve()`; example-grpc only
-*claims* gRPC on :50051, and the integration test starts tonic manually via
-`into_router`. Fix shape: a serve hook (or `serve_auto` extension) that
-drains the registry with `collect_grpc_services` and spawns tonic per
-`GrpcTransport` mode, tied to the shutdown token.
+`AppBuilder::serve()` now actually starts the gRPC server, in both modes.
+The key API fact (tonic 0.14): `tonic::transport::server::Router` is
+one-per-service and cannot be merged, but `tonic::service::Routes` (feature
+`router`, already enabled) accumulates `add_service` calls and is itself a
+tower `Service` (`Error = Infallible`) convertible to an `axum::Router` —
+the workspace has a single axum 0.8, so tonic's axum types unify with
+r2e-http's.
+
+- **Breaking — `GrpcService`**: `into_router(ctx) -> transport::server::Router`
+  became `add_to_routes(routes: Routes, ctx) -> Routes` (r2e-grpc/src/service.rs;
+  codegen in `grpc_codegen/service_impl.rs`). Registration folds every
+  service into ONE `Routes`; construction stays once-at-registration from the
+  retained `BeanContext`, and the `EndpointDeps` + `AllSatisfied` check on
+  `register_grpc_service` is untouched.
+- **Breaking — `GrpcServiceRegistry`**: typed over `Routes` + service names
+  (`add_service(name, FnOnce(Routes) -> Routes)`, `take() ->
+  Option<(Routes, Vec<&str>)>`) instead of `Box<dyn Any>` entries.
+  `GrpcServiceEntry` and the never-called `collect_grpc_services` are gone.
+  `GrpcTransportConfig` deleted (the transport is consumed inside `install`;
+  the dead-code warning with it).
+- **SeparatePort**: the plugin's `on_serve` hook drains the registry and
+  `rt::spawn`s tonic (`Server::builder().add_routes(routes)
+  .serve_with_incoming_shutdown(...)`) on an explicitly bound listener (so
+  `:0` logs the real port), graceful shutdown tied to the plugin's
+  CancellationToken (cancelled by its `on_shutdown` hook). Empty registry →
+  loud `warn!`, no server.
+- **Multiplexed**: wired for real via the NEW `DeferredContext::wrap_router`
+  (r2e-core; review-gate fix) — transport-level transforms applied
+  **outermost**, after every `add_layer` layer and the catch-panic layer,
+  regardless of plugin install order — wrapping the assembled HTTP router in
+  `MultiplexService` mounted as `Router::new().fallback_service(mux)`
+  (content-type `application/grpc*` → tonic `Routes`, everything else → the
+  original router with its full middleware stack). This keeps gRPC streams
+  out of HTTP-shaped middleware (a catch-panic JSON 500 is garbage to a gRPC
+  client; a gRPC handler panic now kills only its connection).
+  `MultiplexService` is now `Error = Infallible` (breaking: both inner
+  services must be infallible — `Routes` and `axum::Router` are) so axum
+  accepts it as a fallback service. Plaintext gRPC works because hyper's
+  auto builder accepts h2c prior knowledge on the HTTP port. grpc-web is NOT
+  supported (the content-type sniff routes it to plain tonic, which fails —
+  documented on `is_grpc_content_type`).
+- Tests: `example-grpc/tests/grpc_serve.rs` — both modes e2e through the
+  REAL path (`plugin → build_state → register_grpc_service → serve()`),
+  asserting the response, that a graph-built interceptor ran, and (mux) that
+  plain HTTP/1.1 still reaches axum on the same port. Verified to FAIL on
+  the pre-fix code (connect deadline panic). `registry.rs` tests rewritten
+  for the typed API; `grpc_intercept.rs` updated to `add_to_routes`.
+- Residual gaps: (a) `serve()` still only terminates on an OS signal, so the
+  e2e test aborts the serve task instead of exercising cancellation; (b) the
+  gRPC drain is cancelled at shutdown but not *awaited* — in-flight gRPC
+  calls race the HTTP drain + grace period (an `on_shutdown_async` hook
+  awaiting a completion signal would fix it if ever needed); (c)
+  `GrpcServer::with_reflection` remains unimplemented — it now logs a
+  `warn!` at install time instead of being a silent no-op (review-gate fix).
+- Review gate (Opus): construction-at-registration contract verified intact
+  (the registry `FnOnce` runs synchronously inside `register_grpc_service`).
+  Fixes applied: mux moved from `add_layer` to the new outermost
+  `wrap_router` slot (HTTP-middleware leak onto gRPC traffic was
+  install-order dependent), `with_reflection` warn, dead `NeverIdentity`
+  deleted, grpc-web + registry-mutex notes.
 
 ## 11. ~~Sync scheduled methods: async bridge for direct-call interception~~ — ✅ DONE (2026-07-09)
 

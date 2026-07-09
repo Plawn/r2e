@@ -1,6 +1,6 @@
 //! An `#[intercept(...)]` spec on a `#[grpc_routes]` method reads a bean the
 //! app never provided — must be rejected at `register_grpc_service()`.
-//! gRPC interceptor sets are prebuilt from the bean context in `into_router`,
+//! gRPC interceptor sets are prebuilt from the bean context in `add_to_routes`,
 //! and their `Deps` are folded into `EndpointDeps` exactly like HTTP route
 //! decorator deps.
 

@@ -384,6 +384,10 @@ pub struct DeferredContext<'a> {
     /// Layers to apply to the router.
     #[doc(hidden)]
     pub layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+    /// Transport-level router transforms, applied outermost (after layers and
+    /// the catch-panic layer). See [`DeferredContext::wrap_router`].
+    #[doc(hidden)]
+    pub router_wraps: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
     /// Plugin data storage.
     #[doc(hidden)]
     pub plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
@@ -403,6 +407,21 @@ impl DeferredContext<'_> {
     /// Add a layer to the router.
     pub fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
         self.layers.push(layer);
+    }
+
+    /// Add a transport-level router transform, applied **outermost** — after
+    /// every [`add_layer`](Self::add_layer) layer (regardless of plugin
+    /// install order) and after the built-in catch-panic layer.
+    ///
+    /// Use this instead of `add_layer` when the transform routes traffic
+    /// *around* the HTTP stack (e.g. a content-type multiplexer handing
+    /// gRPC requests to tonic): the wrapped-in service sees raw requests
+    /// before any HTTP middleware, while the inner HTTP router keeps its
+    /// full middleware stack. Do NOT use it for ordinary HTTP middleware —
+    /// it would also intercept the non-HTTP branch of any multiplexer
+    /// installed by another plugin.
+    pub fn wrap_router(&mut self, wrap: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+        self.router_wraps.push(wrap);
     }
 
     /// Store plugin-specific data for later retrieval.

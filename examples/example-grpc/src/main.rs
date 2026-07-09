@@ -19,7 +19,7 @@ pub struct CallLog(pub std::sync::Arc<std::sync::Mutex<Vec<String>>>);
 // ── Interceptor built from the bean graph ──────────────────────────────
 //
 // gRPC `#[intercept(...)]` sites are prebuilt once at registration
-// (`into_router`), from the resolved bean context — same `DecoratorSpec`
+// (`add_to_routes`), from the resolved bean context — same `DecoratorSpec`
 // path as HTTP route interceptors, so bean-reading specs work here too.
 
 #[derive(DecoratorBean)]
