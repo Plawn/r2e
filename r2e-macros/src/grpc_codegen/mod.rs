@@ -99,6 +99,7 @@ pub fn generate(def: &GrpcRoutesImplDef) -> TokenStream {
     let wrapper = generate_wrapper_struct(def, &deco);
     let tonic_trait_impl = trait_impl::generate_tonic_trait_impl(def, &deco);
     let grpc_service_impl = service_impl::generate_grpc_service_impl(def, &deco);
+    let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
     let deco_items = &deco.items;
 
     quote! {
@@ -107,6 +108,7 @@ pub fn generate(def: &GrpcRoutesImplDef) -> TokenStream {
         #wrapper
         #tonic_trait_impl
         #grpc_service_impl
+        #endpoint_deps_impl
     }
 }
 

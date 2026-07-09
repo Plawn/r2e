@@ -2,7 +2,7 @@
 //! app never provided — must be rejected at `register_controller()`.
 //! Scheduled interceptors are built from the bean context inside
 //! `scheduled_tasks_boxed`, and their `Deps` are folded into
-//! `ControllerDeps` exactly like route decorator deps.
+//! `EndpointDeps` exactly like route decorator deps.
 
 use r2e::prelude::*;
 use std::future::Future;

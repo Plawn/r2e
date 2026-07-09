@@ -23,8 +23,13 @@ phase ends with a quality-review gate before the next starts.
 **Next steps:** the prioritized post-Phase-6 backlog is in `di-next-steps.md`
 (bridge-overlap invariant, spec DX, scheduled/gRPC ctx; qualifiers rejected —
 newtypes by design). Item 1 (module decorator-deps carrier) landed 2026-07-08:
-`#[routes]` emits a state-independent `ControllerDeps` carrier of the full dep
-fold, consumed by both `Controller::Deps` and the module-scope check.
+`#[routes]` emits a state-independent carrier of the full dep fold, consumed
+by both `Controller::Deps` and the module-scope check. Item 10 (2026-07-09)
+promoted that carrier to the transport-neutral **`EndpointDeps`** (renamed
+from `ControllerDeps`): `#[grpc_routes]` emits it too and
+`register_grpc_service` gained the `AllSatisfied` bound — every registration
+scope (HTTP, module, scheduled, gRPC) is now compile-checked. Recipe for
+future wire adapters: `transport-adapters.md`.
 
 Phase 1 shipped a clean quality-review gate (no correctness bugs found) and a
 46-file docs alignment pass.
@@ -295,7 +300,7 @@ Spring/NestJS cannot offer:
   `BeanList` fold (derives provided types + aggregate deps + registration
   from `Registrable`), `ControllerDepsList` (state-independent controller
   deps — originally via `ContextConstruct::Deps`; since the post-Phase-6
-  `ControllerDeps` carrier it folds the full list incl. decorator deps),
+  carrier — now `EndpointDeps` — it folds the full list incl. decorator deps),
   `ModuleControllers`/`ModuleList`
   (deferred controller folds). `AppBuilder` gained a 4th phantom param
   `Mods` (default `TNil`); `register_module` (extension trait

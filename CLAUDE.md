@@ -167,6 +167,7 @@ impl UserController {
 | feature modules, `#[module]`, `register_module`, closed subgraph, module imports/exports/encapsulation, controllers as beans, `from_context`, `ContextConstruct`, context-as-state | `docs/claude/plan-controllers-as-beans.md`, `docs/claude/plan-feature-modules.md` |
 | guards/interceptors as beans, `DecoratorSpec`, `DecoratorBean`, guard compile-time deps, once-at-registration guard construction, `Guard<I>`/`Interceptor<R>` redesign | `docs/claude/plan-guards-as-beans.md` |
 | DI backlog / next steps, module decorator deps carrier, bridge-overlap invariant, `#[derive(DecoratorBean)]`, scheduled/gRPC intercept ctx, newtypes-over-qualifiers decision | `docs/claude/di-next-steps.md` |
+| new transport / wire adapter, `EndpointDeps`, `endpoint_deps_fold`, `register_grpc_service` compile check, `AppBuilderGrpcExt`, ports-and-adapters shape, per-transport guards decision | `docs/claude/transport-adapters.md` |
 
 **Rules:**
 1. Match keywords from your task to the left column. Read **only** the matched file(s).

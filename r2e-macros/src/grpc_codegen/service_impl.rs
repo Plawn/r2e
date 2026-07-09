@@ -8,6 +8,34 @@ use crate::grpc_routes_parsing::GrpcRoutesImplDef;
 
 use super::GrpcDecoSets;
 
+/// Generate the `EndpointDeps` carrier for the service: the core's
+/// `ContextConstruct::Deps` extended with every `#[intercept(...)]` site's
+/// spec deps — the same fold `#[routes]` emits for HTTP controllers. Checked
+/// by `AllSatisfied` at `register_grpc_service()`, so a missing bean is a
+/// compile error at the registration call site.
+pub fn generate_endpoint_deps_impl(def: &GrpcRoutesImplDef) -> TokenStream {
+    let krate = r2e_core_path();
+    let controller_name = &def.controller_name;
+
+    let mut exprs: Vec<&syn::Expr> = Vec::new();
+    // Controller-level interceptors run on every method; their deps only
+    // matter when at least one method exists.
+    if !def.methods.is_empty() {
+        exprs.extend(&def.controller_intercepts);
+    }
+    for m in &def.methods {
+        exprs.extend(&m.decorators.intercept_fns);
+    }
+    let deps_fold = crate::codegen::decorators::endpoint_deps_fold(controller_name, exprs);
+
+    quote! {
+        #[doc(hidden)]
+        impl #krate::EndpointDeps for #controller_name {
+            type Deps = #deps_fold;
+        }
+    }
+}
+
 /// Generate `impl GrpcService for ControllerName`.
 pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> TokenStream {
     let krate = r2e_core_path();

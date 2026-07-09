@@ -50,7 +50,7 @@ pub use config::{
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,
 };
-pub use controller::{ContextConstruct, Controller, ControllerDeps};
+pub use controller::{ContextConstruct, Controller, EndpointDeps};
 pub use decorator::{DecoratorSpec, SelfBuilt};
 pub use module::FeatureModule;
 pub use extract::{

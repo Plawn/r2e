@@ -28,6 +28,9 @@ pub mod registry;
 pub mod server;
 pub mod service;
 
+use r2e_core::type_list::AllSatisfied;
+use r2e_core::EndpointDeps;
+
 pub use guard::{GrpcGuard, GrpcGuardContext, GrpcRolesGuard, GrpcRoleBasedIdentity};
 pub use identity::{
     extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentityExtractor,
@@ -44,7 +47,15 @@ pub use prost;
 
 /// Extension trait for `AppBuilder` to register gRPC services.
 ///
-/// This is the gRPC analog of `register_controller` for HTTP.
+/// This is the gRPC analog of `register_controller` for HTTP — including the
+/// compile-time dependency check: the service's [`EndpointDeps`] (its core's
+/// `#[inject]` fields plus every `#[intercept(...)]` spec's deps, emitted by
+/// `#[grpc_routes]`) are checked against the application state via
+/// `AllSatisfied`, so a missing bean is a compile error at this call site.
+///
+/// `T` and `DepIdx` are inference-only witnesses (the same pattern as
+/// [`RegisterController`](r2e_core::RegisterController)): call sites write
+/// `.register_grpc_service::<UserGrpcService>()` and never name them.
 ///
 /// # Example
 ///
@@ -53,22 +64,35 @@ pub use prost;
 ///
 /// AppBuilder::new()
 ///     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-///     .build_state::<Services, _>()
+///     .build_state()
 ///     .await
 ///     .register_grpc_service::<UserGrpcService>()
 ///     .register_grpc_service::<OrderGrpcService>()
 ///     .serve("0.0.0.0:3000")
 /// ```
-pub trait AppBuilderGrpcExt {
+pub trait AppBuilderGrpcExt<T, DepIdx>: Sized
+where
+    T: Clone + Send + Sync + 'static,
+{
     /// Register a gRPC service whose handler is wired into the gRPC server.
     ///
     /// The service is built immediately from the retained bean graph
     /// ([`AppBuilder::bean_context`](r2e_core::AppBuilder::bean_context)).
-    fn register_grpc_service<S: GrpcService>(self) -> Self;
+    fn register_grpc_service<S>(self) -> Self
+    where
+        S: GrpcService + EndpointDeps,
+        S::Deps: AllSatisfied<T, DepIdx>;
 }
 
-impl<T: Clone + Send + Sync + 'static> AppBuilderGrpcExt for r2e_core::AppBuilder<T> {
-    fn register_grpc_service<S: GrpcService>(self) -> Self {
+impl<T, DepIdx> AppBuilderGrpcExt<T, DepIdx> for r2e_core::AppBuilder<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn register_grpc_service<S>(self) -> Self
+    where
+        S: GrpcService + EndpointDeps,
+        S::Deps: AllSatisfied<T, DepIdx>,
+    {
         let registry = self
             .get_plugin_data::<GrpcServiceRegistry>()
             .expect(
@@ -91,62 +115,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilderGrpcExt for r2e_core::AppBuilde
     }
 }
 
-/// Build a tonic `Server` with all registered gRPC services from the registry.
+/// Drain the registry and return every registered service's tonic router.
 ///
-/// This is called during `serve()` to start the gRPC server.
-pub fn build_grpc_router(
-    registry: &GrpcServiceRegistry,
-) -> Option<tonic::transport::server::Router> {
-    let factories = registry.take_all();
-    if factories.is_empty() {
-        return None;
-    }
-
-    let mut router: Option<tonic::transport::server::Router> = None;
-
-    for factory_any in factories {
-        if let Ok(entry) = factory_any.downcast::<service::GrpcServiceEntry>() {
-            tracing::info!(service = entry.name, "Starting gRPC service");
-            let service_router = entry.router;
-            router = Some(match router {
-                Some(existing) => {
-                    // Merge routers — tonic doesn't have a merge, but we can
-                    // use the builder pattern. For now, we'll build services one
-                    // at a time and fold them into a single Router via
-                    // Server::builder().
-                    // Actually, tonic::transport::server::Router doesn't support
-                    // merging. The pattern is to call add_service repeatedly on
-                    // the Server builder. We need to change our approach.
-                    //
-                    // Let's return the list of factories instead and let the
-                    // caller build the server.
-                    existing
-                }
-                None => service_router,
-            });
-        }
-    }
-
-    router
-}
-
-/// Collect all gRPC service factories from the registry and build them.
-///
-/// Returns a list of built tonic Routers, one per service.
+/// This is the serve-time consumer of [`GrpcServiceRegistry`]: whatever
+/// starts the gRPC server (see `GrpcTransport`) calls this once to collect
+/// the routers built at `register_grpc_service()` time.
 pub fn collect_grpc_services(
     registry: &GrpcServiceRegistry,
 ) -> Vec<(&'static str, tonic::transport::server::Router)> {
-    let factories = registry.take_all();
-    let mut services = Vec::new();
-
-    for factory_any in factories {
-        if let Ok(entry) = factory_any.downcast::<service::GrpcServiceEntry>() {
-            let name = entry.name;
-            services.push((name, entry.router));
-        }
-    }
-
-    services
+    registry
+        .take_all()
+        .into_iter()
+        .filter_map(|factory_any| {
+            factory_any
+                .downcast::<service::GrpcServiceEntry>()
+                .ok()
+                .map(|entry| (entry.name, entry.router))
+        })
+        .collect()
 }
 
 /// Re-exports for generated code.

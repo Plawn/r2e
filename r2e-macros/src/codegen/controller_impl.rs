@@ -26,7 +26,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let pre_auth_registrations = generate_pre_auth_registrations(def, name, &meta_mod);
     // Controller deps = core `ContextConstruct::Deps` ++ every decorator
     // site's `<Spec as DecoratorSpec>::Deps`. Emitted once, on the
-    // `ControllerDeps` carrier — checked by `AllSatisfied` at
+    // `EndpointDeps` carrier — checked by `AllSatisfied` at
     // `register_controller()` and by `ModuleDepsSatisfied` at
     // `register_module()`.
     let deps_fold = super::decorators::controller_deps_fold(def);
@@ -142,7 +142,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         // deps) — lets `register_module` check decorator deps in the NoState
         // phase, where `Controller<S, W>::Deps` is not yet nameable.
         #[doc(hidden)]
-        impl #krate::ControllerDeps for #name {
+        impl #krate::EndpointDeps for #name {
             type Deps = #deps_fold;
         }
 
@@ -156,7 +156,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             #(#param_marker_bounds,)*
             #(#managed_bounds,)*
         {
-            type Deps = <#name as #krate::ControllerDeps>::Deps;
+            type Deps = <#name as #krate::EndpointDeps>::Deps;
 
             fn construct(_state: &#state_ident, __ctx: &#krate::beans::BeanContext) -> Self {
                 <#name as #krate::ContextConstruct>::from_context(__ctx)
@@ -795,7 +795,7 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
 /// `#[intercept(...)]` sites (controller-level first, then method-level) are
 /// built once here, from the retained bean context — same
 /// `DecoratorSpec::build` path as route decorators, so bean-reading config
-/// specs work and their `Deps` are folded into `ControllerDeps`. The built
+/// specs work and their `Deps` are folded into `EndpointDeps`. The built
 /// sets go into the core's hidden `DecoSlot` (one container struct per
 /// controller): intercepted scheduled methods read the slot in their own
 /// dispatch wrapper (see `wrapping.rs` — sync sources are promoted to

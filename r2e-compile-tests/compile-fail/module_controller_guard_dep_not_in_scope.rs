@@ -1,6 +1,6 @@
 //! A module controller whose guard reads a bean outside the module's scope
 //! (neither provided nor imported) must be rejected at `register_module` —
-//! decorator deps are part of `ControllerDeps::Deps`, like `#[inject]` deps.
+//! decorator deps are part of `EndpointDeps::Deps`, like `#[inject]` deps.
 
 use r2e::prelude::*;
 use r2e::type_list::{TCons, TNil};

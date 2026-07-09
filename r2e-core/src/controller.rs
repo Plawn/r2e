@@ -24,23 +24,33 @@ pub trait ContextConstruct {
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 }
 
-/// State-independent carrier of a controller's **full** dependency list:
+/// State-independent carrier of an endpoint's **full** dependency list:
 /// [`ContextConstruct::Deps`] extended with every guard/interceptor site's
 /// [`DecoratorSpec::Deps`](crate::decorator::DecoratorSpec::Deps).
 ///
-/// Emitted by `#[routes]` alongside the [`Controller`] impl. The list is the
-/// same one `Controller::Deps` resolves to, but nameable without a state type
-/// or extraction witnesses — which is what lets `register_module` check
-/// controller dependencies (including decorator deps) against the module scope
-/// in the NoState phase, before the state type exists.
+/// This is the transport-neutral registration contract: anything that is
+/// built from the bean graph and carries decorator sites — an HTTP
+/// controller, a gRPC service, a future wire adapter — emits this carrier,
+/// and its registration path checks `Deps` against the application state
+/// (`AllSatisfied`) or the module scope (`ModuleDepsSatisfied`). Emitted by
+/// `#[routes]` alongside the [`Controller`] impl and by `#[grpc_routes]`
+/// alongside the `GrpcService` impl. The list is nameable without a state
+/// type or extraction witnesses — which is what lets `register_module` check
+/// controller dependencies (including decorator deps) against the module
+/// scope in the NoState phase, before the state type exists.
+///
+/// One type carries **one** endpoint dep list: a struct cannot host both a
+/// `#[routes]` and a `#[grpc_routes]` block (the two impls would collide).
+/// Expose the same logic over two transports by delegating to a shared bean
+/// from two endpoint types.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` has no `#[routes]` impl",
-    note = "a controller placed in a module's `Controllers` needs a `#[routes]` block \
-            (or, for a hand-written controller, a manual `ControllerDeps` impl)"
+    message = "`{Self}` has no `#[routes]` or `#[grpc_routes]` impl",
+    note = "an endpoint type needs a `#[routes]` / `#[grpc_routes]` block \
+            (or, for a hand-written endpoint, a manual `EndpointDeps` impl)"
 )]
-pub trait ControllerDeps {
-    /// Type-level list of every bean this controller's core and decorators read.
+pub trait EndpointDeps {
+    /// Type-level list of every bean this endpoint's core and decorators read.
     type Deps;
 }
 

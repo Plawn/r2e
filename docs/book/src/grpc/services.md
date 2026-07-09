@@ -188,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `.provide(...)` and `.register::<T>()` populate the bean graph, `build_state().await` resolves it into the inferred state (no hand-written state struct), and `.register_grpc_service::<S>()` then constructs the service core from that graph.
 
-Register gRPC services with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP.
+Register gRPC services with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP, including the compile-time dependency check: if the service's `#[inject]` fields or its `#[intercept(...)]` specs read a bean the app never provided, the registration line fails to compile with a `missing .provide::<TheBean>()` diagnostic — exactly like an HTTP controller.
 
 ## Transport modes
 

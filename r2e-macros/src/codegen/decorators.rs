@@ -376,59 +376,65 @@ pub(crate) fn wrap_with_deco_interceptors(
     }
 }
 
-/// The `Controller::Deps` fold: the core's `ContextConstruct::Deps` extended
-/// with every decorator site's `<Spec as DecoratorSpec>::Deps`, deduplicated
-/// by spec type. All lists are concrete, so the `TAppend` projections
-/// normalize without extra bounds on the impl.
-pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
+/// The `EndpointDeps::Deps` fold: the core's `ContextConstruct::Deps`
+/// extended with every decorator site's `<Spec as DecoratorSpec>::Deps`,
+/// deduplicated by spec type. All lists are concrete, so the `TAppend`
+/// projections normalize without extra bounds on the impl.
+///
+/// Transport-neutral: `#[routes]` (via [`controller_deps_fold`]) and
+/// `#[grpc_routes]` both fold their sites through here, so every endpoint
+/// kind carries the same shape of dep list.
+pub(crate) fn endpoint_deps_fold<'a>(
+    endpoint_name: &syn::Ident,
+    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> TokenStream {
     let krate = r2e_core_path();
-    let name = &def.controller_name;
 
     let mut seen = std::collections::HashSet::new();
-    let mut spec_paths: Vec<syn::Path> = Vec::new();
-    let mut collect = |exprs: &[syn::Expr]| {
-        for expr in exprs {
-            if let Ok((path, _)) = spec_type_of(expr) {
-                if seen.insert(quote!(#path).to_string()) {
-                    spec_paths.push(path);
-                }
+    let mut deps = quote! { <#endpoint_name as #krate::ContextConstruct>::Deps };
+    for expr in site_exprs {
+        if let Ok((spec, _)) = spec_type_of(expr) {
+            if seen.insert(quote!(#spec).to_string()) {
+                deps = quote! {
+                    <#deps as #krate::type_list::TAppend<
+                        <#spec as #krate::DecoratorSpec>::Deps,
+                    >>::Output
+                };
             }
         }
-    };
+    }
+    deps
+}
+
+/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block.
+pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
+    let mut exprs: Vec<&syn::Expr> = Vec::new();
 
     // Controller-level interceptors are wired into HTTP route handlers and
     // scheduled tasks (SSE/WS do not run the interceptor chain), so their
     // deps only matter when at least one such method exists.
     if !def.route_methods.is_empty() || !def.scheduled_methods.is_empty() {
-        collect(&def.controller_intercepts);
+        exprs.extend(&def.controller_intercepts);
     }
     for rm in &def.route_methods {
-        collect(&rm.decorators.guard_fns);
-        collect(&rm.decorators.pre_auth_guard_fns);
-        collect(&rm.decorators.intercept_fns);
+        exprs.extend(&rm.decorators.guard_fns);
+        exprs.extend(&rm.decorators.pre_auth_guard_fns);
+        exprs.extend(&rm.decorators.intercept_fns);
     }
     // Scheduled methods run interceptors (built once at registration, from
     // the retained context, inside `scheduled_tasks_boxed`).
     for sm in &def.scheduled_methods {
-        collect(&sm.intercept_fns);
+        exprs.extend(&sm.intercept_fns);
     }
     // SSE/WS methods run guards (and pre-auth guards) but not interceptors.
     for sm in &def.sse_methods {
-        collect(&sm.decorators.guard_fns);
-        collect(&sm.decorators.pre_auth_guard_fns);
+        exprs.extend(&sm.decorators.guard_fns);
+        exprs.extend(&sm.decorators.pre_auth_guard_fns);
     }
     for wm in &def.ws_methods {
-        collect(&wm.decorators.guard_fns);
-        collect(&wm.decorators.pre_auth_guard_fns);
+        exprs.extend(&wm.decorators.guard_fns);
+        exprs.extend(&wm.decorators.pre_auth_guard_fns);
     }
 
-    let mut deps = quote! { <#name as #krate::ContextConstruct>::Deps };
-    for spec in spec_paths {
-        deps = quote! {
-            <#deps as #krate::type_list::TAppend<
-                <#spec as #krate::DecoratorSpec>::Deps,
-            >>::Output
-        };
-    }
-    deps
+    endpoint_deps_fold(&def.controller_name, exprs)
 }

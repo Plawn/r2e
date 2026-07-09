@@ -230,10 +230,11 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   `DecoSlot` field (added by `#[controller]` to every core); gRPC sites are
   prebuilt into the hidden `__R2eGrpc<Name>` wrapper at `into_router`.
   Bean-reading specs work in both places. Scheduled spec deps are folded
-  into `ControllerDeps` and compile-checked like route decorator deps; gRPC
-  deps (core AND decorators) are NOT compile-checked —
-  `register_grpc_service` resolves from the retained context at runtime, so
-  a missing bean panics there (pre-existing gRPC behavior, unchanged).
+  into `EndpointDeps` and compile-checked like route decorator deps; gRPC
+  deps (core AND `#[intercept]` specs) are compile-checked too since
+  di-next-steps item 10 — `#[grpc_routes]` emits the same `EndpointDeps`
+  carrier and `register_grpc_service` bounds it with `AllSatisfied`, so a
+  missing bean is a compile error at the registration call site.
 - **Scheduled methods intercept DIRECT calls too** (user decision): the
   chain runs in the method's dispatch wrapper (slot lookup), so
   `self.tick().await` from another method goes through the interceptors —
@@ -245,9 +246,9 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   core that never went through registration (hand-built `from_context` in a
   test) has an empty slot → direct calls run undecorated.
 - **Module controllers' decorator deps ARE compile-checked** (since the
-  post-Phase-6 `ControllerDeps` carrier): they register through the
-  unchecked backend, but the module-scope check folds the full
-  `ControllerDeps::Deps` list (core ++ decorator deps), so a guard or
+  post-Phase-6 `EndpointDeps` carrier, formerly `ControllerDeps`): they
+  register through the unchecked backend, but the module-scope check folds
+  the full `EndpointDeps::Deps` list (core ++ decorator deps), so a guard or
   interceptor reading a bean outside `Provides ∪ Imports` is a compile
   error at `register_module` — declare the bean in the module's `imports`.
 

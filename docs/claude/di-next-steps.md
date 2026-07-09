@@ -7,8 +7,12 @@ items are ordered by recommended priority.
 
 ## Recommended order
 
-~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ ~~11~~ — all done. Items 6/8/9/10 are
+~~1~~ ~~3~~ ~~4~~ ~~2~~ ~~5~~ ~~11~~ ~~10~~ — all done. Items 6/8/9/12 are
 opportunistic. Item 7 is **rejected** (user decision — do not re-propose).
+
+Naming note (2026-07-09, item 10): the `ControllerDeps` carrier trait was
+renamed **`EndpointDeps`** when it became transport-neutral. Older items
+below use the old name in their historical records.
 
 ---
 
@@ -226,19 +230,49 @@ revisit only together with this item if build times ever matter.
 reverse dependency order). Independent, additive extension of the bean
 graph if the need materializes.
 
-## 10. (Opportunistic) Compile-check gRPC service deps
+## 10. ~~Compile-check gRPC service deps~~ — ✅ DONE (2026-07-09)
 
-Recorded 2026-07-08 during the item-5 review gate. gRPC is now the only
-decorator scope whose bean deps are not compile-checked:
-`register_grpc_service<S: GrpcService>` (r2e-grpc/src/lib.rs) has no
-`AllSatisfied` bound, so a missing bean — for the core's `#[inject]` fields
-AND for `#[intercept(...)]` specs — compiles clean and panics inside
-`into_router` at registration time (`BeanContext::get`). HTTP and scheduled
-sites reject the same mistake at `register_controller`. If this bites, the
-shape is known: a `GrpcServiceDeps` carrier emitted by `#[grpc_routes]`
-(fold: `ContextConstruct::Deps` ++ Σ spec deps, mirroring `ControllerDeps`)
-and an `AllSatisfied` bound on `register_grpc_service`. Fail-early-at-startup
-makes this less urgent than the controller case was.
+Implemented as a **generalization, not a parallel carrier**: instead of a
+gRPC-only `GrpcServiceDeps`, the `ControllerDeps` trait was renamed
+**`EndpointDeps`** (r2e-core/src/controller.rs) and became the
+transport-neutral registration contract — anything built from the bean
+graph with decorator sites emits it, and its registration path checks
+`Deps` via `AllSatisfied`. A future wire adapter gets the compile check by
+construction.
+
+- Macro side: the dep fold is shared — `endpoint_deps_fold` in
+  `codegen/decorators.rs` (dedup by spec type, `TAppend` chain over
+  `ContextConstruct::Deps`); `#[routes]` folds its sites through it
+  (`controller_deps_fold`), `#[grpc_routes]` folds controller-level +
+  method-level `#[intercept]` sites (`generate_endpoint_deps_impl` in
+  `grpc_codegen/service_impl.rs`).
+- `register_grpc_service` (r2e-grpc/src/lib.rs) now mirrors
+  `RegisterController`: `AppBuilderGrpcExt<T, DepIdx>` with
+  `S: GrpcService + EndpointDeps, S::Deps: AllSatisfied<T, DepIdx>` —
+  witnesses on the trait, service type on the method, call sites unchanged.
+- Consequence of one-impl-per-type: a struct cannot host both `#[routes]`
+  and `#[grpc_routes]` (the two `EndpointDeps` impls would collide) —
+  documented on the trait; share logic via a bean instead.
+- Dead code deleted: `build_grpc_router` (broke multi-service merge by
+  design — kept only the first router). `collect_grpc_services` kept as the
+  documented serve-time drain (see item 12).
+- Tests: `grpc_intercept_missing_dep.rs` (compile-fail, with a hand-written
+  tonic-server stand-in — no proto/build.rs needed). Recipe doc:
+  `docs/claude/transport-adapters.md`.
+
+## 12. (Gap, found during item 10) gRPC serve path is unwired
+
+`register_grpc_service` fills `GrpcServiceRegistry` with built tonic
+routers, but **nothing drains it at serve time**: the `GrpcServer` plugin's
+`on_serve` hook is empty (r2e-grpc/src/server.rs — comment claims "handled
+by the serve() extension", which does not exist), `GrpcTransportConfig` is
+stored and never read (dead-code warning is real), and no caller invokes
+`collect_grpc_services`. The separate-port and multiplexed modes therefore
+never start a gRPC server through `AppBuilder::serve()`; example-grpc only
+*claims* gRPC on :50051, and the integration test starts tonic manually via
+`into_router`. Fix shape: a serve hook (or `serve_auto` extension) that
+drains the registry with `collect_grpc_services` and spawns tonic per
+`GrpcTransport` mode, tied to the shutdown token.
 
 ## 11. ~~Sync scheduled methods: async bridge for direct-call interception~~ — ✅ DONE (2026-07-09)
 

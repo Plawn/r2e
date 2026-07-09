@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`build_state()` takes no type arguments and is async — `.await` it. Register gRPC services **after** `build_state()` with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP (both are extension-trait methods on the built phase).
+`build_state()` takes no type arguments and is async — `.await` it. Register gRPC services **after** `build_state()` with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP (both are extension-trait methods on the built phase). Like its HTTP counterpart, it compile-checks the service's dependencies: a bean read by an `#[inject]` field or an `#[intercept(...)]` spec but never provided is a compile error at the registration line, not a startup panic.
 
 ## Transport Modes
 

@@ -1,5 +1,5 @@
 //! A type placed in a module's `Controllers` tuple without a `#[routes]`
-//! block (so no `ControllerDeps` impl) must be rejected at `register_module`
+//! block (so no `EndpointDeps` impl) must be rejected at `register_module`
 //! with the "has no `#[routes]` impl" diagnostic.
 
 use r2e::prelude::*;

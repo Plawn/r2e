@@ -18,7 +18,9 @@ use std::fmt;
 ///     fn into_router(ctx: &Arc<BeanContext>) -> tonic::transport::server::Router {
 ///         let wrapper = __R2eGrpcUserGrpcService {
 ///             core: Arc::new(<UserGrpcService as ContextConstruct>::from_context(ctx)),
-///             ctx: Arc::clone(ctx),
+///             // plus, when any method has `#[intercept(...)]` sites:
+///             // __decos: Arc::new(__R2eGrpcDecos_UserGrpcService { ... }),
+///             // (interceptor sets prebuilt from `ctx` — never per call)
 ///         };
 ///         tonic::transport::Server::builder()
 ///             .add_service(proto::user_service_server::UserServiceServer::new(wrapper))
