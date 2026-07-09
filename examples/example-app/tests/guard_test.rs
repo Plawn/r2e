@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use r2e::config::R2eConfig;
 use r2e::prelude::*;
-use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e::r2e_security::AuthenticatedUser;
 use r2e::{Guard, GuardContext, Identity, PreAuthGuard, PreAuthGuardContext};
 use r2e_test::{TestApp, TestJwt};
 
@@ -11,10 +11,11 @@ use r2e_test::{TestApp, TestJwt};
 
 pub struct AllowGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for AllowGuard {
+impl SelfBuilt for AllowGuard {}
+
+impl<I: Identity> Guard<I> for AllowGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
@@ -25,10 +26,11 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for AllowGuard {
 
 pub struct DenyGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for DenyGuard {
+impl SelfBuilt for DenyGuard {}
+
+impl<I: Identity> Guard<I> for DenyGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async {
@@ -41,10 +43,11 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for DenyGuard {
 
 pub struct SubCheckGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for SubCheckGuard {
+impl SelfBuilt for SubCheckGuard {}
+
+impl<I: Identity> Guard<I> for SubCheckGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         let sub = ctx.identity_sub().map(|s| s.to_string());
@@ -61,10 +64,11 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for SubCheckGuard {
 
 pub struct HeaderCheckGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for HeaderCheckGuard {
+impl SelfBuilt for HeaderCheckGuard {}
+
+impl<I: Identity> Guard<I> for HeaderCheckGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         let has_header = ctx.headers.get("x-custom-token").is_some();
@@ -82,10 +86,11 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for HeaderCheckGuard {
 
 pub struct PathCheckGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for PathCheckGuard {
+impl SelfBuilt for PathCheckGuard {}
+
+impl<I: Identity> Guard<I> for PathCheckGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         let path = ctx.path().to_string();
@@ -103,10 +108,11 @@ impl<S: Send + Sync, I: Identity> Guard<S, I> for PathCheckGuard {
 
 pub struct DenyPreAuthGuard;
 
-impl<S: Send + Sync> PreAuthGuard<S> for DenyPreAuthGuard {
+impl SelfBuilt for DenyPreAuthGuard {}
+
+impl PreAuthGuard for DenyPreAuthGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async {
@@ -119,10 +125,11 @@ impl<S: Send + Sync> PreAuthGuard<S> for DenyPreAuthGuard {
 
 pub struct ApiKeyPreAuthGuard;
 
-impl<S: Send + Sync> PreAuthGuard<S> for ApiKeyPreAuthGuard {
+impl SelfBuilt for ApiKeyPreAuthGuard {}
+
+impl PreAuthGuard for ApiKeyPreAuthGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         let has_key = ctx
@@ -141,17 +148,9 @@ impl<S: Send + Sync> PreAuthGuard<S> for ApiKeyPreAuthGuard {
     }
 }
 
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct GuardTestState {
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-
 // ─── Controller with various guard scenarios ───
 
-#[controller(path = "/guarded", state = GuardTestState)]
+#[controller(path = "/guarded")]
 pub struct GuardTestController;
 
 #[routes]
@@ -218,15 +217,12 @@ async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let config = R2eConfig::empty();
 
-    let state = GuardTestState {
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     let app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<GuardTestController>(),
     );

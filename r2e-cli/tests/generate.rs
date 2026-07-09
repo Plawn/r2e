@@ -168,7 +168,9 @@ fn generate_controller_valid_content() {
     generate::controller("UserController").unwrap();
 
     let content = fs::read_to_string("src/controllers/user_controller.rs").unwrap();
-    assert!(content.contains("#[controller("));
+    assert!(content.contains("#[controller]"));
+    // New DI model: no typed state on the controller attribute.
+    assert!(!content.contains("state = AppState"));
     assert!(content.contains("pub struct UserController"));
     assert!(content.contains("#[routes]"));
     assert!(content.contains("impl UserController"));
@@ -464,7 +466,7 @@ fn generate_middleware_has_interceptor() {
 
     let content = fs::read_to_string("src/middleware/audit_log.rs").unwrap();
     assert!(content.contains("pub struct AuditLog"));
-    assert!(content.contains("Interceptor<R, S>"));
+    assert!(content.contains("Interceptor<R>"));
     assert!(content.contains("fn around"));
 }
 

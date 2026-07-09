@@ -12,6 +12,9 @@ tonic-prost = {workspace = true}
 prost = {workspace = true}
 tracing = {workspace = true}
 
+[dev-dependencies]
+tokio-stream = {workspace = true, features = ["net"]}
+
 [build-dependencies]
 tonic-build = {workspace = true}
 tonic-prost-build = {workspace = true}

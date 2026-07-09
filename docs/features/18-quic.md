@@ -74,7 +74,7 @@ With YAML config in place, `serve_auto()` or `serve(addr)` automatically starts 
 ```rust
 AppBuilder::new()
     .load_config::<AppConfig>()
-    .build_state::<Services, _, _>().await
+    .build_state().await
     .register_controller::<MyController>()
     .serve_auto()
     .await?;

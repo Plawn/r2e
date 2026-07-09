@@ -58,19 +58,24 @@ async fn create(
 
 The transaction is automatically committed on success or rolled back on error.
 
-### HasPool
+### Providing the pool
 
-Trait for extracting a database pool from your application state:
+`Tx` fetches the connection pool from the bean graph **by type** — its
+`ManagedResource` impl looks up `sqlx::Pool<DB>` via `BeanLookup`. There is no
+`HasPool` trait to implement and no application-state struct to wire it into.
+Just provide the pool as a bean before `build_state()`:
 
 ```rust
-use r2e::r2e_data_sqlx::HasPool;
+let pool: sqlx::Pool<Sqlite> = SqlitePool::connect("sqlite::memory:").await?;
 
-impl HasPool<Sqlite> for AppState {
-    fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-}
+AppBuilder::new()
+    .provide(pool)            // Pool<Sqlite> is now a bean
+    // ...
+    .build_state().await;
 ```
+
+Once the `Pool<DB>` is a bean, `#[managed] tx: &mut Tx<'_, DB>` just works. A
+missing pool bean surfaces as a clear runtime error naming the type.
 
 ## License
 

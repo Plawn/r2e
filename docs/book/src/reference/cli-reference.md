@@ -60,7 +60,6 @@ my-app/
   application.yaml                app name + port
   src/
     main.rs                       #[tokio::main], AppBuilder, .serve()
-    state.rs                      AppState with #[derive(Clone, BeanState)]
     controllers/
       mod.rs                      pub mod hello;
       hello.rs                    HelloController at /
@@ -100,7 +99,7 @@ async fn main() {
     AppBuilder::new()
         .plugin(Scheduler)
         .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-        .build_state::<AppState, _, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Tracing)
@@ -150,7 +149,7 @@ r2e generate controller UserController
 use r2e::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[controller(state = AppState)]
+#[controller]
 pub struct UserController {
     // #[inject]
     // your_service: YourService,
@@ -257,7 +256,7 @@ CREATE TABLE IF NOT EXISTS users (
 #### Generated controller example
 
 ```rust
-#[controller(path = "/articles", state = AppState)]
+#[controller(path = "/articles")]
 pub struct ArticleController {
     #[inject]
     service: ArticleService,
@@ -302,10 +301,15 @@ use r2e::prelude::*;
 use std::future::Future;
 
 /// Custom interceptor: AuditLog
+///
+/// Self-contained (no bean deps) — the `SelfBuilt` opt-in makes it usable in
+/// `#[intercept(AuditLog)]`.
 pub struct AuditLog;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl SelfBuilt for AuditLog {}
+
+impl<R: Send> Interceptor<R> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,

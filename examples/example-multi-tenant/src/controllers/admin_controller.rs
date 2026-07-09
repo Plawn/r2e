@@ -2,11 +2,10 @@ use r2e::prelude::*;
 
 use crate::models::TenantInfo;
 use crate::services::ProjectService;
-use crate::state::AppState;
 use crate::tenant_identity::TenantUser;
 
 /// Admin-only endpoints for managing tenants.
-#[controller(path = "/admin", state = AppState)]
+#[controller(path = "/admin")]
 pub struct AdminController {
     #[inject]
     project_service: ProjectService,

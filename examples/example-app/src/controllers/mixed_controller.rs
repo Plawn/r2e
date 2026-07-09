@@ -1,14 +1,13 @@
 use crate::models::User;
 use crate::services::UserService;
-use crate::state::Services;
 use r2e::prelude::*;
 
 /// A mixed controller demonstrating param-level identity injection.
 ///
-/// Because there is no `#[inject(identity)]` on the struct, `StatefulConstruct`
+/// Because there is no `#[inject(identity)]` on the struct, `ContextConstruct`
 /// is generated — enabling this controller for consumers and scheduled tasks
 /// while still having protected endpoints via handler-param identity.
-#[controller(path = "/mixed", state = Services)]
+#[controller(path = "/mixed")]
 pub struct MixedController {
     #[inject]
     user_service: UserService,

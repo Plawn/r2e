@@ -25,8 +25,8 @@ async fn setup() -> (TestApp, TestJwt) {
     let app = TestApp::from_builder(
         AppBuilder::new()
             .provide(Arc::new(jwt.claims_validator()))
-            .with_bean::<UserService>()
-            .build_state::<AppState, _, _>()
+            .register::<UserService>()
+            .build_state()
             .await
             .with(Health)
             .with(ErrorHandling)
@@ -59,25 +59,21 @@ let app = TestApp::from_builder(
 );
 ```
 
-## Reducing boilerplate with `#[derive(TestState)]`
+## Hand-building test state with `#[derive(TestState)]`
 
-Test state structs typically need `FromRef` impls for each field so Axum can extract sub-state. Use `#[derive(TestState)]` to auto-generate these:
+Normally the app state is inferred — `.provide` / `.register` build the bean graph
+and `build_state()` materializes it (see [State and Beans](../core-concepts/state-and-beans.md)).
+For focused unit-style tests you can instead hand-write a state struct and derive
+`TestState` on it. The derive bridges the struct into R2E's HList state model —
+generating `HasBean<T, ByField>` / `Contains<T, ByField>` per unique field type (so
+controllers can be registered against it and a missing dependency is a compile
+error) plus `BeanLookup` (so guards and interceptors can read beans via
+`state.bean::<T>()`), along with a per-field `FromRef` impl for any raw Axum
+extractors:
 
 ```rust
 use r2e::prelude::*;
 
-// Before: manual FromRef impls for every field
-#[derive(Clone)]
-struct TestState {
-    user_service: UserService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-// impl FromRef<TestState> for UserService { ... }
-// impl FromRef<TestState> for Arc<JwtClaimsValidator> { ... }
-// impl FromRef<TestState> for R2eConfig { ... }
-
-// After: one derive does it all
 #[derive(Clone, TestState)]
 struct TestState {
     user_service: UserService,
@@ -86,7 +82,10 @@ struct TestState {
 }
 ```
 
-Skip fields that shouldn't get a `FromRef` impl:
+Each field type becomes a bean readable by type — no hand-written `HasBean` /
+`BeanLookup` impls required.
+
+Skip fields that shouldn't be exposed as a bean:
 
 ```rust
 #[derive(Clone, TestState)]

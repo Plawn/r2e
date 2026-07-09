@@ -8,11 +8,11 @@ Provide complete JWT authentication with token validation, automatic user identi
 
 ### AuthenticatedUser
 
-Struct representing the authenticated user, automatically extracted from the `Authorization: Bearer <token>` header. Implements Axum's `FromRequestParts`.
+Struct representing the authenticated user, automatically extracted from the `Authorization: Bearer <token>` header. Extraction goes through R2E's own `FromRequestPartsVia<S, M>` / `OptionalFromRequestPartsVia<S, M>` traits (the marker slot `M` carries the `HasBean` witness that locates the `Arc<JwtClaimsValidator>` bean in the state). Plain axum `FromRequestParts<S>` extractors still work via a blanket `ViaAxum` bridge. Both traits are in the prelude.
 
-### JwtValidator
+### JwtClaimsValidator
 
-Validates JWT tokens — supports static keys (tests, HMAC) and JWKS endpoints (production, RSA/ECDSA).
+Validates JWT tokens — supports static keys (tests, HMAC) and JWKS endpoints (production, RSA/ECDSA). Provided to the application as a bean (`Arc<JwtClaimsValidator>`); every identity extractor resolves it from the bean graph by type.
 
 ### SecurityConfig
 
@@ -20,7 +20,7 @@ Validation configuration: JWKS URL, expected issuer, expected audience.
 
 ### #[inject(identity)]
 
-`#[controller]` attribute that marks a field as extracted from the request (request scope). The field lives on the generated request façade and is automatically populated by the corresponding `FromRequestParts` extractor.
+`#[controller]` attribute that marks a field as extracted from the request (request scope). The field lives on the generated request façade and is automatically populated by the corresponding `FromRequestPartsVia` extractor. Can also be applied to a handler parameter — `#[inject(identity)] user: AuthenticatedUser` or `Option<AuthenticatedUser>` — so only annotated endpoints require authentication.
 
 ### #[roles("...")]
 
@@ -28,17 +28,17 @@ Method attribute that restricts access to users having at least one of the speci
 
 ## Usage
 
-### 1. Configuring JwtValidator
+### 1. Configuring JwtClaimsValidator
 
 #### Test mode (static HMAC key)
 
 ```rust
-use r2e_security::{JwtValidator, SecurityConfig};
+use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 use jsonwebtoken::DecodingKey;
 
 let secret = b"mon-secret-change-en-production";
 let config = SecurityConfig::new("unused", "mon-issuer", "mon-audience");
-let validator = JwtValidator::new_with_static_key(
+let validator = JwtClaimsValidator::new_with_static_key(
     DecodingKey::from_secret(secret),
     config,
 );
@@ -52,36 +52,36 @@ let config = SecurityConfig::new(
     "https://auth.example.com",
     "mon-application",
 );
-let validator = JwtValidator::new(config).await?;
+let validator = JwtClaimsValidator::new(config).await?;
 ```
 
 The `JwksCache` downloads and caches public keys, with automatic refresh.
 
-### 2. Storing in the Application State
+### 2. Providing the Validator as a Bean
+
+The validator is resolved from the bean graph **by type** — there is no
+hand-written state struct and no `FromRef` impl. Provide it once as
+`Arc<JwtClaimsValidator>` and every identity extractor (`AuthenticatedUser` and
+any custom `ClaimsIdentity`) finds it automatically:
 
 ```rust
 use std::sync::Arc;
 
-#[derive(Clone)]
-pub struct Services {
-    pub jwt_validator: Arc<JwtValidator>,
-    // ...
-}
-
-impl axum::extract::FromRef<Services> for Arc<JwtValidator> {
-    fn from_ref(state: &Services) -> Self {
-        state.jwt_validator.clone()
-    }
-}
+let app = AppBuilder::new()
+    .provide(Arc::new(validator))   // Arc<JwtClaimsValidator> — resolved by type
+    .register::<UserService>();
 ```
+
+`AuthenticatedUser` will fail to compile if no `Arc<JwtClaimsValidator>` bean is
+present, naming the missing type.
 
 ### 3. Using `#[inject(identity)]` in a Controller
 
 ```rust
-use r2e_core::prelude::*;
-use r2e_security::AuthenticatedUser;
+use r2e::prelude::*;
+use r2e::r2e_security::AuthenticatedUser;
 
-#[controller(state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)]
     user: AuthenticatedUser,
@@ -118,6 +118,41 @@ Roles are looked up in the following order:
 2. `realm_access.roles` claim (Keycloak format)
 
 The `RoleExtractor` trait can be implemented to support other formats.
+
+### Custom Identity Types (`ClaimsIdentity`)
+
+To carry data beyond the raw JWT claims (e.g. a DB-backed profile), implement
+`ClaimsIdentity<S>` **generic over the state `S`** — never over a concrete state
+struct. Read any beans you need (a pool, a repository, …) from the state via
+`state.bean::<T>()` (the `BeanLookup` vocabulary), then call
+`impl_claims_identity_extractor!` to generate the `FromRequestPartsVia` glue:
+
+```rust
+use r2e::{BeanLookup, Identity};
+use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity};
+
+impl<S> ClaimsIdentity<S> for DbUser
+where
+    S: BeanLookup + Send + Sync,
+{
+    async fn from_jwt_claims(
+        claims: serde_json::Value,
+        state: &S,
+    ) -> Result<Self, r2e::HttpError> {
+        let auth = AuthenticatedUser::from_claims(claims);
+        let pool = state
+            .bean::<sqlx::SqlitePool>()
+            .ok_or_else(|| r2e::HttpError::internal("SqlitePool bean not found in state"))?;
+        // … fetch profile from `pool` …
+        Ok(DbUser { auth, /* profile */ })
+    }
+}
+
+impl_claims_identity_extractor!(DbUser);
+```
+
+The same `Arc<JwtClaimsValidator>` bean validates the JWT once; the light
+(`AuthenticatedUser`) and full (`DbUser`) identities share it.
 
 ### 5. Access Control with `#[roles]`
 
@@ -165,7 +200,7 @@ user.has_any_role(&["admin", "manager"]);  // → bool
    a. Extraire le header Authorization
    b. Verifier le schema "Bearer"
    c. Extraire le token
-   d. Valider via JwtValidator (signature, exp, iss, aud)
+   d. Valider via JwtClaimsValidator (signature, exp, iss, aud)
    e. Mapper les claims vers AuthenticatedUser
 3. Si valide → handler execute avec self.user peuple
 4. Si invalide → 401 retourne, handler jamais execute
@@ -187,16 +222,18 @@ For a controller with `#[inject(identity)] user: AuthenticatedUser`, `#[controll
 struct into an application-scoped **core** (holding only `#[inject]` / `#[config]` fields,
 built once at router-build time and shared as an `Arc`) and a per-request **façade**
 (`__R2eRequest_UserController`) that holds the request-scoped `user` plus an `Arc` to the
-core, with `Deref<Target = Core>`. The macros also generate a `FromRequestParts` extractor
-`__R2eRequestData_UserController` that produces **only** the request-scoped values (the
-identity here); `#[inject]` and `#[config]` live on the shared core and are not re-resolved
-per request. Each registered route closure captures the core `Arc`, extracts the request
-data, and `bind_request` binds the stack façade before invoking the method on it:
+core, with `Deref<Target = Core>`. The core is built by `ContextConstruct::from_context`,
+which pulls each `#[inject]` field from the resolved `BeanContext` **by type**. The macros
+also generate a `FromRequestParts` extractor `__R2eRequestData_UserController` that produces
+**only** the request-scoped values (the identity here); `#[inject]` and `#[config]` live on
+the shared core and are not re-resolved per request. Each registered route closure captures
+the core `Arc`, extracts the request data, and `bind_request` binds the stack façade before
+invoking the method on it:
 
 ```rust
 // Genere (simplifie)
-// Construit une seule fois a l'enregistrement :
-let core: Arc<UserController> = Arc::new(UserController::from_state(&state));
+// Construit une seule fois a l'enregistrement, depuis le graphe de beans :
+let core: Arc<UserController> = Arc::new(UserController::from_context(&ctx));
 
 get({
     let core = core.clone();

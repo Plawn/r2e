@@ -25,17 +25,19 @@ If the user doesn't have the required role, a 403 Forbidden response is returned
 
 ## The `Guard` trait
 
-Custom post-auth guards implement `Guard<S, I>`:
+Custom post-auth guards implement `Guard<I>`. A guard that reads no beans is a
+self-contained decorator — implement the trait and add `impl SelfBuilt`:
 
 ```rust
-use r2e::prelude::*; // Guard, GuardContext, Identity, IntoResponse, Response
+use r2e::prelude::*; // Guard, GuardContext, Identity, SelfBuilt, IntoResponse, Response
 
 struct TenantGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
+impl SelfBuilt for TenantGuard {}
+
+impl<I: Identity> Guard<I> for TenantGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -74,8 +76,10 @@ Convenience methods: `identity_sub()`, `identity_email()`, `identity_claims()`, 
 Use `parse_path_param()` for resource authorization guards that need typed IDs:
 
 ```rust
-use r2e::prelude::*;
+use r2e::prelude::*; // Guard, GuardContext, DecoratorSpec, GuardError, ...
 use r2e::PathParam;
+use r2e::beans::BeanContext;
+use r2e::type_list::{TCons, TNil};
 use std::future::Future;
 
 #[derive(Clone, Copy)]
@@ -94,6 +98,11 @@ enum ProjectRole {
     Viewer,
 }
 
+// Spec: the value the `#[guard(...)]` expression evaluates to. Holds config
+// (the path-param name + minimum role); reads the AuthzService bean in build().
+// This one is hand-written (instead of `#[derive(DecoratorBean)]`) because the
+// domain constructors (`viewer(path::pid)`, …) ARE the config surface — the
+// derive's generated `spec(...)` would lose that vocabulary.
 struct ProjectGuard {
     param: &'static str,
     min_role: ProjectRole,
@@ -108,10 +117,29 @@ impl ProjectGuard {
     }
 }
 
-impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
+// Product: the finished guard, holding the resolved bean plus the config.
+struct ProjectGuardReady {
+    authz: AuthzService,
+    param: &'static str,
+    min_role: ProjectRole,
+}
+
+impl DecoratorSpec for ProjectGuard {
+    type Product = ProjectGuardReady;
+    type Deps = TCons<AuthzService, TNil>;   // compile-checked at register_controller()
+
+    fn build(self, ctx: &BeanContext) -> ProjectGuardReady {
+        ProjectGuardReady {
+            authz: ctx.get::<AuthzService>(),
+            param: self.param,
+            min_role: self.min_role,
+        }
+    }
+}
+
+impl Guard<AuthenticatedUser> for ProjectGuardReady {
     fn check(
         &self,
-        state: &AppState,
         ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -120,8 +148,8 @@ impl Guard<AppState, AuthenticatedUser> for ProjectGuard {
                 .ok_or_else(|| GuardError::unauthorized("identity required"))?;
             let project_id: ProjectId = ctx.parse_path_param(self.param)?;
 
-            state
-                .authz
+            // The authorization service was resolved once at registration.
+            self.authz
                 .require_project_role(user.sub(), project_id, self.min_role)
                 .await
                 .map_err(|_| Response::from(GuardError::forbidden("insufficient project role")))
@@ -193,14 +221,15 @@ pub trait Identity: Send + Sync {
 For authorization that doesn't need identity (e.g., IP allowlisting), use `PreAuthGuard`:
 
 ```rust
-use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, HttpError, IntoResponse, Response
+use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, SelfBuilt, HttpError, IntoResponse, Response
 
 struct IpAllowlistGuard;
 
-impl<S: Send + Sync> PreAuthGuard<S> for IpAllowlistGuard {
+impl SelfBuilt for IpAllowlistGuard {}
+
+impl PreAuthGuard for IpAllowlistGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
@@ -225,25 +254,27 @@ Pre-auth guards run **before** JWT extraction, avoiding wasted token validation.
 
 Guards can perform async operations like database lookups:
 
-```rust
-struct DatabaseGuard;
+A guard that needs a database pool holds it as an `#[inject]` field;
+`#[derive(DecoratorBean)]` pulls the bean from the graph once, at registration:
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for DatabaseGuard
-where
-    sqlx::SqlitePool: FromRef<S>,
-{
+```rust
+#[derive(DecoratorBean)]
+struct DatabaseGuard {
+    #[inject]
+    pool: sqlx::SqlitePool,
+}
+
+impl<I: Identity> Guard<I> for DatabaseGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async move {
-            let pool = sqlx::SqlitePool::from_ref(state);
             let allowed = sqlx::query_scalar::<_, bool>(
                 "SELECT active FROM users WHERE sub = ?"
             )
             .bind(ctx.identity_sub().unwrap_or(""))
-            .fetch_optional(&pool)
+            .fetch_optional(&self.pool)
             .await
             .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
 
@@ -255,6 +286,13 @@ where
     }
 }
 ```
+
+Applied with `#[guard(DatabaseGuard::spec())]` — the generated constructor
+takes the non-injected fields (none here).
+
+> The database query still runs **per request** inside `check`. What changed is
+> that the pool is resolved **once** at registration and held as a field — there
+> is no `state.bean::<...>()` lookup at request time.
 
 ## Guard execution order
 
@@ -269,7 +307,7 @@ Guards short-circuit on first failure — later guards don't run.
 
 ```rust
 #[post("/")]
-#[pre_guard(RateLimit::per_ip(10, 60))]      // Pre-auth: IP rate limit
+#[pre_guard(PreRateLimit::per_ip(10, 60))]    // Pre-auth: IP rate limit
 #[guard(RateLimit::per_user(5, 60))]          // Post-auth: user rate limit
 #[roles("editor")]                             // Role check
 #[guard(TenantGuard)]                          // Custom check

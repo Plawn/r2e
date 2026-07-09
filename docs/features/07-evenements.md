@@ -149,21 +149,40 @@ impl UserService {
 }
 ```
 
-### 6. Share the bus via application state
+### 6. Share the bus as a bean
+
+The event bus is provided as a bean once, then injected by type — no `FromRef` impl and no hand-written state struct:
 
 ```rust
-#[derive(Clone)]
-pub struct Services {
-    pub user_service: UserService,
-    pub event_bus: LocalEventBus,
-    // ...
-}
+let event_bus = LocalEventBus::new();
 
-impl axum::extract::FromRef<Services> for LocalEventBus {
-    fn from_ref(state: &Services) -> Self {
-        state.event_bus.clone()
-    }
+let app = AppBuilder::new()
+    .provide(event_bus)             // the bus becomes a bean, resolved by type
+    .register::<UserService>();     // UserService takes LocalEventBus via #[inject]
+```
+
+Any controller, service, or consumer receives it through a `#[inject]` field:
+
+```rust
+#[controller(path = "/users")]
+pub struct UserController {
+    #[inject] user_service: UserService,
+    #[inject] event_bus: LocalEventBus,
 }
+```
+
+### 7. Register event subscribers
+
+`#[consumer]`-style subscribers are registered **after** `.build_state().await` with `.register_subscriber::<S>()`. The subscriber type `S` must itself be a bean (provided or registered), because it is resolved from the graph by type — never name-matched:
+
+```rust
+app.build_state()
+    .await
+    .register_subscriber::<UserEventConsumer>()
+    .register_controller::<UserController>()
+    .serve("0.0.0.0:3000")
+    .await
+    .unwrap();
 ```
 
 ## Isolation by type

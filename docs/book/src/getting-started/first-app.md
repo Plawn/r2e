@@ -21,20 +21,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-## 2. Define your state
+## 2. Understand application state
 
-Create `src/state.rs`:
-
-```rust
-use r2e::prelude::*;
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub config: R2eConfig,
-}
-```
-
-`BeanState` derives the `FromRef` implementations needed for Axum's state extraction.
+There is **no state struct to write**. R2E infers your application's state from
+the bean graph: every value you `.provide(...)` and every type you
+`.register::<T>()` becomes a bean, and `build_state()` materializes them into an
+inferred state that controllers draw from *by type*. Config (`R2eConfig`) is
+registered as a bean automatically when you call `load_config` — so a minimal app
+has nothing to define here and you can go straight to writing a controller.
 
 ## 3. Create a controller
 
@@ -46,10 +40,9 @@ pub mod hello;
 Create `src/controllers/hello.rs`:
 
 ```rust
-use crate::state::AppState;
 use r2e::prelude::*;
 
-#[controller(path = "/hello", state = AppState)]
+#[controller(path = "/hello")]
 pub struct HelloController;
 
 #[routes]
@@ -75,26 +68,31 @@ use r2e::prelude::*;
 use r2e::plugins::{Health, Tracing};
 
 mod controllers;
-mod state;
 
 use controllers::hello::HelloController;
-use state::AppState;
 
 #[tokio::main]
 async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .build_state::<AppState, _, _>()
+        .build_state()          // no type args; async — resolves the bean graph
         .await
         .with(Health)
         .with(Tracing)
-        .register_controller::<HelloController>()
+        .register_controller::<HelloController>()   // register controllers after build_state
         .serve("0.0.0.0:3000")
         .await
         .unwrap();
 }
 ```
+
+`build_state()` takes no type arguments — the state type is inferred from the
+beans you registered. Controllers are registered **after** `build_state()`.
+
+> **Large apps:** if your bean graph grows past ~127 registrations, add
+> `#![recursion_limit = "512"]` at the top of `main.rs`. `r2e doctor` warns as you
+> approach the threshold.
 
 ## 5. Run it
 
@@ -164,13 +162,12 @@ impl UserService {
 Create `src/controllers/user.rs`:
 
 ```rust
-use crate::state::AppState;
 use crate::services::{User, UserService};
 use r2e::prelude::*;
 
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
-    #[inject] user_service: UserService,
+    #[inject] user_service: UserService,   // resolved from the bean graph by type
 }
 
 #[routes]
@@ -188,18 +185,9 @@ impl UserController {
 }
 ```
 
-Update `src/state.rs` to include the service:
-
-```rust
-use r2e::prelude::*;
-use crate::services::UserService;
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub config: R2eConfig,
-}
-```
+No state struct to edit — registering `UserService` as a bean in `main.rs` (next
+step) is all it takes. The controller's `#[inject] user_service: UserService`
+field is resolved from the graph by type.
 
 Update `src/controllers/mod.rs`:
 ```rust
@@ -215,29 +203,30 @@ use r2e::plugins::{Health, Tracing};
 
 mod controllers;
 mod services;
-mod state;
 
 use controllers::hello::HelloController;
 use controllers::user::UserController;
-use state::AppState;
 
 #[tokio::main]
 async fn main() {
     r2e::init_tracing();
 
     AppBuilder::new()
-        .with_bean::<services::UserService>()
-        .build_state::<AppState, _, _>()
+        .register::<services::UserService>()   // register the bean before build_state
+        .build_state()
         .await
         .with(Health)
         .with(Tracing)
-        .register_controller::<HelloController>()
-        .register_controller::<UserController>()
+        .register_controllers::<(HelloController, UserController)>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();
 }
 ```
+
+Multiple controllers can be registered in one call with the tuple form
+`.register_controllers::<(A, B, ...)>()` (arity 1..=16), or one at a time with
+`.register_controller::<T>()`.
 
 Test:
 

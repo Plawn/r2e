@@ -27,10 +27,11 @@ pub struct RolesGuard {
     pub required_roles: &'static [&'static str],
 }
 
-impl<S: Send + Sync, I: RoleBasedIdentity> Guard<S, I> for RolesGuard {
+impl r2e_core::SelfBuilt for RolesGuard {}
+
+impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         let result = (|| {
@@ -67,10 +68,11 @@ pub struct AllRolesGuard {
     pub required_roles: &'static [&'static str],
 }
 
-impl<S: Send + Sync, I: RoleBasedIdentity> Guard<S, I> for AllRolesGuard {
+impl r2e_core::SelfBuilt for AllRolesGuard {}
+
+impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         let result = (|| {

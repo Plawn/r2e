@@ -16,10 +16,10 @@ AppBuilder::new()
     .plugin(Scheduler)                     // pre-state plugin
     .load_config::<AppConfig>()             // load yaml + type + provide (or .with_config(config))
     .provide(my_pool.clone())              // pre-built instance
-    .with_bean::<UserService>()            // sync bean
-    .with_async_bean::<MyAsyncService>()   // async bean
-    .with_producer::<CreatePool>()         // async producer
-    .build_state::<Services, _, _>().await    // resolve bean graph → phase 2
+    .register::<UserService>()            // sync bean
+    .register::<MyAsyncService>()   // async bean
+    .register::<CreatePool>()         // async producer
+    .build_state().await    // resolve bean graph → phase 2 (no type args; inferred HList state)
 
     // Phase 2: post-state (plugins, routes, lifecycle)
     .with(Health)
@@ -32,7 +32,7 @@ AppBuilder::new()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
 
-`build_state()` is **async** — it resolves the bean dependency graph with topological sorting.
+`build_state()` is **async** and takes **no type arguments** — it resolves the bean dependency graph with topological sorting and materializes the state as an inferred HList of every provided/registered bean (you never hand-write a state struct). Use `try_build_state()` for the non-panicking `Result` variant. Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the crate root.
 
 `build()` returns a `Router` (from `r2e-http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, listens, waits for shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
 
@@ -42,9 +42,9 @@ Three bean traits resolved at compile time:
 
 | Trait | Constructor | Registration |
 |-------|-----------|-------------|
-| `Bean` | `fn build(ctx) -> Self` | `.with_bean::<T>()` |
-| `AsyncBean` | `async fn build(ctx) -> Self` | `.with_async_bean::<T>()` |
-| `Producer` | `async fn produce(ctx) -> Output` | `.with_producer::<P>()` |
+| `Bean` | `fn build(ctx) -> Self` | `.register::<T>()` |
+| `AsyncBean` | `async fn build(ctx) -> Self` | `.register::<T>()` |
+| `Producer` | `async fn produce(ctx) -> Output` | `.register::<P>()` |
 
 A producer can declare `type Output = Option<T>` (the `#[producer]` macro
 infers this from the return type) to express conditional availability —
@@ -55,13 +55,13 @@ producer's decision. Consumers hard-depend on `Option<T>`.
 
 ### Controller injection scopes
 
-- `#[inject]` — app-scoped, cloned from Axum state
-- `#[inject(identity)]` — request-scoped, extracted via `FromRequestParts`
+- `#[inject]` — app-scoped, resolved from the bean graph by type
+- `#[inject(identity)]` — request-scoped, extracted via `FromRequestPartsVia` (plain axum `FromRequestParts` extractors bridge automatically)
 - `#[config("key")]` — app-scoped, resolved from `R2eConfig`
 
-### StatefulConstruct
+### ContextConstruct
 
-`StatefulConstruct<S>` constructs a controller from state alone (no HTTP context). Auto-generated for controllers without `#[inject(identity)]` struct fields. Required by `#[consumer]` and `#[scheduled]` methods.
+`ContextConstruct` constructs a controller from the resolved `BeanContext` — each `#[inject]` field is fetched by type (`ctx.get::<T>()`). It replaces the old `StatefulConstruct`. The generated `Controller<S, W>` impl is generic over the state `S` and its `Controller::Deps` (the unique `#[inject]` types plus `R2eConfig`) are checked at `register_controller` time via `AllSatisfied` — a missing bean is a compile error naming the type. `#[consumer]` and `#[scheduled]` methods run on the controller core built this way.
 
 ## Plugin system
 
@@ -375,13 +375,16 @@ Adds security-related HTTP response headers:
 Background services that don't handle HTTP requests:
 
 ```rust
-pub trait ServiceComponent<S>: Sized {
-    fn from_state(state: &S) -> Self;
+pub trait ServiceComponent: Sized {
+    fn from_context(ctx: &BeanContext) -> Self;
     async fn start(self, shutdown: CancellationToken);
 }
 ```
 
-Register with `.spawn_service::<MyService>()`.
+`ServiceComponent` has no state generic — it constructs from the resolved
+`BeanContext` by type. Derive it with `#[derive(BackgroundService)]` (no
+`#[service(...)]` attribute), then register **after** `build_state()` with
+`.spawn_service::<MyService>()`.
 
 ## Lifecycle hooks
 

@@ -84,7 +84,7 @@ repo.delete(&1).await?;
 ## In controllers
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] pool: SqlitePool,
 }
@@ -116,19 +116,24 @@ impl UserController {
 }
 ```
 
-## HasPool trait
+## Making the pool available
 
-For controllers that use data-sqlx features, implement `HasPool` on your state:
+Data-sqlx features (`#[managed]` transactions and `SqlxRepository`) fetch the
+database pool from the bean graph **by type**. There is no state trait to
+implement — just make the pool a bean by providing it before `build_state()`:
 
 ```rust
-use r2e::r2e_data_sqlx::HasPool;
 use sqlx::{Pool, Sqlite};
 
-impl HasPool<Sqlite> for AppState {
-    fn pool(&self) -> &Pool<Sqlite> {
-        &self.pool
-    }
-}
+let pool: Pool<Sqlite> = SqlitePool::connect(&url).await?;
+
+AppBuilder::new()
+    .provide(pool)     // `Pool<Sqlite>` is now resolvable by type
+    // ...
+    .build_state()
+    .await
+    // ...
 ```
 
-This is required for `#[managed]` transactions and `SqlxRepository`.
+Once `Pool<Sqlite>` is provided, controllers can `#[inject] pool: SqlitePool`
+and `#[managed] tx: &mut Tx<'_, Sqlite>` resolves the same pool automatically.

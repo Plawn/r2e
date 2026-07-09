@@ -1,21 +1,20 @@
 use crate::error::AppError;
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
-use crate::state::Services;
 use r2e::prelude::*;
 use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;
 use std::future::Future;
 
-/// A custom user-defined interceptor for audit logging (generic — no state access).
+/// A custom user-defined interceptor for audit logging (self-contained — no
+/// bean deps, so a one-line `SelfBuilt` opt-in makes it usable in
+/// `#[intercept(AuditLog)]`).
 pub struct AuditLog;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext<'_, S>,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+impl SelfBuilt for AuditLog {}
+
+impl<R: Send> Interceptor<R> for AuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -39,43 +38,45 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
     }
 }
 
-/// A stateful interceptor that accesses the application state.
+/// A bean-reading interceptor: writes an audit row using the database pool.
 ///
-/// Unlike `AuditLog` (generic over `S`), this interceptor is bound to `Services`
-/// and can access the database pool, event bus, or any other field from the state.
+/// Unlike `AuditLog` (which never touches beans), this one holds the pool as
+/// a field. `#[derive(DecoratorBean)]` generates the spec plumbing: the pool
+/// is declared as a dep (checked at `register_controller()` — a missing bean
+/// is a compile error) and pulled **once at wiring time** into the built
+/// interceptor. No per-request lookups.
 ///
 /// # Usage
 /// ```ignore
-/// #[intercept(DbAuditLog)]
+/// #[intercept(DbAuditLog::spec())]
 /// async fn create(&self, body: Json<User>) -> Result<Json<User>, HttpError> { ... }
 /// ```
-pub struct DbAuditLog;
+#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject]
+    pool: sqlx::SqlitePool,
+}
 
-impl<R: Send> Interceptor<R, Services> for DbAuditLog {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext<'_, Services>,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+impl<R: Send> Interceptor<R> for DbAuditLog {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
         let method_name = ctx.method_name;
-        let pool = ctx.state.pool.clone();
         async move {
             let result = next().await;
             // Write an audit log entry to the database after execution
             let _ = sqlx::query("INSERT INTO audit_log (method, ts) VALUES (?, datetime('now'))")
                 .bind(method_name)
-                .execute(&pool)
+                .execute(&self.pool)
                 .await;
             result
         }
     }
 }
 
-#[controller(path = "/users", state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]
     user_service: UserService,
@@ -185,7 +186,7 @@ impl UserController {
 
     // Demo: stateful interceptor that accesses ctx.state (writes audit log to DB)
     #[get("/db-audited")]
-    #[intercept(DbAuditLog)]
+    #[intercept(DbAuditLog::spec())]
     async fn db_audited_list(&self) -> Json<Vec<User>> {
         let users = self.user_service.list().await;
         Json(users)

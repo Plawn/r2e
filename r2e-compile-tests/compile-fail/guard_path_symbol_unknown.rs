@@ -27,17 +27,18 @@ impl ProjectGuard {
     }
 }
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for ProjectGuard {
+impl SelfBuilt for ProjectGuard {}
+
+impl<I: Identity> Guard<I> for ProjectGuard {
     fn check(
         &self,
-        _state: &S,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
 
-#[controller(path = "/guarded", state = AppState)]
+#[controller(path = "/guarded")]
 pub struct GuardedController;
 
 #[routes]

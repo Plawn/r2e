@@ -6,11 +6,11 @@ Controllers are the central building block of R2E. They map HTTP routes to handl
 
 A controller requires two macros working together:
 
-1. `#[controller(path = "...", state = ...)]` on the struct — a transforming attribute that generates the controller core, the request-data extractor, the per-request façade, and metadata
+1. `#[controller(path = "...")]` on the struct — a transforming attribute that generates the controller core, the request-data extractor, the per-request façade, and metadata
 2. `#[routes]` on the impl block — generates Axum handler functions and route registration
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
 }
@@ -55,7 +55,11 @@ The `#[controller]` attribute takes:
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `path` | No | URL prefix for all routes (default: `""`) |
-| `state` | Yes | The application state type |
+
+There is no `state` parameter: `#[inject]` fields are resolved **by type** from the
+bean graph, so a controller with only consumers/scheduled tasks (no routes) can be
+declared as a bare `#[controller]`. The application state type is inferred by the
+builder — you never write it.
 
 ## HTTP method attributes
 
@@ -115,9 +119,9 @@ Controller fields support four injection scopes — two app-scoped (on the core)
 and two request-scoped (on the per-request façade):
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
-    #[inject]              user_service: UserService,     // App-scoped (from state)
+    #[inject]              user_service: UserService,     // App-scoped (from the bean graph)
     #[config("app.name")]  app_name: String,              // App-scoped (from R2eConfig)
     #[inject(identity)]    user: AuthenticatedUser,        // Request-scoped auth identity
     #[inject(request)]     tenant: TenantId,               // Request-scoped (any FromRequestParts)
@@ -126,7 +130,7 @@ pub struct UserController {
 
 | Scope | Attribute | Lives on | Timing | Notes |
 |-------|-----------|----------|--------|-------|
-| App | `#[inject]` | Core | Built once | Cloned from state. Must be `Clone + Send + Sync`. |
+| App | `#[inject]` | Core | Built once | Resolved by type from the bean graph. Must be `Clone + Send + Sync`. |
 | Config | `#[config("key")]` | Core | Built once | Looked up from `R2eConfig`. |
 | Request (identity) | `#[inject(identity)]` | Façade | Per request | Extracted from request parts. Must implement `Identity`. Drives guards/roles. |
 | Request (generic) | `#[inject(request)]` | Façade | Per request | Any `FromRequestParts` value (tenant id, trace context, request-scoped handle). Not modeled in OpenAPI yet. |
@@ -147,7 +151,7 @@ request. See [Controller Lifecycle and Handler Dispatch](../advanced/controller-
 When only some endpoints need authentication, use param-level `#[inject(identity)]` instead of struct-level. This is the **recommended pattern** for most controllers:
 
 ```rust
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -177,7 +181,7 @@ impl ApiController {
 }
 ```
 
-This is the **mixed controller pattern** — it's more efficient because JWT validation only runs on endpoints that need it, and it keeps request scope explicit per handler. The controller core always implements `StatefulConstruct`, so it can also be used with `#[consumer]` and `#[scheduled]` (which run on the core and cannot access request identity).
+This is the **mixed controller pattern** — it's more efficient because JWT validation only runs on endpoints that need it, and it keeps request scope explicit per handler. The controller core always implements `ContextConstruct` (it is built by type from the resolved bean graph), so it can also be used with `#[consumer]` and `#[scheduled]` (which run on the core and cannot access request identity).
 
 ## Registering controllers
 
@@ -185,7 +189,8 @@ Controllers are registered with the application builder:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .register::<UserService>()   // register beans first (see State and Beans)
+    .build_state()               // no type argument — the state type is inferred
     .await
     .register_controller::<UserController>()
     .register_controller::<AccountController>()
@@ -194,15 +199,21 @@ AppBuilder::new()
     .unwrap();
 ```
 
+To register several controllers at once, use `register_controllers::<(A, B, ...)>()` (tuples of arity 1..=16). It is equivalent to the sequential `register_controller` calls above, preserving order:
+
+```rust
+    .register_controllers::<(UserController, AccountController)>()
+```
+
 ## What gets generated
 
 Behind the scenes, `#[controller]` and `#[routes]` generate:
 
 1. **Controller core** — your struct with request-scoped fields stripped out; holds only `#[inject]` + `#[config]` fields and is built once into an `Arc`
-2. **Metadata module** (`__r2e_meta_<Name>`) — state type, identity type, path prefix, `bind_request`, config validation
+2. **Metadata module** (`__r2e_meta_<Name>`) — identity type, path prefix, `bind_request`, config validation
 3. **Request-data extractor** (`__R2eRequestData_<Name>`) — implements `FromRequestParts` to extract the request-scoped values (identity + `#[inject(request)]`)
 4. **Request façade** (`__R2eRequest_<Name>`) — `{ __core: Arc<Core>, <request fields> }` with `Deref<Target = Core>`; route methods run here
-5. **StatefulConstruct impl** — always generated (the core never holds request-scoped fields)
-6. **Controller trait impl** — wires the core supplied by `register_controller()` into routes, consumers, and scheduled tasks
+5. **ContextConstruct impl** — always generated; builds the core from the resolved bean graph, resolving each `#[inject]` field by type via `ctx.get::<T>()`
+6. **Controller trait impl** — generic over the (inferred) state; wires the core supplied by `register_controller()` into routes, consumers, and scheduled tasks. Its `Deps` (the unique `#[inject]` types plus `R2eConfig`) are checked at registration, so injecting a type that is not a bean is a compile error naming that type.
 
 All of this is hidden from your code — you just write the struct and methods.

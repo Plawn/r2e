@@ -5,7 +5,7 @@ pub struct AppState {
     pub greeting: String,
 }
 
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct BasicController {
     #[inject]
     greeting: String,

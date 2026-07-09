@@ -37,8 +37,8 @@ async fn main(env: AppEnv) {
         .with_config(env.config)
         .provide(env.event_bus)
         .provide(env.pool)
-        .with_bean::<UserService>()
-        .build_state::<MyState, _, _>().await
+        .register::<UserService>()
+        .build_state().await
         .with(Health)
         .with(Cors::permissive())
         .with(DevReload)
@@ -130,7 +130,7 @@ The Dioxus devserver (`dx serve`) listens on port **8080** by default. If your R
 #[r2e::main]
 async fn main(env: AppEnv) {
     AppBuilder::new()
-        .load_config::<()>()  // reads disk every time
+        .load_config::<RootConfig>()  // reads disk every time
         // ...
 }
 
@@ -178,7 +178,7 @@ The `DevReload` plugin adds development-mode endpoints and response headers:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(DevReload)
     // ...

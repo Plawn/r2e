@@ -5,7 +5,7 @@
 ## What R2E offers
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]           user_service: UserService,
     #[inject(identity)] user: AuthenticatedUser,

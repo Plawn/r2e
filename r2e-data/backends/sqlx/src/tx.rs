@@ -88,13 +88,18 @@ impl<'a, DB: Database> Tx<'a, DB> {
 impl<S, DB> ManagedResource<S> for Tx<'static, DB>
 where
     DB: Database,
-    S: HasPool<DB> + Send + Sync,
+    S: r2e_core::type_list::BeanLookup + Send + Sync,
 {
     type Error = ManagedErr<HttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let tx = state
-            .pool()
+        let pool = state.bean::<sqlx::Pool<DB>>().ok_or_else(|| {
+            ManagedErr(HttpError::internal(format!(
+                "database pool bean `{}` not found in application state — .provide(pool) before build_state()",
+                std::any::type_name::<sqlx::Pool<DB>>()
+            )))
+        })?;
+        let tx = pool
             .begin()
             .await
             .map_err(|e| ManagedErr(HttpError::internal(e.to_string())))?;

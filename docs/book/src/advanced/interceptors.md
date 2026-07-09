@@ -33,6 +33,23 @@ async fn slow_query(&self) -> Json<Vec<User>> { /* ... */ }
 
 ### `Cache` — Response caching
 
+`Cache` reads a cache store from the bean graph, so the store must be provided
+as a bean (an `Arc<dyn CacheStore>`). A missing store is a **compile error at
+`register_controller()`**. Provide one on the builder:
+
+```rust
+use r2e::r2e_cache::InMemoryStore;
+
+AppBuilder::new()
+    .provide(InMemoryStore::shared())   // Arc<dyn CacheStore>
+    // ... other beans ...
+    .build_state()
+    .await;
+```
+
+> There is no global cache store anymore — the old `cache_backend()` /
+> `set_cache_backend()` functions have been removed. The store is always a bean.
+
 ```rust
 #[get("/")]
 #[intercept(Cache::ttl(30))]                     // Cache for 30 seconds
@@ -42,6 +59,10 @@ async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 #[intercept(Cache::ttl(30).group("users"))]      // Named cache group
 async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
+
+`Cache` and `CacheInvalidate` are the only built-in interceptors that read a
+bean. `Logged`, `Timed`, `Counted`, and `MetricTimed` are self-contained and
+need no beans.
 
 ### `CacheInvalidate` — Clear cache groups
 
@@ -81,6 +102,45 @@ impl UserController {
 }
 ```
 
+## Scheduled tasks and gRPC methods
+
+`#[intercept(...)]` also works on `#[scheduled]` methods and on methods in a
+`#[grpc_routes]` block, with the same construction model as HTTP routes: the
+interceptor is built **once at registration**, from the resolved bean graph,
+and wraps every task tick / RPC call. Bean-reading interceptors (e.g. one
+declared with `#[derive(DecoratorBean)]` and `#[inject]` fields) work there
+too:
+
+```rust
+#[routes]
+impl ReportJobs {
+    #[scheduled(every = 60)]
+    #[intercept(DbAuditLog::spec("nightly"))]  // reads beans — built from the graph
+    async fn refresh(&self) { /* ... */ }
+}
+```
+
+Differences from HTTP routes:
+
+- Guards don't apply (there is no request to reject) — only interceptors.
+- Type-constrained interceptors must match the method's return type: a
+  scheduled method returns `()` or `Result<(), E>`, so `Cache` (which needs a
+  `Cacheable` return) doesn't apply there.
+- **Scheduled methods run their interceptors on direct calls too**: the
+  chain wraps the method body itself, so calling `self.refresh().await` from
+  another method (say, an admin route forcing a run) still goes through the
+  interceptors.
+- **A sync `#[scheduled]` method with interceptors becomes `async`**: the
+  chain must be awaited, so the macro promotes the generated method to
+  `async fn` (the body you wrote still runs synchronously inside it). Call
+  it with `.await`; the generated rustdoc carries a note explaining the
+  promotion. Controller-level `#[intercept]` counts too — a sync scheduled
+  method in a controller carrying one is promoted even without a
+  method-level site. Without any applicable interceptor the method stays
+  sync.
+- One caveat: a controller built by hand in a test — without going through
+  registration — runs its scheduled methods undecorated.
+
 ## Execution order
 
 When multiple interceptors are applied, they wrap in this order (outermost to innermost):
@@ -102,17 +162,22 @@ Interceptors always see the handler's **raw return type** (`Json<T>`, `Result<Js
 async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-> **Known limitation:** `#[managed]` parameters combined with type-constrained interceptors (e.g., `Cache`) don't work because the managed resource lifecycle wraps `into_response` inside the interceptor closure. Workaround: use `cache_backend()` manually in the handler body.
+> **Known limitation:** `#[managed]` parameters combined with type-constrained interceptors (e.g., `Cache`) don't work because the managed resource lifecycle wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: inject the store bean (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the handler body.
 
 ## Writing custom interceptors
 
 Implement the `Interceptor<R>` trait:
 
+A self-contained interceptor (no bean dependencies) opts in with one line,
+`impl SelfBuilt for AuditLog {}`:
+
 ```rust
-use r2e::prelude::*; // Interceptor, InterceptorContext
+use r2e::prelude::*; // Interceptor, InterceptorContext, SelfBuilt
 use std::future::Future;
 
 pub struct AuditLog;
+
+impl SelfBuilt for AuditLog {}
 
 impl<R: Send> Interceptor<R> for AuditLog {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
@@ -146,7 +211,30 @@ Apply it:
 async fn list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-The type must be constructable as a bare path expression (unit struct or constant).
+The `#[intercept(...)]` attribute's leading type path names the decorator spec.
+For a self-contained interceptor, that type is the interceptor itself
+(`impl SelfBuilt`). An interceptor that needs beans holds them as `#[inject]`
+fields and derives `DecoratorBean` — plain fields become config passed to the
+generated `spec(...)` constructor at the attribute site:
+
+```rust
+#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject]
+    pool: SqlitePool,     // from the bean graph, compile-checked
+    prefix: String,       // config, set at the site
+}
+
+impl<R: Send> Interceptor<R> for DbAuditLog { /* uses self.pool */ }
+
+#[get("/")]
+#[intercept(DbAuditLog::spec("api".into()))]
+async fn list(&self) -> Json<Vec<User>> { /* ... */ }
+```
+
+See [Custom Guards](./custom-guards.md#guards-that-read-beans) for the full
+field-attribute reference (`#[inject]`, `#[config]`, plain fields) and the
+low-level `DecoratorSpec` contract the derive expands to.
 
 ### `InterceptorContext`
 

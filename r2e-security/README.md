@@ -24,7 +24,7 @@ Axum extractor that validates Bearer tokens and exposes user identity:
 ```rust
 use r2e::r2e_security::AuthenticatedUser;
 
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
@@ -43,6 +43,20 @@ impl UserController {
 - `roles()` — role list
 - `email()` — email address (optional)
 - `claims()` — raw JWT claims
+
+The extractor validates the token with an `Arc<JwtClaimsValidator>` **resolved
+from the bean graph by type** — so you must provide one as a bean before
+`build_state()`:
+
+```rust
+AppBuilder::new()
+    .provide(std::sync::Arc::new(claims_validator))  // Arc<JwtClaimsValidator>
+    // ...
+    .build_state().await
+```
+
+`AuthenticatedUser` extracts via `FromRequestPartsVia` (its `HasBean<Arc<JwtClaimsValidator>, _>`
+witness is inferred at the call site); no `state = ...` and no `FromRef` bound is involved.
 
 ### JwtValidator
 
@@ -81,7 +95,7 @@ Trait-based role extraction to support multiple OIDC providers. The default `Def
 For mixed controllers with both public and protected endpoints:
 
 ```rust
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct MixedController {
     #[inject] service: MyService,
 }

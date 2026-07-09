@@ -3,7 +3,7 @@
 Tenant isolation via JWT claims and custom guards, demonstrating:
 
 - Custom identity type (`TenantUser`) via `ClaimsIdentity` + `impl_claims_identity_extractor!`
-- Custom `Guard<AppState, TenantUser>` reading path params from `GuardContext`
+- Custom `Guard<TenantUser>` reading path params from `GuardContext`
 - Layered auth: `#[guard(TenantGuard)]` + `#[roles("admin")]`
 - Super-admin bypass in guard logic
 - Per-tenant data filtering in service layer

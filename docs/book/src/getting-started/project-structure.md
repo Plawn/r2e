@@ -10,7 +10,6 @@ my-app/
 │   └── 20250101000001_init.sql
 ├── src/
 │   ├── main.rs                   # Application entry point
-│   ├── state.rs                  # AppState definition
 │   ├── error.rs                  # Custom error type (optional)
 │   ├── models/
 │   │   ├── mod.rs
@@ -41,8 +40,8 @@ async fn main() {
 
     AppBuilder::new()
         .load_config::<()>()
-        .with_bean::<UserService>()
-        .build_state::<AppState, _, _>()
+        .register::<UserService>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())
@@ -55,28 +54,28 @@ async fn main() {
 }
 ```
 
-### `state.rs` — Application state
+`build_state()` takes no type arguments — the state type is inferred from the
+registered beans. If your bean graph grows past ~127 registrations, add
+`#![recursion_limit = "512"]` at the top of `main.rs` (`r2e doctor` warns as you
+approach the threshold).
 
-The state struct holds all app-scoped dependencies. `BeanState` derives `FromRef` for each field:
+### Application state — inferred, no struct to write
 
-```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub pool: SqlitePool,
-    pub event_bus: LocalEventBus,
-    pub config: R2eConfig,
-}
-```
+R2E has **no hand-written state struct**. Application state is the *inferred* set
+of beans: each value you `.provide(...)` and each type you `.register::<T>()`
+forms the bean graph, and `build_state()` materializes it into a state that
+controllers and plugins read from *by type*. Config (`R2eConfig`) and typed
+`#[config(section)]` children are registered as beans automatically by
+`load_config`. There is no `state.rs` file in an R2E project.
 
 ### Controllers
 
 Controllers are structs with `#[controller]` and an impl block with `#[routes]`. Each method becomes an Axum handler:
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
-    #[inject] user_service: UserService,
+    #[inject] user_service: UserService,   // resolved from the bean graph by type
 }
 
 #[routes]
@@ -131,6 +130,6 @@ database:
 
 R2E follows a few conventions:
 - Controllers live in `src/controllers/` and are registered explicitly via `register_controller::<T>()`
-- Services live in `src/services/` and are registered as beans via `with_bean::<T>()`
+- Services live in `src/services/` and are registered as beans via `register::<T>()`
 - Configuration is loaded from `application.yaml` (with env var overlay)
-- The state struct uses `#[derive(BeanState)]` for automatic `FromRef` implementations
+- There is no state struct — application state is the inferred bean graph, materialized by `build_state()`

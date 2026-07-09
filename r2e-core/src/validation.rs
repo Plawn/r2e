@@ -33,28 +33,32 @@ pub struct ValidationErrorResponse {
 pub struct __AutoValidator<'a, T>(pub &'a T);
 
 /// Matched when `T: garde::Validate<Context = ()>` (direct, higher priority).
+///
+/// The error is boxed so the `Ok` path is not penalized by a `Response`-sized
+/// `Result` (clippy `result_large_err`); the generated handler dereferences
+/// the box when returning the error response.
 pub trait __DoValidate {
-    fn __maybe_validate(&self) -> Result<(), Response>;
+    fn __maybe_validate(&self) -> Result<(), Box<Response>>;
 }
 
 impl<T: garde::Validate> __DoValidate for __AutoValidator<'_, T>
 where
     T::Context: Default,
 {
-    fn __maybe_validate(&self) -> Result<(), Response> {
+    fn __maybe_validate(&self) -> Result<(), Box<Response>> {
         self.0
             .validate()
-            .map_err(|report| convert_garde_report(&report))
+            .map_err(|report| Box::new(convert_garde_report(&report)))
     }
 }
 
 /// Fallback via autoref (lower priority) — no-op for types without Validate.
 pub trait __SkipValidate {
-    fn __maybe_validate(&self) -> Result<(), Response>;
+    fn __maybe_validate(&self) -> Result<(), Box<Response>>;
 }
 
 impl<T> __SkipValidate for &__AutoValidator<'_, T> {
-    fn __maybe_validate(&self) -> Result<(), Response> {
+    fn __maybe_validate(&self) -> Result<(), Box<Response>> {
         Ok(())
     }
 }

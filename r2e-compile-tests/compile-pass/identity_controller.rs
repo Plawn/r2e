@@ -15,7 +15,7 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
     }
 }
 
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct IdentityController {
     #[inject(identity)]
     user: AuthenticatedUser,

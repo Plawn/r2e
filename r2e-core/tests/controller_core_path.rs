@@ -35,6 +35,11 @@ impl Clone for BuildTracker {
 }
 
 impl BuildTracker {
+    fn new() -> Self {
+        Self {
+            builds: Arc::new(AtomicUsize::new(0)),
+        }
+    }
     fn record(&self) {
         self.builds.fetch_add(1, Ordering::SeqCst);
     }
@@ -43,35 +48,9 @@ impl BuildTracker {
     }
 }
 
-#[derive(Clone)]
-struct AppState {
-    simple: BuildTracker,
-    guarded: BuildTracker,
-    intercepted: BuildTracker,
-    managed: BuildTracker,
-    sse: BuildTracker,
-    pre_auth: BuildTracker,
-}
-
-impl AppState {
-    fn new() -> Self {
-        let mk = || BuildTracker {
-            builds: Arc::new(AtomicUsize::new(0)),
-        };
-        Self {
-            simple: mk(),
-            guarded: mk(),
-            intercepted: mk(),
-            managed: mk(),
-            sse: mk(),
-            pre_auth: mk(),
-        }
-    }
-}
-
 // ── 1. Simple non-identity controller ──────────────────────────────────────
 
-#[controller(state = AppState)]
+#[controller]
 struct SimpleController {
     #[inject]
     simple: BuildTracker,
@@ -104,17 +83,14 @@ async fn assert_no_controller_extension(
 // ── 2. Guarded controller (Case 3) ─────────────────────────────────────────
 
 struct AllowAll;
-impl<S: Send + Sync, I: Identity> Guard<S, I> for AllowAll {
-    fn check(
-        &self,
-        _state: &S,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+impl r2e_core::SelfBuilt for AllowAll {}
+impl<I: Identity> Guard<I> for AllowAll {
+    fn check(&self, _ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct GuardedController {
     #[inject]
     guarded: BuildTracker,
@@ -133,13 +109,10 @@ impl GuardedController {
 // ── 3. Intercepted controller (Case 2a) ────────────────────────────────────
 
 struct PassThrough;
+impl r2e_core::SelfBuilt for PassThrough {}
 
-impl<R: Send, S: Send + Sync> r2e_core::Interceptor<R, S> for PassThrough {
-    fn around<F, Fut>(
-        &self,
-        _ctx: InterceptorContext<'_, S>,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+impl<R: Send> r2e_core::Interceptor<R> for PassThrough {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -148,7 +121,7 @@ impl<R: Send, S: Send + Sync> r2e_core::Interceptor<R, S> for PassThrough {
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct InterceptedController {
     #[inject]
     intercepted: BuildTracker,
@@ -168,10 +141,10 @@ impl InterceptedController {
 
 struct ManagedToken;
 
-impl ManagedResource<AppState> for ManagedToken {
+impl<S: Send + Sync> ManagedResource<S> for ManagedToken {
     type Error = ManagedErr<r2e_core::HttpError>;
 
-    async fn acquire(_state: &AppState) -> Result<Self, Self::Error> {
+    async fn acquire(_state: &S) -> Result<Self, Self::Error> {
         Ok(ManagedToken)
     }
 
@@ -180,7 +153,7 @@ impl ManagedResource<AppState> for ManagedToken {
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct ManagedController {
     #[inject]
     managed: BuildTracker,
@@ -197,7 +170,7 @@ impl ManagedController {
 
 // ── 5. SSE controller ──────────────────────────────────────────────────────
 
-#[controller(state = AppState)]
+#[controller]
 struct SseController {
     #[inject]
     sse: BuildTracker,
@@ -228,17 +201,14 @@ impl SseController {
 // ── 6. Pre-auth-guarded controller ─────────────────────────────────────────
 
 struct AllowAllPre;
-impl<S: Send + Sync> PreAuthGuard<S> for AllowAllPre {
-    fn check(
-        &self,
-        _state: &S,
-        _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+impl r2e_core::SelfBuilt for AllowAllPre {}
+impl PreAuthGuard for AllowAllPre {
+    fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct PreAuthController {
     #[inject]
     pre_auth: BuildTracker,
@@ -256,7 +226,7 @@ impl PreAuthController {
 
 // ── 7. Direct state-aware routes construction ──────────────────────────────
 
-#[controller(state = AppState)]
+#[controller]
 struct DirectRoutesController {
     #[inject]
     #[allow(dead_code)]
@@ -291,10 +261,11 @@ async fn get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String)
 /// rebuilt per request.
 #[r2e_core::test]
 async fn simple_controller_constructed_once() {
-    let state = AppState::new();
-    let tracker = state.simple.clone();
+    let tracker = BuildTracker::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(tracker.clone())
+        .build_state()
+        .await
         .register_controller::<SimpleController>()
         .build();
 
@@ -313,9 +284,10 @@ async fn simple_controller_constructed_once() {
 /// Guarded controller — guards still fire with the captured core.
 #[r2e_core::test]
 async fn guarded_controller_uses_captured_core() {
-    let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(BuildTracker::new())
+        .build_state()
+        .await
         .register_controller::<GuardedController>()
         .build();
 
@@ -329,9 +301,10 @@ async fn guarded_controller_uses_captured_core() {
 /// Intercepted controller — the interceptor chain runs over the captured core.
 #[r2e_core::test]
 async fn intercepted_controller_uses_captured_core() {
-    let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(BuildTracker::new())
+        .build_state()
+        .await
         .register_controller::<InterceptedController>()
         .build();
 
@@ -345,9 +318,10 @@ async fn intercepted_controller_uses_captured_core() {
 /// Managed-resource controller — acquire/release run over the captured core.
 #[r2e_core::test]
 async fn managed_controller_uses_captured_core() {
-    let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(BuildTracker::new())
+        .build_state()
+        .await
         .register_controller::<ManagedController>()
         .build();
 
@@ -361,9 +335,10 @@ async fn managed_controller_uses_captured_core() {
 /// SSE controller — the stream is produced from the captured core.
 #[r2e_core::test]
 async fn sse_controller_uses_captured_core() {
-    let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(BuildTracker::new())
+        .build_state()
+        .await
         .register_controller::<SseController>()
         .build();
 
@@ -381,9 +356,10 @@ async fn sse_controller_uses_captured_core() {
 /// pre-auth middleware fires before dispatch.
 #[r2e_core::test]
 async fn pre_auth_route_uses_captured_core() {
-    let state = AppState::new();
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(BuildTracker::new())
+        .build_state()
+        .await
         .register_controller::<PreAuthController>()
         .build();
 
@@ -396,8 +372,10 @@ async fn pre_auth_route_uses_captured_core() {
 
 // ── Quantitative captured-core check ──────────────────────────────────────
 
-/// `from_state` clones this dependency, so the dependency clone counter
-/// is a proxy for the number of times the controller was constructed.
+/// `from_context` clones this dependency into the controller core, so the
+/// dependency clone counter is a proxy for the number of times the core was
+/// constructed. Cloning bumps the counter; `Arc::clone` of the shared core on
+/// each request does not.
 struct CloneTracked {
     clones: Arc<AtomicUsize>,
 }
@@ -411,32 +389,28 @@ impl Clone for CloneTracked {
     }
 }
 
-struct CloneState {
-    dep: CloneTracked,
+/// A structurally identical probe that the controller does **not** inject.
+///
+/// In the HList application-state model, every provided bean — including the
+/// controller's injected `dep` — is a member of the state, so a guarded route's
+/// routine per-request state cloning also clones `dep`. This probe lives in the
+/// same state and absorbs that identical per-request cloning, but is never
+/// pulled by the core's `from_context`. Comparing the two counters therefore
+/// isolates core (re)construction from routine state cloning.
+struct StateOnlyProbe {
+    clones: Arc<AtomicUsize>,
 }
 
-// Match the pattern from `controller_scope.rs`: state cloning is expected
-// during router construction and dispatch, so we keep it outside the
-// dependency-clone counter and only observe controller construction.
-impl Clone for CloneState {
+impl Clone for StateOnlyProbe {
     fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
         Self {
-            dep: CloneTracked {
-                clones: Arc::clone(&self.dep.clones),
-            },
+            clones: Arc::clone(&self.clones),
         }
     }
 }
 
-impl CloneState {
-    fn new(counter: Arc<AtomicUsize>) -> Self {
-        Self {
-            dep: CloneTracked { clones: counter },
-        }
-    }
-}
-
-#[controller(state = CloneState)]
+#[controller]
 struct FastPathController {
     #[inject]
     #[allow(dead_code)]
@@ -457,18 +431,25 @@ impl FastPathController {
 /// would push the clone count above 1.
 #[r2e_core::test]
 async fn captured_core_skips_per_request_construction() {
-    let clones = Arc::new(AtomicUsize::new(0));
-    let state = CloneState::new(Arc::clone(&clones));
+    let core_clones = Arc::new(AtomicUsize::new(0));
+    let state_clones = Arc::new(AtomicUsize::new(0));
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(CloneTracked {
+            clones: Arc::clone(&core_clones),
+        })
+        .provide(StateOnlyProbe {
+            clones: Arc::clone(&state_clones),
+        })
+        .build_state()
+        .await
         .register_controller::<FastPathController>()
         .build();
 
-    // Exactly one construction at router-build time. Note that
-    // `AppState::clone` may run elsewhere in the pipeline (state cloning is
-    // routine in Axum) — but the dep field is only cloned by the controller
-    // extractor.
-    let after_build = clones.load(Ordering::SeqCst);
+    // Baselines after build. `dep` is additionally cloned once by the core's
+    // `from_context`, so `core_clones` may exceed `state_clones` by a fixed
+    // build-time amount — which we subtract out below.
+    let core_base = core_clones.load(Ordering::SeqCst);
+    let state_base = state_clones.load(Ordering::SeqCst);
 
     for _ in 0..10 {
         let (status, body) = get(router.clone(), "/fast").await;
@@ -476,23 +457,36 @@ async fn captured_core_skips_per_request_construction() {
         assert_eq!(body, "ok");
     }
 
-    let after_requests = clones.load(Ordering::SeqCst);
+    // Both counters absorb identical per-request state cloning, so their
+    // per-request growth must match exactly. Divergence would mean the core was
+    // rebuilt per request — an extra `from_context` clone of `dep` that the
+    // state-only probe never sees.
+    let core_delta = core_clones.load(Ordering::SeqCst) - core_base;
+    let state_delta = state_clones.load(Ordering::SeqCst) - state_base;
     assert_eq!(
-        after_requests, after_build,
-        "controller must not be rebuilt per request with captured-core dispatch \
-         (before requests: {after_build}, after 10 requests: {after_requests})"
+        core_delta, state_delta,
+        "guarded route must not rebuild the controller core per request \
+         (core dep clones grew by {core_delta}, state-only probe by {state_delta})"
     );
 }
 
-/// Direct routes remain available when the application state is supplied.
+/// Direct routes remain available when the controller core is built by hand
+/// from a resolved bean context and wired via `Controller::routes` — the
+/// low-level path `register_controller()` drives internally.
 #[r2e_core::test]
 async fn direct_state_aware_routes_still_work() {
-    let state = AppState::new();
-    let core = Arc::new(<DirectRoutesController as r2e_core::StatefulConstruct<
-        AppState,
-    >>::from_state(&state));
-    let router = <DirectRoutesController as r2e_core::Controller<AppState>>::routes(&state, core)
-        .with_state(state);
+    let mut registry = r2e_core::BeanRegistry::new();
+    registry.provide(BuildTracker::new());
+    let ctx = registry.resolve().await.unwrap();
+
+    // The generated `Controller` impl requires the state to implement
+    // `BeanLookup`; the empty HList `HNil` is the minimal such state.
+    use r2e_core::type_list::HNil;
+    let core =
+        Arc::new(<DirectRoutesController as r2e_core::ContextConstruct>::from_context(&ctx));
+    let router =
+        <DirectRoutesController as r2e_core::Controller<HNil, _>>::routes(&HNil, core, &ctx)
+            .with_state(HNil);
 
     let (status, body) = get(router, "/direct").await;
     assert_eq!(status, StatusCode::OK);

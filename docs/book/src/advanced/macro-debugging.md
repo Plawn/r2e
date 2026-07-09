@@ -28,7 +28,7 @@ cargo expand -p example-app 2>/dev/null | grep "__r2e_"
 Given this controller:
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
     #[inject] event_bus: LocalEventBus,
@@ -52,19 +52,21 @@ router is registered and shared as an `Arc<UserController>`.
 #[doc(hidden)]
 mod __r2e_meta_UserController {
     use super::*;
-    pub type State = AppState;
     pub const PATH_PREFIX: Option<&str> = Some("/users");
-    pub type IdentityType = r2e::NoIdentity;  // no #[inject(identity)] field
+    pub const HAS_STRUCT_IDENTITY: bool = false;   // no #[inject(identity)] field
+    pub type IdentityType = r2e::NoIdentity;
 
     // Reads the identity off the request façade (never the core).
     pub fn guard_identity(_facade: &super::__R2eRequest_UserController) -> Option<&r2e::NoIdentity> {
         None
     }
 
-    // Moves request-scoped values + the core Arc into the façade.
-    pub fn bind_request(
+    // Moves request-scoped values + the core Arc into the façade. Generic over
+    // the per-field marker tuple `__M` so `#[routes]` can thread it as one
+    // opaque inferred generic.
+    pub fn bind_request<__M>(
         core: std::sync::Arc<super::UserController>,
-        data: super::__R2eRequestData_UserController,
+        data: super::__R2eRequestData_UserController<__M>,
     ) -> super::__R2eRequest_UserController { /* ... */ }
 
     pub fn validate_config(_config: &r2e::config::R2eConfig) -> Vec<r2e::config::MissingKeyError> {
@@ -73,30 +75,45 @@ mod __r2e_meta_UserController {
 }
 ```
 
-This module is referenced by `#[routes]` through naming convention. It tells the routes macro what state type to use, what the path prefix is, what identity type is available for guards, and how to bind the per-request façade.
+This module is referenced by `#[routes]` through naming convention. It carries the
+path prefix, whether the controller has struct-level identity, what identity type
+is available for guards, and how to bind the per-request façade. There is **no
+`State` alias** — the state type is inferred (the HList of provisions), so the
+generated `Controller` impl and the request-data extractor are generic over it.
 
 ### 3. Request-data extractor `__R2eRequestData_UserController`
 
 ```rust
 #[doc(hidden)]
-pub struct __R2eRequestData_UserController {
+pub struct __R2eRequestData_UserController<__M> {
     // One field per request-scoped (#[inject(identity)] / #[inject(request)]) field.
-    // Zero-sized here, since UserController has none.
+    // Marker-only (zero-sized) here, since UserController has none.
+    __markers: core::marker::PhantomData<__M>,
 }
 
-impl r2e::http::extract::FromRequestParts<AppState> for __R2eRequestData_UserController {
+// State-generic: works with any inferred HList state `S`. Each request-scoped
+// field is extracted through `FromRequestPartsVia<S, M>`, which lets a
+// bean-backed extractor park its `HasBean` index witness in the marker `M`.
+impl<S> r2e::http::extract::FromRequestParts<S> for __R2eRequestData_UserController<()>
+where
+    S: Send + Sync,
+{
     type Rejection = r2e::http::response::Response;
 
     async fn from_request_parts(
         __parts: &mut r2e::http::header::Parts,
-        __state: &AppState,
+        __state: &S,
     ) -> Result<Self, Self::Rejection> {
-        Ok(Self { /* extract each request-scoped field via FromRequestParts */ })
+        Ok(Self { __markers: core::marker::PhantomData })
     }
 }
 ```
 
-This is the only per-request extraction. When the controller has no request-scoped fields it is zero-sized and infallible.
+This is the only per-request extraction. When the controller has no request-scoped
+fields the extractor is marker-only and infallible (implemented for `__M = ()`).
+Plain axum `FromRequestParts<S>` extractors reach this path through the blanket
+`ViaAxum` bridge; R2E-owned extractors (like `AuthenticatedUser`) go through
+`FromRequestPartsVia` / `BeanExtract<T, I>`.
 
 ### 4. Request façade `__R2eRequest_UserController` + `Deref`
 
@@ -115,20 +132,34 @@ impl core::ops::Deref for __R2eRequest_UserController {
 
 Route methods run on this façade. `self.user_service` resolves to the core through `Deref`; `self.user` (if present) is a direct façade field.
 
-### 5. `StatefulConstruct` impl
+### 5. `ContextConstruct` impl
 
 ```rust
-impl r2e::StatefulConstruct<AppState> for UserController {
-    fn from_state(__state: &AppState) -> Self {
+impl r2e::ContextConstruct for UserController {
+    // Unique #[inject] types (+ R2eConfig when #[config] fields exist),
+    // checked against the state's provision list via AllSatisfied at
+    // register_controller() — a missing bean is a compile error naming the type.
+    type Deps = r2e::type_list::TCons<
+        UserService,
+        r2e::type_list::TCons<LocalEventBus, r2e::type_list::TNil>,
+    >;
+
+    // Each #[inject] field is pulled BY TYPE from the resolved bean graph.
+    fn from_context(__ctx: &r2e::beans::BeanContext) -> Self {
         Self {
-            user_service: __state.user_service.clone(),
-            event_bus: __state.event_bus.clone(),
+            user_service: __ctx.get::<UserService>(),
+            event_bus: __ctx.get::<LocalEventBus>(),
         }
     }
 }
 ```
 
-This is **always** generated (the core never holds request-scoped fields). It builds the core from state and enables the controller to be used with `#[consumer]` and `#[scheduled]` methods that run outside of HTTP requests.
+This replaces the old `StatefulConstruct::from_state` (which cloned fields from a
+hand-written state struct by name). It is **always** generated (the core never
+holds request-scoped fields), builds the core once from the `BeanContext` by type,
+and enables the controller to be used with `#[consumer]` and `#[scheduled]`
+methods that run outside of HTTP requests. `#[config("key")]` fields resolve from
+the `R2eConfig` bean (`__ctx.get::<R2eConfig>().get::<T>("key")`).
 
 ## What `#[routes]` generates
 
@@ -181,15 +212,19 @@ The closure binds the façade from the captured core `Arc` and the extracted req
 
 ### Guarded handler (with `#[roles]`)
 
+Guards are **built once at registration** from the resolved `BeanContext` (via
+`DecoratorSpec::build`) and captured by the route closure in a decorator bundle
+(`__deco`) — one `Arc` per route, no state access at request time:
+
 ```rust
 move |
-    axum::extract::State(__state): axum::extract::State<AppState>,
     __headers: axum::http::HeaderMap,
     __uri: axum::http::Uri,
-    __data: __R2eRequestData_UserController,
+    __data: __R2eRequestData_UserController<()>,
     Path(id): Path<i64>,
 | {
     let core = core.clone();
+    let __deco = __deco.clone();     // prebuilt guards/interceptors
     async move {
         let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
 
@@ -202,7 +237,8 @@ move |
             &__uri,
             __identity_ref,
         );
-        r2e::Guard::check(&r2e::RolesGuard::new(&["admin"]), &__state, &__guard_ctx)
+        // The guard was built at registration; check() takes no state.
+        r2e::Guard::check(&__deco.__g0, &__guard_ctx)
             .await
             .map_err(/* ... */)?;
 
@@ -212,18 +248,43 @@ move |
 }
 ```
 
-Guarded handlers also extract `State`, `HeaderMap`, and `Uri` to build a `GuardContext`. `guard_identity` reads the identity directly from the façade.
+Guarded handlers extract `HeaderMap` and `Uri` to build a `GuardContext`.
+`guard_identity` reads the identity directly from the façade. The guard itself
+(`__deco.__g0`) was constructed once at registration, so there is no `State`
+extraction and no per-request DI.
 
-### `Controller<AppState>` impl
+### `Controller<S, W>` impl
+
+The generated impl is **generic over the state** `S` (the inferred HList) and over
+an opaque witness carrier `W` that parks the request-data extraction markers. User
+code never names `S` or `W` — `register_controller()` infers both:
 
 ```rust
-impl r2e::Controller<AppState> for UserController {
+impl<S, W> r2e::Controller<S, W> for UserController
+where
+    S: Clone + Send + Sync + 'static + r2e::type_list::BeanLookup,
+    // ... plus the inferred `HasBean` bounds carried by W
+{
+    // #[inject] types PLUS every guard/interceptor spec's `Deps`, folded into
+    // one list and checked against S's provisions via AllSatisfied — so a bean
+    // a guard needs is a compile error here too.
+    type Deps = /* ContextConstruct::Deps ++ each DecoratorSpec::Deps */;
+
+    // Build the core once from the resolved bean graph.
+    fn construct(_state: &S, ctx: &r2e::beans::BeanContext) -> Self {
+        <Self as r2e::ContextConstruct>::from_context(ctx)
+    }
+
     fn routes(
-        state: &AppState,
+        state: &S,
         core: std::sync::Arc<Self>,
-    ) -> axum::Router<AppState> {
+        ctx: &r2e::beans::BeanContext,   // resolved graph — guards/interceptors are built here
+    ) -> axum::Router<S> {
+        // Guards and interceptors are built ONCE from `ctx` via
+        // `build_decorator::<_, Spec>(expr, ctx)`, then captured by the
+        // route closures (see the guarded-handler shape above).
         axum::Router::new()
-            // Each generated closure captures core.clone().
+            // Each generated closure captures core.clone() (and any built decorators).
             .route("/users/", axum::routing::get(/* generated closure */))
             .route("/users/{id}", axum::routing::get(/* generated closure */))
     }
@@ -233,6 +294,10 @@ impl r2e::Controller<AppState> for UserController {
     // Consumers and scheduled tasks receive the same core Arc.
 }
 ```
+
+Registration itself lives on the `RegisterController` / `RegisterControllers`
+extension traits (in the prelude), called on the built app after
+`build_state().await`.
 
 ## What `#[bean]` generates
 
@@ -348,7 +413,7 @@ These contribute to the `Controller` trait impl generated by `#[routes]`:
 - `#[scheduled(every = 30)]` methods appear in `scheduled_tasks()` as `ScheduledTaskDef` entries
 - `#[consumer(bus = "event_bus")]` methods are wired up in `register_event_consumers()`
 
-Both run on the controller core via `StatefulConstruct` (always available) and therefore cannot access request identity. They coexist with struct-level `#[inject(identity)]`, which only affects the controller's HTTP routes.
+Both run on the controller core built via `ContextConstruct` (always available) and therefore cannot access request identity. They coexist with struct-level `#[inject(identity)]`, which only affects the controller's HTTP routes.
 
 ## Debugging tips
 
@@ -356,10 +421,12 @@ Both run on the controller core via `StatefulConstruct` (always available) and t
 
 | Error message | Cause | Fix |
 |---------------|-------|-----|
-| `cannot find __R2eRequest_X` / `__r2e_meta_X` | Missing `#[controller(...)]` on the struct | Add `#[controller(state = AppState)]` |
+| `cannot find __R2eRequest_X` / `__r2e_meta_X` | Missing `#[controller(...)]` on the struct | Add `#[controller]` |
 | `#[routes]` cannot find the controller metadata | `#[routes]` impl block on a struct without `#[controller(...)]` | Add `#[controller(...)]` to the struct |
-| `#[controller(state = ...)] is required` | Missing `state` in controller attribute | Add `#[controller(state = AppState)]` |
+| `` `T` cannot be constructed from the bean context `` | `#[routes]` / `#[grpc_routes]` on a struct without `#[controller]` | Add `#[controller]` to the struct |
+| `` the trait bound `S: HasBean<T, _>` is not satisfied `` (bean `T` is not registered) | A `#[inject] T` field whose type was never registered as a bean | `.register::<T>()` or `.provide(T)` before `build_state()` |
 | `every controller field must be annotated` | Field without `#[inject]`, `#[config]`, etc. | Annotate the field with one of the supported attributes |
+| `E0283: type annotations needed` at `register_controller()`, with `multiple impls satisfying ...: FromRequestPartsVia` | A request-scoped type has **two extraction routes**: it implements both axum's `FromRequestParts`/`OptionalFromRequestParts` (generically) and R2E's `FromRequestPartsVia`/`OptionalFromRequestPartsVia` | Keep exactly one route (bean-backed extractors: the R2E `*Via` impls only). Extractor authors should pin the type with `r2e::extract::assert_unambiguous_extractor` in a test |
 
 ### Filtering expanded output
 

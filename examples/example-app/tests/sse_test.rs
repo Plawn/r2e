@@ -1,16 +1,8 @@
 use std::convert::Infallible;
 
-use r2e::config::R2eConfig;
 use r2e::http::response::SseEvent;
 use r2e::prelude::*;
 use r2e_test::TestApp;
-
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct SseTestState {
-    config: R2eConfig,
-}
 
 // ─── A simple finite stream for testability ───
 // (The broadcaster-backed stream is infinite, so TestApp.send() would hang.)
@@ -38,7 +30,7 @@ fn finite_stream<T: Unpin>(items: Vec<T>) -> FiniteStream<T> {
 
 // ─── SSE Controller with finite stream ───
 
-#[controller(path = "/sse", state = SseTestState)]
+#[controller(path = "/sse")]
 pub struct SseTestController;
 
 #[routes]
@@ -55,16 +47,10 @@ impl SseTestController {
 }
 
 async fn setup() -> TestApp {
-    let config = R2eConfig::empty();
-
-    let state = SseTestState {
-        config: config.clone(),
-    };
-
     TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
-            .with_state(state)
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<SseTestController>(),
     )

@@ -2,20 +2,11 @@ use std::sync::Arc;
 
 use r2e::config::{ConfigValue, R2eConfig};
 use r2e::prelude::*;
-use r2e::r2e_security::JwtClaimsValidator;
 use r2e_test::{TestApp, TestJwt};
-
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct ConfigTestState {
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
 
 // ─── Controller testing various config types ───
 
-#[controller(path = "/config", state = ConfigTestState)]
+#[controller(path = "/config")]
 pub struct ConfigTestController {
     #[config("app.name")]
     name: String,
@@ -95,15 +86,12 @@ async fn setup_with_option(option_value: Option<&str>) -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let config = make_config_with_option(option_value);
 
-    let state = ConfigTestState {
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     let app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<ConfigTestController>(),
     );
@@ -203,7 +191,7 @@ async fn test_config_option_none() {
 
 // ─── Missing required config key panics ───
 
-#[controller(path = "/bad-config", state = ConfigTestState)]
+#[controller(path = "/bad-config")]
 pub struct MissingConfigController {
     #[config("nonexistent.key")]
     required_value: String,
@@ -226,16 +214,13 @@ async fn test_config_missing_required_panics() {
     let jwt = TestJwt::new();
     let config = R2eConfig::empty(); // no keys set
 
-    let state = ConfigTestState {
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     // This should panic during register_controller because the config key is missing
     let _app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<MissingConfigController>(),
     );

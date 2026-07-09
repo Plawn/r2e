@@ -16,7 +16,7 @@ struct Assets;
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(EmbeddedFrontend::new::<Assets>())
     .serve("0.0.0.0:3000")
@@ -36,7 +36,7 @@ Use `EmbeddedFrontend::builder()` for full control:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(
         EmbeddedFrontend::builder::<Assets>()
@@ -148,7 +148,7 @@ struct Assets;
 #[tokio::main]
 async fn main() {
     AppBuilder::new()
-        .build_state::<AppState, _, _>()
+        .build_state()
         .await
         .with(Tracing)
         .with(Health)

@@ -25,7 +25,7 @@ The `boot_time` is a timestamp (milliseconds since Unix epoch) captured once at 
 
 ```rust
 AppBuilder::new()
-    .build_state::<Services, _, _>().await
+    .build_state().await
     .with(DevReload)  // Enables /__r2e_dev/* endpoints
     // ...
     .serve("0.0.0.0:3000")
@@ -94,8 +94,8 @@ async fn main(env: AppEnv) {
         .with_config(env.config)
         .provide(env.event_bus)
         .provide(env.pool)
-        .with_bean::<UserService>()
-        .build_state::<MyState, _, _>().await
+        .register::<UserService>()
+        .build_state().await   // no type args — state inferred from the provisions
         .with(Health)
         .register_controller::<UserController>()
         .serve("0.0.0.0:3000").await.unwrap();
@@ -200,17 +200,27 @@ AppBuilder::new()
     .provide(env.event_bus)
     .provide(env.claims_validator)
     // 3. Bean factories (resolved from provided + config)
-    .with_bean::<UserService>()
-    .with_async_bean::<CacheService>()
-    .with_producer::<CreatePool>()
-    // 5. Build the state
-    .build_state::<Services, _, _>().await
-    // 6. Post-state: plugins, controllers, hooks
+    .register::<UserService>()
+    .register::<CacheService>()
+    .register::<CreatePool>()
+    // 4. Build the state — no type args; the state type is the provision
+    //    list materialized as an HList, inferred by the builder chain
+    .build_state().await
+    // 5. Post-state: plugins, controllers, hooks
     .with(Health)
     .with(Cors::permissive())
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
+
+There is no hand-written state struct: `.build_state().await` materializes
+everything you `.provide()`d or `.register()`ed into an inferred HList state,
+and controllers resolve their `#[inject]` fields from it **by type** at
+`register_controller` time. A missing bean is a compile error naming the type.
+
+> **Note:** apps with more than ~127 beans need `#![recursion_limit = "512"]`
+> at the crate root (`main.rs`). `r2e doctor` warns as the bean count
+> approaches the threshold.
 
 ### Method reference
 
@@ -218,11 +228,9 @@ AppBuilder::new()
 |--------|---------|-------------|
 | `.with_config(config)` | Provide pre-loaded `R2eConfig` | Hot-reload (config loaded in setup) |
 | `.load_config::<C>()` | Load YAML + env overlay in one call | Simple apps without hot-reload |
-| `.provide(value)` | Inject a pre-built instance | Pools, event buses, validators, shared channels |
+| `.provide(value)` | Inject a pre-built instance as a bean (by type) | Pools, event buses, validators, shared channels |
 | `.load_config::<Root>()` | Load config + auto-register children as beans | Typed config sections needed by controllers/beans |
-| `.with_bean::<T>()` | Register a sync bean factory | Services with `#[bean] impl T { fn new(...) }` |
-| `.with_async_bean::<T>()` | Register an async bean factory | Services needing async init |
-| `.with_producer::<T>()` | Register a producer (types you don't own) | Connection pools, external clients |
+| `.register::<T>()` | Register a `#[bean]` / `#[producer]` / `AsyncBean` type, resolved by the builder | Services, async-init beans, types you don't own |
 
 ### Anti-patterns
 

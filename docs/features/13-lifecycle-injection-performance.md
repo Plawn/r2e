@@ -14,24 +14,32 @@ Everything starts with the fluent construction via `AppBuilder`:
 
 ```rust
 AppBuilder::new()
-    .with_config(config)            // 1. Configuration
-    .with_state(services)           // 2. Etat applicatif
-    .with_cors()                    // 3. Layers Tower
-    .with_tracing()
-    .with_health()
-    .with_error_handling()
-    .with_openapi(openapi_config)   // 4. Documentation
-    .with_scheduler(|s| {           // 5. Taches planifiees
-        s.register::<ScheduledJobs>();
-    })
-    .on_start(|state| async { Ok(()) })  // 6. Hooks
-    .on_stop(|_| async { })
-    .register_controller::<UserController>()  // 7. Controllers
-    .serve("0.0.0.0:3000")         // 8. Lancement
+    .load_config::<RootConfig>()          // 1. Configuration (typee)
+    .plugin(Scheduler)                    // 2. Plugins pre-build (taches planifiees)
+    .provide(pool)                        // 3. Beans pre-construits (par type)
+    .provide(event_bus)
+    .register::<UserService>()            // 4. Beans #[bean] / #[producer]
+    .build_state()                        // 5. Resolution du graphe → etat HList infere
+    .await
+    .with(Health)                         // 6. Plugins HTTP
+    .with(Cors::permissive())
+    .with(ErrorHandling)
+    .on_start(|_state| async move { Ok(()) })  // 7. Hooks
+    .on_stop(|_| async {})
+    .register_controllers::<(UserController, ScheduledJobs)>()  // 8. Controllers
+    .serve("0.0.0.0:3000")                // 9. Lancement
     .await?;
 ```
 
-`AppBuilder` accumulates elements without executing anything. Assembly happens when `build()` or `serve()` is called.
+`AppBuilder` accumulates registrations without executing anything. `build_state()`
+(no type arguments, `async`) resolves the bean graph and materializes the provision
+list into an **HList state** — the state type is *inferred* from the `.provide` /
+`.register` calls; you never write a state struct. Controllers are registered
+**after** `build_state()`, and final assembly happens when `serve()` is called.
+
+> **Note**: apps with more than ~127 registered beans need
+> `#![recursion_limit = "512"]` at the crate root (`main.rs`). `r2e doctor` warns
+> as the bean count approaches the threshold.
 
 ### 1.2 Internal Construction (`build_inner`)
 
@@ -105,7 +113,8 @@ By default, the process waits indefinitely for shutdown hooks to complete. `shut
 
 ```rust
 AppBuilder::new()
-    .with_state(services)
+    .build_state()
+    .await
     .shutdown_grace_period(Duration::from_secs(5))
     .serve("0.0.0.0:3000").await?;
 ```
@@ -182,8 +191,9 @@ Reponse HTTP
 `#[controller]` splits every controller into two physical pieces:
 
 - a **core** struct holding only application-scoped data (`#[inject]` and `#[config]`
-  fields). The core is built **once** at router-build time via
-  `StatefulConstruct::from_state` and shared as an `Arc<Core>`. The `#[inject]`/`#[config]`
+  fields). The core is built **once** at registration time via
+  `ContextConstruct::from_context(&BeanContext)` — each field resolved from the bean
+  graph **by type** — and shared as an `Arc<Core>`. The `#[inject]`/`#[config]`
   resolution described below therefore happens **once at registration**, not per request.
 - a generated **request façade** (`__R2eRequest_<Name>`) holding the request-scoped fields
   plus an `Arc` to the core, with `Deref<Target = Core>`. Inside a route body, `self.user`
@@ -194,25 +204,32 @@ Each registered route closure captures the core `Arc` and, per request, runs two
 **Step 1 — Core construction (once, at registration)**
 
 ```rust
-// Built once when the router is registered, shared across all requests.
-let core: Arc<UserController> = Arc::new(UserController::from_state(&state));
-// Inside from_state:
-//   user_service: state.user_service.clone(),         // #[inject], sync
-//   greeting: {                                        // #[config], sync
-//       let cfg = <R2eConfig as FromRef<State>>::from_ref(state);
-//       cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
-//   }
+// Built once when the controller is registered, shared across all requests.
+let core: Arc<UserController> = Arc::new(UserController::from_context(&ctx));
+// Inside from_context (ctx: &BeanContext) — resolution by TYPE from the graph:
+//   user_service: ctx.get::<UserService>(),           // #[inject], sync
+//   greeting: ctx.get::<R2eConfig>()                   // #[config], sync
+//       .get("app.greeting")
+//       .unwrap_or_else(|e| panic!(...))
 ```
 
 **Step 2 — Request data extraction (per request, async, fallible)**
 
-The generated `__R2eRequestData_<Name>` extractor implements `FromRequestParts<State>` and
-produces **only** the request-scoped values (`#[inject(identity)]` and `#[inject(request)]`).
-When the controller declares no request-scoped fields it is zero-sized and infallible.
+The generated `__R2eRequestData_<Name>` extractor implements `FromRequestParts<S>`
+(generic over the inferred HList state) and produces **only** the request-scoped values
+(`#[inject(identity)]` and `#[inject(request)]`). When the controller declares no
+request-scoped fields it is zero-sized and infallible.
+
+Each value is resolved through the R2E-owned trait `FromRequestPartsVia<S, M>` (or
+`OptionalFromRequestPartsVia<S, M>` for `Option<T>` fields). The marker slot `M`
+carries the `HasBean` witness: for `AuthenticatedUser`, it locates the
+`Arc<JwtClaimsValidator>` bean inside the state with a monomorphized fixed-offset
+access. Plain axum `FromRequestParts<S>` extractors still work unchanged, bridged
+automatically through the blanket `ViaAxum` marker.
 
 ```rust
-let user = <AuthenticatedUser as FromRequestParts<State>>
-    ::from_request_parts(parts, state)
+let user = <AuthenticatedUser as FromRequestPartsVia<S, M>>
+    ::from_request_parts_via(parts, state)
     .await
     .map_err(IntoResponse::into_response)?;
 ```
@@ -253,10 +270,12 @@ move |data: __R2eRequestData_UserController, /* ... params */| {
 
 ```rust
 let core = core.clone();
-move |State(state): State<Services>,
-      headers: HeaderMap,
+let deco = deco.clone();   // guards/interceptors built once from the BeanContext at registration
+move |headers: HeaderMap,
+      uri: Uri,
       data: __R2eRequestData_UserController| {
     let core = core.clone();
+    let deco = deco.clone();
     async move {
         let ctrl = __r2e_meta_UserController::bind_request(core, data);
 
@@ -264,11 +283,13 @@ move |State(state): State<Services>,
             method_name: "admin_list",
             controller_name: "UserController",
             headers: &headers,
+            uri: &uri,
+            path_params: PathParams::EMPTY,
             identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, lu sur la façade
         };
 
-        // Short-circuit si le guard echoue
-        if let Err(resp) = Guard::check(&RolesGuard { required_roles: &["admin"] }, &state, &guard_ctx) {
+        // Guard built at registration (deco.g0); check() takes no state, and is async.
+        if let Err(resp) = Guard::check(&deco.g0, &guard_ctx).await {
             return resp;
         }
 
@@ -277,7 +298,7 @@ move |State(state): State<Services>,
 }
 ```
 
-**Implications**: in guarded mode, Axum also extracts `State` and `HeaderMap` in addition to the request-data extractor. State extraction is an additional clone (but cheap — it is an internal `Arc` clone). In all modes the per-request cost is one `Arc` clone of the core plus one request-data extraction; the core itself is built once at registration.
+**Implications**: in guarded mode, Axum extracts `HeaderMap` and `Uri` in addition to the request-data extractor, to build the `GuardContext`. There is **no `State` extraction** — the guard was constructed once at registration and is captured by the closure. In all modes the per-request cost is one `Arc` clone of the core, one clone of the prebuilt decorator bundle, and one request-data extraction; the core and the guards are built once at registration.
 
 ---
 
@@ -287,16 +308,16 @@ move |State(state): State<Services>,
 
 | Property | Value |
 |----------|-------|
-| Resolution | Compile-time (codegen) |
+| Resolution | Compile-time (codegen; missing bean = compile error naming the type) |
 | Timing | Once at registration (into the shared core `Arc`) |
-| Operation | `state.field.clone()` |
-| Prerequisite | `Clone + Send + Sync` |
+| Operation | `ctx.get::<T>()` — by type, from the resolved `BeanContext` |
+| Prerequisite | `Clone + Send + Sync`, present in the bean graph (`.provide` / `.register`) |
 | Fallible | No |
 | Async | No |
 
 **Generated code:**
 ```rust
-field_name: __state.field_name.clone()
+field_name: ctx.get::<FieldType>()
 ```
 
 **Common patterns:**
@@ -317,28 +338,33 @@ field_name: __state.field_name.clone()
 |----------|-------|
 | Resolution | Compile-time (codegen) |
 | Timing | On each request |
-| Operation | `FromRequestParts::from_request_parts()` |
-| Prerequisite | `FromRequestParts<State>` + `Identity` |
+| Operation | `FromRequestPartsVia::from_request_parts_via()` |
+| Prerequisite | `FromRequestPartsVia<S, M>` + `Identity` (plain axum `FromRequestParts<S>` extractors are bridged automatically via `ViaAxum`) |
 | Fallible | Yes (error response) |
 | Async | Yes |
 
 **Generated code:**
 ```rust
-let user = <AuthenticatedUser as FromRequestParts<State>>
-    ::from_request_parts(__parts, __state)
+let user = <AuthenticatedUser as FromRequestPartsVia<S, M>>
+    ::from_request_parts_via(__parts, __state)
     .await
     .map_err(IntoResponse::into_response)?;
 ```
 
+For `AuthenticatedUser`, the marker `M` resolves a `HasBean<Arc<JwtClaimsValidator>, _>`
+witness — the validator must be provided as a bean
+(`.provide(Arc::new(JwtClaimsValidator::...))`) and is read from the HList state with a
+fixed-offset access (no lookup).
+
 **Two possible locations:**
 
 - **On the struct** — every HTTP route on the controller authenticates. The identity lives
-  on the per-request façade, never on the core, so `StatefulConstruct` is still generated for
+  on the per-request façade, never on the core, so `ContextConstruct` is still generated for
   the core (the dependencies are not rebuilt per request).
-- **On a handler parameter** — only annotated handlers require the identity. `StatefulConstruct`
+- **On a handler parameter** — only annotated handlers require the identity. `ContextConstruct`
   is generated for the core as well.
 
-In both cases the core is built once and `StatefulConstruct` is always generated; only the
+In both cases the core is built once and `ContextConstruct` is always generated; only the
 small façade (one `Arc` clone plus the extracted identity) is created per request.
 
 **Cost**: this is the most expensive scope. For `AuthenticatedUser`, each request involves JWT validation with cryptographic signature verification.
@@ -349,33 +375,37 @@ small façade (one `Arc` clone plus the extracted identity) is created per reque
 |----------|-------|
 | Resolution | Compile-time (codegen) |
 | Timing | Once at registration (into the shared core `Arc`) |
-| Operation | `FromRef` + `HashMap::get()` |
-| Prerequisite | `FromConfigValue` |
-| Fallible | Panics if key is missing |
+| Operation | `ctx.get::<R2eConfig>()` + `HashMap::get()` |
+| Prerequisite | `FromConfigValue`; `R2eConfig` is itself a bean in the graph |
+| Fallible | Fails at startup if key is missing |
 | Async | No |
 
 **Generated code:**
 ```rust
 field_name: {
-    let __cfg = <R2eConfig as FromRef<State>>::from_ref(__state);
+    let __cfg = ctx.get::<R2eConfig>();
     __cfg.get("app.greeting").unwrap_or_else(|e| panic!(...))
 }
 ```
 
-**Note**: the config is cloned from the state (via `FromRef`), then a HashMap lookup is performed. If the key does not exist, the handler **panics** (and `CatchPanicLayer` converts it to a 500).
+**Note**: the config is pulled from the bean graph by type (`R2eConfig` is a bean), then a
+HashMap lookup by string key is performed — **once, at core construction**. If the key does
+not exist, registration fails **at startup** with a readable error (`register_controller`
+panics; `try_register_controller` returns a `Result` instead) — never mid-request.
 
 ### 3.4 Summary Diagram
 
 ```
                     ┌─────────────────────────────────────────────┐
-                    │           Etat applicatif (State)            │
+                    │   Etat applicatif = HList infere (forme=P)   │
+                    │   (aucune struct ecrite par l'utilisateur)   │
                     │                                             │
-                    │  user_service: UserService  ←── Arc interne │
-                    │  pool: SqlitePool           ←── Arc interne │
-                    │  jwt_validator: Arc<JwtValidator>            │
-                    │  event_bus: LocalEventBus     ←── Arc interne │
-                    │  config: R2eConfig       ←── HashMap     │
-                    │  rate_limiter: RateLimitRegistry             │
+                    │  [ UserService ]            ←── Arc interne │
+                    │  [ SqlitePool ]             ←── Arc interne │
+                    │  [ Arc<JwtClaimsValidator> ]                 │
+                    │  [ LocalEventBus ]          ←── Arc interne │
+                    │  [ R2eConfig ]              ←── HashMap     │
+                    │  [ RateLimitRegistry ]                       │
                     └──────────────┬──────────────────────────────┘
                                    │
                     ┌──────────────┴──────────────────────────────┐
@@ -385,56 +415,64 @@ field_name: {
             ┌──────────────────────┼──────────────────────────┐
             │                      │                          │
     #[inject]              #[inject(identity)]         #[config("key")]
-    state.field.clone()    FromRequestParts(async)     config.get(key)
+    ctx.get::<T>()         FromRequestPartsVia         ctx.get::<R2eConfig>()
+    (1x, enregistrement)   (async, par requete)        .get(key) (1x, enreg.)
     ↓                      ↓                           ↓
     O(1) si Arc            Validation JWT              O(1) HashMap
-    Sync, infaillible      Async, faillible (401)      Sync, panic si absent
+    Sync, infaillible      Async, faillible (401)      Sync, echec au demarrage
 ```
 
 ---
 
-## 4. Construction Outside HTTP Context: `StatefulConstruct`
+## 4. Construction Outside HTTP Context: `ContextConstruct`
 
-The `StatefulConstruct<S>` trait constructs a controller **core** from the state alone, without an HTTP request. It is **always** generated by `#[controller]`: identity and `#[inject(request)]` fields live only on the per-request façade, never on the core, so the core can always be built from state. It is what the router uses to build the shared core once at registration, and what consumers and scheduled tasks use to build a fresh core per run (these run on the core and cannot access request identity).
+The `ContextConstruct` trait constructs a controller **core** from the resolved `BeanContext` alone, without an HTTP request — each `#[inject]` field resolved from the graph **by type** via `ctx.get::<T>()`, each `#[config]` field read from the `R2eConfig` bean. It is **always** generated by `#[controller]`: identity and `#[inject(request)]` fields live only on the per-request façade, never on the core, so the core can always be built from the context. The builder retains the graph as an `Arc<BeanContext>` through the typed phase; `register_controller()` calls `from_context` **once** and wires routes, consumers, and scheduled tasks to that **same shared core** (these run on the core and cannot access request identity).
 
 ### 4.1 Usage by Consumers
 
+Consumers capture the shared core `Arc` at registration; each event delivery is one `Arc` clone:
+
 ```rust
 // Code genere par #[routes] pour #[consumer(bus = "event_bus")]
-event_bus.subscribe(move |event: Arc<UserCreatedEvent>| {
-    let state = state.clone();
+// __core: Arc<Self> — le core partage, construit une fois via from_context
+let __consumer_core = __core.clone();
+event_bus.subscribe(move |__envelope: EventEnvelope<UserCreatedEvent>| {
+    let __ctrl = __consumer_core.clone();  // un clone d'Arc par evenement
     async move {
-        let ctrl = <MyController as StatefulConstruct<State>>::from_state(&state);
-        ctrl.on_user_created(event).await;
+        __ctrl.on_user_created(__envelope.event).await.into()
     }
 }).await;
 ```
 
 ### 4.2 Usage by Scheduled Tasks
 
+Scheduled tasks likewise capture the shared core; each execution is one `Arc` clone:
+
 ```rust
 // Code genere par #[routes] pour #[scheduled(every = 30)]
-scheduler.add_task(ScheduledTask {
-    name: "MyController_cleanup",
+let __task_core = __core.clone();
+ScheduledTaskDef {
+    name: "MyController_cleanup".to_string(),
     schedule: Schedule::Every(Duration::from_secs(30)),
-    task: Box::new(move |state: State| {
+    state: __state.clone(),
+    task: Box::new(move |_state| {
+        let __ctrl = __task_core.clone();  // un clone d'Arc par execution
         Box::pin(async move {
-            let ctrl = <MyController as StatefulConstruct<State>>::from_state(&state);
-            ctrl.cleanup().await;
+            ScheduledResult::log_if_err(__ctrl.cleanup().await, "MyController_cleanup");
         })
     }),
-});
+}
 ```
 
 ### 4.3 The Mixed Controller Pattern
 
 With `#[inject(identity)]` on handler **parameters** (not on the struct), the controller keeps
 request scope explicit per endpoint while still allowing protected endpoints. (Struct-level
-identity also keeps `StatefulConstruct` on the core — it simply makes every HTTP route
+identity also keeps `ContextConstruct` on the core — it simply makes every HTTP route
 authenticate.)
 
 ```rust
-#[controller(path = "/api", state = Services)]
+#[controller(path = "/api")]
 pub struct MixedController {
     #[inject] user_service: UserService,
     // Identity au niveau parametre → request scope explicite par endpoint
@@ -451,7 +489,7 @@ impl MixedController {
     }
 
     #[scheduled(every = 60)]
-    async fn cleanup(&self) { ... }  // Fonctionne car StatefulConstruct existe
+    async fn cleanup(&self) { ... }  // Fonctionne car ContextConstruct existe
 }
 ```
 
@@ -472,15 +510,25 @@ pub struct GuardContext<'a, I: Identity> {
     pub method_name: &'static str,
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
+    pub uri: &'a Uri,
+    pub path_params: PathParams<'a>,
     pub identity: Option<&'a I>,
 }
 
-pub trait Guard<S, I: Identity>: Send + Sync {
-    fn check(&self, state: &S, ctx: &GuardContext<'_, I>) -> Result<(), Response>;
+pub trait Guard<I: Identity>: Send + Sync {
+    fn check(&self, ctx: &GuardContext<'_, I>)
+        -> impl Future<Output = Result<(), Response>> + Send;
 }
 ```
 
 The `Identity` trait decouples guards from the concrete `AuthenticatedUser` type. Built-in guards (`RolesGuard`, `RateLimitGuard`) are generic over `I: Identity`.
+
+Guards are **graph-resolved decorators** (Phase 6): they are built **once, at controller
+registration**, from the resolved `BeanContext` — never per request, and `check` takes
+**no state parameter**. A guard that reads no beans is self-contained (`impl SelfBuilt for
+MyGuard {}`); a guard that needs a bean holds it as a field, and a spec type named by the
+`#[guard(...)]` expression implements `DecoratorSpec` (Product + Deps + build) to pull the
+bean from the graph. A missing bean is a compile error at `register_controller()`.
 
 ### 5.2 Identity Source for Guards
 
@@ -518,14 +566,17 @@ When there is no identity at all, `guard_identity` returns `None` and the type i
 |------|------|-------------|-------|
 | Tower layers | Sync | ~1 us | Tracing, CORS, error handling |
 | Axum routing | Sync | ~1 us | Radix tree matching |
-| **`#[inject]` field cloning** | Sync | **~10-50 ns per field** | With `Arc` types (atomic refcount) |
-| **Config lookup** | Sync | **~50 ns per field** | HashMap lookup + type conversion |
+| **Core `Arc` clone** | Sync | **~10 ns** | One per request; `#[inject]`/`#[config]` already resolved into the core at registration |
+| **App-dep access in request extractors** | Sync | **~ns (fixed-offset)** | `HasBean` on the HList state — monomorphized field access, no hash/lookup |
 | **JWT validation** | Async | **~10-50 us** | Cryptographic signature verification |
 | **JWKS lookup (cache miss)** | Async | **~50-200 ms** | HTTP call to the OIDC provider |
 | Rate limit guard | Sync | ~100 ns | Token bucket check |
 | Roles guard | Sync | ~50 ns | Iteration over the roles array |
 | Interceptors | Async | ~100 ns overhead | Monomorphized, zero vtable |
 | Business logic | Async | Variable | Database I/O, external services |
+
+`#[inject]` field resolution (`ctx.get::<T>()`, ~10-50 ns per field with `Arc` types) and
+`#[config]` lookups (~50 ns per field) happen **once at registration**, not per request.
 
 ### 6.2 Critical Operations in Detail
 
@@ -622,7 +673,7 @@ Guards are executed synchronously within an async handler. They do not block the
 | Aspect | Struct-level `#[inject(identity)]` | Param-level `#[inject(identity)]` |
 |--------|-----------------------------------|----------------------------------|
 | JWT extraction | On every request, all endpoints | Only annotated endpoints |
-| `StatefulConstruct` | Generated (on the core) | Generated (on the core) |
+| `ContextConstruct` | Generated (on the core) | Generated (on the core) |
 | Consumers / Schedulers | Possible (run on the core) | Possible (run on the core) |
 | Identity access in self | `self.user` (façade field, always available) | Not available in self |
 | Guard context | Via `guard_identity(&ctrl)` | Via reference to param |
@@ -633,13 +684,10 @@ Guards are executed synchronously within an async handler. They do not block the
 
 ### 6.6 Scheduled Tasks: Construction Cost
 
-Each scheduled task execution calls `StatefulConstruct::from_state`, which builds a fresh
-core by cloning `#[inject]` fields and looking up `#[config]` fields. Unlike HTTP requests —
-which now reuse the once-built shared core `Arc` — scheduled tasks construct a new core on
-every run. For high-frequency tasks (e.g., `every = 1`), this core-construction cost recurs
-each execution.
-
-**Recommendation**: for very high-frequency tasks, reduce the number of injected fields to the minimum necessary.
+Scheduled tasks share the controller core built once at `register_controller()`
+(from the resolved bean graph via `ContextConstruct`): each execution clones the
+core `Arc` — the same cost model as HTTP requests. No per-run dependency
+resolution or config lookup occurs.
 
 ---
 

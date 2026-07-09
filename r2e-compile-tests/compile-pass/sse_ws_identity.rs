@@ -22,7 +22,7 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
     }
 }
 
-#[controller(path = "/stream", state = AppState)]
+#[controller(path = "/stream")]
 pub struct StreamController {
     #[inject(identity)]
     user: AuthenticatedUser,

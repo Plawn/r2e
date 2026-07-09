@@ -12,7 +12,7 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 | `r2e-compile-tests` | (no description) |
 | `r2e-core` | Core runtime for R2E web framework - AppBuilder, plugins, guards, and dependency injection |
 | `r2e-data-diesel` | Diesel backend for R2E data layer (skeleton) |
-| `r2e-data-sqlx` | SQLx backend for R2E data layer — SqlxRepository, Tx, HasPool, ManagedResource impl |
+| `r2e-data-sqlx` | SQLx backend for R2E data layer — SqlxRepository, Tx (resolves the pool from the bean graph by type), ManagedResource impl |
 | `r2e-data` | Data access abstractions for R2E — Entity, Repository, Page, DataError (no driver deps) |
 | `r2e-devtools` | Subsecond hot-reload integration for R2E |
 | `r2e-events-iggy` | Apache Iggy event bus backend for R2E — persistent distributed event streaming |

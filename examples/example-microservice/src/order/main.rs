@@ -10,11 +10,8 @@ mod controllers;
 mod models;
 #[path = "services/mod.rs"]
 mod services;
-#[path = "state.rs"]
-mod state;
 
 use controllers::order_controller::OrderController;
-use state::OrderState;
 
 #[r2e::main]
 async fn main() {
@@ -22,9 +19,9 @@ async fn main() {
 
     AppBuilder::new()
         .with_config(config)
-        .with_bean::<services::ProductClient>()
-        .with_bean::<services::OrderService>()
-        .build_state::<OrderState, _, _>()
+        .register::<services::ProductClient>()
+        .register::<services::OrderService>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

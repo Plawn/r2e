@@ -34,7 +34,7 @@ The following types are exported by `r2e-grpc` and ready for use:
 
 | Type | Description |
 |------|-------------|
-| `GrpcGuard<S, I>` | Guard trait for gRPC methods (analog of `Guard<S, I>` for HTTP) |
+| `GrpcGuard<I>` | Guard trait for gRPC methods (analog of `Guard<I>` for HTTP) |
 | `GrpcGuardContext<'a, I>` | Context passed to guards (service name, method name, metadata, identity) |
 | `GrpcRolesGuard` | Built-in guard that checks required roles |
 | `GrpcRoleBasedIdentity` | Extension trait for identity types that carry roles |
@@ -107,7 +107,7 @@ The extraction pipeline (implemented in `r2e_grpc::identity`):
 
 1. Read `authorization` metadata from `tonic::Request`
 2. Strip the `Bearer ` prefix (supports `Bearer` and `bearer`)
-3. Validate the token with `JwtClaimsValidator` (from app state)
+3. Validate the token with `JwtClaimsValidator` (the `Arc<JwtClaimsValidator>` bean read from the resolved graph)
 4. Build `AuthenticatedUser` from the validated claims
 
 If validation fails, the method returns `Status::unauthenticated` before the handler body runs.
@@ -146,10 +146,9 @@ use tonic::Status;
 
 struct TenantGuard;
 
-impl<S: Send + Sync, I: Identity> GrpcGuard<S, I> for TenantGuard {
+impl<I: Identity> GrpcGuard<I> for TenantGuard {
     fn check(
         &self,
-        _state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Status>> + Send {
         async move {
@@ -178,31 +177,31 @@ async fn create_user(
 }
 ```
 
-### Guards with state access (planned)
+### Guards that need beans (planned)
 
-Guards receive the application state, enabling database lookups:
+Unlike HTTP guards, gRPC guards do **not** go through `DecoratorSpec` — they are
+plain `GrpcGuard<I>` implementations. A guard that needs a database pool (or any
+service) holds it as a **field**, constructed by the caller who wires the guard
+onto the service:
 
 ```rust
-struct ActiveUserGuard;
+struct ActiveUserGuard {
+    pool: SqlitePool,   // resolved by the caller, held as a field
+}
 
-impl<S: Send + Sync, I: Identity> GrpcGuard<S, I> for ActiveUserGuard
-where
-    SqlitePool: FromRef<S>,
-{
+impl<I: Identity> GrpcGuard<I> for ActiveUserGuard {
     fn check(
         &self,
-        state: &S,
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Status>> + Send {
         async move {
-            let pool = SqlitePool::from_ref(state);
             let sub = ctx.identity_sub().unwrap_or("");
 
             let active = sqlx::query_scalar::<_, bool>(
                 "SELECT active FROM users WHERE sub = ?"
             )
             .bind(sub)
-            .fetch_optional(&pool)
+            .fetch_optional(&self.pool)
             .await
             .map_err(|_| Status::internal("Database error"))?;
 
@@ -237,7 +236,7 @@ Execution order: roles check first, then custom guards in declaration order. Sho
 
 | | HTTP | gRPC |
 |-|------|------|
-| Guard trait | `Guard<S, I>` | `GrpcGuard<S, I>` |
+| Guard trait | `Guard<I>` | `GrpcGuard<I>` |
 | Error type | `Response` (HTTP response) | `tonic::Status` |
 | Context type | `GuardContext` | `GrpcGuardContext` |
 | Request metadata | `&HeaderMap` + `&Uri` | `&MetadataMap` |
@@ -248,20 +247,21 @@ The concepts are identical — only the error type and metadata source differ.
 
 ## Setup for identity
 
-To use identity extraction in gRPC services, the `JwtClaimsValidator` must be in your app state (same requirement as HTTP):
+To use identity extraction in gRPC services, `Arc<JwtClaimsValidator>` must be a bean in the graph (same requirement as HTTP) — provide it before `build_state()`:
 
 ```rust
 use std::sync::Arc;
 use r2e::r2e_security::JwtClaimsValidator;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub jwt_validator: Arc<JwtClaimsValidator>,
-    // ...
-}
+AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .provide(Arc::new(jwt_validator))   // Arc<JwtClaimsValidator> as a bean
+    .build_state()
+    .await
+    .register_grpc_service::<GreeterService>();
 ```
 
-The gRPC identity extractor uses `JwtClaimsValidatorLike`, a trait that `Arc<JwtClaimsValidator>` implements automatically via a blanket impl. No additional setup needed beyond what HTTP authentication already requires.
+There is no hand-written state struct: the application state is the inferred HList of everything you `.provide()`/`.register()`, and beans are read back by type. The gRPC identity extractor uses `JwtClaimsValidatorLike`, a trait that `Arc<JwtClaimsValidator>` implements automatically via a blanket impl. No additional setup needed beyond what HTTP authentication already requires.
 
 ### GrpcRoleBasedIdentity
 
@@ -282,7 +282,7 @@ impl GrpcRoleBasedIdentity for AuthenticatedUser {
 ## Limitations
 
 - **No pre-auth guards** — gRPC doesn't have the same pre-auth/post-auth distinction as HTTP. All guards run after identity extraction is attempted.
-- **No struct-level identity** — gRPC services cannot have `#[inject(identity)]` on struct fields (they need `StatefulConstruct`). Use param-level injection instead.
+- **No struct-level identity** — gRPC services cannot have `#[inject(identity)]` on struct fields (the core is built from the bean context via `ContextConstruct`, with no request to extract from). Use param-level injection instead.
 - **Metadata vs headers** — gRPC uses `tonic::metadata::MetadataMap`, not HTTP `HeaderMap`. Custom guards must use the metadata API.
 
 ## Next steps

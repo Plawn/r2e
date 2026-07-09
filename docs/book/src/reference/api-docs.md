@@ -20,23 +20,29 @@ This generates and opens documentation for all R2E crates.
 | `HttpError` | Built-in error type with HTTP status mapping |
 | `R2eConfig` | YAML + env var configuration |
 | `Controller` | Trait for route registration |
-| `Guard<S, I>` | Post-auth guard trait |
-| `PreAuthGuard<S>` | Pre-auth guard trait |
+| `Guard<I>` | Post-auth guard trait (built once from the bean graph) |
+| `PreAuthGuard` | Pre-auth guard trait |
 | `GuardContext<I>` | Guard context with identity |
 | `PreAuthGuardContext` | Guard context without identity |
 | `Identity` | Identity trait for guards |
-| `Interceptor<R>` | AOP interceptor trait |
-| `InterceptorContext` | Interceptor context |
+| `Interceptor<R>` | AOP interceptor trait, generic over the return type `R` |
+| `InterceptorContext` | Interceptor context (`Copy`: method + controller name) |
+| `DecoratorSpec` | Build contract for guards/interceptors (Product + Deps + build) |
+| `SelfBuilt` | Marker for self-contained decorators (no bean deps) |
+| `DecoratorBean` (derive) | Generates the `DecoratorSpec` plumbing for a bean-reading guard/interceptor (`#[inject]` fields + `Type::spec(...)` constructor) |
 | `ManagedResource<S>` | Managed resource lifecycle trait |
 | `ManagedErr<E>` | Error wrapper for managed resources |
 | `Plugin<S>` | Post-state plugin trait |
 | `PreStatePlugin` | Pre-state plugin trait |
 | `DeferredAction` | Deferred setup action for plugins |
-| `StatefulConstruct<S>` | Construct from state (no HTTP context) |
+| `ContextConstruct` | Construct a controller from the resolved bean graph by type (no HTTP context) — replaces the removed `StatefulConstruct` |
 | `Bean` | Sync bean trait |
 | `AsyncBean` | Async bean trait |
 | `Producer` | Factory trait for external types |
-| `BeanContext` | Bean graph context |
+| `BeanContext` | Resolved bean graph; beans are fetched by type (`ctx.get::<T>()`) |
+| `BeanLookup` | Dynamic, witness-free bean access on the state (`state.bean::<T>() -> Option<T>`); the vocabulary for guards, interceptors, and `ManagedResource`. In the prelude |
+| `BeanAccess` | Witness-free fixed-offset bean access on the state (`state.get::<T>()`). Not in the prelude — import via `use r2e_core::type_list::BeanAccess;` |
+| `FromRequestPartsVia<S, M>` | Request-scoped extractor trait (identity + `#[inject(request)]`); `OptionalFromRequestPartsVia<S, M>` is the optional variant. Plain axum `FromRequestParts` extractors bridge automatically via `ViaAxum` |
 | `Validate` | Re-export of `garde::Validate` for automatic validation |
 | `Params` | Derive macro for aggregating path/query/header params |
 
@@ -49,7 +55,13 @@ This generates and opens documentation for all R2E crates.
 | `#[bean]` | Generate Bean or AsyncBean impl |
 | `#[producer]` | Generate Producer impl from free function |
 | `#[derive(Bean)]` | Derive Bean from struct fields |
-| `#[derive(BeanState)]` | Derive FromRef for state struct |
+
+> **State is inferred, not declared.** There is no state struct and no state-deriving
+> macro. Beans are `.provide()`-d or `.register::<T>()`-ed on the builder, and
+> `.build_state().await` materializes the application state as an HList inferred from
+> the provision list. `#[controller]` resolves its `#[inject]` fields from that graph
+> **by type** — a missing bean is a compile error naming the type. (The old
+> `#[derive(BeanState)]` / `BeanState` trait and `build_state!` macro have been removed.)
 
 ### r2e-security
 
@@ -92,8 +104,8 @@ This generates and opens documentation for all R2E crates.
 | Type | Description |
 |------|-------------|
 | `SqlxRepository<E, DB>` | SQLx-backed repository |
-| `Tx<DB>` | Transaction wrapper |
-| `HasPool<DB>` | Pool accessor trait |
+| `Tx<DB>` | Transaction wrapper; `#[managed] tx: &mut Tx<'_, DB>` resolves the `Pool<DB>` from the bean graph by type — just `.provide(pool)` before `build_state()` |
+| `HasPool<DB>` | Optional pool-accessor trait; no longer required for `Tx` (it fetches the pool from the graph via `BeanLookup`) |
 
 ### r2e-cache
 

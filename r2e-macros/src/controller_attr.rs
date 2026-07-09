@@ -11,7 +11,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
 
     let parsed = controller_parsing::parse_controller_args(args, item.ident.span())
-        .and_then(|(state_type, prefix)| controller_parsing::parse(state_type, prefix, &item));
+        .and_then(|prefix| controller_parsing::parse(prefix, &item));
 
     match parsed {
         Ok(def) => {

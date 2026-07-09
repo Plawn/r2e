@@ -9,7 +9,7 @@ pub struct AppState {
     pub name: String,
 }
 
-#[controller(path = "/x", state = AppState)]
+#[controller(path = "/x")]
 pub struct MyController {
     #[inject]
     name: String,

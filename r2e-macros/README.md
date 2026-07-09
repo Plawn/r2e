@@ -13,10 +13,11 @@ This proc-macro crate generates all the Axum boilerplate at compile time with ze
 A transforming attribute on the struct. It rewrites the struct into a physical
 *core* (request-scoped fields stripped out, built once into an `Arc`) and
 generates the request-data extractor, the per-request façade, metadata, and
-`StatefulConstruct`:
+`ContextConstruct`. There is no `state = ...` argument — `#[inject]` fields are
+resolved from the bean graph by type:
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
     #[inject(identity)] user: AuthenticatedUser,        // request-scoped (auth)
@@ -30,7 +31,11 @@ pub struct UserController {
 - `mod __r2e_meta_UserController` — type aliases, constants, `guard_identity`, `bind_request`, `validate_config`
 - `struct __R2eRequestData_UserController` — `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`)
 - `struct __R2eRequest_UserController` — the per-request façade, `Deref<Target = core>`; route methods run here
-- `impl StatefulConstruct` — always (the core never holds request-scoped fields)
+- `impl ContextConstruct` — always (the core builds from the resolved `BeanContext`, fetching each `#[inject]` field by type)
+
+A missing bean for an `#[inject]` field is a **compile error naming the type**,
+checked via `Controller::Deps` / `AllSatisfied` at `register_controller`. The
+generated `Controller<S, W>` impl is generic over the state `S`.
 
 ### `#[routes]`
 

@@ -15,7 +15,6 @@ mod db_identity;
 mod error;
 mod models;
 mod services;
-mod state;
 
 use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
@@ -30,7 +29,26 @@ use controllers::notification_controller::NotificationController;
 use controllers::upload_controller::UploadController;
 use controllers::ws_controller::WsEchoController;
 use services::{NotificationService, UserService};
-use state::Services;
+
+/// The "users" vertical slice as a feature module: one `register_module`
+/// call registers the service and both controllers. `UserService` is
+/// exported (other controllers inject it); the imports are satisfied by the
+/// app's `.provide`/`.load_config` calls below. Decorator deps count too:
+/// `UserController`'s rate-limit guard and cache interceptor read
+/// `RateLimitRegistry` and the cache store bean, so the module imports them.
+#[module(
+    providers(UserService),
+    controllers(UserController, UserEventConsumer),
+    exports(UserService),
+    imports(
+        LocalEventBus,
+        sqlx::SqlitePool,
+        R2eConfig,
+        r2e::r2e_rate_limit::RateLimitRegistry,
+        std::sync::Arc<dyn r2e::r2e_cache::CacheStore>,
+    )
+)]
+struct UserModule;
 
 fn generate_test_token(secret: &[u8]) -> String {
     let exp = std::time::SystemTime::now()
@@ -121,7 +139,7 @@ async fn setup() -> AppEnv {
 
 #[r2e::main]
 async fn main(env: AppEnv) {
-    AppBuilder::new()
+    let app = AppBuilder::new()
         .plugin(Scheduler)
         .plugin(Prometheus::builder()
             .endpoint("/metrics")
@@ -134,10 +152,12 @@ async fn main(env: AppEnv) {
         .provide(env.pool)
         .provide(env.claims_validator)
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
+        .provide(r2e::r2e_cache::InMemoryStore::shared())
         .provide(env.sse_broadcaster)
         .provide(env.notification_service)
-        .with_bean::<UserService>()
-        .build_state::<Services, _, _>()
+        .register_module::<UserModule>();
+
+    app.build_state()
         .await
         .with(Health)
         .with(RequestIdPlugin)
@@ -165,18 +185,18 @@ async fn main(env: AppEnv) {
         .on_stop(|_| async {
             tracing::info!("R2E example-app shutdown hook executed");
         })
-        .register_controller::<UserController>()
-        .register_controller::<AccountController>()
-        .register_controller::<ConfigController>()
-        .register_controller::<DataController>()
-        .register_controller::<UserEventConsumer>()
-        .register_controller::<MixedController>()
-        .register_controller::<IdentityController>()
-        .register_controller::<ScheduledJobs>()
-        .register_controller::<SseController>()
-        .register_controller::<WsEchoController>()
-        .register_controller::<NotificationController>()
-        .register_controller::<UploadController>()
+        .register_controllers::<(
+            AccountController,
+            ConfigController,
+            DataController,
+            MixedController,
+            IdentityController,
+            ScheduledJobs,
+            SseController,
+            WsEchoController,
+            NotificationController,
+            UploadController,
+        )>()
         .with(NormalizePath)
         .serve("0.0.0.0:3001")
         .await

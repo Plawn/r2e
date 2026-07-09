@@ -28,7 +28,7 @@ Usage:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(RequestLogger)
     // ...
@@ -100,7 +100,7 @@ AppBuilder::new()
     .plugin(Scheduler)          // provides CancellationToken
     .provide(pool)              // provides DbPool
     .plugin(MyPlugin)
-    .build_state::<AppState, _, _>().await
+    .build_state().await
 
 // ❌ Compile error: deps not yet provided
 AppBuilder::new()
@@ -113,7 +113,7 @@ Usage:
 ```rust
 AppBuilder::new()
     .plugin(MyPlugin { config: MyPluginConfig::default() })
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     // ...
 ```
@@ -188,8 +188,8 @@ impl RawPreStatePlugin for MyAdvancedPlugin {
     type Provisions = TCons<CancellationToken, TCons<MyRegistry, TNil>>;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
+        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
@@ -212,7 +212,7 @@ Usage is the same — `.plugin()` accepts both `PreStatePlugin` and `RawPreState
 ```rust
 AppBuilder::new()
     .plugin(MyAdvancedPlugin)
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     // ...
 ```
@@ -264,7 +264,7 @@ Usage:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(RequestId)
     .serve("0.0.0.0:3000")
@@ -340,7 +340,7 @@ AppBuilder::new()
         interval: Duration::from_secs(30),
         url: "https://api.example.com/health".into(),
     })
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .serve("0.0.0.0:3000")
     .await;

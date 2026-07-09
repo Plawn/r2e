@@ -5,12 +5,10 @@ use sqlx::SqlitePool;
 mod controllers;
 mod models;
 mod services;
-mod state;
 
 use controllers::chat_controller::ChatController;
 use controllers::consumer::MessagePersistenceConsumer;
 use controllers::history_controller::HistoryController;
-use state::AppState;
 
 #[r2e::main]
 async fn main() {
@@ -36,16 +34,14 @@ async fn main() {
         .provide(event_bus)
         .provide(ws_rooms)
         .provide(pool)
-        .with_bean::<services::ChatService>()
-        .build_state::<AppState, _, _>()
+        .register::<services::ChatService>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())
         .with(Tracing)
         .with(ErrorHandling)
-        .register_controller::<ChatController>()
-        .register_controller::<HistoryController>()
-        .register_controller::<MessagePersistenceConsumer>()
+        .register_controllers::<(ChatController, HistoryController, MessagePersistenceConsumer)>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

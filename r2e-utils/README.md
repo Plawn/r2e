@@ -4,7 +4,7 @@ Built-in interceptors for R2E — Logged, Timed, Cache, and CacheInvalidate.
 
 ## Overview
 
-Provides ready-to-use interceptors that implement the `Interceptor<R>` trait from `r2e-core`. All calls are monomorphized at compile time for zero overhead.
+Provides ready-to-use interceptors that implement the `Interceptor<R, S>` trait (generic over the state `S`) from `r2e-core`. All calls are monomorphized at compile time for zero overhead.
 
 ## Usage
 

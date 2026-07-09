@@ -1,12 +1,14 @@
 //! Code generation for the `#[routes]` attribute macro.
 //!
-//! This module is organized into three submodules:
+//! This module is organized into four submodules:
 //!
 //! - `wrapping`: Method wrapping with interceptors and transactional behavior
 //! - `handlers`: Axum handler function generation
+//! - `decorators`: Guard/interceptor decorator sets (built once from the graph)
 //! - `controller_impl`: Controller trait implementation generation
 
 mod controller_impl;
+pub(crate) mod decorators;
 mod handlers;
 mod wrapping;
 

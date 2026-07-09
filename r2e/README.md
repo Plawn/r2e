@@ -20,7 +20,7 @@ use r2e::prelude::*;
 ```rust
 use r2e::prelude::*;
 
-#[controller(path = "/hello", state = ())]
+#[controller(path = "/hello")]
 pub struct HelloController;
 
 #[routes]
@@ -34,7 +34,7 @@ impl HelloController {
 #[tokio::main]
 async fn main() {
     AppBuilder::new()
-        .build_state::<(), _>()
+        .build_state()
         .await
         .register_controller::<HelloController>()
         .serve("0.0.0.0:3000")

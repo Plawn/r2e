@@ -3,22 +3,27 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::crate_path::{r2e_core_path, r2e_grpc_path, r2e_security_path};
+use crate::codegen::decorators::wrap_with_deco_interceptors;
+use crate::crate_path::{r2e_core_path, r2e_grpc_path};
 use crate::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 
+use super::GrpcDecoSets;
+
 /// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc<Name>`.
-pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef) -> TokenStream {
+pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> TokenStream {
     let krate = r2e_core_path();
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
     let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
 
     let method_impls: Vec<TokenStream> = def
         .methods
         .iter()
-        .map(|m| generate_method_impl(m, def, &krate, &grpc_krate, controller_name, &meta_mod))
+        .enumerate()
+        .map(|(i, m)| {
+            generate_method_impl(m, deco.set_for(i), &krate, &grpc_krate, controller_name)
+        })
         .collect();
 
     quote! {
@@ -32,11 +37,10 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef) -> TokenStream {
 /// Generate a single tonic trait method implementation.
 fn generate_method_impl(
     method: &GrpcMethod,
-    def: &GrpcRoutesImplDef,
+    deco_set: Option<&crate::codegen::decorators::DecoSet>,
     krate: &TokenStream,
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
-    meta_mod: &syn::Ident,
 ) -> TokenStream {
     let fn_name = &method.name;
     let fn_item = &method.fn_item;
@@ -59,11 +63,9 @@ fn generate_method_impl(
     let controller_name_str = controller_name.to_string();
     let fn_name_str = fn_name.to_string();
 
-    // Determine identity extraction and guard context
-    let has_guards = !method.decorators.guard_fns.is_empty() || !method.decorators.roles.is_empty();
+    // Determine identity extraction. Guards/roles are rejected on gRPC methods
+    // at parse time (`validate_grpc_attrs`), so there is no guard codegen here.
     let has_identity = method.identity_param.is_some();
-    let has_intercepts =
-        !method.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
 
     // Build the request param for the tonic trait signature
     let request_param_tokens = if let Some(pt) = request_param {
@@ -74,22 +76,15 @@ fn generate_method_impl(
     };
 
     // Build identity extraction code
-    let identity_extraction = if has_identity || has_guards {
+    let identity_extraction = if has_identity {
         generate_identity_extraction(method, grpc_krate)
     } else {
         quote! {}
     };
 
-    // Build guard checks
-    let guard_checks = if has_guards {
-        generate_grpc_guard_checks(method, def, grpc_krate, &controller_name_str, &fn_name_str)
-    } else {
-        quote! {}
-    };
-
-    // Build the controller construction
+    // The core is shared — built once at registration, cloned per call site.
     let construct_controller = quote! {
-        let __ctrl = <#controller_name as #krate::StatefulConstruct<#meta_mod::State>>::from_state(&self.state);
+        let __ctrl = ::std::sync::Arc::clone(&self.core);
     };
 
     // Build the method call
@@ -104,16 +99,23 @@ fn generate_method_impl(
 
     let method_call = quote! { __ctrl.#fn_name(#(#call_args),*).await };
 
-    // Build the interceptor wrapping
-    let body = if has_intercepts {
-        wrap_with_interceptors(
+    // Interceptors are prebuilt wrapper fields (one set per method, built
+    // once from the bean graph in `add_to_routes`); `deco_set` is `None` when
+    // the method has no interceptor sites or when spec inference failed (the
+    // `compile_error!` is already emitted — degrade to the unwrapped shape).
+    let body = if let Some(set) = deco_set {
+        let deco_field = GrpcDecoSets::field_ident(fn_name);
+        let wrapped = wrap_with_deco_interceptors(
             method_call,
             &fn_name_str,
             &controller_name_str,
-            def,
-            &method.decorators.intercept_fns,
+            &set.intercept_fields,
             krate,
-        )
+        );
+        quote! {
+            let __deco = &self.__decos.#deco_field;
+            #wrapped
+        }
     } else {
         method_call
     };
@@ -121,7 +123,6 @@ fn generate_method_impl(
     quote! {
         async fn #fn_name(&self, #request_param_tokens) #return_type {
             #identity_extraction
-            #guard_checks
             #construct_controller
             #body
         }
@@ -153,126 +154,5 @@ fn generate_identity_extraction(method: &GrpcMethod, grpc_krate: &TokenStream) -
         }
     } else {
         quote! {}
-    }
-}
-
-/// Generate gRPC guard checks.
-fn generate_grpc_guard_checks(
-    method: &GrpcMethod,
-    def: &GrpcRoutesImplDef,
-    grpc_krate: &TokenStream,
-    controller_name_str: &str,
-    fn_name_str: &str,
-) -> TokenStream {
-    let security_krate = r2e_security_path();
-
-    // Build roles guard if needed
-    let roles_guard = if !method.decorators.roles.is_empty() {
-        let roles = &method.decorators.roles;
-        Some(quote! {
-            {
-                let __roles_guard = #grpc_krate::GrpcRolesGuard {
-                    required_roles: &[#(#roles),*],
-                };
-                let __guard_ctx = #grpc_krate::GrpcGuardContext {
-                    service_name: #controller_name_str,
-                    method_name: #fn_name_str,
-                    metadata: request.metadata(),
-                    identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
-                };
-                // Note: roles guard requires identity — this is a simplified version.
-                // The full version would extract identity first and pass it.
-            }
-        })
-    } else {
-        None
-    };
-
-    // Build custom guard checks
-    let custom_guards: Vec<TokenStream> = method
-        .decorators
-        .guard_fns
-        .iter()
-        .map(|guard_expr| {
-            quote! {
-                {
-                    let __guard = #guard_expr;
-                    let __guard_ctx = #grpc_krate::GrpcGuardContext {
-                        service_name: #controller_name_str,
-                        method_name: #fn_name_str,
-                        metadata: request.metadata(),
-                        identity: None::<&#grpc_krate::__macro_support::NeverIdentity>,
-                    };
-                    if let Err(__status) = #grpc_krate::GrpcGuard::check(&__guard, &self.state, &__guard_ctx).await {
-                        return Err(__status);
-                    }
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        #roles_guard
-        #(#custom_guards)*
-    }
-}
-
-/// Wrap a body expression with interceptors.
-fn wrap_with_interceptors(
-    body: TokenStream,
-    fn_name_str: &str,
-    controller_name_str: &str,
-    def: &GrpcRoutesImplDef,
-    method_intercepts: &[syn::Expr],
-    krate: &TokenStream,
-) -> TokenStream {
-    let all_intercepts: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(method_intercepts.iter())
-        .collect();
-
-    if all_intercepts.is_empty() {
-        return body;
-    }
-
-    // Start with the innermost: the body wrapped in a move closure
-    let mut wrapped = quote! {
-        move || async move { #body }
-    };
-
-    // Wrap from innermost interceptor to second interceptor
-    for intercept_expr in all_intercepts[1..].iter().rev() {
-        wrapped = quote! {
-            move || async move {
-                let __interceptor = #intercept_expr;
-                #krate::Interceptor::around(
-                    &__interceptor,
-                    #krate::InterceptorContext {
-                        method_name: #fn_name_str,
-                        controller_name: #controller_name_str,
-                        state: &self.state,
-                    },
-                    #wrapped
-                ).await
-            }
-        };
-    }
-
-    // Apply the outermost interceptor directly
-    let outermost = &all_intercepts[0];
-    quote! {
-        {
-            let __interceptor = #outermost;
-            #krate::Interceptor::around(
-                &__interceptor,
-                #krate::InterceptorContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    state: &self.state,
-                },
-                #wrapped
-            ).await
-        }
     }
 }

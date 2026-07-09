@@ -15,7 +15,7 @@ use r2e::r2e_scheduler::Scheduler;
 
 AppBuilder::new()
     .plugin(Scheduler)                  // MUST be before build_state()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
@@ -30,7 +30,7 @@ The `Scheduler` plugin must be installed **before** `build_state()` because it p
 Use `#[scheduled]` on controller methods:
 
 ```rust
-#[controller(state = AppState)]
+#[controller]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
 }
@@ -88,7 +88,7 @@ Six fields: `second minute hour day_of_month month day_of_week`
 
 ## Requirements
 
-- Scheduled methods run on the controller core (built via `StatefulConstruct`) and cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable. A controller may still declare struct-level identity for its HTTP routes; its scheduled methods just use only core (`#[inject]` / `#[config]`) fields.
+- Scheduled methods run on the controller core (built from the bean graph via `ContextConstruct`) and cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable. `ContextConstruct` is generated only when the controller declares **no** struct-level identity; if you need both scheduled tasks and authenticated endpoints, use param-level identity (the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity)). Scheduled methods use only core (`#[inject]` / `#[config]`) fields.
 - The `Scheduler` plugin must be installed before `build_state()`
 - Scheduled methods take `&self` only (no additional parameters)
 
@@ -125,7 +125,7 @@ Add `SchedulerHandle` as a parameter to any handler method:
 ```rust
 use r2e::r2e_scheduler::SchedulerHandle;
 
-#[controller(path = "/admin", state = AppState)]
+#[controller(path = "/admin")]
 pub struct AdminController {
     #[inject] some_service: SomeService,
 }
@@ -164,7 +164,7 @@ The `ScheduledJobRegistry` provides runtime introspection of all registered sche
 ```rust
 use r2e::r2e_scheduler::{ScheduledJobRegistry, ScheduledJobInfo};
 
-#[controller(path = "/admin", state = AppState)]
+#[controller(path = "/admin")]
 pub struct JobAdminController {
     #[inject] jobs: ScheduledJobRegistry,
 }
@@ -201,7 +201,7 @@ You can use both together to build a full admin dashboard:
 ```rust
 use r2e::r2e_scheduler::{SchedulerHandle, ScheduledJobRegistry, ScheduledJobInfo};
 
-#[controller(path = "/admin/scheduler", state = AppState)]
+#[controller(path = "/admin/scheduler")]
 pub struct SchedulerAdminController {
     #[inject] jobs: ScheduledJobRegistry,
 }
@@ -239,7 +239,7 @@ impl SchedulerAdminController {
 A controller can have both HTTP routes and scheduled tasks:
 
 ```rust
-#[controller(path = "/stats", state = AppState)]
+#[controller(path = "/stats")]
 pub struct StatsController {
     #[inject] stats_service: StatsService,
 }

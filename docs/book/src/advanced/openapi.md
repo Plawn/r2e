@@ -50,7 +50,7 @@ pub struct User {
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")
@@ -180,7 +180,7 @@ pub struct User {
     pub email: String,
 }
 
-#[controller(path = "/users", state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
 }

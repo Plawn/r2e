@@ -38,7 +38,7 @@ let oidc = OidcServer::new()
 
 AppBuilder::new()
     .plugin(oidc)
-    .build_state::<AppState, _, _>().await
+    .build_state().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
@@ -70,7 +70,7 @@ let oidc = OidcServer::new()
 // main(env) — called on each hot-patch
 AppBuilder::new()
     .plugin(oidc.clone()) // reuses same keys and state
-    .build_state::<AppState, _, _>().await
+    .build_state().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
 ```

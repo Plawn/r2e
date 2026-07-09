@@ -20,16 +20,16 @@ r2e = { version = "0.1", features = ["rate-limit"] }
 ### Pre-auth rate limiting (no identity required)
 
 ```rust
-use r2e::r2e_rate_limit::RateLimit;
+use r2e::r2e_rate_limit::PreRateLimit;
 
 #[routes]
 impl MyController {
     #[get("/")]
-    #[pre_guard(RateLimit::global(100, 60))]   // 100 requests / 60 seconds, shared bucket
+    #[pre_guard(PreRateLimit::global(100, 60))]   // 100 requests / 60 seconds, shared bucket
     async fn public_endpoint(&self) -> &'static str { "ok" }
 
     #[post("/login")]
-    #[pre_guard(RateLimit::per_ip(5, 60))]     // 5 requests / 60 seconds, per IP
+    #[pre_guard(PreRateLimit::per_ip(5, 60))]     // 5 requests / 60 seconds, per IP
     async fn login(&self) -> &'static str { "ok" }
 }
 ```
@@ -72,8 +72,8 @@ Clonable handle stored in app state, managing rate limiter instances for the gen
 
 | Key kind | Guard type | When to use |
 |----------|-----------|-------------|
-| `RateLimit::global()` | `#[pre_guard]` | Shared bucket, before JWT validation |
-| `RateLimit::per_ip()` | `#[pre_guard]` | Per X-Forwarded-For, before JWT validation |
+| `PreRateLimit::global()` | `#[pre_guard]` | Shared bucket, before JWT validation |
+| `PreRateLimit::per_ip()` | `#[pre_guard]` | Per X-Forwarded-For, before JWT validation |
 | `RateLimit::per_user()` | `#[guard]` | Per authenticated user, after JWT validation |
 
 ## License

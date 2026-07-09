@@ -283,38 +283,18 @@ async fn cors_preflight_returns_200() {
 
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
-use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanState, Producer};
-use r2e_core::type_list::{BuildableFrom, Contains, TNil};
+use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, Producer, Registrable};
+use r2e_core::type_list::{BeanAccess, TCons, TNil};
 use std::any::TypeId;
 
 #[derive(Clone, Debug)]
 struct TestDep(i32);
 
-// State with a single dependency
-#[derive(Clone)]
-struct SingleDepState {
-    dep: TestDep,
-}
-
-impl BeanState for SingleDepState {
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            dep: ctx.get::<TestDep>(),
-        }
-    }
-}
-
-impl<P, I0> BuildableFrom<P, (I0,)> for SingleDepState
-where
-    P: Contains<TestDep, I0>,
-{
-}
-
 #[r2e_core::test]
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
-        .build_state::<SingleDepState, _, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -341,30 +321,19 @@ impl Bean for TestService {
     }
 }
 
-#[derive(Clone)]
-struct BeanTestState {
-    service: TestService,
-}
-
-impl BeanState for BeanTestState {
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get::<TestService>(),
-        }
+impl Registrable for TestService {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
     }
-}
-
-impl<P, I0> BuildableFrom<P, (I0,)> for BeanTestState
-where
-    P: Contains<TestService, I0>,
-{
 }
 
 #[r2e_core::test]
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
-        .with_bean::<TestService>()
-        .build_state::<BeanTestState, _, _>()
+        .register::<TestService>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -388,30 +357,19 @@ impl AsyncBean for AsyncService {
     }
 }
 
-#[derive(Clone)]
-struct AsyncBeanTestState {
-    service: AsyncService,
-}
-
-impl BeanState for AsyncBeanTestState {
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get::<AsyncService>(),
-        }
+impl Registrable for AsyncService {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register_async::<Self>();
     }
-}
-
-impl<P, I0> BuildableFrom<P, (I0,)> for AsyncBeanTestState
-where
-    P: Contains<AsyncService, I0>,
-{
 }
 
 #[r2e_core::test]
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
-        .with_async_bean::<AsyncService>()
-        .build_state::<AsyncBeanTestState, _, _>()
+        .register::<AsyncService>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -438,30 +396,19 @@ impl Producer for TestProducer {
     }
 }
 
-#[derive(Clone)]
-struct ProducerTestState {
-    value: ProducedValue,
-}
-
-impl BeanState for ProducerTestState {
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            value: ctx.get::<ProducedValue>(),
-        }
+impl Registrable for TestProducer {
+    type Provided = ProducedValue;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register_producer::<Self>();
     }
-}
-
-impl<P, I0> BuildableFrom<P, (I0,)> for ProducerTestState
-where
-    P: Contains<ProducedValue, I0>,
-{
 }
 
 #[r2e_core::test]
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
-        .with_producer::<TestProducer>()
-        .build_state::<ProducerTestState, _, _>()
+        .register::<TestProducer>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -479,7 +426,7 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
-        .build_state::<SingleDepState, _, _>()
+        .build_state()
         .await
         .with(Health)
         .build();
@@ -487,158 +434,208 @@ async fn build_state_with_config_injection() {
     assert_eq!(status, StatusCode::OK);
 }
 
-// ── E.2b Conditional Bean Registration ───────────────────────────────────
+// ── E.2b Conditional availability via `#[producer] -> Option<T>` ──────────
+//
+// Runtime-flag conditional bean presence is expressed through a producer whose
+// `Output = Option<T>`: the `Option<T>` slot is ALWAYS in the provision list,
+// and the producer decides `Some`/`None` at build time from a flag it reads out
+// of the context (`ServiceEnabled` / `ProducedEnabled`). Consumers hard-depend
+// on `Option<T>` — no runtime `try_get` / missing-dependency escape hatch. The
+// flag itself is a plain provided bean, computed either from a literal boolean
+// or from config via `config_flag`.
 
-// State with an optional dependency
+// The runtime flag the producers key off, injected as a first-class bean.
 #[derive(Clone)]
-struct OptionalDepState {
-    dep: TestDep,
-    service: Option<TestService>,
-}
+struct ServiceEnabled(bool);
 
-impl BeanState for OptionalDepState {
-    fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            dep: ctx.get::<TestDep>(),
-            service: ctx.try_get::<TestService>(),
-        }
+// Producer for `Option<TestService>` — always registers the slot, emits
+// `Some`/`None` based on the injected `ServiceEnabled` flag.
+struct MaybeServiceProducer;
+
+impl Producer for MaybeServiceProducer {
+    type Output = Option<TestService>;
+    type Deps = TCons<ServiceEnabled, TNil>;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<ServiceEnabled>(), "ServiceEnabled")]
+    }
+    fn produce(
+        ctx: &BeanContext,
+    ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
+        let enabled = ctx.get::<ServiceEnabled>().0;
+        async move { enabled.then(|| TestService { label: "built".into() }) }
     }
 }
 
-// Only TestDep is required — TestService is optional
-impl<P, I0> BuildableFrom<P, (I0,)> for OptionalDepState
-where
-    P: Contains<TestDep, I0>,
-{
+impl Registrable for MaybeServiceProducer {
+    type Provided = Option<TestService>;
+    type Deps = TCons<ServiceEnabled, TNil>;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register_producer::<Self>();
+    }
 }
 
 #[r2e_core::test]
-async fn with_bean_when_true_provides_some() {
-    let app = AppBuilder::new()
-        .provide(TestDep(1))
-        .with_bean_when::<TestService>(true)
-        .build_state::<OptionalDepState, _, _>()
+async fn producer_option_present_when_flag_true() {
+    let prepared = AppBuilder::new()
+        .provide(ServiceEnabled(true))
+        .register::<MaybeServiceProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
+        .prepare("127.0.0.1:0");
+    assert!(
+        prepared.state().get::<Option<TestService>>().is_some(),
+        "flag=true → Option<TestService> present"
+    );
 }
 
 #[r2e_core::test]
-async fn with_bean_when_false_provides_none() {
-    let app = AppBuilder::new()
-        .provide(TestDep(2))
-        .with_bean_when::<TestService>(false)
-        .build_state::<OptionalDepState, _, _>()
+async fn producer_option_absent_when_flag_false() {
+    let prepared = AppBuilder::new()
+        .provide(ServiceEnabled(false))
+        .register::<MaybeServiceProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
+        .prepare("127.0.0.1:0");
+    assert!(
+        prepared.state().get::<Option<TestService>>().is_none(),
+        "flag=false → Option<TestService> absent"
+    );
 }
 
 #[r2e_core::test]
-async fn with_async_bean_when_true() {
-    // State with optional async service
+async fn async_producer_option_present() {
+    // A producer performs its work in an async body — this replaces the old
+    // "conditional async bean" path. The slot is `Option<AsyncService>`.
     #[derive(Clone)]
-    struct OptionalAsyncState {
-        service: Option<AsyncService>,
-    }
-    impl BeanState for OptionalAsyncState {
-        fn from_context(ctx: &BeanContext) -> Self {
-            Self { service: ctx.try_get::<AsyncService>() }
+    struct MaybeAsyncProducer;
+    impl Producer for MaybeAsyncProducer {
+        type Output = Option<AsyncService>;
+        type Deps = TCons<ServiceEnabled, TNil>;
+        fn dependencies() -> Vec<(TypeId, &'static str)> {
+            vec![(TypeId::of::<ServiceEnabled>(), "ServiceEnabled")]
+        }
+        fn produce(
+            ctx: &BeanContext,
+        ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
+            let enabled = ctx.get::<ServiceEnabled>().0;
+            async move {
+                enabled.then(|| AsyncService {
+                    label: "async-built".into(),
+                })
+            }
         }
     }
-    impl<P> BuildableFrom<P, ()> for OptionalAsyncState {}
+    impl Registrable for MaybeAsyncProducer {
+        type Provided = Option<AsyncService>;
+        type Deps = TCons<ServiceEnabled, TNil>;
+        fn register_into(registry: &mut BeanRegistry) {
+            registry.register_producer::<Self>();
+        }
+    }
 
-    let app = AppBuilder::new()
-        .with_async_bean_when::<AsyncService>(true)
-        .build_state::<OptionalAsyncState, _, _>()
+    let prepared = AppBuilder::new()
+        .provide(ServiceEnabled(true))
+        .register::<MaybeAsyncProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
+        .prepare("127.0.0.1:0");
+    assert!(prepared.state().get::<Option<AsyncService>>().is_some());
 }
 
 #[r2e_core::test]
-async fn with_producer_when_false() {
-    #[derive(Clone)]
-    struct OptionalProducedState {
-        value: Option<ProducedValue>,
-    }
-    impl BeanState for OptionalProducedState {
-        fn from_context(ctx: &BeanContext) -> Self {
-            Self { value: ctx.try_get::<ProducedValue>() }
-        }
-    }
-    impl<P> BuildableFrom<P, ()> for OptionalProducedState {}
-
-    let app = AppBuilder::new()
-        .with_producer_when::<TestProducer>(false)
-        .build_state::<OptionalProducedState, _, _>()
-        .await
-        .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
-}
-
-#[r2e_core::test]
-async fn with_bean_on_config_enabled() {
+async fn producer_option_present_via_config_flag() {
     use r2e_core::config::{ConfigValue, R2eConfig};
 
     let mut config = R2eConfig::empty();
     config.set("features.test-service", ConfigValue::Bool(true));
 
-    let app = AppBuilder::new()
-        .with_config(config)
-        .provide(TestDep(10))
-        .with_bean_on_config::<TestService>("features.test-service")
-        .build_state::<OptionalDepState, _, _>()
+    // Compute the flag from config via the public `config_flag` helper before
+    // consuming the builder, then feed it into the producer.
+    let builder = AppBuilder::new().with_config(config);
+    let enabled = builder.config_flag("features.test-service");
+    assert!(enabled);
+
+    let prepared = builder
+        .provide(ServiceEnabled(enabled))
+        .register::<MaybeServiceProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
+        .prepare("127.0.0.1:0");
+    assert!(prepared.state().get::<Option<TestService>>().is_some());
 }
 
 #[r2e_core::test]
-async fn with_bean_on_config_disabled() {
+async fn producer_option_absent_via_config_flag() {
     use r2e_core::config::{ConfigValue, R2eConfig};
 
     let mut config = R2eConfig::empty();
     config.set("features.test-service", ConfigValue::Bool(false));
 
-    let app = AppBuilder::new()
-        .with_config(config)
-        .provide(TestDep(11))
-        .with_bean_on_config::<TestService>("features.test-service")
-        .build_state::<OptionalDepState, _, _>()
+    let builder = AppBuilder::new().with_config(config);
+    let enabled = builder.config_flag("features.test-service");
+    assert!(!enabled);
+
+    let prepared = builder
+        .provide(ServiceEnabled(enabled))
+        .register::<MaybeServiceProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
-    assert_eq!(status, StatusCode::OK);
+        .prepare("127.0.0.1:0");
+    assert!(prepared.state().get::<Option<TestService>>().is_none());
 }
 
 #[r2e_core::test]
-async fn with_bean_on_config_missing_key_defaults_to_false() {
+async fn config_flag_missing_key_defaults_to_false() {
     use r2e_core::config::R2eConfig;
 
-    let config = R2eConfig::empty();
+    let builder = AppBuilder::new().with_config(R2eConfig::empty());
+    // Missing key → `config_flag` yields false → producer emits `None`.
+    let enabled = builder.config_flag("features.nonexistent");
+    assert!(!enabled);
 
-    let app = AppBuilder::new()
-        .with_config(config)
-        .provide(TestDep(12))
-        .with_bean_on_config::<TestService>("features.nonexistent")
-        .build_state::<OptionalDepState, _, _>()
+    let prepared = builder
+        .provide(ServiceEnabled(enabled))
+        .register::<MaybeServiceProducer>()
+        .build_state()
         .await
         .with(Health)
-        .build();
-    let (status, _) = send_get(app, "/health").await;
+        .prepare("127.0.0.1:0");
+    assert!(prepared.state().get::<Option<TestService>>().is_none());
+}
+
+#[r2e_core::test]
+async fn when_applies_transformation_conditionally() {
+    // `when` runs a `Self -> Self` transformation only when the flag is true.
+    let with_plugin = build_app().when(true, |b| b.with(Health)).build();
+    let (status, _) = send_get(with_plugin, "/health").await;
     assert_eq!(status, StatusCode::OK);
+
+    let without_plugin = build_app().when(false, |b| b.with(Health)).build();
+    let (status, _) = send_get(without_plugin, "/health").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[r2e_core::test]
+async fn profile_is_reflects_active_profile() {
+    use r2e_core::config::{ConfigValue, R2eConfig};
+
+    let mut config = R2eConfig::empty();
+    config.set("r2e.profile", ConfigValue::String("prod".into()));
+
+    let builder = AppBuilder::new().with_config(config);
+    // `R2E_PROFILE` (if set in the environment) overrides the config key, so
+    // pin the expectation to whatever the resolver actually chose.
+    let active = builder.active_profile().to_string();
+    assert!(builder.profile_is(&active));
+    assert!(!builder.profile_is("definitely-not-the-active-profile"));
+    if std::env::var("R2E_PROFILE").is_err() {
+        assert_eq!(active, "prod");
+    }
 }
 
 // ── E.3 Plugin Lifecycle ──────────────────────────────────────────────────

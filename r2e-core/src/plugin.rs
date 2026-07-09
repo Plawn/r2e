@@ -220,7 +220,7 @@ pub trait PreStatePlugin: Send + 'static {
     ///
     /// **Constraint:** plugin install runs *before* the bean graph is built,
     /// so every type listed here must be a `.provide(instance)` value, not a
-    /// `.with_bean::<T>()` registration. If a `with_bean`-registered type
+    /// `.register::<T>()` registration. If a `register`-ed (factory-built) type
     /// appears in `Deps`, runtime resolution panics with a clear message.
     type Deps: crate::type_list::PluginDeps;
 
@@ -236,7 +236,7 @@ pub trait PreStatePlugin: Send + 'static {
 ///
 /// Implement this trait when your plugin needs to:
 /// - Provide **multiple** bean types (via `type Provisions = TCons<A, TCons<B, TNil>>`)
-/// - Call arbitrary builder methods (`.with_bean()`, `.with_producer()`, etc.)
+/// - Call arbitrary builder methods (`.register()`, `.provide()`, etc.)
 ///
 /// Most plugins should implement [`PreStatePlugin`] instead — it's simpler and
 /// automatically provides a `RawPreStatePlugin` impl via a blanket implementation.
@@ -255,8 +255,8 @@ pub trait PreStatePlugin: Send + 'static {
 ///     type Provisions = TCons<CancellationToken, TCons<JobRegistry, TNil>>;
 ///     type Required = TNil;
 ///
-///     fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
-///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+///     fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
+///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
 ///     where
 ///         P: TAppend<Self::Provisions>,
 ///         R: TAppend<Self::Required>,
@@ -288,10 +288,13 @@ pub trait RawPreStatePlugin: Send + 'static {
     type Required;
 
     /// Install the plugin in the pre-state phase with full builder access.
-    fn install<P, R>(
+    ///
+    /// `Mods` is the builder's pending feature-module list — plugins carry it
+    /// through unchanged.
+    fn install<P, R, Mods>(
         self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>;
@@ -302,10 +305,10 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
     type Provisions = TCons<T::Provided, crate::type_list::TNil>;
     type Required = <T::Deps as crate::type_list::PluginDeps>::AsList;
 
-    fn install<P, R>(
+    fn install<P, R, Mods>(
         self,
-        app: AppBuilder<NoState, P, R>,
-    ) -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
@@ -381,6 +384,10 @@ pub struct DeferredContext<'a> {
     /// Layers to apply to the router.
     #[doc(hidden)]
     pub layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+    /// Transport-level router transforms, applied outermost (after layers and
+    /// the catch-panic layer). See [`DeferredContext::wrap_router`].
+    #[doc(hidden)]
+    pub router_wraps: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
     /// Plugin data storage.
     #[doc(hidden)]
     pub plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
@@ -400,6 +407,21 @@ impl DeferredContext<'_> {
     /// Add a layer to the router.
     pub fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
         self.layers.push(layer);
+    }
+
+    /// Add a transport-level router transform, applied **outermost** — after
+    /// every [`add_layer`](Self::add_layer) layer (regardless of plugin
+    /// install order) and after the built-in catch-panic layer.
+    ///
+    /// Use this instead of `add_layer` when the transform routes traffic
+    /// *around* the HTTP stack (e.g. a content-type multiplexer handing
+    /// gRPC requests to tonic): the wrapped-in service sees raw requests
+    /// before any HTTP middleware, while the inner HTTP router keeps its
+    /// full middleware stack. Do NOT use it for ordinary HTTP middleware —
+    /// it would also intercept the non-HTTP branch of any multiplexer
+    /// installed by another plugin.
+    pub fn wrap_router(&mut self, wrap: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+        self.router_wraps.push(wrap);
     }
 
     /// Store plugin-specific data for later retrieval.

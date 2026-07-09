@@ -7,10 +7,12 @@ pub struct AppState;
 
 pub struct AuditLog;
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
+impl SelfBuilt for AuditLog {}
+
+impl<R: Send> Interceptor<R> for AuditLog {
     fn around<F, Fut>(
         &self,
-        _ctx: InterceptorContext<'_, S>,
+        _ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -21,7 +23,7 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for AuditLog {
     }
 }
 
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct InterceptedController;
 
 #[routes]

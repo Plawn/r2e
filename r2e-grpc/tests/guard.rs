@@ -48,7 +48,7 @@ async fn roles_guard_passes_with_correct_role() {
     let id = TestIdentity::new("user-1", &["admin", "user"]);
     let metadata = MetadataMap::new();
     let ctx = make_ctx(Some(&id), &metadata);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_ok());
 }
 
@@ -60,7 +60,7 @@ async fn roles_guard_rejects_missing_role() {
     let id = TestIdentity::new("user-1", &["user"]);
     let metadata = MetadataMap::new();
     let ctx = make_ctx(Some(&id), &metadata);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let status = result.unwrap_err();
     assert_eq!(status.code(), tonic::Code::PermissionDenied);
@@ -73,7 +73,7 @@ async fn roles_guard_rejects_no_identity() {
     };
     let metadata = MetadataMap::new();
     let ctx: GrpcGuardContext<'_, TestIdentity> = make_ctx(None, &metadata);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let status = result.unwrap_err();
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
@@ -87,7 +87,7 @@ async fn roles_guard_passes_with_any_required_role() {
     let id = TestIdentity::new("user-1", &["moderator"]);
     let metadata = MetadataMap::new();
     let ctx = make_ctx(Some(&id), &metadata);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_ok());
 }
 

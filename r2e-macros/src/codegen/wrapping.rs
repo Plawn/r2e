@@ -1,7 +1,8 @@
 //! Method wrapping for transactional behavior.
 //!
-//! Interceptor wrapping has moved to `handlers.rs` where it has access
-//! to the application state (needed by `InterceptorContext<'_, S>`).
+//! Interceptor wrapping for routes lives in `handlers.rs`, and for scheduled
+//! tasks in `controller_impl.rs` (interceptors are prebuilt decorator-set
+//! fields in both cases).
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -61,10 +62,17 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         })
         .collect();
 
+    // Scheduled methods: `#[intercept(...)]` sets are built once from the
+    // bean context inside `scheduled_tasks_boxed` (controller_impl.rs) and
+    // stored in the core's hidden `DecoSlot`. Intercepted methods run the
+    // chain in their own body (slot lookup), so DIRECT in-code calls are
+    // intercepted too — not just scheduler ticks. A sync source method gets
+    // its dispatch wrapper PROMOTED to `async fn` so the body can await the
+    // chain (di-next-steps item 11).
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
-        .map(|sm| generate_wrapped_scheduled_method(sm, def))
+        .map(|sm| generate_scheduled_method(sm, def))
         .collect();
 
     let async_exec_fns: Vec<TokenStream> = def
@@ -107,6 +115,102 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     quote! {
         #facade_impl
         #core_impl
+    }
+}
+
+/// Emit one scheduled method.
+///
+/// Methods with (inferable) interceptor sites split into a hidden renamed
+/// inner fn plus a dispatch wrapper: the wrapper reads the prebuilt set from
+/// the core's `DecoSlot` (filled at registration by `scheduled_tasks_boxed`)
+/// and runs the chain around the inner call, so the chain applies on every
+/// call path. An unregistered core (slot empty — e.g. a hand-built test
+/// core) runs the inner body undecorated.
+///
+/// A **sync** source method's wrapper is PROMOTED to `async fn` — the chain
+/// can only run in an async body, and every direct caller already sits in an
+/// async context (handlers, consumers, tasks). The inner fn keeps the source
+/// signature; the promotion is flagged in the wrapper's rustdoc.
+///
+/// Methods without interceptors and methods whose spec type is not
+/// inferable (the compile_error is emitted by the registration pass) are
+/// emitted unchanged.
+fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
+    let fn_item = &sm.fn_item;
+    let is_async = fn_item.sig.asyncness.is_some();
+    let intercept_exprs: Vec<&syn::Expr> = def
+        .controller_intercepts
+        .iter()
+        .chain(sm.intercept_fns.iter())
+        .collect();
+
+    if intercept_exprs.is_empty()
+        || !super::decorators::all_specs_inferable(intercept_exprs.iter().copied())
+    {
+        return quote! { #fn_item };
+    }
+
+    let krate = r2e_core_path();
+    let fn_name = &fn_item.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let controller_name_str = def.controller_name.to_string();
+    let container = super::decorators::sched_container_ident(&def.controller_name);
+    let field = super::decorators::sched_field_ident(fn_name);
+    let intercept_fields = super::decorators::intercept_field_idents(intercept_exprs.len());
+    let inner_name = format_ident!("__r2e_sched_{}_inner", fn_name);
+
+    let mut inner_fn = fn_item.clone();
+    inner_fn.sig.ident = inner_name.clone();
+    inner_fn.attrs = vec![syn::parse_quote!(#[doc(hidden)])];
+    inner_fn.vis = syn::Visibility::Inherited;
+
+    let attrs = &fn_item.attrs;
+    let vis = &fn_item.vis;
+
+    // Async promotion: a sync source keeps a sync inner fn, but the wrapper
+    // must be async to await the chain. Direct callers get the usual
+    // "consider `.await`" diagnostics; the rustdoc note explains why.
+    let mut sig = fn_item.sig.clone();
+    let promotion_doc = if is_async {
+        quote! {}
+    } else {
+        sig.asyncness = Some(Default::default());
+        quote! {
+            #[doc = ""]
+            #[doc = "*R2E:* promoted to `async fn` by `#[routes]` — this sync `#[scheduled]` \
+                     method has `#[intercept]` sites, and the chain (which must be awaited) \
+                     runs on direct calls too. Call with `.await`."]
+        }
+    };
+
+    let inner_call = if is_async {
+        quote! { self.#inner_name().await }
+    } else {
+        quote! { self.#inner_name() }
+    };
+
+    let chain = super::decorators::wrap_with_deco_interceptors(
+        inner_call.clone(),
+        &fn_name_str,
+        &controller_name_str,
+        &intercept_fields,
+        &krate,
+    );
+
+    quote! {
+        #inner_fn
+
+        #(#attrs)*
+        #promotion_doc
+        #vis #sig {
+            match self.__r2e_decos.get::<#container>() {
+                Some(__decos) => {
+                    let __deco = &__decos.#field;
+                    #chain
+                }
+                None => #inner_call,
+            }
+        }
     }
 }
 
@@ -214,81 +318,3 @@ fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
     }
 }
 
-/// Wrap a scheduled method with interceptors.
-/// Scheduled methods keep interceptor wrapping here because they don't
-/// go through the handler path (no State extraction).
-fn generate_wrapped_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
-    let has_interceptors = !sm.intercept_fns.is_empty() || !def.controller_intercepts.is_empty();
-
-    if !has_interceptors {
-        let f = &sm.fn_item;
-        return quote! { #f };
-    }
-
-    let fn_item = &sm.fn_item;
-    let attrs = &fn_item.attrs;
-    let vis = &fn_item.vis;
-    let sig = &fn_item.sig;
-    let fn_name_str = sig.ident.to_string();
-    let controller_name_str = def.controller_name.to_string();
-    let original_body = &fn_item.block;
-
-    let body = wrap_with_interceptors_no_state(
-        quote! { #original_body },
-        &fn_name_str,
-        &controller_name_str,
-        def,
-        &sm.intercept_fns,
-    );
-
-    quote! {
-        #(#attrs)*
-        #vis #sig {
-            #body
-        }
-    }
-}
-
-/// Apply interceptor chain without state (for scheduled tasks).
-/// Uses a unit-type `()` state since scheduled tasks don't have HTTP state.
-fn wrap_with_interceptors_no_state(
-    mut body: TokenStream,
-    fn_name_str: &str,
-    controller_name_str: &str,
-    def: &RoutesImplDef,
-    method_intercepts: &[syn::Expr],
-) -> TokenStream {
-    let all_intercepts: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(method_intercepts.iter())
-        .collect();
-
-    if all_intercepts.is_empty() {
-        return body;
-    }
-
-    let krate = r2e_core_path();
-
-    for intercept_expr in all_intercepts.iter().rev() {
-        body = quote! {
-            {
-                let __interceptor = #intercept_expr;
-                #krate::Interceptor::around(&__interceptor, __ctx, move || async move {
-                    #body
-                }).await
-            }
-        };
-    }
-
-    quote! {
-        {
-            let __ctx = #krate::InterceptorContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-                state: &(),
-            };
-            #body
-        }
-    }
-}

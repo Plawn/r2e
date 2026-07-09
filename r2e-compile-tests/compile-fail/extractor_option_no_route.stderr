@@ -1,0 +1,74 @@
+error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request against this application state
+  --> compile-fail/extractor_option_no_route.rs:32:9
+   |
+32 | /         AppBuilder::new()
+33 | |             .build_state()
+34 | |             .await
+35 | |             .register_controller::<WidgetController>()
+   | |______________________________________________________^ the trait `FromRequestPartsVia<HNil, _>` is not implemented for `std::option::Option<Widget>`
+   |
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is implemented for `std::option::Option<T>`
+  --> $WORKSPACE/r2e-core/src/extract.rs
+   |
+   | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
+   | | where
+   | |     S: Send + Sync,
+   | |     T: OptionalFromRequestPartsVia<S, M>,
+   | |_________________________________________^
+note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> compile-fail/extractor_option_no_route.rs:16:1
+   |
+16 | #[controller(path = "/w")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `WidgetController` to implement `Controller<HNil, ((_,),)>`
+  --> compile-fail/extractor_option_no_route.rs:22:1
+   |
+22 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+23 | impl WidgetController {
+   |      ^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request against this application state
+  --> compile-fail/extractor_option_no_route.rs:35:36
+   |
+35 |             .register_controller::<WidgetController>()
+   |              -------------------   ^^^^^^^^^^^^^^^^ the trait `FromRequestPartsVia<HNil, _>` is not implemented for `std::option::Option<Widget>`
+   |              |
+   |              required by a bound introduced by this call
+   |
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is implemented for `std::option::Option<T>`
+  --> $WORKSPACE/r2e-core/src/extract.rs
+   |
+   | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
+   | | where
+   | |     S: Send + Sync,
+   | |     T: OptionalFromRequestPartsVia<S, M>,
+   | |_________________________________________^
+note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> compile-fail/extractor_option_no_route.rs:16:1
+   |
+16 | #[controller(path = "/w")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `WidgetController` to implement `Controller<HNil, ((_,),)>`
+  --> compile-fail/extractor_option_no_route.rs:22:1
+   |
+22 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+23 | impl WidgetController {
+   |      ^^^^^^^^^^^^^^^^
+note: required by a bound in `register_controller`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_controller<C>(self) -> Self
+   |        ------------------- required by a bound in this associated function
+   |     where
+   |         C: Controller<T, W>,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `RegisterController::register_controller`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -4,15 +4,23 @@ R2E provides `on_start` and `on_stop` hooks for running code during application 
 
 ## `on_start` — Startup hook
 
-Runs before the server starts listening. Receives the application state:
+Runs before the server starts listening. Receives the application state — the
+inferred HList of resolved beans. There is no hand-written state struct, so you
+pull each bean out **by type** with `state.get::<T>()` (fixed-offset access via
+the `BeanAccess` trait — `use r2e_core::type_list::BeanAccess;`) or, if you want
+an `Option`, `state.bean::<T>()` (via `BeanLookup`, already in the prelude):
 
 ```rust
+use r2e_core::type_list::BeanAccess;
+
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .on_start(|state| async move {
+        // Pull the pool bean out of the state by type
+        let pool = state.get::<sqlx::SqlitePool>();
         // Verify database connectivity
-        sqlx::query("SELECT 1").execute(&state.pool).await?;
+        sqlx::query("SELECT 1").execute(&pool).await?;
         tracing::info!("Database connection verified");
         Ok(())
     })
@@ -25,7 +33,8 @@ AppBuilder::new()
 
 ```rust
 .on_start(|state| async move {
-    if !state.config.get::<bool>("app.ready").unwrap_or(false) {
+    let config = state.get::<R2eConfig>();
+    if !config.get::<bool>("app.ready").unwrap_or(false) {
         return Err("Application not ready".into());
     }
     Ok(())
@@ -46,26 +55,32 @@ AppBuilder::new()
 A common pattern is seeding an initial admin user at startup. `on_start` gives you full access to the DI-resolved state, and `R2eConfig` automatically overlays environment variables (`ADMIN_EMAIL` → `admin.email`), so there's no need for manual `std::env::var()` calls or reconstructing repositories:
 
 ```rust
+use r2e_core::type_list::BeanAccess;
+
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .on_start(|state| async move {
+        // Beans are pulled out of the inferred HList state by type
+        let config = state.get::<R2eConfig>();
+        let user_repo = state.get::<UserRepository>();
+
         // R2eConfig maps ADMIN_EMAIL → admin.email automatically
-        let email: String = state.config.get("admin.email").unwrap_or_default();
-        let password: String = state.config.get("admin.password").unwrap_or_default();
+        let email: String = config.get("admin.email").unwrap_or_default();
+        let password: String = config.get("admin.password").unwrap_or_default();
 
         if email.is_empty() || password.is_empty() {
             return Ok(()); // no seed requested
         }
 
-        // user_repo is already in the state via DI — no manual construction
-        if state.user_repo.find_by_email(&email).await?.is_some() {
+        // the UserRepository bean is already in the graph — no manual construction
+        if user_repo.find_by_email(&email).await?.is_some() {
             tracing::debug!("Admin seed skipped — {} already exists", email);
             return Ok(());
         }
 
         let hash = hash_password(&password)?;
-        state.user_repo.create(&NewUser {
+        user_repo.create(&NewUser {
             email: email.clone(),
             role: Role::Admin,
             password_hash: Some(hash),
@@ -79,8 +94,8 @@ AppBuilder::new()
 ```
 
 Key points:
-- **No `std::env::var()`** — use `state.config.get()` instead. Environment variables are overlaid automatically (`ADMIN_EMAIL` → `admin.email`).
-- **No manual repository construction** — services are already available in the state via DI.
+- **No `std::env::var()`** — read the `R2eConfig` bean (`state.get::<R2eConfig>()`) and call `config.get()`. Environment variables are overlaid automatically (`ADMIN_EMAIL` → `admin.email`).
+- **No manual repository construction** — every service is already a bean in the graph; pull it from state by type with `state.get::<T>()`.
 - **Use `?` for error propagation** — `on_start` returns `Result`, so errors block server startup cleanly instead of being silently logged.
 
 ## `on_stop` — Shutdown hook
@@ -89,7 +104,8 @@ Runs after the server stops accepting connections and all in-flight requests com
 
 ```rust
 .on_stop(|state| async move {
-    state.pool.close().await;
+    let pool = state.get::<sqlx::SqlitePool>();
+    pool.close().await;
     tracing::info!("Shutdown complete");
 })
 ```
@@ -109,7 +125,7 @@ Register multiple hooks — they execute in registration order:
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .on_start(|state| async move {
         tracing::info!("Hook 1: check DB");
@@ -136,7 +152,7 @@ By default, R2E waits indefinitely for shutdown hooks to complete. Use `shutdown
 use std::time::Duration;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .shutdown_grace_period(Duration::from_secs(5))
     .on_stop(|_state| async {

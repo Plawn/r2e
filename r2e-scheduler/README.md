@@ -24,7 +24,8 @@ use r2e::r2e_scheduler::Scheduler;
 
 AppBuilder::new()
     .plugin(Scheduler)
-    .build_state::<AppState, _, _>()
+    .register::<CleanupService>()
+    .build_state()
     .await
     .register_controller::<ScheduledJobs>()
     .serve("0.0.0.0:3000")
@@ -34,7 +35,7 @@ AppBuilder::new()
 ## Declarative scheduling
 
 ```rust
-#[controller(path = "/jobs", state = AppState)]
+#[controller(path = "/jobs")]
 pub struct ScheduledJobs {
     #[inject] service: CleanupService,
 }
@@ -76,7 +77,7 @@ impl ScheduledJobs {
 
 ## Constraints
 
-Scheduled tasks run on the controller core, which always implements `StatefulConstruct` (identity and request-scoped fields live only on the per-request façade). Controllers can be used for scheduling regardless of any struct-level or param-level `#[inject(identity)]`.
+Scheduled tasks run on the controller core, which always implements `ContextConstruct` (it builds from the resolved `BeanContext` by type; identity and request-scoped fields live only on the per-request façade). Controllers can be used for scheduling regardless of any struct-level or param-level `#[inject(identity)]`.
 
 ## License
 

@@ -227,7 +227,8 @@ Install the `ErrorHandling` plugin to catch panics and return JSON 500 responses
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    // ... .provide(...) / .register::<...>() ...
+    .build_state()
     .await
     .with(ErrorHandling)
     // ...
@@ -240,11 +241,14 @@ Without this, a panic in a handler will drop the connection with no response.
 The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orphan rules, you can't implement `Into<Response>` directly for your error type. R2E provides `ManagedErr<E>` — a generic wrapper over any error type implementing `IntoResponse`. For the framework's built-in `HttpError`, use `ManagedErr<HttpError>`.
 
 ```rust
-impl<S: HasPool + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
+impl<S: BeanLookup + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
     type Error = ManagedErr<MyHttpError>;
 
     async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let tx = state.pool().begin().await
+        // Resolve the pool from the bean graph by type (no `HasPool` trait).
+        let pool = state.bean::<Pool<Sqlite>>()
+            .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
+        let tx = pool.begin().await
             .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
         Ok(Tx(tx))
     }

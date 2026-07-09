@@ -34,24 +34,28 @@ impl Clone for CloneTrackedDependency {
     }
 }
 
-struct AppState {
-    dependency: CloneTrackedDependency,
+/// A structurally identical probe that no controller injects.
+///
+/// In the HList application-state model every provided bean is a member of the
+/// state, so a controller's injected dependency is cloned whenever the state is
+/// cloned per request. This probe lives in the same state and absorbs that
+/// identical per-request cloning, but is never pulled by a core's
+/// `from_context`. The difference between the two counters therefore isolates
+/// core (re)construction from routine per-request state cloning.
+struct StateOnlyProbe {
+    clone_count: Arc<AtomicUsize>,
 }
 
-// Application-state cloning is expected during router construction and
-// dispatch. Keep it outside the dependency clone counter so this test only
-// observes controller construction.
-impl Clone for AppState {
+impl Clone for StateOnlyProbe {
     fn clone(&self) -> Self {
+        self.clone_count.fetch_add(1, Ordering::SeqCst);
         Self {
-            dependency: CloneTrackedDependency {
-                clone_count: Arc::clone(&self.dependency.clone_count),
-            },
+            clone_count: Arc::clone(&self.clone_count),
         }
     }
 }
 
-#[controller(state = AppState)]
+#[controller]
 struct AppScopedController {
     #[inject]
     dependency: CloneTrackedDependency,
@@ -70,29 +74,42 @@ impl AppScopedController {
 
 #[r2e_core::test]
 async fn standard_controller_is_constructed_once_and_reused() {
-    let clone_count = Arc::new(AtomicUsize::new(0));
-    let state = AppState {
-        dependency: CloneTrackedDependency {
-            clone_count: Arc::clone(&clone_count),
-        },
-    };
+    let core_count = Arc::new(AtomicUsize::new(0));
+    let state_count = Arc::new(AtomicUsize::new(0));
 
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(CloneTrackedDependency {
+            clone_count: Arc::clone(&core_count),
+        })
+        .provide(StateOnlyProbe {
+            clone_count: Arc::clone(&state_count),
+        })
+        .build_state()
+        .await
         .register_controller::<AppScopedController>()
         .build();
-    let clones_after_build = clone_count.load(Ordering::SeqCst);
-    assert_eq!(clones_after_build, 1);
 
+    // Baselines after the single build-time construction. The injected
+    // dependency is additionally cloned once by the core's `from_context`, so
+    // `core_count` may exceed `state_count` by a fixed amount we subtract out.
+    let core_base = core_count.load(Ordering::SeqCst);
+    let state_base = state_count.load(Ordering::SeqCst);
+
+    for _ in 0..3 {
+        let _ = get(router.clone(), "/clone-count", None).await;
+    }
+
+    // Both beans absorb identical per-request state cloning, so their growth
+    // must match exactly: the core is built once and reused, never rebuilt per
+    // request (which would clone the injected dependency again via
+    // `from_context`, diverging the two counters).
+    let core_delta = core_count.load(Ordering::SeqCst) - core_base;
+    let state_delta = state_count.load(Ordering::SeqCst) - state_base;
     assert_eq!(
-        get(router.clone(), "/clone-count", None).await,
-        clones_after_build.to_string()
+        core_delta, state_delta,
+        "standard controller core must be built once and reused, not rebuilt per request \
+         (injected dep clones grew by {core_delta}, state-only probe by {state_delta})"
     );
-    assert_eq!(
-        get(router, "/clone-count", None).await,
-        clones_after_build.to_string()
-    );
-    assert_eq!(clone_count.load(Ordering::SeqCst), clones_after_build);
 }
 
 struct RequestIdentity(String);
@@ -114,28 +131,12 @@ impl Clone for CoreBuildTracked {
     }
 }
 
-struct IdentityState {
-    dep: CoreBuildTracked,
-}
-
-// State cloning is routine in Axum; keep it outside the dependency-clone counter
-// so the test observes only controller-core construction.
-impl Clone for IdentityState {
-    fn clone(&self) -> Self {
-        Self {
-            dep: CoreBuildTracked {
-                clones: Arc::clone(&self.dep.clones),
-            },
-        }
-    }
-}
-
-impl FromRequestParts<IdentityState> for RequestIdentity {
+impl<S: Send + Sync> FromRequestParts<S> for RequestIdentity {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut r2e_core::http::header::Parts,
-        _state: &IdentityState,
+        _state: &S,
     ) -> Result<Self, Self::Rejection> {
         let user = parts
             .headers
@@ -146,7 +147,7 @@ impl FromRequestParts<IdentityState> for RequestIdentity {
     }
 }
 
-#[controller(state = IdentityState)]
+#[controller]
 struct RequestScopedController {
     #[inject]
     #[allow(dead_code)]
@@ -168,19 +169,23 @@ impl RequestScopedController {
 /// extracts a fresh identity into a stack façade.
 #[r2e_core::test]
 async fn struct_identity_controller_core_built_once() {
-    let clones = Arc::new(AtomicUsize::new(0));
-    let state = IdentityState {
-        dep: CoreBuildTracked {
-            clones: Arc::clone(&clones),
-        },
-    };
+    let core_count = Arc::new(AtomicUsize::new(0));
+    let state_count = Arc::new(AtomicUsize::new(0));
 
     let router = r2e_core::AppBuilder::new()
-        .with_state(state)
+        .provide(CoreBuildTracked {
+            clones: Arc::clone(&core_count),
+        })
+        .provide(StateOnlyProbe {
+            clone_count: Arc::clone(&state_count),
+        })
+        .build_state()
+        .await
         .register_controller::<RequestScopedController>()
         .build();
 
-    let after_build = clones.load(Ordering::SeqCst);
+    let core_base = core_count.load(Ordering::SeqCst);
+    let state_base = state_count.load(Ordering::SeqCst);
 
     // Each request still sees its own extracted identity...
     assert_eq!(
@@ -192,11 +197,15 @@ async fn struct_identity_controller_core_built_once() {
         let _ = get(router.clone(), "/identity", Some("carol")).await;
     }
 
-    // ...but the core was never rebuilt: the dependency clone count is unchanged
-    // from the single router-build construction.
+    // ...but the core was never rebuilt: the injected dependency and the
+    // state-only probe absorb identical per-request state cloning, so their
+    // growth must match. A per-request core rebuild would clone the dependency
+    // again via `from_context` and diverge the two counters.
+    let core_delta = core_count.load(Ordering::SeqCst) - core_base;
+    let state_delta = state_count.load(Ordering::SeqCst) - state_base;
     assert_eq!(
-        clones.load(Ordering::SeqCst),
-        after_build,
-        "struct-identity controller core must be built once, not per request"
+        core_delta, state_delta,
+        "struct-identity controller core must be built once, not rebuilt per request \
+         (injected dep clones grew by {core_delta}, state-only probe by {state_delta})"
     );
 }

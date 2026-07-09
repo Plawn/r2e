@@ -27,10 +27,7 @@ pub fn controller(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         r#"use r2e::prelude::*;
 use serde::{{Deserialize, Serialize}};
 
-// TODO: import your state type
-// use crate::state::AppState;
-
-#[controller(state = AppState)]
+#[controller]
 pub struct {name} {{
     // #[inject]
     // your_service: YourService,
@@ -226,9 +223,13 @@ pub fn crud(name: &str, raw_fields: &[String]) -> Result<(), Box<dyn std::error:
         "     {}",
         format!(".register_controller::<{name}Controller>()").cyan()
     );
-    println!("  2. Add {name}Service to your state struct");
-    println!("  3. Run migrations if applicable");
-    println!("  4. Run `cargo check` to verify");
+    println!(
+        "  2. Register the service as a bean in main.rs: {}",
+        format!(".register::<{name}Service>()").cyan()
+    );
+    println!("  3. Provide its dependencies (e.g. a database pool) before `.build_state()`");
+    println!("  4. Run migrations if applicable");
+    println!("  5. Run `cargo check` to verify");
 
     Ok(())
 }
@@ -350,7 +351,7 @@ fn crud_controller(entity_name: &str, _fields: &[Field]) -> String {
 use crate::services::{snake}_service::{entity_name}Service;
 use r2e::prelude::*;
 
-#[controller(path = "/{plural}", state = AppState)]
+#[controller(path = "/{plural}")]
 pub struct {entity_name}Controller {{
     #[inject]
     service: {entity_name}Service,
@@ -604,10 +605,7 @@ pub mod proto {{
 use proto::{snake}_server::{name};
 use proto::*;
 
-// TODO: import your state type
-// use crate::state::AppState;
-
-#[controller(state = AppState)]
+#[controller]
 pub struct {name}Service {{
     // #[inject]
     // your_dependency: YourDependency,
@@ -644,7 +642,7 @@ impl {name}Service {{
 
 /// Generate a middleware/interceptor skeleton.
 ///
-/// Creates `src/middleware/<snake_name>.rs` with an `Interceptor<R, S>`
+/// Creates `src/middleware/<snake_name>.rs` with an `Interceptor<R>`
 /// implementation and updates `src/middleware/mod.rs`.
 ///
 /// Returns an error if the file already exists.

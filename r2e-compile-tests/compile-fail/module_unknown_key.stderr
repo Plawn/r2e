@@ -1,0 +1,5 @@
+error: unknown key `provider` in #[module] — expected `providers`, `controllers`, `exports`, or `imports`
+  --> compile-fail/module_unknown_key.rs:15:10
+   |
+15 | #[module(provider(Svc))]
+   |          ^^^^^^^^

@@ -1,10 +1,8 @@
-use r2e::http::extract::FromRef;
 use r2e::Identity;
 use r2e::r2e_security::{
     impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
 };
 use serde::Serialize;
-use std::sync::Arc;
 
 /// A tenant-aware identity that includes the tenant_id from JWT claims.
 // Not `Deserialize`: a trusted identity must never be constructible from a
@@ -42,7 +40,6 @@ impl TenantUser {
 impl<S> ClaimsIdentity<S> for TenantUser
 where
     S: Send + Sync,
-    Arc<r2e::r2e_security::JwtClaimsValidator>: FromRef<S>,
 {
     async fn from_jwt_claims(
         claims: serde_json::Value,

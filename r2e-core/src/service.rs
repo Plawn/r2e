@@ -5,7 +5,8 @@ use tokio_util::sync::CancellationToken;
 ///
 /// Implement this trait for long-running background components (queue
 /// consumers, gRPC servers, metrics exporters, etc.) that need access
-/// to the application state but are not HTTP handlers.
+/// to application beans but are not HTTP handlers. Construction pulls beans
+/// from the resolved graph by type — the same model as controller cores.
 ///
 /// # Example
 ///
@@ -14,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 ///     pool: SqlitePool,
 /// }
 ///
-/// impl ServiceComponent<Services> for MetricsExporter {
-///     fn from_state(state: &Services) -> Self {
-///         Self { pool: state.pool.clone() }
+/// impl ServiceComponent for MetricsExporter {
+///     fn from_context(ctx: &BeanContext) -> Self {
+///         Self { pool: ctx.get::<SqlitePool>() }
 ///     }
 ///
 ///     async fn start(self, shutdown: CancellationToken) {
@@ -33,13 +34,14 @@ use tokio_util::sync::CancellationToken;
 ///
 /// // Register in builder:
 /// AppBuilder::new()
-///     .build_state::<Services, _, _>().await
+///     .provide(pool)
+///     .build_state().await
 ///     .spawn_service::<MetricsExporter>()
 ///     .serve("0.0.0.0:3000").await
 /// ```
-pub trait ServiceComponent<S>: Sized + Send + 'static {
-    /// Construct from application state.
-    fn from_state(state: &S) -> Self;
+pub trait ServiceComponent: Sized + Send + 'static {
+    /// Construct from the resolved bean graph.
+    fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 
     /// Run until the shutdown token is cancelled.
     fn start(self, shutdown: CancellationToken) -> impl Future<Output = ()> + Send;

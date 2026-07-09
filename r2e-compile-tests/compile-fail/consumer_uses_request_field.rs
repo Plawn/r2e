@@ -25,7 +25,7 @@ pub struct UserCreated {
     pub name: String,
 }
 
-#[controller(path = "/acct", state = AppState)]
+#[controller(path = "/acct")]
 pub struct AccountController {
     #[inject]
     event_bus: LocalEventBus,

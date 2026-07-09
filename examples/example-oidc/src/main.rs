@@ -1,25 +1,14 @@
-use std::sync::Arc;
-
 use r2e::prelude::*;
 use r2e::r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcRuntime, OidcServer, OidcUser};
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e::r2e_security::AuthenticatedUser;
 use serde::Serialize;
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, BeanState)]
-struct Services {
-    claims_validator: Arc<JwtClaimsValidator>,
-}
 
 // ---------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------
 
-#[controller(path = "/", state = Services)]
+#[controller(path = "/")]
 pub struct GreetingController;
 
 #[routes]
@@ -130,7 +119,7 @@ async fn setup() -> AppEnv {
 async fn main(env: AppEnv) {
     AppBuilder::new()
         .plugin(env.oidc.clone())
-        .build_state::<Services, _, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

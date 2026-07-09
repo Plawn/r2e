@@ -2,10 +2,9 @@ use r2e::prelude::*;
 
 use crate::models::StoredMessage;
 use crate::services::ChatService;
-use crate::state::AppState;
 
 /// REST endpoints for room listing and message history.
-#[controller(path = "/rooms", state = AppState)]
+#[controller(path = "/rooms")]
 pub struct HistoryController {
     #[inject]
     chat_service: ChatService,

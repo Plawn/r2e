@@ -5,7 +5,7 @@ pub struct AppState;
 
 pub struct MyResource;
 
-#[controller(path = "/test", state = AppState)]
+#[controller(path = "/test")]
 pub struct MyController;
 
 #[routes]

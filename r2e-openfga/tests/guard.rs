@@ -1,6 +1,9 @@
-use r2e_core::guards::{GuardContext, Identity, PathParams};
-use r2e_core::http::{HeaderMap, Uri};
-use r2e_openfga::guard::{FgaCheck, ObjectResolver};
+use r2e_core::beans::BeanRegistry;
+use r2e_core::guards::{Guard, GuardContext, Identity, PathParams};
+use r2e_core::http::{HeaderMap, StatusCode, Uri};
+use r2e_core::DecoratorSpec;
+use r2e_openfga::guard::{FgaCheck, FgaGuard, ObjectResolver};
+use r2e_openfga::{MockBackend, OpenFgaRegistry};
 
 struct TestIdentity {
     sub: String,
@@ -297,4 +300,97 @@ fn test_resolve_object_fixed_allows_colon() {
     // Fixed values are developer-controlled, colons are allowed
     let object = guard.resolve_object(&ctx).unwrap();
     assert_eq!(object, "system:global");
+}
+
+// ── Built guard: DecoratorSpec::build + Guard::check ────────────────────────
+
+async fn build_guard(mock: MockBackend, config: FgaCheck) -> FgaGuard {
+    let mut registry = BeanRegistry::new();
+    registry.provide(OpenFgaRegistry::new(mock));
+    let ctx = registry.resolve().await.expect("graph must resolve");
+    <FgaCheck as DecoratorSpec>::build(config, &ctx)
+}
+
+#[tokio::test]
+async fn built_guard_allows_when_tuple_present() {
+    let mock = MockBackend::new();
+    mock.add_tuple("user:alice", "viewer", "document:123");
+    let guard = build_guard(
+        mock,
+        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+    )
+    .await;
+
+    let uri: Uri = "/api/documents/123".parse().unwrap();
+    let headers = HeaderMap::new();
+    let pairs = [("doc_id", "123")];
+    let path_params = PathParams::from_pairs(&pairs);
+    let identity = TestIdentity {
+        sub: "alice".to_string(),
+    };
+    let ctx = GuardContext {
+        method_name: "get",
+        controller_name: "DocumentController",
+        headers: &headers,
+        uri: &uri,
+        path_params,
+        identity: Some(&identity),
+    };
+
+    assert!(guard.check(&ctx).await.is_ok());
+}
+
+#[tokio::test]
+async fn built_guard_forbids_when_tuple_absent() {
+    let mock = MockBackend::new();
+    let guard = build_guard(
+        mock,
+        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+    )
+    .await;
+
+    let uri: Uri = "/api/documents/123".parse().unwrap();
+    let headers = HeaderMap::new();
+    let pairs = [("doc_id", "123")];
+    let path_params = PathParams::from_pairs(&pairs);
+    let identity = TestIdentity {
+        sub: "alice".to_string(),
+    };
+    let ctx = GuardContext {
+        method_name: "get",
+        controller_name: "DocumentController",
+        headers: &headers,
+        uri: &uri,
+        path_params,
+        identity: Some(&identity),
+    };
+
+    let response = guard.check(&ctx).await.expect_err("should be denied");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn built_guard_unauthorized_without_identity() {
+    let mock = MockBackend::new();
+    let guard = build_guard(
+        mock,
+        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+    )
+    .await;
+
+    let uri: Uri = "/api/documents/123".parse().unwrap();
+    let headers = HeaderMap::new();
+    let pairs = [("doc_id", "123")];
+    let path_params = PathParams::from_pairs(&pairs);
+    let ctx: GuardContext<'_, TestIdentity> = GuardContext {
+        method_name: "get",
+        controller_name: "DocumentController",
+        headers: &headers,
+        uri: &uri,
+        path_params,
+        identity: None,
+    };
+
+    let response = guard.check(&ctx).await.expect_err("should be unauthorized");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

@@ -22,13 +22,6 @@ use r2e::r2e_executor::{Executor, PoolExecutor};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, BeanState)]
-pub struct Services {
-    pub executor: PoolExecutor,
-    pub counter: Arc<AtomicU64>,
-    pub config: R2eConfig,
-}
-
 #[derive(Serialize)]
 struct ReportSummary {
     id: u64,
@@ -45,7 +38,7 @@ struct ExecMetrics {
     background_ticks: u64,
 }
 
-#[controller(path = "/", state = Services)]
+#[controller(path = "/")]
 #[derive(Clone)]
 pub struct ReportController {
     #[inject] executor: PoolExecutor,
@@ -89,7 +82,6 @@ impl ReportController {
 }
 
 #[derive(BackgroundService, Clone)]
-#[service(state = Services)]
 pub struct TickWorker {
     #[inject] executor: PoolExecutor,
     #[inject] counter: Arc<AtomicU64>,
@@ -118,7 +110,7 @@ async fn main() {
         .with_config(R2eConfig::empty())
         .plugin(Executor)
         .provide(Arc::new(AtomicU64::new(0)))
-        .build_state::<Services, _, _>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())

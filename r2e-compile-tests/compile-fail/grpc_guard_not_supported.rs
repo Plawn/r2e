@@ -3,7 +3,7 @@ use r2e::prelude::*;
 #[derive(Clone)]
 pub struct AppState;
 
-#[controller(state = AppState)]
+#[controller]
 pub struct TestGrpc;
 
 #[grpc_routes(proto::test_service_server::TestService)]

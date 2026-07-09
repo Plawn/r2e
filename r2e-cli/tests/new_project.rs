@@ -73,19 +73,24 @@ fn new_creates_main_rs() {
     assert!(main.contains("#[r2e::main]"));
     assert!(main.contains("serve("));
     assert!(main.contains("AppBuilder"));
+    // New DI model: state is inferred via `.build_state().await`, no typed state.
+    assert!(main.contains(".build_state()"));
+    assert!(!main.contains("build_state!"));
+    assert!(!main.contains("AppState"));
+    // recursion_limit guidance is emitted as a commented crate-level attribute.
+    assert!(main.contains("recursion_limit"));
 }
 
 #[test]
 #[serial]
-fn new_creates_state_rs() {
+fn new_does_not_create_state_rs() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CwdGuard::new(tmp.path());
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("pub struct AppState"));
-    assert!(state.contains("BeanState"));
+    // The typed-state path was removed: no state.rs is generated.
+    assert!(!Path::new("myapp/src/state.rs").exists());
 }
 
 #[test]
@@ -147,8 +152,12 @@ fn new_with_db_sqlite() {
     // migrations/ directory should be created
     assert!(Path::new("myapp/migrations").is_dir());
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("SqlitePool"));
+    // Pool is produced from config in main.rs (no typed state anymore).
+    assert!(!Path::new("myapp/src/state.rs").exists());
+    let main = fs::read_to_string("myapp/src/main.rs").unwrap();
+    assert!(main.contains("SqlitePool"));
+    assert!(main.contains("#[producer]"));
+    assert!(main.contains(".register::<CreatePool>()"));
 
     let yaml = fs::read_to_string("myapp/application.yaml").unwrap();
     assert!(yaml.contains("database:"));
@@ -169,8 +178,8 @@ fn new_with_db_postgres() {
     assert!(cargo.contains("sqlx"));
     assert!(cargo.contains("postgres"));
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("PgPool"));
+    let main = fs::read_to_string("myapp/src/main.rs").unwrap();
+    assert!(main.contains("PgPool"));
 }
 
 #[test]
@@ -183,8 +192,8 @@ fn new_with_db_postgres_alias() {
     opts.db = Some("pg".to_string());
     new_project::run("myapp", opts).unwrap();
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("PgPool"));
+    let main = fs::read_to_string("myapp/src/main.rs").unwrap();
+    assert!(main.contains("PgPool"));
 }
 
 // ── Feature flags ───────────────────────────────────────────────────
@@ -202,8 +211,11 @@ fn new_with_auth() {
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
     assert!(cargo.contains("security"));
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("JwtClaimsValidator"));
+    // JWT validator is produced from config in main.rs (no typed state anymore).
+    assert!(!Path::new("myapp/src/state.rs").exists());
+    let main = fs::read_to_string("myapp/src/main.rs").unwrap();
+    assert!(main.contains("JwtClaimsValidator"));
+    assert!(main.contains(".register::<JwtValidator>()"));
 
     let yaml = fs::read_to_string("myapp/application.yaml").unwrap();
     assert!(yaml.contains("security:"));
@@ -278,12 +290,12 @@ fn new_full() {
     assert!(Path::new("myapp/proto/greeter.proto").exists());
     assert!(Path::new("myapp/build.rs").exists());
 
-    let state = fs::read_to_string("myapp/src/state.rs").unwrap();
-    assert!(state.contains("SqlitePool"));
-    assert!(state.contains("LocalEventBus"));
-    assert!(state.contains("JwtClaimsValidator"));
-
+    // No typed state — all wiring lives in main.rs under the new DI model.
+    assert!(!Path::new("myapp/src/state.rs").exists());
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
+    assert!(main.contains("SqlitePool"));
+    assert!(main.contains("LocalEventBus"));
+    assert!(main.contains("JwtClaimsValidator"));
     assert!(main.contains("Scheduler"));
     assert!(main.contains("OpenApiPlugin"));
     assert!(main.contains("GrpcServer"));

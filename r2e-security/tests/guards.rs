@@ -56,7 +56,7 @@ async fn roles_guard_passes() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_ok());
 }
 
@@ -69,7 +69,7 @@ async fn roles_guard_rejects() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
@@ -83,7 +83,7 @@ async fn roles_guard_rejects_no_identity() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx: GuardContext<'_, TestIdentity> = make_ctx(None, &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
@@ -100,7 +100,7 @@ async fn all_roles_guard_passes_when_all_present() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_ok());
 }
 
@@ -113,7 +113,7 @@ async fn all_roles_guard_rejects_when_one_missing() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
@@ -127,7 +127,7 @@ async fn all_roles_guard_rejects_no_identity() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx: GuardContext<'_, TestIdentity> = make_ctx(None, &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
@@ -142,6 +142,6 @@ async fn all_roles_guard_passes_single_role() {
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers);
-    let result = guard.check(&(), &ctx).await;
+    let result = guard.check(&ctx).await;
     assert!(result.is_ok());
 }

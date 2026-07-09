@@ -40,13 +40,21 @@ use r2e::r2e_events::{EventBus, LocalEventBus};
 let event_bus = LocalEventBus::new();
 ```
 
-Add it to your state:
+Provide it as a bean so it can be injected by type:
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub event_bus: LocalEventBus,
-    // ...
+let app = AppBuilder::new()
+    .provide(event_bus)
+    // ... other beans
+    ;
+```
+
+Any controller or bean can then inject it by type:
+
+```rust
+#[controller]
+pub struct MyController {
+    #[inject] event_bus: LocalEventBus,
 }
 ```
 

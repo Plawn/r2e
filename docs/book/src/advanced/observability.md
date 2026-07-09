@@ -10,7 +10,7 @@ The `Tracing` plugin initializes structured logging and adds HTTP-level trace sp
 use r2e::prelude::*;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(Tracing)
     .serve("0.0.0.0:3000")
@@ -92,7 +92,7 @@ let tracing_config = TracingConfig::default()
     .with_filter("debug,hyper=warn");
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(Tracing::configured(tracing_config))
     .serve("0.0.0.0:3000")
@@ -104,11 +104,16 @@ AppBuilder::new()
 When using `load_config`, you can read `TracingConfig` directly from your YAML:
 
 ```rust
-AppBuilder::new()
+let app = AppBuilder::new()
     .load_config::<RootConfig>()
-    .build_state::<AppState, _, _>()
-    .await
-    .with(Tracing::from_config(&app.r2e_config().unwrap()))
+    .build_state()
+    .await;
+
+// `R2eConfig` is itself a bean in the graph; the post-build_state builder
+// exposes it via `r2e_config()`.
+let tracing = Tracing::from_config(app.r2e_config().unwrap());
+
+app.with(tracing)
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -128,7 +133,7 @@ The `RequestIdPlugin` assigns a unique identifier to every request, enabling cor
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(RequestIdPlugin)
     .with(Tracing)
@@ -152,7 +157,7 @@ This means upstream proxies and API gateways can set the request ID, and R2E wil
 ```rust
 use r2e::prelude::*;
 
-#[controller(path = "/api", state = AppState)]
+#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -249,20 +254,23 @@ A typical production setup uses all observability features together:
 use r2e::prelude::*;
 
 // Application setup
-AppBuilder::new()
+let app = AppBuilder::new()
     .load_config::<RootConfig>()
-    .build_state::<AppState, _, _>()
-    .await
-    .with(RequestIdPlugin)                                // Assign request IDs
-    .with(Tracing::from_config(&app.r2e_config().unwrap()))  // Configurable tracing
-    .with(Health)                                         // Health check endpoint
-    .register::<ApiController>()
+    .build_state()
+    .await;
+
+let tracing = Tracing::from_config(app.r2e_config().unwrap());
+
+app.with(RequestIdPlugin)                                // Assign request IDs
+    .with(tracing)                                       // Configurable tracing
+    .with(Health)                                        // Health check endpoint
+    .register_controller::<ApiController>()
     .serve("0.0.0.0:3000")
     .await;
 ```
 
 ```rust
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject] service: UserService,
 }

@@ -9,9 +9,11 @@ pub(crate) mod extract;
 pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
+pub(crate) mod decorator_bean_derive;
 pub(crate) mod bean_state_derive;
 pub(crate) mod bg_service_derive;
 pub(crate) mod test_state_derive;
+pub(crate) mod module_attr;
 pub(crate) mod producer_attr;
 pub(crate) mod type_list_gen;
 pub(crate) mod controller_attr;
@@ -74,7 +76,7 @@ pub(crate) mod field_resolver;
 /// #[controller(path = "/api", state = Services)]
 /// pub struct MixedController {
 ///     #[inject] user_service: UserService,
-///     // No identity on struct → StatefulConstruct is generated
+///     // No identity on struct → ContextConstruct is generated
 /// }
 ///
 /// #[routes]
@@ -107,7 +109,7 @@ pub(crate) mod field_resolver;
 /// - The request façade (`__R2eRequest_<Name>`) — owns `Arc<Name>` plus the
 ///   request-scoped values, with `Deref<Target = Name>`. Route methods run on
 ///   it; app/config fields and core helpers are reached through `Deref`.
-/// - `impl StatefulConstruct<State> for Name` — **always** (the core has no
+/// - `impl ContextConstruct<State> for Name` — **always** (the core has no
 ///   request-scoped fields), so the core is built once per registration and
 ///   reused by every request, consumer, and scheduled task.
 #[proc_macro_attribute]
@@ -823,13 +825,44 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 /// // Use with the builder:
 /// AppBuilder::new()
 ///     .provide(config)
-///     .with_producer::<CreatePool>()   // registers SqlitePool
-///     .build_state::<Services, _, _>()
+///     .register::<CreatePool>()   // registers SqlitePool
+///     .build_state()
 ///     .await
 /// ```
 #[proc_macro_attribute]
 pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
     producer_attr::expand(args, input)
+}
+
+/// Attribute macro on a struct — generates a
+/// [`FeatureModule`](r2e_core::module::FeatureModule) impl from a
+/// declarative listing of providers, controllers, exports, and imports.
+///
+/// Every key is optional and defaults to empty. Register the module with
+/// `.register_module::<M>()` on the builder — providers join the bean graph,
+/// controllers are wired automatically at `build_state()`, and the
+/// closed-subgraph encapsulation checks run at compile time.
+///
+/// # Example
+///
+/// ```ignore
+/// #[module(
+///     providers(UserRepo, UserService),
+///     controllers(UserController, AdminController),
+///     exports(UserService),      // UserRepo stays private to the module
+///     imports(DbPool),           // supplied by the app or another module
+/// )]
+/// pub struct UserModule;
+///
+/// AppBuilder::new()
+///     .provide(db_pool)
+///     .register_module::<UserModule>()
+///     .build_state()
+///     .await
+/// ```
+#[proc_macro_attribute]
+pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
+    module_attr::expand(args, input)
 }
 
 /// Derive macro for simple beans whose `#[inject]` fields are resolved
@@ -850,6 +883,45 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Bean, attributes(inject, config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
+}
+
+/// Derive macro for guards/interceptors with bean deps — generates the
+/// [`DecoratorSpec`](r2e_core::DecoratorSpec) plumbing so the type can be
+/// used in `#[guard(...)]` / `#[pre_guard(...)]` / `#[intercept(...)]`
+/// without hand-writing a config spec + product pair.
+///
+/// The derived struct is the finished guard/interceptor (implement
+/// `Guard<I>` / `Interceptor<R>` on it). Field attributes:
+/// - `#[inject]` — resolved from the bean graph at controller registration
+///   (compile-checked, like a controller `#[inject]`)
+/// - `#[config("key")]` / `#[config_section(prefix = "...")]` — resolved
+///   from `R2eConfig`
+/// - plain fields — config set at the attribute site via the generated
+///   `Type::spec(...)` constructor (declaration order)
+///
+/// Caveats: a *misspelled* field attribute is not rejected — the field
+/// silently becomes a `spec(...)` constructor argument (the site then fails
+/// to compile with an arity/type error rather than an attribute error). And
+/// since `spec(...)` shares the struct's visibility, plain-field types must
+/// be at least as visible as the struct (E0446 otherwise).
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(DecoratorBean)]
+/// pub struct DbAuditLog {
+///     #[inject] pool: SqlitePool,
+///     prefix: String,
+/// }
+///
+/// impl<R: Send> Interceptor<R> for DbAuditLog { /* uses self.pool */ }
+///
+/// #[intercept(DbAuditLog::spec("api".into()))]
+/// async fn create(&self) -> Json<User> { ... }
+/// ```
+#[proc_macro_derive(DecoratorBean, attributes(inject, config, config_section))]
+pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
+    decorator_bean_derive::expand(input)
 }
 
 /// Derive macro for background services — generates
@@ -890,35 +962,9 @@ pub fn derive_background_service(input: TokenStream) -> TokenStream {
     bg_service_derive::expand(input)
 }
 
-/// Derive macro for state structs — generates
-/// [`BeanState::from_context()`](r2e_core::beans::BeanState) and
-/// `FromRef` impls for each field.
-///
-/// Every field is resolved from the [`BeanContext`] by type. If two fields
-/// share the same type, `FromRef` is generated only for the first one.
-/// Use `#[bean_state(skip_from_ref)]` on a field to suppress its `FromRef`
-/// impl.
-///
-/// # Example
-///
-/// ```ignore
-/// #[derive(Clone, BeanState)]
-/// pub struct Services {
-///     pub user_service: UserService,
-///     pub event_bus: EventBus,
-///     pub pool: SqlitePool,
-/// }
-/// ```
-#[proc_macro_derive(BeanState, attributes(bean_state))]
-pub fn derive_bean_state(input: TokenStream) -> TokenStream {
-    bean_state_derive::expand(input)
-}
-
 /// Derive macro for test state structs — generates `FromRef` impls for
 /// each field, eliminating boilerplate in test files.
 ///
-/// Unlike [`BeanState`], this does **not** generate `BeanState::from_context()`
-/// or `BuildableFrom` impls — only `FromRef`.
 ///
 /// Use `#[test_state(skip)]` on a field to suppress its `FromRef` impl.
 ///
@@ -1210,7 +1256,7 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// #[r2e::main]
 /// async fn main() {
 ///     AppBuilder::new()
-///         .build_state::<Services, _, _>().await
+///         .build_state().await
 ///         .serve("0.0.0.0:8080").await.unwrap();
 /// }
 ///

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use r2e::config::R2eConfig;
 use r2e::prelude::*;
-use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e::r2e_security::AuthenticatedUser;
 use r2e_test::{TestApp, TestJwt};
 
 // ─── Types ───
@@ -33,18 +33,9 @@ impl UserService {
     }
 }
 
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct MixedTestState {
-    user_service: UserService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-
 // ─── Mixed controller: public + protected endpoints ───
 
-#[controller(path = "/api", state = MixedTestState)]
+#[controller(path = "/api")]
 pub struct MixedTestController {
     #[inject]
     user_service: UserService,
@@ -97,16 +88,13 @@ async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let config = R2eConfig::empty();
 
-    let state = MixedTestState {
-        user_service: UserService::new(),
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     let app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(UserService::new())
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<MixedTestController>(),
     );

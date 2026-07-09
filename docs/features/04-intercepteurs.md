@@ -6,7 +6,7 @@ Provide declarative attributes to enrich controller method behavior: logging, pe
 
 ## Architecture
 
-Interceptors are based on a generic `Interceptor<R>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). Built-in interceptors (`Logged`, `Timed`, `Cached`) are structs that implement this trait. All calls are monomorphized (no `dyn`) — zero-cost at runtime.
+Interceptors are based on a generic `Interceptor<R>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). `R` is the wrapped return type. Interceptors are **graph-resolved decorators** (Phase 6): they are built **once, at controller registration**, from the resolved `BeanContext` — never per request — and any beans they read are held as fields. Built-in interceptors (`Logged`, `Timed`, `Cache`) are structs that implement this trait; self-contained ones opt in with `impl SelfBuilt`, while bean-reading ones implement `DecoratorSpec`. All calls are monomorphized (no `dyn`) — zero-cost at runtime. There is **no state access at request time**.
 
 Exceptions to this architecture:
 - **`rate_limited`** — handled at the handler level (short-circuits before the controller, like `#[roles]`)
@@ -42,7 +42,7 @@ These no-op declarations exist for three reasons:
 | `#[rate_limited(..., key = "ip")]` | Per-IP-address limit | `X-Forwarded-For` header |
 | `#[transactional]` | SQL transaction with auto-commit/rollback | Injected `pool` field |
 | `#[transactional(pool = "read_db")]` | Transaction on a specific pool | Corresponding injected field |
-| `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R>` |
+| `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R>` (+ `SelfBuilt` or `DecoratorSpec`) |
 
 ### Application order
 
@@ -50,7 +50,7 @@ Interceptors are applied in a fixed order, from outermost to innermost:
 
 ```
 Pre-auth middleware level (before JWT extraction):
-  → pre_guard (RateLimit::global, RateLimit::per_ip, custom PreAuthGuard)
+  → pre_guard (PreRateLimit::global, PreRateLimit::per_ip, custom PreAuthGuard)
 
 Handler level (after extraction, before body):
   → guard (RateLimit::per_user, custom Guard)
@@ -77,19 +77,20 @@ Pure codegen (inline wrapping):
 async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 ```
 
-**Known limitation:** `#[managed]` + `#[intercept(Cache)]` does NOT work — the managed resource lifecycle (acquire/release with error handling) wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: use `cache_backend()` manually in the handler body.
+**Known limitation:** `#[managed]` + `#[intercept(Cache)]` does NOT work — the managed resource lifecycle (acquire/release with error handling) wraps `into_response` inside the interceptor closure, so `Cache` sees `Response` instead of the raw type. Workaround: inject the store bean (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the handler body.
 
 ## The `Interceptor<R>` trait
 
 ```rust
-/// Context passed to each interceptor. Copy for capture by async move closures.
+/// Context passed to each interceptor. Carries handler identification only —
+/// `Copy`, no state field. Interceptors that need services hold them as fields.
 #[derive(Clone, Copy)]
 pub struct InterceptorContext {
     pub method_name: &'static str,
     pub controller_name: &'static str,
 }
 
-/// Trait generic over return type R.
+/// Trait generic over the wrapped return type `R`.
 pub trait Interceptor<R> {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
@@ -98,7 +99,22 @@ pub trait Interceptor<R> {
 }
 ```
 
-`InterceptorContext` is `Copy`, which allows it to be captured by each nested `async move` closure without ownership issues.
+Interceptors no longer receive the application state — there is no state access
+at request time. Instead, a decorator is built **once at registration** via the
+`DecoratorSpec` contract, and any beans it needs are pulled from the graph and
+held as fields:
+
+- An interceptor that never reads a bean is **self-contained**: implement
+  `Interceptor<R>` and opt in with `impl SelfBuilt for AuditLog {}`.
+- An interceptor that **reads a bean** holds it as a field, and a **spec** type
+  (named by the `#[intercept(...)]` expression) pulls it in `build`:
+  `impl DecoratorSpec for DbAudit { type Product = DbAuditReady; type Deps = TCons<SqlitePool, TNil>; fn build(self, ctx) -> DbAuditReady { DbAuditReady { pool: ctx.get() } } }`.
+  A missing bean is a **compile error at `register_controller()`** naming the type.
+
+`SelfBuilt`, `DecoratorSpec`, `BeanContext`, and `InterceptorContext` are all in
+the prelude (`TCons`/`TNil` live in `r2e::type_list`). `ctx.method_name` and
+`ctx.controller_name` are `Copy`, so they can be captured by each nested
+`async move` closure.
 
 ## `#[logged]`
 
@@ -281,10 +297,12 @@ async fn read_data(&self, ...) -> Result<...> { ... }
 
 ## `#[intercept(Type)]` — User-defined interceptors
 
-Users can create their own interceptors by implementing the `Interceptor<R>` trait:
+Users can create their own interceptors by implementing the `Interceptor<R>` trait. A self-contained interceptor (no bean deps) stays generic over `R` and opts in with `impl SelfBuilt`:
 
 ```rust
 pub struct AuditLog;
+
+impl r2e_core::SelfBuilt for AuditLog {}
 
 impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
     fn around<F, Fut>(
@@ -296,15 +314,65 @@ impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
         async move {
-            tracing::info!(method = ctx.method_name, "audit: entering");
+            tracing::info!(method = method_name, "audit: entering");
             let result = next().await;
-            tracing::info!(method = ctx.method_name, "audit: done");
+            tracing::info!(method = method_name, "audit: done");
             result
         }
     }
 }
 ```
+
+An interceptor that reads a bean holds it as a **field**; a separate **spec** type — named by the `#[intercept(...)]` expression — pulls the bean from the graph in `build`, once at registration:
+
+```rust
+use r2e_core::{DecoratorSpec, Interceptor, InterceptorContext, BeanContext};
+use r2e_core::type_list::{TCons, TNil};
+
+// Spec: the value the attribute expression evaluates to.
+pub struct DbAudit;
+
+// Product: the finished interceptor, holding the resolved bean.
+pub struct DbAuditReady {
+    pool: sqlx::SqlitePool,
+}
+
+impl DecoratorSpec for DbAudit {
+    type Product = DbAuditReady;
+    type Deps = TCons<sqlx::SqlitePool, TNil>;   // compile-checked at register_controller()
+
+    fn build(self, ctx: &BeanContext) -> DbAuditReady {
+        DbAuditReady { pool: ctx.get::<sqlx::SqlitePool>() }
+    }
+}
+
+impl<R: Send> Interceptor<R> for DbAuditReady {
+    fn around<F, Fut>(
+        &self,
+        ctx: InterceptorContext,
+        next: F,
+    ) -> impl Future<Output = R> + Send
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = R> + Send,
+    {
+        let method_name = ctx.method_name;
+        let pool = self.pool.clone();   // resolved once at registration
+        async move {
+            let result = next().await;
+            let _ = sqlx::query("INSERT INTO audit_log (method, ts) VALUES (?, datetime('now'))")
+                .bind(method_name)
+                .execute(&pool)
+                .await;
+            result
+        }
+    }
+}
+```
+
+Apply it with `#[intercept(DbAudit)]` — the macro builds `DbAuditReady` once and captures it in the route closure.
 
 Usage:
 
@@ -317,8 +385,8 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 
 ### Constraints
 
-- The type passed to `#[intercept(...)]` must be constructible as a path expression (unit struct or constant). Call syntax (`#[intercept(Foo::new())]`) does not work.
-- The interceptor is generic over `R` (or constrained to a specific type if needed).
+- The `#[intercept(...)]` expression's leading type path names the decorator spec. Builder-style call syntax works (`#[intercept(Cache::ttl(30).group("x"))]`); for a self-contained interceptor the type is the interceptor itself (`impl SelfBuilt`). Use the escape hatch `#[intercept(MyIcept = make_icept())]` for a free function or variable.
+- The interceptor is generic over `R`. If it reads beans, hold them as fields and implement `DecoratorSpec` on a config type (Product + Deps + build).
 
 ## Complete example
 
@@ -326,24 +394,27 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 use std::future::Future;
 use r2e_core::prelude::*;
 
-/// Custom interceptor
+/// Custom interceptor (self-contained: no bean deps)
 pub struct AuditLog;
+
+impl SelfBuilt for AuditLog {}
 
 impl<R: Send> Interceptor<R> for AuditLog {
     fn around<F, Fut>(&self, ctx: InterceptorContext, next: F)
         -> impl Future<Output = R> + Send
     where F: FnOnce() -> Fut + Send, Fut: Future<Output = R> + Send,
     {
+        let method_name = ctx.method_name;
         async move {
-            tracing::info!(method = ctx.method_name, "audit: entering");
+            tracing::info!(method = method_name, "audit: entering");
             let result = next().await;
-            tracing::info!(method = ctx.method_name, "audit: done");
+            tracing::info!(method = method_name, "audit: done");
             result
         }
     }
 }
 
-#[controller(path = "/users", state = Services)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject]
     user_service: UserService,

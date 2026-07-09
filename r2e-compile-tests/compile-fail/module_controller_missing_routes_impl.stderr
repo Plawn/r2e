@@ -1,0 +1,23 @@
+error[E0277]: `PlainService` has no `#[routes]` or `#[grpc_routes]` impl
+  --> compile-fail/module_controller_missing_routes_impl.rs:31:13
+   |
+31 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `r2e::EndpointDeps` is not implemented for `PlainService`
+  --> compile-fail/module_controller_missing_routes_impl.rs:19:1
+   |
+19 | pub struct PlainService;
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: an endpoint type needs a `#[routes]` / `#[grpc_routes]` block (or, for a hand-written endpoint, a manual `EndpointDeps` impl)
+   = help: the following other types implement trait `ControllerDepsList`:
+             ()
+             (C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15)
+             (C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15)
+             (C10, C11, C12, C13, C14, C15)
+             (C11, C12, C13, C14, C15)
+             (C12, C13, C14, C15)
+             (C13, C14, C15)
+             (C14, C15)
+           and $N others
+   = note: required for `(PlainService,)` to implement `ControllerDepsList`

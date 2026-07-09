@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use r2e::config::R2eConfig;
 use r2e::prelude::*;
-use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
+use r2e::r2e_security::AuthenticatedUser;
 use r2e_test::{TestApp, TestJwt};
 use tokio::sync::RwLock;
 
@@ -70,18 +70,9 @@ impl ItemService {
     }
 }
 
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct VerbTestState {
-    item_service: ItemService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-
 // ─── Controller with all HTTP verbs (struct-level identity) ───
 
-#[controller(path = "/items", state = VerbTestState)]
+#[controller(path = "/items")]
 pub struct ItemController {
     #[inject]
     item_service: ItemService,
@@ -156,16 +147,13 @@ async fn setup() -> (TestApp, TestJwt) {
     let jwt = TestJwt::new();
     let config = R2eConfig::empty();
 
-    let state = VerbTestState {
-        item_service: ItemService::new(),
-        jwt_validator: Arc::new(jwt.claims_validator()),
-        config: config.clone(),
-    };
-
     let app = TestApp::from_builder(
         AppBuilder::new()
             .with_config(config)
-            .with_state(state)
+            .provide(ItemService::new())
+            .provide(Arc::new(jwt.claims_validator()))
+            .build_state()
+            .await
             .with(ErrorHandling)
             .register_controller::<ItemController>(),
     );

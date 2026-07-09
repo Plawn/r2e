@@ -71,7 +71,7 @@ struct PlainCore {
 
 // ── Standard R2E controller without request-scoped fields ───────────────────
 
-#[controller(state = BenchState)]
+#[controller]
 struct NoIdentityController {
     #[inject]
     label: &'static str,
@@ -88,7 +88,7 @@ impl NoIdentityController {
 
 // ── R2E parameter-level identity (stub extractor) ───────────────────────────
 
-#[controller(state = BenchState)]
+#[controller]
 struct ParamIdentityController {
     #[inject]
     label: &'static str,
@@ -106,7 +106,7 @@ impl ParamIdentityController {
 
 // ── R2E struct-level identity façade (stub extractor) ───────────────────────
 
-#[controller(state = BenchState)]
+#[controller]
 struct StructIdentityController {
     #[inject]
     label: &'static str,
@@ -177,25 +177,39 @@ fn axum_app_stack_identity_router() -> Router {
         .build()
 }
 
-fn no_request_scope_router() -> Router {
-    r2e_core::AppBuilder::new()
-        .with_state(state())
-        .register_controller::<NoIdentityController>()
-        .build()
+// R2E controllers construct from the bean graph: provide the injected
+// `&'static str` bean and materialize the HList state (async → block_on).
+fn no_request_scope_router(rt: &tokio::runtime::Runtime) -> Router {
+    rt.block_on(async {
+        r2e_core::AppBuilder::new()
+            .provide("ok")
+            .build_state()
+            .await
+            .register_controller::<NoIdentityController>()
+            .build()
+    })
 }
 
-fn param_identity_router() -> Router {
-    r2e_core::AppBuilder::new()
-        .with_state(state())
-        .register_controller::<ParamIdentityController>()
-        .build()
+fn param_identity_router(rt: &tokio::runtime::Runtime) -> Router {
+    rt.block_on(async {
+        r2e_core::AppBuilder::new()
+            .provide("ok")
+            .build_state()
+            .await
+            .register_controller::<ParamIdentityController>()
+            .build()
+    })
 }
 
-fn struct_identity_router() -> Router {
-    r2e_core::AppBuilder::new()
-        .with_state(state())
-        .register_controller::<StructIdentityController>()
-        .build()
+fn struct_identity_router(rt: &tokio::runtime::Runtime) -> Router {
+    rt.block_on(async {
+        r2e_core::AppBuilder::new()
+            .provide("ok")
+            .build_state()
+            .await
+            .register_controller::<StructIdentityController>()
+            .build()
+    })
 }
 
 /// Identical request shape across every scenario, so the measured delta is pure
@@ -225,10 +239,10 @@ fn bench_dispatch(c: &mut Criterion) {
     // Build every router once, outside the timed loop.
     let bare_axum = bare_axum_router();
     let axum_app_stack = axum_app_stack_router();
-    let no_request_scope = no_request_scope_router();
+    let no_request_scope = no_request_scope_router(&rt);
     let axum_app_stack_identity = axum_app_stack_identity_router();
-    let param_identity = param_identity_router();
-    let struct_identity = struct_identity_router();
+    let param_identity = param_identity_router(&rt);
+    let struct_identity = struct_identity_router(&rt);
 
     let mut group = c.benchmark_group("controller_dispatch");
 

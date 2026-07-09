@@ -5,7 +5,7 @@ pub struct AppState {
     pub name: String,
 }
 
-#[controller(path = "/test", state = AppState)]
+#[controller(path = "/test")]
 pub struct MyController {
     name: String,
 }

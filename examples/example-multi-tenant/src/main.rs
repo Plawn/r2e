@@ -9,13 +9,11 @@ use sqlx::SqlitePool;
 mod controllers;
 mod models;
 mod services;
-mod state;
 mod tenant_guard;
 mod tenant_identity;
 
 use controllers::admin_controller::AdminController;
 use controllers::tenant_controller::TenantController;
-use state::AppState;
 
 fn generate_token(secret: &[u8], sub: &str, tenant_id: &str, roles: &[&str]) -> String {
     let exp = std::time::SystemTime::now()
@@ -104,8 +102,8 @@ async fn main() {
         .with_config(config)
         .provide(pool)
         .provide(Arc::new(claims_validator))
-        .with_bean::<services::ProjectService>()
-        .build_state::<AppState, _, _>()
+        .register::<services::ProjectService>()
+        .build_state()
         .await
         .with(Health)
         .with(Cors::permissive())
@@ -116,8 +114,7 @@ async fn main() {
                 .with_description("Tenant isolation via JWT claims and custom guards")
                 .with_docs_ui(true),
         ))
-        .register_controller::<TenantController>()
-        .register_controller::<AdminController>()
+        .register_controllers::<(TenantController, AdminController)>()
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

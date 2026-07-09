@@ -16,7 +16,7 @@ use r2e::ws::WsStream;
 Annotate a controller method with `#[ws("/path")]` and accept a `WsStream` parameter. The framework handles the HTTP upgrade automatically:
 
 ```rust
-#[controller(path = "/ws", state = AppState)]
+#[controller(path = "/ws")]
 pub struct EchoController;
 
 #[routes]
@@ -159,7 +159,7 @@ impl WsHandler for ChatHandler {
 When a `#[ws]` method has no `WsStream` parameter, the framework expects it to return an `impl WsHandler`. The generated code calls `run_ws_handler` automatically:
 
 ```rust
-#[controller(path = "/ws", state = AppState)]
+#[controller(path = "/ws")]
 pub struct ChatController;
 
 #[routes]
@@ -185,14 +185,13 @@ use r2e::ws::WsBroadcaster;
 let broadcaster = WsBroadcaster::new(128); // channel capacity
 ```
 
-Add it to your state so it can be injected:
+Provide it as a bean so it can be injected by type:
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub broadcaster: WsBroadcaster,
-    // ...
-}
+let app = AppBuilder::new()
+    .provide(broadcaster)
+    // ... other beans
+    ;
 ```
 
 ### Broadcasting messages
@@ -257,14 +256,13 @@ use r2e::ws::WsRooms;
 let rooms = WsRooms::new(128); // per-room channel capacity
 ```
 
-Add it to your state:
+Provide it as a bean:
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub ws_rooms: WsRooms,
-    // ...
-}
+let app = AppBuilder::new()
+    .provide(rooms)
+    // ... other beans
+    ;
 ```
 
 ### Room API
@@ -301,7 +299,7 @@ pub enum WsOutgoing {
     Leave { username: String, room: String },
 }
 
-#[controller(path = "/chat", state = AppState)]
+#[controller(path = "/chat")]
 pub struct ChatController {
     #[inject]
     ws_rooms: WsRooms,

@@ -8,7 +8,7 @@ Install plugins with `.with(plugin)` on the builder (after `build_state()`):
 
 ```rust
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with(Health)
     .with(Cors::permissive())
@@ -46,7 +46,7 @@ Some plugins need to install before `build_state()`. Use `.plugin()` instead of 
 ```rust
 AppBuilder::new()
     .plugin(Scheduler)    // provides CancellationToken + ScheduledJobRegistry
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     // ...
 ```
@@ -71,7 +71,7 @@ For Tower middleware that doesn't need the full plugin API, use `.with_layer()`:
 use tower_http::timeout::TimeoutLayer;
 
 AppBuilder::new()
-    .build_state::<AppState, _, _>()
+    .build_state()
     .await
     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
     // ...
@@ -179,8 +179,8 @@ impl RawPreStatePlugin for MultiProvider {
     type Provisions = TCons<TokenA, TCons<TokenB, TNil>>;
     type Required = TNil;
 
-    fn install<P, R>(self, app: AppBuilder<NoState, P, R>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output>
+    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
+        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,

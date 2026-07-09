@@ -1,20 +1,12 @@
 use std::time::Duration;
 
-use r2e::config::R2eConfig;
 use r2e::prelude::*;
 use r2e::ws::WsStream;
 use r2e_test::TestApp;
 
-// ─── State ───
-
-#[derive(Clone, TestState)]
-struct WsTestState {
-    config: R2eConfig,
-}
-
 // ─── Echo controller ───
 
-#[controller(path = "/ws", state = WsTestState)]
+#[controller(path = "/ws")]
 pub struct WsEchoTestController;
 
 #[routes]
@@ -27,11 +19,10 @@ impl WsEchoTestController {
 }
 
 async fn setup() -> TestApp {
-    let config = R2eConfig::empty();
-    let state = WsTestState { config };
     TestApp::from_builder(
         AppBuilder::new()
-            .with_state(state)
+            .build_state()
+            .await
             .register_controller::<WsEchoTestController>(),
     )
 }

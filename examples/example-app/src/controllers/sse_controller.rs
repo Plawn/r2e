@@ -4,9 +4,8 @@ use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-use crate::state::Services;
 
-#[controller(path = "/sse", state = Services)]
+#[controller(path = "/sse")]
 pub struct SseController {
     #[inject]
     sse_broadcaster: SseBroadcaster,

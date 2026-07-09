@@ -129,7 +129,47 @@ async fn cyclic_dependency() {
     reg.register::<CycleA>();
     reg.register::<CycleB>();
     let err = reg.resolve().await.unwrap_err();
-    assert!(matches!(err, BeanError::CyclicDependency { .. }));
+    let BeanError::CyclicDependency { cycle } = err else {
+        panic!("expected CyclicDependency, got: {err}");
+    };
+    // The reported path is a closed loop: A -> B -> A (3 entries, ends where
+    // it starts).
+    assert_eq!(cycle.len(), 3);
+    assert_eq!(cycle.first(), cycle.last());
+    assert!(cycle.iter().any(|n| n.contains("CycleA")));
+    assert!(cycle.iter().any(|n| n.contains("CycleB")));
+}
+
+/// Depends on the A↔B cycle but is not part of it — must not appear in the
+/// reported cycle path.
+#[derive(Clone)]
+struct CycleDependent;
+
+impl Bean for CycleDependent {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<CycleA>(), type_name::<CycleA>())]
+    }
+    fn build(ctx: &BeanContext) -> Self {
+        let _ = ctx.get::<CycleA>();
+        Self
+    }
+}
+
+#[r2e_core::test]
+async fn cyclic_dependency_reports_only_the_cycle() {
+    let mut reg = BeanRegistry::new();
+    reg.register::<CycleDependent>();
+    reg.register::<CycleA>();
+    reg.register::<CycleB>();
+    let err = reg.resolve().await.unwrap_err();
+    let BeanError::CyclicDependency { cycle } = err else {
+        panic!("expected CyclicDependency, got: {err}");
+    };
+    // CycleDependent is stuck behind the cycle but is not on it.
+    assert_eq!(cycle.len(), 3);
+    assert_eq!(cycle.first(), cycle.last());
+    assert!(!cycle.iter().any(|n| n.contains("CycleDependent")));
 }
 
 #[r2e_core::test]

@@ -19,10 +19,11 @@ impl FromRef<AppState> for Arc<JwtClaimsValidator> {
 
 pub struct Allow;
 
-impl Guard<AppState, AuthenticatedUser> for Allow {
+impl SelfBuilt for Allow {}
+
+impl Guard<AuthenticatedUser> for Allow {
     fn check(
         &self,
-        _state: &AppState,
         _ctx: &GuardContext<'_, AuthenticatedUser>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
@@ -31,10 +32,12 @@ impl Guard<AppState, AuthenticatedUser> for Allow {
 
 pub struct PassThrough;
 
-impl<R: Send> Interceptor<R, AppState> for PassThrough {
+impl SelfBuilt for PassThrough {}
+
+impl<R: Send> Interceptor<R> for PassThrough {
     fn around<F, Fut>(
         &self,
-        _ctx: InterceptorContext<'_, AppState>,
+        _ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -47,10 +50,10 @@ impl<R: Send> Interceptor<R, AppState> for PassThrough {
 
 pub struct RequestResource;
 
-impl ManagedResource<AppState> for RequestResource {
+impl<S: Send + Sync> ManagedResource<S> for RequestResource {
     type Error = ManagedErr<HttpError>;
 
-    async fn acquire(_state: &AppState) -> Result<Self, Self::Error> {
+    async fn acquire(_state: &S) -> Result<Self, Self::Error> {
         Ok(Self)
     }
 
@@ -59,7 +62,7 @@ impl ManagedResource<AppState> for RequestResource {
     }
 }
 
-#[controller(path = "/combined", state = AppState)]
+#[controller(path = "/combined")]
 pub struct CombinedController;
 
 #[routes]

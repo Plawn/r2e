@@ -11,7 +11,7 @@ impl FromRef<AppState> for R2eConfig {
     }
 }
 
-#[controller(path = "/cfg", state = AppState)]
+#[controller(path = "/cfg")]
 pub struct ConfigController {
     #[config("app.name")]
     name: String,

@@ -179,7 +179,7 @@ pub struct ProfileUpload {
     pub attachments: Vec<UploadedFile>,
 }
 
-#[controller(path = "/uploads", state = Services)]
+#[controller(path = "/uploads")]
 pub struct UploadController;
 
 #[routes]

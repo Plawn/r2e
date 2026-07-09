@@ -49,7 +49,7 @@ impl<S: Send + Sync> FromRequestParts<S> for TraceId {
     }
 }
 
-#[controller(path = "/req", state = AppState)]
+#[controller(path = "/req")]
 pub struct RequestScopeController {
     #[inject]
     label: String,

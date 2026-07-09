@@ -11,7 +11,7 @@ pub struct Item {
     pub name: String,
 }
 
-#[controller(path = "/items", state = AppState)]
+#[controller(path = "/items")]
 pub struct ItemController;
 
 #[routes]

@@ -1,19 +1,17 @@
 use bytes::Bytes;
 use std::future::Future;
 
-/// Context passed to each interceptor, including a reference to the
-/// application state.
+/// Context passed to each interceptor.
 ///
-/// The state reference allows interceptors to access DI-resolved services,
-/// database pools, or any other component in the application state.
-pub struct InterceptorContext<'a, S> {
+/// Carries handler identification only. Interceptors that need services
+/// (a cache store, a database pool, …) hold them as fields, injected once at
+/// registration via [`DecoratorSpec`](crate::decorator::DecoratorSpec) —
+/// there is no state access at request time.
+#[derive(Clone, Copy)]
+pub struct InterceptorContext {
     pub method_name: &'static str,
     pub controller_name: &'static str,
-    pub state: &'a S,
 }
-
-// Manual Clone/Copy impls are not possible because S may not be Copy.
-// InterceptorContext is consumed by value in the around() call.
 
 /// Generic interceptor trait with an `around` pattern.
 ///
@@ -22,29 +20,25 @@ pub struct InterceptorContext<'a, S> {
 /// next interceptor, and so on.
 ///
 /// Type parameter `R` is the return type of the wrapped computation.
-/// Type parameter `S` is the application state type, available via
-/// [`InterceptorContext::state`].
-///
-/// Interceptors that don't need the state use a generic `S: Send + Sync`:
 ///
 /// ```ignore
-/// impl<R: Send, S: Send + Sync> Interceptor<R, S> for Logged { ... }
+/// impl<R: Send> Interceptor<R> for Logged { ... }
 /// ```
 ///
-/// Interceptors that need state access constrain `S` to their concrete type:
-///
-/// ```ignore
-/// impl<R: Send> Interceptor<R, AppState> for AuditInterceptor { ... }
-/// ```
+/// Interceptors are built **once, at controller registration** — a
+/// self-contained interceptor opts in with `impl SelfBuilt for Logged {}`;
+/// one that reads beans implements
+/// [`DecoratorSpec`](crate::decorator::DecoratorSpec) on its config type and
+/// holds the beans as fields.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `Interceptor<{R}, {S}>`",
+    message = "`{Self}` does not implement `Interceptor<{R}>`",
     label = "this type cannot be used as an interceptor",
-    note = "implement `Interceptor<R, S>` for your type and apply it with `#[intercept(YourInterceptor)]`"
+    note = "implement `Interceptor<R>` for your type and apply it with `#[intercept(YourInterceptor)]`"
 )]
-pub trait Interceptor<R, S> {
+pub trait Interceptor<R> {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext<'_, S>,
+        ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where

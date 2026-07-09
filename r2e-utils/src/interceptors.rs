@@ -63,8 +63,10 @@ impl Default for Logged {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Logged {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Logged {}
+
+impl<R: Send> Interceptor<R> for Logged {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -119,8 +121,10 @@ impl Default for Timed {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Timed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Timed {}
+
+impl<R: Send> Interceptor<R> for Timed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -149,7 +153,17 @@ impl<R: Send, S: Send + Sync> Interceptor<R, S> for Timed {
 // Cache
 // ---------------------------------------------------------------------------
 
-/// Caches the response of a method using the global [`CacheStore`](r2e_cache::CacheStore).
+/// Caches the response of a method using the application's
+/// [`CacheStore`](r2e_cache::CacheStore) bean.
+///
+/// `Cache` is the *spec*: the store (an `Arc<dyn CacheStore>` bean) is
+/// declared in `Deps` — a missing store is a compile error at
+/// `register_controller()` — and pulled once at wiring time into the built
+/// [`CacheInterceptor`]. Provide one on the builder:
+///
+/// ```ignore
+/// .provide(r2e_cache::InMemoryStore::shared())   // Arc<dyn CacheStore>
+/// ```
 ///
 /// Works with `r2e_core::http::Json<T>` where `T: Serialize + DeserializeOwned`.
 ///
@@ -201,22 +215,43 @@ impl Cache {
     }
 }
 
-impl<R, S: Send + Sync> Interceptor<R, S> for Cache
+/// The built product of the [`Cache`] spec: holds the resolved store.
+pub struct CacheInterceptor {
+    store: std::sync::Arc<dyn r2e_cache::CacheStore>,
+    config: Cache,
+}
+
+impl r2e_core::DecoratorSpec for Cache {
+    type Product = CacheInterceptor;
+    type Deps = r2e_core::type_list::TCons<
+        std::sync::Arc<dyn r2e_cache::CacheStore>,
+        r2e_core::type_list::TNil,
+    >;
+
+    fn build(self, ctx: &r2e_core::BeanContext) -> CacheInterceptor {
+        CacheInterceptor {
+            store: ctx.get(),
+            config: self,
+        }
+    }
+}
+
+impl<R> Interceptor<R> for CacheInterceptor
 where
     R: r2e_core::Cacheable,
 {
     fn around<F, Fut>(
         &self,
-        ctx: InterceptorContext<'_, S>,
+        ctx: InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        let store = r2e_cache::cache_backend();
-        let key = self.full_key(ctx.controller_name, ctx.method_name);
-        let ttl = self.ttl;
+        let store = self.store.clone();
+        let key = self.config.full_key(ctx.controller_name, ctx.method_name);
+        let ttl = self.config.ttl;
         async move {
             // Cache hit
             if let Some(cached) = store.get(&key).await {
@@ -242,6 +277,9 @@ where
 
 /// Invalidates all cache entries in a named group after the wrapped method executes.
 ///
+/// Like [`Cache`], this is a spec: the store bean is resolved once at wiring
+/// time into the built [`CacheInvalidateInterceptor`].
+///
 /// # Usage
 /// ```ignore
 /// #[intercept(CacheInvalidate::group("users"))]
@@ -258,18 +296,38 @@ impl CacheInvalidate {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for CacheInvalidate {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+/// The built product of the [`CacheInvalidate`] spec.
+pub struct CacheInvalidateInterceptor {
+    store: std::sync::Arc<dyn r2e_cache::CacheStore>,
+    group: String,
+}
+
+impl r2e_core::DecoratorSpec for CacheInvalidate {
+    type Product = CacheInvalidateInterceptor;
+    type Deps = r2e_core::type_list::TCons<
+        std::sync::Arc<dyn r2e_cache::CacheStore>,
+        r2e_core::type_list::TNil,
+    >;
+
+    fn build(self, ctx: &r2e_core::BeanContext) -> CacheInvalidateInterceptor {
+        CacheInvalidateInterceptor {
+            store: ctx.get(),
+            group: self.group,
+        }
+    }
+}
+
+impl<R: Send> Interceptor<R> for CacheInvalidateInterceptor {
+    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
+        let store = self.store.clone();
         let group = self.group.clone();
         async move {
             let result = next().await;
-            r2e_cache::cache_backend()
-                .remove_by_prefix(&format!("{}:", group))
-                .await;
+            store.remove_by_prefix(&format!("{}:", group)).await;
             result
         }
     }
@@ -307,8 +365,10 @@ impl Counted {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for Counted {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for Counted {}
+
+impl<R: Send> Interceptor<R> for Counted {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -360,8 +420,10 @@ impl MetricTimed {
     }
 }
 
-impl<R: Send, S: Send + Sync> Interceptor<R, S> for MetricTimed {
-    fn around<F, Fut>(&self, ctx: InterceptorContext<'_, S>, next: F) -> impl Future<Output = R> + Send
+impl r2e_core::SelfBuilt for MetricTimed {}
+
+impl<R: Send> Interceptor<R> for MetricTimed {
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,

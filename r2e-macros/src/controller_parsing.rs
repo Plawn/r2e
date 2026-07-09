@@ -6,14 +6,12 @@ use crate::types::*;
 /// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
     pub name: syn::Ident,
-    pub state_type: syn::Path,
     pub prefix: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub request_fields: Vec<RequestField>,
     pub config_fields: Vec<ConfigField>,
     pub config_section_fields: Vec<ConfigSectionField>,
-    pub is_unit_struct: bool,
 }
 
 impl ControllerStructDef {
@@ -69,12 +67,11 @@ fn inject_qualifier_is(attr: &syn::Attribute, want: &str) -> bool {
     }
 }
 
-/// Parse the `#[controller(path = "...", state = ...)]` attribute arguments.
+/// Parse the `#[controller(path = "...")]` attribute arguments.
 pub fn parse_controller_args(
     args: proc_macro2::TokenStream,
     span: proc_macro2::Span,
-) -> syn::Result<(syn::Path, Option<String>)> {
-    let mut state_type: Option<syn::Path> = None;
+) -> syn::Result<Option<String>> {
     let mut prefix: Option<String> = None;
 
     let parser = syn::meta::parser(|meta| {
@@ -84,40 +81,34 @@ pub fn parse_controller_args(
             prefix = Some(lit.value());
             Ok(())
         } else if meta.path.is_ident("state") {
-            let value = meta.value()?;
-            state_type = Some(value.parse()?);
-            Ok(())
+            Err(meta.error(
+                "`state = ...` was removed — controllers are constructed from the bean graph \
+                 by type; drop the key and make sure every #[inject] field type is provided or \
+                 registered on the AppBuilder before build_state()",
+            ))
         } else {
-            Err(meta.error("unknown attribute in #[controller(...)]: expected `path` or `state`"))
+            Err(meta.error("unknown attribute in #[controller(...)]: expected `path`"))
         }
     });
     parser.parse2(args)?;
+    let _ = span;
 
-    let state_type = state_type.ok_or_else(|| {
-        syn::Error::new(
-            span,
-            "#[controller(state = ...)] is required\n\
-             example: #[controller(path = \"/users\", state = AppState)]",
-        )
-    })?;
-
-    Ok((state_type, prefix))
+    Ok(prefix)
 }
 
 /// Parse a `#[controller]` struct into a [`ControllerStructDef`].
 ///
-/// `state_type`/`prefix` come from the attribute arguments; field scopes are
-/// read from the struct's named fields.
+/// `prefix` comes from the attribute arguments; field scopes are read from
+/// the struct's named fields.
 pub fn parse(
-    state_type: syn::Path,
     prefix: Option<String>,
     item: &syn::ItemStruct,
 ) -> syn::Result<ControllerStructDef> {
     let name = item.ident.clone();
 
-    let (fields, is_unit_struct): (Vec<&syn::Field>, bool) = match &item.fields {
-        syn::Fields::Named(named) => (named.named.iter().collect(), false),
-        syn::Fields::Unit => (Vec::new(), true),
+    let fields: Vec<&syn::Field> = match &item.fields {
+        syn::Fields::Named(named) => named.named.iter().collect(),
+        syn::Fields::Unit => Vec::new(),
         syn::Fields::Unnamed(_) => {
             return Err(syn::Error::new(
                 name.span(),
@@ -175,7 +166,10 @@ pub fn parse(
                 ));
             } else {
                 // #[inject] -> app-scoped (clone from state)
-                injected_fields.push(InjectedField { name: field_name });
+                injected_fields.push(InjectedField {
+                    name: field_name,
+                    ty: field_type,
+                });
             }
         } else if let Some(attr) = config_attr {
             let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;
@@ -216,14 +210,12 @@ pub fn parse(
 
     Ok(ControllerStructDef {
         name,
-        state_type,
         prefix,
         injected_fields,
         identity_fields,
         request_fields,
         config_fields,
         config_section_fields,
-        is_unit_struct,
     })
 }
 

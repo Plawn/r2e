@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
@@ -10,6 +11,12 @@ use tower::Service;
 ///
 /// Requests with `content-type: application/grpc*` are routed to the gRPC service,
 /// all others to the HTTP (Axum) service.
+///
+/// Both inner services must be infallible (`Error = Infallible`) — which
+/// `tonic::service::Routes` and `axum::Router` both are — so the multiplexer
+/// is itself infallible and can be mounted directly on an axum router (the
+/// `GrpcServer::multiplexed()` transport mounts it as the app's fallback
+/// service).
 #[derive(Clone)]
 pub struct MultiplexService<GrpcSvc, HttpSvc> {
     grpc: GrpcSvc,
@@ -26,12 +33,16 @@ impl<GrpcSvc, HttpSvc> MultiplexService<GrpcSvc, HttpSvc> {
 impl<GrpcSvc, HttpSvc, ReqBody, GrpcResBody, HttpResBody> Service<Request<ReqBody>>
     for MultiplexService<GrpcSvc, HttpSvc>
 where
-    GrpcSvc: Service<Request<ReqBody>, Response = Response<GrpcResBody>> + Clone + Send + 'static,
+    GrpcSvc: Service<Request<ReqBody>, Response = Response<GrpcResBody>, Error = Infallible>
+        + Clone
+        + Send
+        + 'static,
     GrpcSvc::Future: Send + 'static,
-    GrpcSvc::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    HttpSvc: Service<Request<ReqBody>, Response = Response<HttpResBody>> + Clone + Send + 'static,
+    HttpSvc: Service<Request<ReqBody>, Response = Response<HttpResBody>, Error = Infallible>
+        + Clone
+        + Send
+        + 'static,
     HttpSvc::Future: Send + 'static,
-    HttpSvc::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     ReqBody: Send + 'static,
     GrpcResBody: http_body::Body<Data = Bytes> + Send + 'static,
     GrpcResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
@@ -39,7 +50,7 @@ where
     HttpResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
 {
     type Response = Response<MultiplexBody<GrpcResBody, HttpResBody>>;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Error = Infallible;
     type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -56,20 +67,29 @@ where
         if is_grpc {
             let mut grpc = self.grpc.clone();
             Box::pin(async move {
-                let resp = grpc.call(req).await.map_err(Into::into)?;
-                Ok(resp.map(|body| MultiplexBody::Grpc { inner: body }))
+                match grpc.call(req).await {
+                    Ok(resp) => Ok(resp.map(|body| MultiplexBody::Grpc { inner: body })),
+                    Err(infallible) => match infallible {},
+                }
             })
         } else {
             let mut http = self.http.clone();
             Box::pin(async move {
-                let resp = http.call(req).await.map_err(Into::into)?;
-                Ok(resp.map(|body| MultiplexBody::Http { inner: body }))
+                match http.call(req).await {
+                    Ok(resp) => Ok(resp.map(|body| MultiplexBody::Http { inner: body })),
+                    Err(infallible) => match infallible {},
+                }
             })
         }
     }
 }
 
 /// Check if a content-type header value indicates a gRPC request.
+///
+/// The prefix match also captures `application/grpc-web*`, which is NOT
+/// supported: grpc-web requests route to the plain tonic services (no
+/// `tonic-web` translation layer) and will fail. If grpc-web support is ever
+/// added, it needs its own branch with a `tonic-web` layer.
 fn is_grpc_content_type(ct: &HeaderValue) -> bool {
     ct.as_bytes().starts_with(b"application/grpc")
 }

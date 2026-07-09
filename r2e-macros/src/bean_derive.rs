@@ -147,5 +147,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
         }
+
+        impl #krate::beans::Registrable for #name {
+            type Provided = Self;
+            type Deps = #deps_type;
+
+            fn register_into(registry: &mut #krate::beans::BeanRegistry) {
+                registry.register::<Self>();
+            }
+        }
     })
 }

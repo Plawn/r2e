@@ -2334,6 +2334,7 @@ dependencies = [
  "prost 0.14.4",
  "r2e",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tonic-prost",
@@ -5629,6 +5630,7 @@ dependencies = [
  "dashmap",
  "r2e-core",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -2,13 +2,12 @@ use r2e::prelude::*;
 
 use crate::models::{CreateProjectRequest, Project};
 use crate::services::ProjectService;
-use crate::state::AppState;
 use crate::tenant_guard::TenantGuard;
 use crate::tenant_identity::TenantUser;
 
 /// Tenant-scoped project endpoints.
 /// Uses param-level identity + TenantGuard for tenant isolation.
-#[controller(path = "/tenants", state = AppState)]
+#[controller(path = "/tenants")]
 pub struct TenantController {
     #[inject]
     project_service: ProjectService,

@@ -2,16 +2,16 @@ use r2e::prelude::*;
 use r2e::{Guard, GuardContext};
 
 use crate::tenant_identity::TenantUser;
-use crate::state::AppState;
 
 /// Guard that ensures the authenticated user's tenant_id matches the path parameter.
 /// Super-admins bypass this check.
 pub struct TenantGuard;
 
-impl Guard<AppState, TenantUser> for TenantGuard {
+impl r2e::SelfBuilt for TenantGuard {}
+
+impl Guard<TenantUser> for TenantGuard {
     fn check(
         &self,
-        _state: &AppState,
         ctx: &GuardContext<'_, TenantUser>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         async move {

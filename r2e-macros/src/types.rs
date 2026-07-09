@@ -2,6 +2,9 @@ use crate::route::HttpMethod;
 
 pub struct InjectedField {
     pub name: syn::Ident,
+    /// The declared field type. Used by `ContextConstruct` codegen
+    /// (`ctx.get::<Ty>()`) and the controller's `Deps` list.
+    pub ty: syn::Type,
 }
 
 pub struct IdentityField {
