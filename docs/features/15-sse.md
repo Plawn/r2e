@@ -247,8 +247,9 @@ topic.publish(&SyncStatus { done: 10, total: 42 })?;
 
 Unlike `send_event`, publishing to a topic **with no active subscribers is
 `Ok(0)`**, not an error — a topic nobody is watching is a normal state for a
-publisher. `Err` means the event failed to serialize. `SseTopic` derefs to
-`SseBroadcaster` for everything else (`subscriber_count()`, `capacity()`, …).
+publisher. `Err` means the event failed to serialize. `subscriber_count()`
+and `capacity()` are exposed directly; `broadcaster()` is the raw escape
+hatch (its `send`/`send_event` bypass the typed contract — prefer `publish`).
 
 ### 8. EventBus↔SSE Bridge (zero-liaison fan-out)
 
@@ -391,7 +392,8 @@ impl SseController {
 | `with_event_name` | `fn with_event_name(self, name: impl Into<String>) -> Self` | Override the SSE event name |
 | `publish` | `fn publish(&self, event: &E) -> Result<usize, serde_json::Error>` | JSON-serialize and broadcast; `Ok(0)` when no subscribers |
 | `subscribe` | `fn subscribe(&self) -> SseSubscription` | Subscription stream, ready for `#[sse]` |
-| (deref) | `Deref<Target = SseBroadcaster>` | All `SseBroadcaster` methods available |
+| `subscriber_count` | `fn subscriber_count(&self) -> usize` | Active subscribers |
+| `broadcaster` | `fn broadcaster(&self) -> &SseBroadcaster` | Raw escape hatch (prefer `publish`) |
 
 ### `#[sse]` Attribute
 

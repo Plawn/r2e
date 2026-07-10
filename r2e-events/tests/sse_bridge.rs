@@ -95,3 +95,21 @@ async fn unsubscribing_the_bridge_stops_forwarding() {
         "no events should be forwarded after unsubscribe"
     );
 }
+
+#[r2e_core::test]
+async fn bridged_event_fans_out_to_all_sse_subscribers() {
+    let bus = LocalEventBus::new();
+    let topic = SseTopic::<SyncStatus>::new(16);
+    let mut sub1 = topic.subscribe();
+    let mut sub2 = topic.subscribe();
+
+    bridge_event_to_sse(&bus, topic).await.unwrap();
+    bus.emit_and_wait(SyncStatus { done: 3, total: 7 })
+        .await
+        .unwrap();
+
+    for sub in [&mut sub1, &mut sub2] {
+        let event = next_event(sub).await.expect("every subscriber should receive the event");
+        assert!(format!("{event:?}").contains(r#"total\":7"#) || format!("{event:?}").contains(r#""total":7"#));
+    }
+}

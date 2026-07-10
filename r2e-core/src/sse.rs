@@ -309,7 +309,10 @@ impl<E> SseTopic<E> {
     /// Create a new topic with the given broadcast channel capacity.
     ///
     /// The SSE event name defaults to the short type name of `E`
-    /// (`my_app::events::SyncStatus` → `"SyncStatus"`).
+    /// (`my_app::events::SyncStatus` → `"SyncStatus"`). The derivation is
+    /// only meaningful for nominal types — for tuples or other non-nominal
+    /// event types, set an explicit name via
+    /// [`with_event_name`](Self::with_event_name).
     pub fn new(capacity: usize) -> Self {
         Self {
             broadcaster: SseBroadcaster::new(capacity),
@@ -330,8 +333,23 @@ impl<E> SseTopic<E> {
     }
 
     /// The underlying broadcaster.
+    ///
+    /// The escape hatch for anything not exposed on the topic itself. Note
+    /// that `send`/`send_event` on the raw broadcaster bypass the topic's
+    /// typed contract (JSON payload, configured event name, `Ok(0)` on no
+    /// subscribers) — prefer [`publish`](Self::publish).
     pub fn broadcaster(&self) -> &SseBroadcaster {
         &self.broadcaster
+    }
+
+    /// Number of active subscribers (see [`SseBroadcaster::subscriber_count`]).
+    pub fn subscriber_count(&self) -> usize {
+        self.broadcaster.subscriber_count()
+    }
+
+    /// The broadcast channel capacity fixed at construction.
+    pub fn capacity(&self) -> usize {
+        self.broadcaster.capacity()
     }
 
     /// Subscribe to the topic. Ready to return from an `#[sse]` handler.
@@ -370,14 +388,6 @@ impl<E: serde::Serialize> SseTopic<E> {
             .broadcaster
             .send_event(&self.event_name, data)
             .unwrap_or(0))
-    }
-}
-
-impl<E> std::ops::Deref for SseTopic<E> {
-    type Target = SseBroadcaster;
-
-    fn deref(&self) -> &SseBroadcaster {
-        &self.broadcaster
     }
 }
 
