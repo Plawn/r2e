@@ -242,6 +242,145 @@ impl futures_core::Stream for SseSubscription {
     }
 }
 
+// ── SseTopic ─────────────────────────────────────────────────────────────
+
+/// A typed broadcast topic over an [`SseBroadcaster`].
+///
+/// `SseTopic<E>` is a first-class "broadcast topic bean": each event type `E`
+/// makes it a distinct injectable type, so an app can provide several topics
+/// without newtype boilerplate:
+///
+/// ```ignore
+/// // blueprint
+/// b.provide(SseTopic::<SyncStatus>::new(128))
+///  .provide(SseTopic::<MatchProgress>::new(128).with_event_name("match"))
+///
+/// // controller
+/// #[controller(path = "/sync")]
+/// struct SyncController {
+///     #[inject] topic: SseTopic<SyncStatus>,
+/// }
+///
+/// #[routes]
+/// impl SyncController {
+///     #[sse("/status")]
+///     async fn status(&self) -> impl Stream<Item = Result<SseEvent, Infallible>> {
+///         self.topic.subscribe()
+///     }
+/// }
+///
+/// // anywhere (service, scheduled task, consumer)
+/// topic.publish(&SyncStatus { done: 10, total: 42 })?;
+/// ```
+///
+/// [`publish`](Self::publish) serializes the event to JSON and broadcasts it
+/// under the topic's SSE event name (default: the short type name of `E`,
+/// override via [`with_event_name`](Self::with_event_name)).
+///
+/// The EventBus↔SSE bridge (`r2e-events`) forwards events emitted on an
+/// [`EventBus`] into an `SseTopic<E>` so real-time fan-out needs no liaison
+/// code at all.
+pub struct SseTopic<E> {
+    broadcaster: SseBroadcaster,
+    event_name: Arc<str>,
+    _marker: std::marker::PhantomData<fn() -> E>,
+}
+
+// Manual impl: `derive(Clone)` would needlessly require `E: Clone`.
+impl<E> Clone for SseTopic<E> {
+    fn clone(&self) -> Self {
+        Self {
+            broadcaster: self.broadcaster.clone(),
+            event_name: Arc::clone(&self.event_name),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Short (unqualified, generics-stripped) type name of `E`, used as the
+/// default SSE event name of an [`SseTopic<E>`].
+fn short_type_name<E>() -> &'static str {
+    let full = std::any::type_name::<E>();
+    let no_generics = full.split('<').next().unwrap_or(full);
+    no_generics.rsplit("::").next().unwrap_or(no_generics)
+}
+
+impl<E> SseTopic<E> {
+    /// Create a new topic with the given broadcast channel capacity.
+    ///
+    /// The SSE event name defaults to the short type name of `E`
+    /// (`my_app::events::SyncStatus` → `"SyncStatus"`).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            broadcaster: SseBroadcaster::new(capacity),
+            event_name: Arc::from(short_type_name::<E>()),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Override the SSE event name events are published under.
+    pub fn with_event_name(mut self, name: impl Into<String>) -> Self {
+        self.event_name = Arc::from(name.into());
+        self
+    }
+
+    /// The SSE event name this topic publishes under.
+    pub fn event_name(&self) -> &str {
+        &self.event_name
+    }
+
+    /// The underlying broadcaster.
+    pub fn broadcaster(&self) -> &SseBroadcaster {
+        &self.broadcaster
+    }
+
+    /// Subscribe to the topic. Ready to return from an `#[sse]` handler.
+    ///
+    /// Lagged messages are silently skipped; see
+    /// [`subscribe_lagged`](Self::subscribe_lagged) /
+    /// [`subscribe_with`](Self::subscribe_with) for lag signaling.
+    pub fn subscribe(&self) -> SseSubscription {
+        self.broadcaster.subscribe()
+    }
+
+    /// Subscribe with a synthetic SSE event of the given type emitted
+    /// whenever the subscriber lags (see [`SseBroadcaster::subscribe_lagged`]).
+    pub fn subscribe_lagged(&self, event_name: impl Into<String>) -> SseSubscription {
+        self.broadcaster.subscribe_lagged(event_name)
+    }
+
+    /// Subscribe using the given [`LagPolicy`].
+    pub fn subscribe_with(&self, policy: LagPolicy) -> SseSubscription {
+        self.broadcaster.subscribe_with(policy)
+    }
+}
+
+impl<E: serde::Serialize> SseTopic<E> {
+    /// Serialize `event` to JSON and broadcast it under the topic's event
+    /// name.
+    ///
+    /// Returns the number of subscribers that received the message. Unlike
+    /// [`SseBroadcaster::send_event`], publishing to a topic **with no active
+    /// subscribers is `Ok(0)`**, not an error — a topic nobody is currently
+    /// watching is a normal state for a publisher. `Err` means the event
+    /// failed to serialize.
+    pub fn publish(&self, event: &E) -> Result<usize, serde_json::Error> {
+        let data = serde_json::to_string(event)?;
+        Ok(self
+            .broadcaster
+            .send_event(&self.event_name, data)
+            .unwrap_or(0))
+    }
+}
+
+impl<E> std::ops::Deref for SseTopic<E> {
+    type Target = SseBroadcaster;
+
+    fn deref(&self) -> &SseBroadcaster {
+        &self.broadcaster
+    }
+}
+
 // ── SseRooms ─────────────────────────────────────────────────────────────
 
 /// Keyed manager for per-resource SSE broadcasters.
