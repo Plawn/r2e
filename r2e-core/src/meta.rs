@@ -76,6 +76,8 @@ pub struct RouteInfo {
     pub description: Option<String>,
     pub request_body_type: Option<String>,
     pub request_body_schema: Option<Value>,
+    /// Request body media type. `None` means `application/json`.
+    pub request_body_content_type: Option<String>,
     pub request_body_required: bool,
     pub response_type: Option<String>,
     pub response_schema: Option<Value>,
@@ -85,6 +87,23 @@ pub struct RouteInfo {
     pub tag: Option<String>,
     pub deprecated: bool,
     pub has_auth: bool,
+}
+
+/// Describes a multipart form type as a JSON Schema object for OpenAPI.
+///
+/// `#[derive(FromMultipart)]` generates this impl automatically. The routes
+/// macro probes for it (autoref specialization) when a handler takes
+/// `TypedMultipart<T>`, so a manual `FromMultipart` impl without it simply
+/// yields a schema-less `multipart/form-data` body in the generated spec.
+///
+/// Lives here (not in the feature-gated `multipart` module) because the
+/// routes macro emits the probe for any `TypedMultipart`-shaped parameter,
+/// including in apps that never enable the `multipart` feature.
+pub trait MultipartSchema {
+    /// The JSON Schema describing the form:
+    /// `{"type": "object", "properties": {...}, "required": [...]}`.
+    /// File fields are modeled as `{"type": "string", "format": "binary"}`.
+    fn multipart_schema() -> Value;
 }
 
 /// Metadata about a route parameter.

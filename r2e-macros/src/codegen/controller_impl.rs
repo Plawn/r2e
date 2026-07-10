@@ -207,7 +207,8 @@ fn generate_route_metadata(
 
             let path_params = extract_path_params(rm, &krate);
             let handler_param_types = extract_handler_param_types(rm);
-            let (body_type_token, body_schema_token) = extract_body_info(rm);
+            let (body_type_token, body_schema_token, body_content_type_token) =
+                extract_body_info(rm);
             let (response_type_token, response_schema_token) = extract_response_info(rm);
 
             // Extract doc comments for summary + description
@@ -261,6 +262,7 @@ fn generate_route_metadata(
                     description: #description_token,
                     request_body_type: #body_type_token,
                     request_body_schema: #body_schema_token,
+                    request_body_content_type: #body_content_type_token,
                     request_body_required: #body_required,
                     response_type: #response_type_token,
                     response_schema: #response_schema_token,
@@ -375,13 +377,14 @@ fn infer_path_param_openapi_type(ty: &syn::Type) -> &'static str {
 }
 
 /// Map a syn::Type to an OpenAPI type string by inspecting the last path segment.
-fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
+/// Shared with the `FromMultipart` derive so path params and multipart text
+/// fields classify primitives identically.
+pub(crate) fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
     if let syn::Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             return match segment.ident.to_string().as_str() {
-                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
-                    "integer"
-                }
+                "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64"
+                | "i128" | "isize" => "integer",
                 "f32" | "f64" => "number",
                 "bool" => "boolean",
                 _ => "string",
@@ -518,30 +521,41 @@ fn type_to_schema_name(ty: &syn::Type) -> String {
     quote!(#ty).to_string().replace(' ', "")
 }
 
+/// Emit an autoref-specialization schema probe: when `ty` satisfies `bound`,
+/// the inherent method wins and returns `Some(#some_body)` (with `T` bound to
+/// `ty`); otherwise the trait fallback returns `None`. Lets optional schema
+/// discovery work without requiring the bound on every type.
+fn autoref_schema_probe(ty: &syn::Type, bound: TokenStream, some_body: TokenStream) -> TokenStream {
+    let krate = r2e_core_path();
+    quote! {
+        {
+            struct __SchemaProbe<T>(::core::marker::PhantomData<T>);
+            trait __NoSchema {
+                fn __schema(&self) -> Option<#krate::serde_json::Value> { None }
+            }
+            impl<T> __NoSchema for &__SchemaProbe<T> {}
+            impl<T: #bound> __SchemaProbe<T> {
+                fn __schema(&self) -> Option<#krate::serde_json::Value> {
+                    Some(#some_body)
+                }
+            }
+            let __p = __SchemaProbe::<#ty>(::core::marker::PhantomData);
+            use __NoSchema as _;
+            (&__p).__schema()
+        }
+    }
+}
+
 /// Generate a schema token for a response type, using autoref specialization
 /// so that types not implementing `JsonSchema` gracefully return `None`.
 fn response_schema_token(ty: &syn::Type) -> TokenStream {
     if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
-        quote! {
-            {
-                // Autoref specialization: if #ty implements JsonSchema, this
-                // resolves to the inherent method returning Some(schema).
-                // Otherwise, the trait fallback returns None.
-                struct __RespProbe<T>(::core::marker::PhantomData<T>);
-                trait __NoRespSchema {
-                    fn __resp_schema(&self) -> Option<serde_json::Value> { None }
-                }
-                impl<T> __NoRespSchema for &__RespProbe<T> {}
-                impl<T: #schemars::JsonSchema> __RespProbe<T> {
-                    fn __resp_schema(&self) -> Option<serde_json::Value> {
-                        Some(serde_json::to_value(#schemars::schema_for!(T)).unwrap())
-                    }
-                }
-                let __p = __RespProbe::<#ty>(::core::marker::PhantomData);
-                use __NoRespSchema as _;
-                (&__p).__resp_schema()
-            }
-        }
+        let krate = r2e_core_path();
+        autoref_schema_probe(
+            ty,
+            quote! { #schemars::JsonSchema },
+            quote! { #krate::serde_json::to_value(#schemars::schema_for!(T)).unwrap() },
+        )
     } else {
         quote! { None }
     }
@@ -601,9 +615,23 @@ fn extract_response_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenS
     }
 }
 
-/// Extract request body type information.
-fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream) {
-    let body_info: Option<(String, syn::Type)> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
+/// A handler parameter recognized as the request body extractor.
+enum BodyExtractor {
+    /// `Json<T>` — `application/json` with a schemars-generated schema.
+    Json { name: String, ty: syn::Type },
+    /// `TypedMultipart<T>` — `multipart/form-data` with a `MultipartSchema`-probed schema.
+    TypedMultipart { name: String, ty: syn::Type },
+    /// Raw `Multipart` — `multipart/form-data`, free-form (no named schema).
+    RawMultipart,
+}
+
+/// Media type emitted for multipart body extractors.
+const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
+
+/// Extract request body information.
+/// Returns (type_name_token, schema_token, content_type_token).
+fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream, TokenStream) {
+    let body_info: Option<BodyExtractor> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
         } else {
@@ -611,39 +639,77 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
         }
     });
 
+    let multipart_ct = MULTIPART_CONTENT_TYPE;
     match &body_info {
-        Some((bname, inner_ty)) => {
+        Some(BodyExtractor::Json { name, ty }) => {
             let schema_token = if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
+                let krate = r2e_core_path();
                 quote! {
                     Some({
-                        let __schema = #schemars::schema_for!(#inner_ty);
-                        serde_json::to_value(__schema).unwrap()
+                        let __schema = #schemars::schema_for!(#ty);
+                        #krate::serde_json::to_value(__schema).unwrap()
                     })
                 }
             } else {
                 quote! { None }
             };
-            (quote! { Some(#bname.to_string()) }, schema_token)
+            (quote! { Some(#name.to_string()) }, schema_token, quote! { None })
         }
-        None => (quote! { None }, quote! { None }),
+        Some(BodyExtractor::TypedMultipart { name, ty }) => (
+            quote! { Some(#name.to_string()) },
+            multipart_schema_token(ty),
+            quote! { Some(#multipart_ct.to_string()) },
+        ),
+        Some(BodyExtractor::RawMultipart) => (
+            quote! { None },
+            quote! { None },
+            quote! { Some(#multipart_ct.to_string()) },
+        ),
+        None => (quote! { None }, quote! { None }, quote! { None }),
     }
 }
 
-/// Extract body type info from Json<T> types.
-fn extract_body_type_info(ty: &syn::Type) -> Option<(String, syn::Type)> {
+/// Generate a schema token for a `TypedMultipart<T>` body via autoref
+/// specialization: the derived `MultipartSchema` impl yields `Some(schema)`;
+/// a manual `FromMultipart` impl without it degrades to `None`.
+///
+/// The `MultipartSchema` trait lives in `r2e_core::meta` (always compiled,
+/// not the feature-gated `multipart` module) so this probe also compiles in
+/// apps that use a `TypedMultipart`-shaped extractor without the feature.
+fn multipart_schema_token(ty: &syn::Type) -> TokenStream {
+    let krate = r2e_core_path();
+    autoref_schema_probe(
+        ty,
+        quote! { #krate::meta::MultipartSchema },
+        quote! { <T as #krate::meta::MultipartSchema>::multipart_schema() },
+    )
+}
+
+/// Classify a handler parameter type as a body extractor.
+fn extract_body_type_info(ty: &syn::Type) -> Option<BodyExtractor> {
     if let syn::Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             let ident = segment.ident.to_string();
-            if ident == "Json" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                        if let syn::Type::Path(inner_path) = inner_ty {
-                            if let Some(inner_seg) = inner_path.path.segments.last() {
-                                return Some((inner_seg.ident.to_string(), inner_ty.clone()));
+            match ident.as_str() {
+                "Json" | "TypedMultipart" => {
+                    if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                        if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                            if let syn::Type::Path(inner_path) = inner_ty {
+                                if let Some(inner_seg) = inner_path.path.segments.last() {
+                                    let name = inner_seg.ident.to_string();
+                                    let ty = inner_ty.clone();
+                                    return Some(if ident == "Json" {
+                                        BodyExtractor::Json { name, ty }
+                                    } else {
+                                        BodyExtractor::TypedMultipart { name, ty }
+                                    });
+                                }
                             }
                         }
                     }
                 }
+                "Multipart" => return Some(BodyExtractor::RawMultipart),
+                _ => {}
             }
         }
     }
@@ -1033,6 +1099,7 @@ fn emit_streaming_route_info(
             description: None,
             request_body_type: None,
             request_body_schema: None,
+            request_body_content_type: None,
             request_body_required: true,
             response_type: None,
             response_schema: None,

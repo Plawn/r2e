@@ -257,6 +257,12 @@ pub trait FromMultipart: Sized {
     fn from_multipart(fields: MultipartFields) -> Result<Self, MultipartError>;
 }
 
+// ── MultipartSchema trait ────────────────────────────────────────────────────
+
+/// OpenAPI form schema for `FromMultipart` types. Defined in [`crate::meta`]
+/// (always compiled); re-exported here as the user-facing path.
+pub use crate::meta::MultipartSchema;
+
 // ── TypedMultipart extractor ─────────────────────────────────────────────────
 
 /// An Axum extractor that consumes a `multipart/form-data` request body and

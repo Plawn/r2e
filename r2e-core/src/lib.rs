@@ -37,6 +37,11 @@ pub mod multipart;
 #[cfg(feature = "ws")]
 pub mod ws;
 
+// Used by macro-generated code (schema construction) so user crates don't
+// need a direct serde_json dependency.
+#[doc(hidden)]
+pub use serde_json;
+
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
 pub use lazy::Lazy;
 pub use builder::{

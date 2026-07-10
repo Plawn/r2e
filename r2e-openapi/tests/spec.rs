@@ -17,6 +17,7 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         description: None,
         request_body_type: None,
         request_body_schema: None,
+        request_body_content_type: None,
         request_body_required: true,
         response_type: None,
         response_schema: None,
@@ -873,4 +874,99 @@ fn empty_registry_does_not_affect_spec() {
         spec_without["components"]["schemas"],
         spec_with["components"]["schemas"]
     );
+}
+
+// ── Multipart request bodies ─────────────────────────────────────────────────
+
+fn multipart_form_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "avatar": { "type": "string", "format": "binary" }
+        },
+        "required": ["name", "avatar"]
+    })
+}
+
+#[test]
+fn typed_multipart_request_body_uses_form_data_content_type() {
+    let routes = vec![RouteInfo {
+        request_body_type: Some("ProfileUpload".to_string()),
+        request_body_schema: Some(multipart_form_schema()),
+        request_body_content_type: Some("multipart/form-data".to_string()),
+        ..route("POST", "/uploads", "upload_profile")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    let req_body = &spec["paths"]["/uploads"]["post"]["requestBody"];
+    assert_eq!(req_body["required"], true);
+    assert!(
+        req_body["content"].get("application/json").is_none(),
+        "multipart body must not be modeled as JSON"
+    );
+    assert_eq!(
+        req_body["content"]["multipart/form-data"]["schema"]["$ref"],
+        "#/components/schemas/ProfileUpload"
+    );
+}
+
+#[test]
+fn typed_multipart_schema_lands_in_components() {
+    let routes = vec![RouteInfo {
+        request_body_type: Some("ProfileUpload".to_string()),
+        request_body_schema: Some(multipart_form_schema()),
+        request_body_content_type: Some("multipart/form-data".to_string()),
+        ..route("POST", "/uploads", "upload_profile")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    let schema = &spec["components"]["schemas"]["ProfileUpload"];
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["avatar"]["format"], "binary");
+    assert_eq!(schema["required"], json!(["name", "avatar"]));
+}
+
+#[test]
+fn raw_multipart_request_body_is_free_form() {
+    // Raw `Multipart` extractor: a content type but no named body type.
+    let routes = vec![RouteInfo {
+        request_body_content_type: Some("multipart/form-data".to_string()),
+        ..route("POST", "/uploads/raw", "upload_raw")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    let req_body = &spec["paths"]["/uploads/raw"]["post"]["requestBody"];
+    assert_eq!(req_body["required"], true);
+    assert_eq!(
+        req_body["content"]["multipart/form-data"]["schema"],
+        json!({ "type": "object" })
+    );
+}
+
+#[test]
+fn multipart_request_body_documents_400() {
+    let routes = vec![RouteInfo {
+        request_body_content_type: Some("multipart/form-data".to_string()),
+        ..route("POST", "/uploads/raw", "upload_raw")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    assert!(
+        spec["paths"]["/uploads/raw"]["post"]["responses"]["400"].is_object(),
+        "a multipart body can be malformed, so 400 must be documented"
+    );
+}
+
+#[test]
+fn json_request_body_content_type_defaults_to_json() {
+    // `None` content type keeps the historical application/json behavior.
+    let routes = vec![RouteInfo {
+        request_body_type: Some("CreateUser".to_string()),
+        ..route("POST", "/users", "create_user")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    assert!(spec["paths"]["/users"]["post"]["requestBody"]["content"]["application/json"]
+        .is_object());
 }
