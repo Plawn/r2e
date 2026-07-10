@@ -10,9 +10,7 @@ pub(crate) mod from_multipart;
 pub(crate) mod bean_attr;
 pub(crate) mod bean_derive;
 pub(crate) mod decorator_bean_derive;
-pub(crate) mod bean_state_derive;
 pub(crate) mod bg_service_derive;
-pub(crate) mod test_state_derive;
 pub(crate) mod module_attr;
 pub(crate) mod producer_attr;
 pub(crate) mod type_list_gen;
@@ -962,27 +960,6 @@ pub fn derive_background_service(input: TokenStream) -> TokenStream {
     bg_service_derive::expand(input)
 }
 
-/// Derive macro for test state structs — generates `FromRef` impls for
-/// each field, eliminating boilerplate in test files.
-///
-///
-/// Use `#[test_state(skip)]` on a field to suppress its `FromRef` impl.
-///
-/// # Example
-///
-/// ```ignore
-/// #[derive(Clone, TestState)]
-/// struct TestServices {
-///     user_service: UserService,
-///     validator: Arc<JwtClaimsValidator>,
-///     config: R2eConfig,
-/// }
-/// ```
-#[proc_macro_derive(TestState, attributes(test_state))]
-pub fn derive_test_state(input: TokenStream) -> TokenStream {
-    test_state_derive::expand(input)
-}
-
 /// Derive macro that generates a [`Cacheable`](r2e_core::Cacheable) impl
 /// using `serde_json` serialization.
 ///
@@ -1285,6 +1262,23 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Wraps the function body in a Tokio **multi-thread** runtime and calls
 /// `init_tracing()` automatically.
 ///
+/// # Blueprint tests (`app = ...`)
+///
+/// With `app = <blueprint fn>`, the macro boots the application blueprint
+/// into a `TestApp` (test profile forced, `TestJwt` validators pinned) and
+/// binds the test function's parameters from it:
+///
+/// - `app: TestApp` — the booted app,
+/// - `jwt: TestJwt` — the app's auto-wired `TestJwt`,
+/// - `#[inject] service: UserService` — any bean from the resolved graph.
+///
+/// Optional arguments:
+///
+/// - `with = |b| ...` — builder pre-configuration hook, the place to pin
+///   mocks (`b.override_bean(...)`) and patch config
+///   (`b.override_config_value(...)`),
+/// - `jwt = false` — skip the `TestJwt` auto-wiring (`boot_plain`).
+///
 /// # Examples
 ///
 /// ```ignore
@@ -1297,6 +1291,14 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// #[r2e::test(tracing = false)]
 /// async fn test_no_tracing() { /* ... */ }
+///
+/// #[r2e::test(app = example_app::app)]
+/// async fn lists_users(app: TestApp) {
+///     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
+/// }
+///
+/// #[r2e::test(app = example_app::app, with = |b| b.override_bean(FakeMailer::new()))]
+/// async fn with_mock(app: TestApp, #[inject] mailer: FakeMailer) { /* ... */ }
 /// ```
 #[proc_macro_attribute]
 pub fn test(args: TokenStream, input: TokenStream) -> TokenStream {

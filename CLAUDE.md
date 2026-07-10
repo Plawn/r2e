@@ -65,12 +65,13 @@ r2e-observability → OpenTelemetry plugin: distributed tracing and context prop
 r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external IdP.
 r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-r2e-test        → TestApp (HTTP client wrapper), TestJwt (JWT generation for tests), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders, #[derive(TestState)].
+r2e-test        → TestApp (HTTP client + blueprint boot: TestApp::boot / #[r2e::test(app = ...)], bean::<T>() access, .as_user() via auto-wired TestJwt), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
+r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, shared-per-process containers, URL injected via override_config_value. Features `postgres`, `redis`.
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
 r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messages.
-example-app     → Demo binary exercising all features.
+example-app     → Demo app (lib + bin) exercising all features. `lib.rs` exposes the blueprint `app(b) -> impl BootableApp` booted by both `main.rs` and the integration tests.
 ```
 
 Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-events-kafka` / `r2e-events-pulsar` / `r2e-events-rabbitmq` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
@@ -168,6 +169,7 @@ impl UserController {
 | guards/interceptors as beans, `DecoratorSpec`, `DecoratorBean`, guard compile-time deps, once-at-registration guard construction, `Guard<I>`/`Interceptor<R>` redesign | `docs/claude/plan-guards-as-beans.md` |
 | DI backlog / next steps, module decorator deps carrier, bridge-overlap invariant, `#[derive(DecoratorBean)]`, scheduled/gRPC intercept ctx, newtypes-over-qualifiers decision | `docs/claude/di-next-steps.md` |
 | new transport / wire adapter, `EndpointDeps`, `endpoint_deps_fold`, `register_grpc_service` compile check, `AppBuilderGrpcExt`, ports-and-adapters shape, per-transport guards decision | `docs/claude/transport-adapters.md` |
+| testing DX, app blueprint, `BootableApp`, `TestApp::boot`, `#[r2e::test(app = ...)]`, `override_bean` (pinned overrides), `override_config_value`, `with_profile`, `application-test.yaml`, `.as_user()`, mocks in tests, dev services / testcontainers plan | `docs/claude/plan-testing-dx.md` |
 
 **Rules:**
 1. Match keywords from your task to the left column. Read **only** the matched file(s).

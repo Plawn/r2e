@@ -140,6 +140,15 @@ pub fn r2e_grpc_path() -> TokenStream {
     )
 }
 
+/// Returns the token stream for accessing `r2e_test` types.
+///
+/// `r2e-test` is a dev-dependency of the user's crate (it is not re-exported
+/// by the `r2e` facade).
+pub fn r2e_test_path() -> TokenStream {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    resolve_cached(&CACHE, &[("r2e-test", "")], "::r2e_test")
+}
+
 /// Returns the token stream for accessing `r2e_executor` types.
 pub fn r2e_executor_path() -> TokenStream {
     static CACHE: OnceLock<String> = OnceLock::new();

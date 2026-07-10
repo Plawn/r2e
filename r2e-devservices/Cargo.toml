@@ -1,0 +1,24 @@
+[package]
+name = "r2e-devservices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["testing", "testcontainers", "dev-services"]
+categories = ["development-tools::testing"]
+description = "Dev services for R2E tests - containerized Postgres/Redis started on demand and wired into the test config"
+
+[features]
+default = []
+postgres = ["testcontainers-modules/postgres"]
+redis = ["testcontainers-modules/redis"]
+
+[dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

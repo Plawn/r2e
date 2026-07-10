@@ -276,19 +276,105 @@ macro_rules! impl_request_builders {
 ///
 /// Uses `tower::ServiceExt::oneshot` to dispatch requests without binding
 /// to a TCP port.
+///
+/// Created either from a hand-assembled router/builder
+/// ([`new`](Self::new) / [`from_builder`](Self::from_builder)) or by booting
+/// an application blueprint ([`boot`](Self::boot) /
+/// [`boot_with`](Self::boot_with)), which additionally retains the resolved
+/// bean graph, the loaded config, and an auto-wired [`TestJwt`].
 pub struct TestApp {
     pub(crate) router: Router,
+    pub(crate) bean_context: Option<std::sync::Arc<r2e_core::beans::BeanContext>>,
+    pub(crate) config: Option<r2e_core::config::R2eConfig>,
+    pub(crate) jwt: Option<crate::TestJwt>,
 }
 
 impl TestApp {
     /// Create a `TestApp` from an assembled `axum::Router`.
     pub fn new(router: Router) -> Self {
-        Self { router }
+        Self {
+            router,
+            bean_context: None,
+            config: None,
+            jwt: None,
+        }
     }
 
     /// Create a `TestApp` from an `AppBuilder` by calling `.build()`.
+    ///
+    /// Retains the resolved bean graph and config, so [`bean`](Self::bean)
+    /// works. No [`TestJwt`] is wired — pair with
+    /// [`with_jwt`](Self::with_jwt) if you want
+    /// [`as_user`](TestRequest::as_user).
     pub fn from_builder(builder: r2e_core::AppBuilder<impl Clone + Send + Sync + 'static>) -> Self {
-        Self::new(builder.build())
+        use r2e_core::BootableApp;
+        let bean_context = BootableApp::bean_context(&builder);
+        let config = BootableApp::r2e_config(&builder);
+        Self {
+            router: builder.build(),
+            bean_context: Some(bean_context),
+            config,
+            jwt: None,
+        }
+    }
+
+    /// Attach a [`TestJwt`] so [`as_user`](TestRequest::as_user) works on a
+    /// hand-assembled app. Provide the matching validator yourself
+    /// (`.provide(Arc::new(jwt.claims_validator()))`).
+    pub fn with_jwt(mut self, jwt: crate::TestJwt) -> Self {
+        self.jwt = Some(jwt);
+        self
+    }
+
+    // ── Booted-app accessors ────────────────────────────────────────────
+
+    /// Fetch a bean from the resolved graph by type — the test-side
+    /// equivalent of `#[inject]` (Quarkus: `@Inject` in the test class).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app was built without a bean graph (`TestApp::new`) or
+    /// if no bean of type `T` exists.
+    pub fn bean<T: Clone + Send + Sync + 'static>(&self) -> T {
+        self.bean_context
+            .as_ref()
+            .expect(
+                "TestApp::bean requires a bean graph — build the app with \
+                 TestApp::boot / boot_with / from_builder, not TestApp::new",
+            )
+            .try_get::<T>()
+            .unwrap_or_else(|| {
+                panic!(
+                    "no bean of type `{}` in the test app's bean graph",
+                    std::any::type_name::<T>()
+                )
+            })
+    }
+
+    /// The [`TestJwt`] wired by [`boot`](Self::boot) (or
+    /// [`with_jwt`](Self::with_jwt)).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (booted with `boot_plain`, or
+    /// hand-assembled without `with_jwt`).
+    pub fn test_jwt(&self) -> &crate::TestJwt {
+        self.jwt.as_ref().expect(
+            "this TestApp has no TestJwt — boot it with TestApp::boot, or \
+             attach one with .with_jwt(jwt)",
+        )
+    }
+
+    /// The loaded [`R2eConfig`](r2e_core::config::R2eConfig).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app was assembled without config.
+    pub fn config(&self) -> &r2e_core::config::R2eConfig {
+        self.config.as_ref().expect(
+            "this TestApp has no config — the blueprint did not call \
+             load_config()/with_config()",
+        )
     }
 
     /// Start building a GET request.
@@ -352,6 +438,18 @@ impl<'a> TestRequest<'a> {
     }
 
     impl_request_builders!();
+
+    /// Authenticate this request as `sub` with `roles`, using the app's
+    /// [`TestJwt`](crate::TestJwt) to mint the Bearer token (Quarkus:
+    /// `@TestSecurity`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (see [`TestApp::test_jwt`]).
+    pub fn as_user(self, sub: &str, roles: &[&str]) -> Self {
+        let token = self.app.test_jwt().token(sub, roles);
+        self.bearer(&token)
+    }
 
     /// Send the request and return the response.
     pub async fn send(self) -> TestResponse {

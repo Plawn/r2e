@@ -1,5 +1,6 @@
 #[macro_use]
 mod app;
+mod boot;
 mod jwt;
 mod multipart;
 mod server;

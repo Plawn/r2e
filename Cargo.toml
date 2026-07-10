@@ -26,6 +26,7 @@ members = [
     "r2e-http",
     "r2e-cli",
     "r2e-test",
+    "r2e-devservices",
     "r2e-utils",
     "r2e",
     "examples/example-app",
@@ -83,6 +84,7 @@ r2e-devtools = { path = "r2e-devtools", version = "0.1.0" }
 r2e-static = { path = "r2e-static", version = "0.1.0" }
 r2e-http = { path = "r2e-http", version = "0.1.0" }
 r2e-test = { path = "r2e-test", version = "0.1.0" }
+r2e-devservices = { path = "r2e-devservices", version = "0.1.0" }
 
 # Core
 tokio = { version = "1" }
@@ -113,6 +115,10 @@ dashmap = "6"
 url = "2"
 base64 = "0.22"
 dotenvy = "0.15"
+
+# Dev services (test containers)
+testcontainers = "0.27"
+testcontainers-modules = "0.15"
 
 # Security
 jsonwebtoken = "10"

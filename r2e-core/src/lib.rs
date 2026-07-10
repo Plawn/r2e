@@ -40,8 +40,8 @@ pub mod ws;
 pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
 pub use lazy::Lazy;
 pub use builder::{
-    AppBuilder, PreparedApp, RegisterController, RegisterControllers, RegisterModule,
-    TaskRegistryHandle,
+    AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
+    RegisterModule, TaskRegistryHandle,
 };
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,

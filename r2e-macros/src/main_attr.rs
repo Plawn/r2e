@@ -31,6 +31,12 @@ struct MainArgs {
     flavor: Option<bool>,
     /// Optional setup function path for hot-reload support.
     setup_fn: Option<syn::Path>,
+    /// `#[r2e::test(app = ...)]`: blueprint function to boot into a `TestApp`.
+    app_fn: Option<syn::Path>,
+    /// `#[r2e::test(app = ..., with = |b| ...)]`: builder pre-configuration hook.
+    with_expr: Option<syn::Expr>,
+    /// `#[r2e::test(app = ..., jwt = false)]`: skip the TestJwt auto-wiring.
+    jwt: bool,
     max_blocking_threads: Option<usize>,
     thread_stack_size: Option<usize>,
     thread_name: Option<String>,
@@ -47,6 +53,9 @@ impl Default for MainArgs {
             worker_threads: None,
             flavor: None,
             setup_fn: None,
+            app_fn: None,
+            with_expr: None,
+            jwt: true,
             max_blocking_threads: None,
             thread_stack_size: None,
             thread_name: None,
@@ -91,6 +100,9 @@ impl MainArgs {
                             }
                         });
                     }
+                    "app" => this.app_fn = Some(meta.value()?.parse()?),
+                    "with" => this.with_expr = Some(meta.value()?.parse()?),
+                    "jwt" => this.jwt = parse_bool(&meta)?,
                     "worker_threads" => this.worker_threads = Some(parse_int(&meta)?),
                     "max_blocking_threads" => this.max_blocking_threads = Some(parse_int(&meta)?),
                     "thread_stack_size" => this.thread_stack_size = Some(parse_int(&meta)?),
@@ -233,6 +245,32 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         quote! {}
     };
 
+    // ── Blueprint-boot path: #[r2e::test(app = my_app::app)] ─────────────
+    if args.app_fn.is_some() && !is_test {
+        return syn::Error::new_spanned(
+            sig,
+            "`app = ...` is only valid on #[r2e::test]",
+        )
+        .to_compile_error();
+    }
+    if args.app_fn.is_none() && (args.with_expr.is_some() || !args.jwt) {
+        return syn::Error::new_spanned(
+            sig,
+            "`with = ...` and `jwt = ...` require `app = <blueprint fn>`",
+        )
+        .to_compile_error();
+    }
+    if let Some(app_fn) = &args.app_fn {
+        return expand_boot_test(
+            app_fn,
+            args.with_expr.as_ref(),
+            args.jwt,
+            &func,
+            &tracing_init,
+            &runtime_builder,
+        );
+    }
+
     // ── Hot-reload path: function has a parameter ─────────────────────────
     //
     // If main takes a parameter (e.g. `env: AppEnv`), we generate two cfg-gated
@@ -306,6 +344,112 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
             #tracing_init
             #runtime_builder
                 .block_on(async #body)
+        }
+    }
+}
+
+/// Returns `true` if `ty` is a path type whose last segment is `name`
+/// (matches both `TestApp` and `r2e_test::TestApp`).
+fn type_ends_with(ty: &syn::Type, name: &str) -> bool {
+    match ty {
+        syn::Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|seg| seg.ident == name)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Codegen for `#[r2e::test(app = <blueprint>)]`: boots the blueprint into a
+/// `TestApp` and binds the test function's parameters from it.
+///
+/// Parameter forms:
+/// - `app: TestApp` — the booted app (at most one),
+/// - `jwt: TestJwt` — a clone of the app's auto-wired `TestJwt`,
+/// - `#[inject] bean: T` — `app.bean::<T>()` from the resolved graph.
+fn expand_boot_test(
+    app_fn: &syn::Path,
+    with_expr: Option<&syn::Expr>,
+    jwt: bool,
+    func: &ItemFn,
+    tracing_init: &TokenStream2,
+    runtime_builder: &TokenStream2,
+) -> TokenStream2 {
+    let test_crate = crate::crate_path::r2e_test_path();
+    let vis = &func.vis;
+    let sig = &func.sig;
+    let attrs = &func.attrs;
+    let body_stmts = &func.block.stmts;
+    let fn_name = &sig.ident;
+    let ret = &sig.output;
+
+    let configure: TokenStream2 = match with_expr {
+        Some(expr) => quote! { #expr },
+        None => quote! { |__r2e_b| __r2e_b },
+    };
+    let boot_call = if jwt {
+        quote! { #test_crate::TestApp::boot_with(#app_fn, #configure).await }
+    } else {
+        quote! { #test_crate::TestApp::boot_plain(#app_fn, #configure).await }
+    };
+
+    // Bind parameters from the booted app. The `TestApp` binding moves the
+    // app, so it is emitted last.
+    let mut bindings: Vec<TokenStream2> = Vec::new();
+    let mut app_binding: Option<TokenStream2> = None;
+    for input in &sig.inputs {
+        let param = match input {
+            FnArg::Typed(param) => param,
+            FnArg::Receiver(recv) => {
+                return syn::Error::new_spanned(
+                    recv,
+                    "#[r2e::test(app = ...)] does not support `self` parameters",
+                )
+                .to_compile_error();
+            }
+        };
+        let pat = &param.pat;
+        let ty = &param.ty;
+        let is_inject = param.attrs.iter().any(|a| a.path().is_ident("inject"));
+
+        if is_inject {
+            bindings.push(quote! { let #pat: #ty = __r2e_test_app.bean::<#ty>(); });
+        } else if type_ends_with(ty, "TestApp") {
+            if app_binding.is_some() {
+                return syn::Error::new_spanned(
+                    param,
+                    "only one `TestApp` parameter is allowed",
+                )
+                .to_compile_error();
+            }
+            app_binding = Some(quote! { let #pat: #ty = __r2e_test_app; });
+        } else if type_ends_with(ty, "TestJwt") {
+            bindings.push(quote! { let #pat: #ty = __r2e_test_app.test_jwt().clone(); });
+        } else {
+            return syn::Error::new_spanned(
+                param,
+                "parameters of a blueprint test must be `TestApp`, `TestJwt`, \
+                 or a bean marked `#[inject]` (e.g. `#[inject] service: UserService`)",
+            )
+            .to_compile_error();
+        }
+    }
+    let app_binding = app_binding.into_iter();
+
+    quote! {
+        #(#attrs)*
+        #[::core::prelude::v1::test]
+        #vis fn #fn_name() #ret {
+            #tracing_init
+            #runtime_builder
+                .block_on(async {
+                    let __r2e_test_app = #boot_call;
+                    #(#bindings)*
+                    #(#app_binding)*
+                    #(#body_stmts)*
+                })
         }
     }
 }

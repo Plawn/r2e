@@ -7,12 +7,14 @@
 //! - [`prepared`]: [`PreparedApp`] + the serving lifecycle (`run()`).
 //! - [`task_registry`]: [`TaskRegistryHandle`] shared by scheduler/gRPC/plugins.
 
+mod bootable;
 mod nostate;
 mod prepared;
 mod registration;
 mod task_registry;
 mod typed;
 
+pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
@@ -111,10 +113,12 @@ impl ServiceHandles {
     }
 }
 
-/// Resolve the active profile: `R2E_PROFILE` env > `r2e.profile` config > `"default"`.
-fn resolve_profile(config: &crate::config::R2eConfig) -> String {
-    std::env::var("R2E_PROFILE")
-        .ok()
+/// Resolve the active profile: forced (`with_profile`) > `R2E_PROFILE` env >
+/// `r2e.profile` config > `"default"`.
+fn resolve_profile(forced: Option<&str>, config: &crate::config::R2eConfig) -> String {
+    forced
+        .map(str::to_string)
+        .or_else(|| std::env::var("R2E_PROFILE").ok())
         .or_else(|| config.try_get::<String>("r2e.profile"))
         .unwrap_or_else(|| "default".to_string())
 }
@@ -152,9 +156,17 @@ struct BuilderConfig {
     /// Maximum time allowed for shutdown hooks to complete before force-exiting.
     /// `None` means wait indefinitely (default).
     shutdown_grace_period: Option<Duration>,
-    /// Active profile name, resolved from `R2E_PROFILE` env var, `r2e.profile`
+    /// Active profile name, resolved from the forced profile
+    /// ([`AppBuilder::with_profile`]), `R2E_PROFILE` env var, `r2e.profile`
     /// config key, or `"default"`.
     active_profile: String,
+    /// Profile forced via [`AppBuilder::with_profile`]; wins over env/config
+    /// detection. Set by test harnesses (no process-global env mutation).
+    forced_profile: Option<String>,
+    /// Config keys stashed via [`AppBuilder::override_config_value`] before
+    /// config is loaded; applied on top of whatever `with_config`/`load_config`
+    /// produces.
+    config_overrides: Vec<(String, crate::config::ConfigValue)>,
 }
 
 /// Builder for assembling a R2E application.

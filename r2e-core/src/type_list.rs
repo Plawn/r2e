@@ -98,14 +98,6 @@ pub struct Here;
 /// the head, but somewhere deeper in the list at index `I`.
 pub struct There<T>(PhantomData<fn() -> T>);
 
-/// Witness used by `#[derive(TestState)]` structs: the element is present as a
-/// **named field** of a hand-written struct rather than at a positional slot
-/// of an HList.
-///
-/// Lets test-state structs satisfy the same [`Contains`]/[`HasBean`] bounds as
-/// HList states.
-pub struct ByField;
-
 /// Compile-time witness that type `H` is present in the type-level list `Self`,
 /// located at position `Idx`.
 ///

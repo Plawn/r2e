@@ -43,6 +43,17 @@ impl<'a> TestSession<'a> {
         self
     }
 
+    /// Authenticate every request in this session as `sub` with `roles`,
+    /// using the app's [`TestJwt`](crate::TestJwt) (Quarkus: `@TestSecurity`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (see [`TestApp::test_jwt`]).
+    pub fn as_user(self, sub: &str, roles: &[&str]) -> Self {
+        let token = self.app.test_jwt().token(sub, roles);
+        self.with_bearer(&token)
+    }
+
     /// Set a default header for all requests in this session.
     pub fn with_default_header(mut self, name: impl IntoHeaderName, value: &str) -> Self {
         self.default_headers.insert(name, value.parse().unwrap());
@@ -145,6 +156,17 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
     }
 
     impl_request_builders!();
+
+    /// Authenticate this request as `sub` with `roles`, using the app's
+    /// [`TestJwt`](crate::TestJwt) (Quarkus: `@TestSecurity`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (see [`TestApp::test_jwt`]).
+    pub fn as_user(self, sub: &str, roles: &[&str]) -> Self {
+        let token = self.session.app.test_jwt().token(sub, roles);
+        self.bearer(&token)
+    }
 
     /// Send the request and return the response.
     ///

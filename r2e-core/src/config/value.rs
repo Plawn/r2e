@@ -111,6 +111,52 @@ impl ConfigValue {
     }
 }
 
+// ── Ergonomic conversions into ConfigValue ─────────────────────────────────
+//
+// Let call sites pass plain literals: `override_config_value("app.port", 8080)`.
+
+impl From<&str> for ConfigValue {
+    fn from(v: &str) -> Self {
+        ConfigValue::String(v.to_string())
+    }
+}
+
+impl From<String> for ConfigValue {
+    fn from(v: String) -> Self {
+        ConfigValue::String(v)
+    }
+}
+
+impl From<i64> for ConfigValue {
+    fn from(v: i64) -> Self {
+        ConfigValue::Integer(v)
+    }
+}
+
+impl From<i32> for ConfigValue {
+    fn from(v: i32) -> Self {
+        ConfigValue::Integer(v as i64)
+    }
+}
+
+impl From<u16> for ConfigValue {
+    fn from(v: u16) -> Self {
+        ConfigValue::Integer(v as i64)
+    }
+}
+
+impl From<f64> for ConfigValue {
+    fn from(v: f64) -> Self {
+        ConfigValue::Float(v)
+    }
+}
+
+impl From<bool> for ConfigValue {
+    fn from(v: bool) -> Self {
+        ConfigValue::Bool(v)
+    }
+}
+
 /// Trait for converting a `ConfigValue` into a concrete type.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be used as a config value type",

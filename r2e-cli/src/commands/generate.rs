@@ -207,7 +207,7 @@ pub fn crud(name: &str, raw_fields: &[String]) -> Result<(), Box<dyn std::error:
     let test_dir = Path::new("tests");
     fs::create_dir_all(test_dir)?;
     let test_path = test_dir.join(format!("{snake}_test.rs"));
-    fs::write(&test_path, crud_test(name))?;
+    fs::write(&test_path, crud_test(name, &package_lib_name()))?;
     println!("  {} {}", "✓".green(), test_path.display());
 
     println!();
@@ -456,48 +456,58 @@ pub fn rust_type_to_sql(rust_type: &str) -> &str {
     }
 }
 
-fn crud_test(entity_name: &str) -> String {
+/// Read the lib name (`package.name` with `-` → `_`) from `Cargo.toml`,
+/// falling back to `my_app`.
+fn package_lib_name() -> String {
+    fs::read_to_string("Cargo.toml")
+        .ok()
+        .and_then(|content| content.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| {
+            doc.get("package")
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| n.replace('-', "_"))
+        })
+        .unwrap_or_else(|| "my_app".to_string())
+}
+
+fn crud_test(entity_name: &str, lib_name: &str) -> String {
     let snake = to_snake_case(entity_name);
     let plural = pluralize(&snake);
 
     format!(
-        r#"use r2e_test::{{TestApp, TestJwt}};
+        r#"use r2e_test::TestApp;
 use serde_json::json;
 
 // TODO: adapt imports to your project structure
-// use crate::models::{snake}::{entity_name};
+// use {lib_name}::models::{snake}::{entity_name};
 
-#[r2e::test]
-async fn test_list_{plural}() {{
-    // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.get("/{plural}").send().await;
-    // resp.assert_ok();
-    todo!("Setup TestApp and test list endpoint");
+// These tests boot your application blueprint. Expose it in lib.rs:
+//   pub async fn app(b: AppBuilder) -> impl BootableApp {{ ... }}
+
+#[r2e::test(app = {lib_name}::app)]
+async fn test_list_{plural}(app: TestApp) {{
+    let resp = app.get("/{plural}").as_user("test-user", &["user"]).send().await;
+    resp.assert_ok();
 }}
 
-#[r2e::test]
-async fn test_create_{snake}() {{
-    // let app = TestApp::from_builder(/* your builder */);
-    // let body = json!({{ /* fields */ }});
-    // let resp = app.post("/{plural}").json(&body).send().await;
-    // resp.assert_created();
-    todo!("Setup TestApp and test create endpoint");
+#[r2e::test(app = {lib_name}::app)]
+async fn test_create_{snake}(app: TestApp) {{
+    let body = json!({{ /* fields */ }});
+    let resp = app.post("/{plural}").as_user("test-user", &["user"]).json(&body).send().await;
+    resp.assert_created();
 }}
 
-#[r2e::test]
-async fn test_get_{snake}_not_found() {{
-    // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.get("/{plural}/999").send().await;
-    // resp.assert_not_found();
-    todo!("Setup TestApp and test 404");
+#[r2e::test(app = {lib_name}::app)]
+async fn test_get_{snake}_not_found(app: TestApp) {{
+    let resp = app.get("/{plural}/999").as_user("test-user", &["user"]).send().await;
+    resp.assert_not_found();
 }}
 
-#[r2e::test]
-async fn test_delete_{snake}() {{
-    // let app = TestApp::from_builder(/* your builder */);
-    // let resp = app.delete("/{plural}/1").send().await;
-    // resp.assert_ok();
-    todo!("Setup TestApp and test delete");
+#[r2e::test(app = {lib_name}::app)]
+async fn test_delete_{snake}(app: TestApp) {{
+    let resp = app.delete("/{plural}/1").as_user("test-user", &["user"]).send().await;
+    resp.assert_ok();
 }}
 "#
     )

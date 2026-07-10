@@ -21,6 +21,8 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
                 active_profile: "default".to_string(),
+                forced_profile: None,
+                config_overrides: Vec::new(),
             },
             state: NoState,
             bean_context: Arc::new(crate::beans::BeanContext::empty()),
@@ -256,9 +258,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// ```
     pub fn with_config(
         mut self,
-        config: crate::config::R2eConfig,
+        mut config: crate::config::R2eConfig,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R, Mods> {
-        self.shared.active_profile = resolve_profile(&config);
+        for (key, value) in self.shared.config_overrides.drain(..) {
+            config.set(&key, value);
+        }
+        self.shared.active_profile =
+            resolve_profile(self.shared.forced_profile.as_deref(), &config);
         self.shared.config = Some(config.clone());
         self.shared.bean_registry.provide(config);
         self.with_updated_types()
@@ -293,41 +299,80 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     where
         C::Children: TAppend<P>,
     {
-        let config = crate::config::R2eConfig::load()
-            .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+        let mut config =
+            crate::config::R2eConfig::load_profiled(self.shared.forced_profile.as_deref())
+                .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+        for (key, value) in self.shared.config_overrides.drain(..) {
+            config.set(&key, value);
+        }
         C::register(&config, &mut self.shared.bean_registry)
             .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
-        self.shared.active_profile = resolve_profile(&config);
+        self.shared.active_profile =
+            resolve_profile(self.shared.forced_profile.as_deref(), &config);
         self.shared.config = Some(config.clone());
         self.shared.bean_registry.provide(config);
         self.with_updated_types()
     }
 
-    /// Enable bean override mode (useful for testing).
+    // ── Test-harness pre-configuration ─────────────────────────────────
+
+    /// Pin a bean instance that wins over **any later** registration of the
+    /// same type: subsequent `provide`/`register` calls for that type are
+    /// silently ignored.
     ///
-    /// When enabled, duplicate bean registrations are allowed and the last
-    /// registration wins. Must be called before [`override_provide`](Self::override_provide).
-    pub fn allow_bean_override(mut self) -> Self {
-        self.shared.bean_registry.allow_overrides = true;
+    /// This is the mock/test-double primitive. A test harness applies its
+    /// overrides *before* handing the builder to the application's assembly
+    /// function, and the app's own registration of the real bean becomes a
+    /// no-op — the pinned instance fills the provision slot instead:
+    ///
+    /// ```ignore
+    /// TestApp::boot_with(my_app::app, |b| b.override_bean(FakeMailer::new())).await
+    /// ```
+    ///
+    /// The pinned value does not extend the compile-time provision list `P`:
+    /// presence is still guaranteed by the app's own registration, only the
+    /// value is substituted. Pinning a type the app never registers simply
+    /// adds an unused instance.
+    pub fn override_bean<B: Clone + Send + Sync + 'static>(mut self, value: B) -> Self {
+        self.shared.bean_registry.pin_provide(value);
         self
     }
 
-    /// Override a previously registered bean with a pre-built instance.
+    /// Override a single config key on top of whatever
+    /// [`with_config`](Self::with_config) / [`load_config`](Self::load_config)
+    /// loads — regardless of call order.
     ///
-    /// Requires [`allow_bean_override`](Self::allow_bean_override) to be called first.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `allow_bean_override()` was not called.
-    pub fn override_provide<B: Clone + Send + Sync + 'static>(
+    /// If config is already loaded, the key is set immediately; otherwise it
+    /// is stashed and applied right after loading (the `@TestProfile`
+    /// config-override equivalent).
+    pub fn override_config_value(
         mut self,
-        value: B,
+        key: impl Into<String>,
+        value: impl Into<crate::config::ConfigValue>,
     ) -> Self {
-        assert!(
-            self.shared.bean_registry.allow_overrides,
-            "Call allow_bean_override() before override_provide()"
-        );
-        self.shared.bean_registry.provide(value);
+        match self.shared.config.as_mut() {
+            Some(config) => {
+                config.set(&key.into(), value.into());
+                // Keep the registry copy in sync with the patched config.
+                self.shared.bean_registry.provide(config.clone());
+            }
+            None => {
+                self.shared.config_overrides.push((key.into(), value.into()));
+            }
+        }
+        self
+    }
+
+    /// Force the active profile, winning over `R2E_PROFILE` and `r2e.profile`.
+    ///
+    /// A later [`load_config`](Self::load_config) also overlays
+    /// `application-{profile}.yaml`. Test harnesses use
+    /// `with_profile("test")` instead of mutating the process environment
+    /// (which would race with parallel tests).
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
+        let profile = profile.into();
+        self.shared.active_profile = profile.clone();
+        self.shared.forced_profile = Some(profile);
         self
     }
 

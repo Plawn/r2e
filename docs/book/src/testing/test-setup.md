@@ -12,38 +12,64 @@ r2e-test = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
-## Basic test structure
+## Recommended pattern: boot your app's blueprint
+
+Expose the app's assembly as a **blueprint** function in `lib.rs` (production
+`main.rs` boots the same function), then boot the real application in tests:
 
 ```rust
-use r2e::prelude::*;
-use r2e_test::{TestApp, TestJwt};
-
-async fn setup() -> (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-
-    // Build app state for testing
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .register::<UserService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(ErrorHandling)
-            .register_controller::<UserController>(),
-    );
-
-    (app, jwt)
+// src/lib.rs
+pub async fn app(b: AppBuilder) -> impl BootableApp {
+    b.load_config::<AppConfig>()
+        .register::<UserService>()
+        .build_state().await
+        .with(Health)
+        .with(ErrorHandling)
+        .register_controllers::<(UserController,)>()
 }
 
-#[tokio::test]
-async fn test_health_check() {
-    let (app, _) = setup().await;
-    app.get("/health").send().await.assert_ok();
+// src/main.rs
+#[r2e::main]
+async fn main() {
+    my_app::app(AppBuilder::new()).await.serve_auto().await.unwrap();
 }
 ```
 
-## Key pattern: `TestApp::from_builder`
+```rust
+// tests/users.rs
+use r2e_test::TestApp;
+
+#[r2e::test(app = my_app::app)]
+async fn lists_users(app: TestApp) {
+    app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
+}
+```
+
+Booting an app this way:
+
+- forces the **`test` profile**, so `application-test.yaml` overlays your base
+  config,
+- pins a local `TestJwt` validator over the app's own, so `.as_user(sub, roles)`
+  works with no identity provider,
+- retains the resolved bean graph: `app.bean::<UserService>()` (or an
+  `#[inject] users: UserService` test parameter) returns the same instance
+  your controllers use.
+
+Mocks and config patches go through the `with` hook — overrides are **pinned**,
+so the app's own registration of the same type becomes a no-op:
+
+```rust
+#[r2e::test(app = my_app::app, with = |b| {
+    b.override_bean(FakeMailer::new())          // @InjectMock
+        .override_config_value("mail.enabled", false)  // @TestProfile
+})]
+async fn signup_does_not_send_mail(app: TestApp, #[inject] mailer: FakeMailer) {
+    app.post("/signup").json(&payload()).send().await.assert_ok();
+    assert_eq!(mailer.sent().len(), 0);
+}
+```
+
+## Hand-assembled apps: `TestApp::from_builder`
 
 `TestApp` wraps your router with an in-process HTTP client (via `tower::ServiceExt::oneshot` — no TCP). This means:
 
@@ -59,51 +85,41 @@ let app = TestApp::from_builder(
 );
 ```
 
-## Hand-building test state with `#[derive(TestState)]`
-
-Normally the app state is inferred — `.provide` / `.register` build the bean graph
-and `build_state()` materializes it (see [State and Beans](../core-concepts/state-and-beans.md)).
-For focused unit-style tests you can instead hand-write a state struct and derive
-`TestState` on it. The derive bridges the struct into R2E's HList state model —
-generating `HasBean<T, ByField>` / `Contains<T, ByField>` per unique field type (so
-controllers can be registered against it and a missing dependency is a compile
-error) plus `BeanLookup` (so guards and interceptors can read beans via
-`state.bean::<T>()`), along with a per-field `FromRef` impl for any raw Axum
-extractors:
-
-```rust
-use r2e::prelude::*;
-
-#[derive(Clone, TestState)]
-struct TestState {
-    user_service: UserService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
-}
-```
-
-Each field type becomes a bean readable by type — no hand-written `HasBean` /
-`BeanLookup` impls required.
-
-Skip fields that shouldn't be exposed as a bean:
-
-```rust
-#[derive(Clone, TestState)]
-struct TestState {
-    user_service: UserService,
-    #[test_state(skip)]
-    internal_counter: Arc<AtomicU64>,
-}
-```
-
 ## Test configuration
 
-For tests, use `R2eConfig::empty()` or manual config:
+Booted apps use the `test` profile: put test-only keys in
+`application-test.yaml`, patch individual keys with
+`b.override_config_value(key, value)` in the `with` hook, and read the final
+config in the test via `app.config()`.
+
+For hand-assembled apps, use `R2eConfig::empty()` or manual config:
 
 ```rust
 let config = R2eConfig::empty();
 config.set("app.name", ConfigValue::String("test-app".into()));
 ```
+
+## Dev services (containerized infrastructure)
+
+When a test needs real infrastructure, `r2e-devservices` starts Docker
+containers on demand (features `postgres`, `redis`):
+
+```rust
+use r2e_devservices::DevPostgres;
+
+#[tokio::test]
+async fn users_are_persisted() {
+    let pg = DevPostgres::shared().await; // one container per test process
+    let app = TestApp::boot_with(my_app::app, |b| {
+        b.override_config_value("app.database.url", pg.url())
+    })
+    .await;
+    // ...
+}
+```
+
+`shared()` reuses one container for the whole test process (fast); `start()`
+gives an isolated one. Containers are cleaned up after the process exits.
 
 ## Running tests
 

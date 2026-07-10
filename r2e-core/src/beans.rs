@@ -447,8 +447,11 @@ pub struct BeanRegistry {
     beans: Vec<BeanRegistration>,
     lazy_beans: Vec<LazyBeanRegistration>,
     provided: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    /// When true, duplicate bean registrations are allowed (last wins).
-    pub(crate) allow_overrides: bool,
+    /// Types whose provided instance is **pinned**: any later `provide` /
+    /// `register` of the same `TypeId` is silently ignored. Used by test
+    /// harnesses that pre-configure the builder *before* handing it to the
+    /// application's assembly function (see `AppBuilder::override_bean`).
+    pinned: HashSet<TypeId>,
 }
 
 struct BeanRegistration {
@@ -569,8 +572,8 @@ impl fmt::Display for BeanError {
                     f,
                     "Bean of type '{}' is registered more than once. Remove the \
                      duplicate .register()/.provide(). For an intentional override, \
-                     register the base with .with_default_bean() (last-wins) or opt \
-                     into overrides with .allow_bean_override()",
+                     register the base with .with_default_bean() (last-wins); in \
+                     tests, pin a replacement with .override_bean()",
                     type_name
                 )
             }
@@ -593,7 +596,7 @@ impl BeanRegistry {
             beans: Vec::new(),
             lazy_beans: Vec::new(),
             provided: HashMap::new(),
-            allow_overrides: false,
+            pinned: HashSet::new(),
         }
     }
 
@@ -601,7 +604,23 @@ impl BeanRegistry {
     ///
     /// The instance will be available to beans that depend on type `T`.
     pub fn provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
+        if self.pinned.contains(&TypeId::of::<T>()) {
+            return self;
+        }
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
+        self
+    }
+
+    /// Provide a **pinned** instance: any later `provide`/`register` of the
+    /// same type is silently ignored, so this value wins even over
+    /// registrations made after it.
+    ///
+    /// This is the test-override primitive: a harness pins its mocks and test
+    /// doubles before handing the builder to the application's assembly
+    /// function, whose own registrations of the same types are then no-ops.
+    pub fn pin_provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
+        self.provided.insert(TypeId::of::<T>(), Box::new(value));
+        self.pinned.insert(TypeId::of::<T>());
         self
     }
 
@@ -642,6 +661,9 @@ impl BeanRegistry {
     }
 
     fn register_inner<T: Bean>(&mut self, overridable: bool) -> &mut Self {
+        if self.pinned.contains(&TypeId::of::<T>()) {
+            return self;
+        }
         if T::LAZY {
             self.lazy_beans.push(LazyBeanRegistration {
                 type_id: TypeId::of::<T>(),
@@ -691,6 +713,9 @@ impl BeanRegistry {
     }
 
     fn register_async_inner<T: AsyncBean>(&mut self, overridable: bool) -> &mut Self {
+        if self.pinned.contains(&TypeId::of::<T>()) {
+            return self;
+        }
         if T::LAZY {
             self.lazy_beans.push(LazyBeanRegistration {
                 type_id: TypeId::of::<T>(),
@@ -755,6 +780,9 @@ impl BeanRegistry {
         T: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> T + Send + 'static,
     {
+        if self.pinned.contains(&TypeId::of::<T>()) {
+            return;
+        }
         // Derive a stable per-registration fingerprint from the closure type's
         // name. The name encodes the closure's definition site, so identical
         // closures at distinct call sites hash to distinct values. This is not
@@ -805,6 +833,9 @@ impl BeanRegistry {
     }
 
     fn register_producer_inner<P: Producer>(&mut self, overridable: bool) -> &mut Self {
+        if self.pinned.contains(&TypeId::of::<P::Output>()) {
+            return self;
+        }
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<P::Output>(),
             type_name: type_name::<P::Output>(),
@@ -826,8 +857,8 @@ impl BeanRegistry {
 
     /// Compute the graph fingerprint without constructing any beans.
     ///
-    /// Performs deduplication (when overrides are enabled), topological sorting,
-    /// and computes per-bean fingerprints from metadata only. This is cheap
+    /// Performs alternative resolution, topological sorting, and computes
+    /// per-bean fingerprints from metadata only. This is cheap
     /// and allows `build_state` to compare against the cached fingerprint
     /// before doing the expensive construction step.
     ///
@@ -843,69 +874,30 @@ impl BeanRegistry {
         let alt_remove = Self::overridable_indices_to_remove(&self.beans);
         let lazy_alt_remove = Self::overridable_indices_to_remove(&self.lazy_beans);
 
-        let mut beans: Vec<FingerprintReg<'_>> = if self.allow_overrides {
-            // Deduplicate: keep only the last registration per TypeId
-            let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
-            for (i, reg) in self.beans.iter().enumerate() {
-                last_seen.insert(reg.type_id, i);
-            }
-            let keep: HashSet<usize> = last_seen.values().copied().collect();
-            self.beans.iter().enumerate()
-                .filter(|(i, _)| keep.contains(i) && !alt_remove.contains(i))
-                .map(|(_, reg)| FingerprintReg {
-                    type_id: reg.type_id,
-                    type_name: reg.type_name,
-                    dependencies: &reg.dependencies,
-                    config_keys: &reg.config_keys,
-                    build_version: reg.build_version,
-                })
-                .collect()
-        } else {
-            self.beans.iter().enumerate()
-                .filter(|(i, _)| !alt_remove.contains(i))
-                .map(|(_, reg)| FingerprintReg {
-                    type_id: reg.type_id,
-                    type_name: reg.type_name,
-                    dependencies: &reg.dependencies,
-                    config_keys: &reg.config_keys,
-                    build_version: reg.build_version,
-                })
-                .collect()
-        };
+        let mut beans: Vec<FingerprintReg<'_>> = self.beans.iter().enumerate()
+            .filter(|(i, _)| !alt_remove.contains(i))
+            .map(|(_, reg)| FingerprintReg {
+                type_id: reg.type_id,
+                type_name: reg.type_name,
+                dependencies: &reg.dependencies,
+                config_keys: &reg.config_keys,
+                build_version: reg.build_version,
+            })
+            .collect();
 
         // Include lazy beans in the fingerprint graph.
-        let lazy_regs: Vec<FingerprintReg<'_>> = if self.allow_overrides {
-            let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
-            for (i, reg) in self.lazy_beans.iter().enumerate() {
-                last_seen.insert(reg.type_id, i);
-            }
-            let keep: HashSet<usize> = last_seen.values().copied().collect();
-            self.lazy_beans
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| keep.contains(i) && !lazy_alt_remove.contains(i))
-                .map(|(_, reg)| FingerprintReg {
-                    type_id: reg.type_id,
-                    type_name: reg.type_name,
-                    dependencies: &reg.dependencies,
-                    config_keys: &reg.config_keys,
-                    build_version: reg.build_version,
-                })
-                .collect()
-        } else {
-            self.lazy_beans
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !lazy_alt_remove.contains(i))
-                .map(|(_, reg)| FingerprintReg {
-                    type_id: reg.type_id,
-                    type_name: reg.type_name,
-                    dependencies: &reg.dependencies,
-                    config_keys: &reg.config_keys,
-                    build_version: reg.build_version,
-                })
-                .collect()
-        };
+        let lazy_regs: Vec<FingerprintReg<'_>> = self.lazy_beans
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !lazy_alt_remove.contains(i))
+            .map(|(_, reg)| FingerprintReg {
+                type_id: reg.type_id,
+                type_name: reg.type_name,
+                dependencies: &reg.dependencies,
+                config_keys: &reg.config_keys,
+                build_version: reg.build_version,
+            })
+            .collect();
 
         beans.extend(lazy_regs);
 
@@ -956,24 +948,13 @@ impl BeanRegistry {
         Self::resolve_alternatives(&mut self.beans);
         Self::resolve_alternatives(&mut self.lazy_beans);
 
-        // When overrides are allowed, deduplicate beans (last registration wins).
-        if self.allow_overrides {
-            Self::deduplicate_regs(&mut self.beans, &mut entries);
-            Self::deduplicate_regs(&mut self.lazy_beans, &mut entries);
-        }
-
         let bean_count = self.beans.len();
         let lazy_type_ids: HashSet<TypeId> =
             self.lazy_beans.iter().map(|lr| lr.type_id).collect();
 
         // Check for duplicates before any construction.
-        if !self.allow_overrides {
-            Self::check_for_duplicates(&self.beans, &entries)?;
-            Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
-        } else {
-            // Even with overrides, lazy and eager registrations must not conflict.
-            Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
-        }
+        Self::check_for_duplicates(&self.beans, &entries)?;
+        Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
 
         let mut ctx = if bean_count == 0 {
             BeanContext::new(entries)
@@ -1125,8 +1106,8 @@ impl BeanRegistry {
     /// Remove overridable (default) registrations that have been superseded
     /// by a later (alternative) registration of the same `TypeId`.
     ///
-    /// This runs before the global deduplication / duplicate-check so that
-    /// the default/alternative pattern works regardless of `allow_overrides`.
+    /// This runs before the global duplicate-check so that the
+    /// default/alternative pattern never trips it.
     /// Works uniformly for eager and lazy registrations via [`RegMeta`].
     fn resolve_alternatives<R: RegMeta>(regs: &mut Vec<R>) {
         let remove = Self::overridable_indices_to_remove(regs);
@@ -1137,31 +1118,6 @@ impl BeanRegistry {
                 idx += 1;
                 keep
             });
-        }
-    }
-
-    /// Deduplicate registrations when overrides are enabled: last registration
-    /// wins. Also removes provided entries whose `TypeId` matches a surviving
-    /// registration (the registration's factory is constructed instead).
-    /// Works uniformly for eager and lazy registrations via [`RegMeta`].
-    fn deduplicate_regs<R: RegMeta>(
-        regs: &mut Vec<R>,
-        entries: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    ) {
-        // Iterate in order; for each type_id keep the last occurrence.
-        let mut last_seen: HashMap<TypeId, usize> = HashMap::new();
-        for (i, reg) in regs.iter().enumerate() {
-            last_seen.insert(reg.reg_type_id(), i);
-        }
-        let keep: HashSet<usize> = last_seen.values().copied().collect();
-        let mut idx = 0;
-        regs.retain(|_| {
-            let kept = keep.contains(&idx);
-            idx += 1;
-            kept
-        });
-        for reg in regs.iter() {
-            entries.remove(&reg.reg_type_id());
         }
     }
 

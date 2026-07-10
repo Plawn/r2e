@@ -430,7 +430,13 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 ## Testing (r2e-test)
 
-- `TestApp` — wraps a `Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute. `serve()` spawns a live `TestServer` on a random TCP port (needed for WebSocket/SSE).
+- **Blueprint boot (the `@QuarkusTest` path)** — apps expose an assembly function `pub async fn app(b: AppBuilder) -> impl BootableApp` in `lib.rs`; tests boot the real app instead of re-declaring controllers:
+  - `TestApp::boot(blueprint).await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
+  - `TestApp::boot_with(blueprint, |b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`). Pinned overrides win over the app's later registrations (first-pin semantics, see `docs/claude/plan-testing-dx.md`).
+  - `TestApp::boot_plain(blueprint, |b| ...).await` — skips the TestJwt wiring.
+  - `#[r2e::test(app = my_app::app)]` — macro form; binds test-fn params: `app: TestApp`, `jwt: TestJwt`, `#[inject] bean: T`. Optional `with = |b| ...` and `jwt = false`.
+  - `app.bean::<T>()` — fetch any bean from the booted app's resolved graph. `app.config()`, `app.test_jwt()` accessors. `.as_user(sub, &roles)` on `TestRequest`/`SessionRequest`/`TestSession` mints a Bearer token from the app's `TestJwt` (the `@TestSecurity` equivalent).
+- `TestApp` — wraps a `Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute. `serve()` spawns a live `TestServer` on a random TCP port (needed for WebSocket/SSE). `from_builder` retains the bean graph (so `bean::<T>()` works); `with_jwt(jwt)` attaches a `TestJwt` to a hand-assembled app.
 - `TestRequest` — builder with: `bearer(token)`, `header(name, value)`, `json(body)`, `body(bytes)`, `form(fields)`, `cookie(name, value)`, `query(key, value)`, `queries(pairs)`, `content_type(ct)`, `file(field, name, ct, data)`, `field(name, value)`, `multipart()`.
 - `TestResponse` — response wrapper with:
   - **Status assertions:** `assert_ok` (200), `assert_created` (201), `assert_no_content` (204), `assert_bad_request` (400), `assert_unauthorized` (401), `assert_forbidden` (403), `assert_not_found` (404), `assert_conflict` (409), `assert_unprocessable` (422), `assert_too_many_requests` (429), `assert_internal_server_error` (500), `assert_status(code)`. All return `&Self`.
@@ -449,5 +455,5 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 - `SetCookie` — parsed `Set-Cookie` header with all attributes: `name`, `value`, `path`, `domain`, `max_age`, `expires`, `secure`, `http_only`, `same_site`.
 - `FiniteStream<T>` — yields items from a `Vec` then completes. Use for testing SSE endpoints backed by infinite broadcast streams.
 - `ParsedSseEvent` — parsed SSE event with `event: Option<String>` and `data: String`.
-- `#[derive(TestState)]` — generates `FromRef` impls for test state structs (eliminates boilerplate). Supports `#[test_state(skip)]`.
 - `json_contains(actual, expected)` — recursive subset matching function (exported for custom assertions).
+- **Dev services (`r2e-devservices`)** — containerized infra for tests via testcontainers. `DevPostgres` / `DevRedis` (features `postgres`/`redis`): `shared().await` = one container per test process (tokio OnceCell, reaped after process exit), `start()` = isolated, `start_with_tag(tag)` = custom image tag (defaults pinned to `postgres:16-alpine`/`redis:7-alpine` — the modules' own defaults are pre-arm64). Wire in via `b.override_config_value("app.database.url", pg.url())` in the boot hook. Docker smoke tests: `cargo test -p r2e-devservices --features postgres,redis --test dev_services -- --ignored`.

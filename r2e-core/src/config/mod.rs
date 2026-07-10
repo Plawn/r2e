@@ -100,9 +100,30 @@ impl R2eConfig {
     /// Load configuration with a custom secret resolver.
     ///
     /// Looks for `application.yaml` in the current working directory,
+    /// overlays the profile file (see
+    /// [`load_profiled_with_resolver`](Self::load_profiled_with_resolver)),
     /// resolves `${...}` placeholders in string values, then overlays
     /// environment variables.
     pub fn load_with_resolver(
+        resolver: &dyn SecretResolver,
+    ) -> Result<Self, ConfigError> {
+        Self::load_profiled_with_resolver(None, resolver)
+    }
+
+    /// Load configuration for a specific profile.
+    ///
+    /// Resolution order (lowest to highest priority):
+    /// 1. `application.yaml`
+    /// 2. `application-{profile}.yaml` (when the file exists and the profile
+    ///    is not `default`)
+    /// 3. `R2E_`-prefixed environment variables
+    ///
+    /// The profile itself is resolved as: `profile` argument >
+    /// `R2E_PROFILE` env var > `r2e.profile` key in the base file >
+    /// `"default"`. The resolved profile is written back to the
+    /// `r2e.profile` key so downstream consumers agree on it.
+    pub fn load_profiled_with_resolver(
+        profile: Option<&str>,
         resolver: &dyn SecretResolver,
     ) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
@@ -113,10 +134,25 @@ impl R2eConfig {
         // 2. Load .env file (does NOT overwrite existing env vars)
         let _ = dotenvy::dotenv();
 
-        // 3. Resolve ${...} placeholders in string values
+        // 3. Overlay the profile-specific file.
+        let resolved_profile = profile
+            .map(str::to_string)
+            .or_else(|| std::env::var("R2E_PROFILE").ok())
+            .or_else(|| match values.get("r2e.profile") {
+                Some(ConfigValue::String(s)) => Some(s.clone()),
+                _ => None,
+            });
+        if let Some(p) = resolved_profile {
+            if p != "default" {
+                loader::load_yaml_file(Path::new(&format!("application-{p}.yaml")), &mut values)?;
+            }
+            values.insert("r2e.profile".to_string(), ConfigValue::String(p));
+        }
+
+        // 4. Resolve ${...} placeholders in string values
         resolve_string_values(&mut values, resolver)?;
 
-        // 4. Overlay environment variables.
+        // 5. Overlay environment variables.
         apply_env_overlay(&mut values, std::env::vars());
 
         Ok(R2eConfig {
@@ -127,9 +163,15 @@ impl R2eConfig {
     /// Load configuration (default resolver: env + file).
     ///
     /// Looks for `application.yaml` in the current working directory,
+    /// overlays `application-{profile}.yaml` when a profile is active,
     /// then overlays environment variables.
     pub fn load() -> Result<Self, ConfigError> {
         Self::load_with_resolver(&DefaultSecretResolver)
+    }
+
+    /// [`load`](Self::load) with an explicit profile (wins over `R2E_PROFILE`).
+    pub fn load_profiled(profile: Option<&str>) -> Result<Self, ConfigError> {
+        Self::load_profiled_with_resolver(profile, &DefaultSecretResolver)
     }
 
     /// Apply the `R2E_`-prefixed environment overlay to an existing values

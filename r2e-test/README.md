@@ -231,21 +231,43 @@ let expired = jwt.token_builder("user-1")
 let claims_validator = jwt.claims_validator();
 ```
 
-### TestState derive
+### Blueprint boot
 
-Eliminates `FromRef` boilerplate for test state structs:
+Expose your app's assembly as a blueprint in `lib.rs` and boot the **real**
+application in tests — no copy-pasted setup:
 
 ```rust
-use r2e::prelude::*;
-
-#[derive(Clone, TestState)]
-struct TestState {
-    user_service: UserService,
-    jwt_validator: Arc<JwtClaimsValidator>,
-    config: R2eConfig,
+// lib.rs
+pub async fn app(b: AppBuilder) -> impl BootableApp {
+    b.load_config::<AppConfig>()
+        .register::<UserService>()
+        .build_state().await
+        .with(Health)
+        .register_controllers::<(UserController,)>()
 }
-// Automatically generates FromRef impls for each field type
 ```
+
+```rust
+use r2e_test::TestApp;
+
+#[r2e::test(app = my_app::app)]
+async fn lists_users(app: TestApp, #[inject] users: UserService) {
+    // .as_user mints a token accepted by the auto-pinned TestJwt validator
+    app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
+    assert_eq!(users.count().await, 2); // same bean instance the app used
+}
+
+// Pin mocks and patch config per test:
+#[r2e::test(app = my_app::app, with = |b| {
+    b.override_bean(FakeMailer::new())
+        .override_config_value("app.greeting", "hi")
+})]
+async fn with_mock(app: TestApp) { /* ... */ }
+```
+
+Booting forces the `test` profile, so `application-test.yaml` overlays your
+base config. The non-macro form is `TestApp::boot(my_app::app).await` /
+`TestApp::boot_with(my_app::app, |b| ...).await`.
 
 ## Full example
 

@@ -7,6 +7,7 @@ use serde_json::Value;
 /// Test helper for generating JWT tokens and a matching `JwtValidator`.
 ///
 /// Uses HS256 with a static secret for deterministic, fast test setup.
+#[derive(Clone)]
 pub struct TestJwt {
     secret: Vec<u8>,
     issuer: String,

@@ -53,7 +53,6 @@ pub use r2e_macros::module;
 pub use r2e_macros::producer;
 pub use r2e_macros::Bean;
 pub use r2e_macros::DecoratorBean;
-pub use r2e_macros::TestState;
 pub use r2e_macros::BackgroundService;
 
 // Config macros
@@ -68,7 +67,7 @@ pub use r2e_macros::ApiError;
 
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
-pub use crate::builder::{AppBuilder, PreparedApp, RegisterController, RegisterControllers, RegisterModule};
+pub use crate::builder::{AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers, RegisterModule};
 // NOTE: `BeanAccess` is deliberately NOT in the prelude: its blanket impl puts
 // a `get` method on every type, which would shadow inherent `get`s reached
 // through `Deref` (e.g. `Arc<DashMap>::get`). Import it explicitly where
