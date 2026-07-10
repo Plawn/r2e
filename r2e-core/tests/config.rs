@@ -763,3 +763,435 @@ fn test_config_deserialize_error_display() {
     assert!(msg.contains("app.mode"));
     assert!(msg.contains("unknown variant `bad`"));
 }
+
+// =========================================================================
+// Prefix helpers: has_prefix / sub_keys
+// =========================================================================
+
+#[test]
+fn test_has_prefix() {
+    let yaml = r#"
+app:
+  database:
+    url: "sqlite::memory:"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    assert!(config.has_prefix("app"));
+    assert!(config.has_prefix("app.database"));
+    assert!(config.has_prefix("app.database.url")); // exact key counts
+    assert!(!config.has_prefix("app.data")); // not a segment boundary
+    assert!(!config.has_prefix("missing"));
+}
+
+#[test]
+fn test_sub_keys() {
+    let yaml = r#"
+upstreams:
+  npm:
+    url: "https://registry.npmjs.org"
+  docker:
+    url: "https://registry-1.docker.io"
+    auth:
+      token: "x"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    assert_eq!(config.sub_keys("upstreams"), vec!["docker", "npm"]);
+    assert_eq!(config.sub_keys("upstreams.docker"), vec!["auth", "url"]);
+    assert!(config.sub_keys("missing").is_empty());
+}
+
+// =========================================================================
+// Optional sections are presence-based
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct AllDefaultsSection {
+    #[config(default = true)]
+    enabled: bool,
+    #[config(default = 300)]
+    ttl_secs: i64,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct RequiredFieldSection {
+    url: String,
+    #[config(default = 5)]
+    pool_size: i64,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct PresenceRoot {
+    #[config(section)]
+    cache: Option<AllDefaultsSection>,
+    #[config(section)]
+    database: Option<RequiredFieldSection>,
+}
+
+#[test]
+fn test_optional_section_absent_is_none_even_with_all_defaults() {
+    // Regression: an absent section whose fields all have defaults used to
+    // come back as Some(defaults) because from_config never hit NotFound.
+    let config = R2eConfig::from_yaml_str("other:\n  x: 1\n").unwrap();
+    let root = PresenceRoot::from_config(&config, None).unwrap();
+    assert!(root.cache.is_none());
+    assert!(root.database.is_none());
+}
+
+#[test]
+fn test_optional_section_present_parses() {
+    let yaml = r#"
+cache:
+  ttl_secs: 60
+database:
+  url: "postgres://localhost/db"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let root = PresenceRoot::from_config(&config, None).unwrap();
+    let cache = root.cache.unwrap();
+    assert!(cache.enabled); // default
+    assert_eq!(cache.ttl_secs, 60);
+    assert_eq!(root.database.unwrap().url, "postgres://localhost/db");
+}
+
+#[test]
+fn test_optional_section_partial_errors_instead_of_none() {
+    // A present-but-invalid section surfaces the error instead of silently
+    // collapsing to None.
+    let yaml = r#"
+database:
+  pool_size: 10
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let err = PresenceRoot::from_config(&config, None).unwrap_err();
+    assert!(matches!(err, ConfigError::NotFound(key) if key == "database.url"));
+}
+
+// =========================================================================
+// #[config(section, default)] — Default fallback for absent sections
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct ServerSection {
+    #[config(default = "0.0.0.0:8080")]
+    bind: String,
+}
+
+impl Default for ServerSection {
+    fn default() -> Self {
+        Self {
+            bind: "0.0.0.0:9999".to_string(),
+        }
+    }
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct DefaultSectionRoot {
+    #[config(section, default)]
+    server: ServerSection,
+}
+
+#[test]
+fn test_section_default_used_when_absent() {
+    let config = R2eConfig::empty();
+    let root = DefaultSectionRoot::from_config(&config, None).unwrap();
+    // Default::default(), not the field-level config defaults
+    assert_eq!(root.server.bind, "0.0.0.0:9999");
+}
+
+#[test]
+fn test_section_default_parses_when_present() {
+    let config = R2eConfig::from_yaml_str("server:\n  bind: \"127.0.0.1:3000\"\n").unwrap();
+    let root = DefaultSectionRoot::from_config(&config, None).unwrap();
+    assert_eq!(root.server.bind, "127.0.0.1:3000");
+}
+
+// =========================================================================
+// #[config(skip)] — field not read from config
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct SkipRoot {
+    name: String,
+    #[config(skip)]
+    resolved_token: Option<String>,
+}
+
+#[test]
+fn test_skip_field_defaults_and_has_no_metadata() {
+    let config = R2eConfig::from_yaml_str("name: app\nresolved_token: leaked\n").unwrap();
+    let root = SkipRoot::from_config(&config, None).unwrap();
+    assert_eq!(root.name, "app");
+    // Never read from config, even when a key with the same name exists.
+    assert!(root.resolved_token.is_none());
+
+    let meta = SkipRoot::properties_metadata(None);
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[0].key, "name");
+}
+
+// =========================================================================
+// Map-valued sections
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct UpstreamEntry {
+    url: String,
+    #[config(default = true)]
+    enabled: bool,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct MapRoot {
+    #[config(section)]
+    upstreams: std::collections::HashMap<String, UpstreamEntry>,
+    #[config(section)]
+    mirrors: std::collections::BTreeMap<String, UpstreamEntry>,
+    #[config(section)]
+    optional_pools: Option<std::collections::HashMap<String, UpstreamEntry>>,
+}
+
+#[test]
+fn test_map_section_parses_entries() {
+    let yaml = r#"
+upstreams:
+  npm:
+    url: "https://registry.npmjs.org"
+  docker:
+    url: "https://registry-1.docker.io"
+    enabled: false
+mirrors:
+  eu:
+    url: "https://eu.mirror"
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let root = MapRoot::from_config(&config, None).unwrap();
+
+    assert_eq!(root.upstreams.len(), 2);
+    assert_eq!(root.upstreams["npm"].url, "https://registry.npmjs.org");
+    assert!(root.upstreams["npm"].enabled); // default
+    assert!(!root.upstreams["docker"].enabled);
+
+    assert_eq!(root.mirrors.len(), 1);
+    assert_eq!(root.mirrors["eu"].url, "https://eu.mirror");
+
+    assert!(root.optional_pools.is_none());
+}
+
+#[test]
+fn test_map_section_absent_is_empty() {
+    let config = R2eConfig::empty();
+    let root = MapRoot::from_config(&config, None).unwrap();
+    assert!(root.upstreams.is_empty());
+    assert!(root.mirrors.is_empty());
+    assert!(root.optional_pools.is_none());
+}
+
+#[test]
+fn test_map_section_entry_error_propagates() {
+    let yaml = r#"
+upstreams:
+  npm:
+    enabled: false
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let err = MapRoot::from_config(&config, None).unwrap_err();
+    assert!(matches!(err, ConfigError::NotFound(key) if key == "upstreams.npm.url"));
+}
+
+#[test]
+fn test_map_section_with_prefix() {
+    let yaml = r#"
+app:
+  upstreams:
+    cargo:
+      url: "https://crates.io"
+  mirrors: {}
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let root = MapRoot::from_config(&config, Some("app")).unwrap();
+    assert_eq!(root.upstreams.len(), 1);
+    assert_eq!(root.upstreams["cargo"].url, "https://crates.io");
+}
+
+// =========================================================================
+// Tagged enum sections
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct S3Settings {
+    bucket: String,
+    region: Option<String>,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct FilesystemSettings {
+    #[config(default = "./data/blobs")]
+    base_dir: String,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[config(tag = "backend")]
+enum StorageConfig {
+    S3(S3Settings),
+    #[config(default)]
+    Filesystem(FilesystemSettings),
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct StorageRoot {
+    #[config(section)]
+    storage: StorageConfig,
+}
+
+#[test]
+fn test_tagged_enum_selects_variant_at_same_prefix() {
+    let yaml = r#"
+storage:
+  backend: s3
+  bucket: my-bucket
+  region: eu-west-1
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let root = StorageRoot::from_config(&config, None).unwrap();
+    match root.storage {
+        StorageConfig::S3(s3) => {
+            assert_eq!(s3.bucket, "my-bucket");
+            assert_eq!(s3.region.as_deref(), Some("eu-west-1"));
+        }
+        other => panic!("expected S3, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_tagged_enum_default_variant_when_tag_absent() {
+    let config = R2eConfig::empty();
+    let storage = StorageConfig::from_config(&config, Some("storage")).unwrap();
+    match storage {
+        StorageConfig::Filesystem(fs) => assert_eq!(fs.base_dir, "./data/blobs"),
+        other => panic!("expected Filesystem, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_tagged_enum_unknown_tag_errors() {
+    let config = R2eConfig::from_yaml_str("storage:\n  backend: ftp\n").unwrap();
+    let err = StorageConfig::from_config(&config, Some("storage")).unwrap_err();
+    match err {
+        ConfigError::Deserialize { key, message } => {
+            assert_eq!(key, "storage.backend");
+            assert!(message.contains("ftp"));
+            assert!(message.contains("s3, filesystem"));
+        }
+        other => panic!("expected Deserialize error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_tagged_enum_variant_payload_error_propagates() {
+    // backend=s3 selected but required `bucket` missing
+    let config = R2eConfig::from_yaml_str("storage:\n  backend: s3\n").unwrap();
+    let err = StorageConfig::from_config(&config, Some("storage")).unwrap_err();
+    assert!(matches!(err, ConfigError::NotFound(key) if key == "storage.bucket"));
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
+#[config(tag = "mode", rename_all = "kebab-case")]
+enum AuthMode {
+    ServiceAccount,
+    #[config(rename = "passthrough")]
+    PassThrough,
+    None,
+}
+
+#[test]
+fn test_tagged_enum_unit_variants_rename_all_and_rename() {
+    let config = R2eConfig::from_yaml_str("auth:\n  mode: service-account\n").unwrap();
+    assert_eq!(
+        AuthMode::from_config(&config, Some("auth")).unwrap(),
+        AuthMode::ServiceAccount
+    );
+
+    let config = R2eConfig::from_yaml_str("auth:\n  mode: passthrough\n").unwrap();
+    assert_eq!(
+        AuthMode::from_config(&config, Some("auth")).unwrap(),
+        AuthMode::PassThrough
+    );
+}
+
+#[test]
+fn test_tagged_enum_without_default_requires_tag() {
+    let config = R2eConfig::empty();
+    let err = AuthMode::from_config(&config, Some("auth")).unwrap_err();
+    assert!(matches!(err, ConfigError::NotFound(key) if key == "auth.mode"));
+}
+
+#[test]
+fn test_tagged_enum_metadata_is_tag_key() {
+    let meta = StorageConfig::properties_metadata(Some("storage"));
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[0].key, "backend");
+    assert_eq!(meta[0].full_key, "storage.backend");
+    assert!(!meta[0].required); // has a default variant
+    assert_eq!(meta[0].default_value.as_deref(), Some("filesystem"));
+
+    let meta = AuthMode::properties_metadata(None);
+    assert_eq!(meta[0].full_key, "mode");
+    assert!(meta[0].required); // no default variant
+}
+
+// =========================================================================
+// Manual impl surface: NoChildren + default properties_metadata
+// =========================================================================
+
+#[derive(Clone, Debug)]
+struct ManualDynamicConfig {
+    entries: Vec<(String, String)>,
+}
+
+impl ConfigProperties for ManualDynamicConfig {
+    type Children = r2e_core::config::NoChildren;
+
+    fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError> {
+        let base = prefix.unwrap_or("entries").to_string();
+        let entries = config
+            .sub_keys(&base)
+            .into_iter()
+            .map(|k| {
+                let v: String = config.get(&format!("{base}.{k}"))?;
+                Ok((k, v))
+            })
+            .collect::<Result<Vec<_>, ConfigError>>()?;
+        Ok(Self { entries })
+    }
+}
+
+#[test]
+fn test_manual_impl_with_public_surface_only() {
+    let yaml = r#"
+labels:
+  team: core
+  env: prod
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let manual = ManualDynamicConfig::from_config(&config, Some("labels")).unwrap();
+    let mut entries = manual.entries.clone();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec![
+            ("env".to_string(), "prod".to_string()),
+            ("team".to_string(), "core".to_string()),
+        ]
+    );
+    // Default properties_metadata is a no-op
+    assert!(ManualDynamicConfig::properties_metadata(None).is_empty());
+}
+
+#[test]
+fn test_optional_section_empty_yaml_key_is_none() {
+    // `database:` with no content flattens to a Null at the exact key —
+    // treated as absent, not as a present-but-invalid section.
+    let config = R2eConfig::from_yaml_str("database:\nname: app\n").unwrap();
+    let root = PresenceRoot::from_config(&config, None).unwrap();
+    assert!(root.database.is_none());
+}
