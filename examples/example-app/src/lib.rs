@@ -175,10 +175,14 @@ pub async fn app_with_env(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
         .provide(r2e::r2e_cache::InMemoryStore::shared())
         .provide(env.sse_broadcaster)
+        .provide(SseTopic::<models::UserCreatedEvent>::new(64).with_event_name("user_created"))
         .provide(env.notification_service)
         .register_module::<UserModule>()
         .build_state()
         .await
+        // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is
+        // broadcast on the topic (served at /sse/users) with no liaison code.
+        .bridge_sse::<LocalEventBus, models::UserCreatedEvent>()
         .with(Health)
         .with(RequestIdPlugin)
         .with(SecureHeaders::default())
