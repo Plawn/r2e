@@ -66,7 +66,7 @@ impl TestApp {
             .override_bean(Arc::new(jwt.claims_validator()))
             .override_bean(Arc::new(jwt.validator()));
         let built = blueprint(configure(builder)).await;
-        Self::from_bootable(built, Some(jwt))
+        Self::from_bootable(built, Some(jwt)).await
     }
 
     /// Boot a blueprint **without** the harness JWT wiring — for apps whose
@@ -83,14 +83,16 @@ impl TestApp {
     {
         let builder = AppBuilder::new().with_profile("test");
         let built = blueprint(configure(builder)).await;
-        Self::from_bootable(built, None)
+        Self::from_bootable(built, None).await
     }
 
-    fn from_bootable(built: impl BootableApp, jwt: Option<TestJwt>) -> Self {
+    async fn from_bootable(built: impl BootableApp, jwt: Option<TestJwt>) -> Self {
         let bean_context = built.bean_context();
         let config = built.r2e_config();
         Self {
-            router: built.into_router(),
+            // Run consumer registrations so `#[consumer]` methods, subscriber
+            // beans, and EventBus bridges are live in tests, as in `serve()`.
+            router: built.into_router_with_consumers().await,
             bean_context: Some(bean_context),
             config,
             jwt,

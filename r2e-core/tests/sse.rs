@@ -232,3 +232,80 @@ async fn sse_rooms_typed_key() {
     let event = next_event(&mut sub).await.expect("typed room should work");
     assert!(format!("{event:?}").contains("typed"));
 }
+
+// ── SseTopic ─────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct SyncStatus {
+    done: u32,
+    total: u32,
+}
+
+#[r2e_core::test]
+async fn sse_topic_default_event_name_is_short_type_name() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    assert_eq!(topic.event_name(), "SyncStatus");
+}
+
+#[r2e_core::test]
+async fn sse_topic_generic_event_name_strips_generics() {
+    let topic = r2e_core::sse::SseTopic::<Vec<SyncStatus>>::new(16);
+    assert_eq!(topic.event_name(), "Vec");
+}
+
+#[r2e_core::test]
+async fn sse_topic_with_event_name_overrides_default() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
+    assert_eq!(topic.event_name(), "sync");
+}
+
+#[r2e_core::test]
+async fn sse_topic_publish_roundtrip() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
+    let mut sub = topic.subscribe();
+    let received = topic.publish(&SyncStatus { done: 10, total: 42 }).unwrap();
+    assert_eq!(received, 1);
+    let event = next_event(&mut sub).await.expect("should receive event");
+    let debug = format!("{event:?}");
+    assert!(debug.contains("sync"), "event name should be on the wire: {debug}");
+    assert!(debug.contains(r#"\"done\":10"#) || debug.contains(r#""done":10"#),
+        "JSON payload should be on the wire: {debug}");
+}
+
+#[r2e_core::test]
+async fn sse_topic_publish_without_subscribers_is_ok_zero() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    let received = topic.publish(&SyncStatus { done: 0, total: 0 }).unwrap();
+    assert_eq!(received, 0);
+}
+
+#[r2e_core::test]
+async fn sse_topic_clone_shares_channel() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    let clone = topic.clone();
+    let mut sub = clone.subscribe();
+    topic.publish(&SyncStatus { done: 1, total: 2 }).unwrap();
+    assert!(next_event(&mut sub).await.is_some(), "clone should share the broadcast channel");
+}
+
+#[r2e_core::test]
+async fn sse_topic_custom_serializer() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+        .with_event_name("sync")
+        .with_serializer(|s| Ok(format!("{}/{}", s.done, s.total)));
+    let mut sub = topic.subscribe();
+    topic.publish(&SyncStatus { done: 10, total: 42 }).unwrap();
+    let event = next_event(&mut sub).await.expect("should receive event");
+    let debug = format!("{event:?}");
+    assert!(debug.contains("10/42"), "custom format should be on the wire: {debug}");
+}
+
+#[r2e_core::test]
+async fn sse_topic_serializer_error_is_returned() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+        .with_serializer(|_| Err("encoding broke".into()));
+    let mut sub = topic.subscribe();
+    let err = topic.publish(&SyncStatus { done: 1, total: 1 }).unwrap_err();
+    assert!(err.to_string().contains("encoding broke"));
+    assert!(poll_once(&mut sub).is_none(), "nothing should have been broadcast");
+}

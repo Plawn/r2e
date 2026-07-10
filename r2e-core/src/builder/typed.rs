@@ -516,6 +516,25 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Register a raw consumer-registration hook, run once during server
+    /// startup (at the same point `#[consumer]` methods and
+    /// [`register_subscriber`](Self::register_subscriber) beans subscribe).
+    ///
+    /// This is the extension point downstream crates use to wire event
+    /// subscriptions that aren't controller- or bean-shaped — e.g. the
+    /// EventBus↔SSE bridge in `r2e-events`. Combine with
+    /// [`bean_context`](Self::bean_context) to resolve the beans the hook
+    /// needs.
+    pub fn add_consumer_registration<F, Fut>(mut self, f: F) -> Self
+    where
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.consumer_registrations
+            .push(Box::new(move |state| Box::pin(f(state))));
+        self
+    }
+
     /// Register a typed metadata consumer.
     ///
     /// At `build()` time, the consumer receives a shared slice of all `M` items
@@ -544,6 +563,22 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Assemble the final `axum::Router` from all registered routes and layers.
     pub fn build(self) -> crate::http::Router {
         self.build_inner().router
+    }
+
+    /// Like [`build`](Self::build), but also runs the consumer registrations
+    /// (`#[consumer]` methods, [`register_subscriber`](Self::register_subscriber)
+    /// beans, [`add_consumer_registration`](Self::add_consumer_registration)
+    /// hooks) that `serve()` would run at startup.
+    ///
+    /// This is the in-process test entry point: it gives event consumers
+    /// production parity without binding a listener. Serve hooks (scheduler
+    /// task start, …) still do not run.
+    pub async fn build_with_consumers(self) -> crate::http::Router {
+        let built = self.build_inner();
+        for reg in built.consumer_registrations {
+            reg(built.state.clone()).await;
+        }
+        built.router
     }
 
     fn build_inner(self) -> BuiltApp<T> {

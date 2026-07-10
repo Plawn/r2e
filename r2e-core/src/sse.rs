@@ -242,6 +242,184 @@ impl futures_core::Stream for SseSubscription {
     }
 }
 
+// ── SseTopic ─────────────────────────────────────────────────────────────
+
+/// A typed broadcast topic over an [`SseBroadcaster`].
+///
+/// `SseTopic<E>` is a first-class "broadcast topic bean": each event type `E`
+/// makes it a distinct injectable type, so an app can provide several topics
+/// without newtype boilerplate:
+///
+/// ```ignore
+/// // blueprint
+/// b.provide(SseTopic::<SyncStatus>::new(128))
+///  .provide(SseTopic::<MatchProgress>::new(128).with_event_name("match"))
+///
+/// // controller
+/// #[controller(path = "/sync")]
+/// struct SyncController {
+///     #[inject] topic: SseTopic<SyncStatus>,
+/// }
+///
+/// #[routes]
+/// impl SyncController {
+///     #[sse("/status")]
+///     async fn status(&self) -> impl Stream<Item = Result<SseEvent, Infallible>> {
+///         self.topic.subscribe()
+///     }
+/// }
+///
+/// // anywhere (service, scheduled task, consumer)
+/// topic.publish(&SyncStatus { done: 10, total: 42 })?;
+/// ```
+///
+/// [`publish`](Self::publish) serializes the event — JSON by default,
+/// override via [`with_serializer`](Self::with_serializer) — and broadcasts
+/// it under the topic's SSE event name (default: the short type name of `E`,
+/// override via [`with_event_name`](Self::with_event_name)).
+///
+/// The EventBus↔SSE bridge (`r2e-events`) forwards events emitted on an
+/// [`EventBus`] into an `SseTopic<E>` so real-time fan-out needs no liaison
+/// code at all.
+pub struct SseTopic<E> {
+    broadcaster: SseBroadcaster,
+    event_name: Arc<str>,
+    serializer: Arc<dyn Fn(&E) -> Result<String, SseSerializeError> + Send + Sync>,
+}
+
+/// Error returned by an [`SseTopic`] serializer (boxed so custom
+/// [`with_serializer`](SseTopic::with_serializer) formats are not forced
+/// into `serde_json::Error`).
+pub type SseSerializeError = Box<dyn std::error::Error + Send + Sync>;
+
+// Manual impl: `derive(Clone)` would needlessly require `E: Clone`.
+impl<E> Clone for SseTopic<E> {
+    fn clone(&self) -> Self {
+        Self {
+            broadcaster: self.broadcaster.clone(),
+            event_name: Arc::clone(&self.event_name),
+            serializer: Arc::clone(&self.serializer),
+        }
+    }
+}
+
+/// Short (unqualified, generics-stripped) type name of `E`, used as the
+/// default SSE event name of an [`SseTopic<E>`].
+fn short_type_name<E>() -> &'static str {
+    let full = std::any::type_name::<E>();
+    let no_generics = full.split('<').next().unwrap_or(full);
+    no_generics.rsplit("::").next().unwrap_or(no_generics)
+}
+
+impl<E: serde::Serialize> SseTopic<E> {
+    /// Create a new topic with the given broadcast channel capacity.
+    ///
+    /// Events are serialized to JSON (override via
+    /// [`with_serializer`](Self::with_serializer)). The SSE event name
+    /// defaults to the short type name of `E`
+    /// (`my_app::events::SyncStatus` → `"SyncStatus"`). The derivation is
+    /// only meaningful for nominal types — for tuples or other non-nominal
+    /// event types, set an explicit name via
+    /// [`with_event_name`](Self::with_event_name).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            broadcaster: SseBroadcaster::new(capacity),
+            event_name: Arc::from(short_type_name::<E>()),
+            serializer: Arc::new(|event| {
+                serde_json::to_string(event).map_err(SseSerializeError::from)
+            }),
+        }
+    }
+}
+
+impl<E> SseTopic<E> {
+    /// Override the SSE event name events are published under.
+    pub fn with_event_name(mut self, name: impl Into<String>) -> Self {
+        self.event_name = Arc::from(name.into());
+        self
+    }
+
+    /// Replace the payload serializer (default: `serde_json::to_string`).
+    ///
+    /// SSE is a text protocol, so the serializer produces a `String` — use
+    /// this for non-JSON text formats (NDJSON-ready lines, CSV, compact
+    /// custom encodings):
+    ///
+    /// ```ignore
+    /// let topic = SseTopic::<Tick>::new(128)
+    ///     .with_serializer(|t| Ok(format!("{},{}", t.symbol, t.price)));
+    /// ```
+    pub fn with_serializer<F>(mut self, serializer: F) -> Self
+    where
+        F: Fn(&E) -> Result<String, SseSerializeError> + Send + Sync + 'static,
+    {
+        self.serializer = Arc::new(serializer);
+        self
+    }
+
+    /// The SSE event name this topic publishes under.
+    pub fn event_name(&self) -> &str {
+        &self.event_name
+    }
+
+    /// The underlying broadcaster.
+    ///
+    /// The escape hatch for anything not exposed on the topic itself. Note
+    /// that `send`/`send_event` on the raw broadcaster bypass the topic's
+    /// typed contract (JSON payload, configured event name, `Ok(0)` on no
+    /// subscribers) — prefer [`publish`](Self::publish).
+    pub fn broadcaster(&self) -> &SseBroadcaster {
+        &self.broadcaster
+    }
+
+    /// Number of active subscribers (see [`SseBroadcaster::subscriber_count`]).
+    pub fn subscriber_count(&self) -> usize {
+        self.broadcaster.subscriber_count()
+    }
+
+    /// The broadcast channel capacity fixed at construction.
+    pub fn capacity(&self) -> usize {
+        self.broadcaster.capacity()
+    }
+
+    /// Subscribe to the topic. Ready to return from an `#[sse]` handler.
+    ///
+    /// Lagged messages are silently skipped; see
+    /// [`subscribe_lagged`](Self::subscribe_lagged) /
+    /// [`subscribe_with`](Self::subscribe_with) for lag signaling.
+    pub fn subscribe(&self) -> SseSubscription {
+        self.broadcaster.subscribe()
+    }
+
+    /// Subscribe with a synthetic SSE event of the given type emitted
+    /// whenever the subscriber lags (see [`SseBroadcaster::subscribe_lagged`]).
+    pub fn subscribe_lagged(&self, event_name: impl Into<String>) -> SseSubscription {
+        self.broadcaster.subscribe_lagged(event_name)
+    }
+
+    /// Subscribe using the given [`LagPolicy`].
+    pub fn subscribe_with(&self, policy: LagPolicy) -> SseSubscription {
+        self.broadcaster.subscribe_with(policy)
+    }
+
+    /// Serialize `event` (JSON by default, see
+    /// [`with_serializer`](Self::with_serializer)) and broadcast it under
+    /// the topic's event name.
+    ///
+    /// Returns the number of subscribers that received the message. Unlike
+    /// [`SseBroadcaster::send_event`], publishing to a topic **with no active
+    /// subscribers is `Ok(0)`**, not an error — a topic nobody is currently
+    /// watching is a normal state for a publisher. `Err` means the event
+    /// failed to serialize.
+    pub fn publish(&self, event: &E) -> Result<usize, SseSerializeError> {
+        let data = (self.serializer)(event)?;
+        Ok(self
+            .broadcaster
+            .send_event(&self.event_name, data)
+            .unwrap_or(0))
+    }
+}
+
 // ── SseRooms ─────────────────────────────────────────────────────────────
 
 /// Keyed manager for per-resource SSE broadcasters.

@@ -160,6 +160,8 @@ Distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) implement the `EventBus` tr
 
 **Multiple buses** — both controllers and beans can use multiple bus fields of different types. Each `#[consumer(bus = "field")]` references a specific field.
 
+**EventBus↔SSE bridge** — `r2e_events::sse_bridge`. `SseTopic<E>` (r2e-core `sse` module, in the prelude) is a typed broadcast-topic bean over `SseBroadcaster`: `publish(&E)` serializes (JSON by default; `with_serializer` swaps the text format) under the topic's SSE event name (default: short type name of `E`; `with_event_name` to override; `Ok(0)` when no subscribers); `subscribe()` returns an `SseSubscription` ready for `#[sse]` handlers. `SseBridgeExt::bridge_sse::<Bus, E>()` (post-`build_state`, in the prelude) pulls the bus and `SseTopic<E>` beans from the bean context and registers a forwarding consumer at startup — `bus.emit(event)` fans out to SSE with zero liaison code, cross-instance with distributed backends. Manual entry point: `bridge_event_to_sse(&bus, topic)`. The underlying extension hook is `AppBuilder::add_consumer_registration` (same drain as `#[consumer]`; also run by `TestApp::boot` via `BootableApp::into_router_with_consumers`, so consumers and bridges are live in tests).
+
 ### IggyEventBus (r2e-events-iggy)
 
 `IggyEventBus` — distributed `EventBus` implementation backed by [Apache Iggy](https://iggy.apache.org/). Publishes events as JSON to Iggy topics; background pollers consume and dispatch to local handlers.

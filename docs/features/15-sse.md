@@ -210,6 +210,84 @@ impl NotificationController {
 }
 ```
 
+### 7. Typed Broadcast Topics (`SseTopic<E>`)
+
+`SseTopic<E>` is a typed topic bean over `SseBroadcaster`: each event type `E`
+makes it a distinct injectable type, so an app can provide several topics
+without newtype boilerplate. `publish(&E)` serializes the event to JSON and
+broadcasts it under the topic's SSE event name (default: the short type name
+of `E`, override via `with_event_name`).
+
+```rust
+// blueprint — one topic per event type, no newtypes
+.provide(SseTopic::<SyncStatus>::new(128))
+.provide(SseTopic::<MatchProgress>::new(128).with_event_name("match"))
+```
+
+```rust
+#[controller(path = "/sync")]
+pub struct SyncController {
+    #[inject]
+    topic: SseTopic<SyncStatus>,
+}
+
+#[routes]
+impl SyncController {
+    #[sse("/status")]
+    async fn status(&self) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
+        self.topic.subscribe()
+    }
+}
+```
+
+```rust
+// anywhere (service, scheduled task, consumer)
+topic.publish(&SyncStatus { done: 10, total: 42 })?;
+```
+
+Unlike `send_event`, publishing to a topic **with no active subscribers is
+`Ok(0)`**, not an error — a topic nobody is watching is a normal state for a
+publisher. `Err` means the event failed to serialize. `subscriber_count()`
+and `capacity()` are exposed directly; `broadcaster()` is the raw escape
+hatch (its `send`/`send_event` bypass the typed contract — prefer `publish`).
+
+Payloads are JSON by default. SSE is a text protocol, so alternative formats
+are text too — swap the serializer while keeping the typed `publish` contract
+(and the EventBus bridge, which goes through `publish`):
+
+```rust
+let ticks = SseTopic::<Tick>::new(128)
+    .with_event_name("tick")
+    .with_serializer(|t| Ok(format!("{},{}", t.symbol, t.price)));
+```
+
+### 8. EventBus↔SSE Bridge (zero-liaison fan-out)
+
+With the `events` feature, `bridge_sse::<Bus, E>()` (from
+`r2e_events::SseBridgeExt`, in the prelude) forwards every event of type `E`
+emitted on the EventBus into the provided `SseTopic<E>` — no `#[consumer]`
+plumbing:
+
+```rust
+b.provide(LocalEventBus::new())
+    .provide(SseTopic::<UserCreatedEvent>::new(64).with_event_name("user_created"))
+    .register::<SyncController>()
+    .build_state()
+    .await
+    .bridge_sse::<LocalEventBus, UserCreatedEvent>()
+```
+
+Services just `bus.emit(event)` as usual; SSE clients subscribed to the
+topic's endpoint see it as JSON. With a distributed EventBus backend (Kafka,
+RabbitMQ, …), SSE fan-out works across instances for free. The forwarding
+subscription registers at server startup, alongside `#[consumer]` methods
+(`TestApp::boot` also runs it, so the bridge is live in tests).
+
+Both beans must be provided before `build_state()`; `bridge_sse` panics at
+startup with a descriptive message otherwise. For manual wiring (e.g. outside
+the builder), use `r2e_events::sse_bridge::bridge_event_to_sse(&bus, topic)`,
+which returns the `SubscriptionHandle`.
+
 ## Complete Example
 
 Minimal application with a global SSE stream:
@@ -315,6 +393,18 @@ impl SseController {
 | `send` | `fn send(&self, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a data-only event |
 | `send_event` | `fn send_event(&self, event: &str, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a named event with data |
 | `subscribe` | `fn subscribe(&self) -> SseSubscription` | Create a new subscription stream |
+
+### SseTopic&lt;E&gt;
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `new` | `fn new(capacity: usize) -> Self` | Topic with default event name = short type name of `E` |
+| `with_event_name` | `fn with_event_name(self, name: impl Into<String>) -> Self` | Override the SSE event name |
+| `with_serializer` | `fn with_serializer(self, f: impl Fn(&E) -> Result<String, SseSerializeError>) -> Self` | Override the payload format (default: JSON) |
+| `publish` | `fn publish(&self, event: &E) -> Result<usize, SseSerializeError>` | Serialize and broadcast; `Ok(0)` when no subscribers |
+| `subscribe` | `fn subscribe(&self) -> SseSubscription` | Subscription stream, ready for `#[sse]` |
+| `subscriber_count` | `fn subscriber_count(&self) -> usize` | Active subscribers |
+| `broadcaster` | `fn broadcaster(&self) -> &SseBroadcaster` | Raw escape hatch (prefer `publish`) |
 
 ### `#[sse]` Attribute
 

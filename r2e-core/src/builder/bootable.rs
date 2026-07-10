@@ -42,8 +42,14 @@ pub trait BootableApp: Sized {
     /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any.
     fn r2e_config(&self) -> Option<crate::config::R2eConfig>;
 
-    /// Assemble the final router (in-process test entry point).
+    /// Assemble the final router without starting event consumers.
     fn into_router(self) -> crate::http::Router;
+
+    /// Assemble the final router and run the consumer registrations that
+    /// `serve()` would run at startup (`#[consumer]` methods, subscriber
+    /// beans, EventBus bridges). The in-process test entry point — used by
+    /// `TestApp::boot` so event consumers have production parity in tests.
+    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router>;
 
     /// Build and serve on an explicit address.
     fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>>;
@@ -64,6 +70,10 @@ impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
 
     fn into_router(self) -> crate::http::Router {
         self.build()
+    }
+
+    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router> {
+        self.build_with_consumers()
     }
 
     fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>> {

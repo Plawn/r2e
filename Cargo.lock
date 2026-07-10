@@ -5657,6 +5657,7 @@ dependencies = [
 name = "r2e-events"
 version = "0.1.0"
 dependencies = [
+ "futures-core",
  "r2e-core",
  "serde",
  "serde_json",
