@@ -17,6 +17,7 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         description: None,
         request_body_type: None,
         request_body_schema: None,
+        request_body_content_type: None,
         request_body_required: true,
         response_type: None,
         response_schema: None,

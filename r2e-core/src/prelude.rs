@@ -130,7 +130,7 @@ pub use crate::sse::{
 };
 
 #[cfg(feature = "multipart")]
-pub use crate::multipart::{FromMultipart, Multipart, TypedMultipart, UploadedFile};
+pub use crate::multipart::{FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile};
 
 #[cfg(feature = "multipart")]
 pub use r2e_macros::FromMultipart;

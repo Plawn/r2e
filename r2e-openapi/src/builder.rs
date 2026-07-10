@@ -171,17 +171,25 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
             operation.insert("deprecated".into(), json!(true));
         }
 
-        // Request body
-        if let Some(ref body_type) = route.request_body_type {
+        // Request body. The media type defaults to application/json; multipart
+        // routes carry an explicit request_body_content_type. A content type
+        // without a named body type (raw Multipart) is modeled as a free-form
+        // object.
+        let body_schema = match (&route.request_body_type, &route.request_body_content_type) {
+            (Some(body_type), _) => Some(json!({ "$ref": format!("#/components/schemas/{body_type}") })),
+            (None, Some(_)) => Some(json!({ "type": "object" })),
+            (None, None) => None,
+        };
+        if let Some(schema) = body_schema {
+            let content_type = route
+                .request_body_content_type
+                .as_deref()
+                .unwrap_or("application/json");
             operation.insert(
                 "requestBody".into(),
                 json!({
                     "required": route.request_body_required,
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": format!("#/components/schemas/{body_type}") }
-                        }
-                    }
+                    "content": { content_type: { "schema": schema } }
                 }),
             );
         }
@@ -245,7 +253,7 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         }));
 
         // If route has a request body, it may return 400
-        if route.request_body_type.is_some() {
+        if route.request_body_type.is_some() || route.request_body_content_type.is_some() {
             responses.entry("400".to_string()).or_insert_with(|| json!({
                 "description": "Bad request / Validation error",
                 "content": {

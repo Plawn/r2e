@@ -35,6 +35,8 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
     };
 
     let mut field_extractions = Vec::new();
+    let mut schema_properties = Vec::new();
+    let mut schema_required = Vec::new();
 
     for field in fields {
         let field_name = field.ident.as_ref().unwrap();
@@ -45,6 +47,12 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
         field_extractions.push(quote! {
             #field_name: #extraction
         });
+
+        let (field_schema, required) = field_schema(ty);
+        schema_properties.push(quote! { #field_name_str: #field_schema });
+        if required {
+            schema_required.push(quote! { #field_name_str });
+        }
     }
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -59,7 +67,51 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
                 })
             }
         }
+
+        impl #impl_generics #core::multipart::MultipartSchema for #name #ty_generics #where_clause {
+            fn multipart_schema() -> #core::serde_json::Value {
+                #core::serde_json::json!({
+                    "type": "object",
+                    "properties": { #(#schema_properties,)* },
+                    "required": [ #(#schema_required,)* ],
+                })
+            }
+        }
     })
+}
+
+/// Map a field type to its JSON Schema fragment (as tokens usable inside
+/// `serde_json::json!`) plus whether the field is required.
+///
+/// Mirrors the runtime classification in `classify_and_extract`: files and raw
+/// bytes are `string`/`binary`, text fields map by primitive ident, and any
+/// other `FromStr`-parsed type is modeled as a string.
+fn field_schema(ty: &Type) -> (TokenStream, bool) {
+    let last_seg = last_path_segment(ty);
+
+    match last_seg.as_deref() {
+        Some("Option") => {
+            let inner_schema = extract_generic_arg(ty)
+                .map(|inner| field_schema(inner).0)
+                .unwrap_or_else(|| quote! { { "type": "string" } });
+            (inner_schema, false)
+        }
+        // classify_and_extract only accepts Vec<UploadedFile>
+        Some("Vec") => (
+            quote! { { "type": "array", "items": { "type": "string", "format": "binary" } } },
+            true,
+        ),
+        Some("UploadedFile") | Some("Bytes") => {
+            (quote! { { "type": "string", "format": "binary" } }, true)
+        }
+        Some(
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64"
+            | "i128" | "isize",
+        ) => (quote! { { "type": "integer" } }, true),
+        Some("f32" | "f64") => (quote! { { "type": "number" } }, true),
+        Some("bool") => (quote! { { "type": "boolean" } }, true),
+        _ => (quote! { { "type": "string" } }, true),
+    }
 }
 
 /// Classify a field type and generate the appropriate extraction code.

@@ -76,6 +76,8 @@ pub struct RouteInfo {
     pub description: Option<String>,
     pub request_body_type: Option<String>,
     pub request_body_schema: Option<Value>,
+    /// Request body media type. `None` means `application/json`.
+    pub request_body_content_type: Option<String>,
     pub request_body_required: bool,
     pub response_type: Option<String>,
     pub response_schema: Option<Value>,
