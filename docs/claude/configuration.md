@@ -38,6 +38,8 @@ R2eConfig::empty()                         // testing
 | `try_get::<V>("key")` | `Option<V>` | Returns `None` on missing key or type mismatch |
 | `get_or("key", default)` | `V` | With fallback |
 | `contains_key("key")` | `bool` | Key existence |
+| `has_prefix("prefix")` | `bool` | Any key under the prefix (empty YAML key = absent). Section presence primitive. |
+| `sub_keys("prefix")` | `Vec<String>` | Distinct immediate child segments, sorted. Map-section primitive. |
 | `set("key", ConfigValue::...)` | `()` | Insert/overwrite |
 
 ---
@@ -113,11 +115,23 @@ Each field resolves to: **`prefix + "." + field_name`** (or `field_name` alone i
 | `#[config(key = "custom.path")]` | Override key (relative to prefix) | `#[config(key = "jwks.url")] pub jwks_url: String` |
 | `#[config(env = "VAR")]` | Env var fallback if key missing | `#[config(env = "DATABASE_URL")] pub url: String` |
 | `#[config(section)]` | Nested sub-struct (recursive `from_config()`) | `#[config(section)] pub database: DatabaseConfig` |
+| `#[config(section, default)]` | Section falling back to `Default::default()` when its prefix is absent (requires `T: Default`) | `#[config(section, default)] pub server: ServerConfig` |
+| `#[config(section)]` on `HashMap`/`BTreeMap<String, T>` | Map-valued section: one `T: ConfigProperties` entry per sub-key; absent prefix → empty map | `#[config(section)] pub upstreams: HashMap<String, UpstreamConfig>` |
+| `#[config(skip)]` | Never read from config; initialized with `Default::default()`. Not combinable with other config attrs. | `#[config(skip)] resolved_token: Option<String>` |
 | `/// doc comment` | Description in validation errors | `/// Connection timeout` |
 
 Attributes combine: `#[config(key = "client.id", default = "my-app")]`.
 
 Priority for a field: **YAML > env var (`#[config(env)]`) > default > error/None**.
+
+### Optional sections are presence-based
+
+`#[config(section)] pub tls: Option<TlsConfig>` resolves to `None` iff **no
+key lives under the section prefix** (checked with `R2eConfig::has_prefix`;
+an empty YAML key `tls:` counts as absent). If the prefix is present, the
+section is parsed and any error surfaces — a present-but-invalid section is
+an error, not a silent `None`. This makes `Option<Section>` reliable even
+when every field of the section has a default.
 
 ### Why `#[config(section)]` is required
 
@@ -154,6 +168,67 @@ app:
 
 With `prefix = "app"`: `app.name` → scalar, `app.database` → delegates to `DatabaseConfig::from_config(&config, Some("app.database"))`.
 
+### Map-valued sections
+
+`#[config(section)]` on a `HashMap<String, T>` or `BTreeMap<String, T>` (key
+must be `String`, `T: ConfigProperties`) enumerates the immediate sub-keys of
+the section prefix (`R2eConfig::sub_keys`) and parses each as its own
+section. An absent prefix yields an empty map. Entries are **not** registered
+as beans (all entries share one type).
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct RegistryConfig {
+    #[config(section)]
+    pub upstreams: HashMap<String, UpstreamConfig>,   // one entry per sub-key
+}
+```
+
+```yaml
+upstreams:
+  npm:
+    url: "https://registry.npmjs.org"
+  docker:
+    url: "https://registry-1.docker.io"
+    enabled: false
+```
+
+### Tagged enum sections
+
+`#[derive(ConfigProperties)]` works on enums with `#[config(tag = "...")]` —
+the tag key (relative to the prefix) selects the variant; the selected
+variant's payload is parsed as a section at the **same** prefix
+(internally-tagged, like patina's storage backend switch):
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+#[config(tag = "backend")]                 // reads "<prefix>.backend"
+pub enum StorageConfig {
+    S3(S3Config),                           // matches backend: s3
+    #[config(default)]                      // used when the tag key is absent
+    Filesystem(FilesystemConfig),
+}
+```
+
+```yaml
+storage:
+  backend: s3        # selects S3; S3Config parses from "storage.*"
+  bucket: my-bucket
+```
+
+- Variants are **unit** or **single-field tuple** (field: `ConfigProperties`).
+- Tag matching: snake_case of the variant name by default;
+  `#[config(rename_all = "lowercase" | "snake_case" | "kebab-case")]` on the
+  enum, `#[config(rename = "...")]` per variant.
+- `#[config(default)]` on one variant: constructed when the tag key is
+  absent. Without it, a missing tag is `ConfigError::NotFound`.
+- An unknown tag value is `ConfigError::Deserialize` listing the expected values.
+- `Children = TNil` (variant payloads are not auto-registered as beans);
+  metadata is the tag key only — payload validation happens via `from_config`.
+
+For **data-shaped** enums (a scalar value like `mode: strict`), keep using
+`#[derive(FromConfigValue)]` via serde instead.
+
 ### Manual usage (outside injection)
 
 ```rust
@@ -165,11 +240,34 @@ let db = DatabaseConfig::from_config(&config, Some("app.database"))?;
 
 ```rust
 trait ConfigProperties {
+    type Children;  // type-level list of nested section types; NoChildren for leaves
     fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError>;
-    fn properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta>;
+    fn properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta> { vec![] }  // default no-op
     fn register_children(&self, registry: &mut BeanRegistry) {}  // default no-op
 }
 ```
+
+### Supported manual implementations
+
+When the derive can't express a shape, a manual impl is **supported public
+API** — only `type Children` and `from_config` are required:
+
+```rust
+use r2e::prelude::*;   // ConfigProperties, NoChildren, PropertyMeta, R2eConfig, ConfigError
+
+impl ConfigProperties for MyDynamicConfig {
+    type Children = NoChildren;
+
+    fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError> {
+        // build from config.sub_keys(...) / config.has_prefix(...) / config.get(...)
+    }
+}
+```
+
+`R2eConfig::has_prefix(prefix)` (any key under the prefix, empty YAML key =
+absent) and `R2eConfig::sub_keys(prefix)` (distinct immediate child segments,
+sorted) are the supported primitives for dynamic shapes. Do not reach into
+`r2e::type_list` or `r2e::config::typed` internals.
 
 `register_children` is generated by the derive macro. For each `#[config(section)]` field, it calls `registry.provide(child.clone())` and recursively `child.register_children(registry)`. For `Option<T>` sections, it only registers when `Some`. This enables `load_config::<Root>()` to automatically register all nested config types as beans.
 
@@ -347,4 +445,4 @@ Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `
 
 ### Prelude exports
 
-`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `TracingConfig`, `LogFormat`, `SpanEvents`.
+`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `NoChildren`, `PropertyMeta`, `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `TracingConfig`, `LogFormat`, `SpanEvents`.
