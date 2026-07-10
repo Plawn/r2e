@@ -23,6 +23,8 @@ async fn manage(&self) -> Json<&'static str> {
 
 If the user doesn't have the required role, a 403 Forbidden response is returned.
 
+With a struct-level `#[inject(identity)]` field, `#[roles]` needs no identity parameter — the guard reads the extracted struct identity directly. Routes opted out of authentication with `#[anonymous]` cannot carry `#[roles]` (compile error); other guards still run there with `identity: None`. See [Optional Identity](optional-identity.md).
+
 ## The `Guard` trait
 
 Custom post-auth guards implement `Guard<I>`. A guard that reads no beans is a

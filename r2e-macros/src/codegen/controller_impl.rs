@@ -230,10 +230,17 @@ fn generate_route_metadata(
             let deprecated = rm.decorators.deprecated;
             let body_required = detect_body_required(rm);
 
-            // has_auth: roles, identity param, guard fns, or struct-level identity
+            // has_auth: roles, identity param, guard fns, or struct-level identity.
+            // #[anonymous] opts out of the struct identity (roles/identity params
+            // are rejected at parse time), so only explicit guards remain.
             let has_roles = !rm.decorators.roles.is_empty() || !rm.decorators.all_roles.is_empty();
             let has_identity_param = rm.identity_param.is_some();
             let has_guards = !rm.decorators.guard_fns.is_empty();
+            let struct_identity_auth = if rm.decorators.anonymous {
+                quote! { false }
+            } else {
+                quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+            };
 
             // Autoref specialization: for each handler param type, probe for ParamsMetadata.
             // Types implementing ParamsMetadata return their param infos; others return empty vec.
@@ -281,7 +288,7 @@ fn generate_route_metadata(
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
                     deprecated: #deprecated,
-                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
+                    has_auth: #has_roles || #has_identity_param || #has_guards || #struct_identity_auth,
                 }
             }
         })
@@ -1031,6 +1038,7 @@ fn generate_sse_route_metadata(
                 &sm.decorators.all_roles,
                 !sm.decorators.guard_fns.is_empty(),
                 sm.identity_param.is_some(),
+                sm.decorators.anonymous,
                 "SSE stream",
             )
         })
@@ -1054,6 +1062,7 @@ fn generate_ws_route_metadata(
                 &wm.decorators.all_roles,
                 !wm.decorators.guard_fns.is_empty(),
                 wm.identity_param.is_some(),
+                wm.decorators.anonymous,
                 "WebSocket endpoint",
             )
         })
@@ -1075,6 +1084,7 @@ fn emit_streaming_route_info(
     all_roles: &[String],
     has_guards: bool,
     has_identity_param: bool,
+    anonymous: bool,
     summary: &str,
 ) -> TokenStream {
     let krate = r2e_core_path();
@@ -1086,6 +1096,11 @@ fn emit_streaming_route_info(
         .map(|r| quote! { #r.to_string() })
         .collect();
     let has_roles = !roles.is_empty() || !all_roles.is_empty();
+    let struct_identity_auth = if anonymous {
+        quote! { false }
+    } else {
+        quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+    };
 
     quote! {
         #krate::meta::RouteInfo {
@@ -1108,7 +1123,7 @@ fn emit_streaming_route_info(
             roles: vec![#(#roles_tokens),*],
             tag: Some(#tag.to_string()),
             deprecated: false,
-            has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
+            has_auth: #has_roles || #has_identity_param || #has_guards || #struct_identity_auth,
         }
     }
 }

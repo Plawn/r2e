@@ -144,11 +144,48 @@ router is registered; the request-scoped fields live on a generated per-request
 (one `Arc` clone of the core plus the extracted request values) is created per
 request. See [Controller Lifecycle and Handler Dispatch](../advanced/controller-lifecycle-and-dispatch.md).
 
-**Important:** Struct-level `#[inject(identity)]` means **all** endpoints require authentication. For mixed public/protected controllers, use param-level injection instead (see below).
+**Important:** Struct-level `#[inject(identity)]` means **all** endpoints require authentication — a fail-closed default. For a mostly-protected controller with a few public routes, keep the struct identity and mark the exceptions with `#[anonymous]` (see below). For mostly-public controllers, use param-level injection instead.
+
+## Anonymous routes: `#[anonymous]`
+
+On a controller with a struct-level identity, mark public routes with `#[anonymous]` (@PermitAll-style opt-out):
+
+```rust
+#[controller(path = "/posts")]
+pub struct PostController {
+    #[inject] posts: PostService,
+    #[inject(identity)] user: AuthenticatedUser,
+}
+
+#[routes]
+impl PostController {
+    #[get("/")]
+    #[anonymous]               // public: no JWT extraction at all
+    async fn list(&self) -> Json<Vec<Post>> {
+        Json(self.posts.list().await)
+    }
+
+    #[post("/")]               // authenticated by default (fail-closed)
+    async fn create(&self, body: Json<NewPost>) -> Json<Post> {
+        let owner = self.user.sub();   // plain access, no Option
+        // ...
+    }
+}
+```
+
+Semantics of an `#[anonymous]` route:
+
+- **No identity extraction runs** — anonymous requests never pay JWT-validation cost, and credentials sent anyway are ignored.
+- The method runs on the controller **core** (like `#[consumer]`/`#[scheduled]` methods): reading `self.user` — or any request-scoped field — in the body is a **compile error**. `#[inject]`/`#[config]` fields and handler parameters work as usual.
+- Guards (`#[guard]`, `#[pre_guard]`) still run, with `identity: None` in the guard context. `#[roles]`/`#[all_roles]` and **required** `#[inject(identity)]` parameters are rejected at compile time — they require an identity. An `Option<T>` identity parameter is allowed: a public route that personalizes when a valid credential is present.
+- OpenAPI drops the security requirement for the route.
+- On a controller with **no** struct-level identity, the marker is redundant and rejected at compile time.
+
+The direction of the marker is deliberate: **forgetting `#[anonymous]` yields a 401 (fail closed); there is no marker whose omission silently publishes a route.**
 
 ## Mixed controllers (param-level identity)
 
-When only some endpoints need authentication, use param-level `#[inject(identity)]` instead of struct-level. This is the **recommended pattern** for most controllers:
+When most endpoints are public and only a few need authentication, use param-level `#[inject(identity)]` instead of struct-level:
 
 ```rust
 #[controller(path = "/api")]

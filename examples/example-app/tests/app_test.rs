@@ -52,6 +52,44 @@ async fn admin_endpoint_enforces_roles(app: TestApp) {
         .assert_ok();
 }
 
+// ── Fail-closed auth with #[anonymous] opt-out (ReportController) ────────
+
+#[r2e::test(app = example_app::app)]
+async fn anonymous_route_is_public(app: TestApp) {
+    // No credentials at all — the marked route skips identity extraction.
+    app.get("/reports/summary").send().await.assert_ok();
+}
+
+#[r2e::test(app = example_app::app)]
+async fn unmarked_routes_are_authenticated_by_default(app: TestApp) {
+    app.get("/reports/full").send().await.assert_unauthorized();
+
+    app.get("/reports/full")
+        .as_user("user-1", &["user"])
+        .send()
+        .await
+        .assert_ok();
+}
+
+#[r2e::test(app = example_app::app)]
+async fn struct_identity_feeds_roles_without_params(app: TestApp) {
+    // Anonymous → 401 from identity extraction (fail-closed default).
+    app.get("/reports/audit").send().await.assert_unauthorized();
+
+    // Authenticated without the role → 403 from #[roles("admin")].
+    app.get("/reports/audit")
+        .as_user("user-1", &["user"])
+        .send()
+        .await
+        .assert_forbidden();
+
+    app.get("/reports/audit")
+        .as_user("admin-1", &["admin"])
+        .send()
+        .await
+        .assert_ok();
+}
+
 #[r2e::test(app = example_app::app)]
 async fn negative_token_paths(app: TestApp, jwt: TestJwt) {
     let bad = jwt.wrong_issuer_token("user-1");

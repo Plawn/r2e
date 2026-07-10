@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: #[anonymous] is redundant: this controller declares no #[inject(identity)] struct field, so its routes are already public
+  --> compile-fail/anonymous_without_identity.rs:14:14
+   |
+14 |     async fn show(&self) -> Json<String> {
+   |              ^^^^ evaluation of `_` failed here

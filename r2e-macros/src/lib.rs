@@ -299,6 +299,51 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Opt a route out of the controller's struct-level identity (@PermitAll).
+///
+/// On a controller with an `#[inject(identity)]` field, **every** route
+/// requires authentication by default (fail-closed). Mark the public
+/// exceptions with `#[anonymous]`:
+///
+/// ```ignore
+/// #[controller(path = "/posts")]
+/// pub struct PostController {
+///     #[inject] posts: PostService,
+///     #[inject(identity)] user: AuthenticatedUser,
+/// }
+///
+/// #[routes]
+/// impl PostController {
+///     #[get("/")]
+///     #[anonymous]               // public: no JWT extraction at all
+///     async fn list(&self) -> Json<Vec<Post>> { ... }
+///
+///     #[post("/")]               // authenticated by default
+///     async fn create(&self, body: Json<NewPost>) -> Json<Post> {
+///         let owner = self.user.sub();
+///         ...
+///     }
+/// }
+/// ```
+///
+/// Anonymous routes run on the controller **core** (like `#[consumer]` /
+/// `#[scheduled]` methods): identity extraction is skipped entirely — no JWT
+/// validation cost — and reading the identity field (or any request-scoped
+/// field) in the route body is a compile error. Handler parameters and
+/// `#[inject]`/`#[config]` fields work as usual.
+///
+/// Not combinable with `#[roles]`/`#[all_roles]` or a **required**
+/// `#[inject(identity)]` parameter (those require an identity). An `Option<T>`
+/// identity parameter is allowed — it makes a public route adaptive
+/// (personalized when a valid credential is present). On a controller with no
+/// struct-level identity the marker is redundant and rejected at compile time.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn anonymous(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Restrict a route to users that have **all** of the specified roles (AND semantics).
 ///
 /// Requires an identity source: either an `#[inject(identity)]` field on the

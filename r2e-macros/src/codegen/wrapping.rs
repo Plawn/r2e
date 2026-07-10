@@ -23,6 +23,11 @@ use crate::types::*;
 /// ordinary helpers — stay on the core `impl <Name>`. A consumer/scheduled
 /// method that touches a request-scoped field therefore fails to compile (the
 /// field is not on the core), which is the intended diagnostic.
+///
+/// `#[anonymous]` routes are off-request too: they run without identity
+/// extraction, so they are emitted on the core — reading the identity (or any
+/// request-scoped field) from an anonymous route body fails to compile, same
+/// diagnostic as consumers.
 pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let name = &def.controller_name;
     let facade_name = format_ident!("__R2eRequest_{}", name);
@@ -31,12 +36,14 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
+        .filter(|rm| !rm.decorators.anonymous)
         .map(generate_wrapped_method)
         .collect();
 
     let sse_fns: Vec<TokenStream> = def
         .sse_methods
         .iter()
+        .filter(|sm| !sm.decorators.anonymous)
         .map(|sm| {
             let f = &sm.fn_item;
             quote! { #f }
@@ -46,10 +53,33 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let ws_fns: Vec<TokenStream> = def
         .ws_methods
         .iter()
+        .filter(|wm| !wm.decorators.anonymous)
         .map(|wm| {
             let f = &wm.fn_item;
             quote! { #f }
         })
+        .collect();
+
+    // ── Core (anonymous) route methods ──
+    let anon_route_fns: Vec<TokenStream> = def
+        .route_methods
+        .iter()
+        .filter(|rm| rm.decorators.anonymous)
+        .map(generate_wrapped_method)
+        .collect();
+
+    let anon_sse_ws_fns: Vec<TokenStream> = def
+        .sse_methods
+        .iter()
+        .filter(|sm| sm.decorators.anonymous)
+        .map(|sm| &sm.fn_item)
+        .chain(
+            def.ws_methods
+                .iter()
+                .filter(|wm| wm.decorators.anonymous)
+                .map(|wm| &wm.fn_item),
+        )
+        .map(|f| quote! { #f })
         .collect();
 
     // ── Core (off-request) methods ──
@@ -99,11 +129,15 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         && scheduled_fns.is_empty()
         && async_exec_fns.is_empty()
         && other_fns.is_empty()
+        && anon_route_fns.is_empty()
+        && anon_sse_ws_fns.is_empty()
     {
         quote! {}
     } else {
         quote! {
             impl #name {
+                #(#anon_route_fns)*
+                #(#anon_sse_ws_fns)*
                 #(#consumer_fns)*
                 #(#scheduled_fns)*
                 #(#async_exec_fns)*
