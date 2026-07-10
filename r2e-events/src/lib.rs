@@ -9,8 +9,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 pub mod backend;
 mod local;
+pub mod sse_bridge;
 
 pub use local::{LocalEventBus, DEFAULT_MAX_CONCURRENCY};
+pub use sse_bridge::SseBridgeExt;
 
 // ── EventBusError ──────────────────────────────────────────────────────
 
@@ -361,6 +363,7 @@ pub trait EventBus: Clone + Send + Sync + 'static {
 pub mod prelude {
     //! Re-exports of the most commonly used event types.
     pub use crate::backend::DeserializerFn;
+    pub use crate::sse_bridge::SseBridgeExt;
     pub use crate::{
         Event, EventBus, EventBusError, EventEnvelope, EventFilter, EventMetadata, HandlerResult,
         LocalEventBus, RetryPolicy, SubscriptionHandle, SubscriptionId,
