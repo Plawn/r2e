@@ -565,6 +565,22 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.build_inner().router
     }
 
+    /// Like [`build`](Self::build), but also runs the consumer registrations
+    /// (`#[consumer]` methods, [`register_subscriber`](Self::register_subscriber)
+    /// beans, [`add_consumer_registration`](Self::add_consumer_registration)
+    /// hooks) that `serve()` would run at startup.
+    ///
+    /// This is the in-process test entry point: it gives event consumers
+    /// production parity without binding a listener. Serve hooks (scheduler
+    /// task start, …) still do not run.
+    pub async fn build_with_consumers(self) -> crate::http::Router {
+        let built = self.build_inner();
+        for reg in built.consumer_registrations {
+            reg(built.state.clone()).await;
+        }
+        built.router
+    }
+
     fn build_inner(self) -> BuiltApp<T> {
         let state = self.state;
 
