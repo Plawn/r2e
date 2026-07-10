@@ -80,6 +80,18 @@ fn facade_ident_for(controller: &syn::Ident) -> syn::Ident {
     format_ident!("__R2eRequest_{}", controller)
 }
 
+/// The receiver type a route method is invoked on: the controller **core** for
+/// `#[anonymous]` routes (no request-scoped extraction), the request façade
+/// otherwise. Single decision point for all route kinds.
+fn receiver_ty_for(anonymous: bool, controller: &syn::Ident) -> TokenStream {
+    if anonymous {
+        quote! { #controller }
+    } else {
+        let facade = facade_ident_for(controller);
+        quote! { #facade }
+    }
+}
+
 /// The generated request-data extractor type for a controller. Carries the
 /// request-scoped values (identity + `#[inject(request)]`) and is bound into the
 /// façade alongside the captured core `Arc`.
@@ -809,15 +821,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         )
     };
 
-    // #[anonymous] routes run on the core (no request-scoped extraction);
-    // everything else runs on the request facade.
-    let receiver_ty = if rm.decorators.anonymous {
-        let name = controller_name;
-        quote! { #name }
-    } else {
-        let facade_name = facade_ident_for(controller_name);
-        quote! { #facade_name }
-    };
+    let receiver_ty = receiver_ty_for(rm.decorators.anonymous, controller_name);
     let (fn_generics, fn_where) = if needs_state {
         let sb = state_bounds(&krate);
         let managed_bounds: Vec<TokenStream> = rm
@@ -1018,12 +1022,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 
     let invocation_extra_params = &handler_extra_params;
 
-    let receiver_ty = if sm.decorators.anonymous {
-        quote! { #controller_name }
-    } else {
-        let facade_name = facade_ident_for(controller_name);
-        quote! { #facade_name }
-    };
+    let receiver_ty = receiver_ty_for(sm.decorators.anonymous, controller_name);
     quote! {
         #deco_items
         #predeco_items
@@ -1054,13 +1053,11 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     // #[anonymous]: the upgrade adapter owns the core `Arc` directly instead of
     // a bound facade, and the invocation/preflight receive `&Core`. `&Arc<Core>`
     // deref-coerces to `&Core` at the call sites below.
-    let (receiver_ty, carrier_ty) = if wm.decorators.anonymous {
-        (
-            quote! { #controller_name },
-            quote! { ::std::sync::Arc<#controller_name> },
-        )
+    let receiver_ty = receiver_ty_for(wm.decorators.anonymous, controller_name);
+    let carrier_ty = if wm.decorators.anonymous {
+        quote! { ::std::sync::Arc<#controller_name> }
     } else {
-        (quote! { #facade_name }, quote! { #facade_name })
+        quote! { #facade_name }
     };
 
     let fn_name_str = fn_name.to_string();

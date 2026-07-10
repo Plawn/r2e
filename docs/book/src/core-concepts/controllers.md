@@ -177,9 +177,9 @@ Semantics of an `#[anonymous]` route:
 
 - **No identity extraction runs** — anonymous requests never pay JWT-validation cost, and credentials sent anyway are ignored.
 - The method runs on the controller **core** (like `#[consumer]`/`#[scheduled]` methods): reading `self.user` — or any request-scoped field — in the body is a **compile error**. `#[inject]`/`#[config]` fields and handler parameters work as usual.
-- Guards (`#[guard]`, `#[pre_guard]`) still run, with `identity: None` in the guard context. `#[roles]`/`#[all_roles]` and **required** `#[inject(identity)]` parameters are rejected at compile time — they require an identity. An `Option<T>` identity parameter is allowed: a public route that personalizes when a valid credential is present.
-- OpenAPI drops the security requirement for the route.
-- On a controller with **no** struct-level identity, the marker is redundant and rejected at compile time.
+- Guards (`#[guard]`, `#[pre_guard]`) still run. The guard context carries `identity: None` — unless the route declares its own optional identity parameter, which guards then see. `#[roles]`/`#[all_roles]` and **required** `#[inject(identity)]` parameters are rejected at compile time — they require an identity. An `Option<T>` identity parameter is allowed: a public route that personalizes when a valid credential is present.
+- OpenAPI drops the identity-based security requirement for the route (explicit `#[guard]`s still mark it as guarded).
+- The controller must declare a **required** struct-level identity. With no identity the routes are already public, and with an `Option<T>` identity extraction never rejects — in both cases there is nothing fail-closed to opt out of, and the marker is rejected at compile time.
 
 The direction of the marker is deliberate: **forgetting `#[anonymous]` yields a 401 (fail closed); there is no marker whose omission silently publishes a route.**
 

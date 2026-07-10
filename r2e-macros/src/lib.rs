@@ -335,8 +335,10 @@ pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Not combinable with `#[roles]`/`#[all_roles]` or a **required**
 /// `#[inject(identity)]` parameter (those require an identity). An `Option<T>`
 /// identity parameter is allowed — it makes a public route adaptive
-/// (personalized when a valid credential is present). On a controller with no
-/// struct-level identity the marker is redundant and rejected at compile time.
+/// (personalized when a valid credential is present). The controller must
+/// declare a **required** struct-level identity: with no identity the routes
+/// are already public, and an `Option<T>` identity never rejects — in both
+/// cases the marker is rejected at compile time.
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]

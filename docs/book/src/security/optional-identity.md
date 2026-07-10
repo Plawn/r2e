@@ -36,7 +36,7 @@ impl UserController {
 }
 ```
 
-An `#[anonymous]` route runs on the controller core, like consumers: reading `self.user` there is a compile error, identity extraction is skipped entirely (no JWT cost), guards run with `identity: None`, and combining the marker with `#[roles]` or a required identity parameter is rejected at compile time (an `Option<T>` identity parameter is allowed, for adaptive public routes). Forgetting the marker fails closed (401) — there is no marker whose omission silently publishes a route.
+An `#[anonymous]` route runs on the controller core, like consumers: reading `self.user` there is a compile error, identity extraction is skipped entirely (no JWT cost), guards run with `identity: None` (or the route's own optional identity parameter, when declared), and combining the marker with `#[roles]` or a required identity parameter is rejected at compile time (an `Option<T>` identity parameter is allowed, for adaptive public routes). The marker requires a **required** struct identity — on an `Option<T>` struct identity there is nothing fail-closed to opt out of, and it is rejected. Forgetting the marker fails closed (401) — there is no marker whose omission silently publishes a route.
 
 ### Parameter-level identity
 
@@ -184,4 +184,4 @@ async fn admin_panel(
 
 On a controller with a struct-level identity, the parameter is unnecessary — `#[roles]` and `#[guard]` read the struct identity directly, so a handler that never touches the user needs no identity binding at all.
 
-With optional identity, guard context receives `Option<&AuthenticatedUser>`. Custom guards can use this to implement conditional authorization logic; on `#[anonymous]` routes the context always carries `identity: None`.
+With optional identity, guard context receives `Option<&AuthenticatedUser>`. Custom guards can use this to implement conditional authorization logic; on `#[anonymous]` routes the context carries `identity: None`, unless the route declares its own optional identity parameter.

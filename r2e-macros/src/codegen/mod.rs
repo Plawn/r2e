@@ -33,41 +33,45 @@ pub fn generate(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// For every `#[anonymous]` method, assert at compile time that the controller
-/// actually declares a struct-level identity to opt out of.
+/// If any method carries `#[anonymous]`, assert at compile time that the
+/// controller declares a **required** struct-level identity to opt out of.
 ///
 /// `#[routes]` cannot see the struct, so this is checked through the meta
-/// module's `HAS_STRUCT_IDENTITY` const. Without an identity the marker is
-/// dead weight (the route is already public) while still moving the method to
-/// the core — reject it instead of silently accepting a no-op with placement
-/// side effects.
+/// module's `STRUCT_IDENTITY_IS_REQUIRED` const. Without a required identity
+/// there is no fail-closed baseline: no identity means the routes are already
+/// public, and an `Option<T>` identity never rejects — in both cases the
+/// marker would be a silent no-op with placement side effects, so reject it.
+/// One assert per controller (spanned to the first anonymous method) — every
+/// marker on the controller shares the same root cause.
 fn generate_anonymous_asserts(def: &RoutesImplDef) -> Vec<TokenStream> {
     let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
 
-    let assert_for = |decorators: &MethodDecorators, fn_item: &syn::ImplItemFn| {
-        decorators.anonymous.then(|| {
-            let span = fn_item.sig.ident.span();
-            quote_spanned! { span =>
-                const _: () = ::core::assert!(
-                    #meta_mod::HAS_STRUCT_IDENTITY,
-                    "#[anonymous] is redundant: this controller declares no #[inject(identity)] struct field, so its routes are already public"
-                );
-            }
-        })
+    let first_anonymous = |decorators: &MethodDecorators, fn_item: &syn::ImplItemFn| {
+        decorators.anonymous.then(|| fn_item.sig.ident.span())
     };
 
     def.route_methods
         .iter()
-        .filter_map(|m| assert_for(&m.decorators, &m.fn_item))
+        .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item))
         .chain(
             def.sse_methods
                 .iter()
-                .filter_map(|m| assert_for(&m.decorators, &m.fn_item)),
+                .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item)),
         )
         .chain(
             def.ws_methods
                 .iter()
-                .filter_map(|m| assert_for(&m.decorators, &m.fn_item)),
+                .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item)),
         )
+        .next()
+        .map(|span| {
+            quote_spanned! { span =>
+                const _: () = ::core::assert!(
+                    #meta_mod::STRUCT_IDENTITY_IS_REQUIRED,
+                    "#[anonymous] needs a required struct-level #[inject(identity)] field to opt out of: with no identity the routes are already public, and an Option<..> identity never rejects — the marker would be a no-op"
+                );
+            }
+        })
+        .into_iter()
         .collect()
 }
