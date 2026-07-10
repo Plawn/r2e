@@ -125,7 +125,9 @@ pub use crate::validation::Validate;
 pub use r2e_macros::Params;
 
 // SSE broadcaster + typed topics + per-key rooms
-pub use crate::sse::{LagPolicy, SseBroadcaster, SseRooms, SseSubscription, SseTopic};
+pub use crate::sse::{
+    LagPolicy, SseBroadcaster, SseRooms, SseSerializeError, SseSubscription, SseTopic,
+};
 
 #[cfg(feature = "multipart")]
 pub use crate::multipart::{FromMultipart, Multipart, TypedMultipart, UploadedFile};

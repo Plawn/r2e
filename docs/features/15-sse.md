@@ -251,6 +251,16 @@ publisher. `Err` means the event failed to serialize. `subscriber_count()`
 and `capacity()` are exposed directly; `broadcaster()` is the raw escape
 hatch (its `send`/`send_event` bypass the typed contract — prefer `publish`).
 
+Payloads are JSON by default. SSE is a text protocol, so alternative formats
+are text too — swap the serializer while keeping the typed `publish` contract
+(and the EventBus bridge, which goes through `publish`):
+
+```rust
+let ticks = SseTopic::<Tick>::new(128)
+    .with_event_name("tick")
+    .with_serializer(|t| Ok(format!("{},{}", t.symbol, t.price)));
+```
+
 ### 8. EventBus↔SSE Bridge (zero-liaison fan-out)
 
 With the `events` feature, `bridge_sse::<Bus, E>()` (from
@@ -390,7 +400,8 @@ impl SseController {
 |--------|-----------|-------------|
 | `new` | `fn new(capacity: usize) -> Self` | Topic with default event name = short type name of `E` |
 | `with_event_name` | `fn with_event_name(self, name: impl Into<String>) -> Self` | Override the SSE event name |
-| `publish` | `fn publish(&self, event: &E) -> Result<usize, serde_json::Error>` | JSON-serialize and broadcast; `Ok(0)` when no subscribers |
+| `with_serializer` | `fn with_serializer(self, f: impl Fn(&E) -> Result<String, SseSerializeError>) -> Self` | Override the payload format (default: JSON) |
+| `publish` | `fn publish(&self, event: &E) -> Result<usize, SseSerializeError>` | Serialize and broadcast; `Ok(0)` when no subscribers |
 | `subscribe` | `fn subscribe(&self) -> SseSubscription` | Subscription stream, ready for `#[sse]` |
 | `subscriber_count` | `fn subscriber_count(&self) -> usize` | Active subscribers |
 | `broadcaster` | `fn broadcaster(&self) -> &SseBroadcaster` | Raw escape hatch (prefer `publish`) |

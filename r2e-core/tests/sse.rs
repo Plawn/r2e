@@ -287,3 +287,25 @@ async fn sse_topic_clone_shares_channel() {
     topic.publish(&SyncStatus { done: 1, total: 2 }).unwrap();
     assert!(next_event(&mut sub).await.is_some(), "clone should share the broadcast channel");
 }
+
+#[r2e_core::test]
+async fn sse_topic_custom_serializer() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+        .with_event_name("sync")
+        .with_serializer(|s| Ok(format!("{}/{}", s.done, s.total)));
+    let mut sub = topic.subscribe();
+    topic.publish(&SyncStatus { done: 10, total: 42 }).unwrap();
+    let event = next_event(&mut sub).await.expect("should receive event");
+    let debug = format!("{event:?}");
+    assert!(debug.contains("10/42"), "custom format should be on the wire: {debug}");
+}
+
+#[r2e_core::test]
+async fn sse_topic_serializer_error_is_returned() {
+    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+        .with_serializer(|_| Err("encoding broke".into()));
+    let mut sub = topic.subscribe();
+    let err = topic.publish(&SyncStatus { done: 1, total: 1 }).unwrap_err();
+    assert!(err.to_string().contains("encoding broke"));
+    assert!(poll_once(&mut sub).is_none(), "nothing should have been broadcast");
+}
