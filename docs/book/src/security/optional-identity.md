@@ -20,9 +20,27 @@ pub struct UserController {
 
 The identity field lives on the per-request façade, never on the controller core. The core still gets a `ContextConstruct` impl (it always does), so the controller can also host `#[consumer]` / `#[scheduled]` methods — those run on the core and simply cannot access the request identity.
 
+This is the **fail-closed default** for protected controllers: every route requires auth unless explicitly opted out with `#[anonymous]`:
+
+```rust
+#[routes]
+impl UserController {
+    #[get("/health")]
+    #[anonymous]           // public: no JWT extraction runs at all
+    async fn health(&self) -> &'static str { "OK" }
+
+    #[get("/me")]          // authenticated by default
+    async fn me(&self) -> Json<String> {
+        Json(self.user.sub().to_string())
+    }
+}
+```
+
+An `#[anonymous]` route runs on the controller core, like consumers: reading `self.user` there is a compile error, identity extraction is skipped entirely (no JWT cost), guards run with `identity: None` (or the route's own optional identity parameter, when declared), and combining the marker with `#[roles]` or a required identity parameter is rejected at compile time (an `Option<T>` identity parameter is allowed, for adaptive public routes). The marker requires a **required** struct identity — on an `Option<T>` struct identity there is nothing fail-closed to opt out of, and it is rejected. Forgetting the marker fails closed (401) — there is no marker whose omission silently publishes a route.
+
 ### Parameter-level identity
 
-When `#[inject(identity)]` is on a handler parameter instead, only the annotated endpoints require authentication. This is the recommended form for mixed public/protected controllers, since each endpoint opts into authentication individually.
+When `#[inject(identity)]` is on a handler parameter instead, only the annotated endpoints require authentication. Prefer this form for mostly-public controllers, where each endpoint opts into authentication individually.
 
 ```rust
 #[controller(path = "/api")]
@@ -97,45 +115,42 @@ use r2e::prelude::*;
 #[controller(path = "/items")]
 pub struct ItemController {
     #[inject] item_service: ItemService,
+    #[inject(identity)] user: AuthenticatedUser,
 }
 
 #[routes]
 impl ItemController {
-    /// Public — anyone can list items.
+    /// Public — no identity extraction at all (`self.user` here would be a
+    /// compile error).
     #[get("/")]
+    #[anonymous]
     async fn list(&self) -> Json<Vec<Item>> {
         Json(self.item_service.list().await)
     }
 
-    /// Optional auth — personalized results when logged in.
+    /// Optional auth — personalized results when logged in. The optional
+    /// parameter overrides nothing: it is its own extraction, useful for
+    /// adaptive endpoints on any controller shape.
     #[get("/feed")]
-    async fn feed(
-        &self,
-        #[inject(identity)] user: Option<AuthenticatedUser>,
-    ) -> Json<Vec<Item>> {
+    #[anonymous]
+    async fn feed(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> Json<Vec<Item>> {
         match user {
             Some(u) => Json(self.item_service.feed_for(&u.sub()).await),
             None => Json(self.item_service.default_feed().await),
         }
     }
 
-    /// Protected — requires a valid JWT.
+    /// Protected by default — reads the struct identity, no `Option`.
     #[get("/mine")]
-    async fn my_items(
-        &self,
-        #[inject(identity)] user: AuthenticatedUser,
-    ) -> Json<Vec<Item>> {
-        Json(self.item_service.items_for(&user.sub()).await)
+    async fn my_items(&self) -> Json<Vec<Item>> {
+        Json(self.item_service.items_for(&self.user.sub()).await)
     }
 
-    /// Protected + role check — admin only.
+    /// Protected + role check — the roles guard reads the struct identity;
+    /// no unused parameter needed.
     #[post("/")]
     #[roles("admin")]
-    async fn create(
-        &self,
-        #[inject(identity)] _user: AuthenticatedUser,
-        body: Json<CreateItem>,
-    ) -> Json<Item> {
+    async fn create(&self, body: Json<CreateItem>) -> Json<Item> {
         Json(self.item_service.create(body.0).await)
     }
 }
@@ -145,10 +160,11 @@ impl ItemController {
 
 | Scenario | Approach |
 |---|---|
-| Every endpoint requires auth | Struct-level `#[inject(identity)]` |
-| Mix of public and protected endpoints | Parameter-level `#[inject(identity)]` |
-| Endpoint adapts to auth presence | `#[inject(identity)] user: Option<AuthenticatedUser>` |
-| Controller is also a consumer/scheduled task target | Parameter-level (keeps the core identity-free) |
+| Mostly/fully protected controller | Struct-level `#[inject(identity)]` + `#[anonymous]` on public routes (fail-closed) |
+| Mostly public controller, a few protected routes | Parameter-level `#[inject(identity)]` on the protected handlers |
+| Endpoint adapts to auth presence | `#[inject(identity)] user: Option<AuthenticatedUser>` parameter |
+| Route requires auth but never reads the identity | Struct identity, no parameter — `#[roles]`/guards read it directly |
+| Controller is also a consumer/scheduled task target | Any — the core never holds request identity |
 
 ## Combining with guards
 
@@ -159,11 +175,13 @@ Parameter-level identity works with `#[roles]` and `#[guard]`. The identity is e
 #[roles("admin")]
 async fn admin_panel(
     &self,
-    #[inject(identity)] _user: AuthenticatedUser,
+    #[inject(identity)] user: AuthenticatedUser,
 ) -> Json<AdminData> {
     // Only reachable if JWT is valid AND user has "admin" role
-    Json(self.item_service.admin_data().await)
+    Json(self.item_service.admin_data(user.sub()).await)
 }
 ```
 
-With optional identity, guard context receives `Option<&AuthenticatedUser>`. Custom guards can use this to implement conditional authorization logic.
+On a controller with a struct-level identity, the parameter is unnecessary — `#[roles]` and `#[guard]` read the struct identity directly, so a handler that never touches the user needs no identity binding at all.
+
+With optional identity, guard context receives `Option<&AuthenticatedUser>`. Custom guards can use this to implement conditional authorization logic; on `#[anonymous]` routes the context carries `identity: None`, unless the route declares its own optional identity parameter.

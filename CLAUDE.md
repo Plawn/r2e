@@ -95,8 +95,10 @@ Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` /
 `Option<T>` is supported for both `#[inject(identity)]` and `#[inject(request)]`.
 
 **Handler parameter-level identity injection:**
-- `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints). Recommended over struct-level identity for mixed controllers, since each endpoint opts into authentication individually.
+- `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints), with each endpoint opting into authentication individually.
 - **Optional identity:** `#[inject(identity)] user: Option<AuthenticatedUser>` for endpoints working with or without auth.
+
+**`#[anonymous]` — fail-closed auth with per-route opt-out:** a struct-level identity authenticates **every** route by default; mark the public exceptions with `#[anonymous]` (@PermitAll-style). Anonymous routes are emitted on the controller **core** (like consumers/scheduled): identity extraction is skipped entirely (no JWT cost) and reading the identity or any request-scoped field in the body is a compile error. Guards still run there — with `identity: None` unless the route declares its own optional identity param; OpenAPI drops the security requirement unless explicit `#[guard]`s remain. Rejected combinations (compile errors): `#[anonymous]` + `#[roles]`/`#[all_roles]`, + a **required** `#[inject(identity)]` param (an `Option<T>` identity param is allowed — adaptive public route), or on a controller without a **required** struct identity (no identity or `Option<T>` identity = nothing fail-closed to opt out of — const-assert on `STRUCT_IDENTITY_IS_REQUIRED`). Prefer struct identity + `#[anonymous]` for mostly-protected controllers (forgetting the marker fails closed with a 401); use param-level identity for mostly-public ones.
 
 **Controller declaration uses two macros:**
 1. `#[controller(path = "...")]` — a transforming attribute on the struct (no `state` key — controllers are state-generic). It strips request-scoped fields from the physical core struct and generates the metadata module, the request-data extractor, the per-request façade, and the `ContextConstruct` impl (always — the core never holds request-scoped fields).
@@ -141,7 +143,7 @@ impl UserController {
 
 **Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
 
-**No-op attribute macros:** `#[get]`, `#[roles]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
+**No-op attribute macros:** `#[get]`, `#[roles]`, `#[anonymous]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
 
 **`#[post_construct]`** — lifecycle hook on `#[bean]` methods. Called after the entire bean graph is resolved. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates `PostConstruct` trait impl.
 

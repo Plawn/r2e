@@ -28,6 +28,30 @@ pub trait RoutePlugin: Sync {
 
 // ── Plugin implementations ───────────────────────────────────────────────
 
+struct AnonymousPlugin;
+impl RoutePlugin for AnonymousPlugin {
+    fn attr_names(&self) -> &'static [&'static str] {
+        &["anonymous"]
+    }
+    fn parse(
+        &self,
+        attrs: &[syn::Attribute],
+        decorators: &mut MethodDecorators,
+    ) -> syn::Result<()> {
+        let Some(attr) = attrs.iter().find(|a| a.path().is_ident("anonymous")) else {
+            return Ok(());
+        };
+        if !matches!(attr.meta, syn::Meta::Path(_)) {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "#[anonymous] takes no arguments",
+            ));
+        }
+        decorators.anonymous = true;
+        Ok(())
+    }
+}
+
 struct RolesPlugin;
 impl RoutePlugin for RolesPlugin {
     fn attr_names(&self) -> &'static [&'static str] {
@@ -193,6 +217,7 @@ impl RoutePlugin for ReturnsPlugin {
 /// **Ordering matters**: `RolesPlugin` runs before `GuardPlugin` so the
 /// generated `RolesGuard` is inserted at the front of `guard_fns`.
 static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
+    &AnonymousPlugin,
     &RolesPlugin,
     &AllRolesPlugin,
     &GuardPlugin,
@@ -209,6 +234,7 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
 static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[&InterceptPlugin];
 
 const GRPC_DISALLOWED_ATTRS: &[&str] = &[
+    "anonymous",
     "roles",
     "all_roles",
     "guard",

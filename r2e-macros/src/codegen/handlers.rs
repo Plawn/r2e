@@ -80,6 +80,18 @@ fn facade_ident_for(controller: &syn::Ident) -> syn::Ident {
     format_ident!("__R2eRequest_{}", controller)
 }
 
+/// The receiver type a route method is invoked on: the controller **core** for
+/// `#[anonymous]` routes (no request-scoped extraction), the request façade
+/// otherwise. Single decision point for all route kinds.
+fn receiver_ty_for(anonymous: bool, controller: &syn::Ident) -> TokenStream {
+    if anonymous {
+        quote! { #controller }
+    } else {
+        let facade = facade_ident_for(controller);
+        quote! { #facade }
+    }
+}
+
 /// The generated request-data extractor type for a controller. Carries the
 /// request-scoped values (identity + `#[inject(request)]`) and is bound into the
 /// façade alongside the captured core `Arc`.
@@ -421,6 +433,21 @@ fn generate_guard_context(
                 uri: &__uri,
                 path_params: __path_params,
                 identity: #identity_expr,
+            };
+        }
+    } else if rm.decorators.anonymous {
+        // Case C: #[anonymous] — no identity was extracted. Guards still run
+        // (e.g. rate limiting) with `identity: None`, typed to the controller's
+        // `IdentityType` so `GuardContext<I>` stays pinned as in case B.
+        quote! {
+            let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+            let __guard_ctx = #krate::GuardContext {
+                method_name: #fn_name_str,
+                controller_name: #controller_name_str,
+                headers: &__headers,
+                uri: &__uri,
+                path_params: __path_params,
+                identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
             };
         }
     } else {
@@ -794,7 +821,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         )
     };
 
-    let facade_name = facade_ident_for(controller_name);
+    let receiver_ty = receiver_ty_for(rm.decorators.anonymous, controller_name);
     let (fn_generics, fn_where) = if needs_state {
         let sb = state_bounds(&krate);
         let managed_bounds: Vec<TokenStream> = rm
@@ -819,7 +846,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         #[allow(non_snake_case)]
         async fn #invocation_name #fn_generics(
             #(#invocation_prefix_params,)*
-            __ctrl: &#facade_name,
+            __ctrl: &#receiver_ty,
             #(#invocation_extra_params,)*
         ) #invocation_return #fn_where {
             #invocation_body
@@ -956,6 +983,18 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                     identity: #identity_expr,
                 };
             }
+        } else if sm.decorators.anonymous {
+            quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                let __guard_ctx = #krate::GuardContext {
+                    method_name: #fn_name_str,
+                    controller_name: #controller_name_str,
+                    headers: &__headers,
+                    uri: &__uri,
+                    path_params: __path_params,
+                    identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
+                };
+            }
         } else {
             quote! {
                 let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
@@ -983,7 +1022,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 
     let invocation_extra_params = &handler_extra_params;
 
-    let facade_name = facade_ident_for(controller_name);
+    let receiver_ty = receiver_ty_for(sm.decorators.anonymous, controller_name);
     quote! {
         #deco_items
         #predeco_items
@@ -991,7 +1030,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         #[allow(non_snake_case)]
         async fn #invocation_name(
             #(#invocation_prefix_params,)*
-            __ctrl: &#facade_name,
+            __ctrl: &#receiver_ty,
             #(#invocation_extra_params,)*
         ) #invocation_return {
             #invocation_body
@@ -1010,6 +1049,16 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let facade_name = facade_ident_for(controller_name);
     let invocation_name = invocation_ident_for(controller_name, fn_name);
     let preflight_name = format_ident!("__r2e_preflight_{}_{}", controller_name, fn_name);
+
+    // #[anonymous]: the upgrade adapter owns the core `Arc` directly instead of
+    // a bound facade, and the invocation/preflight receive `&Core`. `&Arc<Core>`
+    // deref-coerces to `&Core` at the call sites below.
+    let receiver_ty = receiver_ty_for(wm.decorators.anonymous, controller_name);
+    let carrier_ty = if wm.decorators.anonymous {
+        quote! { ::std::sync::Arc<#controller_name> }
+    } else {
+        quote! { #facade_name }
+    };
 
     let fn_name_str = fn_name.to_string();
     let controller_name_str = controller_name.to_string();
@@ -1143,6 +1192,12 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     quote! { &#arg_name },
                     identity_expr,
                 )
+            } else if wm.decorators.anonymous {
+                (
+                    quote! {},
+                    quote! {},
+                    quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None },
+                )
             } else {
                 (
                     quote! {},
@@ -1171,7 +1226,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
                     __raw_path_params: #krate::http::extract::RawPathParams,
-                    __ctrl: &#facade_name,
+                    __ctrl: &#receiver_ty,
                     #identity_decl
                 ) -> Result<(), #krate::http::response::Response> {
                     #guard_context
@@ -1222,7 +1277,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         #[allow(non_snake_case)]
         async fn #invocation_name(
-            __ctrl: &#facade_name,
+            __ctrl: &#receiver_ty,
             #(#handler_extra_params,)*
             __socket: #krate::http::ws::WebSocket,
         ) {
@@ -1233,7 +1288,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         #[allow(non_snake_case)]
         async fn #handler_name(
             #guard_params
-            __facade: #facade_name,
+            __facade: #carrier_ty,
             #(#handler_extra_params,)*
             __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
         ) -> #krate::http::response::Response {
@@ -1354,6 +1409,26 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
     let deco_arg = has_deco.then(|| quote! { &__deco_capture, });
+    // #[anonymous]: no request-scoped extraction at all — the closure calls the
+    // invocation on the captured core (`&Arc<Core>` deref-coerces to `&Core`).
+    if rm.decorators.anonymous {
+        return quote! {
+            {
+                let __core_capture = __ctrl.clone();
+                #deco_setup
+                move |#(#closure_params),*| {
+                    async move {
+                        #invocation(
+                            #(#prefix,)*
+                            #deco_arg
+                            &__core_capture,
+                            #(#suffix),*
+                        ).await
+                    }
+                }
+            }
+        };
+    }
     // One per-request `Arc` increment: axum clones the `Fn`-once closure per
     // request (cloning `__core_capture`), then this body moves that clone into
     // `bind_request`. There is no second explicit `.clone()`.
@@ -1420,6 +1495,24 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
     let deco_arg = has_guards.then(|| quote! { &__deco_capture, });
+    if sm.decorators.anonymous {
+        return quote! {
+            {
+                let __core_capture = __ctrl.clone();
+                #deco_setup
+                move |#(#closure_params),*| {
+                    async move {
+                        #invocation(
+                            #(#prefix,)*
+                            #deco_arg
+                            &__core_capture,
+                            #(#suffix),*
+                        ).await
+                    }
+                }
+            }
+        };
+    }
     let md = data_marker();
     quote! {
         {
@@ -1491,6 +1584,25 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
+    if wm.decorators.anonymous {
+        // The anonymous WS adapter takes `Arc<Core>` where the facade path
+        // takes a bound facade — same ownership shape across the upgrade.
+        return quote! {
+            {
+                let __core_capture = __ctrl.clone();
+                #deco_setup
+                move |#(#closure_params),*| {
+                    async move {
+                        #inner(
+                            #(#prefix,)*
+                            __core_capture,
+                            #(#suffix),*
+                        ).await
+                    }
+                }
+            }
+        };
+    }
     quote! {
         {
             let __core_capture = __ctrl.clone();

@@ -33,7 +33,7 @@ pub use r2e_macros::routes;
 pub use r2e_macros::{delete, get, patch, post, put};
 
 // Route-level attributes
-pub use r2e_macros::{guard, intercept, layer, managed, middleware, pre_guard, returns, roles, status, transactional};
+pub use r2e_macros::{anonymous, guard, intercept, layer, managed, middleware, pre_guard, returns, roles, status, transactional};
 
 // SSE & WebSocket attributes
 pub use r2e_macros::{sse, ws};

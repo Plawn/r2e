@@ -230,10 +230,16 @@ fn generate_route_metadata(
             let deprecated = rm.decorators.deprecated;
             let body_required = detect_body_required(rm);
 
-            // has_auth: roles, identity param, guard fns, or struct-level identity
             let has_roles = !rm.decorators.roles.is_empty() || !rm.decorators.all_roles.is_empty();
             let has_identity_param = rm.identity_param.is_some();
             let has_guards = !rm.decorators.guard_fns.is_empty();
+            let has_auth = has_auth_expr(
+                rm.decorators.anonymous,
+                has_roles,
+                has_identity_param,
+                has_guards,
+                meta_mod,
+            );
 
             // Autoref specialization: for each handler param type, probe for ParamsMetadata.
             // Types implementing ParamsMetadata return their param infos; others return empty vec.
@@ -281,11 +287,33 @@ fn generate_route_metadata(
                     roles: vec![#(#roles),*],
                     tag: Some(#tag.to_string()),
                     deprecated: #deprecated,
-                    has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
+                    has_auth: #has_auth,
                 }
             }
         })
         .collect()
+}
+
+/// The `RouteInfo.has_auth` expression for a route.
+///
+/// Normal routes: roles, an identity param, guard fns, or the struct-level
+/// identity all mark the operation as secured. `#[anonymous]` routes bypass
+/// the struct identity, cannot carry roles or a *required* identity param
+/// (rejected at parse time), and an *optional* identity param never rejects —
+/// so only explicit guards (which may still reject, e.g. an API-key check)
+/// keep the flag on.
+fn has_auth_expr(
+    anonymous: bool,
+    has_roles: bool,
+    has_identity_param: bool,
+    has_guards: bool,
+    meta_mod: &syn::Ident,
+) -> TokenStream {
+    if anonymous {
+        quote! { #has_guards }
+    } else {
+        quote! { #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY }
+    }
 }
 
 /// Extract path parameters from route method signature.
@@ -1031,6 +1059,7 @@ fn generate_sse_route_metadata(
                 &sm.decorators.all_roles,
                 !sm.decorators.guard_fns.is_empty(),
                 sm.identity_param.is_some(),
+                sm.decorators.anonymous,
                 "SSE stream",
             )
         })
@@ -1054,6 +1083,7 @@ fn generate_ws_route_metadata(
                 &wm.decorators.all_roles,
                 !wm.decorators.guard_fns.is_empty(),
                 wm.identity_param.is_some(),
+                wm.decorators.anonymous,
                 "WebSocket endpoint",
             )
         })
@@ -1075,6 +1105,7 @@ fn emit_streaming_route_info(
     all_roles: &[String],
     has_guards: bool,
     has_identity_param: bool,
+    anonymous: bool,
     summary: &str,
 ) -> TokenStream {
     let krate = r2e_core_path();
@@ -1086,6 +1117,7 @@ fn emit_streaming_route_info(
         .map(|r| quote! { #r.to_string() })
         .collect();
     let has_roles = !roles.is_empty() || !all_roles.is_empty();
+    let has_auth = has_auth_expr(anonymous, has_roles, has_identity_param, has_guards, meta_mod);
 
     quote! {
         #krate::meta::RouteInfo {
@@ -1108,7 +1140,7 @@ fn emit_streaming_route_info(
             roles: vec![#(#roles_tokens),*],
             tag: Some(#tag.to_string()),
             deprecated: false,
-            has_auth: #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY,
+            has_auth: #has_auth,
         }
     }
 }

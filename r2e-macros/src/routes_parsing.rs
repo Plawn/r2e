@@ -120,6 +120,43 @@ fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Resu
     Ok(())
 }
 
+/// Validate `#[anonymous]` against the rest of the method's surface.
+///
+/// Anonymous routes skip the struct identity: combining the marker with role
+/// checks or a *required* identity parameter is contradictory, so reject those
+/// with a targeted error. An **optional** identity parameter is allowed — it
+/// never rejects the request, so it composes with "public" to express an
+/// adaptive route (personalized when a valid credential is present).
+/// (The "controller has no struct identity at all" case cannot be seen from
+/// `#[routes]` — that one is a const-assert on `HAS_STRUCT_IDENTITY`, emitted
+/// in codegen.)
+fn validate_anonymous(
+    decorators: &MethodDecorators,
+    identity_param: &Option<IdentityParam>,
+    method: &syn::ImplItemFn,
+) -> syn::Result<()> {
+    if !decorators.anonymous {
+        return Ok(());
+    }
+    if identity_param.as_ref().is_some_and(|p| !p.is_optional) {
+        return Err(syn::Error::new(
+            method.sig.ident.span(),
+            "#[anonymous] cannot be combined with a required #[inject(identity)] parameter\n\n\
+             The marker opts this route out of authentication; a required identity \
+             parameter reintroduces it. Drop one of the two — or make the parameter \
+             `Option<T>` for a public route that adapts to auth presence.",
+        ));
+    }
+    if !decorators.roles.is_empty() || !decorators.all_roles.is_empty() {
+        return Err(syn::Error::new(
+            method.sig.ident.span(),
+            "#[anonymous] cannot be combined with #[roles]/#[all_roles]\n\n\
+             Role checks need an authenticated identity; an anonymous route has none.",
+        ));
+    }
+    Ok(())
+}
+
 /// Check if a type is a WS type (WsStream or WebSocket) by inspecting the last path segment.
 fn is_ws_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
@@ -256,6 +293,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     method.attrs = strip_known_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
+                    validate_anonymous(&decorators, &identity_param, &method)?;
                     for arg in method.sig.inputs.iter_mut() {
                         if let syn::FnArg::Typed(pat_type) = arg {
                             pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
@@ -274,6 +312,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     method.attrs = strip_known_attrs(all_attrs);
                     let identity_param = extract_identity_param(&mut method)?;
+                    validate_anonymous(&decorators, &identity_param, &method)?;
                     let ws_param = find_ws_param(&method)?;
                     for arg in method.sig.inputs.iter_mut() {
                         if let syn::FnArg::Typed(pat_type) = arg {
@@ -322,6 +361,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     // Detect #[inject(identity)] on handler params
                     let identity_param = extract_identity_param(&mut method)?;
+                    validate_anonymous(&decorators, &identity_param, &method)?;
 
                     // Detect #[managed] on handler params
                     let managed_params = extract_managed_params(&mut method)?;
@@ -380,13 +420,13 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
     // Route-scoped methods move to the request façade; `Self` in their public
     // signature would change meaning. Reject it with a targeted error.
-    for rm in &route_methods {
+    for rm in route_methods.iter().filter(|m| !m.decorators.anonymous) {
         reject_self_in_route_signature(&rm.fn_item.sig, "route")?;
     }
-    for sm in &sse_methods {
+    for sm in sse_methods.iter().filter(|m| !m.decorators.anonymous) {
         reject_self_in_route_signature(&sm.fn_item.sig, "sse")?;
     }
-    for wm in &ws_methods {
+    for wm in ws_methods.iter().filter(|m| !m.decorators.anonymous) {
         reject_self_in_route_signature(&wm.fn_item.sig, "ws")?;
     }
 

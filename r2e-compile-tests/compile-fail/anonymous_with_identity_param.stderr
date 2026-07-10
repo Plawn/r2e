@@ -1,0 +1,7 @@
+error: #[anonymous] cannot be combined with a required #[inject(identity)] parameter
+
+       The marker opts this route out of authentication; a required identity parameter reintroduces it. Drop one of the two — or make the parameter `Option<T>` for a public route that adapts to auth presence.
+  --> compile-fail/anonymous_with_identity_param.rs:17:14
+   |
+17 |     async fn show(&self, #[inject(identity)] other: AuthenticatedUser) -> Json<String> {
+   |              ^^^^

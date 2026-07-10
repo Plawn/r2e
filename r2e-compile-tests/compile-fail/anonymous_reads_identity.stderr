@@ -1,0 +1,7 @@
+error[E0609]: no field `user` on type `&MyController`
+  --> compile-fail/anonymous_reads_identity.rs:19:19
+   |
+19 |         Json(self.user.sub().to_string())
+   |                   ^^^^ unknown field
+   |
+   = note: available field is: `__r2e_decos`

@@ -91,6 +91,10 @@ pub struct MethodDecorators {
     pub status_override: Option<u16>,
     pub returns_type: Option<syn::Type>,
     pub deprecated: bool,
+    /// `#[anonymous]` — opt this route out of the controller's struct-level
+    /// identity: no extraction runs and the method is emitted on the core
+    /// (reading the identity field is a compile error).
+    pub anonymous: bool,
 }
 
 pub struct IdentityParam {

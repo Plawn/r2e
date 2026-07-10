@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: #[anonymous] needs a required struct-level #[inject(identity)] field to opt out of: with no identity the routes are already public, and an Option<..> identity never rejects — the marker would be a no-op
+  --> compile-fail/anonymous_with_optional_struct_identity.rs:18:14
+   |
+18 |     async fn show(&self) -> Json<String> {
+   |              ^^^^ evaluation of `_` failed here
