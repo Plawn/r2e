@@ -1195,3 +1195,35 @@ fn test_optional_section_empty_yaml_key_is_none() {
     let root = PresenceRoot::from_config(&config, None).unwrap();
     assert!(root.database.is_none());
 }
+
+// =========================================================================
+// Option<T> + default (review finding: double .into() broke Option<String>)
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct OptionDefaultConfig {
+    #[config(default = "en")]
+    lang: Option<String>,
+    #[config(default = 5)]
+    retries: Option<i64>,
+}
+
+#[test]
+fn test_option_field_with_default() {
+    let config = R2eConfig::empty();
+    let c = OptionDefaultConfig::from_config(&config, None).unwrap();
+    assert_eq!(c.lang.as_deref(), Some("en"));
+    assert_eq!(c.retries, Some(5));
+
+    let config = R2eConfig::from_yaml_str("lang: fr\nretries: 1\n").unwrap();
+    let c = OptionDefaultConfig::from_config(&config, None).unwrap();
+    assert_eq!(c.lang.as_deref(), Some("fr"));
+    assert_eq!(c.retries, Some(1));
+}
+
+#[test]
+fn test_string_default_metadata_is_unquoted() {
+    let meta = OptionDefaultConfig::properties_metadata(None);
+    let lang = meta.iter().find(|m| m.key == "lang").unwrap();
+    assert_eq!(lang.default_value.as_deref(), Some("en")); // not "\"en\""
+}

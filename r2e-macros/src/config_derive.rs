@@ -104,11 +104,14 @@ fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
                     }
                     let value = meta.value()?;
                     let lit: syn::Expr = value.parse()?;
-                    let lit_str = quote!(#lit).to_string();
-                    // Detect string literals — they need .into() for &str → String
-                    if matches!(&lit, syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(_), .. })) {
+                    // String literals need .into() for &str → String, and their
+                    // metadata string is the unquoted value.
+                    let lit_str = if let syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(s), .. }) = &lit {
                         result.default_is_str_lit = true;
-                    }
+                        s.value()
+                    } else {
+                        quote!(#lit).to_string()
+                    };
                     result.default = Some((quote!(#lit), lit_str));
                     Ok(())
                 } else if meta.path.is_ident("key") {
@@ -523,7 +526,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                             let __key: &str = #key_expr;
                             match __config.get::<#inner_ty>(__key) {
                                 Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => { let __d: #inner_ty = (#default_expr).into(); Some(__d) }
+                                Err(#krate::config::ConfigError::NotFound(_)) => { let __d: #inner_ty = #default_expr; Some(__d) }
                                 Err(e) => return Err(e),
                             }
                         }
