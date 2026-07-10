@@ -197,6 +197,26 @@ bus.emit(OtherEvent).await;
 // → nothing happens, the UserCreatedEvent handler is not called
 ```
 
+## EventBus↔SSE bridge
+
+`SseBridgeExt::bridge_sse::<Bus, E>()` (in the prelude) forwards every event
+of type `E` emitted on the bus into a provided `SseTopic<E>` (see feature 15,
+"Typed Broadcast Topics"), giving real-time SSE fan-out with zero liaison
+code:
+
+```rust
+b.provide(LocalEventBus::new())
+    .provide(SseTopic::<UserCreatedEvent>::new(64).with_event_name("user_created"))
+    .build_state()
+    .await
+    .bridge_sse::<LocalEventBus, UserCreatedEvent>()
+```
+
+Emit on the bus anywhere; SSE clients subscribed to the topic's `#[sse]`
+endpoint receive the JSON-serialized event. With a distributed backend
+(Kafka, RabbitMQ, Pulsar, Iggy), the bridge fans out across instances. The
+manual entry point is `r2e_events::sse_bridge::bridge_event_to_sse(&bus, topic)`.
+
 ## Validation criteria
 
 Start the application and create a user:
