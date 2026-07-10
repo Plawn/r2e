@@ -15,7 +15,7 @@ All multipart types are available through the prelude:
 
 ```rust
 use r2e::prelude::*;
-// Exports: FromMultipart, Multipart, TypedMultipart, UploadedFile
+// Exports: FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile
 ```
 
 Or import explicitly:
@@ -247,6 +247,10 @@ async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
 ```
 
 `Multipart` is re-exported from axum via `r2e::http::multipart::Multipart`. See the [Axum documentation](https://docs.rs/axum/latest/axum/extract/struct.Multipart.html) for its full API.
+
+## OpenAPI integration
+
+Multipart endpoints appear in the generated OpenAPI spec automatically. A `TypedMultipart<T>` parameter is documented as a `multipart/form-data` request body whose schema is derived from `T`'s fields (`#[derive(FromMultipart)]` also generates a `MultipartSchema` impl — no `JsonSchema` derive required): text fields map to their JSON type, file fields to `type: string, format: binary`, and `Option<...>` fields are not listed as required. A raw `Multipart` parameter is documented as a free-form `multipart/form-data` object. Manual `FromMultipart` impls can opt in by also implementing `r2e::multipart::MultipartSchema`.
 
 ## How it works
 
