@@ -432,7 +432,7 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 - **Blueprint boot (the `@QuarkusTest` path)** — apps expose an assembly function `pub async fn app(b: AppBuilder) -> impl BootableApp` in `lib.rs`; tests boot the real app instead of re-declaring controllers:
   - `TestApp::boot(blueprint).await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
-  - `TestApp::boot_with(blueprint, |b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`). Pinned overrides win over the app's later registrations (first-pin semantics, see `docs/claude/plan-testing-dx.md`).
+  - `TestApp::boot_with(blueprint, |b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`). Pinned overrides win over the app's later registrations (first-pin semantics: the harness pre-configures the builder *before* the blueprint runs, so test overrides must beat later registrations).
   - `TestApp::boot_plain(blueprint, |b| ...).await` — skips the TestJwt wiring.
   - `#[r2e::test(app = my_app::app)]` — macro form; binds test-fn params: `app: TestApp`, `jwt: TestJwt`, `#[inject] bean: T`. Optional `with = |b| ...` and `jwt = false`.
   - `app.bean::<T>()` — fetch any bean from the booted app's resolved graph. `app.config()`, `app.test_jwt()` accessors. `.as_user(sub, &roles)` on `TestRequest`/`SessionRequest`/`TestSession` mints a Bearer token from the app's `TestJwt` (the `@TestSecurity` equivalent).

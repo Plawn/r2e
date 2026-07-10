@@ -1,5 +1,5 @@
 //! e2e proof that `AppBuilder::serve()` actually starts the gRPC server
-//! (di-next-steps item 12): services registered with `register_grpc_service`
+//! (DI backlog item 12): services registered with `register_grpc_service`
 //! are drained from the `GrpcServiceRegistry` at serve time and served —
 //! on a separate port (`GrpcServer::on_port`) or multiplexed with HTTP on
 //! one port (`GrpcServer::multiplexed`) — with graph-built interceptors

@@ -1,6 +1,6 @@
 # Transport Adapters — Adding a Wire Format to R2E
 
-Status: **REFERENCE** — recorded 2026-07-09 (di-next-steps item 10). Read
+Status: **REFERENCE** — recorded 2026-07-09 (DI backlog item 10). Read
 this before wiring a new entry point (a wire protocol, a message-driven
 dispatcher, anything that invokes endpoint methods from outside).
 
@@ -61,7 +61,7 @@ the three existing adapters — use them as references.
    gap item 10 closed.
 
 6. **Wire-specific pieces, kept wire-specific** (do not abstract these —
-   deliberate decision, see di-next-steps item 10 discussion):
+   deliberate decision, see DI backlog item 10 discussion):
    - identity extraction (HTTP: `FromRequestParts`; gRPC:
      `GrpcIdentityExtractor` over metadata),
    - a guard trait with the wire's context and reject type (HTTP:
@@ -71,7 +71,7 @@ the three existing adapters — use them as references.
      the `GrpcServer` plugin's `on_serve` hook drains it and spawns tonic on
      the separate port, or an `add_layer` router transform mounts the
      accumulated routes behind `MultiplexService` for the single-port mode;
-     wired in di-next-steps item 12).
+     wired in DI backlog item 12).
 
 7. **Tests** — a trybuild compile-fail for a missing bean at the
    registration call site (model: `grpc_intercept_missing_dep.rs`, which

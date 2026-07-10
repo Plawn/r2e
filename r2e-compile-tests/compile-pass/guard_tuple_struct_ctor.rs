@@ -1,6 +1,6 @@
 //! `#[guard(MyGuard("key"))]` / `#[intercept(Tag("x"))]` — a single-segment
 //! uppercase call is a tuple-struct constructor, so the spec type is the
-//! path itself (di-next-steps item 3). No `MyGuard = MyGuard("key")` escape
+//! path itself (DI backlog item 3). No `MyGuard = MyGuard("key")` escape
 //! hatch needed.
 
 use r2e::prelude::*;

@@ -68,7 +68,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     // chain in their own body (slot lookup), so DIRECT in-code calls are
     // intercepted too — not just scheduler ticks. A sync source method gets
     // its dispatch wrapper PROMOTED to `async fn` so the body can await the
-    // chain (di-next-steps item 11).
+    // chain (DI backlog item 11).
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()

@@ -83,7 +83,7 @@ impl ReuseScheduledController {
     }
 }
 
-// ─── Graph-built interceptor on scheduled methods (di-next-steps item 5) ───
+// ─── Graph-built interceptor on scheduled methods (DI backlog item 5) ───
 //
 // The `#[intercept(...)]` site names a bean-reading spec: the interceptor is
 // built ONCE inside `scheduled_tasks_boxed`, from the retained bean context
@@ -139,7 +139,7 @@ impl AuditedScheduled {
     }
 
     // Sync scheduled method with an interceptor: its dispatch wrapper is
-    // PROMOTED to `async fn` (di-next-steps item 11) so direct calls run the
+    // PROMOTED to `async fn` (DI backlog item 11) so direct calls run the
     // chain too — hence the `.await` at the call sites below (the interval
     // is long enough that the scheduler never fires it past the initial
     // tick).

@@ -67,7 +67,7 @@ impl GrpcServer {
     ///
     /// NOT IMPLEMENTED YET: the flag is accepted but no reflection service is
     /// installed — a warning is logged at install time. Tracked in
-    /// `docs/claude/di-next-steps.md` item 12 residual gaps.
+    /// `docs/claude/roadmap.md` (serve lifecycle gaps).
     pub fn with_reflection(mut self) -> Self {
         self.reflection = true;
         self

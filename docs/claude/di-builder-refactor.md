@@ -16,13 +16,13 @@ phase ends with a quality-review gate before the next starts.
 | 2a | `BuiltApp<T>` struct | ✅ done |
 | 2b | Split `builder.rs` | ✅ done |
 | 3 | Correctness & cleanup | ✅ done |
-| 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model; review gate passed (no blocking findings; ambiguity + guard-panic fixes applied), see `plan-controllers-as-beans.md` |
-| 5 | Feature modules (closed subgraphs) | ✅ done — `FeatureModule` + `register_module` + `#[module]`; compile-time encapsulation (deps ⊆ Provides ∪ Imports, exports-only leakage to `P`); see `plan-feature-modules.md` |
-| 6 | Guards & interceptors as graph-resolved decorators | ✅ done — `Guard<I>`/`PreAuthGuard`/`Interceptor<R>` lost the state param; `DecoratorSpec` + `SelfBuilt`; sites built once at wiring time, deps folded into `Controller::Deps` (compile-checked); `cache_backend()` global deleted; see `plan-guards-as-beans.md` |
+| 4 | Controllers as graph-resolved beans | ✅ done — A3 landed; HList state is the single state model; review gate passed (no blocking findings; ambiguity + guard-panic fixes applied) |
+| 5 | Feature modules (closed subgraphs) | ✅ done — `FeatureModule` + `register_module` + `#[module]`; compile-time encapsulation (deps ⊆ Provides ∪ Imports, exports-only leakage to `P`) |
+| 6 | Guards & interceptors as graph-resolved decorators | ✅ done — `Guard<I>`/`PreAuthGuard`/`Interceptor<R>` lost the state param; `DecoratorSpec` + `SelfBuilt`; sites built once at wiring time, deps folded into `Controller::Deps` (compile-checked); `cache_backend()` global deleted; see `guards-interceptors.md` |
 
-**Next steps:** the prioritized post-Phase-6 backlog is in `di-next-steps.md`
-(bridge-overlap invariant, spec DX, scheduled/gRPC ctx; qualifiers rejected —
-newtypes by design). Item 1 (module decorator-deps carrier) landed 2026-07-08:
+**Next steps:** the post-Phase-6 backlog (items 1-5, 10-12) is fully landed;
+the live backlog is now `roadmap.md` (qualifiers rejected — newtypes by
+design). Item 1 (module decorator-deps carrier) landed 2026-07-08:
 `#[routes]` emits a state-independent carrier of the full dep fold, consumed
 by both `Controller::Deps` and the module-scope check. Item 10 (2026-07-09)
 promoted that carrier to the transport-neutral **`EndpointDeps`** (renamed
@@ -201,8 +201,8 @@ All landed; `cargo clippy -p r2e-core` is at **0 warnings including
 
 ## Phase 4 — Controllers as graph-resolved beans ✅ COMPLETE (A3)
 
-Landed as designed in `plan-controllers-as-beans.md` (approach A3), with the
-user decision applied: **the typed state path was removed entirely** — HList
+Landed as designed in the controllers-as-beans plan (approach A3; plan doc
+now in git history), with the user decision applied: **the typed state path was removed entirely** — HList
 state is the single state model.
 
 - **4a — HList machinery** (`type_list.rs`): value-level `HNil`/`HCons`;
@@ -247,7 +247,7 @@ tracking and the guaranteed `state: T` phase remain.
 
 ### Phase 4 tech debt (deferred, recorded 2026-07-08)
 
-1. **RESOLVED 2026-07-08** (di-next-steps item 2) — ~~Extraction-bridge
+1. **RESOLVED 2026-07-08** (DI backlog item 2) — ~~Extraction-bridge
    overlap fragility.~~ The invariant (a type must NOT implement both axum's
    `FromRequestParts`/`OptionalFromRequestParts` generically and R2E's
    `FromRequestPartsVia`/`OptionalFromRequestPartsVia`) **cannot be excluded
@@ -269,7 +269,7 @@ tracking and the guaranteed `state: T` phase remain.
    competing impls). Still true: do NOT re-add a blanket
    `OptionalFromRequestPartsVia<_, ViaAxum>` bridge.
 2. **RESOLVED by Phase 6** (guards & interceptors as graph-resolved
-   decorators, see `plan-guards-as-beans.md`) — original entry kept below
+   decorators, see `guards-interceptors.md`) — original entry kept below
    for history. ~~Guard/interceptor bean deps are runtime-checked, not compile-checked.~~
    `RateLimitGuard`/`FgaGuard` (and bean-reading interceptors like a DB audit
    log) fetch their beans via `BeanLookup`; a missing bean is a per-request
@@ -285,14 +285,14 @@ tracking and the guaranteed `state: T` phase remain.
    improvement available without redesign: evaluate guard expressions once at
    router-build time and add a `Guard::startup_check(&state)` hook so
    misconfiguration fails at **boot**, not on first request.
-   → **Design proposed** in `plan-guards-as-beans.md` (Phase 6): guards and
+   → **Landed as Phase 6** (plan doc now in git history): guards and
    interceptors as graph-resolved decorators, compile-checked deps,
    once-at-registration construction; supersedes the `startup_check` idea.
 
 ## Phase 5 — Feature modules ✅ COMPLETE
 
-Landed as designed in `plan-feature-modules.md` (spike decisions recorded
-there). Spring/NestJS-style module bundles with **compile-time encapsulation**
+Landed as designed in the feature-modules plan (doc now in git history, spike
+decisions recorded there). Spring/NestJS-style module bundles with **compile-time encapsulation**
 Spring/NestJS cannot offer:
 
 - **5a** — `r2e-core/src/module.rs`: declarative `FeatureModule`

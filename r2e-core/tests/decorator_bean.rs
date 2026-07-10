@@ -1,6 +1,6 @@
 //! End-to-end coverage for `#[derive(DecoratorBean)]` and the
 //! single-segment tuple-struct constructor spec inference
-//! (di-next-steps items 3 + 4).
+//! (DI backlog items 3 + 4).
 //!
 //! A real `#[controller]`/`#[routes]` controller exercises:
 //!

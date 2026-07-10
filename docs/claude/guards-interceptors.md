@@ -225,15 +225,15 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   sees `Response` instead of the raw type. Workaround: read the store bean
   (`#[inject] store: Arc<dyn CacheStore>`) and cache manually in the body.
 - **Scheduled and gRPC method interceptors are graph-built too** (since
-  di-next-steps item 5). Scheduled sets are built once inside
+  DI backlog item 5). Scheduled sets are built once inside
   `scheduled_tasks_boxed(state, core, ctx)` and stored in the core's hidden
   `DecoSlot` field (added by `#[controller]` to every core); gRPC sites are
   prebuilt into the hidden `__R2eGrpc<Name>` wrapper at `add_to_routes`
-  (named `into_router` before di-next-steps item 12).
+  (named `into_router` before DI backlog item 12).
   Bean-reading specs work in both places. Scheduled spec deps are folded
   into `EndpointDeps` and compile-checked like route decorator deps; gRPC
   deps (core AND `#[intercept]` specs) are compile-checked too since
-  di-next-steps item 10 — `#[grpc_routes]` emits the same `EndpointDeps`
+  DI backlog item 10 — `#[grpc_routes]` emits the same `EndpointDeps`
   carrier and `register_grpc_service` bounds it with `AllSatisfied`, so a
   missing bean is a compile error at the registration call site.
 - **Scheduled methods intercept DIRECT calls too** (user decision): the
@@ -241,7 +241,7 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   `self.tick().await` from another method goes through the interceptors —
   unlike routes, whose interceptors live in the handler. A **sync**
   `#[scheduled]` method with `#[intercept]` sites gets its wrapper
-  **promoted to `async fn`** (di-next-steps item 11): the source `fn` body
+  **promoted to `async fn`** (DI backlog item 11): the source `fn` body
   stays sync (hidden inner fn), but callers must `.await` the generated
   method — the promotion is flagged in the generated rustdoc. One edge: a
   core that never went through registration (hand-built `from_context` in a
