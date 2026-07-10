@@ -29,6 +29,13 @@ struct FieldInfo {
     doc: Option<String>,
     /// Whether this is a `#[config(section)]` — nested ConfigProperties.
     is_section: bool,
+    /// Whether this section is map-valued (`HashMap`/`BTreeMap<String, T>`).
+    is_map_section: bool,
+    /// Whether the field has a bare `#[config(default)]` (Default::default()
+    /// fallback for absent sections).
+    default_flag: bool,
+    /// Whether the field is `#[config(skip)]` — not read from config.
+    is_skip: bool,
     /// Explicit env var from `#[config(env = "...")]`.
     env_var: Option<String>,
     /// Whether the field has any `#[validate(...)]` attributes (from garde).
@@ -68,31 +75,43 @@ struct FieldConfig {
     default: Option<(TokenStream2, String)>,
     /// True if the default expression is a string literal (needs `.into()` for String conversion).
     default_is_str_lit: bool,
+    /// Bare `default` (no `= value`) — Default::default() fallback for absent sections.
+    default_flag: bool,
     key: Option<String>,
     section: bool,
     env: Option<String>,
+    skip: bool,
 }
 
-/// Extract `#[config(default = <expr>, key = "...", section, env = "...")]` from a field's attributes.
+/// Extract `#[config(default = <expr>, key = "...", section, env = "...", skip)]` from a field's attributes.
 fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
     let mut result = FieldConfig {
         default: None,
         default_is_str_lit: false,
+        default_flag: false,
         key: None,
         section: false,
         env: None,
+        skip: false,
     };
     for attr in attrs {
         if attr.path().is_ident("config") {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("default") {
+                    if !meta.input.peek(syn::Token![=]) {
+                        result.default_flag = true;
+                        return Ok(());
+                    }
                     let value = meta.value()?;
                     let lit: syn::Expr = value.parse()?;
-                    let lit_str = quote!(#lit).to_string();
-                    // Detect string literals — they need .into() for &str → String
-                    if matches!(&lit, syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(_), .. })) {
+                    // String literals need .into() for &str → String, and their
+                    // metadata string is the unquoted value.
+                    let lit_str = if let syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(s), .. }) = &lit {
                         result.default_is_str_lit = true;
-                    }
+                        s.value()
+                    } else {
+                        quote!(#lit).to_string()
+                    };
                     result.default = Some((quote!(#lit), lit_str));
                     Ok(())
                 } else if meta.path.is_ident("key") {
@@ -108,13 +127,45 @@ fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
                     let lit: syn::LitStr = value.parse()?;
                     result.env = Some(lit.value());
                     Ok(())
+                } else if meta.path.is_ident("skip") {
+                    result.skip = true;
+                    Ok(())
                 } else {
-                    Err(meta.error("expected `default`, `key`, `section`, or `env` in #[config(...)]"))
+                    Err(meta.error("expected `default`, `key`, `section`, `env`, or `skip` in #[config(...)]"))
                 }
             })?;
         }
     }
     Ok(result)
+}
+
+/// Detect `HashMap<String, V>` / `BTreeMap<String, V>` and return `V`.
+fn string_map_value_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = ty else { return None };
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "HashMap" && seg.ident != "BTreeMap" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    if args.args.len() != 2 {
+        return None;
+    }
+    let syn::GenericArgument::Type(key_ty) = args.args.first()? else {
+        return None;
+    };
+    let syn::GenericArgument::Type(value_ty) = args.args.last()? else {
+        return None;
+    };
+    let is_string_key = matches!(
+        key_ty,
+        syn::Type::Path(kp) if kp.path.segments.last().map(|s| s.ident == "String").unwrap_or(false)
+    );
+    if !is_string_key {
+        return None;
+    }
+    Some(value_ty)
 }
 
 /// Check if a field has any `#[validate(...)]` attributes (from garde).
@@ -142,25 +193,28 @@ fn consume_prefix_attr(input: &DeriveInput) -> syn::Result<()> {
 }
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    match &input.data {
+        Data::Struct(data) => generate_struct(input, data),
+        Data::Enum(data) => generate_enum(input, data),
+        _ => Err(syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(ConfigProperties)] only works on structs with named fields and tagged enums",
+        )),
+    }
+}
+
+fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     // Consume (and ignore) any #[config(prefix = "...")] for backwards compat
     consume_prefix_attr(input)?;
     let krate = r2e_core_path();
 
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "#[derive(ConfigProperties)] only works on structs with named fields",
-                ))
-            }
-        },
+    let fields = match &data.fields {
+        Fields::Named(named) => &named.named,
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                "#[derive(ConfigProperties)] only works on structs",
+                "#[derive(ConfigProperties)] only works on structs with named fields",
             ))
         }
     };
@@ -188,6 +242,41 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             None => (None, None),
         };
 
+        if field_config.skip
+            && (field_config.section
+                || field_config.default_flag
+                || default_expr.is_some()
+                || field_config.key.is_some()
+                || field_config.env.is_some())
+        {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[config(skip)] cannot be combined with other #[config(...)] attributes",
+            ));
+        }
+        if field_config.default_flag && !field_config.section {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[config(default)] without a value is only supported on #[config(section)] fields \
+                 (uses Default::default() when the section is absent)",
+            ));
+        }
+        if field_config.default_flag && is_option {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[config(section, default)] cannot be used on Option fields — \
+                 an absent optional section is already None",
+            ));
+        }
+
+        let is_map_section = field_config.section
+            && string_map_value_type(if is_option {
+                option_inner_type(&field_type).unwrap()
+            } else {
+                &field_type
+            })
+            .is_some();
+
         field_infos.push(FieldInfo {
             name: field_name,
             ty: field_type,
@@ -197,6 +286,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             is_option,
             doc,
             is_section: field_config.section,
+            is_map_section,
+            default_flag: field_config.default_flag,
+            is_skip: field_config.skip,
             env_var: field_config.env,
             has_validate: has_validate_attr(&field.attrs),
         });
@@ -208,6 +300,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     // Generate metadata entries
     let metadata_entries: Vec<TokenStream2> = field_infos
         .iter()
+        .filter(|f| !f.is_skip)
         .map(|f| {
             let key = match &f.custom_key {
                 Some(k) => k.clone(),
@@ -259,33 +352,100 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 None => f.name.to_string(),
             };
 
+            // Skipped fields are never read from config.
+            if f.is_skip {
+                return quote! {
+                    #field_name: ::std::default::Default::default()
+                };
+            }
+
             // Section fields delegate to ConfigProperties::from_config
             if f.is_section {
+                let section_prefix_expr = quote! {
+                    match __prefix {
+                        Some(__p) => format!("{}.{}", __p, #key_str),
+                        None => #key_str.to_string(),
+                    }
+                };
                 let section_ty = if f.is_option {
                     option_inner_type(&f.ty).unwrap()
                 } else {
                     &f.ty
                 };
+
+                // Map-valued section: enumerate immediate sub-keys, parse each
+                // entry as its own section. Absent prefix → empty map.
+                if let Some(value_ty) = string_map_value_type(section_ty) {
+                    let build_map = quote! {{
+                        let mut __map: #section_ty = ::std::default::Default::default();
+                        for __k in __config.sub_keys(&__section_prefix) {
+                            let __child_prefix = format!("{}.{}", __section_prefix, __k);
+                            let __v = <#value_ty as #krate::config::ConfigProperties>::from_config(
+                                __config,
+                                Some(&__child_prefix),
+                            )?;
+                            __map.insert(__k, __v);
+                        }
+                        __map
+                    }};
+                    if f.is_option {
+                        return quote! {
+                            #field_name: {
+                                let __section_prefix = #section_prefix_expr;
+                                if __config.has_prefix(&__section_prefix) {
+                                    Some(#build_map)
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                    }
+                    return quote! {
+                        #field_name: {
+                            let __section_prefix = #section_prefix_expr;
+                            #build_map
+                        }
+                    };
+                }
+
                 let section_init = quote! {
                     <#section_ty as #krate::config::ConfigProperties>::from_config(
                         __config,
-                        Some(&match __prefix {
-                            Some(__p) => format!("{}.{}", __p, #key_str),
-                            None => #key_str.to_string(),
-                        }),
+                        Some(&__section_prefix),
                     )
                 };
+                // Optional section: presence-based. None only when no key
+                // lives under the prefix; a present-but-invalid section errors.
                 if f.is_option {
                     return quote! {
-                        #field_name: match #section_init {
-                            Ok(v) => Some(v),
-                            Err(#krate::config::ConfigError::NotFound(_)) => None,
-                            Err(e) => return Err(e),
+                        #field_name: {
+                            let __section_prefix = #section_prefix_expr;
+                            if __config.has_prefix(&__section_prefix) {
+                                Some(#section_init?)
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                }
+                // `#[config(section, default)]`: absent section → Default::default().
+                if f.default_flag {
+                    return quote! {
+                        #field_name: {
+                            let __section_prefix = #section_prefix_expr;
+                            if __config.has_prefix(&__section_prefix) {
+                                #section_init?
+                            } else {
+                                <#section_ty as ::std::default::Default>::default()
+                            }
                         }
                     };
                 }
                 return quote! {
-                    #field_name: #section_init?
+                    #field_name: {
+                        let __section_prefix = #section_prefix_expr;
+                        #section_init?
+                    }
                 };
             }
 
@@ -366,7 +526,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                             let __key: &str = #key_expr;
                             match __config.get::<#inner_ty>(__key) {
                                 Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => { let __d: #inner_ty = (#default_expr).into(); Some(__d) }
+                                Err(#krate::config::ConfigError::NotFound(_)) => { let __d: #inner_ty = #default_expr; Some(__d) }
                                 Err(e) => return Err(e),
                             }
                         }
@@ -476,10 +636,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
-    // Generate register_children body for section fields
+    // Generate register_children body for section fields.
+    // Map-valued sections are excluded: all entries share one type, so
+    // registering them as by-type beans would collide.
     let register_children_stmts: Vec<TokenStream2> = field_infos
         .iter()
-        .filter(|f| f.is_section)
+        .filter(|f| f.is_section && !f.is_map_section)
         .map(|f| {
             let field_name = &f.name;
             if f.is_option {
@@ -507,7 +669,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     // For leaf configs (no sections), Children = TNil.
     let non_option_sections: Vec<&syn::Type> = field_infos
         .iter()
-        .filter(|f| f.is_section && !f.is_option)
+        .filter(|f| f.is_section && !f.is_option && !f.is_map_section)
         .map(|f| &f.ty)
         .collect();
 
@@ -552,6 +714,261 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             fn register_children(&self, __registry: &mut #krate::beans::BeanRegistry) {
                 #(#register_children_stmts)*
+            }
+        }
+    })
+}
+
+// ── Tagged enum support ─────────────────────────────────────────────────────
+
+/// Enum-level `#[config(tag = "...", rename_all = "...")]` attributes.
+struct EnumConfig {
+    tag: Option<String>,
+    rename_all: Option<(String, proc_macro2::Span)>,
+}
+
+fn extract_enum_config(attrs: &[syn::Attribute]) -> syn::Result<EnumConfig> {
+    let mut result = EnumConfig {
+        tag: None,
+        rename_all: None,
+    };
+    for attr in attrs {
+        if attr.path().is_ident("config") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("tag") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    result.tag = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("rename_all") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    result.rename_all = Some((lit.value(), lit.span()));
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `tag` or `rename_all` in #[config(...)] on an enum"))
+                }
+            })?;
+        }
+    }
+    Ok(result)
+}
+
+/// Per-variant `#[config(rename = "...", default)]` attributes.
+struct VariantConfig {
+    rename: Option<String>,
+    is_default: bool,
+}
+
+fn extract_variant_config(attrs: &[syn::Attribute]) -> syn::Result<VariantConfig> {
+    let mut result = VariantConfig {
+        rename: None,
+        is_default: false,
+    };
+    for attr in attrs {
+        if attr.path().is_ident("config") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    result.rename = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("default") {
+                    result.is_default = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `rename` or `default` in #[config(...)] on a variant"))
+                }
+            })?;
+        }
+    }
+    Ok(result)
+}
+
+/// Split a PascalCase identifier into lowercase words joined by `delim`
+/// (e.g. `PassThrough` → `pass_through`, `S3` → `s3`).
+fn camel_to_delimited(s: &str, delim: char) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            let prev_lower = chars[i - 1].is_lowercase() || chars[i - 1].is_ascii_digit();
+            let next_lower = chars.get(i + 1).map(|n| n.is_lowercase()).unwrap_or(false);
+            if prev_lower || (chars[i - 1].is_uppercase() && next_lower) {
+                out.push(delim);
+            }
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+/// Apply a `rename_all` style to a variant identifier. Default: snake_case.
+fn variant_tag_name(ident: &str, rename_all: Option<&(String, proc_macro2::Span)>) -> syn::Result<String> {
+    match rename_all {
+        None => Ok(camel_to_delimited(ident, '_')),
+        Some((style, span)) => match style.as_str() {
+            "snake_case" => Ok(camel_to_delimited(ident, '_')),
+            "kebab-case" => Ok(camel_to_delimited(ident, '-')),
+            "lowercase" => Ok(ident.to_lowercase()),
+            other => Err(syn::Error::new(
+                *span,
+                format!(
+                    "unsupported rename_all style `{other}` — expected \
+                     `snake_case`, `kebab-case`, or `lowercase`"
+                ),
+            )),
+        },
+    }
+}
+
+/// Generate `ConfigProperties` for an internally-tagged enum.
+///
+/// ```ignore
+/// #[derive(ConfigProperties, Clone)]
+/// #[config(tag = "backend")]
+/// pub enum StorageConfig {
+///     S3(S3Config),
+///     #[config(default)]
+///     Filesystem(FilesystemConfig),
+/// }
+/// ```
+///
+/// The tag key is read relative to the prefix; the selected variant's payload
+/// (if any) is parsed as a `ConfigProperties` section at the *same* prefix.
+fn generate_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    let krate = r2e_core_path();
+
+    let enum_config = extract_enum_config(&input.attrs)?;
+    let Some(tag) = enum_config.tag else {
+        return Err(syn::Error::new_spanned(
+            name,
+            "#[derive(ConfigProperties)] on an enum requires #[config(tag = \"...\")] — \
+             the config key whose value selects the variant",
+        ));
+    };
+
+    if data.variants.is_empty() {
+        return Err(syn::Error::new_spanned(
+            name,
+            "#[derive(ConfigProperties)] requires at least one enum variant",
+        ));
+    }
+
+    let mut tag_names: Vec<String> = Vec::new();
+    let mut constructions: Vec<TokenStream2> = Vec::new();
+    let mut default_construction: Option<TokenStream2> = None;
+    let mut default_tag: Option<String> = None;
+
+    for variant in &data.variants {
+        let vident = &variant.ident;
+        let vconfig = extract_variant_config(&variant.attrs)?;
+        let tag_name = match vconfig.rename {
+            Some(r) => r,
+            None => variant_tag_name(&vident.to_string(), enum_config.rename_all.as_ref())?,
+        };
+        if tag_names.contains(&tag_name) {
+            return Err(syn::Error::new_spanned(
+                variant,
+                format!("duplicate tag value `{tag_name}`"),
+            ));
+        }
+
+        let construction = match &variant.fields {
+            Fields::Unit => quote! { #name::#vident },
+            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
+                let payload_ty = &unnamed.unnamed.first().unwrap().ty;
+                quote! {
+                    #name::#vident(
+                        <#payload_ty as #krate::config::ConfigProperties>::from_config(
+                            __config,
+                            __prefix,
+                        )?,
+                    )
+                }
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "tagged-enum variants must be unit variants or single-field tuple \
+                     variants whose field implements ConfigProperties",
+                ))
+            }
+        };
+
+        if vconfig.is_default {
+            if default_construction.is_some() {
+                return Err(syn::Error::new_spanned(
+                    variant,
+                    "only one variant may be marked #[config(default)]",
+                ));
+            }
+            default_construction = Some(construction.clone());
+            default_tag = Some(tag_name.clone());
+        }
+
+        tag_names.push(tag_name);
+        constructions.push(construction);
+    }
+
+    let expected_list = tag_names.join(", ");
+    let none_arm = match &default_construction {
+        Some(construction) => quote! { Ok(#construction) },
+        None => quote! { Err(#krate::config::ConfigError::NotFound(__tag_key)) },
+    };
+    let tag_required = default_construction.is_none();
+    let default_tag_tok = match &default_tag {
+        Some(t) => quote! { Some(#t.to_string()) },
+        None => quote! { None },
+    };
+    let tag_description = format!("one of: {expected_list}");
+
+    Ok(quote! {
+        impl #krate::config::typed::ConfigProperties for #name {
+            type Children = #krate::type_list::TNil;
+
+            fn properties_metadata(__prefix: Option<&str>) -> Vec<#krate::config::typed::PropertyMeta> {
+                let __full_key = match __prefix {
+                    Some(__p) => format!("{}.{}", __p, #tag),
+                    None => #tag.to_string(),
+                };
+                vec![#krate::config::typed::PropertyMeta {
+                    key: #tag.to_string(),
+                    full_key: __full_key,
+                    type_name: "String",
+                    required: #tag_required,
+                    default_value: #default_tag_tok,
+                    description: Some(#tag_description.to_string()),
+                    env_var: None,
+                    is_section: false,
+                }]
+            }
+
+            fn from_config(
+                __config: &#krate::config::R2eConfig,
+                __prefix: Option<&str>,
+            ) -> Result<Self, #krate::config::ConfigError> {
+                let __tag_key = match __prefix {
+                    Some(__p) => format!("{}.{}", __p, #tag),
+                    None => #tag.to_string(),
+                };
+                let __tag_val: Option<String> = match __config.get::<String>(&__tag_key) {
+                    Ok(v) => Some(v),
+                    Err(#krate::config::ConfigError::NotFound(_)) => None,
+                    Err(e) => return Err(e),
+                };
+                match __tag_val.as_deref() {
+                    #( Some(#tag_names) => Ok(#constructions), )*
+                    Some(__other) => Err(#krate::config::ConfigError::Deserialize {
+                        key: __tag_key,
+                        message: format!(
+                            "unknown tag value `{}` — expected one of: {}",
+                            __other, #expected_list,
+                        ),
+                    }),
+                    None => #none_arm,
+                }
             }
         }
     })

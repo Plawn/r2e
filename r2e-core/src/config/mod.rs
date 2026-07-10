@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use registry::{register_section, registered_sections, RegisteredSection};
-pub use typed::{ConfigProperties, PropertyMeta};
+pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{validate_keys, validate_section, ConfigValidationError, MissingKeyError};
 pub use value::{ConfigValue, FromConfigValue, deserialize_value};
 
@@ -240,6 +240,45 @@ impl R2eConfig {
     /// Check whether a key exists in the config.
     pub fn contains_key(&self, key: &str) -> bool {
         self.values.contains_key(key)
+    }
+
+    /// Check whether any key lives under the given prefix.
+    ///
+    /// Returns `true` when a key equal to `prefix` holds a non-null value or
+    /// any key starts with `"{prefix}."`. This is how section presence is
+    /// detected: a section is "present" when it contributes at least one
+    /// key, whether from YAML or from the `R2E_` env overlay. An empty YAML
+    /// section (`tls:` with no content, flattened to a `Null` at the exact
+    /// key) counts as absent.
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        match self.values.get(prefix) {
+            Some(ConfigValue::Null) | None => {}
+            Some(_) => return true,
+        }
+        let dotted = format!("{prefix}.");
+        self.values.keys().any(|k| k.starts_with(&dotted))
+    }
+
+    /// List the distinct immediate child segments under a prefix, sorted.
+    ///
+    /// For keys `upstreams.npm.url` and `upstreams.docker.url` with prefix
+    /// `"upstreams"`, returns `["docker", "npm"]`. Keys equal to the prefix
+    /// itself are ignored. This is the enumeration primitive for map-shaped
+    /// config sections.
+    pub fn sub_keys(&self, prefix: &str) -> Vec<String> {
+        let dotted = format!("{prefix}.");
+        let mut segments: Vec<String> = self
+            .values
+            .keys()
+            .filter_map(|k| k.strip_prefix(&dotted))
+            .map(|rest| match rest.find('.') {
+                Some(i) => rest[..i].to_string(),
+                None => rest.to_string(),
+            })
+            .collect();
+        segments.sort();
+        segments.dedup();
+        segments
     }
 
     /// Compute a fingerprint (hash) over a set of config keys.

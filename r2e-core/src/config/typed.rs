@@ -1,5 +1,13 @@
 use super::{ConfigError, R2eConfig};
 
+/// The empty `Children` list for configs with no nested `#[config(section)]`
+/// types.
+///
+/// This is the supported spelling for manual [`ConfigProperties`] impls —
+/// use `type Children = NoChildren;` instead of reaching into
+/// `r2e::type_list` internals.
+pub type NoChildren = crate::type_list::TNil;
+
 /// Metadata about a single configuration property.
 #[derive(Debug, Clone)]
 pub struct PropertyMeta {
@@ -66,6 +74,25 @@ pub struct PropertyMeta {
 /// ```
 ///
 /// See `r2e-core/tests/config.rs` for runnable examples.
+///
+/// # Manual implementations
+///
+/// When the derive cannot express a section's shape, a manual impl is
+/// supported using only public API — [`NoChildren`], [`PropertyMeta`], and
+/// `R2eConfig`'s prefix helpers (`has_prefix`, `sub_keys`):
+///
+/// ```ignore
+/// impl ConfigProperties for MyDynamicConfig {
+///     type Children = NoChildren;
+///
+///     fn from_config(config: &R2eConfig, prefix: Option<&str>) -> Result<Self, ConfigError> {
+///         // custom parsing, e.g. driven by config.sub_keys(...)
+///     }
+/// }
+/// ```
+///
+/// `properties_metadata` and `register_children` have default no-op bodies,
+/// so a manual impl only needs `type Children` and `from_config`.
 pub trait ConfigProperties: Sized {
     /// Type-level list of all nested `#[config(section)]` types (recursively flattened).
     ///
@@ -79,7 +106,12 @@ pub trait ConfigProperties: Sized {
     ///
     /// When `prefix` is `Some("app.database")`, `full_key` is `"app.database.pool_size"`.
     /// When `prefix` is `None`, `full_key` equals the relative key (`"pool_size"`).
-    fn properties_metadata(prefix: Option<&str>) -> Vec<PropertyMeta>;
+    ///
+    /// The default implementation returns no metadata — the derive generates
+    /// a full override; manual impls may keep the default.
+    fn properties_metadata(_prefix: Option<&str>) -> Vec<PropertyMeta> {
+        Vec::new()
+    }
 
     /// Construct from an `R2eConfig` instance using the given prefix.
     ///
