@@ -7,7 +7,7 @@
 //! - `decorators`: Guard/interceptor decorator sets (built once from the graph)
 //! - `controller_impl`: Controller trait implementation generation
 
-mod controller_impl;
+pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 mod handlers;
 mod wrapping;

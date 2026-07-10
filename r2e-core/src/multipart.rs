@@ -259,18 +259,9 @@ pub trait FromMultipart: Sized {
 
 // ── MultipartSchema trait ────────────────────────────────────────────────────
 
-/// Describes a [`FromMultipart`] type as a JSON Schema object for OpenAPI.
-///
-/// `#[derive(FromMultipart)]` generates this impl automatically. The routes
-/// macro probes for it (autoref specialization) when a handler takes
-/// [`TypedMultipart<T>`], so a manual `FromMultipart` impl without it simply
-/// yields a schema-less `multipart/form-data` body in the generated spec.
-pub trait MultipartSchema {
-    /// The JSON Schema describing the form:
-    /// `{"type": "object", "properties": {...}, "required": [...]}`.
-    /// File fields are modeled as `{"type": "string", "format": "binary"}`.
-    fn multipart_schema() -> serde_json::Value;
-}
+/// OpenAPI form schema for `FromMultipart` types. Defined in [`crate::meta`]
+/// (always compiled); re-exported here as the user-facing path.
+pub use crate::meta::MultipartSchema;
 
 // ── TypedMultipart extractor ─────────────────────────────────────────────────
 

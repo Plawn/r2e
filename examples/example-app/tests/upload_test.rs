@@ -30,7 +30,8 @@ fn derived_multipart_schema_shape() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert_eq!(required, vec!["name", "avatar", "attachments"]);
+    // Vec<UploadedFile> is not required: an absent field yields an empty Vec.
+    assert_eq!(required, vec!["name", "avatar"]);
 }
 
 #[r2e::test(app = example_app::app)]
