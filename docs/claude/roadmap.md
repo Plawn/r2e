@@ -32,82 +32,35 @@ Two production-bound apps built on pre-refactor R2E (~pin `v0.2.56` /
 
 Verdict: where the apps follow the R2E path, compounding works (config, DI,
 scheduler, metrics, health, OIDC come nearly free). Both apps leak out of the
-framework at the same seams — those seams are workstream W2 below.
+framework at the same seams — those seams are the Tasker #635 gap tasks (W2).
 
 ---
 
-## W1 — Migrate threaty to R2E master (the validation vehicle)
+## W1 — Migrate threaty to R2E master → tracked in Tasker
 
-The single highest-value next step. Threaty exercises DI, guards, SSE, OIDC,
-plugins and the new test harness at once; every migration friction is a
-framework ticket to add here. Breaking changes it must absorb (pin → master):
+Moved to Tasker (not this repo's work): task "Migrate threaty to R2E master
+(framework validation vehicle)", target `threaty`. The single highest-value
+next step — threaty exercises DI, guards, SSE, OIDC, plugins and the new test
+harness at once; every migration friction becomes an r2e sub-task under
+Tasker #635. The detailed breaking-changes checklist lives in that task (and
+in this file's git history at commit `6d880f6`).
 
-- `#[derive(Controller)]` + `#[controller(state = AppState)]` → attribute-only
-  `#[controller]`, no `state` key (controllers are state-generic).
-- Hand-written `AppState` (41 fields, `#[derive(BeanState)]` — deleted) +
-  42 `.with_bean` + `build_state::<AppState,_,_>()` turbofish →
-  `.register::<T>()` / `.provide(...)` + `build_state()` (HList state).
-- `Guard<AppState, AppUser>` (its 5 macro-generated resource guards) →
-  `Guard<I>` + `DecoratorSpec` (guards built once at registration; verify
-  typed path symbols `path::pid` survive per-request via `GuardContext`).
-- `cache_backend()` global (used in `sync_chain_service.rs`) → cache store
-  bean (`InMemoryStore::shared()`).
-- `PreStatePlugin` ×3 + middleware `Plugin` ×2 → current plugin signatures
-  (`RawPreStatePlugin::install` gained `Mods`); the two hand-written frontend
-  plugins should become `r2e-static`.
-- Major dep bumps ride along (sqlx 0.9, tonic 0.14, lapin 4…).
-- Adopt the blueprint pattern (lib `app(b) -> impl BootableApp` + thin bin)
-  and write its **first HTTP tests** via `#[r2e::test(app = ...)]` +
-  `DevPostgres` — 44K LOC currently has zero.
+## W2 — Framework gaps found in real apps → tracked in Tasker #635
 
-## W2 — Framework gaps found in real apps (prioritized)
-
-1. **Real-time fan-out / EventBus↔SSE bridge.** Threaty enables the `events`
-   feature but never uses the EventBus: it wrote its own broadcaster macro
-   (newtype + `#[bean]` + `Deref` over `SseBroadcaster`) and fans out via SSE
-   by hand (`threaty-domain/src/broadcasters.rs`). Wanted: first-class
-   broadcast/topic beans and a zero-liaison bridge (e.g. a `#[consumer]` that
-   feeds an SSE stream).
-2. **Proxy/streaming path.** Patina bypasses R2E for 100% of its business
-   traffic: fallback dispatch by content-type, streamed responses
-   (`handler.rs`), per-protocol auth. Wanted: catch-all/wildcard routes as
-   first-class controller routes, or at minimum a stable, documented
-   escape-hatch pattern (today: `with_layer_fn` + `r.fallback(...)`).
-3. **Dynamic scheduled tasks.** Patina registers config-driven task sets by
-   reaching into internals (`get_plugin_data::<TaskRegistryHandle>` +
-   `ScheduledTaskMarker` + boxed `ScheduledTaskDef`s). `#[scheduled]` only
-   covers static tasks. Wanted: a public dynamic task-registration API.
-4. **First-class multipart.** Threaty imports `axum::extract::Multipart`
-   directly (3 sites). Wanted: an R2E-owned extractor re-export + OpenAPI
-   modeling (r2e-test already ships multipart upload builders).
-5. **Config derive expressiveness.** Patina hand-wrote 2 `impl
-   ConfigProperties` touching internal API (`TNil`, `PropertyMeta`) —
-   presumably for dynamic/map-shaped sections. Wanted: close that gap in the
-   derive (map-valued sections, tagged enums), or expose a supported
-   manual-impl surface.
-6. **Serve lifecycle / graceful drain.** Patina hand-rolled connection
-   draining (`begin_drain`/`wait_in_flight` + `DrainHealthIndicator`); this
-   overlaps the known gRPC residual gaps: no programmatic `serve()`
-   termination (tests abort the task), gRPC drain cancelled but not awaited
-   at shutdown, `GrpcServer::with_reflection` unimplemented (warns loudly).
-   Wanted: a real shutdown contract — awaited drain hooks + programmatic stop.
-7. **Auth-required without a phantom field.** In threaty, most of the 82
-   `#[inject(identity)]` fields exist only to force authentication (`_user`,
-   never read). Wanted: a declarative "authenticated endpoint" marker with no
-   dummy field.
-8. **AI-facing DX.** Patina (largely AI-co-written) defaulted to axum idioms
-   (custom `FromRequestParts` extractor instead of a guard, fallback instead
-   of a controller). When the idiomatic path isn't the shortest visible one,
-   humans and AIs route around the framework. Countermeasures: agent-facing
-   docs, CLI scaffolds that bake in the blueprint pattern, "one obvious way"
-   examples per subsystem.
+Moved to Tasker: umbrella task **#635 "R2E framework gaps from real-app audit
+(threaty + patina)"** (target `r2e`), one sub-task per gap: EventBus↔SSE
+bridge, proxy/streaming catch-all path, dynamic scheduled tasks, first-class
+multipart, config-derive expressiveness, serve lifecycle / awaited drain,
+auth-required without a phantom identity field, AI-facing DX. Full evidence
+per gap in the Tasker sub-tasks and in this file's git history (`6d880f6`).
 
 ## W3 — Migrate patina (escape-hatch hardening)
 
 Small API surface (2 controllers, 6 injects) but it exercises exactly the
-seams of W2 items 2/3/5 plus `TestApp::from_builder` → blueprint boot, and
+seams of the Tasker #635 gaps (proxy/streaming, dynamic scheduled tasks,
+config derive) plus `TestApp::from_builder` → blueprint boot, and
 testcontainers-Postgres-by-hand → `DevPostgres`. Do after (or interleaved
-with) the corresponding W2 items so the migration lands on supported API
+with) the corresponding gap tasks so the migration lands on supported API
 instead of re-pinning to internals.
 
 ## W4 — Plugin serve-path e2e audit
@@ -127,7 +80,8 @@ From the completed DI backlog (details in git history of `di-next-steps.md`):
   controller. Only worth it for stateful interceptors.
 - **Compile-time scalability watch** — the HList machinery is O(n²)-ish in
   registrations; measure on a real app (threaty post-migration = the perfect
-  data point, W1 feeds this). Dep lists are not bean-deduped (revisit only if
+  data point — the Tasker threaty-migration task feeds this). Dep lists are
+  not bean-deduped (revisit only if
   build times hurt). `recursion_limit = "512"` needed past ~127 registrations.
 - **Bean disposal hooks** — `@PreDestroy` equivalent; becomes concrete once a
   real DB app runs on master (threaty again).
@@ -147,7 +101,7 @@ From the completed DI backlog (details in git history of `di-next-steps.md`):
 CLI templates (`r2e new`, `r2e add`, `r2e generate`) and the book still
 reflect pre-refactor idioms in places; align them with blueprint boot, HList
 state, `.register()`, `DecoratorSpec` guards, and pinned test overrides.
-This is also the main lever for W2 item 8 (AI-facing DX).
+This is also the main lever for the AI-facing-DX gap (Tasker #635).
 
 ## Tech debt (deferred, low priority)
 
