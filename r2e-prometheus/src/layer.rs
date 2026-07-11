@@ -1,7 +1,8 @@
 use crate::metrics::{dec_in_flight, inc_in_flight, record_request, MetricsConfig};
-use http::{Method, Request, Response};
+use http::{Request, Response};
 use pin_project_lite::pin_project;
 use r2e_core::http::extract::MatchedPath;
+use r2e_core::http::labels::{method_label, route_label};
 use std::{
     future::Future,
     pin::Pin,
@@ -10,32 +11,10 @@ use std::{
 };
 use tower::{Layer, Service};
 
-/// `path` label value for requests no route matched (404s and
-/// `Router::fallback`-handled requests carry no [`MatchedPath`]).
-/// A single sentinel keeps label cardinality bounded under arbitrary-path
-/// scanner traffic.
-pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
-
-/// `method` label value for non-standard HTTP methods. `http::Method` accepts
-/// arbitrary extension tokens, so labeling with the raw method would leave
-/// series cardinality attacker-controlled even with a bounded `path` label.
-pub const OTHER_METHOD_LABEL: &str = "other";
-
-/// Bound the `method` label to the nine standard HTTP methods + one sentinel.
-fn method_label(method: &Method) -> &'static str {
-    match method.as_str() {
-        "GET" => "GET",
-        "HEAD" => "HEAD",
-        "POST" => "POST",
-        "PUT" => "PUT",
-        "DELETE" => "DELETE",
-        "CONNECT" => "CONNECT",
-        "OPTIONS" => "OPTIONS",
-        "TRACE" => "TRACE",
-        "PATCH" => "PATCH",
-        _ => OTHER_METHOD_LABEL,
-    }
-}
+// Label-bounding semantics are shared with r2e-observability via
+// `r2e_core::http::labels`; re-exported here so the crate's public API keeps
+// exposing the sentinel values it records under.
+pub use r2e_core::http::labels::{OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 
 /// RAII balance for the in-flight gauge: incremented on creation, decremented
 /// on drop. The response future can be dropped without ever completing (client
@@ -111,10 +90,7 @@ where
         // the label the request would be recorded under ("/users/{id}" or the
         // sentinel), so either spelling in `exclude_paths` works.
         let raw_path = req.uri().path();
-        let label_path = matched_path
-            .as_ref()
-            .map(MatchedPath::as_str)
-            .unwrap_or(UNMATCHED_PATH_LABEL);
+        let label_path = route_label(matched_path.as_ref());
         let should_track = !self
             .config
             .exclude_paths
@@ -163,11 +139,7 @@ where
                         Err(_) => 500,
                     };
 
-                    let path = this
-                        .matched_path
-                        .as_ref()
-                        .map(MatchedPath::as_str)
-                        .unwrap_or(UNMATCHED_PATH_LABEL);
+                    let path = route_label(this.matched_path.as_ref());
                     record_request(this.method, path, status, duration);
                 }
 

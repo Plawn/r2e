@@ -1,4 +1,4 @@
-pub use r2e_http::{body, extract, middleware, response, routing};
+pub use r2e_http::{body, extract, labels, middleware, response, routing};
 pub use r2e_http::header;
 #[cfg(feature = "ws")]
 pub mod ws;

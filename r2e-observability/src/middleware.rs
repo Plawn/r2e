@@ -1,5 +1,7 @@
 use http::Request;
 use opentelemetry::propagation::Extractor;
+use r2e_core::http::extract::MatchedPath;
+use r2e_core::http::labels::{method_label, route_label};
 use pin_project_lite::pin_project;
 use std::{
     future::Future,
@@ -71,14 +73,19 @@ where
             propagator.extract(&HeaderExtractor(req.headers()))
         });
 
-        let method = req.method().to_string();
-        let path = req.uri().path().to_string();
+        // `http.route` must be the matched route template (OTel semconv), not
+        // the raw path: tracing backends tag on it, so raw paths would mint
+        // one tag value per unique scanner URL. The raw path stays available
+        // per-request as `url.path`, which backends treat as an unbounded
+        // span attribute.
+        let route = route_label(req.extensions().get::<MatchedPath>());
 
         // Create the request span
         let span = tracing::info_span!(
             "HTTP request",
-            http.method = %method,
-            http.route = %path,
+            http.method = method_label(req.method()),
+            http.route = route,
+            url.path = %req.uri().path(),
             http.status_code = tracing::field::Empty,
             otel.kind = "server",
         );
