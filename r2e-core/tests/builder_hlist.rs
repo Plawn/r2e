@@ -126,3 +126,13 @@ async fn build_state_empty_builder_yields_hnil_state() {
     let app = AppBuilder::new().build_state().await;
     let _: &r2e_core::HNil = app.state();
 }
+
+#[r2e_core::test]
+async fn build_state_after_raw_load_config_provides_unit_slot() {
+    // `load_config::<()>()` pushes `()` onto the provision list; the unit
+    // bean must be registered too or materializing the HList panics with
+    // "Bean of type `()` not found in context".
+    let app = AppBuilder::new().load_config::<()>().build_state().await;
+    let _: () = app.state().get::<()>();
+    assert!(app.bean_context().try_get::<r2e_core::R2eConfig>().is_some());
+}
