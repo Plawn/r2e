@@ -83,6 +83,14 @@ pub fn validate_section<C: ConfigProperties>(
     let mut errors: Vec<MissingKeyError> = meta.iter()
         .filter(|prop| prop.required && !prop.is_section)
         .filter(|prop| matches!(config.get::<String>(&prop.full_key), Err(ConfigError::NotFound(_))))
+        .filter(|prop| {
+            // A custom `#[config(env = "VAR")]` var satisfies the property even
+            // though `from_config` reads it from the process env, not the map.
+            !prop
+                .env_var
+                .as_deref()
+                .is_some_and(|var| std::env::var(var).is_ok())
+        })
         .map(|prop| MissingKeyError {
             source: source.to_string(),
             key: prop.full_key.clone(),
@@ -129,7 +137,24 @@ pub fn validate_section<C: ConfigProperties>(
                         description: None,
                     });
                 }
-                _ => {}
+                ConfigError::Deserialize { key, message } => {
+                    errors.push(MissingKeyError {
+                        source: source.to_string(),
+                        key: key.clone(),
+                        expected_type: "deserializable".to_string(),
+                        env_hint: key.to_uppercase().replace('.', "_"),
+                        description: Some(message),
+                    });
+                }
+                ConfigError::Load(msg) => {
+                    errors.push(MissingKeyError {
+                        source: source.to_string(),
+                        key: source.to_string(),
+                        expected_type: "loadable".to_string(),
+                        env_hint: source.to_uppercase().replace('.', "_"),
+                        description: Some(msg),
+                    });
+                }
             }
         }
     }
