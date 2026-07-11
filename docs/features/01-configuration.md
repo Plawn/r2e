@@ -52,6 +52,24 @@ if config.get::<String>("app.name").is_err() {
 }
 ```
 
+#### Custom base file
+
+To use a domain-specific file name instead of `application.yaml`:
+
+```rust
+let config = R2eConfig::load_from("patina.yaml")?;
+
+// Or on the builder, before load_config:
+AppBuilder::new()
+    .with_config_file("patina.yaml")
+    .load_config::<RootConfig>()
+```
+
+The profile overlay file derives from the base name (`patina.yaml` + profile
+`test` → `patina-test.yaml`), and secrets / env overlay apply as usual. Unlike
+`load()`, an explicitly requested file that does not exist is an error — a
+typo'd name would otherwise silently yield an empty config.
+
 ### 3. Reading values
 
 ```rust

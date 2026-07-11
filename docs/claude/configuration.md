@@ -19,9 +19,25 @@ Central configuration store. Flat dot-separated keys → `ConfigValue`.
 ```rust
 R2eConfig::load()                          // application.yaml + .env + env vars
 R2eConfig::load_with_resolver(&resolver)   // custom SecretResolver
+R2eConfig::load_from("patina.yaml")        // custom base file (see below)
+R2eConfig::load_profiled_from(file, p)     // custom base file + explicit profile
 R2eConfig::from_yaml_str(yaml)             // testing
 R2eConfig::empty()                         // testing
 ```
+
+### Custom base file
+
+`load_from` / `load_profiled_from` / `load_from_with_resolver` replace the
+default `application.yaml` with any path. The profile overlay file derives
+from the base name — `patina.yaml` + profile `test` → `patina-test.yaml`
+(sibling of the base file). Secrets and the `R2E_` env overlay apply
+identically.
+
+Unlike `load()` (where a missing `application.yaml` is tolerated — apps may
+run on env vars alone), an explicitly requested base file that does not exist
+is a `ConfigError::Load`.
+
+On the builder: `.with_config_file("patina.yaml")` before `.load_config::<C>()`.
 
 ### Resolution order (lowest → highest priority)
 
@@ -353,6 +369,9 @@ AppBuilder::new().load_config::<RootConfig>()   // raw + typed + children (prefe
 ```
 
 `C` must implement `LoadableConfig` — satisfied by `()` (raw only) and any `T: ConfigProperties`.
+
+`.with_config_file("patina.yaml")` (called before `load_config`) swaps the base
+file; the profile overlay becomes `patina-{profile}.yaml`.
 
 When using a root config with nested sections, all children are available for `#[inject]` in controllers and as bean dependencies:
 
