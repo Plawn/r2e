@@ -12,8 +12,7 @@ pub type ShutdownHook<T> =
 /// A drain hook, awaited when shutdown is triggered — after the signal (or
 /// [`StopHandle::stop`]) but **before** the server stops accepting
 /// connections. See [`AppBuilder::on_drain`](crate::AppBuilder::on_drain).
-pub type DrainHook<T> =
-    Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+pub type DrainHook<T> = ShutdownHook<T>;
 
 /// Handle to stop a running server programmatically.
 ///
@@ -23,9 +22,9 @@ pub type DrainHook<T> =
 /// future resolves once the whole sequence completes.
 ///
 /// Obtain one from [`PreparedApp::stop_handle`](crate::PreparedApp::stop_handle),
-/// or create it first with [`StopHandle::new`] and wire it via
-/// [`AppBuilder::with_stop_handle`](crate::AppBuilder::with_stop_handle) —
-/// e.g. to `provide()` it as a bean for an admin endpoint.
+/// or create it first with [`StopHandle::new`] and `provide()` it as a bean
+/// (e.g. for an admin stop endpoint) — a `StopHandle` bean is wired into the
+/// lifecycle automatically at `prepare()`.
 ///
 /// # Example
 ///

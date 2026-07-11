@@ -108,6 +108,21 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// Stop the server via its `StopHandle` and assert `run()` terminated
+/// cleanly — the real graceful-shutdown path, including the awaited gRPC
+/// drain on the separate-port transport.
+async fn stop_and_await_clean(
+    stop: r2e::prelude::StopHandle,
+    server: tokio::task::JoinHandle<Result<(), String>>,
+) {
+    stop.stop();
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server did not stop within 5s after StopHandle::stop()")
+        .expect("server task panicked");
+    assert!(result.is_ok(), "run() returned an error: {result:?}");
+}
+
 /// Connect a gRPC client with a retry deadline, so the test fails with a
 /// clear panic (instead of hanging) when the server never comes up — which
 /// is exactly what happened before the serve path was wired.
@@ -170,12 +185,7 @@ async fn serve_starts_grpc_on_separate_port() {
 
     // Programmatic graceful stop: run() resolves cleanly once the HTTP
     // listener AND the gRPC server (tracked drain) have shut down.
-    stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s after StopHandle::stop()")
-        .expect("server task panicked");
-    assert!(result.is_ok(), "run() returned an error: {result:?}");
+    stop_and_await_clean(stop, server).await;
 }
 
 #[r2e::test]
@@ -225,10 +235,5 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
     );
     assert!(response.contains("pong"), "unexpected HTTP body: {response}");
 
-    stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s after StopHandle::stop()")
-        .expect("server task panicked");
-    assert!(result.is_ok(), "run() returned an error: {result:?}");
+    stop_and_await_clean(stop, server).await;
 }

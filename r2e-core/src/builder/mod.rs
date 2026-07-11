@@ -285,18 +285,14 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     /// Wire a user-created [`StopHandle`] into the server lifecycle.
     ///
     /// Calling [`StopHandle::stop`] on (a clone of) the handle triggers the
-    /// same graceful shutdown as an OS signal. Use this when the handle must
-    /// exist before [`prepare()`](AppBuilder::prepare) — e.g. to `provide()`
-    /// it as a bean for an admin endpoint. Otherwise just take
-    /// [`PreparedApp::stop_handle`] after preparing.
+    /// same graceful shutdown as an OS signal.
     ///
-    /// ```ignore
-    /// let stop = StopHandle::new();
-    /// AppBuilder::new()
-    ///     .provide(stop.clone())
-    ///     .with_stop_handle(stop)
-    ///     // ...
-    /// ```
+    /// Usually unnecessary: a `StopHandle` bean (`.provide(stop.clone())`,
+    /// e.g. for an admin endpoint) is picked up automatically at
+    /// [`prepare()`](AppBuilder::prepare), and without one
+    /// [`PreparedApp::stop_handle`] hands back a fresh wired handle. Use this
+    /// only to wire a handle that is neither a bean nor taken from the
+    /// prepared app (it takes precedence over a bean).
     pub fn with_stop_handle(mut self, handle: StopHandle) -> Self {
         self.shared.stop_handle = Some(handle);
         self

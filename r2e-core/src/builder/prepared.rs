@@ -292,9 +292,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
         // Spawn the QUIC/HTTP3 endpoint (if configured) before the TCP server.
         // In dev-reload mode, the endpoint is cached so the UDP socket
-        // survives across hot-patches without port conflicts.
+        // survives across hot-patches without port conflicts. The task handle
+        // joins the tracked set (like gRPC / spawn_service), so the QUIC drain
+        // is awaited in the shutdown phase, bounded by `shutdown_grace_period`.
         #[cfg(feature = "quic")]
-        let quic_handle = self.quic_server_config.take().and_then(|(addr, server_config)| {
+        if let Some(quic_handle) = self.quic_server_config.take().and_then(|(addr, server_config)| {
             let router = self.router.clone();
             let token = cancel_token.clone();
 
@@ -330,10 +332,18 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     None
                 }
             }
-        });
+        }) {
+            service_handles.push(quic_handle);
+        }
 
         let cancel_for_shutdown = cancel_token.clone();
         let shutdown_future = async move {
+            // Cancel-on-drop: the token must fire even if a drain or plugin
+            // hook panics (in the sharded path this future runs as a spawned
+            // task, where a panic is swallowed — without the guard the
+            // workers would never see the cancellation and run() would hang
+            // forever).
+            let _cancel_guard = cancel_for_shutdown.drop_guard();
             tokio::select! {
                 _ = crate::rt::shutdown_signal() => {}
                 _ = stop_handle.stopped() => {
@@ -349,7 +359,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             for hook in plugin_async_shutdown_hooks {
                 hook().await;
             }
-            cancel_for_shutdown.cancel();
+            // `_cancel_guard` drops here and cancels the token.
         };
 
         // ── Serve (single-listener or sharded) ──────────────────────────────
@@ -447,21 +457,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         };
         serve_result?;
 
-        // Wait for QUIC endpoint to drain after TCP server stops.
-        #[cfg(feature = "quic")]
-        if let Some(handle) = quic_handle {
-            if let Err(join_err) = handle.await {
-                if join_err.is_panic() {
-                    tracing::warn!("QUIC task panicked");
-                }
-            }
-        }
-
         // After HTTP drain completes: await tracked JobHandles (spawn_service
-        // tasks and serve-hook tasks registered via `ServeContext::track`,
-        // e.g. the gRPC server drain) with a deadline, then run user shutdown
-        // hooks. Both phases together are bounded by `shutdown_grace_period`
-        // if set.
+        // tasks, serve-hook tasks registered via `ServeContext::track` such
+        // as the gRPC server drain, and the QUIC endpoint drain), then run
+        // user shutdown hooks. Both phases together are bounded by
+        // `shutdown_grace_period` if set.
         let state_for_shutdown = self.state.clone();
         let shutdown_hooks = self.shutdown_hooks;
         let shutdown_phase = async move {

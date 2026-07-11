@@ -38,20 +38,21 @@ API: `StopHandle::new()`, `stop()` (idempotent, non-blocking), `is_stopped()`, `
 
 ### As a bean (admin/stop endpoint)
 
-The handle can exist *before* the builder — wire it with `with_stop_handle` and provide it as a bean:
+Providing a `StopHandle` bean is enough — `prepare()` picks it up automatically:
 
 ```rust
 let stop = StopHandle::new();
 
 AppBuilder::new()
-    .provide(stop.clone())          // injectable: #[inject] stop: StopHandle
-    .with_stop_handle(stop)
+    .provide(stop)                  // injectable: #[inject] stop: StopHandle
     .build_state()
     .await
     .register_controller::<AdminController>()
     .serve_auto()
     .await?;
 ```
+
+Resolution order at `prepare()`: explicit `with_stop_handle()` → `StopHandle` bean from the graph → fresh handle (returned by `PreparedApp::stop_handle()`).
 
 ### In e2e tests
 
@@ -115,10 +116,10 @@ dctx.on_serve(move |serve_ctx| {
 
 ## Interactions
 
-- **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation.
-- **QUIC**: the HTTP/3 endpoint drains on the same token and is awaited after the TCP server stops (pre-existing behavior, unchanged).
-- **`shutdown_grace_period`**: bounds step 4 (tracked handles + `on_stop` hooks) as before. `on_drain` hooks are **not** bounded by it — they run before the drain begins.
-- **dev-reload**: plugin shutdown hooks are skipped on hot-reload re-entry (unchanged); `on_drain`/`on_stop` user hooks always run.
+- **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics.
+- **QUIC**: the HTTP/3 endpoint drains on the same token; its task handle joins the tracked set, so the QUIC drain is awaited in step 4 and bounded by `shutdown_grace_period`.
+- **`shutdown_grace_period`**: bounds step 4 (tracked handles + `on_stop` hooks). Without one, shutdown waits indefinitely for tracked drains — a client holding a server-streaming gRPC call open holds the (grace-boundable) tracked drain, and an open HTTP SSE/streaming response holds the HTTP drain itself (step 3, never grace-bounded — same as plain axum). `on_drain` hooks are **not** bounded by it — they run before the drain begins.
+- **dev-reload**: plugin shutdown hooks are skipped on hot-reload re-entry (unchanged); `on_drain`/`on_stop` user hooks always run (same rule as `on_stop` had before).
 
 ## Files
 

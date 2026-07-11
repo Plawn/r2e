@@ -309,14 +309,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Set a maximum grace period for shutdown.
+    /// Set a maximum grace period for the post-drain shutdown phase.
     ///
-    /// When a shutdown signal is received the server stops accepting new
-    /// connections and runs plugin/user shutdown hooks. If those hooks do
-    /// not complete within `duration` the process will force-exit.
+    /// After the listener has stopped accepting and in-flight requests have
+    /// finished, tracked background tasks (`spawn_service`, gRPC/QUIC drains,
+    /// [`ServeContext::track`](crate::builder::ServeContext::track)) are
+    /// awaited and [`on_stop`](Self::on_stop) hooks run. `duration` bounds
+    /// those two together: if they do not complete in time, they are
+    /// abandoned with a warning and `run()` returns.
     ///
-    /// By default there is **no** grace period — the process waits
-    /// indefinitely for hooks to finish.
+    /// By default there is **no** grace period — shutdown waits indefinitely
+    /// for tracked tasks and hooks. A long-lived in-flight connection keeps
+    /// its drain open: a server-streaming gRPC call holds the (tracked, thus
+    /// grace-boundable) gRPC drain, while an open HTTP SSE/streaming response
+    /// holds the HTTP drain itself, which runs *before* this phase and is not
+    /// bounded by it. [`on_drain`](Self::on_drain) hooks are also **not**
+    /// covered — they run before the drain begins, while the server is still
+    /// serving.
     ///
     /// # Example
     ///
@@ -765,7 +774,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // is carried on `PreparedApp` and surfaced at `run()` time.
         let workers = crate::sharded::parse_workers(this.shared.config.as_ref());
 
-        let stop_handle = this.shared.stop_handle.clone().unwrap_or_default();
+        // Stop-handle resolution: explicit `with_stop_handle` wins, then a
+        // `StopHandle` bean from the graph (so `.provide(stop.clone())` alone
+        // is enough to wire an admin stop endpoint — a provided-but-unwired
+        // handle would be a silent no-op), then a fresh handle.
+        let stop_handle = this
+            .shared
+            .stop_handle
+            .clone()
+            .or_else(|| this.bean_context.try_get::<StopHandle>())
+            .unwrap_or_default();
 
         let BuiltApp {
             router,

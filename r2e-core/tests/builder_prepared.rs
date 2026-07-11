@@ -24,6 +24,16 @@ impl EventLog {
     }
 }
 
+/// Await the spawned `run()` task and assert it terminated cleanly (within
+/// the deadline, without panicking, returning `Ok`).
+async fn await_clean_stop(server: tokio::task::JoinHandle<Result<(), String>>) {
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server did not stop within 5s")
+        .expect("server task panicked");
+    assert!(result.is_ok(), "run() returned an error: {result:?}");
+}
+
 #[tokio::test]
 async fn stop_handle_stops_run_gracefully() {
     let app = AppBuilder::new().build_state().await;
@@ -41,12 +51,7 @@ async fn stop_handle_stops_run_gracefully() {
 
     stop.stop();
     assert!(stop.is_stopped());
-
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s after StopHandle::stop()")
-        .expect("server task panicked");
-    assert!(result.is_ok(), "run() returned an error: {result:?}");
+    await_clean_stop(server).await;
 }
 
 #[tokio::test]
@@ -71,11 +76,27 @@ async fn with_stop_handle_wires_a_user_created_handle() {
     // Stopping via the ORIGINAL handle (created before the builder saw it)
     // terminates the server.
     stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s")
-        .expect("server task panicked");
-    assert!(result.is_ok());
+    await_clean_stop(server).await;
+}
+
+#[tokio::test]
+async fn stop_handle_bean_is_wired_automatically() {
+    // Providing a StopHandle bean (the admin-endpoint pattern) is enough —
+    // no explicit with_stop_handle needed.
+    let stop = StopHandle::new();
+    let app = AppBuilder::new().provide(stop.clone()).build_state().await;
+    let prepared = app.prepare("127.0.0.1:0");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = tokio::spawn(async move {
+        prepared
+            .run_with_listener(listener)
+            .await
+            .map_err(|e| e.to_string())
+    });
+
+    stop.stop();
+    await_clean_stop(server).await;
 }
 
 #[tokio::test]
@@ -139,11 +160,7 @@ async fn drain_sequence_finishes_in_flight_requests_and_orders_hooks() {
     );
     assert!(response.contains("done"), "unexpected body: {response}");
 
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s")
-        .expect("server task panicked");
-    assert!(result.is_ok());
+    await_clean_stop(server).await;
 
     // Hook order: drain (at stop time, before the request finished — the
     // server was still serving) → in-flight request completion → on_stop
