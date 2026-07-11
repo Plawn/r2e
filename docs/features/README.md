@@ -26,6 +26,7 @@ R2E provides 20 main features, each documented in a dedicated file.
 | 18 | QUIC / HTTP/3 | [18-quic.md](./18-quic.md) | `r2e-http` |
 | 19 | Sharded Serving (SO_REUSEPORT) | [19-sharded-serving.md](./19-sharded-serving.md) | `r2e-core` |
 | 20 | Proxy & Catch-All Routes | [20-proxy-catch-all.md](./20-proxy-catch-all.md) | `r2e-macros` / `r2e-core` |
+| 21 | Dynamic Scheduled Tasks | [21-dynamic-scheduled-tasks.md](./21-dynamic-scheduled-tasks.md) | `r2e-scheduler` |
 
 ## Crate Architecture
 
