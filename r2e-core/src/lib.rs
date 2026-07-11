@@ -46,7 +46,7 @@ pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConst
 pub use lazy::Lazy;
 pub use builder::{
     AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
-    RegisterModule, TaskRegistryHandle,
+    RegisterModule, ServeContext, TaskRegistryHandle,
 };
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
@@ -67,7 +67,7 @@ pub use guards::{Guard, GuardContext, GuardError, Identity, NoIdentity, PathPara
 pub use interceptors::{Cacheable, InterceptorContext, Interceptor};
 pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
 pub use tracing_config::{LogFormat, SpanEvents, TracingConfig};
-pub use lifecycle::LifecycleController;
+pub use lifecycle::{LifecycleController, StopHandle};
 pub use plugin::{
     DeferredAction, DeferredContext, Plugin, PluginInstallContext, PreStatePlugin,
     RawPreStatePlugin,

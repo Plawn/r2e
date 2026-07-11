@@ -19,6 +19,8 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) addr: String,
     pub(super) startup_hooks: Vec<StartupHook<T>>,
     pub(super) shutdown_hooks: Vec<ShutdownHook<T>>,
+    pub(super) drain_hooks: Vec<DrainHook<T>>,
+    pub(super) stop_handle: StopHandle,
     pub(super) consumer_registrations: Vec<ConsumerReg<T>>,
     pub(super) serve_hooks: Vec<ServeHook>,
     pub(super) plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
@@ -80,6 +82,23 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// Whether TCP_NODELAY is enabled for accepted connections.
     pub fn tcp_nodelay(&self) -> bool {
         self.tcp_nodelay
+    }
+
+    /// A handle that stops the server programmatically.
+    ///
+    /// Calling [`StopHandle::stop`] triggers the same graceful shutdown as an
+    /// OS signal; the [`run()`](Self::run) future resolves once the drain
+    /// completes. The handle is `Clone` — grab it before spawning `run()`:
+    ///
+    /// ```ignore
+    /// let prepared = app.prepare("127.0.0.1:8080");
+    /// let stop = prepared.stop_handle();
+    /// let server = tokio::spawn(prepared.run());
+    /// stop.stop();
+    /// server.await??;
+    /// ```
+    pub fn stop_handle(&self) -> StopHandle {
+        self.stop_handle.clone()
     }
 
     /// The parsed `server.workers` (SO_REUSEPORT sharding) configuration.
@@ -187,13 +206,30 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// sharded), QUIC drain, and the shutdown phase. Only the "bind + serve"
     /// middle differs between strategies.
     async fn run_inner(
-        #[cfg_attr(not(feature = "quic"), allow(unused_mut))] mut self,
+        mut self,
         strategy: ServeStrategy,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "dev-reload")]
         let skip_lifecycle = crate::dev::is_lifecycle_initialized();
         #[cfg(not(feature = "dev-reload"))]
         let skip_lifecycle = false;
+
+        // Cancelled when graceful shutdown begins (after drain hooks). Serve
+        // hooks receive it via `ServeContext`; the HTTP/QUIC/sharded serving
+        // paths observe it as their graceful-shutdown signal.
+        let cancel_token = CancellationToken::new();
+
+        // Get-or-insert the shared post-drain handle collector BEFORE serve
+        // hooks run: hooks `track()` into it via `ServeContext`, and it must
+        // be the same instance the shutdown phase drains (spawn_service
+        // inserts it at registration time, but only when used).
+        let service_handles = self
+            .plugin_data
+            .entry(TypeId::of::<ServiceHandles>())
+            .or_insert_with(|| Box::new(ServiceHandles::default()))
+            .downcast_ref::<ServiceHandles>()
+            .expect("ServiceHandles type mismatch in plugin_data")
+            .clone();
 
         if !skip_lifecycle {
             // Register event consumers
@@ -203,8 +239,10 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
             // Call serve hooks (e.g., scheduler starts tasks).
             //
-            // Each hook receives a clone of the shared `TaskRegistryHandle`
-            // (Arc-backed) and drains the tasks it owns. Multiple hooks can
+            // Each hook receives a `ServeContext`: a clone of the shared
+            // `TaskRegistryHandle` (Arc-backed) to drain the tasks it owns,
+            // the app shutdown token, and a `track()` collector for tasks
+            // whose drain must be awaited at shutdown. Multiple hooks can
             // share the registry: scheduler calls `take_all()` or
             // `take_of::<ScheduledTaskMarker>()`, other subsystems pick their
             // own tagged subset, and absent subsystems observe no tasks.
@@ -214,7 +252,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 .cloned()
                 .unwrap_or_default();
             for hook in self.serve_hooks {
-                hook(task_registry.clone(), CancellationToken::new());
+                hook(ServeContext {
+                    tasks: task_registry.clone(),
+                    shutdown: cancel_token.clone(),
+                    handles: service_handles.clone(),
+                });
             }
 
             // Run startup hooks
@@ -230,32 +272,31 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
         }
 
-        // Pull the shared spawn_service JobHandle collector (if any) so we
-        // can await tasks after graceful shutdown.
-        let service_handles = self
-            .plugin_data
-            .get(&TypeId::of::<ServiceHandles>())
-            .and_then(|b| b.downcast_ref::<ServiceHandles>())
-            .cloned()
-            .unwrap_or_default();
-
         // Compose the shutdown future handed to `with_graceful_shutdown`.
-        // When the OS signal arrives, fire plugin shutdown hooks (which
-        // cancel tokens handed to spawn_service tasks) BEFORE letting the
-        // HTTP server start draining. This way background tasks see the
-        // cancel signal while in-flight HTTP requests still get to finish.
+        // When the OS signal (or a programmatic `StopHandle::stop`) arrives:
+        // 1. user drain hooks are awaited — the server is still accepting and
+        //    serving normally (readiness flips, LB deregistration waits);
+        // 2. plugin shutdown hooks fire (they cancel tokens handed to
+        //    spawn_service tasks) and plugin async shutdown hooks are awaited,
+        //    BEFORE the HTTP server starts draining — background tasks see the
+        //    cancel signal while in-flight HTTP requests still get to finish;
+        // 3. the shared token is cancelled and the listener stops accepting.
         let (plugin_shutdown_hooks, plugin_async_shutdown_hooks) = if skip_lifecycle {
             (Vec::new(), Vec::new())
         } else {
             (self.plugin_shutdown_hooks, self.plugin_async_shutdown_hooks)
         };
-        let cancel_token = CancellationToken::new();
+        let drain_hooks = self.drain_hooks;
+        let state_for_drain = self.state.clone();
+        let stop_handle = self.stop_handle.clone();
 
         // Spawn the QUIC/HTTP3 endpoint (if configured) before the TCP server.
         // In dev-reload mode, the endpoint is cached so the UDP socket
-        // survives across hot-patches without port conflicts.
+        // survives across hot-patches without port conflicts. The task handle
+        // joins the tracked set (like gRPC / spawn_service), so the QUIC drain
+        // is awaited in the shutdown phase, bounded by `shutdown_grace_period`.
         #[cfg(feature = "quic")]
-        let quic_handle = self.quic_server_config.take().and_then(|(addr, server_config)| {
+        if let Some(quic_handle) = self.quic_server_config.take().and_then(|(addr, server_config)| {
             let router = self.router.clone();
             let token = cancel_token.clone();
 
@@ -291,18 +332,34 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     None
                 }
             }
-        });
+        }) {
+            service_handles.push(quic_handle);
+        }
 
         let cancel_for_shutdown = cancel_token.clone();
         let shutdown_future = async move {
-            crate::rt::shutdown_signal().await;
+            // Cancel-on-drop: the token must fire even if a drain or plugin
+            // hook panics (in the sharded path this future runs as a spawned
+            // task, where a panic is swallowed — without the guard the
+            // workers would never see the cancellation and run() would hang
+            // forever).
+            let _cancel_guard = cancel_for_shutdown.drop_guard();
+            tokio::select! {
+                _ = crate::rt::shutdown_signal() => {}
+                _ = stop_handle.stopped() => {
+                    tracing::info!("Programmatic stop requested, starting graceful shutdown");
+                }
+            }
+            for hook in drain_hooks {
+                hook(state_for_drain.clone()).await;
+            }
             for hook in plugin_shutdown_hooks {
                 hook();
             }
             for hook in plugin_async_shutdown_hooks {
                 hook().await;
             }
-            cancel_for_shutdown.cancel();
+            // `_cancel_guard` drops here and cancels the token.
         };
 
         // ── Serve (single-listener or sharded) ──────────────────────────────
@@ -400,19 +457,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         };
         serve_result?;
 
-        // Wait for QUIC endpoint to drain after TCP server stops.
-        #[cfg(feature = "quic")]
-        if let Some(handle) = quic_handle {
-            if let Err(join_err) = handle.await {
-                if join_err.is_panic() {
-                    tracing::warn!("QUIC task panicked");
-                }
-            }
-        }
-
-        // After HTTP drain completes: await spawn_service JobHandles with a
-        // deadline, then run user shutdown hooks. Both phases together are
-        // bounded by `shutdown_grace_period` if set.
+        // After HTTP drain completes: await tracked JobHandles (spawn_service
+        // tasks, serve-hook tasks registered via `ServeContext::track` such
+        // as the gRPC server drain, and the QUIC endpoint drain), then run
+        // user shutdown hooks. Both phases together are bounded by
+        // `shutdown_grace_period` if set.
         let state_for_shutdown = self.state.clone();
         let shutdown_hooks = self.shutdown_hooks;
         let shutdown_phase = async move {
@@ -420,14 +469,14 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             if !handles.is_empty() {
                 tracing::info!(
                     count = handles.len(),
-                    "Awaiting spawn_service tasks to finish"
+                    "Awaiting background tasks to finish"
                 );
                 for h in handles {
                     if let Err(e) = h.await {
                         if e.is_panic() {
-                            tracing::warn!(error = %e, "spawn_service task panicked");
+                            tracing::warn!(error = %e, "background task panicked");
                         } else if !e.is_cancelled() {
-                            tracing::warn!(error = %e, "spawn_service task join error");
+                            tracing::warn!(error = %e, "background task join error");
                         }
                     }
                 }

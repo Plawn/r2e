@@ -29,6 +29,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             routes: Vec::new(),
             startup_hooks: Vec::new(),
             shutdown_hooks: Vec::new(),
+            drain_hooks: Vec::new(),
             meta_registry: MetaRegistry::new(),
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
@@ -278,14 +279,53 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Set a maximum grace period for shutdown.
+    /// Register a drain hook, awaited when shutdown is triggered — **before**
+    /// the server stops accepting connections.
     ///
-    /// When a shutdown signal is received the server stops accepting new
-    /// connections and runs plugin/user shutdown hooks. If those hooks do
-    /// not complete within `duration` the process will force-exit.
+    /// This is the place for "prepare the outside world for our departure"
+    /// work: flip a readiness endpoint to unready, wait for the load balancer
+    /// to deregister, broadcast a drain notice. The server keeps serving
+    /// normally while drain hooks run; once all of them (and plugin shutdown
+    /// hooks) complete, the listener stops accepting and in-flight requests
+    /// finish. Compare [`on_stop`](Self::on_stop), which runs *after* the
+    /// drain completes.
     ///
-    /// By default there is **no** grace period — the process waits
-    /// indefinitely for hooks to finish.
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .on_drain(|state| async move {
+    ///         state.get::<Readiness>().set_draining();
+    ///         tokio::time::sleep(Duration::from_secs(5)).await; // LB deregistration
+    ///     })
+    /// ```
+    pub fn on_drain<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.drain_hooks
+            .push(Box::new(move |state| Box::pin(hook(state))));
+        self
+    }
+
+    /// Set a maximum grace period for the post-drain shutdown phase.
+    ///
+    /// After the listener has stopped accepting and in-flight requests have
+    /// finished, tracked background tasks (`spawn_service`, gRPC/QUIC drains,
+    /// [`ServeContext::track`](crate::builder::ServeContext::track)) are
+    /// awaited and [`on_stop`](Self::on_stop) hooks run. `duration` bounds
+    /// those two together: if they do not complete in time, they are
+    /// abandoned with a warning and `run()` returns.
+    ///
+    /// By default there is **no** grace period — shutdown waits indefinitely
+    /// for tracked tasks and hooks. A long-lived in-flight connection keeps
+    /// its drain open: a server-streaming gRPC call holds the (tracked, thus
+    /// grace-boundable) gRPC drain, while an open HTTP SSE/streaming response
+    /// holds the HTTP drain itself, which runs *before* this phase and is not
+    /// bounded by it. [`on_drain`](Self::on_drain) hooks are also **not**
+    /// covered — they run before the drain begins, while the server is still
+    /// serving.
     ///
     /// # Example
     ///
@@ -659,6 +699,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             router: app,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
+            drain_hooks: self.drain_hooks,
             consumer_registrations: self.consumer_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
@@ -733,10 +774,22 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // is carried on `PreparedApp` and surfaced at `run()` time.
         let workers = crate::sharded::parse_workers(this.shared.config.as_ref());
 
+        // Stop-handle resolution: explicit `with_stop_handle` wins, then a
+        // `StopHandle` bean from the graph (so `.provide(stop.clone())` alone
+        // is enough to wire an admin stop endpoint — a provided-but-unwired
+        // handle would be a silent no-op), then a fresh handle.
+        let stop_handle = this
+            .shared
+            .stop_handle
+            .clone()
+            .or_else(|| this.bean_context.try_get::<StopHandle>())
+            .unwrap_or_default();
+
         let BuiltApp {
             router,
             startup_hooks,
             shutdown_hooks,
+            drain_hooks,
             consumer_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
@@ -759,6 +812,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             addr: addr.to_string(),
             startup_hooks,
             shutdown_hooks,
+            drain_hooks,
+            stop_handle,
             consumer_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
@@ -809,6 +864,7 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     router: crate::http::Router,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
+    drain_hooks: Vec<DrainHook<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
