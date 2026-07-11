@@ -110,3 +110,11 @@ async fn with_config_file_and_profile_overlays_derived_sibling() {
     assert_eq!(config.get::<String>("r2e.profile").unwrap(), "test");
     assert_eq!(config.get::<i64>("app.port").unwrap(), 1234);
 }
+
+#[test]
+#[should_panic(expected = "with_config_file() was set but with_config()")]
+fn with_config_file_then_with_config_panics() {
+    let _ = AppBuilder::new()
+        .with_config_file("patina.yaml")
+        .with_config(R2eConfig::empty());
+}

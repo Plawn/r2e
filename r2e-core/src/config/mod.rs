@@ -181,10 +181,12 @@ impl R2eConfig {
     ) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
 
-        // 1. Load base config
-        if require_file && !file.exists() {
+        // 1. Load base config. `is_file()` (not `exists()`) so a directory
+        // path gets this clear error instead of a raw "Is a directory" io
+        // error from the read.
+        if require_file && !file.is_file() {
             return Err(ConfigError::Load(format!(
-                "config file not found: {}",
+                "config file not found (or not a regular file): {}",
                 file.display()
             )));
         }

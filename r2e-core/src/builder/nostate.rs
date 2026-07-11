@@ -264,6 +264,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         mut self,
         mut config: crate::config::R2eConfig,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R, Mods> {
+        assert!(
+            self.shared.config_file.is_none(),
+            "with_config_file() was set but with_config() supplies a pre-loaded \
+             R2eConfig — the custom file would be silently ignored. Either load it \
+             yourself (R2eConfig::load_from) or use load_config() instead."
+        );
         for (key, value) in self.shared.config_overrides.drain(..) {
             config.set(&key, value);
         }
@@ -305,15 +311,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         C::Children: TAppend<P>,
     {
         let profile = self.shared.forced_profile.as_deref();
+        // An explicitly requested file must exist (load_profiled_from is
+        // strict, and its error names the file); the default is optional.
         let mut config = match self.shared.config_file.take() {
-            // An explicitly requested file must exist (load_profiled_from is strict).
-            Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile)
-                .unwrap_or_else(|e| {
-                    panic!("Failed to load config from {}: {e}", file.display())
-                }),
-            None => crate::config::R2eConfig::load_profiled(profile)
-                .unwrap_or_else(|e| panic!("Failed to load config: {e}")),
-        };
+            Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile),
+            None => crate::config::R2eConfig::load_profiled(profile),
+        }
+        .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
         for (key, value) in self.shared.config_overrides.drain(..) {
             config.set(&key, value);
         }
@@ -381,6 +385,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// overlay file is derived from the base name (`patina.yaml` + profile
     /// `test` → `patina-test.yaml`); secret resolution, the env overlay, and
     /// [`override_config_value`](Self::override_config_value) apply as usual.
+    /// Combining this with [`with_config`](Self::with_config) (a pre-loaded
+    /// config) is a panic — the file could not be honored.
     ///
     /// ```ignore
     /// AppBuilder::new()

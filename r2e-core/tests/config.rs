@@ -1311,3 +1311,13 @@ fn load_from_resolves_secret_placeholders() {
     let config = R2eConfig::load_from(&file).unwrap();
     assert_eq!(config.get::<String>("app.secret").unwrap(), "fallback");
 }
+
+#[test]
+fn load_from_directory_path_errors_clearly() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = R2eConfig::load_from(dir.path()).unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Load(msg) if msg.contains("not a regular file")),
+        "expected clear not-a-file error, got: {err}"
+    );
+}
