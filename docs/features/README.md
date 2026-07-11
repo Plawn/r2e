@@ -27,6 +27,7 @@ R2E provides 20 main features, each documented in a dedicated file.
 | 19 | Sharded Serving (SO_REUSEPORT) | [19-sharded-serving.md](./19-sharded-serving.md) | `r2e-core` |
 | 20 | Proxy & Catch-All Routes | [20-proxy-catch-all.md](./20-proxy-catch-all.md) | `r2e-macros` / `r2e-core` |
 | 21 | Dynamic Scheduled Tasks | [21-dynamic-scheduled-tasks.md](./21-dynamic-scheduled-tasks.md) | `r2e-scheduler` |
+| 22 | Serve Lifecycle (Stop & Drain) | [22-serve-lifecycle.md](./22-serve-lifecycle.md) | `r2e-core` / `r2e-grpc` |
 
 ## Crate Architecture
 

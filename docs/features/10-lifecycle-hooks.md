@@ -12,7 +12,11 @@ Hook executed **before** the server starts listening for connections. Receives t
 
 ### on_stop
 
-Hook executed **after** the server's graceful shutdown (Ctrl+C signal or SIGTERM). Does not receive the state, cannot fail.
+Hook executed **after** the server's graceful shutdown (Ctrl+C signal, SIGTERM, or a programmatic `StopHandle::stop()`). Receives the application state, cannot fail.
+
+### on_drain / StopHandle
+
+Two more lifecycle pieces live in [Feature 22 — Serve Lifecycle](./22-serve-lifecycle.md): `on_drain` hooks are awaited when shutdown is *triggered*, **before** the server stops accepting connections (readiness flip, load-balancer deregistration), and `StopHandle` stops a running server programmatically through the same graceful path.
 
 ## Usage
 
