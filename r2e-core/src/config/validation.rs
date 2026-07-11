@@ -137,7 +137,24 @@ pub fn validate_section<C: ConfigProperties>(
                         description: None,
                     });
                 }
-                _ => {}
+                ConfigError::Deserialize { key, message } => {
+                    errors.push(MissingKeyError {
+                        source: source.to_string(),
+                        key: key.clone(),
+                        expected_type: "deserializable".to_string(),
+                        env_hint: key.to_uppercase().replace('.', "_"),
+                        description: Some(message),
+                    });
+                }
+                ConfigError::Load(msg) => {
+                    errors.push(MissingKeyError {
+                        source: source.to_string(),
+                        key: source.to_string(),
+                        expected_type: "loadable".to_string(),
+                        env_hint: source.to_uppercase().replace('.', "_"),
+                        description: Some(msg),
+                    });
+                }
             }
         }
     }
