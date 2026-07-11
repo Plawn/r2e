@@ -59,7 +59,8 @@ AppBuilder::new()
 
 Plugins are installed in registration order. Some have ordering requirements:
 
-- `NormalizePath` and `EmbeddedFrontend` should be installed last (they use `should_be_last()` hint — R2E warns if plugins are added after them)
+- `NormalizePath` can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router
+- `EmbeddedFrontend` should be installed last (plugins may use the `should_be_last()` hint — R2E warns if plugins are added after one that sets it)
 - `Tracing` should be early to capture all requests
 - `ErrorHandling` should be after `Tracing` but before route registration
 

@@ -63,7 +63,7 @@ Runtime constraints:
 
 - If **two registered controllers** both declare a `#[fallback]`, the router build panics (axum allows a single fallback per app: `Cannot merge two Routers that both have a fallback`).
 - **Declared routes always win.** A path that matches with the wrong method returns **405**, not the fallback (correct HTTP semantics).
-- **NormalizePath composes**: with the `NormalizePath` plugin enabled, a trailing-slash request is normalized first; if it still matches nothing, it lands in the controller fallback.
+- **NormalizePath composes**: with the `NormalizePath` plugin enabled, the trailing slash is stripped by a pre-routing URI rewrite; the trimmed request is routed once, and if it matches nothing it lands in the controller fallback. Note the rewrite also collapses a leading run of slashes (`//x` → `/x`), so a gateway fallback forwards the normalized path, not the raw one.
 
 ## Raw `Request` and streaming responses
 

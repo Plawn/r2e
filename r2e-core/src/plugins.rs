@@ -238,9 +238,20 @@ impl Plugin for DevReload {
 /// This ensures consistent routing regardless of whether clients include
 /// a trailing slash.
 ///
-/// Uses a router fallback approach: when no route matches and the path has a
-/// trailing slash, the request is re-dispatched with the slash stripped. This
-/// can be installed at any point in the plugin chain.
+/// Implemented as a pre-routing URI rewrite (tower-http `NormalizePath`)
+/// wrapping the whole router: the slash is stripped before routing, so the
+/// request is routed exactly once and carries `MatchedPath` through all
+/// instrumentation layers (metrics, tracing). It can be installed at any
+/// point in the plugin chain.
+///
+/// Notes on the exact rewrite semantics (tower-http `trim_trailing_slash`):
+///
+/// - Routes declared with a literal trailing slash (e.g. `#[get("/foo/")]`)
+///   are unreachable — the incoming path is always trimmed first.
+/// - A leading run of slashes is also collapsed: `//admin` is rewritten to
+///   `/admin` and routed there (without the plugin it would be a 404). This
+///   matters for raw-path consumers such as `#[fallback]` gateway proxies,
+///   which see and forward the normalized path.
 pub struct NormalizePath;
 
 impl Plugin for NormalizePath {

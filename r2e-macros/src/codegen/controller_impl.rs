@@ -204,10 +204,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #(#register_meta_stmts)*
             }
 
-            fn has_fallback() -> bool {
-                #has_fallback
-            }
-
             #register_consumers_fn
 
             #scheduled_tasks_fn

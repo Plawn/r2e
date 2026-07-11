@@ -340,8 +340,8 @@ async fn normalize_path_composes_with_fallback() {
 
 #[r2e_core::test]
 async fn normalize_path_without_fallback_still_404s() {
-    // No controller fallback: plain misses take the direct-404 fast path
-    // (no re-dispatch), trailing-slash misses still normalize then 404.
+    // No controller fallback: plain misses 404, trailing-slash misses
+    // normalize (pre-routing rewrite) then 404.
     let router = r2e_core::AppBuilder::new()
         .with_state(())
         .with(r2e_core::plugins::NormalizePath)

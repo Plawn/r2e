@@ -185,12 +185,8 @@ struct BuilderConfig {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// Name of the last plugin that should be installed last (for ordering validation).
     last_plugin_name: Option<&'static str>,
-    /// Whether to install a trailing-slash normalization fallback.
+    /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
-    /// Whether a registered controller declared a `#[fallback]` route. Lets
-    /// the NormalizePath fallback skip the re-dispatch on plain misses when
-    /// there is no controller fallback to reach.
-    has_controller_fallback: bool,
     /// Whether the DevReload plugin has been applied (prevents double-install).
     dev_reload_applied: bool,
     /// Maximum time allowed for shutdown hooks to complete before force-exiting.
