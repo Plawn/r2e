@@ -6,6 +6,7 @@
 pub mod body;
 pub mod extract;
 pub mod header;
+pub mod labels;
 pub mod middleware;
 pub mod response;
 pub mod routing;
