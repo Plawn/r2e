@@ -3,6 +3,11 @@ use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
 pub mod proto {
     tonic::include_proto!("greeter");
+
+    /// Encoded `FileDescriptorSet` emitted by `build.rs`
+    /// (`file_descriptor_set_path`), consumed by gRPC server reflection.
+    pub const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("greeter_descriptor");
 }
 
 use proto::{HelloReply, HelloRequest};
@@ -59,7 +64,7 @@ pub struct GreeterService {
     greeting_prefix: GreetingPrefix,
 }
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl GreeterService {
     #[intercept(LogCalls::spec("grpc"))]
     async fn say_hello(
@@ -105,7 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = GreetingPrefix("Hello".to_string());
 
     let app = AppBuilder::new()
-        .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+        // Reflection serves the descriptor set collected from the services
+        // above: `grpcurl -plaintext localhost:50051 list` works out of the box.
+        .plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())
         .provide(prefix)
         .provide(CallLog::default())
         .build_state()

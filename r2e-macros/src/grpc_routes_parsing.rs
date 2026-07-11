@@ -4,12 +4,59 @@ use crate::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
 use crate::types::{IdentityParam, MethodDecorators};
 
+/// Parsed arguments of the `#[grpc_routes(...)]` attribute:
+/// `TraitPath` optionally followed by `, descriptor = <expr>`.
+pub struct GrpcRoutesArgs {
+    /// The tonic-generated service trait path.
+    pub service_trait: syn::Path,
+    /// Expression evaluating to the service's encoded `FileDescriptorSet`
+    /// (`&'static [u8]`), used by gRPC server reflection.
+    pub descriptor: Option<syn::Expr>,
+}
+
+impl syn::parse::Parse for GrpcRoutesArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let service_trait: syn::Path = input.parse()?;
+        let mut descriptor = None;
+        while input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let key: syn::Ident = input.parse()?;
+            if key == "descriptor" {
+                if descriptor.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &key,
+                        "duplicate `descriptor` argument on #[grpc_routes]",
+                    ));
+                }
+                input.parse::<syn::Token![=]>()?;
+                descriptor = Some(input.parse()?);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    format!(
+                        "unknown #[grpc_routes] argument `{key}`; expected `descriptor = <expr>`"
+                    ),
+                ));
+            }
+        }
+        Ok(Self {
+            service_trait,
+            descriptor,
+        })
+    }
+}
+
 /// Parsed representation of a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
 pub struct GrpcRoutesImplDef {
     /// The controller struct name (e.g., `UserGrpcService`).
     pub controller_name: syn::Ident,
     /// The tonic-generated service trait path (e.g., `proto::user_service_server::UserService`).
     pub service_trait: syn::Path,
+    /// Expression for the service's encoded `FileDescriptorSet`, if declared.
+    pub descriptor: Option<syn::Expr>,
     /// Controller-level interceptors applied to all methods.
     pub controller_intercepts: Vec<syn::Expr>,
     /// gRPC methods with their attributes.
@@ -75,9 +122,13 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 
 /// Parse a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
 pub fn parse(
-    service_trait: syn::Path,
+    args: GrpcRoutesArgs,
     item: syn::ItemImpl,
 ) -> syn::Result<GrpcRoutesImplDef> {
+    let GrpcRoutesArgs {
+        service_trait,
+        descriptor,
+    } = args;
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
         syn::Type::Path(ref type_path) => type_path
@@ -139,6 +190,7 @@ pub fn parse(
     Ok(GrpcRoutesImplDef {
         controller_name,
         service_trait,
+        descriptor,
         controller_intercepts,
         methods,
         other_methods,

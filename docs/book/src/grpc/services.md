@@ -251,19 +251,43 @@ HTTP controllers use `#[routes]`, gRPC services use `#[grpc_routes]`. Both const
 
 ## gRPC reflection
 
-Enable server reflection for introspection tools like `grpcurl` and gRPC UI:
+Enable server reflection for introspection tools like `grpcurl` and gRPC UI. Reflection needs the encoded `FileDescriptorSet` of your protos, so three pieces cooperate:
+
+1. **build.rs** — emit the descriptor set next to the generated code:
 
 ```rust
+tonic_prost_build::configure()
+    .file_descriptor_set_path(out_dir.join("greeter_descriptor.bin"))
+    .compile_protos(&["proto/greeter.proto"], &["proto"])?;
+```
+
+2. **Proto module** — expose the bytes:
+
+```rust
+pub mod proto {
+    tonic::include_proto!("greeter");
+    pub const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("greeter_descriptor");
+}
+```
+
+3. **Service + plugin** — declare the set on the service and enable reflection:
+
+```rust
+#[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+impl GreeterService { /* ... */ }
+
 AppBuilder::new()
     .plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())
 ```
 
-This requires the `reflection` feature on `r2e-grpc`:
+Each `register_grpc_service` contributes its service's descriptor set to the reflection registry (identical sets are stored once). For descriptor sets not carried by a service, use `with_reflection_descriptor(bytes)` — it also implies `with_reflection()`. Both reflection protocol versions (v1 and v1alpha) are served, on both transports (separate port and multiplexed).
+
+This requires the `reflection` feature on `r2e-grpc` (`grpc-reflection` on the `r2e` facade) — without it, `with_reflection()` does not exist and the build fails instead of silently serving no reflection:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["grpc"] }
-r2e-grpc = { version = "0.1", features = ["reflection"] }
+r2e = { version = "0.1", features = ["grpc", "grpc-reflection"] }
 ```
 
 With reflection enabled, clients can discover services without the proto file:
@@ -329,7 +353,8 @@ See [CLI Reference](../reference/cli-reference.md) for full details.
 
 | Method | Description |
 |--------|-------------|
-| `.with_reflection()` | Enable gRPC server reflection (requires `reflection` feature) |
+| `.with_reflection()` | Enable gRPC server reflection, v1 + v1alpha (requires `reflection` feature) |
+| `.with_reflection_descriptor(bytes)` | Enable reflection and register an extra encoded `FileDescriptorSet` |
 
 | Builder method | Description |
 |----------------|-------------|

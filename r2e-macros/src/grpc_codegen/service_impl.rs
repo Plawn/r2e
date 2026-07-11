@@ -49,12 +49,27 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
     // the server is `proto::user_service_server::UserServiceServer`.
     let server_path = derive_server_path(service_trait);
 
-    // The service name is derived from the trait name.
-    let service_name = service_trait
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default();
+    // The service name comes from tonic's generated `SERVICE_NAME` const in
+    // the `*_server` module (the trait path's parent) — the fully-qualified
+    // proto name (e.g. "greeter.Greeter"), so logs, the registry, and the
+    // reflection listing all use one naming convention. A single-segment
+    // trait path has no visible parent module; fall back to the bare ident.
+    let service_name = if service_trait.segments.len() >= 2 {
+        let leading = &service_trait.leading_colon;
+        let module_segments: Vec<_> = service_trait
+            .segments
+            .iter()
+            .take(service_trait.segments.len() - 1)
+            .collect();
+        quote! { #leading #(#module_segments)::* ::SERVICE_NAME }
+    } else {
+        let name = service_trait
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default();
+        quote! { #name }
+    };
 
     // Prebuild every method's interceptor set from the resolved graph — once,
     // at registration, exactly like route decorator sets — into the single
@@ -77,11 +92,23 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
         quote! {}
     };
 
+    // Override the trait's `None` default only when the attribute declared a
+    // descriptor set (`#[grpc_routes(..., descriptor = <expr>)]`).
+    let descriptor_impl = def.descriptor.as_ref().map(|expr| {
+        quote! {
+            fn file_descriptor_set() -> Option<&'static [u8]> {
+                Some(#expr)
+            }
+        }
+    });
+
     quote! {
         impl #grpc_krate::GrpcService for #controller_name {
             fn service_name() -> &'static str {
                 #service_name
             }
+
+            #descriptor_impl
 
             fn add_to_routes(
                 __routes: #grpc_krate::tonic::service::Routes,

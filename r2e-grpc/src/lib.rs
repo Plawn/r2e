@@ -37,7 +37,7 @@ pub use identity::{
     JwtClaimsValidatorLike,
 };
 pub use multiplex::MultiplexService;
-pub use registry::GrpcServiceRegistry;
+pub use registry::{GrpcServiceRegistry, RegisteredServices};
 pub use server::{GrpcMarker, GrpcServer, GrpcTransport};
 pub use service::GrpcService;
 
@@ -100,7 +100,7 @@ where
             )
             .clone();
 
-        registry.add_service(S::service_name(), |routes| {
+        registry.add_service(S::service_name(), S::file_descriptor_set(), |routes| {
             S::add_to_routes(routes, self.bean_context())
         });
 
