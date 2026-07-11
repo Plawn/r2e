@@ -83,6 +83,14 @@ pub fn validate_section<C: ConfigProperties>(
     let mut errors: Vec<MissingKeyError> = meta.iter()
         .filter(|prop| prop.required && !prop.is_section)
         .filter(|prop| matches!(config.get::<String>(&prop.full_key), Err(ConfigError::NotFound(_))))
+        .filter(|prop| {
+            // A custom `#[config(env = "VAR")]` var satisfies the property even
+            // though `from_config` reads it from the process env, not the map.
+            !prop
+                .env_var
+                .as_deref()
+                .is_some_and(|var| std::env::var(var).is_ok())
+        })
         .map(|prop| MissingKeyError {
             source: source.to_string(),
             key: prop.full_key.clone(),
