@@ -36,14 +36,12 @@ framework at the same seams — those seams are the Tasker #635 gap tasks (W2).
 
 ---
 
-## W1 — Migrate threaty to R2E master → tracked in Tasker
+## W1 — Migrate threaty to R2E master → owned elsewhere
 
-Moved to Tasker (not this repo's work): task "Migrate threaty to R2E master
-(framework validation vehicle)", target `threaty`. The single highest-value
-next step — threaty exercises DI, guards, SSE, OIDC, plugins and the new test
-harness at once; every migration friction becomes an r2e sub-task under
-Tasker #635. The detailed breaking-changes checklist lives in that task (and
-in this file's git history at commit `6d880f6`).
+Handled by the maintainer in a separate work stream (Tasker task, target
+`threaty`) — NOT part of this backlog; do not pick it up from here. Migration
+frictions it surfaces still land as r2e sub-tasks under Tasker #635, and the
+post-migration build serves as the compile-time-scalability data point (W5).
 
 ## W2 — Framework gaps found in real apps → tracked in Tasker #635
 
