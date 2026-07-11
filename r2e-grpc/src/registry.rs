@@ -65,9 +65,7 @@ impl GrpcServiceRegistry {
         guard.routes = add(routes);
         guard.names.push(name);
         if let Some(descriptor) = descriptor {
-            if !guard.descriptors.contains(&descriptor) {
-                guard.descriptors.push(descriptor);
-            }
+            push_unique(&mut guard.descriptors, descriptor);
         }
     }
 
@@ -96,5 +94,14 @@ impl GrpcServiceRegistry {
 impl Default for GrpcServiceRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Store `descriptor` unless an identical set is already present — the single
+/// dedup used everywhere descriptor sets accumulate (registry collection and
+/// the plugin's reflection extras).
+pub(crate) fn push_unique(descriptors: &mut Vec<&'static [u8]>, descriptor: &'static [u8]) {
+    if !descriptors.contains(&descriptor) {
+        descriptors.push(descriptor);
     }
 }

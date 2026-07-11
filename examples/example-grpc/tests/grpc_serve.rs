@@ -10,9 +10,11 @@
 //! `run()`), which exercises the real graceful-shutdown path — including the
 //! awaited gRPC drain on the separate-port transport.
 
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+mod common;
 
+use std::sync::{Arc, Mutex};
+
+use common::{connect_channel, free_port, stop_and_await_clean};
 use r2e::prelude::*;
 use r2e::r2e_grpc::{AppBuilderGrpcExt, GrpcServer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -98,48 +100,9 @@ impl PingController {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/// Pick a free TCP port (bind to :0, read the port, release). The tiny
-/// reuse window before the server binds it is acceptable for tests.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-/// Stop the server via its `StopHandle` and assert `run()` terminated
-/// cleanly — the real graceful-shutdown path, including the awaited gRPC
-/// drain on the separate-port transport.
-async fn stop_and_await_clean(
-    stop: r2e::prelude::StopHandle,
-    server: tokio::task::JoinHandle<Result<(), String>>,
-) {
-    stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s after StopHandle::stop()")
-        .expect("server task panicked");
-    assert!(result.is_ok(), "run() returned an error: {result:?}");
-}
-
-/// Connect a gRPC client with a retry deadline, so the test fails with a
-/// clear panic (instead of hanging) when the server never comes up — which
-/// is exactly what happened before the serve path was wired.
+/// Connect a gRPC client with a retry deadline (see `common::connect_channel`).
 async fn connect_client(port: u16) -> GreeterClient<tonic::transport::Channel> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match GreeterClient::connect(format!("http://127.0.0.1:{port}")).await {
-            Ok(client) => return client,
-            Err(e) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "gRPC server did not come up on port {port}: {e}"
-                );
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
+    GreeterClient::new(connect_channel(port).await)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────

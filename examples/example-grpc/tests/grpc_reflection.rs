@@ -4,8 +4,9 @@
 //! descriptor set declared via `#[grpc_routes(..., descriptor = ...)]`
 //! resolves symbol lookups. Both protocol versions (v1 + v1alpha) are served.
 
-use std::time::{Duration, Instant};
+mod common;
 
+use common::{connect_channel, free_port, stop_and_await_clean};
 use r2e::prelude::*;
 use r2e::r2e_grpc::{AppBuilderGrpcExt, GrpcServer};
 use tonic_reflection::pb::v1::server_reflection_client::ServerReflectionClient;
@@ -48,38 +49,6 @@ impl TestGreeter {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/// Pick a free TCP port (bind to :0, read the port, release). The tiny
-/// reuse window before the server binds it is acceptable for tests.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-/// Connect a tonic channel with a retry deadline, so the test fails with a
-/// clear panic (instead of hanging) when the server never comes up.
-async fn connect_channel(port: u16) -> tonic::transport::Channel {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
-            .unwrap()
-            .connect()
-            .await
-        {
-            Ok(channel) => return channel,
-            Err(e) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "gRPC server did not come up on port {port}: {e}"
-                );
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
-}
-
 /// Send one v1 reflection request and return the single response message.
 async fn reflect_v1(
     channel: tonic::transport::Channel,
@@ -105,9 +74,10 @@ async fn reflect_v1(
 }
 
 /// List services via v1 reflection and assert the user service and the v1
-/// reflection service are advertised. (The v1alpha listing only carries the
-/// v1alpha reflection service — each protocol version's builder registers
-/// its own descriptor; v1alpha service presence is asserted separately.)
+/// reflection service are advertised. (Each protocol version's builder
+/// registers only its own reflection descriptor, so the v1 listing does not
+/// carry `grpc.reflection.v1alpha.ServerReflection` — the v1alpha listing,
+/// asserted separately below, carries the user services plus its own.)
 async fn assert_list_services(channel: tonic::transport::Channel) {
     let response = reflect_v1(channel, MessageRequest::ListServices(String::new())).await;
     let MessageResponse::ListServicesResponse(list) = response else {
@@ -189,12 +159,7 @@ async fn reflection_lists_services_on_separate_port() {
         "expected greeter.Greeter in v1alpha services"
     );
 
-    stop.stop();
-    tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s")
-        .expect("server task panicked")
-        .expect("run() returned an error");
+    stop_and_await_clean(stop, server).await;
 }
 
 #[r2e::test]
@@ -214,10 +179,5 @@ async fn reflection_lists_services_multiplexed() {
     let channel = connect_channel(port).await;
     assert_list_services(channel).await;
 
-    stop.stop();
-    tokio::time::timeout(Duration::from_secs(5), server)
-        .await
-        .expect("server did not stop within 5s")
-        .expect("server task panicked")
-        .expect("run() returned an error");
+    stop_and_await_clean(stop, server).await;
 }

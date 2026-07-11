@@ -25,6 +25,12 @@ impl syn::parse::Parse for GrpcRoutesArgs {
             }
             let key: syn::Ident = input.parse()?;
             if key == "descriptor" {
+                if descriptor.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &key,
+                        "duplicate `descriptor` argument on #[grpc_routes]",
+                    ));
+                }
                 input.parse::<syn::Token![=]>()?;
                 descriptor = Some(input.parse()?);
             } else {

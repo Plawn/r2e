@@ -42,10 +42,11 @@ pub enum GrpcTransport {
 /// ```
 pub struct GrpcServer {
     transport: GrpcTransport,
+    /// `Some(extra descriptor sets)` when reflection is enabled — one field
+    /// carries both the on/off state and the plugin-level extras, so they
+    /// cannot desync.
     #[cfg(feature = "reflection")]
-    reflection: bool,
-    #[cfg(feature = "reflection")]
-    extra_descriptors: Vec<&'static [u8]>,
+    reflection: Option<Vec<&'static [u8]>>,
 }
 
 impl GrpcServer {
@@ -53,9 +54,7 @@ impl GrpcServer {
         Self {
             transport,
             #[cfg(feature = "reflection")]
-            reflection: false,
-            #[cfg(feature = "reflection")]
-            extra_descriptors: Vec::new(),
+            reflection: None,
         }
     }
 
@@ -79,12 +78,16 @@ impl GrpcServer {
     /// [`with_reflection_descriptor`](Self::with_reflection_descriptor) adds
     /// explicit extra sets.
     ///
+    /// Reflection is only installed when at least one gRPC service is
+    /// registered — with no services there is no gRPC server (and nothing
+    /// true to advertise).
+    ///
     /// Requires the `reflection` feature on `r2e-grpc` (`grpc-reflection` on
     /// the `r2e` facade) — without it this method does not exist, so a
     /// misconfigured build fails at compile time.
     #[cfg(feature = "reflection")]
     pub fn with_reflection(mut self) -> Self {
-        self.reflection = true;
+        self.reflection.get_or_insert_with(Vec::new);
         self
     }
 
@@ -99,10 +102,10 @@ impl GrpcServer {
     /// stored once.
     #[cfg(feature = "reflection")]
     pub fn with_reflection_descriptor(mut self, descriptor_set: &'static [u8]) -> Self {
-        self.reflection = true;
-        if !self.extra_descriptors.contains(&descriptor_set) {
-            self.extra_descriptors.push(descriptor_set);
-        }
+        crate::registry::push_unique(
+            self.reflection.get_or_insert_with(Vec::new),
+            descriptor_set,
+        );
         self
     }
 }
@@ -116,12 +119,8 @@ impl PreStatePlugin for GrpcServer {
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> GrpcMarker {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport;
-        // `Some(extra descriptor sets)` when reflection is enabled — resolved
-        // here so the drain sites below stay feature-agnostic apart from one
-        // `apply_reflection` line.
         #[cfg(feature = "reflection")]
-        let reflection: Option<Vec<&'static [u8]>> =
-            self.reflection.then_some(self.extra_descriptors);
+        let reflection = self.reflection;
 
         ctx.add_deferred(DeferredAction::new("GrpcServer", move |dctx| {
             // Store the registry for register_grpc_service to find.
@@ -145,10 +144,7 @@ impl PreStatePlugin for GrpcServer {
                             return;
                         };
                         #[cfg(feature = "reflection")]
-                        let services = match &reflection {
-                            Some(extra) => apply_reflection(services, extra),
-                            None => services,
-                        };
+                        let services = apply_reflection(services, &reflection);
                         let RegisteredServices { routes, names, .. } = services;
                         let cancel = serve_ctx.shutdown_token();
                         let handle = r2e_core::rt::spawn(async move {
@@ -203,10 +199,7 @@ impl PreStatePlugin for GrpcServer {
                     dctx.wrap_router(Box::new(move |router| match registry.take() {
                         Some(services) => {
                             #[cfg(feature = "reflection")]
-                            let services = match &reflection {
-                                Some(extra) => apply_reflection(services, extra),
-                                None => services,
-                            };
+                            let services = apply_reflection(services, &reflection);
                             let RegisteredServices { routes, names, .. } = services;
                             tracing::info!(
                                 services = ?names,
@@ -242,15 +235,23 @@ pub struct GrpcMarker;
 /// Fold the reflection services (v1 + v1alpha, both for client compatibility:
 /// older `grpcurl` speaks v1alpha only) into the drained service set, fed by
 /// the descriptor sets collected at registration plus the plugin-level extras.
+/// A no-op when reflection is disabled (`None`).
+///
+/// Panics when a registered descriptor set fails to decode: reflection was
+/// explicitly requested, so broken bytes fed to `descriptor = ...` /
+/// `with_reflection_descriptor` are a build-pipeline misconfiguration that
+/// must fail startup loudly, not degrade into a silently reflection-less
+/// server. Both call sites run at startup, before any traffic.
 #[cfg(feature = "reflection")]
 fn apply_reflection(
     mut services: RegisteredServices,
-    extra_descriptors: &[&'static [u8]],
+    reflection: &Option<Vec<&'static [u8]>>,
 ) -> RegisteredServices {
+    let Some(extra_descriptors) = reflection else {
+        return services;
+    };
     for descriptor in extra_descriptors {
-        if !services.descriptors.contains(descriptor) {
-            services.descriptors.push(descriptor);
-        }
+        crate::registry::push_unique(&mut services.descriptors, descriptor);
     }
     if services.descriptors.is_empty() {
         tracing::warn!(
@@ -261,28 +262,25 @@ fn apply_reflection(
         );
     }
 
-    let mut v1 = tonic_reflection::server::Builder::configure();
-    let mut v1alpha = tonic_reflection::server::Builder::configure();
-    for descriptor in &services.descriptors {
-        v1 = v1.register_encoded_file_descriptor_set(descriptor);
-        v1alpha = v1alpha.register_encoded_file_descriptor_set(descriptor);
-    }
-    match (v1.build_v1(), v1alpha.build_v1alpha()) {
-        (Ok(v1), Ok(v1alpha)) => {
-            services.routes = services.routes.add_service(v1).add_service(v1alpha);
-            services.names.push("grpc.reflection.v1.ServerReflection");
-            services.names.push("grpc.reflection.v1alpha.ServerReflection");
+    let register = |mut builder: tonic_reflection::server::Builder<'static>| {
+        for descriptor in &services.descriptors {
+            builder = builder.register_encoded_file_descriptor_set(descriptor);
         }
-        (Err(e), _) | (_, Err(e)) => {
-            // A descriptor set that fails to decode is a build-pipeline bug
-            // (wrong bytes fed to `descriptor = ...`); the user services still
-            // work, so serve them and surface the error instead of aborting.
-            tracing::error!(
-                error = %e,
-                "Failed to build the gRPC reflection service from the registered \
-                 file descriptor sets; reflection NOT installed"
-            );
-        }
-    }
+        builder
+    };
+    let v1 = register(tonic_reflection::server::Builder::configure())
+        .build_v1()
+        .expect(
+            "gRPC reflection: a registered file descriptor set failed to decode — check the \
+             bytes passed to `#[grpc_routes(..., descriptor = ...)]` / \
+             `with_reflection_descriptor` (must be `tonic_prost_build` \
+             `file_descriptor_set_path` output)",
+        );
+    let v1alpha = register(tonic_reflection::server::Builder::configure())
+        .build_v1alpha()
+        .expect("gRPC reflection: v1alpha build failed on descriptor sets v1 accepted");
+    services.routes = services.routes.add_service(v1).add_service(v1alpha);
+    services.names.push("grpc.reflection.v1.ServerReflection");
+    services.names.push("grpc.reflection.v1alpha.ServerReflection");
     services
 }
