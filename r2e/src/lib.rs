@@ -155,6 +155,9 @@ pub mod prelude {
     #[cfg(feature = "events")]
     pub use r2e_events::prelude::*;
 
+    #[cfg(feature = "scheduler")]
+    pub use r2e_scheduler::prelude::*;
+
     #[cfg(feature = "events-iggy")]
     pub use r2e_events_iggy::prelude::*;
 

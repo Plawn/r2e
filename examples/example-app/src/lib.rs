@@ -185,6 +185,14 @@ pub async fn app_with_env(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is
         // broadcast on the topic (served at /sse/users) with no liaison code.
         .bridge_sse::<LocalEventBus, models::UserCreatedEvent>()
+        // Dynamic scheduled task: the schedule is parsed from a string at
+        // runtime (config-driven), unlike the #[scheduled] methods on
+        // ScheduledJobs. Both show up in the ScheduledJobRegistry bean.
+        .schedule_task(ScheduledTaskDef::from_fn(
+            "dynamic_heartbeat",
+            "30s".parse().expect("valid schedule"),
+            || async { tracing::debug!("dynamic heartbeat tick") },
+        ))
         .with(Health)
         .with(RequestIdPlugin)
         .with(SecureHeaders::default())

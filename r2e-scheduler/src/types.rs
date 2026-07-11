@@ -21,6 +21,91 @@ pub enum ScheduleConfig {
     Cron(String),
 }
 
+/// Error returned when a schedule string cannot be parsed.
+#[derive(Debug, Clone)]
+pub struct ScheduleParseError {
+    message: String,
+}
+
+impl std::fmt::Display for ScheduleParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ScheduleParseError {}
+
+/// Parse a schedule from a string — the config-driven counterpart of
+/// `#[scheduled(every = "...")]` / `#[scheduled(cron = "...")]`.
+///
+/// - A duration string (`"30s"`, `"5m"`, `"1h30m"`) becomes [`ScheduleConfig::Interval`].
+/// - A cron expression (contains whitespace, or starts with `@` like `"@hourly"`)
+///   is validated and becomes [`ScheduleConfig::Cron`].
+///
+/// ```ignore
+/// let every: ScheduleConfig = "30s".parse()?;
+/// let nightly: ScheduleConfig = "0 0 2 * * *".parse()?;
+/// ```
+impl std::str::FromStr for ScheduleConfig {
+    type Err = ScheduleParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(ScheduleParseError {
+                message: "empty schedule string (expected a duration like \"30s\" or a cron expression)"
+                    .to_string(),
+            });
+        }
+
+        if s.contains(char::is_whitespace) || s.starts_with('@') {
+            s.parse::<cron::Schedule>().map_err(|e| ScheduleParseError {
+                message: format!("invalid cron expression '{}': {}", s, e),
+            })?;
+            Ok(ScheduleConfig::Cron(s.to_string()))
+        } else {
+            crate::duration::parse_duration(s)
+                .map(ScheduleConfig::Interval)
+                .map_err(|e| ScheduleParseError {
+                    message: format!(
+                        "invalid schedule '{}': {} (expected a duration like \"30s\" or a cron expression)",
+                        s, e
+                    ),
+                })
+        }
+    }
+}
+
+/// Read a schedule from configuration, enabling
+/// `#[config("app.sync.schedule")] schedule: ScheduleConfig` and
+/// config-driven dynamic task registration.
+///
+/// Accepts a string (duration or cron, see the [`FromStr`](#impl-FromStr-for-ScheduleConfig)
+/// impl) or an integer interpreted as seconds — mirroring `#[scheduled(every = 30)]`.
+impl r2e_core::config::FromConfigValue for ScheduleConfig {
+    fn from_config_value(
+        value: &r2e_core::config::ConfigValue,
+        key: &str,
+    ) -> Result<Self, r2e_core::config::ConfigError> {
+        use r2e_core::config::{ConfigError, ConfigValue};
+        match value {
+            ConfigValue::String(s) => s.parse().map_err(|e: ScheduleParseError| {
+                ConfigError::Deserialize {
+                    key: key.to_string(),
+                    message: e.message,
+                }
+            }),
+            ConfigValue::Integer(i) if *i > 0 => {
+                Ok(ScheduleConfig::Interval(Duration::from_secs(*i as u64)))
+            }
+            _ => Err(ConfigError::TypeMismatch {
+                key: key.to_string(),
+                expected: "schedule string (duration or cron expression) or positive integer seconds",
+            }),
+        }
+    }
+}
+
 /// A scheduled task that can be started.
 ///
 /// This trait uses `self: Box<Self>` to allow the task to take ownership
@@ -69,6 +154,81 @@ pub struct ScheduledTaskDef<T: Clone + Send + Sync + 'static> {
     pub schedule: ScheduleConfig,
     pub state: T,
     pub task: Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+}
+
+impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
+    /// Create a task definition from a name, a schedule, captured state, and
+    /// an async closure receiving a clone of the state on every tick.
+    ///
+    /// The closure may return `()` or `Result<(), E: Display>` — errors are
+    /// logged under the task name (same contract as `#[scheduled]` methods).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let task = ScheduledTaskDef::new(
+    ///     "sync_source",
+    ///     "5m".parse()?,
+    ///     source_service.clone(),
+    ///     |svc| async move { svc.sync().await },
+    /// );
+    /// ```
+    pub fn new<F, Fut>(
+        name: impl Into<String>,
+        schedule: ScheduleConfig,
+        state: T,
+        task: F,
+    ) -> Self
+    where
+        F: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: ScheduledResult,
+    {
+        let name = name.into();
+        let task_name = name.clone();
+        Self {
+            name,
+            schedule,
+            state,
+            task: Box::new(move |state| {
+                let fut = task(state);
+                let task_name = task_name.clone();
+                Box::pin(async move { fut.await.log_if_err(&task_name) })
+            }),
+        }
+    }
+
+    /// Type-erase this definition into the `Box<dyn Any + Send>` shape stored
+    /// in the core task registry (`Box<Box<dyn ScheduledTask>>` internally —
+    /// the counterpart of [`extract_tasks`]).
+    ///
+    /// Most callers should use `AppBuilderSchedulerExt::schedule_task`
+    /// instead, which does this and the registry insertion in one step.
+    pub fn into_boxed_any(self) -> Box<dyn Any + Send> {
+        let boxed: Box<dyn ScheduledTask> = Box::new(self);
+        Box::new(boxed)
+    }
+}
+
+impl ScheduledTaskDef<()> {
+    /// Create a stateless task definition from a name, a schedule, and an
+    /// async closure. State the task needs should be moved into the closure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let task = ScheduledTaskDef::from_fn("heartbeat", "30s".parse()?, || async {
+    ///     tracing::info!("still alive");
+    /// });
+    /// ```
+    pub fn from_fn<F, Fut>(name: impl Into<String>, schedule: ScheduleConfig, task: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: ScheduledResult,
+    {
+        Self::new(name, schedule, (), move |()| task())
+    }
 }
 
 impl<T: Clone + Send + Sync + 'static> ScheduledTask for ScheduledTaskDef<T> {
