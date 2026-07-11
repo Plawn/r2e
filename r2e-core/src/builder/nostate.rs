@@ -22,6 +22,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 shutdown_grace_period: None,
                 active_profile: "default".to_string(),
                 forced_profile: None,
+                config_file: None,
                 config_overrides: Vec::new(),
                 stop_handle: None,
             },
@@ -263,6 +264,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         mut self,
         mut config: crate::config::R2eConfig,
     ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R, Mods> {
+        assert!(
+            self.shared.config_file.is_none(),
+            "with_config_file() was set but with_config() supplies a pre-loaded \
+             R2eConfig — the custom file would be silently ignored. Either load it \
+             yourself (R2eConfig::load_from) or use load_config() instead."
+        );
         for (key, value) in self.shared.config_overrides.drain(..) {
             config.set(&key, value);
         }
@@ -276,7 +283,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Load configuration and provide it to the builder.
     ///
     /// Combines loading, optional typed construction, and registration in one call:
-    /// 1. Loads `application.yaml` + `.env` + env var overlay
+    /// 1. Loads `application.yaml` (or the file set via
+    ///    [`with_config_file`](Self::with_config_file)) + `.env` + env var overlay
     /// 2. If `C` implements [`ConfigProperties`](crate::config::ConfigProperties),
     ///    constructs the typed config and provides it as a bean
     /// 3. Stores the raw config + provides `R2eConfig` in the bean registry
@@ -302,9 +310,14 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     where
         C::Children: TAppend<P>,
     {
-        let mut config =
-            crate::config::R2eConfig::load_profiled(self.shared.forced_profile.as_deref())
-                .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+        let profile = self.shared.forced_profile.as_deref();
+        // An explicitly requested file must exist (load_profiled_from is
+        // strict, and its error names the file); the default is optional.
+        let mut config = match self.shared.config_file.take() {
+            Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile),
+            None => crate::config::R2eConfig::load_profiled(profile),
+        }
+        .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
         for (key, value) in self.shared.config_overrides.drain(..) {
             config.set(&key, value);
         }
@@ -363,6 +376,25 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 self.shared.config_overrides.push((key.into(), value.into()));
             }
         }
+        self
+    }
+
+    /// Use a custom base config file instead of `application.yaml`.
+    ///
+    /// Applies to a later [`load_config`](Self::load_config). The profile
+    /// overlay file is derived from the base name (`patina.yaml` + profile
+    /// `test` → `patina-test.yaml`); secret resolution, the env overlay, and
+    /// [`override_config_value`](Self::override_config_value) apply as usual.
+    /// Combining this with [`with_config`](Self::with_config) (a pre-loaded
+    /// config) is a panic — the file could not be honored.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .with_config_file("patina.yaml")
+    ///     .load_config::<RootConfig>()
+    /// ```
+    pub fn with_config_file(mut self, file: impl Into<std::path::PathBuf>) -> Self {
+        self.shared.config_file = Some(file.into());
         self
     }
 
