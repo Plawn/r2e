@@ -130,8 +130,10 @@ impl R2eConfig {
 
     /// Load configuration for a specific profile.
     ///
-    /// [`load_from_with_resolver`](Self::load_from_with_resolver) with the
-    /// default `application.yaml` base file.
+    /// Same pipeline as
+    /// [`load_from_with_resolver`](Self::load_from_with_resolver), with the
+    /// default `application.yaml` base file — except a missing base file is
+    /// tolerated here (apps may run on env vars alone).
     pub fn load_profiled_with_resolver(
         profile: Option<&str>,
         resolver: &dyn SecretResolver,
