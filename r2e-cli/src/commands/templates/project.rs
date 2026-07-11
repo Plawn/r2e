@@ -1,5 +1,10 @@
 use super::super::new_project::{DbKind, ProjectOptions};
 
+/// Rust identifier for the crate (Cargo maps `-` to `_` in target names).
+fn crate_ident(name: &str) -> String {
+    name.replace('-', "_")
+}
+
 pub fn cargo_toml(opts: &ProjectOptions) -> String {
     let mut r2e_features = Vec::new();
     if opts.auth {
@@ -85,13 +90,18 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}{openapi_dep}{grpc_deps}
+
+[dev-dependencies]
+r2e-test = "0.1"
 {grpc_build_deps}"#
     )
 }
 
-pub fn main_rs(opts: &ProjectOptions) -> String {
+/// The application blueprint (`lib.rs`). Everything except `main()` lives
+/// here so integration tests can boot the exact same app via
+/// `#[r2e::test(app = <crate>::app)]`.
+pub fn lib_rs(opts: &ProjectOptions) -> String {
     let mut imports = String::from("use r2e::prelude::*;\n");
-    imports.push_str("use r2e::plugins::{Health, Tracing};\n");
 
     if opts.openapi {
         imports.push_str("use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};\n");
@@ -108,7 +118,7 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
             .push_str("use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};\n");
     }
 
-    imports.push_str("\nmod controllers;\n\n");
+    imports.push_str("\npub mod controllers;\n\n");
     imports.push_str("use controllers::hello::HelloController;\n");
 
     // Producers — construct config-driven beans that feed the DI graph.
@@ -157,7 +167,7 @@ async fn jwt_validator(
     // `.build_state().await`, which infers the application state from the
     // provision list. Plugins and controllers are wired afterward.
     let mut lines: Vec<String> = Vec::new();
-    lines.push("    AppBuilder::new()".to_string());
+    lines.push("    b".to_string());
 
     if opts.scheduler {
         lines.push("        .plugin(Scheduler)".to_string());
@@ -165,10 +175,8 @@ async fn jwt_validator(
     if opts.grpc {
         lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
     }
-    if opts.db.is_some() || opts.auth {
-        // Config-driven producers need the runtime config loaded first.
-        lines.push("        .load_config::<()>()".to_string());
-    }
+    // serve_auto() reads server.host/server.port, so config is always loaded.
+    lines.push("        .load_config::<()>()".to_string());
     if opts.events {
         lines.push("        .provide(LocalEventBus::new())".to_string());
     }
@@ -192,18 +200,60 @@ async fn jwt_validator(
     }
 
     lines.push("        .register_controller::<HelloController>()".to_string());
-    lines.push("        .serve(\"0.0.0.0:3000\")".to_string());
-    lines.push("        .await".to_string());
-    lines.push("        .unwrap();".to_string());
 
     let builder = lines.join("\n");
 
     format!(
         r#"// #![recursion_limit = "512"]  // uncomment if you register more than ~127 beans
 {imports}{producers}
+/// Application blueprint: assemble the full app on the given builder.
+///
+/// `main.rs` serves this in production; integration tests boot the **same**
+/// app via `#[r2e::test(app = ...)]` — never re-declare controllers in tests.
+pub async fn app(b: AppBuilder) -> impl BootableApp {{
+{builder}
+}}
+"#
+    )
+}
+
+/// Thin binary entry point — boots the blueprint and serves.
+pub fn main_rs(opts: &ProjectOptions) -> String {
+    let ident = crate_ident(&opts.name);
+    format!(
+        r#"use r2e::prelude::*;
+
 #[r2e::main]
 async fn main() {{
-{builder}
+    {ident}::app(AppBuilder::new())
+        .await
+        .serve_auto() // reads server.host / server.port from application.yaml
+        .await
+        .unwrap();
+}}
+"#
+    )
+}
+
+/// Integration test booting the real blueprint.
+pub fn app_test(opts: &ProjectOptions) -> String {
+    let ident = crate_ident(&opts.name);
+    format!(
+        r#"//! Integration tests boot the real application blueprint — the same app
+//! `main()` serves. See AGENTS.md for the testing rules.
+
+use r2e_test::TestApp;
+
+#[r2e::test(app = {ident}::app)]
+async fn hello_works(app: TestApp) {{
+    let resp = app.get("/").send().await;
+    resp.assert_ok();
+    assert_eq!(resp.text(), "Hello, World!");
+}}
+
+#[r2e::test(app = {ident}::app)]
+async fn health_works(app: TestApp) {{
+    app.get("/health").send().await.assert_ok();
 }}
 "#
     )
@@ -214,6 +264,9 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
     let mut yaml = format!(
         r#"app:
   name: "{name}"
+
+# Read by serve_auto()
+server:
   port: 3000
 "#
     );
@@ -260,6 +313,77 @@ impl HelloController {
     }
 }
 "#
+}
+
+/// Agent-facing instructions dropped into every generated project.
+/// Keeps AI coding assistants on the idiomatic R2E path instead of
+/// falling back to raw axum patterns.
+pub fn agents_md(opts: &ProjectOptions) -> String {
+    let ident = crate_ident(&opts.name);
+    format!(
+        r#"# AGENTS.md — working on this R2E project
+
+This project uses [R2E](https://github.com/Plawn/r2e), a Quarkus-like
+ergonomic layer over axum: declarative controllers, compile-time DI, and
+zero runtime reflection. R2E wraps axum — **always reach for the R2E
+construct first**; dropping to raw axum forfeits DI, guards, interceptors,
+OpenAPI, and TestApp integration. The full AI-facing API reference is
+`llm.txt` at the root of the R2E repository.
+
+## Architecture rules
+
+- **Blueprint pattern**: the whole app is assembled in `src/lib.rs` inside
+  `pub async fn app(b: AppBuilder) -> impl BootableApp`. `src/main.rs` only
+  boots it. Add new controllers/beans/plugins to the blueprint — never to
+  `main.rs`, and never build a second `AppBuilder`.
+- **State is inferred**: there is no state struct. `.provide(bean)` /
+  `.register::<T>()` before `.build_state().await`; inject by type with
+  `#[inject]` fields. A missing bean is a compile error at
+  `register_controller()`.
+- **Endpoints are controllers**: a `#[controller(path = "...")]` struct +
+  `#[routes]` impl per resource. New endpoint → new method on a controller
+  (or a new controller registered in the blueprint).
+
+## Do X, not Y (axum habits to avoid)
+
+| You want | Do NOT write | Write instead |
+|---|---|---|
+| Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` |
+| Public routes on a protected controller | Optional extractors everywhere | `#[anonymous]` on the route (fail-closed) |
+| Authorization | Middleware / in-handler `if` | A `Guard` (`#[guard(...)]`) or `#[roles("admin")]` |
+| Catch-all / proxy | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{{*path}}")]` route |
+| Shared services | `State<Arc<...>>` | `.provide()` / `.register::<T>()` + `#[inject]` |
+| Config values | `std::env` / lazy statics | `#[config("key")]` or typed `ConfigProperties` sections |
+| Logging/timing/caching | Tower middleware per concern | `#[intercept(Logged::info())]` / `Timed` / `Cache` |
+| Background jobs | `tokio::spawn` in main | `#[scheduled(every = "5m")]` methods |
+| Errors | Hand-rolled `IntoResponse` | `HttpError` or `#[derive(ApiError)]` |
+
+## Testing rules
+
+- Integration tests boot the **real blueprint**:
+  `#[r2e::test(app = {ident}::app)] async fn t(app: TestApp)`.
+  Never re-declare controllers or routers in tests.
+- `.as_user("alice", &["admin"])` mints a valid JWT (no IdP needed).
+- Pin mocks / patch config in the boot hook:
+  `#[r2e::test(app = {ident}::app, with = |b| b.override_bean(MockMailer::new())
+  .override_config_value("database.url", url))]`.
+- Test-profile config goes in `application-test.yaml` (auto-overlaid).
+- Tests live in `tests/`, one file per feature area.
+
+## Commands
+
+- `cargo check` / `cargo test` — verify.
+- `r2e generate controller <Name>` — scaffold a controller.
+- `r2e routes` — list registered routes. `r2e doctor` — diagnose setup.
+- `r2e dev` — run with hot reload.
+"#
+    )
+}
+
+/// Claude Code reads CLAUDE.md; keep a single source of truth by importing
+/// the tool-agnostic AGENTS.md.
+pub fn claude_md() -> &'static str {
+    "@AGENTS.md\n"
 }
 
 pub fn greeter_proto(project_name: &str) -> String {

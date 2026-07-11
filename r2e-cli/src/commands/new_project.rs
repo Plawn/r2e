@@ -148,6 +148,7 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
     );
 
     fs::create_dir_all(project_dir.join("src/controllers"))?;
+    fs::create_dir_all(project_dir.join("tests"))?;
 
     // 1. Cargo.toml
     fs::write(
@@ -155,10 +156,19 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         templates::project::cargo_toml(opts),
     )?;
 
-    // 2. main.rs
+    // 2. Blueprint (lib.rs) + thin entry point (main.rs) + integration test.
+    //    The same `app()` boots in production and in tests.
+    fs::write(
+        project_dir.join("src/lib.rs"),
+        templates::project::lib_rs(opts),
+    )?;
     fs::write(
         project_dir.join("src/main.rs"),
         templates::project::main_rs(opts),
+    )?;
+    fs::write(
+        project_dir.join("tests/app.rs"),
+        templates::project::app_test(opts),
     )?;
 
     // 3. Hello controller
@@ -177,12 +187,23 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         templates::project::application_yaml(opts),
     )?;
 
-    // 5. Migrations directory if DB selected
+    // 5. Agent-facing docs: AGENTS.md is the source of truth, CLAUDE.md
+    //    imports it so AI assistants stay on the idiomatic R2E path.
+    fs::write(
+        project_dir.join("AGENTS.md"),
+        templates::project::agents_md(opts),
+    )?;
+    fs::write(
+        project_dir.join("CLAUDE.md"),
+        templates::project::claude_md(),
+    )?;
+
+    // 6. Migrations directory if DB selected
     if opts.db.is_some() {
         fs::create_dir_all(project_dir.join("migrations"))?;
     }
 
-    // 6. gRPC scaffolding
+    // 7. gRPC scaffolding
     if opts.grpc {
         fs::create_dir_all(project_dir.join("proto"))?;
         fs::write(
@@ -195,7 +216,7 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         )?;
     }
 
-    // 7. .gitignore
+    // 8. .gitignore
     fs::write(project_dir.join(".gitignore"), "/target\n")?;
 
     println!(
@@ -205,7 +226,8 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
     );
     println!();
     println!("  cd {}", opts.name);
-    println!("  cargo run");
+    println!("  cargo run     # serve");
+    println!("  cargo test    # boots the same app via the blueprint");
     println!();
 
     if opts.openapi {
