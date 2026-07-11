@@ -86,6 +86,37 @@ fn test_property_meta_resolvable_probe() {
     assert!(!url.is_resolvable(&config));
 }
 
+// Section probe: a `#[config(section)]` property resolves when any key lives
+// under its prefix (`has_prefix`), mirroring from_config's presence check.
+// Unreachable through validate_section (sections are never required) but part
+// of the public `is_resolvable` oracle, so pin its semantics here.
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct ProbeChildConfig {
+    pub host: String,
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct ProbeParentConfig {
+    #[config(section)]
+    pub child: ProbeChildConfig,
+}
+
+#[test]
+fn test_property_meta_resolvable_probe_section() {
+    use r2e_core::config::ConfigProperties;
+
+    let meta = ProbeParentConfig::properties_metadata(Some("app"));
+    let child = meta.iter().find(|m| m.key == "child").unwrap();
+    assert!(child.is_section);
+
+    assert!(!child.is_resolvable(&R2eConfig::empty()));
+
+    let config = R2eConfig::from_yaml_str("app:\n  child:\n    host: \"localhost\"").unwrap();
+    assert!(child.is_resolvable(&config));
+}
+
 // A serde-backed FromConfigValue type: conversion failures surface as
 // ConfigError::Deserialize, which validate_section must report, not swallow.
 #[derive(serde::Deserialize, r2e_macros::FromConfigValue, Clone, Debug)]

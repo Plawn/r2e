@@ -196,25 +196,22 @@ fn consume_prefix_attr(input: &DeriveInput) -> syn::Result<()> {
 /// twin of the `from_config` resolution codegen (`field_inits` below). It must
 /// consult the same explicit-value sources in the same order (config map →
 /// custom `#[config(env = "...")]` var), minus defaults. Any new fallback
-/// source added to the `from_config` codegen (e.g. a secrets provider) must be
-/// added here too — `validate_section` has no other knowledge of resolution
-/// semantics.
+/// source added to the `from_config` codegen (e.g. a secrets provider) must
+/// get a matching probe here — `validate_section` has no other knowledge of
+/// resolution semantics.
 fn resolvability_probe(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
     if f.is_section {
-        // A section resolves when any key lives under its prefix.
+        // A section resolves when any key lives under its prefix — mirrors
+        // the `has_prefix` presence check in the section `field_inits`.
+        // Unreachable through `validate_section` (sections are never
+        // `required`); it serves the public `is_resolvable` oracle.
         return quote! {
             |__config, __meta| __config.has_prefix(&__meta.full_key)
         };
     }
-    match &f.env_var {
-        Some(env_name) => quote! {
-            |__config, __meta| {
-                #krate::config::typed::PropertyMeta::in_config_map(__config, __meta)
-                    || ::std::env::var(#env_name).is_ok()
-            }
-        },
-        None => quote! { #krate::config::typed::PropertyMeta::in_config_map },
-    }
+    // Config map → custom env var, both read as data from the meta itself
+    // (`full_key` / `env_var`), so the probe cannot desync from the fields.
+    quote! { #krate::config::typed::PropertyMeta::standard_sources }
 }
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -969,8 +966,9 @@ fn generate_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<Token
                     description: Some(#tag_description.to_string()),
                     env_var: None,
                     is_section: false,
-                    // The tag is only ever read from the config map.
-                    resolvable: #krate::config::typed::PropertyMeta::in_config_map,
+                    // env_var is None, so this probes the config map only —
+                    // matching from_config, which reads the tag from the map.
+                    resolvable: #krate::config::typed::PropertyMeta::standard_sources,
                 }]
             }
 
