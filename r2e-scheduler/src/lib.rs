@@ -3,9 +3,14 @@
 //! Provides interval, cron, and delayed task execution. Install with
 //! `.plugin(Scheduler)` before `build_state()`.
 
+mod duration;
 mod types;
 
-pub use types::{extract_tasks, ScheduleConfig, ScheduledResult, ScheduledTask, ScheduledTaskDef};
+pub use duration::parse_duration;
+pub use types::{
+    extract_tasks, ScheduleConfig, ScheduleParseError, ScheduledResult, ScheduledTask,
+    ScheduledTaskDef,
+};
 
 use std::any::Any;
 use std::future::Future;
@@ -231,6 +236,94 @@ impl RawPreStatePlugin for Scheduler {
             }))
             .with_updated_types()
     }
+}
+
+/// Extension trait for `AppBuilder` to register scheduled tasks dynamically —
+/// the runtime counterpart of `#[scheduled]` for tasks whose set is only known
+/// at startup (e.g. driven by configuration).
+///
+/// Requires `.plugin(Scheduler)` before `build_state()`; tasks registered here
+/// are started by the scheduler's serve hook alongside `#[scheduled]` tasks
+/// (and show up in [`ScheduledJobRegistry`]). Registration must happen before
+/// `serve()` — the task registry is drained once at serve time.
+///
+/// # Example
+///
+/// ```ignore
+/// use r2e_scheduler::{AppBuilderSchedulerExt, ScheduledTaskDef, Scheduler};
+///
+/// let app = AppBuilder::new()
+///     .plugin(Scheduler)
+///     .provide(sync_service.clone())
+///     .build_state()
+///     .await;
+///
+/// // e.g. one sync task per configured source
+/// let app = sources.iter().fold(app, |app, source| {
+///     let svc = sync_service.clone();
+///     let source = source.clone();
+///     app.schedule_task(ScheduledTaskDef::new(
+///         format!("sync_{}", source.name),
+///         source.schedule.clone(), // ScheduleConfig, e.g. from #[config(...)]
+///         svc,
+///         move |svc| {
+///             let source = source.clone();
+///             async move { svc.sync(&source).await }
+///         },
+///     ))
+/// });
+/// ```
+pub trait AppBuilderSchedulerExt: Sized {
+    /// Register a single dynamic scheduled task.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Scheduler`] plugin was not installed before
+    /// `build_state()`.
+    fn schedule_task<T: Clone + Send + Sync + 'static>(self, task: ScheduledTaskDef<T>) -> Self {
+        self.schedule_tasks([task])
+    }
+
+    /// Register a batch of dynamic scheduled tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Scheduler`] plugin was not installed before
+    /// `build_state()`.
+    fn schedule_tasks<T: Clone + Send + Sync + 'static>(
+        self,
+        tasks: impl IntoIterator<Item = ScheduledTaskDef<T>>,
+    ) -> Self;
+}
+
+impl<S: Clone + Send + Sync + 'static> AppBuilderSchedulerExt for AppBuilder<S> {
+    fn schedule_tasks<T: Clone + Send + Sync + 'static>(
+        self,
+        tasks: impl IntoIterator<Item = ScheduledTaskDef<T>>,
+    ) -> Self {
+        let registry = self
+            .get_plugin_data::<TaskRegistryHandle>()
+            .expect(
+                "Scheduler not installed. Add `.plugin(Scheduler)` before build_state() to register dynamic scheduled tasks.",
+            )
+            .clone();
+
+        let boxed: Vec<_> = tasks
+            .into_iter()
+            .map(ScheduledTaskDef::into_boxed_any)
+            .collect();
+        registry.add_boxed_for::<ScheduledTaskMarker>(boxed);
+
+        self
+    }
+}
+
+pub mod prelude {
+    //! Re-exports of the most commonly used scheduler types.
+    pub use crate::{
+        AppBuilderSchedulerExt, ScheduleConfig, ScheduledJobInfo, ScheduledJobRegistry,
+        ScheduledTaskDef, Scheduler, SchedulerHandle,
+    };
 }
 
 /// Format a schedule config as a human-readable string.
