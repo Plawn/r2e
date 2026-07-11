@@ -51,6 +51,41 @@ db:
     assert!(errors.is_empty(), "key present in map must pass: {errors:?}");
 }
 
+// The generated `PropertyMeta::resolvable` probe is the single resolution
+// oracle consumed by `validate_section` — exercise it directly.
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct ProbeConfig {
+    #[config(env = "TEST_R2E_VALIDATION_PROBE")]
+    pub url: String,
+    pub name: String,
+}
+
+#[test]
+fn test_property_meta_resolvable_probe() {
+    use r2e_core::config::ConfigProperties;
+
+    let empty = R2eConfig::empty();
+    let meta = ProbeConfig::properties_metadata(Some("db"));
+    let url = meta.iter().find(|m| m.key == "url").unwrap();
+    let name = meta.iter().find(|m| m.key == "name").unwrap();
+
+    // Nothing set: neither property resolves.
+    assert!(!url.is_resolvable(&empty));
+    assert!(!name.is_resolvable(&empty));
+
+    // Custom env var satisfies only the `#[config(env)]` property.
+    std::env::set_var("TEST_R2E_VALIDATION_PROBE", "postgres://from-env/db");
+    let url_via_env = url.is_resolvable(&empty);
+    std::env::remove_var("TEST_R2E_VALIDATION_PROBE");
+    assert!(url_via_env);
+
+    // Key in the config map satisfies a plain property.
+    let config = R2eConfig::from_yaml_str("db:\n  name: \"orders\"").unwrap();
+    assert!(name.is_resolvable(&config));
+    assert!(!url.is_resolvable(&config));
+}
+
 // A serde-backed FromConfigValue type: conversion failures surface as
 // ConfigError::Deserialize, which validate_section must report, not swallow.
 #[derive(serde::Deserialize, r2e_macros::FromConfigValue, Clone, Debug)]
