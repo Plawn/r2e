@@ -1,6 +1,7 @@
 use crate::metrics::{dec_in_flight, inc_in_flight, record_request, MetricsConfig};
 use http::{Request, Response};
 use pin_project_lite::pin_project;
+use r2e_core::http::extract::MatchedPath;
 use std::{
     future::Future,
     pin::Pin,
@@ -8,6 +9,12 @@ use std::{
     time::Instant,
 };
 use tower::{Layer, Service};
+
+/// `path` label value for requests no route matched (404s and
+/// `Router::fallback`-handled requests carry no [`MatchedPath`]).
+/// A single sentinel keeps label cardinality bounded under arbitrary-path
+/// scanner traffic.
+pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
 
 /// Tower layer that tracks HTTP request metrics.
 #[derive(Clone)]
@@ -53,14 +60,23 @@ where
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         let method = req.method().to_string();
-        let path = req.uri().path().to_string();
 
-        // Check if this path should be excluded
+        // Exclusion matches on the raw request path (e.g. "/metrics", "/health").
+        let raw_path = req.uri().path();
         let should_track = !self
             .config
             .exclude_paths
             .iter()
-            .any(|p| path.starts_with(p));
+            .any(|p| raw_path.starts_with(p));
+
+        // Label with the matched route template ("/users/{id}") — bounded by the
+        // number of registered routes. Unmatched requests collapse into one
+        // sentinel value instead of minting a series per unique URL.
+        let path = req
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| UNMATCHED_PATH_LABEL.to_string());
 
         if should_track {
             inc_in_flight();
@@ -108,9 +124,7 @@ where
                         Err(_) => 500,
                     };
 
-                    // Normalize path to avoid cardinality explosion
-                    let normalized_path = normalize_path(this.path);
-                    record_request(this.method, &normalized_path, status, duration);
+                    record_request(this.method, this.path, status, duration);
                 }
 
                 Poll::Ready(result)
@@ -118,27 +132,4 @@ where
             Poll::Pending => Poll::Pending,
         }
     }
-}
-
-/// Normalize path to prevent high cardinality.
-/// Replaces numeric path segments with placeholders.
-fn normalize_path(path: &str) -> String {
-    path.split('/')
-        .map(|segment| {
-            if segment.parse::<i64>().is_ok() || is_uuid(segment) {
-                "{id}"
-            } else {
-                segment
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// Check if a string looks like a UUID.
-fn is_uuid(s: &str) -> bool {
-    s.len() == 36
-        && s.chars()
-            .all(|c| c.is_ascii_hexdigit() || c == '-')
-        && s.matches('-').count() == 4
 }

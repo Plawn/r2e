@@ -45,16 +45,21 @@
 //! - `http_requests_total` - Counter with labels: method, path, status
 //! - `http_request_duration_seconds` - Histogram with labels: method, path
 //! - `http_requests_in_flight` - Gauge showing concurrent requests
+//!
+//! The `path` label is the matched route template (e.g. `/users/{id}`), so its
+//! cardinality is bounded by the number of registered routes. Requests that no
+//! route matched (404s, `Router::fallback`) are all recorded under the single
+//! sentinel value [`UNMATCHED_PATH_LABEL`].
 
 mod handler;
 mod layer;
 mod metrics;
 
+pub use layer::{PrometheusLayer, UNMATCHED_PATH_LABEL};
 pub use metrics::{encode_metrics, init_metrics, is_initialized, metrics, registry, MetricsConfig};
 pub use prometheus;
 
 use handler::metrics_handler;
-use layer::PrometheusLayer;
 use r2e_core::http::routing::get;
 use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 
