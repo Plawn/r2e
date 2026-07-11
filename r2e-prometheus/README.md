@@ -38,6 +38,16 @@ The plugin automatically tracks:
 
 Metrics are served at `GET /metrics` in Prometheus text exposition format, ready for scraping.
 
+### Path labels
+
+The `path` label is the matched route template (`/users/{id}`), so cardinality
+stays bounded under arbitrary-path scanner traffic. Requests served by a
+router *fallback* — SPA/asset serving from `r2e-static`, controller
+`#[fallback]` gateway routes, plain 404s — carry no route template and are all
+recorded under the single `path="unmatched"` sentinel, even when they return
+200. With the `NormalizePath` plugin enabled, trailing-slash requests are
+rewritten before routing, so `GET /users/1/` is recorded as `/users/{id}`.
+
 ## License
 
 Apache-2.0

@@ -39,9 +39,9 @@ AppBuilder::new()
 Override `should_be_last()` for plugins that must be the outermost layer:
 
 ```rust
-impl Plugin for NormalizePathPlugin {
+impl Plugin for CompressionPlugin {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
+        app.with_layer_fn(|router| router.layer(CompressionLayer::new()))
     }
 
     fn should_be_last() -> bool
@@ -52,6 +52,12 @@ impl Plugin for NormalizePathPlugin {
     }
 }
 ```
+
+Note that layers added via `Router::layer` run *after* routing — they cannot
+rewrite the request URI in a way that changes which route matches. R2E's
+built-in `NormalizePath` plugin is instead applied at build time as a
+pre-routing rewrite wrapping the whole router, which is why it has no
+ordering constraint.
 
 ## Pre-state plugins (simple path)
 

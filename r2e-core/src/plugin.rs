@@ -47,8 +47,8 @@ pub trait Plugin: Send + 'static {
 
     /// Whether this plugin should be installed last in the layer stack.
     ///
-    /// Plugins like `NormalizePath` need to be the outermost layer (installed last)
-    /// to work correctly. When `should_be_last()` returns `true`, the builder will
+    /// Some plugins need to be the outermost layer (installed last) to work
+    /// correctly. When `should_be_last()` returns `true`, the builder will
     /// warn if other plugins are added after this one.
     fn should_be_last() -> bool
     where

@@ -61,11 +61,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     // ── Path normalization ──────────────────────────────────────────────
 
-    /// Enable trailing-slash normalization via a router fallback.
+    /// Enable trailing-slash normalization via a pre-routing URI rewrite.
     ///
-    /// When enabled, requests to paths with a trailing slash (e.g. `/users/`)
-    /// that don't match any route are re-dispatched with the slash stripped
-    /// (e.g. `/users`). This can be installed at any point in the plugin chain.
+    /// When enabled, the built router is wrapped in a `NormalizePath` service
+    /// that strips trailing slashes (e.g. `/users/` → `/users`) BEFORE
+    /// routing, so the request is routed once and `MatchedPath` is visible to
+    /// all layers. This can be installed at any point in the plugin chain.
     pub(crate) fn enable_normalize_path(mut self) -> Self {
         self.shared.normalize_path = true;
         self
@@ -475,7 +476,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         C: Controller<T, W>,
     {
         C::register_meta(&mut self.meta_registry);
-        self.shared.has_controller_fallback |= C::has_fallback();
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -642,44 +642,27 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Apply the application state.
         let mut app = router.with_state(state.clone());
 
-        // Install trailing-slash normalization fallback.
-        // When no route matches and the path has a trailing slash, strip it
-        // and re-dispatch to the same router via `tower::ServiceExt::oneshot`.
-        // `inner` is captured BEFORE this fallback is installed, so it still
-        // carries any controller-level `#[fallback]` merged above — both the
-        // normalized re-dispatch and the plain miss terminate there. When no
-        // controller fallback is registered, plain misses skip the re-dispatch
-        // entirely: a second routing pass could only produce the same 404.
-        if self.shared.normalize_path {
-            use crate::http::response::IntoResponse;
-            let has_fallback = self.shared.has_controller_fallback;
-            let inner = app.clone();
-            app = app.fallback(move |req: crate::http::extract::Request| async move {
-                let path = req.uri().path();
-                let req = if path.len() > 1 && path.ends_with('/') {
-                    let trimmed = path.trim_end_matches('/');
-                    let new_uri = match req.uri().query() {
-                        Some(q) => format!("{}?{}", trimmed, q),
-                        None => trimmed.to_string(),
-                    };
-                    let (mut parts, body) = req.into_parts();
-                    parts.uri = new_uri.parse().unwrap_or(parts.uri);
-                    crate::http::header::HttpRequest::from_parts(parts, body)
-                } else if has_fallback {
-                    req
-                } else {
-                    return crate::http::StatusCode::NOT_FOUND.into_response();
-                };
-                match tower::ServiceExt::oneshot(inner.clone(), req).await {
-                    Ok(resp) => resp,
-                    Err(infallible) => match infallible {},
-                }
-            });
-        }
-
-        // Apply layers (in registration order).
+        // Apply layers (in registration order). Layers added via
+        // `Router::layer` run after routing, so they observe `MatchedPath`
+        // (and any controller `#[fallback]`) on the routed request.
         for layer_fn in self.shared.custom_layers {
             app = layer_fn(app);
+        }
+
+        // Install trailing-slash normalization as a genuine pre-routing URI
+        // rewrite: the whole layered router is wrapped in tower-http's
+        // `NormalizePath` service, so `/users/1/` is trimmed to `/users/1`
+        // BEFORE routing. The request is routed exactly once and carries
+        // `MatchedPath` through every layer above (metrics, tracing) — unlike
+        // a fallback re-dispatch, which routes twice and hides the match from
+        // outer instrumentation. The wrapped service is re-embedded as a
+        // routerless fallback so the builder keeps producing a plain Router.
+        if self.shared.normalize_path {
+            let svc = tower::Layer::layer(
+                &tower_http::normalize_path::NormalizePathLayer::trim_trailing_slash(),
+                app,
+            );
+            app = crate::http::Router::new().fallback_service(svc);
         }
 
         // Always install the CatchPanicLayer as the outermost HTTP layer so

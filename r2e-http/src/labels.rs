@@ -12,6 +12,11 @@ use crate::header::Method;
 /// `Router::fallback`-handled requests carry no [`MatchedPath`]).
 /// A single sentinel keeps label cardinality bounded under arbitrary-path
 /// scanner traffic.
+///
+/// Note this includes fallback-served *successes* by design: SPA/asset
+/// traffic served by `r2e-static` and controller `#[fallback]` gateway
+/// routes return 200 but still collapse into this sentinel, since a
+/// fallback has no bounded route template to contribute.
 pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
 
 /// Method label value for non-standard HTTP methods. `http::Method` accepts

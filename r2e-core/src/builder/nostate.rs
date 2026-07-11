@@ -18,7 +18,6 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 plugin_data: HashMap::new(),
                 last_plugin_name: None,
                 normalize_path: false,
-                has_controller_fallback: false,
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
                 active_profile: "default".to_string(),

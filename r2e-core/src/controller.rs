@@ -92,15 +92,6 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     /// Called by `register_controller()`. The default implementation is a no-op.
     fn register_meta(_registry: &mut crate::meta::MetaRegistry) {}
 
-    /// Whether this controller declares a `#[fallback]` route.
-    ///
-    /// Lets the builder know a controller-level catch-all exists so the
-    /// NormalizePath fallback re-dispatches misses into it (and skips that
-    /// work when nothing would catch them). Generated impls override this.
-    fn has_fallback() -> bool {
-        false
-    }
-
     /// Register event consumers for this controller.
     ///
     /// Called during `serve()` with the application state and the shared core,
