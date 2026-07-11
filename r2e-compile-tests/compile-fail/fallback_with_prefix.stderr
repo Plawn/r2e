@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: #[fallback] requires a controller without a path prefix: the fallback handles every unmatched request app-wide, which a `path = "..."` prefix would not scope. Move it to a root-mounted controller.
+ --> compile-fail/fallback_with_prefix.rs:9:1
+  |
+9 | #[routes]
+  | ^^^^^^^^^ evaluation of `_` failed here

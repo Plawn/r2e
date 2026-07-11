@@ -8,6 +8,9 @@ pub enum HttpMethod {
     Put,
     Delete,
     Patch,
+    /// Matches every HTTP method (`axum::routing::any`). Used by `#[any]`
+    /// routes and as the placeholder method of `#[fallback]` routes.
+    Any,
 }
 
 impl HttpMethod {
@@ -18,6 +21,7 @@ impl HttpMethod {
             HttpMethod::Put => "put",
             HttpMethod::Delete => "delete",
             HttpMethod::Patch => "patch",
+            HttpMethod::Any => "any",
         }
     }
 }

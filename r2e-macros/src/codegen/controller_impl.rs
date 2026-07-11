@@ -36,6 +36,34 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let register_consumers_fn = generate_consumer_registrations(def);
     let (scheduled_deco_items, scheduled_tasks_fn) = generate_scheduled_tasks(def, name);
 
+    let has_fallback = def.route_methods.iter().any(|rm| rm.is_fallback);
+
+    // #[fallback] is app-wide (it handles every request no other route
+    // matched), so it only makes sense on a controller mounted at the root.
+    // PATH_PREFIX lives on the #[controller] side — enforce cross-macro with
+    // a const assert on the meta module.
+    let fallback_prefix_assert = if has_fallback {
+        quote! {
+            const _: () = {
+                const fn __r2e_is_root_prefix(p: &str) -> bool {
+                    let b = p.as_bytes();
+                    b.is_empty() || (b.len() == 1 && b[0] == b'/')
+                }
+                match #meta_mod::PATH_PREFIX {
+                    None => {}
+                    Some(p) => assert!(
+                        __r2e_is_root_prefix(p),
+                        "#[fallback] requires a controller without a path prefix: the fallback \
+                         handles every unmatched request app-wide, which a `path = \"...\"` \
+                         prefix would not scope. Move it to a root-mounted controller."
+                    ),
+                }
+            };
+        }
+    } else {
+        quote! {}
+    };
+
     // Only emit extend() calls for non-empty metadata lists to avoid
     // type inference issues with empty vec![].
     let register_meta_stmts = {
@@ -138,6 +166,8 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         // `scheduled_tasks_boxed`).
         #scheduled_deco_items
 
+        #fallback_prefix_assert
+
         // State-independent carrier of the full dep list (core ++ decorator
         // deps) — lets `register_module` check decorator deps in the NoState
         // phase, where `Controller<S, W>::Deps` is not yet nameable.
@@ -174,6 +204,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #(#register_meta_stmts)*
             }
 
+            fn has_fallback() -> bool {
+                #has_fallback
+            }
+
             #register_consumers_fn
 
             #scheduled_tasks_fn
@@ -198,6 +232,14 @@ fn generate_route_metadata(
 
     def.route_methods
         .iter()
+        // Proxy-shaped routes have no documentable OpenAPI operation:
+        // `#[fallback]` matches whatever is left over, `#[any]` has no single
+        // method, and `{*wildcard}` paths are not valid OpenAPI path templates.
+        .filter(|rm| {
+            !rm.is_fallback
+                && rm.method != crate::route::HttpMethod::Any
+                && !is_wildcard_path(&rm.path)
+        })
         .map(|rm| {
             let route_path_str = &rm.path;
             let method = rm.method.as_routing_fn().to_uppercase();
@@ -430,7 +472,14 @@ fn default_status_for_method(method: &crate::route::HttpMethod) -> u16 {
         crate::route::HttpMethod::Put => 200,
         crate::route::HttpMethod::Delete => 204,
         crate::route::HttpMethod::Patch => 200,
+        crate::route::HttpMethod::Any => 200,
     }
+}
+
+/// Whether a route path contains an axum `{*wildcard}` segment. Such paths
+/// are not valid OpenAPI path templates, so the route is excluded from the spec.
+fn is_wildcard_path(path: &str) -> bool {
+    path.contains("{*")
 }
 
 /// Check if the body parameter is `Option<Json<T>>` → required: false, `Json<T>` → required: true.
@@ -1173,13 +1222,22 @@ fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
                 .iter()
                 .map(|expr| quote! { .layer(#expr) })
                 .collect();
-            quote! {
-                .route(
-                    #path,
-                    #krate::http::routing::#method_fn(#closure)
-                        #(#middleware_layers)*
-                        #(#direct_layers)*
-                )
+            if rm.is_fallback {
+                // #[fallback]: handles everything no other route matched.
+                // #[middleware]/#[layer]/#[pre_guard] are rejected at parse
+                // time, so the closure is registered bare.
+                quote! {
+                    .fallback(#closure)
+                }
+            } else {
+                quote! {
+                    .route(
+                        #path,
+                        #krate::http::routing::#method_fn(#closure)
+                            #(#middleware_layers)*
+                            #(#direct_layers)*
+                    )
+                }
             }
         })
         .collect()

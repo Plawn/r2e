@@ -435,6 +435,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         C: Controller<T, W>,
     {
         C::register_meta(&mut self.meta_registry);
+        self.shared.has_controller_fallback |= C::has_fallback();
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -604,12 +605,18 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Install trailing-slash normalization fallback.
         // When no route matches and the path has a trailing slash, strip it
         // and re-dispatch to the same router via `tower::ServiceExt::oneshot`.
+        // `inner` is captured BEFORE this fallback is installed, so it still
+        // carries any controller-level `#[fallback]` merged above — both the
+        // normalized re-dispatch and the plain miss terminate there. When no
+        // controller fallback is registered, plain misses skip the re-dispatch
+        // entirely: a second routing pass could only produce the same 404.
         if self.shared.normalize_path {
             use crate::http::response::IntoResponse;
+            let has_fallback = self.shared.has_controller_fallback;
             let inner = app.clone();
             app = app.fallback(move |req: crate::http::extract::Request| async move {
                 let path = req.uri().path();
-                if path.len() > 1 && path.ends_with('/') {
+                let req = if path.len() > 1 && path.ends_with('/') {
                     let trimmed = path.trim_end_matches('/');
                     let new_uri = match req.uri().query() {
                         Some(q) => format!("{}?{}", trimmed, q),
@@ -617,13 +624,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     };
                     let (mut parts, body) = req.into_parts();
                     parts.uri = new_uri.parse().unwrap_or(parts.uri);
-                    let new_req = crate::http::header::HttpRequest::from_parts(parts, body);
-                    match tower::ServiceExt::oneshot(inner.clone(), new_req).await {
-                        Ok(resp) => resp,
-                        Err(infallible) => match infallible {},
-                    }
+                    crate::http::header::HttpRequest::from_parts(parts, body)
+                } else if has_fallback {
+                    req
                 } else {
-                    crate::http::StatusCode::NOT_FOUND.into_response()
+                    return crate::http::StatusCode::NOT_FOUND.into_response();
+                };
+                match tower::ServiceExt::oneshot(inner.clone(), req).await {
+                    Ok(resp) => resp,
+                    Err(infallible) => match infallible {},
                 }
             });
         }

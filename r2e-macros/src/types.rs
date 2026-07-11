@@ -118,6 +118,9 @@ pub struct RouteMethod {
     pub identity_param: Option<IdentityParam>,
     pub managed_params: Vec<ManagedParam>,
     pub fn_item: syn::ImplItemFn,
+    /// `#[fallback]` route: registered via `Router::fallback` instead of
+    /// `.route(path, ...)`. `method`/`path` are placeholders (`Any` / `""`).
+    pub is_fallback: bool,
 }
 
 pub struct TransactionalConfig {

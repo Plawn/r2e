@@ -172,6 +172,47 @@ impl UserController {
 }
 
 #[test]
+fn parses_any_sse_ws_and_fallback_routes() {
+    let tmp = TempDir::new().unwrap();
+    let file_path = tmp.path().join("proxy_controller.rs");
+    fs::write(
+        &file_path,
+        r#"
+#[controller]
+pub struct ProxyController;
+
+#[routes]
+impl ProxyController {
+    #[any("/proxy/{*path}")]
+    async fn proxy(&self) {}
+
+    #[sse("/events")]
+    async fn events(&self) {}
+
+    #[ws("/chat")]
+    async fn chat(&self) {}
+
+    #[fallback]
+    async fn dispatch(&self) {}
+}
+"#,
+    )
+    .unwrap();
+
+    let mut routes = Vec::new();
+    parse_routes_from_file(&file_path, &mut routes).unwrap();
+
+    assert_eq!(routes.len(), 4);
+    let find = |m: &str| routes.iter().find(|r| r.method == m).unwrap();
+    assert_eq!(find("ANY").path, "/proxy/{*path}");
+    assert_eq!(find("ANY").handler, "proxy");
+    assert_eq!(find("SSE").path, "/events");
+    assert_eq!(find("WS").path, "/chat");
+    assert_eq!(find("FALLBACK").path, "*");
+    assert_eq!(find("FALLBACK").handler, "dispatch");
+}
+
+#[test]
 fn parses_routes_combines_paths() {
     let tmp = TempDir::new().unwrap();
     let file_path = tmp.path().join("user_controller.rs");

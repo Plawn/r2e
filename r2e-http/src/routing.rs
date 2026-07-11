@@ -1,1 +1,1 @@
-pub use axum::routing::{delete, get, patch, post, put, Route};
+pub use axum::routing::{any, delete, get, patch, post, put, MethodRouter, Route};

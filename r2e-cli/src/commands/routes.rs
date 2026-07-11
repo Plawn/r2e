@@ -16,9 +16,10 @@ pub struct Route {
 /// List all declared routes by parsing source files.
 ///
 /// Scans `src/controllers/*.rs` (excluding `mod.rs`) for route attributes
-/// (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`), extracts
-/// base paths from `#[controller(path = "...")]`, and prints a sorted
-/// table with method, path, handler name, file, and line number.
+/// (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`, `#[any]`,
+/// `#[sse]`, `#[ws]`, `#[fallback]`), extracts base paths from
+/// `#[controller(path = "...")]`, and prints a sorted table with method,
+/// path, handler name, file, and line number.
 ///
 /// Returns an error if `src/controllers/` does not exist.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -107,7 +108,7 @@ pub fn parse_routes_from_file(
         }
 
         // Detect route macros
-        for method in &["get", "post", "put", "delete", "patch"] {
+        for method in &["get", "post", "put", "delete", "patch", "any", "sse", "ws"] {
             let pattern = format!("#[{}(", method);
             if trimmed.starts_with(&pattern) {
                 if let Some(route_path) = extract_string_arg(trimmed, method) {
@@ -131,6 +132,18 @@ pub fn parse_routes_from_file(
                     });
                 }
             }
+        }
+
+        // Detect #[fallback] — no path argument; it catches every unmatched request.
+        if trimmed == "#[fallback]" {
+            routes.push(Route {
+                method: "FALLBACK".to_string(),
+                path: "*".to_string(),
+                handler: find_next_fn_name(&content, line_num).unwrap_or_else(|| "?".to_string()),
+                file: filename.clone(),
+                line: line_num + 1,
+                roles: current_roles.take(),
+            });
         }
 
         // Reset roles if we hit a line that's not a macro attribute
