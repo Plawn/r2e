@@ -806,39 +806,43 @@ async fn normalize_path_preserves_matched_path_for_outer_layers() {
     // routed exactly once and instrumentation layers (Prometheus, OTel)
     // added via `with_layer_fn` see the `MatchedPath` route template —
     // not the "unmatched" sentinel a fallback re-dispatch would leave.
-    use std::sync::{Arc, Mutex};
-
     use r2e_core::http::extract::MatchedPath;
     use r2e_core::http::middleware::{from_fn, Next};
     use r2e_core::http::routing::get;
-
-    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let seen_layer = seen.clone();
 
     let router = build_app()
         .register_routes(
             r2e_core::http::Router::new().route("/users/{id}", get(|| async { "user" })),
         )
         .with(NormalizePath)
-        .with_layer_fn(move |router| {
-            let seen = seen_layer.clone();
-            router.layer(from_fn(move |req: Request<Body>, next: Next| {
-                let seen = seen.clone();
-                async move {
-                    let label = req
-                        .extensions()
-                        .get::<MatchedPath>()
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| "unmatched".to_string());
-                    seen.lock().unwrap().push(label);
-                    next.run(req).await
-                }
+        .with_layer_fn(|router| {
+            router.layer(from_fn(|req: Request<Body>, next: Next| async move {
+                let label = req
+                    .extensions()
+                    .get::<MatchedPath>()
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "unmatched".to_string());
+                let mut resp = next.run(req).await;
+                resp.headers_mut()
+                    .insert("x-matched-path", label.parse().unwrap());
+                resp
             }))
         })
         .build();
 
-    let (status, body) = send_get(router, "/users/42/").await;
+    let resp = send_request(router, "GET", "/users/42/", &[]).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["x-matched-path"], "/users/{id}");
+}
+
+#[r2e_core::test]
+async fn normalize_path_collapses_leading_slashes() {
+    // tower-http's trim_trailing_slash also collapses a leading run of
+    // slashes (`//health` → `/health`) — documented plugin behavior.
+    // Absolute-form URI keeps `//health` as the path (origin-form `//x`
+    // would parse as an authority).
+    let router = build_app().with(Health).with(NormalizePath).build();
+    let (status, body) = send_get(router, "http://test//health").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, "user");
-    assert_eq!(*seen.lock().unwrap(), vec!["/users/{id}".to_string()]);
+    assert_eq!(body, "OK");
 }

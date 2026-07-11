@@ -93,6 +93,26 @@ pub fn catch_panic_layer() -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) 
     CatchPanicLayer::custom(panic_handler as fn(_) -> _)
 }
 
+/// Wrap a fully-built router in pre-routing trailing-slash normalization.
+///
+/// A middleware added via `Router::layer` runs after routing and cannot
+/// change which route matches, so the rewrite must wrap the router itself:
+/// the whole router goes inside tower-http's `NormalizePath` service, and
+/// the wrapped service is re-embedded as the fallback of a fresh routerless
+/// `Router` so callers keep receiving a plain `Router`. The outer router is
+/// a trivial extra dispatch hop — the meaningful routing (and `MatchedPath`
+/// insertion) happens once, in the wrapped inner router. Anything applied
+/// OUTSIDE this wrap (e.g. `router_wraps`) therefore never sees
+/// `MatchedPath`.
+///
+/// tower-http's `trim_trailing_slash` also collapses a leading run of
+/// slashes (`//admin` → `/admin`); see the `NormalizePath` plugin docs.
+pub fn normalize_path_router(router: crate::http::Router) -> crate::http::Router {
+    use tower::Layer as _;
+    let svc = tower_http::normalize_path::NormalizePathLayer::trim_trailing_slash().layer(router);
+    crate::http::Router::new().fallback_service(svc)
+}
+
 fn panic_handler(_err: Box<dyn std::any::Any + Send>) -> crate::http::Response {
     let body = serde_json::json!({ "error": "Internal server error" });
     (StatusCode::INTERNAL_SERVER_ERROR, crate::http::Json(body)).into_response()

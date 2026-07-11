@@ -650,19 +650,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
 
         // Install trailing-slash normalization as a genuine pre-routing URI
-        // rewrite: the whole layered router is wrapped in tower-http's
-        // `NormalizePath` service, so `/users/1/` is trimmed to `/users/1`
-        // BEFORE routing. The request is routed exactly once and carries
-        // `MatchedPath` through every layer above (metrics, tracing) — unlike
-        // a fallback re-dispatch, which routes twice and hides the match from
-        // outer instrumentation. The wrapped service is re-embedded as a
-        // routerless fallback so the builder keeps producing a plain Router.
+        // rewrite: `/users/1/` is trimmed to `/users/1` BEFORE routing, so
+        // the meaningful routing happens once and `MatchedPath` reaches every
+        // layer applied above (metrics, tracing) — unlike a fallback
+        // re-dispatch, which routes twice and hides the match from outer
+        // instrumentation. See `layers::normalize_path_router` for the
+        // wrap-and-re-embed mechanics and its caveats.
         if self.shared.normalize_path {
-            let svc = tower::Layer::layer(
-                &tower_http::normalize_path::NormalizePathLayer::trim_trailing_slash(),
-                app,
-            );
-            app = crate::http::Router::new().fallback_service(svc);
+            app = crate::layers::normalize_path_router(app);
         }
 
         // Always install the CatchPanicLayer as the outermost HTTP layer so

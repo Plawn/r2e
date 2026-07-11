@@ -244,9 +244,14 @@ impl Plugin for DevReload {
 /// instrumentation layers (metrics, tracing). It can be installed at any
 /// point in the plugin chain.
 ///
-/// Note: with this plugin enabled, routes declared with a literal trailing
-/// slash (e.g. `#[get("/foo/")]`) are unreachable — the incoming path is
-/// always trimmed first.
+/// Notes on the exact rewrite semantics (tower-http `trim_trailing_slash`):
+///
+/// - Routes declared with a literal trailing slash (e.g. `#[get("/foo/")]`)
+///   are unreachable — the incoming path is always trimmed first.
+/// - A leading run of slashes is also collapsed: `//admin` is rewritten to
+///   `/admin` and routed there (without the plugin it would be a 404). This
+///   matters for raw-path consumers such as `#[fallback]` gateway proxies,
+///   which see and forward the normalized path.
 pub struct NormalizePath;
 
 impl Plugin for NormalizePath {
