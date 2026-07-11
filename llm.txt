@@ -2,6 +2,9 @@
 
 > R2E (Rust Enterprise Edition) is a Quarkus-like ergonomic layer over Axum.
 > Declarative controllers, compile-time DI, JWT security, and zero runtime reflection.
+> This file is the canonical AI/agent-facing reference. When R2E is a dependency,
+> follow these idioms — do NOT fall back to raw axum patterns (see "Coming from
+> Axum" below).
 
 ## Quick Start
 
@@ -15,19 +18,53 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`. `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler`, `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
-### Minimal Application
+### Minimal Application — the blueprint pattern
+
+**Always structure an R2E app as a blueprint**: everything except `main()` lives
+in `lib.rs` behind `pub async fn app(b: AppBuilder) -> impl BootableApp`, so the
+exact same app boots in production (`main.rs`) and in tests (`TestApp::boot`).
 
 ```rust
+// src/lib.rs
 use r2e::prelude::*;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub config: R2eConfig,
-}
+pub mod controllers;
+use controllers::hello::HelloController;
 
-#[controller(path = "/hello", state = AppState)]
+/// Application blueprint: assemble the full app on the given builder.
+/// Tests boot this via `#[r2e::test(app = my_app::app)]`.
+pub async fn app(b: AppBuilder) -> impl BootableApp {
+    b.load_config::<()>()                        // application.yaml + env
+        .build_state()                           // resolve bean graph (state is inferred)
+        .await
+        .with(Health)                            // /health → 200 "OK"
+        .with(Tracing)
+        .with(ErrorHandling)                     // panics → JSON 500
+        .register_controller::<HelloController>()
+}
+```
+
+```rust
+// src/main.rs
+use r2e::prelude::*;
+
+#[r2e::main]
+async fn main() {
+    my_app::app(AppBuilder::new())
+        .await
+        .serve_auto()                            // reads server.host / server.port from config
+        .await
+        .unwrap();
+}
+```
+
+```rust
+// src/controllers/hello.rs
+use r2e::prelude::*;
+
+#[controller(path = "/hello")]
 pub struct HelloController;
 
 #[routes]
@@ -37,25 +74,51 @@ impl HelloController {
         Json("Hello, world!")
     }
 }
+```
 
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
+```rust
+// tests/app.rs — boots the REAL app
+use r2e::prelude::*;
+use r2e_test::TestApp;
 
-    AppBuilder::new()
-        .load_config::<()>("dev")
-        .build_state::<AppState, _, _>()
-        .await
-        .with(Health)
-        .with(Cors::permissive())
-        .with(Tracing)
-        .with(ErrorHandling)
-        .register_controller::<HelloController>()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
+#[r2e::test(app = my_app::app)]
+async fn hello_works(app: TestApp) {
+    app.get("/hello").send().await.assert_ok();
 }
 ```
+
+**There is no hand-written state struct.** The application state is inferred
+from what you `.provide()` / `.register()` — a compile-time HList. `#[derive(BeanState)]`
+and `state = ...` on `#[controller]` do not exist.
+
+---
+
+## Coming from Axum — do X, not Y
+
+R2E wraps axum; nearly every axum pattern has a framework-integrated equivalent
+that gets DI, guards, interceptors, OpenAPI, and TestApp support for free.
+**Reach for the R2E construct first.** Dropping to raw axum forfeits
+compile-time checking and framework integration.
+
+| You want | Do NOT write | Write instead |
+|---|---|---|
+| Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `ClaimsIdentity` |
+| Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
+| Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
+| A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
+| Shared services | `State<Arc<MyState>>` + field access | `.provide(bean)` / `.register::<T>()` + `#[inject]` fields |
+| Config values in handlers | Lazy statics / `std::env` | `#[config("key")]` fields, `load_config::<Root>()` + `#[inject]` typed sections |
+| Cross-cutting logging/timing/caching | Tower middleware per concern | `#[intercept(Logged::info())]` / `Timed` / `Cache` |
+| Request-scoped values (tenant id, trace ctx) | Extensions + middleware | `#[inject(request)]` field or param |
+| Background jobs | `tokio::spawn` in main | `#[scheduled(every = "5m")]` methods, or `PoolExecutor` / `#[derive(BackgroundService)]` |
+| Pub/sub between components | Channels wired by hand | `EventBus` (`.emit()`) + `#[consumer]` methods |
+| Test the app | Re-declaring routers in tests | `#[r2e::test(app = my_app::app)]` — boots the real blueprint |
+
+Escape-hatch ladder when you genuinely need raw axum (each rung trades
+integration for control): 1. `#[any]`/`#[fallback]` controller routes →
+2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
+3. `with_layer_fn(|router| ...)` (transform the final `Router`).
 
 ---
 
@@ -63,37 +126,59 @@ async fn main() {
 
 ### Imports
 
-Always start controllers with:
+Always start with:
 ```rust
 use r2e::prelude::*;
 ```
 
-This brings in: `Controller` (derive), `Params` (derive), `Validate` (re-export from garde), `routes`, HTTP method attrs (`get`, `post`, `put`, `delete`, `patch`), `guard`, `pre_guard`, `roles`, `intercept`, `transactional`, `managed`, `consumer`, `scheduled`, `sse`, `ws`, `layer`, `middleware`, `Bean`, `BeanState`, `bean`, `AppBuilder`, `R2eConfig`, `AppError`, `Plugin`, built-in plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`), type aliases (`JsonResult`, `ApiResult`, `StatusResult`), HTTP types (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `State`, `FromRef`, `Form`, `IntoResponse`, `Redirect`, `Response`), and optionally `TypedMultipart`, `UploadedFile`, `FromMultipart`.
+The prelude provides everything a controller needs — no direct `axum` imports.
+Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP verbs,
+`guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `intercept`, `transactional`,
+`managed`, `consumer`, `scheduled`, `bean`, `producer`, `module`, derives `Bean`,
+`DecoratorBean`, `BackgroundService`, `Params`, `ConfigProperties`, `FromConfigValue`,
+`Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
+`R2eConfig`, `Guard`, `GuardContext`, `PreAuthGuard`, `Identity`, `Interceptor`,
+`ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
+`RegisterModule`, `BeanLookup`), plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`,
+`DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
+(`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
+`IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`, `SseBroadcaster`, `SseTopic`),
+type aliases (`JsonResult`, `ApiResult`, `StatusResult`), events (`EventBus`,
+`LocalEventBus`), and with features: multipart (`TypedMultipart`, `UploadedFile`)
+and WebSocket (`WsStream`, `WsBroadcaster`, `WsRooms`).
+
+Not in the prelude: `BeanAccess` (`state.get::<T>()`) — import explicitly with
+`use r2e_core::type_list::BeanAccess;` when needed.
 
 ### Controller Declaration
 
-A controller needs two macros: `#[controller(...)]` (a transforming attribute) on the struct, `#[routes]` on the impl block. The `#[controller]` attribute splits the struct into a physical core (app `#[inject]` + `#[config]` fields, built once) and a per-request façade that holds the request-scoped fields (`#[inject(identity)]` and `#[inject(request)]`) and `Deref`s to the core.
+Two macros: `#[controller(...)]` on the struct, `#[routes]` on the impl block.
+There is **no `state` key** — controllers are state-generic; `#[inject]` deps are
+compile-checked against the app's provision list at `register_controller()`.
 
 ```rust
-#[controller(path = "/users", state = MyAppState)]
+#[controller(path = "/users")]
 pub struct UserController {
-    #[inject] user_service: UserService,       // app-scoped, cloned from state
-    #[inject(identity)] user: AuthenticatedUser, // request-scoped, from JWT
-    #[config("app.greeting")] greeting: String,  // from R2eConfig
+    #[inject] user_service: UserService,          // app-scoped, from the bean graph
+    #[inject(identity)] user: AuthenticatedUser,  // request-scoped, from JWT
+    #[config("app.greeting")] greeting: String,   // from R2eConfig
 }
 ```
 
 - `path` is optional (defaults to no prefix).
-- `state` is required — the Axum application state type.
+- A missing `#[inject]` bean is a **compile error at `register_controller()`** naming the type.
 
-### Field Injection
+### Field Injection — four scopes, all compile-time
 
-| Attribute | Scope | Lives on | Requirement |
-|-----------|-------|----------|-------------|
-| `#[inject]` | App-scoped | Core | Type must impl `Clone + Send + Sync` and be extractable via `FromRef<State>` |
-| `#[config("dotted.key")]` | App-scoped | Core | Type must impl `FromConfigValue` (`String`, `i64`, `f64`, `bool`, `Option<T>`) |
-| `#[inject(identity)]` | Request-scoped | Façade | Type must impl `Identity + FromRequestParts` (e.g., `AuthenticatedUser`); drives guards/roles. `Option<T>` supported |
-| `#[inject(request)]` | Request-scoped | Façade | Any type impl `FromRequestParts` (tenant id, trace context, request-scoped handle); `Option<T>` supported. Not in OpenAPI yet |
+| Attribute | Scope | Requirement |
+|-----------|-------|-------------|
+| `#[inject]` | App-scoped | `Clone + Send + Sync + 'static`, provided/registered on the builder |
+| `#[config("dotted.key")]` | App-scoped | `FromConfigValue` (`String`, ints, `f64`, `bool`, `Option<T>`, `Vec<T>`, derive for enums) |
+| `#[inject(identity)]` | Request-scoped | `Identity + FromRequestParts` (e.g., `AuthenticatedUser`); drives guards/roles. `Option<T>` supported |
+| `#[inject(request)]` | Request-scoped | Any `FromRequestParts` type (tenant id, trace context); `Option<T>` supported. Not in OpenAPI yet |
+
+`#[inject(identity)]` also works on **handler parameters** for mixed
+public/protected controllers (see Security).
 
 ### Route Handlers
 
@@ -104,7 +189,7 @@ impl UserController {
     async fn list(&self) -> Json<Vec<User>> { ... }
 
     #[get("/{id}")]
-    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, AppError> { ... }
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> { ... }
 
     #[post("/")]
     async fn create(&self, Json(body): Json<CreateUser>) -> JsonResult<User> { ... }
@@ -114,143 +199,271 @@ impl UserController {
 
     #[delete("/{id}")]
     async fn delete(&self, Path(id): Path<u64>) -> StatusResult { ... }
-
-    #[patch("/{id}")]
-    async fn patch(&self, Path(id): Path<u64>, Json(body): Json<PatchUser>) -> JsonResult<User> { ... }
 }
 ```
 
 ### Return Type Aliases
 
 ```rust
-type JsonResult<T> = Result<Json<T>, AppError>;
-type ApiResult<T>  = Result<T, AppError>;
-type StatusResult  = Result<StatusCode, AppError>;
-```
-
-### AppError
-
-Built-in error type with variants: `NotFound(String)`, `Unauthorized(String)`, `Forbidden(String)`, `BadRequest(String)`, `Internal(String)`, `Validation(...)`, `Custom { status, body }`.
-
-```rust
-Err(AppError::NotFound("User not found".into()))
-Err(AppError::Custom {
-    status: StatusCode::IM_A_TEAPOT,
-    body: serde_json::json!({ "error": "I'm a teapot" }),
-})
+type ApiResult<T>  = Result<T, HttpError>;
+type JsonResult<T> = Result<Json<T>, HttpError>;
+type StatusResult  = Result<StatusCode, HttpError>;
 ```
 
 ---
 
-## Application State & Dependency Injection
+## Error Handling
 
-### BeanState (auto-wired state)
+### HttpError (built-in)
+
+`HttpError` is the default error type (`#[non_exhaustive]` — wildcard arm when
+matching). Variants: `NotFound`, `Unauthorized`, `Forbidden`, `BadRequest`,
+`Internal` (all `Cow<'static, str>`), `Validation(...)`, `Custom { status, body }`,
+`WithSource { status, message, source }`.
 
 ```rust
-#[derive(Clone, BeanState)]
-pub struct Services {
-    pub user_service: UserService,
-    pub claims_validator: Arc<JwtClaimsValidator>,
-    pub pool: sqlx::SqlitePool,
-    pub event_bus: EventBus,
-    pub config: R2eConfig,
-    pub cancel: CancellationToken,           // provided by Scheduler plugin
-    pub rate_limiter: RateLimitRegistry,
+HttpError::not_found("User not found")      // zero-alloc with static strings
+HttpError::internal(format!("DB: {e}"))
+HttpError::bad_request("invalid input")
+HttpError::from_status(StatusCode::CONFLICT, "already exists")
+
+// context
+let user = db.insert(&u).await.http_context("inserting user")?;  // via HttpErrorExt
+```
+
+### `#[derive(ApiError)]` — custom error types (recommended)
+
+Generates `Display`, `IntoResponse`, and `std::error::Error`:
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = NOT_FOUND, message = "User not found: {0}")]
+    NotFound(String),
+
+    #[error(status = INTERNAL_SERVER_ERROR)]
+    Io(#[from] std::io::Error),          // From impl + Error::source()
+
+    #[error(status = 429, message = "Too many requests")]
+    RateLimited,
+
+    #[error(transparent)]
+    Http(#[from] HttpError),
 }
 ```
 
-`#[derive(BeanState)]` generates `FromRef` impls for each field and a `from_context()` method.
+### `map_error!` — bulk From impls
 
-### Bean (auto-wired services)
+```rust
+r2e::map_error! {
+    sqlx::Error => Internal,
+    serde_json::Error => BadRequest,
+}
+// `?` on sqlx::Error now auto-converts to HttpError::Internal
+```
+
+---
+
+## Dependency Injection
+
+### Three bean kinds, one `register()`
+
+| Trait | Constructor | Use case |
+|-------|-------------|----------|
+| `Bean` | sync `fn new(...)` | Simple services |
+| `AsyncBean` | `async fn new(...)` | Async init |
+| `Producer` | `#[producer] async fn ...() -> T` | Types you don't own (pools, clients) |
 
 ```rust
 #[derive(Clone)]
 pub struct UserService {
-    users: Arc<RwLock<Vec<User>>>,
-    event_bus: EventBus,
+    pool: SqlitePool,
+    event_bus: LocalEventBus,
+}
+
+#[bean]                                   // sync/async auto-detected
+impl UserService {
+    pub fn new(pool: SqlitePool, event_bus: LocalEventBus) -> Self {
+        Self { pool, event_bus }
+    }
+}
+
+#[producer]                               // for types you don't own
+async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
+    SqlitePool::connect(&url).await.expect("db connect")
+}
+// Generates `struct CreatePool` — register with `.register::<CreatePool>()`
+```
+
+`#[config("key")]` works in `#[bean]` constructor params and `#[derive(Bean)]`
+fields. Constructor params are resolved from the bean graph **by type**.
+
+### Assembly — state is inferred
+
+```rust
+let built = AppBuilder::new()
+    .plugin(Scheduler)                    // pre-state plugins FIRST
+    .load_config::<RootConfig>()          // YAML + env; auto-registers config sections as beans
+    .provide(LocalEventBus::new())        // provide constructed values
+    .provide(Arc::new(claims_validator))
+    .register::<CreatePool>()             // producer → registers SqlitePool
+    .register::<UserService>()            // bean (sync or async — same call)
+    .build_state()                        // async, NO type arguments — state is inferred
+    .await;                               // .try_build_state().await = non-panicking
+```
+
+**`build_state()` takes no type arguments.** The state is the provision list
+materialized as a type-level HList. `>127` provisions need
+`#![recursion_limit = "512"]` at the crate root.
+
+### `Option<T>` beans — conditional availability
+
+`Option<T>` is a first-class bean type; the producer decides `Some`/`None`, the
+slot always exists (so dependents always compile):
+
+```rust
+#[producer]
+async fn create_llm(#[config("app.llm.api_key")] key: Option<String>) -> Option<Arc<LlmClient>> {
+    Some(Arc::new(LlmClient::new(&key?)))
 }
 
 #[bean]
-impl UserService {
-    pub fn new(event_bus: EventBus) -> Self {
-        Self { users: Arc::new(RwLock::new(vec![])), event_bus }
+impl ChatService {
+    fn new(llm: Option<Arc<LlmClient>>) -> Self { Self { llm } }  // hard dep on the Option slot
+}
+```
+
+For conditional plugins/layers (no provision-list change) use
+`.when(cond, |b| b.with(...))` with `config_flag("key")` / `profile_is("prod")`.
+
+### `#[post_construct]` — lifecycle hooks
+
+Runs after the full bean graph is resolved. `&self` only, sync or async,
+returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`:
+
+```rust
+#[bean]
+impl CacheService {
+    pub async fn new(pool: SqlitePool) -> Self { Self { pool } }
+
+    #[post_construct]
+    async fn warm_cache(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
     }
 }
 ```
 
-The `#[bean]` attribute generates a `Bean` trait impl. Constructor params are resolved from the `BeanContext`.
+### Feature modules — `#[module]`
 
-### AppBuilder Assembly
+Package a vertical slice (services + controllers) as one registration with a
+checked closed subgraph:
 
 ```rust
-AppBuilder::new()
-    .plugin(Scheduler)                     // pre-state plugins first
-    .load_config::<()>("dev")              // load yaml + env, provide R2eConfig
-    .provide(event_bus)                    // provide raw values
-    .provide(pool)
-    .provide(Arc::new(claims_validator))
-    .provide(RateLimitRegistry::default())
-    .with_bean::<UserService>()            // register bean for auto-wiring
-    .build_state::<Services, _, _>()          // resolve bean graph → state (async)
-    .await
-    .with(Health)                          // /health → 200 "OK"
-    .with(Cors::permissive())              // CORS
-    .with(Tracing)                         // request tracing
-    .with(ErrorHandling)                   // catch panics → JSON 500
-    .with(DevReload)                       // dev-mode hot reload endpoints
-    .with(OpenApiPlugin::new(              // /openapi.json + /docs
-        OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true),
-    ))
-    .on_start(|state| async move { Ok(()) })
-    .on_stop(|state| async move { /* access state during shutdown */ })
-    .register_controller::<UserController>()
-    .with(NormalizePath)                   // MUST be last
-    .serve("0.0.0.0:3000")
-    .await
-    .unwrap();
+#[module(
+    providers(UserService),
+    controllers(UserController, UserEventConsumer),
+    exports(UserService),                 // visible to the rest of the app
+    imports(LocalEventBus, SqlitePool),   // satisfied by the app's provide/load_config
+)]
+pub struct UserModule;
+
+// in the blueprint:
+b.register_module::<UserModule>()
 ```
 
-**Order matters:**
-1. `.plugin(...)` — pre-state plugins (before `build_state`)
-2. `.provide(...)` / `.with_bean::<T>()` — register deps (before `build_state`)
-3. `.build_state::<S, _, _>().await` — resolves the bean graph (async)
-4. `.with(...)` — post-state plugins
-5. `.register_controller::<T>()` — register controllers
-6. `.with(NormalizePath)` — must be last plugin
-7. `.serve(addr)` or `.build()` — start or get router
+### Same-typed beans
+
+Qualifiers/named beans do not exist — use **newtypes** (`struct ReadPool(PgPool)`)
+for multiple beans of the same underlying type.
 
 ---
 
-## Mixed Controllers (Public + Protected Endpoints)
-
-Use param-level `#[inject(identity)]` instead of struct-level to allow both public and protected endpoints:
+## AppBuilder — full assembly order
 
 ```rust
-#[controller(path = "/api", state = Services)]
-pub struct MixedController {
-    #[inject] user_service: UserService,
-    // Param-level identity keeps every endpoint's auth explicit.
-}
-
-#[routes]
-impl MixedController {
-    #[get("/public")]
-    async fn public_data(&self) -> Json<Vec<User>> {
-        Json(self.user_service.list().await)
-    }
-
-    #[get("/me")]
-    async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<AuthenticatedUser> {
-        Json(user)
-    }
-
-    #[get("/admin")]
-    #[roles("admin")]
-    async fn admin_only(&self, #[inject(identity)] _user: AuthenticatedUser) -> Json<Vec<User>> {
-        Json(self.user_service.list().await)
-    }
-}
+AppBuilder::new()
+    // ── Pre-state ──
+    .plugin(Scheduler)                          // scheduler runtime
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
+    .provide(bean)                              // constructed values
+    .register::<CreatePool>()                   // beans / producers (one unified method)
+    .when(dev_mode, |b| b.with(DevReload))      // conditional Self→Self assembly
+    .build_state().await
+    // ── Post-state ──
+    .with(Health)
+    .with(Cors::permissive())
+    .with(Tracing)                              // or Tracing::from_config(&config)
+    .with(ErrorHandling)
+    .with(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
+    .on_start(|state| async move { Ok(()) })
+    .on_stop(|state| async move { if let Some(p) = state.bean::<SqlitePool>() { p.close().await; } })
+    .register_controller::<UserController>()
+    .register_controllers::<(AccountController, ScheduledJobs)>()  // several at once
+    .register_module::<UserModule>()
+    .register_subscriber::<NotificationService>()  // bean event subscribers
+    .with(NormalizePath)                        // last plugin
+    .serve_auto().await                         // server.host/server.port from config
+    // or .serve("0.0.0.0:3000").await
+    // or .build() → Router
+    .unwrap();
 ```
+
+`serve()` runs startup hooks, registers consumers, starts scheduled tasks,
+listens with graceful shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
+`.shutdown_grace_period(Duration)` bounds shutdown-hook time.
+
+---
+
+## Configuration
+
+### Files & resolution order (lowest → highest)
+
+1. `application.yaml` (hierarchies flattened to dotted keys) + `application-{profile}.yaml` (profile from `R2E_PROFILE`)
+2. `.env` file
+3. `${VAR}` / `${VAR:default}` / `${file:/path}` secret placeholders in string values
+4. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`)
+
+### `load_config` — the idiomatic path
+
+```rust
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct RootConfig {
+    #[config(section)]
+    pub app: AppConfig,                   // auto-registered as a bean
+    #[config(section)]
+    pub database: DatabaseConfig,         // auto-registered as a bean
+}
+
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct DatabaseConfig {
+    pub url: String,                      // required — startup error if missing
+    #[config(default = 5)]
+    pub pool_size: i64,
+}
+
+// blueprint:
+b.load_config::<RootConfig>()             // typed + children as beans
+// controllers/beans then simply:
+#[inject] db_config: DatabaseConfig,      // typed section, injected by type
+#[config("app.greeting")] greeting: String,  // single scalar
+```
+
+Field attributes: `#[config(default = ...)]`, `#[config(key = "...")]`,
+`#[config(env = "VAR")]`, `#[config(section)]` (+ `Option<Section>` =
+presence-based, `HashMap<String, T>` = map-valued section), `#[config(skip)]`.
+Tagged enum sections: `#[config(tag = "backend")]` on an enum selects the
+variant from a config key. Enums as scalar values: `#[derive(FromConfigValue)]`
+via serde.
+
+Missing `#[config]` keys fail at startup (controller registration validates
+them), with the env-var equivalent in the message.
+
+### Well-known keys
+
+`server.host` (default `0.0.0.0`), `server.port` (default `3000`) — read by
+`serve_auto()`. `server.workers` (`N` or `"per-core"`) — SO_REUSEPORT sharded
+serving. `server.quic.*` — HTTP/3.
 
 ---
 
@@ -263,61 +476,110 @@ Requires feature: `security`
 ```rust
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 
-let sec_config = SecurityConfig::new("jwks-url-or-unused", "issuer", "audience");
-let claims_validator = JwtClaimsValidator::new_with_static_key(
-    DecodingKey::from_secret(b"my-secret"), sec_config
-);
+// Production: JWKS endpoint
+let config = SecurityConfig::new("https://idp/.well-known/jwks.json", "issuer", "audience");
 
-// Provide as Arc in state
-builder.provide(Arc::new(claims_validator))
+// Static key (dev/demo)
+let sec_config = SecurityConfig::new("unused", "issuer", "audience")
+    .with_allowed_algorithm(jsonwebtoken::Algorithm::HS256);
+let validator = JwtClaimsValidator::new_with_static_key(
+    DecodingKey::from_secret(b"my-secret"), sec_config);
+
+b.provide(Arc::new(validator))            // the bean AuthenticatedUser resolves
 ```
 
 ### AuthenticatedUser
 
-`AuthenticatedUser` implements `Identity` and `FromRequestParts`. It extracts the Bearer JWT, validates it, and provides:
-- `.sub()` — subject
-- `.email()` — optional email
-- `.roles()` — role list
-- `.claims()` — raw JWT claims
+Implements `Identity` and `FromRequestParts`: extracts + validates the Bearer
+JWT. Accessors: `.sub()`, `.email()`, `.roles()`, `.claims()`.
 
-### Role-based Access
+### Struct identity + `#[anonymous]` — fail-closed (PREFERRED for mostly-protected controllers)
+
+A struct-level identity authenticates **every** route; mark public exceptions
+with `#[anonymous]` (forgetting the marker fails closed with 401 — safer than
+opt-in auth):
+
+```rust
+#[controller(path = "/account")]
+pub struct AccountController {
+    #[inject] service: AccountService,
+    #[inject(identity)] user: AuthenticatedUser,   // ALL routes authenticated…
+}
+
+#[routes]
+impl AccountController {
+    #[get("/me")]
+    async fn me(&self) -> Json<Profile> { ... }     // reads self.user
+
+    #[get("/plans")]
+    #[anonymous]                                    // …except this one (no JWT cost)
+    async fn plans(&self) -> Json<Vec<Plan>> { ... } // reading self.user here = compile error
+}
+```
+
+Rejected at compile time: `#[anonymous]` + `#[roles]`, + a required identity
+param, or on a controller without a required struct identity.
+
+### Param-level identity — for mostly-public controllers
+
+```rust
+#[controller(path = "/api")]
+pub struct MixedController {
+    #[inject] user_service: UserService,
+}
+
+#[routes]
+impl MixedController {
+    #[get("/public")]
+    async fn public_data(&self) -> Json<Vec<User>> { ... }        // no auth
+
+    #[get("/me")]
+    async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<AuthenticatedUser> {
+        Json(user)
+    }
+
+    #[get("/maybe")]
+    async fn adaptive(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> Json<Value> { ... }
+}
+```
+
+### Role-based access
 
 ```rust
 #[get("/admin")]
-#[roles("admin")]
+#[roles("admin")]                 // 403 unless identity has the role
 async fn admin_only(&self) -> Json<Data> { ... }
 
-#[get("/manager")]
-#[roles("admin", "manager")]   // OR — any one role suffices
-async fn manager_data(&self) -> Json<Data> { ... }
+#[roles("admin", "manager")]      // OR — any one suffices
+#[all_roles("audit", "finance")]  // AND — all required
 ```
 
-### Custom Identity (Database-backed)
+### Custom identity (database-backed)
 
 ```rust
-use r2e::r2e_security::{ClaimsIdentity, impl_claims_identity_extractor, AuthenticatedUser};
+use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity};
+use r2e::{BeanLookup, Identity};
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct DbUser {
-    pub auth: AuthenticatedUser,
-    pub profile: UserProfile,
-}
+#[derive(Clone, Serialize)]                 // NOT Deserialize — never body-constructible
+pub struct DbUser { pub auth: AuthenticatedUser, pub profile: UserProfile }
 
 impl Identity for DbUser {
     fn sub(&self) -> &str { self.auth.sub() }
+    fn email(&self) -> Option<&str> { self.auth.email() }
+    fn claims(&self) -> Option<&serde_json::Value> { self.auth.claims() }
+}
+impl RoleBasedIdentity for DbUser {
     fn roles(&self) -> &[String] { self.auth.roles() }
 }
 
-impl<S> ClaimsIdentity<S> for DbUser
-where S: Send + Sync, sqlx::SqlitePool: FromRef<S> {
-    async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, AppError> {
+impl<S: BeanLookup + Send + Sync> ClaimsIdentity<S> for DbUser {
+    async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, HttpError> {
         let auth = AuthenticatedUser::from_claims(claims);
-        let pool = sqlx::SqlitePool::from_ref(state);
+        let pool = state.bean::<SqlitePool>().ok_or_else(|| HttpError::internal("no pool"))?;
         let profile = /* query DB with auth.sub() */;
         Ok(DbUser { auth, profile })
     }
 }
-
 impl_claims_identity_extractor!(DbUser);
 ```
 
@@ -325,128 +587,137 @@ impl_claims_identity_extractor!(DbUser);
 
 ## Guards
 
-### Post-auth Guards (run after JWT validation)
+Guards are **graph-resolved decorators**: the `#[guard(...)]` expression is
+evaluated once at controller registration; bean deps are declared at the type
+level and compile-checked (a missing bean is a compile error at
+`register_controller()`). No state access at request time.
+
+### Simple guard (no bean deps) — `SelfBuilt`
 
 ```rust
-use r2e::prelude::*;
+pub struct BlockUser;
+impl SelfBuilt for BlockUser {}            // one line: the expression IS the guard
 
-struct MyGuard;
-
-impl<S: Send + Sync, I: Identity> Guard<S, I> for MyGuard {
-    fn check(&self, state: &S, ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Response>> + Send {
-        async move {
-            if ctx.identity_sub() == "blocked-user" {
-                return Err(AppError::Forbidden("Blocked".into()).into_response());
-            }
-            Ok(())
+impl<I: Identity> Guard<I> for BlockUser {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+        if ctx.identity_sub() == Some("blocked-user") {
+            return Err(GuardError::forbidden("Blocked").into());
         }
+        Ok(())
     }
 }
 
-// Usage:
+// usage:
 #[get("/protected")]
-#[guard(MyGuard)]
+#[guard(BlockUser)]
 async fn protected(&self) -> Json<Data> { ... }
+
+// tuple-struct config works directly:
+#[guard(RequireApiKey("x-api-key"))]
 ```
 
-`GuardContext` provides: `method_name`, `controller_name`, `headers`, `uri`, `identity` (optional), convenience: `identity_sub()`, `identity_roles()`, `identity_email()`, `identity_claims()`.
+`GuardContext` provides: `method_name`, `controller_name`, `headers`, `uri`
+(`.path()`, `.query_string()`), `path_params` (`path_param()`,
+`parse_path_param()`), `identity: Option<&I>`, plus `identity_sub()`,
+`identity_email()`, `identity_claims()`. Error helper: `GuardError::forbidden(...)`,
+`GuardError::unauthorized(...)`, `GuardError::new(status, msg)`.
 
-### Pre-auth Guards (run before JWT validation)
+### Bean-reading guard — `#[derive(DecoratorBean)]`
 
 ```rust
-struct IpAllowlist;
-
-impl<S: Send + Sync> PreAuthGuard<S> for IpAllowlist {
-    fn check(&self, state: &S, ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
-        async move { Ok(()) }
-    }
+#[derive(DecoratorBean)]
+pub struct ProjectGuard {
+    #[inject] pool: PgPool,                 // from the bean graph (compile-checked)
+    #[config("app.tenant")] tenant: String, // from R2eConfig
+    min_role: &'static str,                 // plain field = site config
 }
 
-#[get("/data")]
-#[pre_guard(IpAllowlist)]
-async fn data(&self) -> Json<Data> { ... }
+impl<I: Identity> Guard<I> for ProjectGuard { /* uses self.pool */ }
+
+// at the site — plain fields in declaration order:
+#[guard(ProjectGuard::spec("viewer"))]
 ```
 
----
+### Pre-auth guards
 
-## Rate Limiting
+Run as middleware **before** JWT extraction (IP allowlists, pre-auth rate
+limits). Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no identity),
+apply with `#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
 
-Requires feature: `rate-limit`
+### Rate limiting
+
+Requires feature: `rate-limit`. Provide the registry: `.provide(RateLimitRegistry::default())`.
 
 ```rust
-use r2e::r2e_rate_limit::RateLimit;
+use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 
-// Pre-auth (no identity needed)
-#[pre_guard(RateLimit::global(100, 60))]   // 100 req / 60 sec, shared bucket
-#[pre_guard(RateLimit::per_ip(10, 60))]    // 10 req / 60 sec, per IP
-
-// Post-auth (needs identity)
-#[guard(RateLimit::per_user(5, 60))]       // 5 req / 60 sec, per user
-```
-
-State must include `RateLimitRegistry`:
-```rust
-builder.provide(RateLimitRegistry::default())
+#[pre_guard(PreRateLimit::global(100, 60))]   // 100 req / 60s, shared bucket (pre-auth)
+#[pre_guard(PreRateLimit::per_ip(10, 60))]    // per IP (pre-auth)
+#[guard(RateLimit::per_user(5, 60))]          // per user (post-auth, needs identity)
 ```
 
 ---
 
 ## Interceptors
 
-Cross-cutting concerns via `#[intercept(...)]`. Can be on methods or the entire impl block.
+Cross-cutting concerns via `#[intercept(...)]` on methods or the whole impl
+block. Interceptors see the handler's **raw return type** (`Json<T>`,
+`Result<...>`), never `Response`. Guards run first.
 
 ### Built-in (from `r2e-utils`)
 
 ```rust
 #[intercept(Logged::info())]                  // log entry/exit
-#[intercept(Logged::debug())]                 // custom level
-#[intercept(Timed::info())]                   // measure execution time
 #[intercept(Timed::threshold(100))]           // only log if > 100ms
+#[intercept(Counted::new("user_list_total"))] // named counter metric
+#[intercept(MetricTimed::new("user_list_duration"))]
 #[intercept(Cache::ttl(30))]                  // cache response 30s
 #[intercept(Cache::ttl(60).group("users"))]   // named cache group
 #[intercept(CacheInvalidate::group("users"))] // clear cache group
 ```
 
-### Block-level (applies to all routes)
+`Cache`/`CacheInvalidate` need the store bean: `.provide(InMemoryStore::shared())`
+(feature `cache`). A missing store is a compile error. `Cache` requires the
+return type to be `Cacheable` (`Json<T>`, `Result<T: Cacheable, E>`, or
+`#[derive(Cacheable)]`).
+
+### Block-level
 
 ```rust
 #[routes]
-#[intercept(Logged::info())]
-impl UserController {
-    #[get("/")]
-    async fn list(&self) -> Json<Vec<User>> { ... }  // logged
-
-    #[post("/")]
-    async fn create(&self, ...) -> Json<User> { ... } // also logged
-}
+#[intercept(Logged::info())]                  // applies to all routes below
+impl UserController { ... }
 ```
 
-### Custom Interceptor
+### Custom interceptor
 
 ```rust
 pub struct AuditLog;
+impl SelfBuilt for AuditLog {}
 
 impl<R: Send> Interceptor<R> for AuditLog {
-    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    async fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> R
     where F: FnOnce() -> Fut + Send, Fut: Future<Output = R> + Send {
-        async move {
-            tracing::info!(method = ctx.method_name, "audit: entering");
-            let result = next().await;
-            tracing::info!(method = ctx.method_name, "audit: done");
-            result
-        }
+        tracing::info!(method = ctx.method_name, "audit: entering");
+        let result = next().await;
+        tracing::info!(method = ctx.method_name, "audit: done");
+        result
     }
 }
-
-#[intercept(AuditLog)]
-async fn audited(&self) -> Json<Data> { ... }
 ```
+
+Bean deps → `#[derive(DecoratorBean)]`, same as guards.
+
+Execution order: pre-auth guards → guards (declaration order) → validation →
+controller-level interceptors → method-level interceptors → `#[transactional]`
+→ body.
 
 ---
 
 ## Validation
 
-Validation is always available — no feature flag needed. Uses `garde` crate.
+Always available (via `garde`). `Json<T>` extraction auto-validates when
+`T: garde::Validate`; failures return 400 with field errors.
 
 ```rust
 use garde::Validate;
@@ -459,49 +730,29 @@ pub struct CreateUserRequest {
     #[garde(email)]
     pub email: String,
 }
-
-#[post("/")]
-async fn create(&self, Json(body): Json<CreateUserRequest>) -> JsonResult<User> {
-    // body is automatically validated; returns 400 with field errors on failure
-    Ok(Json(self.service.create(body.name, body.email).await))
-}
 ```
 
-Types without `#[derive(Validate)]` work normally — no validation overhead.
-
-### Params (BeanParam-like aggregation)
+### `#[derive(Params)]` — aggregated path/query/header params
 
 ```rust
-use r2e::prelude::*;
-use garde::Validate;
-
 #[derive(Params, Validate)]
 struct GetUserParams {
     #[path]
     id: u64,
-
     #[query]
     #[param(default = 1)]
     #[garde(range(min = 1))]
     page: u32,
-
-    #[query]
-    #[param(default = 20)]
-    size: u32,
-
     #[header("X-Tenant-Id")]
     #[garde(length(min = 1))]
     tenant_id: String,
 }
 
 #[get("/{id}")]
-async fn get(&self, params: GetUserParams) -> Json<User> {
-    // params.id, params.page, params.size, params.tenant_id extracted and validated
-    // page defaults to 1, size defaults to 20 when absent
-}
+async fn get(&self, params: GetUserParams) -> Json<User> { ... }
 ```
 
-`#[derive(Params)]` also generates `ParamsMetadata`, so all fields automatically appear in the OpenAPI spec (`/openapi.json`) with correct name, location, type, and required status.
+All fields appear automatically in the OpenAPI spec.
 
 ---
 
@@ -509,116 +760,72 @@ async fn get(&self, params: GetUserParams) -> Json<User> {
 
 Requires feature: `multipart`
 
-### Typed Multipart
-
 ```rust
-use r2e::prelude::*;
-use r2e::multipart::{TypedMultipart, UploadedFile};
-
 #[derive(FromMultipart)]
 pub struct ProfileUpload {
-    pub name: String,              // required text field
-    pub bio: Option<String>,       // optional text field
-    pub age: i32,                  // parsed via FromStr
-    pub avatar: UploadedFile,      // required file
-    pub attachments: Vec<UploadedFile>,  // multiple files (may be empty)
+    pub name: String,                    // required text field
+    pub bio: Option<String>,             // optional text field
+    pub avatar: UploadedFile,            // required file
+    pub attachments: Vec<UploadedFile>,  // multiple files
 }
 
 #[post("/profile")]
-async fn upload(&self, TypedMultipart(form): TypedMultipart<ProfileUpload>) -> JsonResult<Value> {
-    Ok(Json(serde_json::json!({
-        "name": form.name,
-        "avatar_size": form.avatar.len(),
-        "avatar_filename": form.avatar.file_name,
-    })))
-}
+async fn upload(&self, TypedMultipart(form): TypedMultipart<ProfileUpload>) -> JsonResult<Value> { ... }
 ```
 
-`UploadedFile` fields: `name: String`, `file_name: Option<String>`, `content_type: Option<String>`, `data: Bytes`. Methods: `len()`, `is_empty()`.
-
-### Raw Multipart
-
-```rust
-use r2e::multipart::Multipart;
-
-#[post("/raw")]
-async fn raw(&self, mut multipart: Multipart) -> JsonResult<Vec<String>> {
-    let mut names = Vec::new();
-    while let Some(field) = multipart.next_field().await.map_err(|e| AppError::BadRequest(e.to_string()))? {
-        names.push(field.name().unwrap_or("").to_string());
-        let _data = field.bytes().await.map_err(|e| AppError::Internal(e.to_string()))?;
-    }
-    Ok(Json(names))
-}
-```
+`UploadedFile`: `name`, `file_name`, `content_type`, `data: Bytes`, `len()`.
+Raw `Multipart` extractor also available.
 
 ---
 
 ## Managed Resources (Transactions)
 
+`#[managed]` params get `acquire()` before the handler and `release(success)`
+after. `r2e-data-sqlx` ships a ready `Tx` — once the pool is provided, it just
+works (the pool is resolved from the bean graph by type; no `HasPool` impl):
+
 ```rust
-use sqlx::{Database, Pool, Sqlite, Transaction};
+use r2e_data_sqlx::Tx;
 
-pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
-
-pub trait HasPool<DB: Database> {
-    fn pool(&self) -> &Pool<DB>;
-}
-
-impl HasPool<Sqlite> for Services {
-    fn pool(&self) -> &Pool<Sqlite> { &self.pool }
-}
-
-impl<S, DB> ManagedResource<S> for Tx<'static, DB>
-where DB: Database, S: HasPool<DB> + Send + Sync {
-    type Error = ManagedErr<AppError>;
-
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let tx = state.pool().begin().await
-            .map_err(|e| ManagedErr(AppError::Internal(e.to_string())))?;
-        Ok(Tx(tx))
-    }
-
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        if success { self.0.commit().await.map_err(|e| ManagedErr(AppError::Internal(e.to_string())))?; }
-        Ok(())
-    }
-}
-```
-
-Usage:
-```rust
 #[post("/db")]
-async fn create_in_db(&self, Json(body): Json<CreateUser>, #[managed] tx: &mut Tx<'_, Sqlite>) -> JsonResult<User> {
-    sqlx::query("INSERT INTO users (name) VALUES (?)").bind(&body.name).execute(tx.as_mut()).await?;
+async fn create_in_db(&self, Json(body): Json<CreateUser>,
+                      #[managed] tx: &mut Tx<'_, Sqlite>) -> JsonResult<User> {
+    sqlx::query("INSERT INTO users (name) VALUES (?)")
+        .bind(&body.name).execute(tx.as_mut()).await?;
     Ok(Json(user))
 }
 ```
 
+Custom resources implement `ManagedResource<S>` (bound `S: BeanLookup` to pull
+beans by type: `state.bean::<T>()`), error type `ManagedErr<HttpError>`.
+`#[managed]` and `#[transactional]` are mutually exclusive; prefer `#[managed]`.
+
 ---
 
-## Events (In-Process Pub/Sub)
+## Events (Pub/Sub)
 
-Requires feature: `events`
+Requires feature: `events`. `EventBus` is a trait; `LocalEventBus` is the
+in-process default; distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) are
+drop-in. Events derive `Serialize + Deserialize` (LocalEventBus never actually
+serializes).
+
+```rust
+b.provide(LocalEventBus::new())
+```
 
 ### Emitting
 
 ```rust
-// fire-and-forget
-self.event_bus.emit(UserCreatedEvent { user_id: 1, name: "Alice".into() }).await;
-
-// wait for all handlers
-self.event_bus.emit_and_wait(event).await;
+self.event_bus.emit(UserCreatedEvent { user_id: 1 }).await?;   // fire-and-forget
+self.event_bus.emit_and_wait(event).await?;                    // wait for handlers
 ```
 
-### Consuming (Declarative)
-
-Consumer methods run on the controller core (via `StatefulConstruct`, always generated) and cannot access request-scoped fields (`#[inject(identity)]` / `#[inject(request)]` are façade-only).
+### Consuming — on controllers
 
 ```rust
-#[controller(state = Services)]
+#[controller]
 pub struct UserEventConsumer {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 
 #[routes]
@@ -628,60 +835,93 @@ impl UserEventConsumer {
         tracing::info!(user_id = event.user_id, "user created");
     }
 }
+// registered automatically by register_controller()
+```
+
+Consumers run on the controller core — they cannot access request-scoped
+fields (identity), but work on any controller.
+
+### Consuming — on beans
+
+```rust
+#[bean]
+impl NotificationService {
+    pub fn new(event_bus: LocalEventBus, mailer: Mailer) -> Self { ... }
+
+    #[consumer(bus = "event_bus")]
+    async fn on_user_created(&self, event: Arc<UserCreatedEvent>) { ... }
+}
+// register with .register_subscriber::<NotificationService>()
+```
+
+### EventBus↔SSE bridge
+
+```rust
+b.provide(SseTopic::<UserCreatedEvent>::new(64).with_event_name("user_created"))
+ .build_state().await
+ .bridge_sse::<LocalEventBus, UserCreatedEvent>()   // bus.emit → SSE fan-out, zero liaison code
 ```
 
 ---
 
 ## Scheduled Tasks
 
-Requires feature: `scheduler`
-
-Scheduled methods run on the controller core (via `StatefulConstruct`, always generated) and cannot access request-scoped fields (`#[inject(identity)]` / `#[inject(request)]` are façade-only).
+Requires feature: `scheduler`. Install the plugin **before** `build_state()`:
 
 ```rust
-use r2e::r2e_scheduler::Scheduler;
-
-// In AppBuilder:
-AppBuilder::new()
-    .plugin(Scheduler)            // MUST be before build_state()
-    .build_state::<Services, _, _>()
-    .await
-    .register_controller::<ScheduledJobs>()
+b.plugin(Scheduler)
+ .build_state().await
+ .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
 ```
 
 ```rust
-#[controller(state = Services)]
+#[controller]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
 }
 
 #[routes]
 impl ScheduledJobs {
-    #[scheduled(every = 30)]                  // every 30 seconds
-    async fn count_users(&self) {
-        let count = self.user_service.count().await;
-        tracing::info!(count, "Scheduled user count");
-    }
+    #[scheduled(every = 30)]                          // every 30s (integer = seconds)
+    async fn count_users(&self) { ... }
 
-    #[scheduled(every = 60, delay = 10)]      // first run after 10s, then every 60s
+    #[scheduled(every = "5m", initial_delay = "10s")] // duration strings
     async fn sync(&self) { ... }
 
-    #[scheduled(cron = "0 */5 * * * *")]      // cron expression
+    #[scheduled(cron = "0 */5 * * * *")]              // compile-time validated
     async fn report(&self) { ... }
 }
 ```
+
+Dynamic (config-driven) tasks — post-`build_state()`:
+
+```rust
+use r2e_scheduler::{AppBuilderSchedulerExt, ScheduledTaskDef};
+
+.schedule_task(ScheduledTaskDef::from_fn("heartbeat", "30s".parse().unwrap(),
+    || async { tracing::debug!("tick") }))
+.schedule_task_with(|ctx| ScheduledTaskDef::new(
+    "sync", schedule, ctx.get::<SyncService>(),
+    move |svc| async move { svc.sync().await }))
+```
+
+Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()`.
+`ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
+from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
 
 ---
 
 ## SSE (Server-Sent Events)
 
 ```rust
+use std::convert::Infallible;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-#[controller(path = "/sse", state = Services)]
+#[controller(path = "/sse")]
 pub struct SseController {
     #[inject] sse_broadcaster: SseBroadcaster,
+    #[inject] user_events: SseTopic<UserCreatedEvent>,   // typed topic (see events bridge)
 }
 
 #[routes]
@@ -693,6 +933,8 @@ impl SseController {
 }
 ```
 
+Provide the broadcaster: `.provide(SseBroadcaster::new(128))`.
+
 ---
 
 ## WebSockets
@@ -702,7 +944,7 @@ Requires feature: `ws`
 ```rust
 use r2e::ws::WsStream;
 
-#[controller(path = "/ws", state = Services)]
+#[controller(path = "/ws")]
 pub struct WsEchoController;
 
 #[routes]
@@ -715,23 +957,46 @@ impl WsEchoController {
 }
 ```
 
+`WsBroadcaster` / `WsRooms` (prelude) support fan-out and room semantics.
+
+---
+
+## Proxy & Catch-All Routes
+
+For gateways/proxies, stay in controllers — do NOT hand-mount an axum fallback:
+
+```rust
+use r2e::http::extract::Request;
+
+#[controller]
+pub struct ProxyController {
+    #[inject] upstream: UpstreamClient,
+}
+
+#[routes]
+impl ProxyController {
+    #[any("/registry/{*path}")]              // every HTTP method, wildcard path
+    async fn proxy(&self, req: Request) -> Response {
+        self.upstream.forward(req).await     // Request must be the LAST param
+    }
+
+    #[fallback]                              // app-wide catch-all (no path argument;
+    async fn dispatch(&self, req: Request) -> Response { ... }  // controller must have no path prefix)
+}
+```
+
+Guards, interceptors, DI, and TestApp all work on these routes. Streaming:
+`Body::from_stream(...)`, or pass through `Body::new(req.into_body())`.
+`#[any]`/`#[fallback]`/wildcard routes are excluded from OpenAPI.
+
 ---
 
 ## Data Access
 
-Requires feature: `data`
-
-### Entity
+Requires feature: `data` (+ `data-sqlx`/`sqlite`/`postgres`/`mysql`)
 
 ```rust
 use r2e_data::Entity;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserEntity {
-    pub id: i64,
-    pub name: String,
-    pub email: String,
-}
 
 impl Entity for UserEntity {
     type Id = i64;
@@ -742,108 +1007,37 @@ impl Entity for UserEntity {
 }
 ```
 
-### QueryBuilder
-
-```rust
-let qb = QueryBuilder::new(UserEntity::table_name())
-    .where_like("name", "%Alice%")
-    .where_eq("email", "alice@example.com")
-    .order_by("id", true)
-    .limit(10)
-    .offset(0);
-
-let (sql, params) = qb.build_select("id, name, email");
-let (count_sql, count_params) = qb.build_count();
-```
-
-### Pagination
+- `Repository<T, ID>` — async CRUD trait; `SqlxRepository` implements it.
+- `QueryBuilder` — fluent SQL (`where_eq`, `where_like`, `order_by`, `limit`, `offset`).
+- `Pageable` (query-string extractor) + `Page<T>` (response wrapper):
 
 ```rust
 #[get("/")]
-async fn list_paged(&self, Query(pageable): Query<Pageable>) -> Result<Json<Page<UserEntity>>, AppError> {
-    // ... query with pageable.size, pageable.offset() ...
+async fn list_paged(&self, Query(pageable): Query<Pageable>) -> JsonResult<Page<UserEntity>> {
     Ok(Json(Page::new(entities, &pageable, total)))
 }
 ```
 
 ---
 
-## Configuration
-
-### YAML Files
-
-`application.yaml` (base) + `application-{profile}.yaml` (override). Profile from `R2E_PROFILE` env var.
-
-```yaml
-app:
-  name: "My App"
-  version: "1.0"
-  greeting: "Hello"
-server:
-  port: 3000
-```
-
-### Loading
-
-```rust
-let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-```
-
-### Injection
-
-```rust
-#[controller(state = Services)]
-pub struct MyController {
-    #[config("app.name")] app_name: String,
-    #[config("server.port")] port: i64,
-}
-```
-
----
-
-## Middleware & Layers
-
-### Per-route Tower layer
-
-```rust
-use tower_http::timeout::TimeoutLayer;
-
-#[get("/slow")]
-#[layer(TimeoutLayer::new(Duration::from_secs(2)))]
-async fn slow(&self) -> Json<&'static str> { Json("done") }
-```
-
-### Global layer
-
-```rust
-builder.with_layer(TimeoutLayer::new(Duration::from_secs(30)))
-```
-
-### Per-route middleware function
-
-```rust
-#[get("/protected")]
-#[middleware(my_middleware_fn)]
-async fn protected(&self) -> Json<Data> { ... }
-```
-
----
-
 ## OpenAPI
 
-Requires feature: `openapi`
+Requires feature: `openapi`. Generates OpenAPI 3.1.0; users add `schemars = "1"`
+and derive `JsonSchema` on request/response types.
 
 ```rust
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
-builder.with(OpenApiPlugin::new(
+.with(OpenApiPlugin::new(
     OpenApiConfig::new("My API", "1.0.0")
         .with_description("API description")
-        .with_docs_ui(true),  // serves /docs
+        .with_docs_ui(true),               // serves /docs
 ))
 ```
 
-Spec at `/openapi.json`. Interactive docs at `/docs` (when enabled).
+Spec at `/openapi.json`. Request/response schemas auto-detected from `Json<T>`
+params and return types; `#[status(N)]` / `#[returns(T)]` override; doc
+comments become summary/description; 401/403 only emitted on authed routes.
 
 ---
 
@@ -854,66 +1048,44 @@ Requires feature: `prometheus`
 ```rust
 use r2e::r2e_prometheus::Prometheus;
 
-// Simple
-builder.with(Prometheus::new("/metrics"))
-
-// With configuration
-builder.with(Prometheus::builder()
+.plugin(Prometheus::builder()             // pre-state plugin
     .endpoint("/metrics")
     .namespace("myapp")
-    .exclude_paths(&["/health", "/metrics"])
+    .exclude_path("/health")
+    .exclude_path("/metrics")
     .build())
 ```
 
-Tracked metrics:
-- `http_requests_total` — Counter (labels: method, path, status)
-- `http_request_duration_seconds` — Histogram (labels: method, path)
-- `http_requests_in_flight` — Gauge (concurrent requests)
+Metrics: `http_requests_total` (method/path/status), `http_request_duration_seconds`,
+`http_requests_in_flight`. Path labels use the matched route template (bounded
+cardinality).
 
 ---
 
 ## Observability (OpenTelemetry)
 
-Requires feature: `observability`
-
-Distributed tracing via OpenTelemetry. **Superset of `Tracing`** — do NOT install both.
+Requires feature: `observability`. **Superset of `Tracing`** — do NOT install both.
 
 ```rust
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 
-AppBuilder::new()
-    .build_state::<MyState, _, _>()
-    .await
-    // No init_tracing() call needed — the plugin handles it
-    .with(Observability::new(
-        ObservabilityConfig::new("my-service")
-            .with_service_version("1.0.0")
-            .with_endpoint("http://otel-collector:4317")
-            .capture_header("x-tenant-id"),
-    ))
-    .serve("0.0.0.0:3000")
-    .await;
+.with(Observability::new(
+    ObservabilityConfig::new("my-service")
+        .with_service_version("1.0.0")
+        .with_endpoint("http://otel-collector:4317")
+        .capture_header("x-tenant-id"),
+))
+// or from YAML (observability.* keys): .with(Observability::from_config(&config, "my-service"))
 ```
 
-Or from YAML config:
-```rust
-.with(Observability::from_config(&config, "my-service"))
-```
-
-| | `Tracing` | `Observability` |
-|---|---|---|
-| Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-| Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
-| Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
-| Context propagation | No | Yes (W3C `traceparent`) |
+OTLP export (Jaeger, Tempo, …) + W3C `traceparent` propagation.
 
 ---
 
 ## OIDC Server (Embedded)
 
-Requires feature: `oidc`
-
-Embedded OIDC server — no external identity provider needed. Generates RSA-2048 key pair, provides `Arc<JwtClaimsValidator>` to the bean graph, and exposes OAuth 2.0 endpoints.
+Requires feature: `oidc`. Issues JWTs without an external IdP; auto-provides
+`Arc<JwtClaimsValidator>` so `AuthenticatedUser` works with no manual setup.
 
 ```rust
 use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
@@ -926,224 +1098,211 @@ let users = InMemoryUserStore::new()
         ..Default::default()
     });
 
-let oidc = OidcServer::new()
+b.plugin(OidcServer::new()                // pre-state plugin
     .issuer("http://localhost:3000")
     .audience("my-app")
     .token_ttl(3600)
-    .base_path("")               // or "/auth" for nested paths
-    .with_user_store(users);
-
-AppBuilder::new()
-    .plugin(oidc)                // PreStatePlugin — before build_state()
-    .build_state::<Services, _, _>().await
-    .register_controller::<UserController>()
-    .serve("0.0.0.0:3000").await.unwrap();
+    .with_user_store(users))
 ```
 
-Exposed endpoints:
-- `POST /oauth/token` — token issuance (password + client_credentials grants)
-- `GET /.well-known/openid-configuration` — OIDC discovery
-- `GET /.well-known/jwks.json` — public keys
-- `GET /userinfo` — authenticated user info
-
-The plugin auto-provides `Arc<JwtClaimsValidator>`, so `AuthenticatedUser` works without manual JWT setup.
+Endpoints: `POST /oauth/token`, `/.well-known/openid-configuration`,
+`/.well-known/jwks.json`, `GET /userinfo`.
 
 ---
 
 ## gRPC
 
-Requires feature: `grpc`
-
-gRPC server support with same DX as HTTP controllers: `#[inject]`, `#[config]`, guards, interceptors, identity extraction.
-
-### Two transport modes
-
-- **Separate port**: gRPC on one port, HTTP on another.
-- **Multiplexed**: both on the same port, routed by `content-type`.
-
-### Setup
+Requires feature: `grpc`. Same DX as HTTP controllers: `#[inject]`, `#[config]`,
+guards, interceptors.
 
 ```rust
 use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
-AppBuilder::new()
-    .plugin(GrpcServer::on_port("0.0.0.0:50051"))  // separate port
-    .build_state::<Services, _, _>()
-    .await
-    .register_grpc_service::<GreeterService>()
-    .register_grpc_service::<OrderService>()
-    .serve("0.0.0.0:3000")                          // HTTP port
-    .await;
+b.plugin(GrpcServer::on_port("0.0.0.0:50051"))   // separate port (or multiplexed)
+ .build_state().await
+ .register_grpc_service::<GreeterService>()       // deps compile-checked here
 ```
 
-### Service declaration
-
-Uses `#[grpc_routes]` macro on tonic-generated traits:
-
 ```rust
-use r2e_grpc::prelude::*;
-
-#[controller(state = Services)]
+#[controller]
 pub struct GreeterService {
     #[inject] user_service: UserService,
 }
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter_server::Greeter)]    // tonic-generated trait
 impl GreeterService {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloReply>, Status> {
-        Ok(Response::new(HelloReply {
-            message: format!("Hello, {}!", request.into_inner().name),
-        }))
+        Ok(Response::new(HelloReply { message: format!("Hello, {}!", request.into_inner().name) }))
     }
 }
 ```
 
-### gRPC Guards
+gRPC guards: `#[guard(GrpcRolesGuard::new(&["admin"]))]` etc.
+
+---
+
+## Static Files / SPA
+
+Requires feature: `static`. Serves `rust_embed` assets with SPA fallback:
 
 ```rust
-use r2e_grpc::{GrpcGuard, GrpcGuardContext, GrpcRolesGuard};
-
-// Role-based access for gRPC
-#[grpc_routes(proto::admin_server::Admin)]
-#[guard(GrpcRolesGuard::new(&["admin"]))]
-impl AdminService { ... }
+.with(EmbeddedFrontend::new::<Assets>())          // SPA on, api/ excluded, assets/ immutable
+// custom: EmbeddedFrontend::builder::<Assets>().spa_fallback(true).exclude_prefix("api/").build()
 ```
+
+---
+
+## Background Work (Executor)
+
+Requires feature: `executor`. Managed task pool with bounded concurrency and
+graceful drain:
+
+```rust
+b.plugin(Executor)                         // provides PoolExecutor bean
+
+#[controller]
+pub struct JobController {
+    #[inject] executor: PoolExecutor,
+}
+// executor.spawn(...) → JobHandle; or #[async_exec] methods; or
+// #[derive(BackgroundService)] for long-running service components
+```
+
+Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown.
 
 ---
 
 ## Additional Plugins
 
-| Plugin | Description |
-|--------|-------------|
-| `RequestIdPlugin` | X-Request-Id propagation |
-| `SecureHeaders` | Security headers (X-Content-Type-Options, X-Frame-Options, etc.) |
-| `AdvancedHealth` | `/health` + `/health/live` + `/health/ready` with custom health checks |
-
 ```rust
-// Request ID
-builder.with(RequestIdPlugin)
-
-// Secure headers
-builder.with(SecureHeaders::default())
-builder.with(SecureHeaders::builder().hsts(true).build())
-
-// Advanced health checks
-builder.with(Health::builder()
-    .check(DbHealth::new(pool.clone()))
-    .check(RedisHealth::new(redis.clone()))
-    .build())
+.with(RequestIdPlugin)                     // X-Request-Id propagation
+.with(SecureHeaders::default())            // security headers
+.with(Health)                              // /health
+.with(NormalizePath)                       // trailing-slash normalization — LAST plugin
 ```
 
 ---
 
 ## Testing
 
+The blueprint pattern makes tests boot the **real app** — never re-declare
+controllers/routers in tests.
+
 ```rust
-use r2e_test::{TestApp, TestJwt};
+use r2e::prelude::*;
+use r2e_test::TestApp;
 
-#[tokio::test]
-async fn test_list_users() {
-    let app = TestApp::new(build_test_router().await);
-    let jwt = TestJwt::new().with_sub("user-1").with_roles(vec!["admin"]);
-
-    let resp = app.get("/users")
-        .bearer(jwt.token())
-        .send().await;
-
-    assert_eq!(resp.status(), 200);
-    let users: Vec<User> = resp.json().await;
-    assert!(!users.is_empty());
+// Macro form — binds params: app: TestApp, jwt: TestJwt, #[inject] bean: T
+#[r2e::test(app = my_app::app)]
+async fn lists_users(app: TestApp) {
+    app.get("/users").as_user("alice", &["user"]).send().await
+        .assert_ok()
+        .assert_json_path("/0/name", "Alice");
 }
+
+// With overrides: pin mocks and patch config BEFORE the blueprint runs
+#[r2e::test(app = my_app::app, with = |b| b
+    .override_bean(MockMailer::new())
+    .override_config_value("app.llm.api_key", "test-key"))]
+async fn with_mocks(app: TestApp, #[inject] service: UserService) { ... }
 ```
+
+Explicit form: `TestApp::boot(my_app::app).await`,
+`TestApp::boot_with(my_app::app, |b| ...).await`. Boot forces the `test`
+profile (`application-test.yaml` overlays) and wires a `TestJwt` validator so
+`.as_user(sub, &roles)` mints valid Bearer tokens.
+
+- `app.bean::<T>()` — fetch any bean from the booted graph; `app.config()`.
+- `TestRequest`: `.bearer(t)`, `.header(...)`, `.json(body)`, `.form(...)`,
+  `.query(k, v)`, `.file(...)` — then `.send().await`.
+- `TestResponse` assertions: `assert_ok/created/no_content/bad_request/unauthorized/
+  forbidden/not_found/...`, `assert_json_path(path, expected)`,
+  `assert_json_contains(subset)`, `assert_json_shape(schema)`, `assert_header(...)`,
+  cookie and SSE assertions; access via `json::<T>()`, `text()`.
+- `app.session()` — cookie-persisting `TestSession`.
+- `app.serve()` — live `TestServer` on a random port (WebSocket/SSE tests);
+  `WsTestClient` for WS.
+- `TestJwt::token_builder(sub)` — expired/wrong-issuer/wrong-audience tokens.
+
+### Dev services (containers)
+
+`r2e-devservices` (features `postgres`, `redis`): `DevPostgres::shared().await`
+= one container per test process; wire via
+`b.override_config_value("app.database.url", pg.url())` in the boot hook.
 
 ---
 
-## Handler Parameter Types (Axum Extractors)
+## Dev Experience
 
-These work as handler parameters alongside `&self`:
+- `#[r2e::main]` — tokio main + optional hot-reload support. With a parameter
+  (`async fn main(env: AppEnv)`) it auto-calls `setup()` and enables the
+  `dev-reload` hot-patch path (keep long-lived resources in `AppEnv`).
+- `r2e new <name>` — scaffold a project (blueprint layout). `r2e dev` — hot
+  reload. `r2e generate controller <Name>` — scaffold pieces. `r2e routes` —
+  list routes. `r2e doctor` — diagnose setup.
+- `cargo expand -p <crate>` — inspect macro output when debugging.
+
+---
+
+## Handler Parameter Types
+
+Alongside `&self`:
 
 | Parameter | Description |
 |-----------|-------------|
 | `Path(id): Path<u64>` | URL path parameter |
 | `Query(params): Query<T>` | Query string (T: Deserialize) |
-| `Json(body): Json<T>` | JSON request body (auto-validated if T: Validate) |
-| `TypedMultipart(form): TypedMultipart<T>` | Typed multipart (needs `multipart` feature) |
-| `mut multipart: Multipart` | Raw multipart (needs `multipart` feature) |
-| `Form(data): Form<T>` | URL-encoded form body (T: Deserialize) |
-| `ConnectInfo(addr): ConnectInfo<SocketAddr>` | Client socket address |
+| `Json(body): Json<T>` | JSON body (auto-validated if T: garde::Validate) |
+| `params: MyParams` | `#[derive(Params)]` aggregation (`#[path]`/`#[query]`/`#[header]`) |
+| `#[inject(identity)] user: AuthenticatedUser` | Identity from JWT (`Option<T>` = adaptive) |
+| `#[managed] tx: &mut Tx<'_, Sqlite>` | Managed resource (transaction) |
+| `TypedMultipart(form): TypedMultipart<T>` | Typed multipart (feature `multipart`) |
+| `Form(data): Form<T>` | URL-encoded form |
 | `HeaderMap` | All request headers |
-| `State(s): State<S>` | App state |
-| `params: MyParams` | Aggregated params (`#[derive(Params)]` with `#[path]`, `#[query]`, `#[header]`) |
-| `#[inject(identity)] user: AuthenticatedUser` | Identity from JWT |
-| `#[managed] tx: &mut Tx<'_, Sqlite>` | Managed resource |
-
----
+| `ConnectInfo(addr): ConnectInfo<SocketAddr>` | Client socket address |
+| `SchedulerHandle` | Scheduler control (when `Scheduler` installed) |
+| `req: Request` | Raw request — MUST be the last parameter |
 
 ## Method Attribute Quick Reference
 
 | Attribute | Level | Purpose |
 |-----------|-------|---------|
-| `#[get("/path")]` | method | GET route |
-| `#[post("/path")]` | method | POST route |
-| `#[put("/path")]` | method | PUT route |
-| `#[delete("/path")]` | method | DELETE route |
-| `#[patch("/path")]` | method | PATCH route |
+| `#[get/post/put/delete/patch("/path")]` | method | Verb route |
+| `#[any("/path")]` | method | All-methods route (wildcards: `{*path}`) |
+| `#[fallback]` | method | App-wide catch-all (no path arg) |
 | `#[sse("/path")]` | method | SSE endpoint |
 | `#[ws("/path")]` | method | WebSocket endpoint |
-| `#[roles("role1", "role2")]` | method | Role check (403 on failure) |
-| `#[guard(MyGuard)]` | method | Post-auth guard |
-| `#[pre_guard(MyGuard)]` | method | Pre-auth guard |
-| `#[intercept(Logged::info())]` | method or impl | Interceptor |
-| `#[transactional]` | method | Wrap in SQL transaction |
+| `#[anonymous]` | method | Skip struct-level identity for this route |
+| `#[roles("r1", "r2")]` | method | Any-of role check (403) |
+| `#[all_roles("r1", "r2")]` | method | All-of role check (403) |
+| `#[guard(Expr)]` | method | Post-auth guard (DecoratorSpec) |
+| `#[pre_guard(Expr)]` | method | Pre-auth guard (before JWT) |
+| `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
+| `#[transactional]` | method | Wrap body in SQL transaction (prefer `#[managed]`) |
 | `#[layer(expr)]` | method | Per-route Tower layer |
-| `#[middleware(fn)]` | method | Per-route middleware |
+| `#[middleware(fn)]` | method | Per-route middleware fn |
 | `#[consumer(bus = "field")]` | method | Event consumer |
-| `#[scheduled(every = N)]` | method | Scheduled task |
+| `#[scheduled(every = "5m")]` | method | Scheduled task |
+| `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
 
----
+## Builder Method Quick Reference
 
-## Common Patterns
-
-### Custom Error Type
-
-```rust
-#[derive(Debug)]
-pub enum MyError {
-    NotFound(String),
-    Database(String),
-}
-
-impl IntoResponse for MyError {
-    fn into_response(self) -> Response {
-        let (status, msg) = match self {
-            MyError::NotFound(m) => (StatusCode::NOT_FOUND, m),
-            MyError::Database(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
-        };
-        (status, Json(serde_json::json!({ "error": msg }))).into_response()
-    }
-}
-```
-
-### Unit Struct Controller (no injected fields)
-
-```rust
-#[controller(path = "/health", state = Services)]
-pub struct HealthController;
-
-#[routes]
-impl HealthController {
-    #[get("/")]
-    async fn health(&self) -> StatusCode { StatusCode::OK }
-}
-```
-
-### map_error! Macro
-
-```rust
-r2e::map_error! {
-    sqlx::Error => Internal,
-    std::io::Error => Internal,
-}
-// Now `?` on sqlx::Error auto-converts to AppError::Internal
-```
+| Method | Phase | Purpose |
+|--------|-------|---------|
+| `.plugin(p)` | pre-state | Pre-state plugins (Scheduler, GrpcServer, OidcServer, Prometheus) |
+| `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans |
+| `.provide(value)` | pre-state | Provide a constructed bean |
+| `.register::<T>()` | pre-state | Register a Bean / AsyncBean / Producer |
+| `.when(cond, \|b\| ...)` | any | Conditional assembly (`config_flag`, `profile_is`) |
+| `.build_state().await` | — | Resolve graph → inferred HList state (no type args) |
+| `.with(plugin)` | post-state | Post-state plugins |
+| `.register_controller::<C>()` | post-state | Register controller (+ consumers + scheduled) |
+| `.register_controllers::<(A, B)>()` | post-state | Several at once |
+| `.register_module::<M>()` | pre-state | Feature module (providers + controllers) |
+| `.register_subscriber::<B>()` | post-state | Bean with `#[consumer]` methods |
+| `.bridge_sse::<Bus, E>()` | post-state | EventBus → SSE topic bridge |
+| `.schedule_task(def)` | post-state | Dynamic scheduled task |
+| `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |
+| `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
+| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router |

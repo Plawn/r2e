@@ -325,7 +325,11 @@ pub trait LoadableConfig: Clone + Send + Sync + 'static {
 impl LoadableConfig for () {
     type Children = crate::type_list::TNil;
 
-    fn register(_config: &R2eConfig, _registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+    fn register(_config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+        // `load_config::<C>()` unconditionally pushes `C` onto the
+        // compile-time provision list, so the unit slot must exist in the
+        // registry or `build_state()` fails with "Bean of type `()` not found".
+        registry.provide(());
         Ok(())
     }
 }
