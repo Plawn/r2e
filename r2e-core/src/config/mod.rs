@@ -78,6 +78,24 @@ pub struct R2eConfig {
     values: Arc<HashMap<String, ConfigValue>>,
 }
 
+/// Default base config file name used by [`R2eConfig::load`].
+pub const DEFAULT_CONFIG_FILE: &str = "application.yaml";
+
+/// Derive the profile overlay file for a base config file:
+/// `<stem>-<profile>.<ext>` next to the base file (`patina.yaml` + `test`
+/// → `patina-test.yaml`; an extension-less base gets `-<profile>` appended).
+fn profile_file_for(base: &Path, profile: &str) -> std::path::PathBuf {
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let name = match base.extension() {
+        Some(ext) => format!("{stem}-{profile}.{}", ext.to_string_lossy()),
+        None => format!("{stem}-{profile}"),
+    };
+    base.with_file_name(name)
+}
+
 /// Overlay `R2E_`-prefixed environment variables onto a config values map.
 fn apply_env_overlay<I: IntoIterator<Item = (String, String)>>(
     values: &mut HashMap<String, ConfigValue>,
@@ -112,24 +130,63 @@ impl R2eConfig {
 
     /// Load configuration for a specific profile.
     ///
+    /// [`load_from_with_resolver`](Self::load_from_with_resolver) with the
+    /// default `application.yaml` base file.
+    pub fn load_profiled_with_resolver(
+        profile: Option<&str>,
+        resolver: &dyn SecretResolver,
+    ) -> Result<Self, ConfigError> {
+        // The default base file is optional: apps may run on env vars alone.
+        Self::load_impl(Path::new(DEFAULT_CONFIG_FILE), profile, resolver, false)
+    }
+
+    /// Load configuration from a custom base file, for a specific profile,
+    /// with a custom secret resolver. This is the full form every other
+    /// `load*` constructor delegates to.
+    ///
     /// Resolution order (lowest to highest priority):
-    /// 1. `application.yaml`
-    /// 2. `application-{profile}.yaml` (when the file exists and the profile
-    ///    is not `default`)
-    /// 3. `R2E_`-prefixed environment variables
+    /// 1. The base file (e.g. `patina.yaml`)
+    /// 2. Its profile sibling `<stem>-{profile}.<ext>` (e.g.
+    ///    `patina-test.yaml`, when the file exists and the profile is not
+    ///    `default`)
+    /// 3. `${...}` secret placeholders resolved in string values
+    /// 4. `R2E_`-prefixed environment variables
     ///
     /// The profile itself is resolved as: `profile` argument >
     /// `R2E_PROFILE` env var > `r2e.profile` key in the base file >
     /// `"default"`. The resolved profile is written back to the
     /// `r2e.profile` key so downstream consumers agree on it.
-    pub fn load_profiled_with_resolver(
+    ///
+    /// # Errors
+    ///
+    /// Unlike [`load`](Self::load) — where the default `application.yaml` is
+    /// optional — an explicitly requested base file that does not exist is
+    /// `ConfigError::Load` (a typo'd name would otherwise silently yield an
+    /// empty config). The profile sibling stays optional.
+    pub fn load_from_with_resolver(
+        file: impl AsRef<Path>,
         profile: Option<&str>,
         resolver: &dyn SecretResolver,
+    ) -> Result<Self, ConfigError> {
+        Self::load_impl(file.as_ref(), profile, resolver, true)
+    }
+
+    fn load_impl(
+        file: &Path,
+        profile: Option<&str>,
+        resolver: &dyn SecretResolver,
+        require_file: bool,
     ) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
 
         // 1. Load base config
-        loader::load_yaml_file(Path::new("application.yaml"), &mut values)?;
+        if require_file && !file.exists() {
+            return Err(ConfigError::Load(format!(
+                "config file not found: {}",
+                file.display()
+            )));
+        }
+        loader::load_yaml_file(file, &mut values)?;
 
         // 2. Load .env file (does NOT overwrite existing env vars)
         let _ = dotenvy::dotenv();
@@ -144,7 +201,7 @@ impl R2eConfig {
             });
         if let Some(p) = resolved_profile {
             if p != "default" {
-                loader::load_yaml_file(Path::new(&format!("application-{p}.yaml")), &mut values)?;
+                loader::load_yaml_file(&profile_file_for(file, &p), &mut values)?;
             }
             values.insert("r2e.profile".to_string(), ConfigValue::String(p));
         }
@@ -172,6 +229,27 @@ impl R2eConfig {
     /// [`load`](Self::load) with an explicit profile (wins over `R2E_PROFILE`).
     pub fn load_profiled(profile: Option<&str>) -> Result<Self, ConfigError> {
         Self::load_profiled_with_resolver(profile, &DefaultSecretResolver)
+    }
+
+    /// Load configuration from a custom base file instead of
+    /// `application.yaml` (e.g. `R2eConfig::load_from("patina.yaml")`).
+    ///
+    /// The profile overlay file is derived from the base name
+    /// (`patina.yaml` + profile `test` → `patina-test.yaml`); secret
+    /// resolution and the env overlay apply exactly as in
+    /// [`load`](Self::load). A missing base file is an error (see
+    /// [`load_from_with_resolver`](Self::load_from_with_resolver)).
+    pub fn load_from(file: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::load_from_with_resolver(file, None, &DefaultSecretResolver)
+    }
+
+    /// [`load_from`](Self::load_from) with an explicit profile (wins over
+    /// `R2E_PROFILE`).
+    pub fn load_profiled_from(
+        file: impl AsRef<Path>,
+        profile: Option<&str>,
+    ) -> Result<Self, ConfigError> {
+        Self::load_from_with_resolver(file, profile, &DefaultSecretResolver)
     }
 
     /// Apply the `R2E_`-prefixed environment overlay to an existing values

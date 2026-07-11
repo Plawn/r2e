@@ -74,3 +74,39 @@ fn load_profiled_records_explicit_profile() {
     let config = R2eConfig::load_profiled(Some("test")).unwrap();
     assert_eq!(config.get::<String>("r2e.profile").unwrap(), "test");
 }
+
+#[r2e_core::test]
+async fn with_config_file_loads_custom_base_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("patina.yaml");
+    std::fs::write(&file, "app:\n  name: patina\n").unwrap();
+
+    let builder = AppBuilder::new()
+        .with_config_file(&file)
+        .override_config_value("app.port", 8081)
+        .load_config::<()>()
+        .build_state()
+        .await;
+
+    let config = builder.bean_context().get::<R2eConfig>();
+    assert_eq!(config.get::<String>("app.name").unwrap(), "patina");
+    assert_eq!(config.get::<i64>("app.port").unwrap(), 8081);
+}
+
+#[r2e_core::test]
+async fn with_config_file_and_profile_overlays_derived_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("patina.yaml"), "app:\n  port: 9000\n").unwrap();
+    std::fs::write(dir.path().join("patina-test.yaml"), "app:\n  port: 1234\n").unwrap();
+
+    let builder = AppBuilder::new()
+        .with_profile("test")
+        .with_config_file(dir.path().join("patina.yaml"))
+        .load_config::<()>()
+        .build_state()
+        .await;
+
+    let config = builder.bean_context().get::<R2eConfig>();
+    assert_eq!(config.get::<String>("r2e.profile").unwrap(), "test");
+    assert_eq!(config.get::<i64>("app.port").unwrap(), 1234);
+}

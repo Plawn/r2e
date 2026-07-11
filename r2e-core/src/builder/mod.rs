@@ -199,6 +199,9 @@ struct BuilderConfig {
     /// Profile forced via [`AppBuilder::with_profile`]; wins over env/config
     /// detection. Set by test harnesses (no process-global env mutation).
     forced_profile: Option<String>,
+    /// Base config file set via [`AppBuilder::with_config_file`]; used by
+    /// `load_config` instead of the default `application.yaml`.
+    config_file: Option<std::path::PathBuf>,
     /// Config keys stashed via [`AppBuilder::override_config_value`] before
     /// config is loaded; applied on top of whatever `with_config`/`load_config`
     /// produces.
