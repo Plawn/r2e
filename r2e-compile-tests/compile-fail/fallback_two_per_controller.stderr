@@ -1,0 +1,5 @@
+error: a controller may declare at most one #[fallback] route
+  --> compile-fail/fallback_two_per_controller.rs:17:14
+   |
+17 |     async fn second(&self) -> &'static str {
+   |              ^^^^^^

@@ -277,6 +277,57 @@ pub fn patch(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Register a route handler matching **every HTTP method** (`axum::routing::any`).
+///
+/// Combine with a `{*wildcard}` path segment for proxy-shaped endpoints, and
+/// take the raw [`Request`] as the **last** parameter to access the method,
+/// headers, and streaming body:
+///
+/// ```ignore
+/// #[any("/proxy/{*path}")]
+/// async fn proxy(&self, req: Request) -> Response {
+///     // route on req.method() / req.uri(), stream the body
+/// }
+/// ```
+///
+/// `#[any]` routes are excluded from the OpenAPI spec (they have no single
+/// method or response shape to document). Guards, interceptors, and DI work
+/// exactly as on verb routes.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn any(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Register a **controller-scoped catch-all**: handles every request no other
+/// route matched, for any HTTP method (`axum::Router::fallback`).
+///
+/// ```ignore
+/// #[fallback]
+/// async fn dispatch(&self, req: Request) -> Response {
+///     // registry-protocol dispatch, proxying, custom 404s...
+/// }
+/// ```
+///
+/// Rules:
+/// - takes **no path argument** — it matches whatever is left over;
+/// - at most **one** `#[fallback]` per controller;
+/// - only allowed on controllers **without a path prefix** (the fallback is
+///   app-wide; a prefixed fallback would be misleading);
+/// - if two registered controllers both declare one, the router build panics
+///   (axum allows a single fallback per app);
+/// - excluded from the OpenAPI spec.
+///
+/// Declared routes always win: the fallback only sees unmatched requests.
+/// Guards, interceptors, and DI work exactly as on verb routes.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn fallback(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Restrict a route to users that have **at least one** of the specified roles.
 ///
 /// Requires an identity source: either an `#[inject(identity)]` field on the

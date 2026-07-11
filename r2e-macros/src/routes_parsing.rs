@@ -352,10 +352,29 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         executor_field: cfg.executor_field,
                         fn_item: method,
                     });
-                } else if let Some((http_method, path)) = extract_route_attr(&all_attrs)? {
+                } else if let Some(route_kind) = extract_route_kind(&all_attrs)? {
                     let mut decorators = parse_decorators(&all_attrs)?;
                     // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
                     decorators.deprecated = crate::extract::route::is_deprecated(&all_attrs);
+
+                    // #[middleware]/#[layer]/#[pre_guard] attach to a
+                    // `.route(path, method_router)` registration; a fallback is
+                    // registered via `Router::fallback(handler)`, which takes
+                    // no layers. #[guard] and #[intercept] run inside the
+                    // generated handler and work as usual.
+                    if route_kind.is_fallback {
+                        if !decorators.pre_auth_guard_fns.is_empty()
+                            || !decorators.middleware_fns.is_empty()
+                            || !decorators.layer_exprs.is_empty()
+                        {
+                            return Err(syn::Error::new(
+                                method.sig.ident.span(),
+                                "#[pre_guard], #[middleware], and #[layer] are not supported on \
+                                 #[fallback] routes — use #[guard]/#[intercept] (which run inside \
+                                 the handler) or do the work in the handler body",
+                            ));
+                        }
+                    }
 
                     method.attrs = strip_known_attrs(all_attrs);
 
@@ -402,12 +421,13 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     }
 
                     route_methods.push(RouteMethod {
-                        method: http_method,
-                        path,
+                        method: route_kind.method,
+                        path: route_kind.path,
                         decorators,
                         identity_param,
                         managed_params,
                         fn_item: method,
+                        is_fallback: route_kind.is_fallback,
                     });
                 } else {
                     method.attrs = all_attrs;
@@ -416,6 +436,14 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             }
             _ => {} // skip non-method items
         }
+    }
+
+    // At most one #[fallback] per controller — a Router has a single fallback slot.
+    if let Some(rm) = route_methods.iter().filter(|m| m.is_fallback).nth(1) {
+        return Err(syn::Error::new(
+            rm.fn_item.sig.ident.span(),
+            "a controller may declare at most one #[fallback] route",
+        ));
     }
 
     // Route-scoped methods move to the request façade; `Self` in their public

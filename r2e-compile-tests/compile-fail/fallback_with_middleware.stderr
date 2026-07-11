@@ -1,0 +1,5 @@
+error: #[pre_guard], #[middleware], and #[layer] are not supported on #[fallback] routes — use #[guard]/#[intercept] (which run inside the handler) or do the work in the handler body
+  --> compile-fail/fallback_with_middleware.rs:21:14
+   |
+21 |     async fn catch_all(&self) -> &'static str {
+   |              ^^^^^^^^^

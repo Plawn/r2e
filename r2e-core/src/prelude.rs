@@ -30,7 +30,7 @@ pub use r2e_macros::controller;
 pub use r2e_macros::routes;
 
 // HTTP method attributes
-pub use r2e_macros::{delete, get, patch, post, put};
+pub use r2e_macros::{any, delete, fallback, get, patch, post, put};
 
 // Route-level attributes
 pub use r2e_macros::{anonymous, guard, intercept, layer, managed, middleware, pre_guard, returns, roles, status, transactional};

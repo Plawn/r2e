@@ -48,6 +48,7 @@ tempfile = {workspace = true}
 http-body-util = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 tower = {workspace = true, features = ["util"]}
+futures-util = {workspace = true}
 criterion = {version = "0.8", default-features = false, features = ["cargo_bench_support"]}
 
 [target.'cfg(unix)'.dev-dependencies]

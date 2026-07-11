@@ -12,6 +12,28 @@ pub fn is_route_attr(attr: &syn::Attribute) -> bool {
         || attr.path().is_ident("put")
         || attr.path().is_ident("delete")
         || attr.path().is_ident("patch")
+        || attr.path().is_ident("any")
+}
+
+pub fn is_fallback_attr(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("fallback")
+}
+
+/// Extract `#[fallback]`. Returns the attribute if present; errors if it
+/// carries arguments (a fallback matches everything left over — it has no path).
+pub fn extract_fallback_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<&syn::Attribute>> {
+    for attr in attrs {
+        if is_fallback_attr(attr) {
+            if !matches!(attr.meta, syn::Meta::Path(_)) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[fallback] takes no arguments: it handles every request no other route matched",
+                ));
+            }
+            return Ok(Some(attr));
+        }
+    }
+    Ok(None)
 }
 
 pub fn is_sse_attr(attr: &syn::Attribute) -> bool {
@@ -34,6 +56,8 @@ pub fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpM
             Some(HttpMethod::Delete)
         } else if attr.path().is_ident("patch") {
             Some(HttpMethod::Patch)
+        } else if attr.path().is_ident("any") {
+            Some(HttpMethod::Any)
         } else {
             None
         };
@@ -44,6 +68,38 @@ pub fn extract_route_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(HttpM
         }
     }
     Ok(None)
+}
+
+/// A parsed route kind: a verb/`#[any]` route or a `#[fallback]` route.
+pub struct RouteKind {
+    pub method: HttpMethod,
+    pub path: String,
+    pub is_fallback: bool,
+}
+
+/// Extract a route-kind attribute: `#[get]`/`#[post]`/.../`#[any]` or `#[fallback]`.
+/// Rejects combining `#[fallback]` with a method attribute.
+pub fn extract_route_kind(attrs: &[syn::Attribute]) -> syn::Result<Option<RouteKind>> {
+    let fallback_attr = extract_fallback_attr(attrs)?;
+    let route = extract_route_attr(attrs)?;
+    match (fallback_attr, route) {
+        (Some(attr), Some(_)) => Err(syn::Error::new_spanned(
+            attr,
+            "#[fallback] cannot be combined with a method attribute: \
+             it already matches every HTTP method on every unmatched path",
+        )),
+        (Some(_), None) => Ok(Some(RouteKind {
+            method: HttpMethod::Any,
+            path: String::new(),
+            is_fallback: true,
+        })),
+        (None, Some((method, path))) => Ok(Some(RouteKind {
+            method,
+            path,
+            is_fallback: false,
+        })),
+        (None, None) => Ok(None),
+    }
 }
 
 pub fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {

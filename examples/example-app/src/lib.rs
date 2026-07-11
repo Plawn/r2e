@@ -36,6 +36,7 @@ use controllers::db_identity_controller::IdentityController;
 use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::notification_controller::NotificationController;
+use controllers::proxy_controller::ProxyController;
 use controllers::report_controller::ReportController;
 use controllers::scheduled_controller::ScheduledJobs;
 use controllers::sse_controller::SseController;
@@ -222,6 +223,7 @@ pub async fn app_with_env(b: AppBuilder, env: AppEnv) -> impl BootableApp {
             NotificationController,
             ReportController,
             UploadController,
+            ProxyController,
         )>()
         .with(NormalizePath)
 }
