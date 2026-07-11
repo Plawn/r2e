@@ -431,8 +431,17 @@ struct PropertyMeta {
     description: Option<String>,
     env_var: Option<String>,
     is_section: bool,
+    resolvable: fn(&R2eConfig, &PropertyMeta) -> bool,  // generated presence oracle
 }
 ```
+
+`resolvable` is chosen by the derive alongside `from_config` and mirrors its
+explicit-value sources (config map → custom `#[config(env)]` var; `has_prefix`
+for sections). `validate_section` consumes it via `meta.is_resolvable(config)`
+instead of re-implementing resolution. Non-section properties use
+`PropertyMeta::standard_sources`, which reads `full_key`/`env_var` as data so
+the probe can't desync from the fields; manual `PropertyMeta` constructions
+should use it too.
 
 ### Registry
 
