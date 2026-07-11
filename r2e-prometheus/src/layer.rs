@@ -1,6 +1,7 @@
 use crate::metrics::{dec_in_flight, inc_in_flight, record_request, MetricsConfig};
-use http::{Request, Response};
+use http::{Method, Request, Response};
 use pin_project_lite::pin_project;
+use r2e_core::http::extract::MatchedPath;
 use std::{
     future::Future,
     pin::Pin,
@@ -8,6 +9,52 @@ use std::{
     time::Instant,
 };
 use tower::{Layer, Service};
+
+/// `path` label value for requests no route matched (404s and
+/// `Router::fallback`-handled requests carry no [`MatchedPath`]).
+/// A single sentinel keeps label cardinality bounded under arbitrary-path
+/// scanner traffic.
+pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
+
+/// `method` label value for non-standard HTTP methods. `http::Method` accepts
+/// arbitrary extension tokens, so labeling with the raw method would leave
+/// series cardinality attacker-controlled even with a bounded `path` label.
+pub const OTHER_METHOD_LABEL: &str = "other";
+
+/// Bound the `method` label to the nine standard HTTP methods + one sentinel.
+fn method_label(method: &Method) -> &'static str {
+    match method.as_str() {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "CONNECT" => "CONNECT",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        "PATCH" => "PATCH",
+        _ => OTHER_METHOD_LABEL,
+    }
+}
+
+/// RAII balance for the in-flight gauge: incremented on creation, decremented
+/// on drop. The response future can be dropped without ever completing (client
+/// disconnect cancels the request mid-flight), so pairing the decrement with
+/// `Poll::Ready` alone would leak the gauge upward.
+struct InFlightGuard;
+
+impl InFlightGuard {
+    fn new() -> Self {
+        inc_in_flight();
+        Self
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        dec_in_flight();
+    }
+}
 
 /// Tower layer that tracks HTTP request metrics.
 #[derive(Clone)]
@@ -52,26 +99,34 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let method = req.method().to_string();
-        let path = req.uri().path().to_string();
+        let method = method_label(req.method());
 
-        // Check if this path should be excluded
+        // Label with the matched route template ("/users/{id}") — bounded by the
+        // number of registered routes. Unmatched requests collapse into one
+        // sentinel value instead of minting a series per unique URL.
+        // `MatchedPath` clones by `Arc` refcount bump — no per-request allocation.
+        let matched_path = req.extensions().get::<MatchedPath>().cloned();
+
+        // Exclusion prefix-matches both the raw request path ("/users/5") and
+        // the label the request would be recorded under ("/users/{id}" or the
+        // sentinel), so either spelling in `exclude_paths` works.
+        let raw_path = req.uri().path();
+        let label_path = matched_path
+            .as_ref()
+            .map(MatchedPath::as_str)
+            .unwrap_or(UNMATCHED_PATH_LABEL);
         let should_track = !self
             .config
             .exclude_paths
             .iter()
-            .any(|p| path.starts_with(p));
-
-        if should_track {
-            inc_in_flight();
-        }
+            .any(|p| raw_path.starts_with(p) || label_path.starts_with(p));
 
         PrometheusResponseFuture {
             inner: self.inner.call(req),
             method,
-            path,
+            matched_path,
             start: Instant::now(),
-            should_track,
+            in_flight: should_track.then(InFlightGuard::new),
         }
     }
 }
@@ -81,10 +136,12 @@ pin_project! {
     pub struct PrometheusResponseFuture<F> {
         #[pin]
         inner: F,
-        method: String,
-        path: String,
+        method: &'static str,
+        matched_path: Option<MatchedPath>,
         start: Instant,
-        should_track: bool,
+        // `Some` while the request is tracked and in flight; dropping it
+        // (normal completion or cancellation) decrements the gauge.
+        in_flight: Option<InFlightGuard>,
     }
 }
 
@@ -99,18 +156,19 @@ where
 
         match this.inner.poll(cx) {
             Poll::Ready(result) => {
-                if *this.should_track {
-                    dec_in_flight();
-
+                if this.in_flight.take().is_some() {
                     let duration = this.start.elapsed().as_secs_f64();
                     let status = match &result {
                         Ok(response) => response.status().as_u16(),
                         Err(_) => 500,
                     };
 
-                    // Normalize path to avoid cardinality explosion
-                    let normalized_path = normalize_path(this.path);
-                    record_request(this.method, &normalized_path, status, duration);
+                    let path = this
+                        .matched_path
+                        .as_ref()
+                        .map(MatchedPath::as_str)
+                        .unwrap_or(UNMATCHED_PATH_LABEL);
+                    record_request(this.method, path, status, duration);
                 }
 
                 Poll::Ready(result)
@@ -118,27 +176,4 @@ where
             Poll::Pending => Poll::Pending,
         }
     }
-}
-
-/// Normalize path to prevent high cardinality.
-/// Replaces numeric path segments with placeholders.
-fn normalize_path(path: &str) -> String {
-    path.split('/')
-        .map(|segment| {
-            if segment.parse::<i64>().is_ok() || is_uuid(segment) {
-                "{id}"
-            } else {
-                segment
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// Check if a string looks like a UUID.
-fn is_uuid(s: &str) -> bool {
-    s.len() == 36
-        && s.chars()
-            .all(|c| c.is_ascii_hexdigit() || c == '-')
-        && s.matches('-').count() == 4
 }
