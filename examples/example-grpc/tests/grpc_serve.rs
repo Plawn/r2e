@@ -5,9 +5,10 @@
 //! one port (`GrpcServer::multiplexed`) — with graph-built interceptors
 //! running on the calls.
 //!
-//! Shutdown note: `serve()` only terminates on an OS signal (Ctrl-C/SIGTERM),
-//! which a test cannot trigger safely, so the serve tasks are aborted at the
-//! end instead of exercising the cancellation path.
+//! Shutdown: the servers are stopped programmatically via
+//! [`StopHandle`](r2e::prelude::StopHandle) (`prepare()` → `stop_handle()` →
+//! `run()`), which exercises the real graceful-shutdown path — including the
+//! awaited gRPC drain on the separate-port transport.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -142,8 +143,10 @@ async fn serve_starts_grpc_on_separate_port() {
         .await
         .register_grpc_service::<TestGreeter>();
 
+    let prepared = app.prepare(&format!("127.0.0.1:{http_port}"));
+    let stop = prepared.stop_handle();
     let server = tokio::spawn(async move {
-        app.serve(&format!("127.0.0.1:{http_port}")).await.unwrap();
+        prepared.run().await.map_err(|e| e.to_string())
     });
 
     let mut client = connect_client(grpc_port).await;
@@ -165,7 +168,14 @@ async fn serve_starts_grpc_on_separate_port() {
     let entries = log.0.lock().unwrap().clone();
     assert_eq!(entries, vec!["grpc:say_hello"]);
 
-    server.abort();
+    // Programmatic graceful stop: run() resolves cleanly once the HTTP
+    // listener AND the gRPC server (tracked drain) have shut down.
+    stop.stop();
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server did not stop within 5s after StopHandle::stop()")
+        .expect("server task panicked");
+    assert!(result.is_ok(), "run() returned an error: {result:?}");
 }
 
 #[r2e::test]
@@ -181,8 +191,10 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
         .register_grpc_service::<TestGreeter>()
         .register_controller::<PingController>();
 
+    let prepared = app.prepare(&format!("127.0.0.1:{port}"));
+    let stop = prepared.stop_handle();
     let server = tokio::spawn(async move {
-        app.serve(&format!("127.0.0.1:{port}")).await.unwrap();
+        prepared.run().await.map_err(|e| e.to_string())
     });
 
     // gRPC on the HTTP port (content-type routed, h2c prior knowledge).
@@ -213,5 +225,10 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
     );
     assert!(response.contains("pong"), "unexpected HTTP body: {response}");
 
-    server.abort();
+    stop.stop();
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server did not stop within 5s after StopHandle::stop()")
+        .expect("server task panicked");
+    assert!(result.is_ok(), "run() returned an error: {result:?}");
 }

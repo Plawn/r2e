@@ -15,7 +15,6 @@
 use crate::builder::{AppBuilder, NoState};
 use crate::type_list::{PluginDeps, TAppend, TCons};
 use std::any::Any;
-use tokio_util::sync::CancellationToken;
 
 // ── Post-state Plugin trait ────────────────────────────────────────────────
 
@@ -391,10 +390,11 @@ pub struct DeferredContext<'a> {
     /// Plugin data storage.
     #[doc(hidden)]
     pub plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
-    /// Serve hooks (called when server starts). Each hook receives a clone
-    /// of the shared `TaskRegistryHandle` and drains the tasks it owns.
+    /// Serve hooks (called when server starts). Each hook receives a
+    /// [`ServeContext`](crate::builder::ServeContext) tying it into the
+    /// app's shutdown sequence.
     #[doc(hidden)]
-    pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send>>,
+    pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(crate::builder::ServeContext) + Send>>,
     /// Shutdown hooks from plugins (sync).
     #[doc(hidden)]
     pub shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
@@ -435,14 +435,14 @@ impl DeferredContext<'_> {
 
     /// Add a serve hook that runs when the server starts.
     ///
-    /// The hook receives:
-    /// - `registry`: Shared handle to the task registry; the hook drains the
-    ///   tasks it owns via `registry.take_of::<Tag>()` (or `take_all()` for
-    ///   single-consumer subsystems).
-    /// - `token`: A cancellation token (unused by the builder, but passed for consistency)
+    /// The hook receives a [`ServeContext`](crate::builder::ServeContext):
+    /// the shared task registry (drain the tasks the hook owns via
+    /// `take_of::<Tag>()`, or `take_all()` for single-consumer subsystems),
+    /// the app shutdown token, and a `track()` collector for spawned tasks
+    /// whose drain must be awaited at shutdown.
     pub fn on_serve<F>(&mut self, hook: F)
     where
-        F: FnOnce(crate::builder::TaskRegistryHandle, CancellationToken) + Send + 'static,
+        F: FnOnce(crate::builder::ServeContext) + Send + 'static,
     {
         self.serve_hooks.push(Box::new(hook));
     }

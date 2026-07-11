@@ -1,5 +1,4 @@
 use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
-use tokio_util::sync::CancellationToken;
 
 use crate::multiplex::MultiplexService;
 use crate::registry::GrpcServiceRegistry;
@@ -89,8 +88,6 @@ impl PreStatePlugin for GrpcServer {
         }
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport;
-        let cancel = CancellationToken::new();
-        let cancel_for_shutdown = cancel.clone();
 
         ctx.add_deferred(DeferredAction::new("GrpcServer", move |dctx| {
             // Store the registry for register_grpc_service to find.
@@ -100,9 +97,12 @@ impl PreStatePlugin for GrpcServer {
                 GrpcTransport::SeparatePort(addr) => {
                     // Drain the registry when the server starts and spawn the
                     // tonic server next to the HTTP one. Serve hooks run before
-                    // the HTTP listener binds, and the spawned task lives until
-                    // the shutdown hook cancels the token.
-                    dctx.on_serve(move |_tasks, _token| {
+                    // the HTTP listener binds. The task observes the app
+                    // shutdown token as its graceful-shutdown signal, and its
+                    // handle is tracked so the shutdown phase awaits the gRPC
+                    // drain (concurrent with the HTTP drain, bounded by the
+                    // shutdown grace period) instead of exiting mid-drain.
+                    dctx.on_serve(move |serve_ctx| {
                         let Some((routes, names)) = registry.take() else {
                             tracing::warn!(
                                 "GrpcServer::on_port is installed but no gRPC service was \
@@ -110,7 +110,8 @@ impl PreStatePlugin for GrpcServer {
                             );
                             return;
                         };
-                        r2e_core::rt::spawn(async move {
+                        let cancel = serve_ctx.shutdown_token();
+                        let handle = r2e_core::rt::spawn(async move {
                             // Bind explicitly (instead of tonic's internal bind)
                             // so the resolved address — including an OS-assigned
                             // port for `:0` — is logged.
@@ -145,6 +146,7 @@ impl PreStatePlugin for GrpcServer {
                             }
                             tracing::debug!("gRPC server stopped");
                         });
+                        serve_ctx.track(handle);
                     });
                 }
                 GrpcTransport::Multiplexed => {
@@ -178,10 +180,6 @@ impl PreStatePlugin for GrpcServer {
                     }));
                 }
             }
-
-            dctx.on_shutdown(move || {
-                cancel_for_shutdown.cancel();
-            });
         }));
 
         GrpcMarker

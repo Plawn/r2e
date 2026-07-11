@@ -9,6 +9,62 @@ pub type StartupHook<T> =
 pub type ShutdownHook<T> =
     Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
+/// A drain hook, awaited when shutdown is triggered — after the signal (or
+/// [`StopHandle::stop`]) but **before** the server stops accepting
+/// connections. See [`AppBuilder::on_drain`](crate::AppBuilder::on_drain).
+pub type DrainHook<T> =
+    Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+/// Handle to stop a running server programmatically.
+///
+/// Triggers the exact same graceful-shutdown sequence as an OS signal
+/// (Ctrl-C/SIGTERM): drain hooks are awaited, the listener stops accepting,
+/// in-flight requests finish, and shutdown hooks run. The `run()`/`serve()`
+/// future resolves once the whole sequence completes.
+///
+/// Obtain one from [`PreparedApp::stop_handle`](crate::PreparedApp::stop_handle),
+/// or create it first with [`StopHandle::new`] and wire it via
+/// [`AppBuilder::with_stop_handle`](crate::AppBuilder::with_stop_handle) —
+/// e.g. to `provide()` it as a bean for an admin endpoint.
+///
+/// # Example
+///
+/// ```ignore
+/// let prepared = app.prepare("127.0.0.1:0");
+/// let stop = prepared.stop_handle();
+/// let server = tokio::spawn(prepared.run());
+/// // ... exercise the app ...
+/// stop.stop();
+/// server.await.unwrap().unwrap(); // resolves after graceful drain
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct StopHandle {
+    token: tokio_util::sync::CancellationToken,
+}
+
+impl StopHandle {
+    /// Create a fresh, untriggered stop handle.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Request a graceful shutdown. Idempotent; returns immediately —
+    /// await the server's `run()` future to observe drain completion.
+    pub fn stop(&self) {
+        self.token.cancel();
+    }
+
+    /// Whether [`stop`](Self::stop) has been called.
+    pub fn is_stopped(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    /// Resolves once [`stop`](Self::stop) has been called.
+    pub async fn stopped(&self) {
+        self.token.cancelled().await;
+    }
+}
+
 /// Boxed future returned by fallible lifecycle methods
 /// ([`LifecycleController::on_start`],
 /// [`PostConstruct::post_construct`](crate::beans::PostConstruct::post_construct)).

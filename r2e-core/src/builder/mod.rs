@@ -25,7 +25,7 @@ use crate::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
     ModuleScope,
 };
-use crate::lifecycle::{ShutdownHook, StartupHook};
+use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::meta::MetaRegistry;
 use crate::service::ServiceComponent;
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
@@ -91,14 +91,50 @@ type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send
 /// a router fragment to be merged into the application.
 type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
 
-/// A serve hook that receives the shared task registry and a cancellation
-/// token. Each hook is responsible for draining the registry of tasks it
-/// owns (via `TaskRegistryHandle::take_of::<Tag>()` for tagged tasks, or
-/// `take_all()` for single-consumer subsystems).
-type ServeHook = Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>;
+/// A serve hook, called once when the server starts. Receives a
+/// [`ServeContext`] tying the hook into the app's shutdown sequence.
+type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
 
-/// Shared collection of JobHandles for services spawned via
-/// [`AppBuilder::spawn_service`], so shutdown can await their completion
+/// Context handed to serve hooks ([`DeferredContext::on_serve`]) when the
+/// server starts.
+///
+/// Ties serve-time subsystems into the app's lifecycle:
+/// - [`task_registry`](Self::task_registry) — the shared task registry; each
+///   hook drains the tasks it owns (`take_of::<Tag>()` for tagged tasks, or
+///   `take_all()` for single-consumer subsystems).
+/// - [`shutdown_token`](Self::shutdown_token) — cancelled when graceful
+///   shutdown begins (after drain hooks), while in-flight HTTP requests are
+///   still finishing. Use it to stop accepting new work.
+/// - [`track`](Self::track) — register a spawned task whose completion is
+///   awaited after the HTTP drain, before user shutdown hooks (bounded by
+///   [`AppBuilder::shutdown_grace_period`]). Track any server-like task that
+///   drains on the shutdown token so the process doesn't exit mid-drain.
+pub struct ServeContext {
+    tasks: TaskRegistryHandle,
+    shutdown: CancellationToken,
+    handles: ServiceHandles,
+}
+
+impl ServeContext {
+    /// The shared task registry (scheduled tasks, tagged subsystem tasks).
+    pub fn task_registry(&self) -> TaskRegistryHandle {
+        self.tasks.clone()
+    }
+
+    /// Token cancelled when graceful shutdown begins.
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
+    }
+
+    /// Track a task handle to be awaited after the HTTP drain completes.
+    pub fn track(&self, handle: crate::rt::JobHandle<()>) {
+        self.handles.push(handle);
+    }
+}
+
+/// Shared collection of JobHandles awaited after the HTTP drain: services
+/// spawned via [`AppBuilder::spawn_service`] and serve-hook tasks registered
+/// through [`ServeContext::track`]. Shutdown awaits their completion
 /// with a grace deadline before returning.
 #[derive(Clone, Default)]
 struct ServiceHandles(Arc<Mutex<Vec<crate::rt::JobHandle<()>>>>);
@@ -171,6 +207,9 @@ struct BuilderConfig {
     /// config is loaded; applied on top of whatever `with_config`/`load_config`
     /// produces.
     config_overrides: Vec<(String, crate::config::ConfigValue)>,
+    /// Stop handle wired via [`AppBuilder::with_stop_handle`]; `prepare()`
+    /// creates one lazily when absent.
+    stop_handle: Option<StopHandle>,
 }
 
 /// Builder for assembling a R2E application.
@@ -202,6 +241,7 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     routes: Vec<crate::http::Router<T>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
+    drain_hooks: Vec<DrainHook<T>>,
     meta_registry: MetaRegistry,
     meta_consumers: Vec<MetaConsumer<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
@@ -240,6 +280,26 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
         } else {
             self
         }
+    }
+
+    /// Wire a user-created [`StopHandle`] into the server lifecycle.
+    ///
+    /// Calling [`StopHandle::stop`] on (a clone of) the handle triggers the
+    /// same graceful shutdown as an OS signal. Use this when the handle must
+    /// exist before [`prepare()`](AppBuilder::prepare) — e.g. to `provide()`
+    /// it as a bean for an admin endpoint. Otherwise just take
+    /// [`PreparedApp::stop_handle`] after preparing.
+    ///
+    /// ```ignore
+    /// let stop = StopHandle::new();
+    /// AppBuilder::new()
+    ///     .provide(stop.clone())
+    ///     .with_stop_handle(stop)
+    ///     // ...
+    /// ```
+    pub fn with_stop_handle(mut self, handle: StopHandle) -> Self {
+        self.shared.stop_handle = Some(handle);
+        self
     }
 }
 

@@ -224,8 +224,8 @@ impl RawPreStatePlugin for Scheduler {
                 // Register a serve hook to start scheduled tasks. Drains only
                 // scheduler-owned tasks from the shared registry so hooks for
                 // other subsystems don't see them.
-                ctx.on_serve(move |registry, _token_at_serve| {
-                    let tasks = registry.take_of::<ScheduledTaskMarker>();
+                ctx.on_serve(move |serve_ctx| {
+                    let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
                     start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
                 });
 

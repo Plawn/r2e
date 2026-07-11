@@ -1,16 +1,15 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-use r2e_core::builder::TaskRegistryHandle;
+use r2e_core::builder::ServeContext;
 use r2e_core::plugin::{AsyncShutdownHook, DeferredAction, DeferredContext};
-use tokio_util::sync::CancellationToken;
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
     layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
     router_wraps: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
-    serve_hooks: &'a mut Vec<Box<dyn FnOnce(TaskRegistryHandle, CancellationToken) + Send>>,
+    serve_hooks: &'a mut Vec<Box<dyn FnOnce(ServeContext) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
     async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
 ) -> DeferredContext<'a> {
@@ -113,7 +112,7 @@ fn deferred_context_on_serve() {
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
     );
-    ctx.on_serve(|_registry, _token| {});
+    ctx.on_serve(|_serve_ctx| {});
     assert_eq!(serve_hooks.len(), 1);
 }
 
