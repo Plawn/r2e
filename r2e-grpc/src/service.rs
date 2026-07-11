@@ -37,6 +37,31 @@ pub trait GrpcService: 'static {
     /// The proto service name (e.g., "mypackage.UserService").
     fn service_name() -> &'static str;
 
+    /// The encoded `FileDescriptorSet` covering this service's proto file(s),
+    /// used by gRPC server reflection ([`GrpcServer::with_reflection`](crate::GrpcServer::with_reflection)).
+    ///
+    /// `None` (the default) when the service does not carry one. Set it via
+    /// the `descriptor` argument of `#[grpc_routes]`, pointing at the bytes
+    /// emitted by `tonic_prost_build`'s `file_descriptor_set_path`:
+    ///
+    /// ```ignore
+    /// // build.rs
+    /// tonic_prost_build::configure()
+    ///     .file_descriptor_set_path(out_dir.join("greeter_descriptor.bin"))
+    ///     .compile_protos(&["proto/greeter.proto"], &["proto"])?;
+    ///
+    /// // proto module
+    /// pub const FILE_DESCRIPTOR_SET: &[u8] =
+    ///     tonic::include_file_descriptor_set!("greeter_descriptor");
+    ///
+    /// // service
+    /// #[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+    /// impl GreeterService { ... }
+    /// ```
+    fn file_descriptor_set() -> Option<&'static [u8]> {
+        None
+    }
+
     /// Add this service to the given route collection, constructing it from
     /// the resolved bean graph.
     fn add_to_routes(

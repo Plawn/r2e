@@ -1151,8 +1151,16 @@ pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
 
 /// Attribute macro for wiring a tonic-generated service trait into R2E.
 ///
-/// The argument is the path to the tonic-generated service trait
-/// (e.g., `proto::user_service_server::UserService`).
+/// The first argument is the path to the tonic-generated service trait
+/// (e.g., `proto::user_service_server::UserService`). An optional
+/// `descriptor = <expr>` argument names the service's encoded
+/// `FileDescriptorSet` (`&'static [u8]`, typically
+/// `tonic::include_file_descriptor_set!(...)` bytes) so gRPC server
+/// reflection (`GrpcServer::with_reflection()`) can describe the service:
+///
+/// ```ignore
+/// #[grpc_routes(proto::user_service_server::UserService, descriptor = proto::FILE_DESCRIPTOR_SET)]
+/// ```
 ///
 /// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
 /// and the metadata module). The macro generates:
@@ -1182,9 +1190,9 @@ pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    let service_trait = syn::parse_macro_input!(args as syn::Path);
+    let args = syn::parse_macro_input!(args as grpc_routes_parsing::GrpcRoutesArgs);
     let item = syn::parse_macro_input!(input as syn::ItemImpl);
-    match grpc_routes_parsing::parse(service_trait, item) {
+    match grpc_routes_parsing::parse(args, item) {
         Ok(def) => grpc_codegen::generate(&def).into(),
         Err(err) => err.to_compile_error().into(),
     }

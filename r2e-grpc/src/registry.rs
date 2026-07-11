@@ -21,6 +21,20 @@ pub struct GrpcServiceRegistry {
 struct Inner {
     routes: Routes,
     names: Vec<&'static str>,
+    descriptors: Vec<&'static [u8]>,
+}
+
+/// The accumulated services drained from a [`GrpcServiceRegistry`] at serve
+/// time (see [`GrpcServiceRegistry::take`]).
+pub struct RegisteredServices {
+    /// The folded route collection hosting every registered service.
+    pub routes: Routes,
+    /// The registered service names, in registration order.
+    pub names: Vec<&'static str>,
+    /// Encoded `FileDescriptorSet`s collected from services that declared one
+    /// (`#[grpc_routes(..., descriptor = ...)]`), deduplicated. Fed to the
+    /// reflection service when `GrpcServer::with_reflection()` is enabled.
+    pub descriptors: Vec<&'static [u8]>,
 }
 
 impl GrpcServiceRegistry {
@@ -35,7 +49,10 @@ impl GrpcServiceRegistry {
     ///
     /// `add` receives the current [`Routes`] and returns it with the service
     /// added (see [`GrpcService::add_to_routes`](crate::GrpcService::add_to_routes)).
-    pub fn add_service<F>(&self, name: &'static str, add: F)
+    /// `descriptor` is the service's encoded file descriptor set, if it
+    /// declares one; identical sets (services generated from the same proto
+    /// compilation) are stored once.
+    pub fn add_service<F>(&self, name: &'static str, descriptor: Option<&'static [u8]>, add: F)
     where
         F: FnOnce(Routes) -> Routes,
     {
@@ -47,18 +64,27 @@ impl GrpcServiceRegistry {
         let routes = std::mem::take(&mut guard.routes);
         guard.routes = add(routes);
         guard.names.push(name);
+        if let Some(descriptor) = descriptor {
+            if !guard.descriptors.contains(&descriptor) {
+                guard.descriptors.push(descriptor);
+            }
+        }
     }
 
-    /// Drain the registry: the accumulated [`Routes`] plus the registered
-    /// service names, or `None` when no service was registered. The registry
-    /// is empty afterwards.
-    pub fn take(&self) -> Option<(Routes, Vec<&'static str>)> {
+    /// Drain the registry: the accumulated [`Routes`], the registered service
+    /// names, and the collected descriptor sets — or `None` when no service
+    /// was registered. The registry is empty afterwards.
+    pub fn take(&self) -> Option<RegisteredServices> {
         let mut guard = self.inner.lock().unwrap();
         if guard.names.is_empty() {
             return None;
         }
         let inner = std::mem::take(&mut *guard);
-        Some((inner.routes, inner.names))
+        Some(RegisteredServices {
+            routes: inner.routes,
+            names: inner.names,
+            descriptors: inner.descriptors,
+        })
     }
 
     /// The names of the currently registered services (without draining).

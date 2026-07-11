@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-r2e = {workspace = true, features = ["grpc"]}
+r2e = {workspace = true, features = ["grpc", "grpc-reflection"]}
 tokio = {workspace = true, features = ["full"]}
 tonic = {workspace = true, default-features = true}
 tonic-prost = {workspace = true}
@@ -14,6 +14,8 @@ tracing = {workspace = true}
 
 [dev-dependencies]
 tokio-stream = {workspace = true, features = ["net"]}
+# Reflection client (pb types + generated client stub) for the e2e test.
+tonic-reflection = {workspace = true}
 
 [build-dependencies]
 tonic-build = {workspace = true}

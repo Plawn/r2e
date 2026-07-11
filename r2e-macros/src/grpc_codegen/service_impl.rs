@@ -77,11 +77,23 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
         quote! {}
     };
 
+    // Override the trait's `None` default only when the attribute declared a
+    // descriptor set (`#[grpc_routes(..., descriptor = <expr>)]`).
+    let descriptor_impl = def.descriptor.as_ref().map(|expr| {
+        quote! {
+            fn file_descriptor_set() -> Option<&'static [u8]> {
+                Some(#expr)
+            }
+        }
+    });
+
     quote! {
         impl #grpc_krate::GrpcService for #controller_name {
             fn service_name() -> &'static str {
                 #service_name
             }
+
+            #descriptor_impl
 
             fn add_to_routes(
                 __routes: #grpc_krate::tonic::service::Routes,
