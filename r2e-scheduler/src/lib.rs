@@ -22,7 +22,7 @@ use r2e_core::http::header::Parts;
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::StatusCode;
 use r2e_core::type_list::{TAppend, TCons, TNil};
-use r2e_core::{AppBuilder, DeferredAction, RawPreStatePlugin};
+use r2e_core::{AppBuilder, BeanContext, DeferredAction, RawPreStatePlugin};
 
 /// Handle to the scheduler runtime.
 ///
@@ -294,6 +294,65 @@ pub trait AppBuilderSchedulerExt: Sized {
         self,
         tasks: impl IntoIterator<Item = ScheduledTaskDef<T>>,
     ) -> Self;
+
+    /// Register a single dynamic scheduled task built from the resolved bean
+    /// graph — the closure receives the [`BeanContext`] so task state can be
+    /// pulled by type instead of threaded through a `let` at the call site.
+    ///
+    /// ```ignore
+    /// app.schedule_task_with(|ctx| ScheduledTaskDef::new(
+    ///     "sync_users",
+    ///     "5m".parse().unwrap(),
+    ///     ctx.get::<SyncService>(),
+    ///     |svc| async move { svc.sync().await },
+    /// ))
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Scheduler`] plugin was not installed before
+    /// `build_state()`, or if the closure requests a bean that is not in the
+    /// graph (`BeanContext::get` panics; use `try_get` for optional beans).
+    fn schedule_task_with<T, F>(self, build: F) -> Self
+    where
+        T: Clone + Send + Sync + 'static,
+        F: FnOnce(&BeanContext) -> ScheduledTaskDef<T>,
+    {
+        self.schedule_tasks_with(move |ctx| [build(ctx)])
+    }
+
+    /// Register a batch of dynamic scheduled tasks built from the resolved
+    /// bean graph — the config-driven case in one call:
+    ///
+    /// ```ignore
+    /// app.schedule_tasks_with(|ctx| {
+    ///     let svc = ctx.get::<SyncService>();
+    ///     sources
+    ///         .iter()
+    ///         .map(|source| {
+    ///             let source = source.clone();
+    ///             ScheduledTaskDef::new(
+    ///                 format!("sync_{}", source.name),
+    ///                 source.schedule.clone(),
+    ///                 svc.clone(),
+    ///                 move |svc| {
+    ///                     let source = source.clone();
+    ///                     async move { svc.sync(&source).await }
+    ///                 },
+    ///             )
+    ///         })
+    ///         .collect::<Vec<_>>()
+    /// })
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Same conditions as [`schedule_task_with`](Self::schedule_task_with).
+    fn schedule_tasks_with<T, I, F>(self, build: F) -> Self
+    where
+        T: Clone + Send + Sync + 'static,
+        I: IntoIterator<Item = ScheduledTaskDef<T>>,
+        F: FnOnce(&BeanContext) -> I;
 }
 
 impl<S: Clone + Send + Sync + 'static> AppBuilderSchedulerExt for AppBuilder<S> {
@@ -315,6 +374,16 @@ impl<S: Clone + Send + Sync + 'static> AppBuilderSchedulerExt for AppBuilder<S> 
         registry.add_boxed_for::<ScheduledTaskMarker>(boxed);
 
         self
+    }
+
+    fn schedule_tasks_with<T, I, F>(self, build: F) -> Self
+    where
+        T: Clone + Send + Sync + 'static,
+        I: IntoIterator<Item = ScheduledTaskDef<T>>,
+        F: FnOnce(&BeanContext) -> I,
+    {
+        let tasks: Vec<_> = build(self.bean_context()).into_iter().collect();
+        self.schedule_tasks(tasks)
     }
 }
 

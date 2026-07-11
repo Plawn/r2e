@@ -41,6 +41,31 @@ Dynamic tasks share the static tasks' lifecycle: started by the scheduler's serv
 - **Register before `serve()`** — the task registry is drained once at serve time; tasks added after boot are never started.
 - `schedule_tasks(impl IntoIterator<Item = ScheduledTaskDef<T>>)` registers a batch with one registry lock.
 
+### Bean-backed state: `schedule_task_with` / `schedule_tasks_with`
+
+The `_with` variants hand the closure the resolved `BeanContext`, so task state is pulled by type instead of threaded through a `let` — the fold above collapses to one call:
+
+```rust
+app.schedule_tasks_with(|ctx| {
+    let svc = ctx.get::<SyncService>();          // panics if missing; try_get for Option
+    sources
+        .iter()
+        .map(|source| {
+            let source = source.clone();
+            ScheduledTaskDef::new(
+                format!("sync_{}", source.name),
+                source.schedule.clone(),
+                svc.clone(),
+                move |svc| {
+                    let source = source.clone();
+                    async move { svc.sync(&source).await }
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+})
+```
+
 ## Building task definitions
 
 ```rust

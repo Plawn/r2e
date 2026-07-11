@@ -333,19 +333,20 @@ Scheduled tasks run on the controller core, which always implements `ContextCons
 
 ### Dynamic (config-driven) tasks — `AppBuilderSchedulerExt`
 
-For tasks whose set is only known at startup (e.g. one task per configured source), use `schedule_task` / `schedule_tasks` on the post-`build_state()` builder instead of `#[scheduled]`. Same lifecycle as static tasks: started at serve, listed in `ScheduledJobRegistry`, cancelled on shutdown. Must be called before `serve()`. Panics if the `Scheduler` plugin is missing. Full doc: `docs/features/21-dynamic-scheduled-tasks.md`.
+For tasks whose set is only known at startup (e.g. one task per configured source), use `schedule_task` / `schedule_tasks` on the post-`build_state()` builder instead of `#[scheduled]`, or the `_with` variants (`schedule_task_with` / `schedule_tasks_with`) whose closure receives the resolved `BeanContext` for pulling task state by type. Same lifecycle as static tasks: started at serve, listed in `ScheduledJobRegistry`, cancelled on shutdown. Must be called before `serve()`. Panics if the `Scheduler` plugin is missing. Full doc: `docs/features/21-dynamic-scheduled-tasks.md`.
 
 ```rust
 use r2e_scheduler::{AppBuilderSchedulerExt, ScheduledTaskDef};
 
 AppBuilder::new()
     .plugin(Scheduler)
+    .provide(sync_service)
     .build_state()
     .await
-    .schedule_task(ScheduledTaskDef::new(
+    .schedule_task_with(|ctx| ScheduledTaskDef::new(
         format!("sync_{}", source.name),
         source.schedule.clone(),          // ScheduleConfig, e.g. from #[config(...)]
-        sync_service.clone(),
+        ctx.get::<SyncService>(),         // bean-backed task state
         move |svc| async move { svc.sync().await },   // may return Result
     ))
     .serve("0.0.0.0:3000")
