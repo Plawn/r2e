@@ -46,16 +46,18 @@
 //! - `http_request_duration_seconds` - Histogram with labels: method, path
 //! - `http_requests_in_flight` - Gauge showing concurrent requests
 //!
-//! The `path` label is the matched route template (e.g. `/users/{id}`), so its
-//! cardinality is bounded by the number of registered routes. Requests that no
-//! route matched (404s, `Router::fallback`) are all recorded under the single
-//! sentinel value [`UNMATCHED_PATH_LABEL`].
+//! Label cardinality is bounded: the `path` label is the matched route
+//! template (e.g. `/users/{id}`), capped by the number of registered routes;
+//! requests that no route matched (404s, `Router::fallback`) are all recorded
+//! under the single sentinel value [`UNMATCHED_PATH_LABEL`]. The `method`
+//! label is capped to the nine standard HTTP methods; non-standard extension
+//! methods are recorded under [`OTHER_METHOD_LABEL`].
 
 mod handler;
 mod layer;
 mod metrics;
 
-pub use layer::{PrometheusLayer, UNMATCHED_PATH_LABEL};
+pub use layer::{PrometheusLayer, OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 pub use metrics::{encode_metrics, init_metrics, is_initialized, metrics, registry, MetricsConfig};
 pub use prometheus;
 
@@ -211,12 +213,18 @@ impl PrometheusBuilder {
     }
 
     /// Exclude paths from metrics tracking (e.g., "/health", "/metrics").
+    ///
+    /// Entries are prefix-matched against both the raw request path
+    /// (`/users/5`) and the route-template label the request would be
+    /// recorded under (`/users/{id}`), so either spelling works.
     pub fn exclude_paths(mut self, paths: &[&str]) -> Self {
         self.exclude_paths = paths.iter().map(|s| s.to_string()).collect();
         self
     }
 
     /// Add a single path to exclude from metrics tracking.
+    ///
+    /// See [`Self::exclude_paths`] for the matching semantics.
     pub fn exclude_path(mut self, path: &str) -> Self {
         self.exclude_paths.push(path.to_string());
         self

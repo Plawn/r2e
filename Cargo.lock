@@ -5864,7 +5864,6 @@ name = "r2e-prometheus"
 version = "0.1.0"
 dependencies = [
  "http",
- "http-body",
  "pin-project-lite",
  "prometheus",
  "r2e-core",
