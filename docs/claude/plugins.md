@@ -128,6 +128,35 @@ registration and serve hooks (`app.get_plugin_data::<T>()`); this is how the
 gRPC plugin coordinates with `register_grpc_service`, and the Scheduler with
 `#[scheduled]` task collection.
 
+## Bean lifecycle hooks for `Provided` beans (phase 5)
+
+A plugin's `Provided` values are deposited straight into the graph, so by
+default they run no `PostConstruct` and no disposal. Opt them in **explicitly**
+from `install` (no trait detection on stable):
+
+```rust
+fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyBean,) {
+    ctx.run_post_construct::<MyBean>();  // MyBean: PostConstruct
+    ctx.run_pre_destroy::<MyBean>();     // MyBean: PreDestroy
+    (MyBean::new(),)
+}
+```
+
+- `run_post_construct::<T>()` — fires during `build_state()`, **after every
+  factory-bean post-construct**, through the same `BeanError::PostConstruct`
+  path (a failure panics at boot).
+- `run_pre_destroy::<T>()` — runs during graceful shutdown, in the **async
+  shutdown phase after the plugin's own `on_shutdown_async` hooks**, in reverse
+  registration order among bean disposers.
+- **Both hooks read `T` from the resolved graph by type**, so a pinned override
+  (`override_bean`) is the value they act on — same contract as everything else
+  the graph holds (contrast the `configure` `provided` arg, which is the
+  plugin's own copy). Backed by `BeanRegistry::register_provided_post_construct`
+  / `register_pre_destroy`; the plain-`.provide()` equivalents are
+  `AppBuilder::provide_with_post_construct` / `provide_with_pre_destroy`. See
+  `docs/claude/beans-di.md` (Lifecycle for `.provide()`-d / plugin beans) and
+  the tests in `r2e-core/tests/plugin.rs`.
+
 ## RawPreStatePlugin (hidden escape hatch)
 
 `#[doc(hidden)]`. HList-typed full-builder-access form that `.plugin()`
