@@ -15,6 +15,7 @@ pub struct MyPreStatePlugin;
 impl PreStatePlugin for MyPreStatePlugin {
     type Provided = (MyBean,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyBean,) {
         (MyBean,)

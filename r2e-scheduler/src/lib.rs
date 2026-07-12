@@ -192,6 +192,7 @@ pub struct Scheduler;
 impl PreStatePlugin for Scheduler {
     type Provided = (CancellationToken, ScheduledJobRegistry);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(
         self,

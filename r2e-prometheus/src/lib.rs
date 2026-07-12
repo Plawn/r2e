@@ -151,6 +151,7 @@ impl Prometheus {
 impl PreStatePlugin for Prometheus {
     type Provided = (PrometheusRegistry,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
         // Initialize global metrics singleton

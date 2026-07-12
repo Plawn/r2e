@@ -198,6 +198,7 @@ pub struct OidcRuntime {
 impl PreStatePlugin for OidcRuntime {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         let oidc_state = self.state;
@@ -211,6 +212,7 @@ impl PreStatePlugin for OidcRuntime {
 impl PreStatePlugin for OidcServer {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         self.build().install((), ctx)
