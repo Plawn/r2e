@@ -23,7 +23,7 @@ impl FeatureModule for BadModule {
     type Providers = TCons<Svc, TNil>;
     type Controllers = ();
     type Exports = TCons<Pool, TNil>; // Pool is not provided by this module
-    type Imports = TNil;
+    type Imports = TNil; type RequiredPlugins = ();
 }
 
 fn main() {

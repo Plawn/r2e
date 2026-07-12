@@ -554,7 +554,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// the public face is
     /// [`RegisterModule::register_module`](super::RegisterModule::register_module),
     /// which infers them.
-    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx>(
+    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>(
         mut self,
     ) -> ModuleRegistered<M, P, R, Mods>
     where
@@ -567,6 +567,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        // Every required plugin must already be installed (its provisions in P).
+        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>,
     {

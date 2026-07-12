@@ -23,7 +23,7 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
-    ModuleScope,
+    ModuleScope, RequiredPluginsInstalled,
 };
 use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::meta::MetaRegistry;

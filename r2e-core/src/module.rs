@@ -54,6 +54,7 @@ use crate::type_list::{Here, TAppend, TCons, TNil, There};
 ///     type Controllers = (UserController,);
 ///     type Exports = TCons<UserService, TNil>;   // UserRepo stays private
 ///     type Imports = TCons<DbPool, TNil>;        // supplied by the app
+///     type RequiredPlugins = ();                 // no plugin required
 /// }
 ///
 /// AppBuilder::new()
@@ -100,6 +101,21 @@ pub trait FeatureModule {
     /// Appended to the global requirement list `R` and checked against the
     /// final provision list at `build_state()`.
     type Imports;
+
+    /// **Tuple** of pre-state plugin types this module requires (or `()` for
+    /// none) — e.g. `(Scheduler,)`.
+    ///
+    /// Unlike [`Imports`](Self::Imports), which names individual bean types,
+    /// this names whole plugins. At `register_module` the compiler verifies
+    /// that **every provided bean** of each listed plugin is already in the
+    /// app-global provision list `P` — i.e. the plugin was `.plugin(..)`-ed
+    /// *before* this module. A missing plugin is a compile error that names the
+    /// plugin and points at `.plugin(..)`, rather than surfacing as an opaque
+    /// missing-bean error on one of the plugin's internal handle types.
+    ///
+    /// Set to `()` when the module needs no plugin. `#[module(requires_plugins(
+    /// Scheduler))]` generates this.
+    type RequiredPlugins;
 }
 
 /// Fold over a type-level list of [`Registrable`] provider types.
@@ -213,6 +229,70 @@ where
     T: ExportsProvided<P, IT>,
 {
 }
+
+// ── Required-plugin checks ──────────────────────────────────────────────────
+//
+// A module may name whole plugins in `RequiredPlugins`. At `register_module`
+// we verify that every provided bean of each such plugin is already in the
+// provision list `P` — i.e. the plugin was installed before the module. The
+// diagnostic names the *plugin* (and points at `.plugin(..)`), which is far
+// clearer than the opaque missing-bean error a module controller would
+// otherwise get on one of the plugin's internal handle types.
+
+/// Compile-time witness that required plugin `Plug` is installed — every bean
+/// in its [`RawPreStatePlugin::Provisions`](crate::plugin::RawPreStatePlugin::Provisions)
+/// is present in the provision list `Self` (the app-global `P`).
+#[diagnostic::on_unimplemented(
+    message = "this feature module requires the `{Plug}` plugin, which is not installed before it",
+    label = "`{Plug}` must be installed before this module",
+    note = "install it with `.plugin({Plug})` *before* `.register_module::<_>()` — a module's `RequiredPlugins` must already be in the provision list `P`"
+)]
+pub trait RequiredPluginInstalled<Plug, Idx> {}
+
+// `do_not_recommend`: without it, a missing plugin surfaces as the inner
+// `AllSatisfied`/`Contains` "type `X` was not provided" error on one of the
+// plugin's internal handle types — the where-clause diagnostic wins. Suppressing
+// this impl from recommendation makes the compiler report the unsatisfied
+// `RequiredPluginInstalled` bound directly, so the plugin-naming message above
+// fires.
+#[diagnostic::do_not_recommend]
+impl<P, Plug, Idx> RequiredPluginInstalled<Plug, Idx> for P
+where
+    Plug: crate::plugin::RawPreStatePlugin,
+    Plug::Provisions: crate::type_list::AllSatisfied<P, Idx>,
+{
+}
+
+/// Compile-time verification that every plugin in `Self` (a module's
+/// `RequiredPlugins` tuple) is installed in the provision list `P`.
+///
+/// `Indices` is an opaque witness tuple inferred by the compiler.
+#[diagnostic::on_unimplemented(
+    message = "one or more of this feature module's required plugins are not installed",
+    note = "each type in the module's `RequiredPlugins` must be `.plugin(..)`-ed before `.register_module`"
+)]
+pub trait RequiredPluginsInstalled<P, Indices> {}
+
+impl<P> RequiredPluginsInstalled<P, ()> for () {}
+
+macro_rules! impl_required_plugins_installed {
+    ($($Plug:ident $Idx:ident),+) => {
+        impl<P, $($Plug, $Idx),+> RequiredPluginsInstalled<P, ($($Idx,)+)> for ($($Plug,)+)
+        where
+            $(P: RequiredPluginInstalled<$Plug, $Idx>,)+
+        {
+        }
+    };
+}
+
+impl_required_plugins_installed!(P0 I0);
+impl_required_plugins_installed!(P0 I0, P1 I1);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2, P3 I3);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2, P3 I3, P4 I4);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2, P3 I3, P4 I4, P5 I5);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2, P3 I3, P4 I4, P5 I5, P6 I6);
+impl_required_plugins_installed!(P0 I0, P1 I1, P2 I2, P3 I3, P4 I4, P5 I5, P6 I6, P7 I7);
 
 /// Aggregate the state-independent dependency lists
 /// ([`EndpointDeps::Deps`]) of a controller tuple.

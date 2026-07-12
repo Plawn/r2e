@@ -88,6 +88,7 @@ impl FeatureModule for UserModule {
     type Controllers = (UserModuleController, AdminController);
     type Exports = TCons<UserService, TNil>;
     type Imports = TCons<DbPool, TNil>;
+    type RequiredPlugins = ();
 }
 
 // ── A second module importing the first module's export ────────────────────
@@ -326,4 +327,53 @@ async fn module_controller_with_bean_backed_extractor() {
     let (status, body) = get(&router, "/stamped").await;
     assert_eq!(status, r2e_core::http::StatusCode::OK);
     assert_eq!(body, "mod-db+stamp-1");
+}
+
+// ── Module-declared required plugins (Phase 6) ──────────────────────────────
+
+/// A bean provided by a pre-state plugin (not by any module).
+#[derive(Clone, Debug, PartialEq)]
+struct PluginBean(u32);
+
+/// Minimal pre-state plugin providing `PluginBean`.
+struct MarkerPlugin;
+
+impl r2e_core::PreStatePlugin for MarkerPlugin {
+    type Provided = (PluginBean,);
+    type Deps = ();
+    type LateDeps = ();
+    type Config = ();
+
+    fn install(
+        &mut self,
+        (): (),
+        _ctx: &mut r2e_core::plugin::PluginInstallContext<'_>,
+    ) -> (PluginBean,) {
+        (PluginBean(7),)
+    }
+}
+
+/// A module declaring `MarkerPlugin` as a required plugin.
+struct NeedsPluginModule;
+
+impl FeatureModule for NeedsPluginModule {
+    type Providers = TNil;
+    type Controllers = ();
+    type Exports = TNil;
+    type Imports = TNil;
+    type RequiredPlugins = (MarkerPlugin,);
+}
+
+#[r2e_core::test]
+async fn module_required_plugin_present_compiles_and_builds() {
+    use r2e_core::type_list::BeanAccess;
+    // `MarkerPlugin` is installed before the module, so its provided bean is in
+    // `P` and the required-plugin check passes at `register_module`.
+    let app = AppBuilder::new()
+        .plugin(MarkerPlugin)
+        .register_module::<NeedsPluginModule>()
+        .build_state()
+        .await;
+
+    assert_eq!(app.state().get::<PluginBean>(), PluginBean(7));
 }
