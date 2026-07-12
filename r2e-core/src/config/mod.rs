@@ -12,7 +12,10 @@ use std::sync::Arc;
 pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use registry::{register_section, registered_sections, RegisteredSection};
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
-pub use validation::{validate_keys, validate_section, ConfigValidationError, MissingKeyError};
+pub use validation::{
+    validate_keys, validate_section, validate_section_keys, ConfigValidationError,
+    MissingKeyError,
+};
 pub use value::{ConfigValue, FromConfigValue, deserialize_value};
 
 /// A single validation error detail from typed config validation (e.g., garde).

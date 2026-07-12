@@ -203,8 +203,9 @@ fn resolvability_probe(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
     if f.is_section {
         // A section resolves when any key lives under its prefix — mirrors
         // the `has_prefix` presence check in the section `field_inits`.
-        // Unreachable through `validate_section` (sections are never
-        // `required`); it serves the public `is_resolvable` oracle.
+        // Consumed by the optional/defaulted `validate_nested` gate (sections
+        // are never `required`, so the phase-1 leaf filter skips them) and by
+        // the public `is_resolvable` oracle.
         return quote! {
             |__config, __meta| __config.has_prefix(&__meta.full_key)
         };
@@ -216,64 +217,64 @@ fn resolvability_probe(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
 
 /// Nested-section validator stored in `PropertyMeta::validate_nested` — the
 /// phase-1 twin of the section `field_inits`: it recurses with
-/// `validate_section` exactly when `from_config` would construct the nested
-/// section, so every nested missing required key is reported with full
-/// metadata instead of short-circuiting on the first `NotFound`.
+/// `validate_section_keys` exactly when `from_config` would construct the
+/// nested section, so every nested missing required key is reported with
+/// full metadata instead of short-circuiting on the first `NotFound`. The
+/// recursion is metadata-only (no `from_config` probe): construction stays
+/// the single top-level probe in `validate_section`.
 fn nested_section_validator(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
-    if f.is_section {
-        let section_ty = if f.is_option {
-            option_inner_type(&f.ty).unwrap()
-        } else {
-            &f.ty
-        };
-        // Map-valued section: one recursion per existing entry — an absent
-        // prefix yields no sub-keys, matching from_config's empty map / None.
-        if f.is_map_section {
-            let value_ty = string_map_value_type(section_ty).unwrap();
-            return quote! {
-                Some(|__config, __meta| {
-                    __config
-                        .sub_keys(&__meta.full_key)
-                        .into_iter()
-                        .flat_map(|__k| {
-                            let __child_prefix = format!("{}.{}", __meta.full_key, __k);
-                            #krate::config::validate_section::<#value_ty>(
-                                __config,
-                                Some(&__child_prefix),
-                            )
-                        })
-                        .collect()
-                })
-            };
-        }
-        // Optional / defaulted section: absence is legal (from_config yields
-        // None / Default::default()), so only a present section is validated.
-        if f.is_option || f.default_flag {
-            return quote! {
-                Some(|__config, __meta| {
-                    if __config.has_prefix(&__meta.full_key) {
-                        #krate::config::validate_section::<#section_ty>(
-                            __config,
-                            Some(&__meta.full_key),
-                        )
-                    } else {
-                        Vec::new()
-                    }
-                })
-            };
-        }
-        // Mandatory section: recurse unconditionally — an absent section
-        // reports every nested required key at once.
+    if !f.is_section {
+        return quote! { None };
+    }
+    let section_ty = if f.is_option {
+        option_inner_type(&f.ty).unwrap()
+    } else {
+        &f.ty
+    };
+    // Map-valued section: one recursion per existing entry — an absent
+    // prefix yields no sub-keys, matching from_config's empty map / None.
+    if f.is_map_section {
+        let value_ty = string_map_value_type(section_ty).unwrap();
         return quote! {
             Some(|__config, __meta| {
-                #krate::config::validate_section::<#section_ty>(
-                    __config,
-                    Some(&__meta.full_key),
-                )
+                __config
+                    .sub_keys(&__meta.full_key)
+                    .into_iter()
+                    .flat_map(|__k| {
+                        let __child_prefix = format!("{}.{}", __meta.full_key, __k);
+                        #krate::config::validate_section_keys::<#value_ty>(
+                            __config,
+                            Some(&__child_prefix),
+                        )
+                    })
+                    .collect()
             })
         };
     }
-    quote! { None }
+    let recurse = quote! {
+        #krate::config::validate_section_keys::<#section_ty>(
+            __config,
+            Some(&__meta.full_key),
+        )
+    };
+    // Optional / defaulted section: absence is legal (from_config yields
+    // None / Default::default()), so only a present section — per the
+    // section `resolvable` oracle (`has_prefix`) — is validated. Mandatory
+    // sections recurse unconditionally: an absent section reports every
+    // nested required key at once.
+    if f.is_option || f.default_flag {
+        quote! {
+            Some(|__config, __meta| {
+                if __meta.is_resolvable(__config) {
+                    #recurse
+                } else {
+                    Vec::new()
+                }
+            })
+        }
+    } else {
+        quote! { Some(|__config, __meta| #recurse) }
+    }
 }
 
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {

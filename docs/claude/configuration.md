@@ -464,13 +464,16 @@ the probe can't desync from the fields; manual `PropertyMeta` constructions
 should use it too.
 
 `validate_nested` is `Some` only on `is_section` properties: it recurses with
-`validate_section::<Child>` under `full_key`, so ALL nested missing required
-keys are reported in one phase-1 pass with full metadata (instead of the
-phase-2 `from_config` probe short-circuiting on the first `NotFound`). The
-derive bakes the presence semantics next to `from_config`: mandatory section →
+`validate_section_keys::<Child>` under `full_key`, so ALL nested missing
+required keys are reported in one phase-1 pass with full metadata (instead of
+the phase-2 `from_config` probe short-circuiting on the first `NotFound`).
+The recursion is metadata-only — it never constructs sections; the single
+`from_config` probe stays at the top level in `validate_section`. The derive
+bakes the presence semantics next to `from_config`: mandatory section →
 recurse unconditionally; `Option` / `#[config(section, default)]` → only when
-`has_prefix`; map section → once per `sub_keys` entry. Manual `PropertyMeta`
-constructions may use `None` (no nested reporting).
+present (the section `resolvable` oracle, `has_prefix`); map section → once
+per `sub_keys` entry. Manual `PropertyMeta` constructions may use `None` (no
+nested reporting).
 
 ### Registry
 
