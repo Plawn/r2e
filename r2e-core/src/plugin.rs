@@ -41,6 +41,11 @@ use std::any::Any;
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `Plugin`, the post-state plugin API used by `.with()`",
+    label = "`.with()` needs a post-state `Plugin`",
+    note = "if `{Self}` is a pre-state plugin (it provides beans), install it with `.plugin({Self})` BEFORE `build_state()` instead of `.with({Self})`"
+)]
 pub trait Plugin: Send + 'static {
     /// Install this plugin into the given `AppBuilder`, returning the modified builder.
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T>;
@@ -105,6 +110,10 @@ pub trait Plugin: Send + 'static {
 /// ```
 pub struct PluginInstallContext<'a> {
     deferred: Vec<DeferredAction>,
+    /// Buffered sugar calls ([`add_layer`](Self::add_layer),
+    /// [`on_serve`](Self::on_serve), etc.). Flushed as ONE [`DeferredAction`]
+    /// by the blanket `RawPreStatePlugin` impl — see [`flush`](Self::flush).
+    sugar: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
     config: Option<&'a crate::config::R2eConfig>,
 }
 
@@ -113,11 +122,25 @@ impl<'a> PluginInstallContext<'a> {
     pub(crate) fn new(config: Option<&'a crate::config::R2eConfig>) -> Self {
         Self {
             deferred: Vec::new(),
+            sugar: Vec::new(),
             config,
         }
     }
 
     /// Register a deferred action to run after state resolution.
+    ///
+    /// This is the low-level escape hatch. Most plugins should prefer the
+    /// direct sugar methods ([`add_layer`](Self::add_layer),
+    /// [`on_serve`](Self::on_serve), [`store_data`](Self::store_data), …),
+    /// which buffer their calls and are flushed as a **single** deferred
+    /// action.
+    ///
+    /// # Ordering
+    ///
+    /// Every action added here runs **before** the sugar-buffered action, in
+    /// the order added. The sugar calls are then applied as one final action.
+    /// If you need sugar and explicit actions to interleave differently, put
+    /// all your logic inside explicit `add_deferred` actions.
     pub fn add_deferred(&mut self, action: DeferredAction) {
         self.deferred.push(action);
     }
@@ -137,9 +160,119 @@ impl<'a> PluginInstallContext<'a> {
         self.config.and_then(|c| c.get::<T>(key).ok())
     }
 
-    /// Consume the context and return the collected deferred actions.
-    pub fn into_deferred(self) -> Vec<DeferredAction> {
-        self.deferred
+    // ── Sugar: direct post-state actions ────────────────────────────────────
+    //
+    // These mirror `DeferredContext`'s surface but take plain closures — the
+    // boxing happens inside. Calls are buffered and flushed as ONE deferred
+    // action (named after the plugin type), running after any explicit
+    // `add_deferred` actions. Within the flushed action, sugar calls run in
+    // the order you made them.
+
+    /// Add a layer to the router (post-state). Sugar for a
+    /// [`DeferredContext::add_layer`] call — pass a plain closure, no `Box`.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn add_layer<F>(&mut self, layer: F)
+    where
+        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+    {
+        self.sugar
+            .push(Box::new(move |dctx| dctx.add_layer(Box::new(layer))));
+    }
+
+    /// Add a transport-level router transform applied **outermost**. Sugar for
+    /// a [`DeferredContext::wrap_router`] call — pass a plain closure, no `Box`.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn wrap_router<F>(&mut self, wrap: F)
+    where
+        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+    {
+        self.sugar
+            .push(Box::new(move |dctx| dctx.wrap_router(Box::new(wrap))));
+    }
+
+    /// Store plugin-specific data for later retrieval. Sugar for a
+    /// [`DeferredContext::store_data`] call.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
+        self.sugar.push(Box::new(move |dctx| dctx.store_data(data)));
+    }
+
+    /// Add a serve hook that runs when the server starts. Sugar for a
+    /// [`DeferredContext::on_serve`] call.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn on_serve<F>(&mut self, hook: F)
+    where
+        F: FnOnce(crate::builder::ServeContext) + Send + 'static,
+    {
+        self.sugar.push(Box::new(move |dctx| dctx.on_serve(hook)));
+    }
+
+    /// Add a shutdown hook that runs when the server stops. Sugar for a
+    /// [`DeferredContext::on_shutdown`] call.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn on_shutdown<F>(&mut self, hook: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.sugar.push(Box::new(move |dctx| dctx.on_shutdown(hook)));
+    }
+
+    /// Add an async shutdown hook awaited during shutdown. Sugar for a
+    /// [`DeferredContext::on_shutdown_async`] call.
+    ///
+    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
+    pub fn on_shutdown_async<F, Fut>(&mut self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.sugar
+            .push(Box::new(move |dctx| dctx.on_shutdown_async(hook)));
+    }
+
+    /// Consume the context, returning the deferred actions to install.
+    ///
+    /// Actions added via [`add_deferred`](Self::add_deferred) come first, in
+    /// call order; the buffered sugar calls are appended as a **single**
+    /// [`DeferredAction`] named `name` (typically the plugin's short type name,
+    /// via [`plugin_action_name`]). Empty sugar contributes no action.
+    pub(crate) fn flush(self, name: &'static str) -> Vec<DeferredAction> {
+        let PluginInstallContext {
+            mut deferred,
+            sugar,
+            ..
+        } = self;
+        if !sugar.is_empty() {
+            deferred.push(DeferredAction::new(name, move |dctx| {
+                for op in sugar {
+                    op(dctx);
+                }
+            }));
+        }
+        deferred
+    }
+}
+
+/// Derive a short, human-readable action name from a plugin type — the last
+/// path segment of its type name, before any generic arguments. For example
+/// `r2e_prometheus::Prometheus` → `"Prometheus"`.
+///
+/// Used by the blanket [`RawPreStatePlugin`] impl to name the single
+/// [`DeferredAction`] flushed from a plugin's buffered sugar calls, so the
+/// plugin author never has to name it themselves.
+pub fn plugin_action_name<T: ?Sized>() -> &'static str {
+    let full = std::any::type_name::<T>();
+    let base = full.split('<').next().unwrap_or(full);
+    let short = base.rsplit("::").next().unwrap_or(base);
+    if short.is_empty() {
+        full
+    } else {
+        short
     }
 }
 
@@ -221,11 +354,16 @@ impl<'a> PluginInstallContext<'a> {
 ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, ScheduledJobRegistry) {
 ///         let token = CancellationToken::new();
 ///         let registry = ScheduledJobRegistry::new();
-///         // ... ctx.add_deferred(...) for layers/hooks ...
+///         // ... ctx.add_layer(..) / ctx.on_serve(..) / ctx.on_shutdown(..) ...
 ///         (token, registry)
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement a pre-state plugin trait (`PreStatePlugin`/`RawPreStatePlugin`), the API used by `.plugin()`",
+    label = "`.plugin()` needs a pre-state plugin",
+    note = "if `{Self}` is a post-state plugin, install it with `.with({Self})` AFTER `build_state()` instead of `.plugin({Self})`"
+)]
 pub trait PreStatePlugin: Send + 'static {
     /// The **tuple** of bean types this plugin provides to the bean registry.
     ///
@@ -279,6 +417,11 @@ pub trait PreStatePlugin: Send + 'static {
 /// call [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
 /// `install()` to perform the zero-cost phantom type conversion.
 #[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement a pre-state plugin trait (`PreStatePlugin`/`RawPreStatePlugin`), the API used by `.plugin()`",
+    label = "`.plugin()` needs a pre-state plugin",
+    note = "if `{Self}` is a post-state plugin, install it with `.with({Self})` AFTER `build_state()` instead of `.plugin({Self})`"
+)]
 pub trait RawPreStatePlugin: Send + 'static {
     /// The type-level list of bean types this plugin provides.
     ///
@@ -323,10 +466,11 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
         R: TAppend<Self::Required>,
     {
         let deps = T::Deps::resolve(app.bean_registry());
+        let name = plugin_action_name::<T>();
         let (provided, deferred) = {
             let mut ctx = PluginInstallContext::new(app.r2e_config_ref());
             let provided = PreStatePlugin::install(self, deps, &mut ctx);
-            (provided, ctx.into_deferred())
+            (provided, ctx.flush(name))
         };
         let mut builder = app;
         for action in deferred {
@@ -341,11 +485,17 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 
 /// A deferred action that runs after state resolution.
 ///
-/// This is the mechanism for plugins that need to run setup code after
-/// `build_state()` is called. Each action is a closure that receives a
+/// This is the low-level mechanism for plugins that need to run setup code
+/// after `build_state()` is called. Each action is a closure that receives a
 /// `DeferredContext` providing access to builder internals.
 ///
-/// # Example
+/// Most plugins never construct one directly: the sugar methods on
+/// [`PluginInstallContext`] ([`add_layer`](PluginInstallContext::add_layer),
+/// [`on_shutdown`](PluginInstallContext::on_shutdown), …) buffer plain closures
+/// and are flushed into a single `DeferredAction` automatically. Reach for
+/// `add_deferred(DeferredAction::new(..))` only as an escape hatch.
+///
+/// # Example (preferred — sugar)
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
@@ -356,10 +506,8 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 ///         let token = MyToken::new();
 ///         let handle = MyHandle::new(token.clone());
 ///
-///         ctx.add_deferred(DeferredAction::new("MyPlugin", move |dctx| {
-///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
-///             dctx.on_shutdown(|| { /* cleanup */ });
-///         }));
+///         ctx.add_layer(move |router| router.layer(Extension(handle)));
+///         ctx.on_shutdown(|| { /* cleanup */ });
 ///         (token,)
 ///     }
 /// }

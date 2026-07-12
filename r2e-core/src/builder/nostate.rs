@@ -467,10 +467,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
     /// Add a deferred action to be executed after state resolution.
     ///
-    /// This is called by [`PreStatePlugin`] implementations to register setup
-    /// that needs to run after `build_state()` is called.
+    /// This is the low-level escape hatch. [`PreStatePlugin`] implementations
+    /// usually reach for the sugar methods on [`PluginInstallContext`]
+    /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) instead — those buffer
+    /// plain closures and are flushed into a single deferred action.
     ///
-    /// # Example
+    /// # Example (sugar — preferred)
     ///
     /// ```ignore
     /// impl PreStatePlugin for MyPlugin {
@@ -481,10 +483,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
-    ///         ctx.add_deferred(DeferredAction::new("MyPlugin", move |dctx| {
-    ///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
-    ///             dctx.on_shutdown(|| { /* cleanup */ });
-    ///         }));
+    ///         ctx.add_layer(move |router| router.layer(Extension(handle)));
+    ///         ctx.on_shutdown(|| { /* cleanup */ });
     ///         (token,)
     ///     }
     /// }
