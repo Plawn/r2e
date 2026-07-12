@@ -117,12 +117,13 @@ impl PreStatePlugin for GrpcServer {
     type Provided = (GrpcMarker,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (GrpcMarker,) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (GrpcMarker,) {
         let registry = GrpcServiceRegistry::new();
-        let transport = self.transport;
+        let transport = self.transport.clone();
         #[cfg(feature = "reflection")]
-        let reflection = self.reflection;
+        let reflection = self.reflection.clone();
 
         // Store the registry for register_grpc_service to find.
         ctx.store_data(registry.clone());

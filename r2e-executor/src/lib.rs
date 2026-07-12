@@ -365,8 +365,9 @@ impl PreStatePlugin for Executor {
     type Provided = (PoolExecutor,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, _deps: (), ctx: &mut PluginInstallContext<'_>) -> (PoolExecutor,) {
+    fn install(&mut self, _deps: (), ctx: &mut PluginInstallContext<'_>) -> (PoolExecutor,) {
         let config = ctx
             .config()
             .map(|c| ExecutorConfig::from_config(c, Some("executor")))

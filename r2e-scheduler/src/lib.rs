@@ -193,9 +193,10 @@ impl PreStatePlugin for Scheduler {
     type Provided = (CancellationToken, ScheduledJobRegistry);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
     fn install(
-        self,
+        &mut self,
         (): (),
         ctx: &mut PluginInstallContext<'_>,
     ) -> (CancellationToken, ScheduledJobRegistry) {
