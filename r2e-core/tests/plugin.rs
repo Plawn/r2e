@@ -35,6 +35,7 @@ fn make_deferred_context<'a>(
         shutdown_hooks,
         async_shutdown_hooks,
         bean_context,
+        config: None,
     }
 }
 
@@ -154,8 +155,9 @@ impl PreStatePlugin for SingleProvider {
     type Provided = (Alpha,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         (Alpha(7),)
     }
 }
@@ -168,8 +170,9 @@ impl PreStatePlugin for MultiProvider {
     type Provided = (Alpha, Beta);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
         (Alpha(42), Beta("hello".into()))
     }
 }
@@ -181,8 +184,9 @@ impl PreStatePlugin for NoProvider {
     type Provided = ();
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) {
         ctx.add_deferred(DeferredAction::new("no-provider", |_dctx| {}));
     }
 }
@@ -269,8 +273,9 @@ impl PreStatePlugin for SugarBuildPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         ctx.store_data(StoredData(42));
         ctx.add_layer(|router| router.route("/sugar", get(|| async { "sugar-ok" })));
         ctx.wrap_router(|router| router.route("/wrapped", get(|| async { "wrapped-ok" })));
@@ -321,9 +326,10 @@ impl PreStatePlugin for EveryHookPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
-        let log = self.log;
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+        let log = self.log.clone();
 
         // Escape hatch: explicit actions run BEFORE the buffered sugar action.
         let l_es = log.clone();
@@ -458,12 +464,19 @@ impl PreStatePlugin for LateProvidedPlugin {
     type Provided = (ConfigureLog,);
     type Deps = ();
     type LateDeps = (Alpha,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
-        (self.log,)
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+        (self.log.clone(),)
     }
 
-    fn configure((log,): &(ConfigureLog,), (alpha,): (Alpha,), _ctx: &mut DeferredContext<'_>) {
+    fn configure(
+        self,
+        (log,): &(ConfigureLog,),
+        (alpha,): (Alpha,),
+        _config: Option<()>,
+        _ctx: &mut DeferredContext<'_>,
+    ) {
         log.push(alpha.0);
     }
 }
@@ -491,14 +504,17 @@ impl PreStatePlugin for LateFactoryPlugin {
     type Provided = (ConfigureLog,);
     type Deps = ();
     type LateDeps = (FactoryBean,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
-        (self.log,)
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+        (self.log.clone(),)
     }
 
     fn configure(
+        self,
         (log,): &(ConfigureLog,),
         (fb,): (FactoryBean,),
+        _config: Option<()>,
         _ctx: &mut DeferredContext<'_>,
     ) {
         log.push(fb.0);
@@ -532,8 +548,9 @@ impl PreStatePlugin for AlphaProviderPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         (Alpha(11),)
     }
 }
@@ -571,14 +588,17 @@ impl PreStatePlugin for PinContractPlugin {
     type Provided = (Alpha, ConfigureLog);
     type Deps = ();
     type LateDeps = (Alpha,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
-        (Alpha(11), self.log)
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
+        (Alpha(11), self.log.clone())
     }
 
     fn configure(
+        self,
         (own_alpha, log): &(Alpha, ConfigureLog),
         (graph_alpha,): (Alpha,),
+        _config: Option<()>,
         _ctx: &mut DeferredContext<'_>,
     ) {
         log.push(own_alpha.0);
@@ -609,12 +629,19 @@ impl PreStatePlugin for LateConfigureCtxPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type LateDeps = (Alpha,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         (SugarMarker,)
     }
 
-    fn configure(_p: &(SugarMarker,), (alpha,): (Alpha,), ctx: &mut DeferredContext<'_>) {
+    fn configure(
+        self,
+        _p: &(SugarMarker,),
+        (alpha,): (Alpha,),
+        _config: Option<()>,
+        ctx: &mut DeferredContext<'_>,
+    ) {
         let v = alpha.0;
         ctx.store_data(StoredData(v));
         ctx.add_layer(Box::new(move |router| {
@@ -639,4 +666,129 @@ async fn configure_can_use_deferred_context() {
     let (status, body) = get_route(router, "/late").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "late-5");
+}
+
+// ── Typed plugin Config (Phase 4) ────────────────────────────────────────────
+
+/// An all-optional config section, so its presence — not any required key —
+/// drives whether `configure` gets `Some`.
+#[derive(r2e_core::prelude::ConfigProperties, Clone, Debug, Default, PartialEq)]
+struct DemoConfig {
+    name: Option<String>,
+    count: Option<i64>,
+}
+
+/// A config section with a **required** field, used to exercise validation.
+#[derive(r2e_core::prelude::ConfigProperties, Clone, Debug)]
+struct StrictConfig {
+    port: i64,
+}
+
+/// Records the `Option<Config>` its `configure` receives, so tests can assert on
+/// the presence/values the framework delivered.
+struct ConfigReadingPlugin {
+    sink: Arc<Mutex<Option<Option<DemoConfig>>>>,
+}
+
+impl PreStatePlugin for ConfigReadingPlugin {
+    type Provided = ();
+    type Deps = ();
+    type LateDeps = ();
+    type Config = DemoConfig;
+    const CONFIG_PREFIX: Option<&'static str> = Some("demo");
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+
+    fn configure(
+        self,
+        _p: &(),
+        (): (),
+        config: Option<DemoConfig>,
+        _ctx: &mut DeferredContext<'_>,
+    ) {
+        *self.sink.lock().unwrap() = Some(config);
+    }
+}
+
+/// A plugin whose `configure` must never run because validation panics first.
+struct StrictConfigPlugin;
+
+impl PreStatePlugin for StrictConfigPlugin {
+    type Provided = ();
+    type Deps = ();
+    type LateDeps = ();
+    type Config = StrictConfig;
+    const CONFIG_PREFIX: Option<&'static str> = Some("demo");
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+
+    fn configure(
+        self,
+        _p: &(),
+        (): (),
+        _config: Option<StrictConfig>,
+        _ctx: &mut DeferredContext<'_>,
+    ) {
+    }
+}
+
+#[r2e_core::test]
+async fn plugin_config_loaded_from_present_section() {
+    let sink = Arc::new(Mutex::new(None));
+    let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  name: hello\n  count: 5\n").unwrap();
+    let _app = AppBuilder::new()
+        .with_config(config)
+        .plugin(ConfigReadingPlugin { sink: sink.clone() })
+        .build_state()
+        .await;
+
+    let received = sink.lock().unwrap().clone().expect("configure ran");
+    assert_eq!(
+        received,
+        Some(DemoConfig {
+            name: Some("hello".into()),
+            count: Some(5),
+        })
+    );
+}
+
+#[r2e_core::test]
+async fn plugin_config_absent_section_is_none() {
+    // Config loaded, but no key lives under the `demo` prefix → None.
+    let sink = Arc::new(Mutex::new(None));
+    let config = r2e_core::R2eConfig::from_yaml_str("other:\n  key: 1\n").unwrap();
+    let _app = AppBuilder::new()
+        .with_config(config)
+        .plugin(ConfigReadingPlugin { sink: sink.clone() })
+        .build_state()
+        .await;
+
+    assert_eq!(*sink.lock().unwrap(), Some(None), "absent section yields None");
+}
+
+#[r2e_core::test]
+async fn plugin_config_no_config_loaded_is_none() {
+    // No `load_config` / `with_config` at all → None (the stringly escape hatch
+    // is unavailable too, but typed Config degrades gracefully to None).
+    let sink = Arc::new(Mutex::new(None));
+    let _app = AppBuilder::new()
+        .plugin(ConfigReadingPlugin { sink: sink.clone() })
+        .build_state()
+        .await;
+
+    assert_eq!(*sink.lock().unwrap(), Some(None), "no config loaded yields None");
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "Invalid configuration for plugin")]
+async fn plugin_config_malformed_section_panics_at_boot() {
+    // `demo.port` is a string where the section requires an `i64` — the same
+    // shape as a malformed controller `#[config]` value. Boot must fail with a
+    // validation error naming the plugin and section.
+    let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  port: not-a-number\n").unwrap();
+    let _app = AppBuilder::new()
+        .with_config(config)
+        .plugin(StrictConfigPlugin)
+        .build_state()
+        .await;
 }

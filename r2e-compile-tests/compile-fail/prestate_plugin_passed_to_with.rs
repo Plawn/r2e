@@ -16,8 +16,9 @@ impl PreStatePlugin for MyPreStatePlugin {
     type Provided = (MyBean,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyBean,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyBean,) {
         (MyBean,)
     }
 }

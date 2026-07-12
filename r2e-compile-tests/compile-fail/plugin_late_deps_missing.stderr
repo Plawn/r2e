@@ -1,7 +1,7 @@
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> compile-fail/plugin_late_deps_missing.rs:29:14
+  --> compile-fail/plugin_late_deps_missing.rs:30:14
    |
-29 |             .build_state()
+30 |             .build_state()
    |              ^^^^^^^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
@@ -30,12 +30,12 @@ note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P
    |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
 
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> compile-fail/plugin_late_deps_missing.rs:26:9
+  --> compile-fail/plugin_late_deps_missing.rs:27:9
    |
-26 | /         AppBuilder::new()
-27 | |             .plugin(NeedsLateBean)
-28 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
-29 | |             .build_state()
+27 | /         AppBuilder::new()
+28 | |             .plugin(NeedsLateBean)
+29 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
+30 | |             .build_state()
    | |__________________________^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
@@ -64,9 +64,9 @@ note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P
    |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
 
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> compile-fail/plugin_late_deps_missing.rs:30:14
+  --> compile-fail/plugin_late_deps_missing.rs:31:14
    |
-30 |             .await
+31 |             .await
    |              ^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`

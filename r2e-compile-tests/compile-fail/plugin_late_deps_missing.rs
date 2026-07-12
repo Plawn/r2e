@@ -17,8 +17,9 @@ impl PreStatePlugin for NeedsLateBean {
     type Provided = ();
     type Deps = ();
     type LateDeps = (MissingBean,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
 }
 
 fn main() {

@@ -1,7 +1,7 @@
 error[E0277]: `MyPreStatePlugin` does not implement `Plugin`, the post-state plugin API used by `.with()`
-  --> compile-fail/prestate_plugin_passed_to_with.rs:31:19
+  --> compile-fail/prestate_plugin_passed_to_with.rs:32:19
    |
-31 |             .with(MyPreStatePlugin)
+32 |             .with(MyPreStatePlugin)
    |              ---- ^^^^^^^^^^^^^^^^ `.with()` needs a post-state `Plugin`
    |              |
    |              required by a bound introduced by this call
