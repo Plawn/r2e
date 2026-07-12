@@ -525,6 +525,83 @@ async fn late_deps_resolves_factory_built_bean_registered_after_plugin() {
     );
 }
 
+/// The "producer" side of the cross-plugin case: provides `Alpha` at install.
+struct AlphaProviderPlugin;
+
+impl PreStatePlugin for AlphaProviderPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type LateDeps = ();
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+        (Alpha(11),)
+    }
+}
+
+#[r2e_core::test]
+async fn late_deps_resolves_bean_provided_by_another_plugin() {
+    // Producer installed first.
+    let log = ConfigureLog::default();
+    let _app = AppBuilder::new()
+        .plugin(AlphaProviderPlugin)
+        .plugin(LateProvidedPlugin { log: log.clone() })
+        .build_state()
+        .await;
+    assert_eq!(log.values(), vec![11], "consumer configure saw producer's Alpha");
+
+    // Consumer installed first: `LateDeps` binds against the final graph, not
+    // install order, so the result is identical.
+    let log = ConfigureLog::default();
+    let _app = AppBuilder::new()
+        .plugin(LateProvidedPlugin { log: log.clone() })
+        .plugin(AlphaProviderPlugin)
+        .build_state()
+        .await;
+    assert_eq!(log.values(), vec![11], "install order must not matter");
+}
+
+/// Records, in `configure`, both the `provided` argument (the plugin's own
+/// instance) and the graph's view of the same bean (via `LateDeps`) — the
+/// pin-override contract documented on `PreStatePlugin::configure`.
+struct PinContractPlugin {
+    log: ConfigureLog,
+}
+
+impl PreStatePlugin for PinContractPlugin {
+    type Provided = (Alpha, ConfigureLog);
+    type Deps = ();
+    type LateDeps = (Alpha,);
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
+        (Alpha(11), self.log)
+    }
+
+    fn configure(
+        (own_alpha, log): &(Alpha, ConfigureLog),
+        (graph_alpha,): (Alpha,),
+        _ctx: &mut DeferredContext<'_>,
+    ) {
+        log.push(own_alpha.0);
+        log.push(graph_alpha.0);
+    }
+}
+
+#[r2e_core::test]
+async fn configure_provided_arg_keeps_own_instance_under_pin_override() {
+    let log = ConfigureLog::default();
+    let app = AppBuilder::new()
+        // Pin an override BEFORE the plugin installs, as a test harness would.
+        .override_bean(Alpha(99))
+        .plugin(PinContractPlugin { log: log.clone() })
+        .build_state()
+        .await;
+    // The state and the graph hold the pinned override…
+    assert_eq!(app.state().get::<Alpha>(), Alpha(99));
+    // …while configure's `provided` arg keeps the plugin's own instance (11)
+    // and its `LateDeps` view reflects the override (99).
+    assert_eq!(log.values(), vec![11, 99]);
+}
+
 /// `configure` reaching for the `DeferredContext` surface (store_data + a layer).
 struct LateConfigureCtxPlugin;
 

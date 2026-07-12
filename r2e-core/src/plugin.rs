@@ -142,6 +142,14 @@ impl<'a> PluginInstallContext<'a> {
     /// the order added. The sugar calls are then applied as one final action.
     /// If you need sugar and explicit actions to interleave differently, put
     /// all your logic inside explicit `add_deferred` actions.
+    ///
+    /// Across plugins, deferred work runs **grouped per plugin, in install
+    /// order**: `[A.explicit…, A.sugar, A.configure, B.explicit…, B.sugar,
+    /// B.configure]`. In particular, a layer added from plugin A's
+    /// [`configure`](crate::PreStatePlugin::configure) is applied *before*
+    /// (i.e. nested inside) a layer added at install time by a
+    /// later-installed plugin B — there is no "all installs, then all
+    /// configures" phase separation.
     pub fn add_deferred(&mut self, action: DeferredAction) {
         self.deferred.push(action);
     }
@@ -266,6 +274,7 @@ impl<'a> PluginInstallContext<'a> {
 /// Used by the blanket [`RawPreStatePlugin`] impl to name the single
 /// [`DeferredAction`] flushed from a plugin's buffered sugar calls, so the
 /// plugin author never has to name it themselves.
+#[doc(hidden)]
 pub fn plugin_action_name<T: ?Sized>() -> &'static str {
     let full = std::any::type_name::<T>();
     let base = full.split('<').next().unwrap_or(full);
@@ -460,6 +469,17 @@ pub trait PreStatePlugin: Send + 'static {
     ///
     /// The default is a no-op, so plugins with `type LateDeps = ()` and no
     /// post-state work need not implement it.
+    ///
+    /// # `provided` and pinned overrides
+    ///
+    /// `provided` is the plugin's **own** instance — a copy of exactly what
+    /// [`install`](Self::install) returned. If a test harness pin-overrides one
+    /// of the `Provided` types (e.g. `override_bean(mock)` /
+    /// `BeanRegistry::pin_provide`), the state and bean context hold the
+    /// override, but `provided` still holds the plugin's original value: the
+    /// plugin owns what it built. To observe the bean **as the rest of the app
+    /// sees it** (override included), read it through the graph instead — list
+    /// it in [`LateDeps`](Self::LateDeps) or use `ctx.bean_context()`.
     ///
     /// # Example
     ///
