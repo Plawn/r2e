@@ -154,6 +154,8 @@ Event types must derive `Serialize + Deserialize` (required by the trait for bac
 
 Distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) implement the `EventBus` trait. Shared backend utilities are in `r2e_events::backend` — `TopicRegistry`, `BackendState`, `encode_metadata`/`decode_metadata`.
 
+**Delivery semantics (distributed backends): at-least-once.** The broker copy is acked/committed only after all local handlers for the message resolve (`BackendState::dispatch_from_poller_tracked` → `DispatchCompletion::outcome()` → `DispatchOutcome::Ack`/`Nack`). Consequences: handlers MUST be idempotent (redelivery after a crash or a `Nack` is expected); a `Nack` whose payload was captured to a configured DLQ counts as processed (acked); messages that fail to deserialize (poison messages) are dropped with an error log, not redelivered; a panicking handler counts as `Nack`. `LocalEventBus` is in-process only — events don't survive a crash (no delivery guarantee across restarts).
+
 **Declarative consumers on controllers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. Consumers run on the controller core (which always implements `ContextConstruct`), so they work regardless of any `#[inject(identity)]` fields. Consumers are registered automatically by `AppBuilder::register_controller`.
 
 **Declarative consumers on beans** via `#[consumer(bus = "field_name")]` in a `#[bean]` impl block. The `#[bean]` macro generates an `EventSubscriber` impl. Register via `AppBuilder::register_subscriber::<T>()`.

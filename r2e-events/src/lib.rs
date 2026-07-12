@@ -1,3 +1,22 @@
+//! In-process and distributed event bus for R2E.
+//!
+//! `LocalEventBus` dispatches in-process by `TypeId` (no serialization, no
+//! delivery guarantee across restarts). Distributed backends (Iggy, Kafka,
+//! Pulsar, RabbitMQ) live in `r2e-events/backends/` and share the utilities
+//! in [`backend`].
+//!
+//! # Delivery semantics (distributed backends)
+//!
+//! **At-least-once.** The broker copy of a message is acked/committed only
+//! after every local handler has resolved
+//! ([`backend::BackendState::dispatch_from_poller_tracked`]). Handlers must
+//! therefore be **idempotent**: redelivery is expected after a crash, a
+//! disconnect, or a [`HandlerResult::Nack`]. A `Nack` whose payload was
+//! captured to a configured dead-letter topic counts as processed and is
+//! acked; a payload that fails to deserialize (poison message) is dropped
+//! with an error log rather than redelivered forever; a panicking handler
+//! counts as a `Nack`.
+
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
