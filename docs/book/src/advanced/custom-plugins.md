@@ -281,6 +281,35 @@ reads no config writes only `type Config = ();`. Config is delivered at
 `R2eConfig` is guaranteed loaded — `load_config` always precedes `build_state()`,
 whereas `.plugin()` calls may run before it.
 
+## Enabling and disabling a plugin from config
+
+Any plugin with a `CONFIG_PREFIX` gets an on/off switch for free: the boolean key
+`<prefix>.enabled` (default **true**) controls whether the plugin's **post-state
+effects** run. Set it to `false` to turn the plugin off without touching code:
+
+```yaml
+prometheus:
+  enabled: false      # no /metrics route, no tracking layer
+```
+
+When disabled, the plugin's sugar (layers, `store_data`, serve/shutdown hooks),
+its explicit deferred actions, **and** its `configure` are all skipped. What
+does **not** change:
+
+- **Its provided beans still exist.** The provision list is fixed at compile
+  time, so a disabled plugin never removes its beans — anything injecting them
+  keeps working. Disabling gates the plugin's *wiring*, not its beans.
+- **`install` still runs** (it happens pre-state, before config is guaranteed
+  loaded). Keep `install` cheap and put config-dependent work in `configure` or
+  sugar so "disabled" is genuinely inert — this is why the built-in plugins
+  defer their routes/layers to `configure`.
+- **Lifecycle hooks still run.** `run_post_construct` / `run_pre_destroy` for
+  provided beans fire regardless, because those beans are real and may be
+  injected elsewhere.
+
+Plugins with no `CONFIG_PREFIX`, and apps that never load config, are always
+enabled (the flag defaults to on).
+
 ## Deferred actions
 
 For plugins that need to set up infrastructure after state is built but during serve:

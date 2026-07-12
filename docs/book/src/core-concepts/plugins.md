@@ -55,6 +55,38 @@ AppBuilder::new()
 |-----------------|-------------|
 | `Scheduler` | Background task scheduling runtime |
 
+## Enabling and disabling plugins from config
+
+Any plugin with a config section (a `CONFIG_PREFIX`) can be switched off from
+YAML with `<prefix>.enabled: false` — no code change:
+
+```yaml
+prometheus:
+  enabled: false
+```
+
+The default is `true`. A disabled plugin skips its post-state wiring (routes,
+layers, serve/shutdown hooks, and its `configure` step), but **its provided beans
+still exist** — anything injecting them keeps working. See
+[Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
+for the full semantics.
+
+## Requiring a plugin from a feature module
+
+A feature module can declare the plugins it depends on so a missing plugin is a
+clear compile error naming the plugin, instead of a confusing missing-bean error:
+
+```rust
+#[module(
+    controllers(JobController),
+    requires_plugins(Scheduler),
+)]
+pub struct JobsModule;
+```
+
+If `Scheduler` is not `.plugin(Scheduler)`-ed before `register_module::<JobsModule>()`,
+the build fails with a message pointing at `.plugin(Scheduler)`.
+
 ## Plugin ordering
 
 Plugins are installed in registration order. Some have ordering requirements:
