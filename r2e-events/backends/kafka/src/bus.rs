@@ -7,15 +7,21 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::consumer::{
+    BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer,
+};
 use rdkafka::message::Headers;
+use rdkafka::ClientContext;
 use rdkafka::producer::{FutureRecord, Producer};
 use rdkafka::Message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler};
+use r2e_events::backend::{
+    decode_metadata, encode_metadata, spawn_completion_forwarder, DispatchOutcome, Handler,
+    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
@@ -24,7 +30,41 @@ use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
 use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
-use crate::offset_tracker::OffsetTracker;
+
+/// Interval between periodic offset commits when `enable_auto_commit` is
+/// `false` — librdkafka's periodic committer is off, so the consume loop drives
+/// commits of the offsets it has stored after handlers acked.
+const MANUAL_COMMIT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Per-partition commit-watermark tracker shared between the rebalance callback
+/// (driver thread) and the consume loop. Guarded by a `std::sync::Mutex` with
+/// short, await-free critical sections — the callback runs on librdkafka's
+/// driver thread, so an async mutex would be wrong here.
+type SharedTracker = Arc<std::sync::Mutex<WatermarkTracker<i32, i64>>>;
+
+/// rdkafka consumer context that resets watermark tracking on partition
+/// revoke. Without this, a revoke+reassign inside `consumer.recv()` leaves the
+/// tracker's `stored` guard suppressing re-commits of redelivered offsets.
+struct R2eConsumerContext {
+    tracker: SharedTracker,
+}
+
+impl ClientContext for R2eConsumerContext {}
+
+impl ConsumerContext for R2eConsumerContext {
+    fn pre_rebalance(&self, _base: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
+        // On revoke, forget the revoked partitions so redelivered offsets are
+        // re-tracked from scratch after reassignment. Short std-mutex hold, no
+        // awaits — safe on the driver thread.
+        if let Rebalance::Revoke(tpl) = rebalance {
+            let mut tracker = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+            for elem in tpl.elements() {
+                let partition = elem.partition();
+                tracker.remove_partition(&partition);
+            }
+        }
+    }
+}
 
 /// Apache Kafka-backed event bus.
 ///
@@ -270,12 +310,15 @@ impl EventBus for KafkaEventBus {
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
+            // Dispatch locally (recording the outcome for poller dedup) BEFORE
+            // publishing — publishing first races the poller consuming the
+            // broker copy before the local outcome is recorded.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -296,12 +339,15 @@ impl EventBus for KafkaEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
 
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
+            // Dispatch locally (recording the outcome for poller dedup) BEFORE
+            // publishing — publishing first races the poller consuming the
+            // broker copy before the local outcome is recorded.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -374,13 +420,23 @@ async fn run_consumer_inner(
     topic_name: &str,
     cancel: &CancellationToken,
 ) {
-    let consumer: StreamConsumer = match inner.config.to_consumer_client_config().create() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(topic = %topic_name, "failed to create Kafka consumer: {e}");
-            return;
-        }
-    };
+    // At-least-once delivery: offsets are stored only after local handlers
+    // complete. Handlers run concurrently (pipelined), so completions arrive
+    // out of order; the tracker advances each partition's commit watermark over
+    // the contiguous prefix of acked offsets. Fresh per consumer lifetime — on
+    // reconnect it is dropped and the new consumer resumes from the last commit.
+    // Shared with the rebalance callback so revoked partitions reset their state.
+    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(WatermarkTracker::new()));
+
+    let context = R2eConsumerContext { tracker: tracker.clone() };
+    let consumer: StreamConsumer<R2eConsumerContext> =
+        match inner.config.to_consumer_client_config().create_with_context(context) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(topic = %topic_name, "failed to create Kafka consumer: {e}");
+                return;
+            }
+        };
 
     if let Err(e) = consumer.subscribe(&[topic_name]) {
         tracing::error!(topic = %topic_name, "failed to subscribe to Kafka topic: {e}");
@@ -389,23 +445,30 @@ async fn run_consumer_inner(
 
     tracing::info!(topic = %topic_name, "Kafka consumer started");
 
-    // At-least-once delivery: offsets are stored only after local handlers
-    // complete. Handlers run concurrently (pipelined), so completions arrive
-    // out of order; the tracker advances each partition's commit watermark over
-    // the contiguous prefix of acked offsets. Fresh per consumer lifetime — on
-    // reconnect it is dropped and the new consumer resumes from the last commit.
-    let mut tracker = OffsetTracker::new();
-    // Completed dispatches report (partition, offset, outcome) back to this
-    // loop. Unbounded so a spawned completion task never blocks the loop (the
-    // loop is the sole receiver and both sends and drains this channel).
-    let (completion_tx, mut completion_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(i32, i64, DispatchOutcome)>();
+    // When the public `enable_auto_commit` is false, librdkafka never commits
+    // the offsets we store, so the loop must commit them itself on a timer.
+    let manual_commit = !inner.config.enable_auto_commit;
+    let mut commit_interval = r2e_core::rt::interval(MANUAL_COMMIT_INTERVAL);
+
+    // Completed dispatches report (key, outcome) back to this loop on a bounded
+    // channel; the forwarder applies backpressure once the loop falls behind.
+    let (completion_tx, mut completion_rx) = tokio::sync::mpsc::channel::<((i32, i64), DispatchOutcome)>(
+        COMPLETION_CHANNEL_CAPACITY,
+    );
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "Kafka consumer cancelled");
                 break;
+            }
+            // Only active with auto-commit disabled: commit the offsets stored
+            // after handlers acked. `Async` keeps the loop responsive.
+            _ = commit_interval.tick(), if manual_commit => {
+                if let Err(e) = consumer.commit_consumer_state(CommitMode::Async) {
+                    // ERR__NO_OFFSET (nothing new to commit) is benign here.
+                    tracing::debug!(topic = %topic_name, "periodic commit skipped: {e}");
+                }
             }
             msg = consumer.recv() => {
                 match msg {
@@ -423,7 +486,7 @@ async fn run_consumer_inner(
                         // Register the offset as in flight before dispatch, so
                         // out-of-order completions cannot advance the commit
                         // watermark past it.
-                        tracker.on_receive(partition, offset);
+                        tracker.lock().unwrap_or_else(|e| e.into_inner()).on_receive(partition, offset);
 
                         let metadata = extract_metadata_from_kafka(&borrowed_msg);
                         // Returns once handler tasks are spawned (permit-bounded);
@@ -433,13 +496,7 @@ async fn run_consumer_inner(
                             .dispatch_from_poller_tracked(type_id, payload, metadata)
                             .await;
 
-                        let tx = completion_tx.clone();
-                        r2e_core::rt::spawn(async move {
-                            let outcome = completion.outcome().await;
-                            // Receiver lives for the consumer loop — ignore send
-                            // errors that only occur after the loop has exited.
-                            let _ = tx.send((partition, offset, outcome));
-                        });
+                        spawn_completion_forwarder(completion, (partition, offset), completion_tx.clone());
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
@@ -447,34 +504,73 @@ async fn run_consumer_inner(
                     }
                 }
             }
-            Some((partition, offset, outcome)) = completion_rx.recv() => {
-                match outcome {
-                    DispatchOutcome::Ack => {
-                        if let Some(store_offset) = tracker.on_ack(partition, offset) {
-                            // `store_offset` is the message offset; librdkafka's
-                            // periodic auto-commit picks it up (+1 internally).
-                            if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
-                                tracing::warn!(
-                                    topic = %topic_name,
-                                    partition,
-                                    offset = store_offset,
-                                    "failed to store Kafka offset: {e}"
-                                );
-                            }
-                        }
-                    }
-                    DispatchOutcome::Nack => {
-                        tracker.on_nack(partition, offset);
-                        tracing::warn!(
-                            topic = %topic_name,
-                            partition,
-                            offset,
-                            "handler nacked without DLQ capture — not committing offset; \
-                             message will be redelivered on rebalance/reconnect"
-                        );
-                    }
+            Some(((partition, offset), outcome)) = completion_rx.recv() => {
+                apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+            }
+        }
+    }
+
+    // Drain pending completion decisions best-effort before dropping the
+    // consumer. Dropping our sender lets `recv` return `None` once every
+    // forwarder has reported; the timeout caps waiting on handlers still
+    // running. Undrained completions just mean redelivery (at-least-once).
+    drop(completion_tx);
+    let drain = async {
+        while let Some(((partition, offset), outcome)) = completion_rx.recv().await {
+            apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+        }
+    };
+    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+
+    // Final synchronous commit of everything stored during the drain, so a
+    // clean shutdown does not needlessly redeliver acked messages. Only needed
+    // when librdkafka's periodic committer is off.
+    if manual_commit {
+        if let Err(e) = consumer.commit_consumer_state(CommitMode::Sync) {
+            tracing::debug!(topic = %topic_name, "final commit skipped: {e}");
+        }
+    }
+}
+
+/// Apply a single completion decision to the tracker and consumer.
+///
+/// On Ack, advances the partition watermark and stores the new offset (picked
+/// up by librdkafka's periodic committer, or the loop's manual commit when
+/// auto-commit is disabled). On Nack, pins the partition so nothing at or above
+/// the failed offset commits — the message is redelivered on rebalance/restart.
+/// The tracker mutex is only held for the tracker call, never across the store.
+fn apply_completion(
+    consumer: &StreamConsumer<R2eConsumerContext>,
+    tracker: &std::sync::Mutex<WatermarkTracker<i32, i64>>,
+    topic_name: &str,
+    partition: i32,
+    offset: i64,
+    outcome: DispatchOutcome,
+) {
+    match outcome {
+        DispatchOutcome::Ack => {
+            let store = tracker.lock().unwrap_or_else(|e| e.into_inner()).on_ack(partition, offset);
+            if let Some(store_offset) = store {
+                // `store_offset` is the message offset; librdkafka commits `+1`.
+                if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
+                    tracing::warn!(
+                        topic = %topic_name,
+                        partition,
+                        offset = store_offset,
+                        "failed to store Kafka offset: {e}"
+                    );
                 }
             }
+        }
+        DispatchOutcome::Nack => {
+            tracker.lock().unwrap_or_else(|e| e.into_inner()).on_nack(partition, offset);
+            tracing::warn!(
+                topic = %topic_name,
+                partition,
+                offset,
+                "handler nacked without DLQ capture — not committing offset; \
+                 message will be redelivered on rebalance/reconnect"
+            );
         }
     }
 }
