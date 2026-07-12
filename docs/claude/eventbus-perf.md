@@ -1,8 +1,11 @@
 # EventBus Performance & Reliability Roadmap
 
-Status: **IN PROGRESS** (validated 2026-07-12; P1 landed on branch
-`events/p1-ack-after-handler`). Check items off as they land. Hub referenced
-from `roadmap.md` (W8).
+Status: **IN PROGRESS** (validated 2026-07-12; P1 + a 10-finding review-fix
+pass landed on branch `events/p1-ack-after-handler` — shared
+`WatermarkTracker`/`spawn_completion_forwarder`, rebalance-aware Kafka
+tracking, manual-commit progress, RabbitMQ ported to the shared engine
+(P4.1), poison→DLQ parking, emit_and_wait outcome recorded for the poller).
+Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
 distributed backends (`backends/iggy`, `backends/kafka`, `backends/pulsar`,
@@ -152,14 +155,12 @@ at a few hundred msg/s on every backend.
 
 ## P4 — Consumer throughput
 
-- [ ] **P4.1 RabbitMQ: pipeline the consume loop.** The loop awaits all
-      handlers of message N before pulling N+1
-      (`backends/rabbitmq/src/bus.rs:479-608`) → per-topic throughput
-      ≈ 1/handler-latency; `prefetch_count` is defeated. Rebuild on the P1.1
-      outcome-aware dispatch: spawn per delivery, ack/nack inside the task,
-      bound by prefetch + semaphore. Also kill the unconditional
-      `payload.to_vec()` DLQ copy per delivery (`bus.rs:521` — shared code
-      already guards this with `has_dlq`, `src/backend/state.rs:426-435`).
+- [x] **P4.1 RabbitMQ: pipeline the consume loop.** Done with the P1
+      review-fix pass: the loop now uses `dispatch_from_poller_tracked` and a
+      per-delivery task acks/nacks via lapin's owned `Acker`, bounded by
+      prefetch + the shared semaphore. The unconditional `payload.to_vec()`
+      DLQ copy is gone (shared `has_dlq` guard applies). Poison messages and
+      DLQ-captured nacks now ack (previously requeued forever).
 - [ ] **P4.2 Iggy: retune poll defaults + partitions.**
       `poll_interval=100ms` × `poll_batch_size=100`
       (`backends/iggy/src/config.rs:53-54`) caps a poller at ~1k msg/s and
