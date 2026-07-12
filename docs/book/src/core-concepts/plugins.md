@@ -85,21 +85,20 @@ AppBuilder::new()
 Implement the `Plugin` trait for plugins that install after `build_state()`:
 
 ```rust
-use r2e::prelude::*; // Plugin, Router
+use r2e::prelude::*; // Plugin, AppBuilder
 
 pub struct MyPlugin;
 
-impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
-    fn install(self, router: Router<S>) -> Router<S> {
+impl Plugin for MyPlugin {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         // Add routes, layers, or middleware
-        router.route("/my-endpoint", get(|| async { "Hello from plugin" }))
-    }
-
-    fn should_be_last(&self) -> bool {
-        false
+        app.register_routes(Router::new().route("/my-endpoint", get(|| async { "Hello from plugin" })))
     }
 }
 ```
+
+`should_be_last()` (default `false`) marks plugins that must be the outermost
+layer — the builder warns if anything is installed after one.
 
 ### Pre-state plugins (simple path)
 
@@ -116,8 +115,9 @@ impl PreStatePlugin for MyPreStatePlugin {
     type Provided = (MyConfig,);
     type Deps = ();
     type LateDeps = ();      // no post-state dependencies
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
         (MyConfig::default(),)
     }
 }
@@ -134,8 +134,9 @@ impl PreStatePlugin for MyPlugin {
     type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+    fn install(&mut self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
         (MyService::new(pool, token),)
     }
 }
@@ -162,14 +163,17 @@ impl PreStatePlugin for MetricsExporter {
     type Provided = (ExporterHandle,);
     type Deps = ();
     type LateDeps = (MetricsRegistry,);   // factory-built; not available at install
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
         (ExporterHandle::new(),)
     }
 
     fn configure(
+        self,
         (handle,): &(ExporterHandle,),
         (registry,): (MetricsRegistry,),
+        _config: Option<()>,
         ctx: &mut DeferredContext<'_>,
     ) {
         let handle = handle.clone();
@@ -203,8 +207,9 @@ impl PreStatePlugin for MyPlugin {
     type Provided = (MyToken,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
         let t = token.clone();
         ctx.add_layer(|router| router);
@@ -240,8 +245,9 @@ impl PreStatePlugin for MultiProvider {
     type Provided = (TokenA, TokenB);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
         (TokenA::new(), TokenB::new())
     }
 }

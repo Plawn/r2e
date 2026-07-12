@@ -74,15 +74,17 @@ impl PreStatePlugin for MyPlugin {
     // `Provided` is a tuple of beans: `(A,)` for one, `(A, B)` for several, `()` for none.
     type Provided = (MyPluginConfig,);
     type Deps = ();
-    type LateDeps = ();      // no post-state dependencies (see "Consuming application beans")
+    type LateDeps = ();
+    type Config = ();      // no post-state dependencies (see "Consuming application beans")
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
-        (self.config,)
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
+        // `install` takes `&mut self`, so move the owned field out with `take`.
+        (std::mem::take(&mut self.config),)
     }
 }
 ```
 
-Every `PreStatePlugin` must declare `type LateDeps` — set it to `()` unless the
+Every `PreStatePlugin` must declare `type LateDeps` and `type Config` — set it to `()` unless the
 plugin consumes an application bean after `build_state()` (see
 [Consuming application beans](#consuming-application-beans)).
 
@@ -100,8 +102,9 @@ impl PreStatePlugin for MyPlugin {
     type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+    fn install(&mut self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
         (MyService::new(pool, token),)
     }
 }
@@ -157,15 +160,19 @@ impl PreStatePlugin for MetricsExporter {
     // `MetricsRegistry` is a factory-built bean (`.register::<MetricsRegistry>()`),
     // so it cannot be a `Deps` — it does not exist yet at install time.
     type LateDeps = (MetricsRegistry,);
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
         (ExporterHandle::new(),)
     }
 
     // Runs after `build_state()`, with the whole bean graph materialized.
+    // Consumes `self`, and receives the loaded typed `Config` (here `()`).
     fn configure(
+        self,
         (handle,): &(ExporterHandle,),
         (registry,): (MetricsRegistry,),
+        _config: Option<()>,
         ctx: &mut DeferredContext<'_>,
     ) {
         let handle = handle.clone();
@@ -183,10 +190,17 @@ AppBuilder::new()
     .build_state().await
 ```
 
-`configure` receives a borrowed copy of the plugin's `Provided` beans, the
-resolved `LateDeps`, and a `DeferredContext` — the same post-state surface as
-deferred actions (`add_layer`, `store_data`, `on_serve`, `on_shutdown`, …). Its
-default is a no-op, so plugins with `type LateDeps = ()` never need to write it.
+`configure` consumes the plugin instance (`self`) — so it can merge programmatic
+builder settings with file config — and receives a borrowed copy of the plugin's
+`Provided` beans, the resolved `LateDeps`, the loaded typed `Config`
+(`Option<Self::Config>`, see [Typed configuration](#typed-configuration)), and a
+`DeferredContext` — the same post-state surface as deferred actions (`add_layer`,
+`store_data`, `on_serve`, `on_shutdown`, …). Its default is a no-op, so plugins
+with `type LateDeps = ()` and `type Config = ()` never need to write it.
+
+> **`install` takes `&mut self`.** So the instance survives into `configure`
+> (which takes `self` by value). If `install` needs to move an owned field out,
+> use `std::mem::take` or `.clone()`, or just leave the field for `configure`.
 
 **Decision rule:** `Deps` = pre-built infrastructure you hand to `.provide()`;
 `LateDeps` = anything else, including factory-built beans and beans other
@@ -201,6 +215,71 @@ AppBuilder::new()
     .await
     // ...
 ```
+
+## Typed configuration
+
+A plugin can declare a typed config section — the same `#[derive(ConfigProperties)]`
+machinery controllers use for `#[config(section)]`. The framework loads and
+**validates** that section and hands it to `configure` as `Option<Self::Config>`.
+`config_get` on `PluginInstallContext` stays as the stringly, low-level fallback.
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+use r2e::prelude::ConfigProperties;
+
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct MetricsCfg {
+    pub endpoint: Option<String>,   // optional keys let the builder win
+    pub namespace: Option<String>,
+}
+
+pub struct Metrics { endpoint: Option<String> }  // programmatic builder setting
+
+impl PreStatePlugin for Metrics {
+    type Provided = ();
+    type Deps = ();
+    type LateDeps = ();
+    type Config = MetricsCfg;                           // typed section
+    const CONFIG_PREFIX: Option<&'static str> = Some("metrics");   // metrics.* in YAML
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+
+    fn configure(
+        self,
+        _p: &(),
+        (): (),
+        config: Option<MetricsCfg>,      // loaded + validated file config
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        // Precedence: builder setting (self) > file config > default.
+        let endpoint = self.endpoint
+            .or_else(|| config.and_then(|c| c.endpoint))
+            .unwrap_or_else(|| "/metrics".into());
+        ctx.add_layer(Box::new(move |router| router /* mount `endpoint` */));
+    }
+}
+```
+
+Rules for the delivered `config`:
+
+- **`Config = ()`** (the default surface) — no config; `CONFIG_PREFIX` stays
+  `None`; `configure` gets `None`.
+- **Presence-based (optional section).** `configure` gets `Some(cfg)` only when
+  `CONFIG_PREFIX` is `Some(prefix)`, config was loaded (`load_config` /
+  `with_config`), **and** at least one key lives under `prefix`. No config
+  loaded, or an absent section → `None`. This mirrors a controller's
+  `Option<Section>`.
+- **Validation.** A present-but-malformed section (missing required key, wrong
+  type) **panics at boot** — during `build_state()` — with the same
+  missing-key / type-mismatch report a controller `#[config]` mismatch produces,
+  naming the plugin and section. The precedence is: **builder setting > file
+  config > default**.
+
+`CONFIG_PREFIX` is an associated const with a default (`None`), so a plugin that
+reads no config writes only `type Config = ();`. Config is delivered at
+`configure` time (never at `install`) because that is the first point where
+`R2eConfig` is guaranteed loaded — `load_config` always precedes `build_state()`,
+whereas `.plugin()` calls may run before it.
 
 ## Deferred actions
 
@@ -219,8 +298,9 @@ impl PreStatePlugin for MyPlugin {
     type Provided = (CancellationToken,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
         let t = token.clone();
 
@@ -277,8 +357,9 @@ impl PreStatePlugin for MyMultiPlugin {
     type Provided = (CancellationToken, MyRegistry);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
         let token = CancellationToken::new();
         let registry = MyRegistry::new();
 
@@ -368,11 +449,12 @@ impl PreStatePlugin for HealthChecker {
     type Provided = (CancellationToken,);
     type Deps = ();
     type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
         let interval = self.interval;
-        let url = self.url;
+        let url = std::mem::take(&mut self.url);
         let t = token.clone();
         let t2 = token.clone();
 
