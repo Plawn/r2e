@@ -362,10 +362,10 @@ impl PoolExecutor {
 pub struct Executor;
 
 impl PreStatePlugin for Executor {
-    type Provided = PoolExecutor;
+    type Provided = (PoolExecutor,);
     type Deps = ();
 
-    fn install(self, _deps: (), ctx: &mut PluginInstallContext<'_>) -> PoolExecutor {
+    fn install(self, _deps: (), ctx: &mut PluginInstallContext<'_>) -> (PoolExecutor,) {
         let config = ctx
             .config()
             .map(|c| ExecutorConfig::from_config(c, Some("executor")))
@@ -390,6 +390,6 @@ impl PreStatePlugin for Executor {
             });
         }));
 
-        executor
+        (executor,)
     }
 }

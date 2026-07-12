@@ -111,12 +111,13 @@ impl GrpcServer {
 }
 
 impl PreStatePlugin for GrpcServer {
-    /// GrpcServer doesn't provide beans — it uses `GrpcMarker` as a placeholder.
-    /// The real coordination happens via `GrpcServiceRegistry` in plugin_data.
-    type Provided = GrpcMarker;
+    /// GrpcServer doesn't provide meaningful beans — it uses `GrpcMarker` as a
+    /// placeholder. The real coordination happens via `GrpcServiceRegistry` in
+    /// plugin_data.
+    type Provided = (GrpcMarker,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> GrpcMarker {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (GrpcMarker,) {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport;
         #[cfg(feature = "reflection")]
@@ -221,7 +222,7 @@ impl PreStatePlugin for GrpcServer {
             }
         }));
 
-        GrpcMarker
+        (GrpcMarker,)
     }
 }
 

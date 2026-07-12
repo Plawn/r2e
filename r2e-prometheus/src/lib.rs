@@ -149,7 +149,7 @@ impl Prometheus {
 }
 
 impl PreStatePlugin for Prometheus {
-    type Provided = PrometheusRegistry;
+    type Provided = (PrometheusRegistry,);
     type Deps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
@@ -179,7 +179,7 @@ impl PreStatePlugin for Prometheus {
             }));
         }));
 
-        handle
+        (handle,)
     }
 }
 

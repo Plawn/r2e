@@ -196,10 +196,10 @@ pub struct OidcRuntime {
 }
 
 impl PreStatePlugin for OidcRuntime {
-    type Provided = Arc<JwtClaimsValidator>;
+    type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         let oidc_state = self.state;
         let base_path = self.base_path;
         ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
@@ -208,15 +208,15 @@ impl PreStatePlugin for OidcRuntime {
             }));
         }));
 
-        self.claims_validator
+        (self.claims_validator,)
     }
 }
 
 impl PreStatePlugin for OidcServer {
-    type Provided = Arc<JwtClaimsValidator>;
+    type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         self.build().install((), ctx)
     }
 }
