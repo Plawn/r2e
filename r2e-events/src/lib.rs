@@ -13,9 +13,12 @@
 //! therefore be **idempotent**: redelivery is expected after a crash, a
 //! disconnect, or a [`HandlerResult::Nack`]. A `Nack` whose payload was
 //! captured to a configured dead-letter topic counts as processed and is
-//! acked; a payload that fails to deserialize (poison message) is dropped
-//! with an error log rather than redelivered forever; a panicking handler
-//! counts as a `Nack`.
+//! acked; a payload that fails to deserialize (poison message) is parked in
+//! the matching handlers' configured dead-letter topics (when any) and then
+//! acked — never redelivered forever; a panicking handler counts as a
+//! `Nack`. `emit_and_wait` runs local handlers **before** publishing to the
+//! broker; if a local handler nacks, the broker copy is nacked too so the
+//! event is redelivered.
 
 use std::collections::HashMap;
 use std::fmt;

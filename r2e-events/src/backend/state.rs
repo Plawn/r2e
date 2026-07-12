@@ -10,18 +10,22 @@ use crate::{DlqPublisher, EventBusError, EventMetadata, HandlerResult, Subscript
 use super::dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 use super::topic::TopicRegistry;
 
-/// Bounded set of event IDs that were dispatched locally by `emit_and_wait`.
+/// Bounded map of event IDs that were dispatched locally by `emit_and_wait`,
+/// with the local dispatch outcome (`true` = all handlers acked).
 ///
-/// Used to prevent double-delivery: when a distributed backend publishes to
-/// the broker AND calls `dispatch_local()`, the background poller would also
-/// receive the same message and dispatch again. This set records which event
-/// IDs were already handled locally so the poller can skip them.
+/// Used to prevent double-delivery: when a distributed backend calls
+/// `dispatch_local()` AND publishes to the broker, the background poller
+/// would also receive the same message and dispatch again. This map records
+/// which event IDs were already handled locally — and how they resolved — so
+/// the poller can skip the handlers and ack/nack the broker copy from the
+/// recorded outcome. Backends must record BEFORE publishing (dispatch-local
+/// first), otherwise the poller can race the recording.
 ///
-/// Memory is constant: when the set reaches `capacity`, the oldest entry is
+/// Memory is constant: when the map reaches `capacity`, the oldest entry is
 /// evicted before inserting the new one. Evictions are logged as warnings and
 /// counted via `eviction_count`.
 pub struct LocallyDispatchedSet {
-    set: HashSet<u64>,
+    set: HashMap<u64, bool>,
     order: VecDeque<u64>,
     capacity: usize,
     /// Total number of entries evicted because the set was full.
@@ -31,28 +35,29 @@ pub struct LocallyDispatchedSet {
 impl LocallyDispatchedSet {
     pub fn new(capacity: usize) -> Self {
         Self {
-            set: HashSet::with_capacity(capacity),
+            set: HashMap::with_capacity(capacity),
             order: VecDeque::with_capacity(capacity),
             capacity,
             eviction_count: 0,
         }
     }
 
-    /// Record an event ID as locally dispatched.
-    pub fn insert(&mut self, id: u64) {
-        if self.set.contains(&id) {
+    /// Record an event ID as locally dispatched with its outcome
+    /// (`all_acked` = every local handler acked).
+    pub fn insert(&mut self, id: u64, all_acked: bool) {
+        if self.set.contains_key(&id) {
             return;
         }
         // Drain leading ghost entries (already removed from set by the poller)
         // to prevent unbounded VecDeque growth.
-        while self.order.front().is_some_and(|&front| !self.set.contains(&front)) {
+        while self.order.front().is_some_and(|front| !self.set.contains_key(front)) {
             self.order.pop_front();
         }
         if self.set.len() >= self.capacity {
             // Evict oldest live entry; skip any remaining ghosts.
             loop {
                 match self.order.pop_front() {
-                    Some(oldest) if self.set.remove(&oldest) => {
+                    Some(oldest) if self.set.remove(&oldest).is_some() => {
                         self.eviction_count += 1;
                         tracing::warn!(
                             capacity = self.capacity,
@@ -67,12 +72,14 @@ impl LocallyDispatchedSet {
                 }
             }
         }
-        self.set.insert(id);
+        self.set.insert(id, all_acked);
         self.order.push_back(id);
     }
 
-    /// Remove an event ID, returning `true` if it was present (i.e. already dispatched locally).
-    pub fn remove(&mut self, id: u64) -> bool {
+    /// Remove an event ID, returning the recorded local outcome if it was
+    /// present (`Some(true)` = handlers all acked, `Some(false)` = at least
+    /// one nacked or panicked).
+    pub fn remove(&mut self, id: u64) -> Option<bool> {
         self.set.remove(&id)
     }
 
@@ -175,6 +182,36 @@ pub struct BackendState {
     pub dlq_publisher: Option<DlqPublisher>,
     /// Semaphore limiting concurrent handler execution (backpressure).
     pub handler_semaphore: Arc<Semaphore>,
+}
+
+/// Default capacity for a poller's completion channel — bounds how many
+/// resolved-but-unapplied ack decisions may queue before completion
+/// forwarders apply backpressure.
+pub const COMPLETION_CHANNEL_CAPACITY: usize = 1024;
+
+/// Best-effort deadline for draining pending completion decisions when a
+/// poller shuts down. Undrained messages are simply redelivered.
+pub const COMPLETION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Spawn a task that awaits a [`DispatchCompletion`] and forwards
+/// `(key, outcome)` to the poller's completion channel.
+///
+/// This is the shared consume-loop pattern: the poller stays pipelined (keeps
+/// pulling messages) while completions resolve out of order; the loop applies
+/// each decision (offset store / broker ack) from its `select!` arm. `key`
+/// identifies the message in backend terms (e.g. `(partition, offset)` for
+/// Kafka, `(topic, message_id)` for Pulsar). Send errors are ignored: the
+/// receiver only closes when the poller has exited, and unapplied decisions
+/// just mean redelivery.
+pub fn spawn_completion_forwarder<K: Send + 'static>(
+    completion: DispatchCompletion,
+    key: K,
+    tx: tokio::sync::mpsc::Sender<(K, DispatchOutcome)>,
+) {
+    r2e_core::rt::spawn(async move {
+        let outcome = completion.outcome().await;
+        let _ = tx.send((key, outcome)).await;
+    });
 }
 
 /// RAII guard that decrements `in_flight` and notifies waiters on drop.
@@ -390,21 +427,31 @@ impl BackendState {
     }
 
     /// Dispatch a deserialized event to all local handlers for `emit_and_wait`.
+    ///
+    /// Records the event ID and the aggregate handler outcome in the
+    /// locally-dispatched map once all handlers have resolved, so the poller
+    /// later acks the broker copy when handlers acked and nacks it (for
+    /// redelivery) when any handler failed. Backends MUST call this BEFORE
+    /// publishing to the broker — recording after the publish races the
+    /// poller consuming the broker copy.
     pub async fn dispatch_local(
         &self,
         type_id: TypeId,
         payload: &[u8],
         metadata: EventMetadata,
     ) -> Result<(), EventBusError> {
-        // Record this event ID so the poller skips it (prevents double-delivery).
-        self.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).insert(metadata.event_id);
+        let event_id = metadata.event_id;
 
         // Collect handlers under the lock, then release before spawning/awaiting.
         let (event, handlers) = {
             let map = self.handlers.read().await;
             let topic_handlers = match map.get(&type_id) {
                 Some(th) => th,
-                None => return Ok(()),
+                None => {
+                    // Nothing ran locally, nothing will: ack the broker copy.
+                    self.record_local_dispatch(event_id, true);
+                    return Ok(());
+                }
             };
 
             let event = (topic_handlers.deserializer)(payload)
@@ -433,13 +480,31 @@ impl BackendState {
             }));
         }
 
+        let mut all_acked = true;
         for task in tasks {
-            if let Ok(HandlerResult::Nack(reason)) = task.await {
-                tracing::warn!("event handler returned Nack: {reason}");
+            match task.await {
+                Ok(HandlerResult::Ack) => {}
+                Ok(HandlerResult::Nack(reason)) => {
+                    tracing::warn!("event handler returned Nack: {reason}");
+                    all_acked = false;
+                }
+                Err(e) => {
+                    tracing::error!("event handler task panicked: {e}");
+                    all_acked = false;
+                }
             }
         }
 
+        self.record_local_dispatch(event_id, all_acked);
         Ok(())
+    }
+
+    /// Record an `emit_and_wait` local dispatch outcome for the poller dedup.
+    fn record_local_dispatch(&self, event_id: u64, all_acked: bool) {
+        self.locally_dispatched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(event_id, all_acked);
     }
 
     /// Dispatch a message from a poller to local handlers (fire-and-forget with in-flight tracking).
@@ -481,9 +546,20 @@ impl BackendState {
         payload: &[u8],
         metadata: EventMetadata,
     ) -> DispatchCompletion {
-        // Skip if this event was already dispatched locally by emit_and_wait.
-        if self.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).remove(metadata.event_id) {
-            return DispatchCompletion::resolved(DispatchOutcome::Ack);
+        // Skip if this event was already dispatched locally by emit_and_wait:
+        // handlers already ran there, so resolve the broker copy from the
+        // recorded local outcome (nack → broker redelivers, handlers re-run).
+        if let Some(all_acked) = self
+            .locally_dispatched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(metadata.event_id)
+        {
+            return DispatchCompletion::resolved(if all_acked {
+                DispatchOutcome::Ack
+            } else {
+                DispatchOutcome::Nack
+            });
         }
 
         // Collect handlers and deserialize under the lock, then release before spawning.
@@ -497,8 +573,23 @@ impl BackendState {
             let event = match (topic_handlers.deserializer)(payload) {
                 Ok(e) => e,
                 Err(err) => {
-                    // Poison message: ack it away rather than redeliver forever.
+                    // Poison message: never redeliver forever. Park it in the
+                    // matching handlers' DLQs when configured, then ack it away.
                     tracing::error!("failed to deserialize event: {err}");
+                    let mut dlq_topics: Vec<String> = topic_handlers.entries.iter()
+                        .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                        .filter_map(|entry| {
+                            entry.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.clone())
+                        })
+                        .collect();
+                    drop(map); // release the handlers lock before awaiting
+                    dlq_topics.sort();
+                    dlq_topics.dedup();
+                    if let Some(ref publisher) = self.dlq_publisher {
+                        for topic in dlq_topics {
+                            publisher(topic, payload.to_vec(), metadata.clone()).await;
+                        }
+                    }
                     return DispatchCompletion::resolved(DispatchOutcome::Ack);
                 }
             };

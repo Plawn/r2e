@@ -8,6 +8,7 @@ mod dispatch;
 mod metadata_codec;
 mod state;
 mod topic;
+mod watermark;
 
 pub use dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 pub use metadata_codec::{
@@ -15,7 +16,9 @@ pub use metadata_codec::{
     HEADER_PARTITION_KEY, HEADER_TIMESTAMP, HEADER_USER_PREFIX,
 };
 pub use state::{
-    BackendState, DispatchCompletion, DispatchOutcome, InFlightGuard, LocallyDispatchedSet,
+    spawn_completion_forwarder, BackendState, DispatchCompletion, DispatchOutcome, InFlightGuard,
+    LocallyDispatchedSet, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
     DEFAULT_BACKEND_CONCURRENCY,
 };
 pub use topic::{sanitize_topic_name, TopicRegistry};
+pub use watermark::WatermarkTracker;

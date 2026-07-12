@@ -162,7 +162,7 @@ async fn tracked_dispatch_skips_locally_dispatched_event() {
         .locally_dispatched
         .lock()
         .unwrap()
-        .insert(metadata.event_id);
+        .insert(metadata.event_id, true);
 
     let completion = state
         .dispatch_from_poller_tracked(TypeId::of::<TestEvent>(), b"{}", metadata)
@@ -170,6 +170,91 @@ async fn tracked_dispatch_skips_locally_dispatched_event() {
 
     // Already handled by emit_and_wait locally: ack the broker copy, skip handlers.
     assert_eq!(completion.outcome().await, DispatchOutcome::Ack);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn locally_dispatched_nack_outcome_nacks_broker_copy() {
+    let state = new_state();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = counting_handler(calls.clone(), || HandlerResult::Ack);
+    state
+        .register_handler_with_deserializer::<TestEvent>(handler, test_deserializer())
+        .await;
+
+    let metadata = EventMetadata::new();
+    state
+        .locally_dispatched
+        .lock()
+        .unwrap()
+        .insert(metadata.event_id, false);
+
+    let completion = state
+        .dispatch_from_poller_tracked(TypeId::of::<TestEvent>(), b"{}", metadata)
+        .await;
+
+    // Local emit_and_wait handlers nacked: skip handlers, nack the broker copy.
+    assert_eq!(completion.outcome().await, DispatchOutcome::Nack);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dispatch_local_records_outcome_for_poller() {
+    let state = new_state();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = counting_handler(calls.clone(), || HandlerResult::Nack("boom".into()));
+    state
+        .register_handler_with_deserializer::<TestEvent>(handler, test_deserializer())
+        .await;
+
+    let metadata = EventMetadata::new();
+    let event_id = metadata.event_id;
+    state
+        .dispatch_local(TypeId::of::<TestEvent>(), b"{}", metadata)
+        .await
+        .unwrap();
+
+    assert_eq!(state.locally_dispatched.lock().unwrap().remove(event_id), Some(false));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn poison_message_routes_to_matching_dlqs_and_acks() {
+    let published: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let published_clone = published.clone();
+    let dlq: DlqPublisher = Arc::new(move |topic, _payload, _meta| {
+        let published = published_clone.clone();
+        Box::pin(async move {
+            published.lock().unwrap().push(topic);
+        })
+    });
+    let state = Arc::new(BackendState::with_dlq_publisher(
+        TopicRegistry::default(),
+        Some(dlq),
+    ));
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = counting_handler(calls.clone(), || HandlerResult::Ack);
+    let policy = RetryPolicy {
+        max_retries: 0,
+        ..Default::default()
+    }
+    .with_dlq("poison-dlq");
+    state
+        .register_handler_full::<serde_json::Value>(
+            handler,
+            Some(failing_deserializer()),
+            None,
+            Some(policy),
+        )
+        .await;
+
+    let completion = state
+        .dispatch_from_poller_tracked(TypeId::of::<serde_json::Value>(), b"garbage", EventMetadata::new())
+        .await;
+
+    // Undecodable payload: parked in the configured DLQ, then acked away.
+    assert_eq!(completion.outcome().await, DispatchOutcome::Ack);
+    assert_eq!(*published.lock().unwrap(), vec!["poison-dlq".to_string()]);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
