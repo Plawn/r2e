@@ -12,13 +12,15 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler, HEADER_TIMESTAMP};
+use r2e_events::backend::{
+    decode_metadata, encode_metadata, spawn_completion_forwarder, DispatchOutcome, Handler,
+    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT, HEADER_TIMESTAMP,
+};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
 
 use crate::builder::IggyEventBusBuilder;
-use crate::commit::compute_commit_offsets;
 use crate::config::IggyConfig;
 use crate::error::map_iggy_error;
 use crate::inner::IggyInner;
@@ -308,14 +310,17 @@ impl EventBus for IggyEventBus {
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
-            // Publish to Iggy
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
-            // Also dispatch locally and wait
+            // Dispatch locally and wait FIRST: dispatch_local records the local
+            // outcome so the poller dedups the broker copy. Publishing before
+            // this races the poller consuming that copy. If the local dispatch
+            // errors, don't publish.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            // Then publish to Iggy.
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -336,14 +341,17 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
 
-            // Publish to Iggy
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
-            // Also dispatch locally and wait
+            // Dispatch locally and wait FIRST: dispatch_local records the local
+            // outcome so the poller dedups the broker copy. Publishing before
+            // this races the poller consuming that copy. If the local dispatch
+            // errors, don't publish.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            // Then publish to Iggy.
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -452,23 +460,51 @@ async fn run_poller_inner(
 
     tracing::info!(topic = %topic_name, "poller started");
 
-    // At-least-once: process one polled batch at a time. All handlers in a
-    // batch run concurrently (permit-bounded inside `dispatch_from_poller_tracked`);
-    // offsets are stored only for the contiguous acked prefix of each partition
-    // once every handler in the batch has finished. On restart the uncommitted
-    // tail is redelivered by the broker.
+    // At-least-once, pipelined: handlers are dispatched as messages arrive
+    // (permit-bounded inside `dispatch_from_poller_tracked`) and their
+    // completions are forwarded — out of order — to a bounded channel. A
+    // dedicated `select!` arm applies each completion to a persistent
+    // `WatermarkTracker` and stores the resulting commit offset. The poll loop
+    // never awaits a handler outcome inline, so a single hung handler cannot
+    // park the loop: `cancel.cancelled()` stays live and shutdown never hangs.
     //
-    // `ready_chunks` groups the messages the consumer has buffered from a server
-    // poll into one batch, closing the batch when the underlying stream goes
-    // pending (i.e. the next server poll is in flight).
+    // The watermark tracker lives for the whole poller session (across
+    // batches). A nacked offset pins its partition's commit boundary for the
+    // rest of the session, so nothing at or above a nacked offset is ever
+    // stored — fixing the cross-batch loss where a later batch could commit
+    // past an earlier nack.
+    //
+    // `ready_chunks` still groups the messages the consumer has buffered from a
+    // server poll into one batch (amortizing the drain), but outcomes are no
+    // longer awaited before pulling the next batch.
     let batch_capacity = (inner.config.poll_batch_size.max(1)) as usize;
     let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
+
+    let mut tracker: WatermarkTracker<u32, u64> = WatermarkTracker::new();
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<((u32, u64), DispatchOutcome)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "poller cancelled");
                 break;
+            }
+            // Apply resolved completions: advance the watermark and store the
+            // commit offset when it moves. `recv` yields `None` only once every
+            // sender (the loop's `tx` and all forwarders) is dropped, which
+            // cannot happen while the loop holds `tx`, so this arm never
+            // spuriously ends the loop.
+            Some(((partition_id, offset), outcome)) = rx.recv() => {
+                apply_completion(
+                    &mut tracker,
+                    batches.get_ref(),
+                    topic_name,
+                    partition_id,
+                    offset,
+                    outcome,
+                )
+                .await;
             }
             batch = futures_util::StreamExt::next(&mut batches) => {
                 let batch = match batch {
@@ -479,14 +515,16 @@ async fn run_poller_inner(
                     }
                 };
 
-                // Spawn handlers for every message in the batch; keep each
-                // message's partition and offset alongside its completion.
-                let mut pending = Vec::with_capacity(batch.len());
+                // Dispatch every message in the batch and forward its
+                // completion; do NOT await outcomes here.
                 for item in &batch {
                     match item {
                         Ok(received) => {
                             let partition_id = received.partition_id;
                             let offset = received.message.header.offset;
+                            // Record receipt before dispatching: the watermark
+                            // is gated by the set of received offsets.
+                            tracker.on_receive(partition_id, offset);
                             let metadata = extract_metadata_from_message(&received.message);
                             let completion = inner.state
                                 .dispatch_from_poller_tracked(
@@ -495,47 +533,79 @@ async fn run_poller_inner(
                                     metadata,
                                 )
                                 .await;
-                            pending.push((partition_id, offset, completion));
+                            spawn_completion_forwarder(
+                                completion,
+                                (partition_id, offset),
+                                tx.clone(),
+                            );
                         }
                         Err(e) => {
                             tracing::warn!(topic = %topic_name, "poll error: {e}");
                         }
                     }
                 }
+            }
+        }
+    }
 
-                // Await every handler outcome before committing anything.
-                let mut outcomes = Vec::with_capacity(pending.len());
-                let mut had_nack = false;
-                for (partition_id, offset, completion) in pending {
-                    let outcome = completion.outcome().await;
-                    if outcome == DispatchOutcome::Nack {
-                        had_nack = true;
-                    }
-                    outcomes.push((partition_id, offset, outcome));
-                }
+    // The loop has exited (cancelled or stream ended). Drop the loop's sender so
+    // the channel closes once the in-flight forwarders finish, then drain
+    // remaining completions best-effort within the deadline. Acks still advance
+    // the watermark and store their offset; anything undrained is simply
+    // redelivered on restart.
+    drop(tx);
+    let consumer = batches.get_ref();
+    let drain = async {
+        while let Some(((partition_id, offset), outcome)) = rx.recv().await {
+            apply_completion(&mut tracker, consumer, topic_name, partition_id, offset, outcome)
+                .await;
+        }
+    };
+    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
+        tracing::warn!(
+            topic = %topic_name,
+            "timed out draining completions on poller shutdown; \
+             undrained messages will be redelivered on restart"
+        );
+    }
+}
 
-                // Store the highest safe offset per partition (acked prefix only).
-                for (partition_id, offset) in compute_commit_offsets(outcomes) {
-                    if let Err(e) =
-                        batches.get_ref().store_offset(offset, Some(partition_id)).await
-                    {
-                        tracing::warn!(
-                            topic = %topic_name,
-                            partition_id,
-                            offset,
-                            "failed to store Iggy consumer offset: {e}"
-                        );
-                    }
-                }
-
-                if had_nack {
+/// Apply one resolved dispatch completion to the commit watermark.
+///
+/// On Ack, advance the tracker and store the commit offset if the watermark
+/// moved. On Nack, pin the partition (nothing at or above this offset commits
+/// again for the tracker's lifetime) and warn — the message is redelivered on
+/// restart.
+async fn apply_completion(
+    tracker: &mut WatermarkTracker<u32, u64>,
+    consumer: &IggyConsumer,
+    topic_name: &str,
+    partition_id: u32,
+    offset: u64,
+    outcome: DispatchOutcome,
+) {
+    match outcome {
+        DispatchOutcome::Ack => {
+            if let Some(commit) = tracker.on_ack(partition_id, offset) {
+                if let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
                     tracing::warn!(
                         topic = %topic_name,
-                        "one or more handlers nacked without DLQ capture; \
-                         uncommitted messages will be redelivered on restart"
+                        partition_id,
+                        offset = commit,
+                        "failed to store Iggy consumer offset: {e}"
                     );
                 }
             }
+        }
+        DispatchOutcome::Nack => {
+            tracker.on_nack(partition_id, offset);
+            tracing::warn!(
+                topic = %topic_name,
+                partition_id,
+                offset,
+                "handler nacked without DLQ capture; partition pinned at this \
+                 offset, message redelivered on restart"
+            );
         }
     }
 }

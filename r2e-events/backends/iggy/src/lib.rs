@@ -39,7 +39,6 @@
 
 mod builder;
 mod bus;
-mod commit;
 mod config;
 mod dispatch;
 mod error;
@@ -49,8 +48,6 @@ mod topic;
 
 pub use builder::IggyEventBusBuilder;
 pub use bus::IggyEventBus;
-#[doc(hidden)]
-pub use commit::compute_commit_offsets;
 pub use config::{IggyConfig, IggyConfigBuilder, Transport};
 pub use error::map_iggy_error;
 pub use r2e_events::backend::sanitize_topic_name;
