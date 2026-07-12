@@ -21,7 +21,7 @@ use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::StatusCode;
-use r2e_core::{AppBuilder, BeanContext, DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::{AppBuilder, BeanContext, PluginInstallContext, PreStatePlugin};
 
 /// Handle to the scheduler runtime.
 ///
@@ -206,28 +206,24 @@ impl PreStatePlugin for Scheduler {
         let token_for_serve = token.clone();
         let job_registry_for_serve = job_registry.clone();
 
-        ctx.add_deferred(DeferredAction::new("Scheduler", move |dctx| {
-            // Add the layer that provides SchedulerHandle via extension.
-            dctx.add_layer(Box::new(move |router| {
-                router.layer(r2e_core::http::Extension(handle))
-            }));
+        // Add the layer that provides SchedulerHandle via extension.
+        ctx.add_layer(move |router| router.layer(r2e_core::http::Extension(handle)));
 
-            // Store the task registry for use during controller registration.
-            dctx.store_data(task_registry);
+        // Store the task registry for use during controller registration.
+        ctx.store_data(task_registry);
 
-            // Register a serve hook to start scheduled tasks. Drains only
-            // scheduler-owned tasks from the shared registry so hooks for
-            // other subsystems don't see them.
-            dctx.on_serve(move |serve_ctx| {
-                let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
-                start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
-            });
+        // Register a serve hook to start scheduled tasks. Drains only
+        // scheduler-owned tasks from the shared registry so hooks for
+        // other subsystems don't see them.
+        ctx.on_serve(move |serve_ctx| {
+            let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
+            start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
+        });
 
-            // Register shutdown hook.
-            dctx.on_shutdown(move || {
-                cancel_for_stopper.cancel();
-            });
-        }));
+        // Register shutdown hook.
+        ctx.on_shutdown(move || {
+            cancel_for_stopper.cancel();
+        });
 
         (token, job_registry)
     }

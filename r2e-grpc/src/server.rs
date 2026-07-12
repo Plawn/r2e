@@ -1,4 +1,4 @@
-use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::{PluginInstallContext, PreStatePlugin};
 
 use crate::multiplex::MultiplexService;
 use crate::registry::{GrpcServiceRegistry, RegisteredServices};
@@ -123,104 +123,101 @@ impl PreStatePlugin for GrpcServer {
         #[cfg(feature = "reflection")]
         let reflection = self.reflection;
 
-        ctx.add_deferred(DeferredAction::new("GrpcServer", move |dctx| {
-            // Store the registry for register_grpc_service to find.
-            dctx.store_data(registry.clone());
+        // Store the registry for register_grpc_service to find.
+        ctx.store_data(registry.clone());
 
-            match transport {
-                GrpcTransport::SeparatePort(addr) => {
-                    // Drain the registry when the server starts and spawn the
-                    // tonic server next to the HTTP one. Serve hooks run before
-                    // the HTTP listener binds. The task observes the app
-                    // shutdown token as its graceful-shutdown signal, and its
-                    // handle is tracked so the shutdown phase awaits the gRPC
-                    // drain (concurrent with the HTTP drain, bounded by the
-                    // shutdown grace period) instead of exiting mid-drain.
-                    dctx.on_serve(move |serve_ctx| {
-                        let Some(services) = registry.take() else {
-                            tracing::warn!(
-                                "GrpcServer::on_port is installed but no gRPC service was \
-                                 registered; not starting the gRPC server"
-                            );
-                            return;
+        match transport {
+            GrpcTransport::SeparatePort(addr) => {
+                // Drain the registry when the server starts and spawn the
+                // tonic server next to the HTTP one. Serve hooks run before
+                // the HTTP listener binds. The task observes the app
+                // shutdown token as its graceful-shutdown signal, and its
+                // handle is tracked so the shutdown phase awaits the gRPC
+                // drain (concurrent with the HTTP drain, bounded by the
+                // shutdown grace period) instead of exiting mid-drain.
+                ctx.on_serve(move |serve_ctx| {
+                    let Some(services) = registry.take() else {
+                        tracing::warn!(
+                            "GrpcServer::on_port is installed but no gRPC service was \
+                             registered; not starting the gRPC server"
+                        );
+                        return;
+                    };
+                    #[cfg(feature = "reflection")]
+                    let services = apply_reflection(services, &reflection);
+                    let RegisteredServices { routes, names, .. } = services;
+                    let cancel = serve_ctx.shutdown_token();
+                    let handle = r2e_core::rt::spawn(async move {
+                        // Bind explicitly (instead of tonic's internal bind)
+                        // so the resolved address — including an OS-assigned
+                        // port for `:0` — is logged.
+                        let listener = match r2e_core::rt::bind_tcp(addr.as_str()).await {
+                            Ok(l) => l,
+                            Err(e) => {
+                                tracing::error!(
+                                    addr = %addr, error = %e,
+                                    "Failed to bind gRPC listener; gRPC server NOT started"
+                                );
+                                return;
+                            }
                         };
+                        match listener.local_addr() {
+                            Ok(local) => tracing::info!(
+                                addr = %local, services = ?names,
+                                "R2E gRPC server listening"
+                            ),
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "Could not read gRPC listener local address"
+                            ),
+                        }
+                        let incoming = tonic::transport::server::TcpIncoming::from(listener);
+                        if let Err(e) = tonic::transport::Server::builder()
+                            .add_routes(routes)
+                            .serve_with_incoming_shutdown(incoming, cancel.cancelled_owned())
+                            .await
+                        {
+                            tracing::error!(error = %e, "gRPC server error");
+                        }
+                        tracing::debug!("gRPC server stopped");
+                    });
+                    serve_ctx.track(handle);
+                });
+            }
+            GrpcTransport::Multiplexed => {
+                // Wrap the assembled HTTP router: gRPC requests (by
+                // content-type) go to the accumulated tonic routes, all
+                // others to the original router. `wrap_router` (NOT
+                // `add_layer`) puts the multiplexer OUTSIDE every HTTP
+                // layer — including other plugins' middleware and the
+                // catch-panic layer — regardless of plugin install order,
+                // so gRPC streams never cross HTTP-shaped middleware.
+                // Wraps run at build time, after every
+                // `register_grpc_service` call filled the registry.
+                // Graceful shutdown rides the HTTP server's.
+                ctx.wrap_router(move |router| match registry.take() {
+                    Some(services) => {
                         #[cfg(feature = "reflection")]
                         let services = apply_reflection(services, &reflection);
                         let RegisteredServices { routes, names, .. } = services;
-                        let cancel = serve_ctx.shutdown_token();
-                        let handle = r2e_core::rt::spawn(async move {
-                            // Bind explicitly (instead of tonic's internal bind)
-                            // so the resolved address — including an OS-assigned
-                            // port for `:0` — is logged.
-                            let listener = match r2e_core::rt::bind_tcp(addr.as_str()).await {
-                                Ok(l) => l,
-                                Err(e) => {
-                                    tracing::error!(
-                                        addr = %addr, error = %e,
-                                        "Failed to bind gRPC listener; gRPC server NOT started"
-                                    );
-                                    return;
-                                }
-                            };
-                            match listener.local_addr() {
-                                Ok(local) => tracing::info!(
-                                    addr = %local, services = ?names,
-                                    "R2E gRPC server listening"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    error = %e,
-                                    "Could not read gRPC listener local address"
-                                ),
-                            }
-                            let incoming =
-                                tonic::transport::server::TcpIncoming::from(listener);
-                            if let Err(e) = tonic::transport::Server::builder()
-                                .add_routes(routes)
-                                .serve_with_incoming_shutdown(incoming, cancel.cancelled_owned())
-                                .await
-                            {
-                                tracing::error!(error = %e, "gRPC server error");
-                            }
-                            tracing::debug!("gRPC server stopped");
-                        });
-                        serve_ctx.track(handle);
-                    });
-                }
-                GrpcTransport::Multiplexed => {
-                    // Wrap the assembled HTTP router: gRPC requests (by
-                    // content-type) go to the accumulated tonic routes, all
-                    // others to the original router. `wrap_router` (NOT
-                    // `add_layer`) puts the multiplexer OUTSIDE every HTTP
-                    // layer — including other plugins' middleware and the
-                    // catch-panic layer — regardless of plugin install order,
-                    // so gRPC streams never cross HTTP-shaped middleware.
-                    // Wraps run at build time, after every
-                    // `register_grpc_service` call filled the registry.
-                    // Graceful shutdown rides the HTTP server's.
-                    dctx.wrap_router(Box::new(move |router| match registry.take() {
-                        Some(services) => {
-                            #[cfg(feature = "reflection")]
-                            let services = apply_reflection(services, &reflection);
-                            let RegisteredServices { routes, names, .. } = services;
-                            tracing::info!(
-                                services = ?names,
-                                "Multiplexing gRPC services onto the HTTP port \
-                                 (content-type routing)"
-                            );
-                            let mux = MultiplexService::new(routes.prepare(), router);
-                            r2e_core::http::Router::new().fallback_service(mux)
-                        }
-                        None => {
-                            tracing::warn!(
-                                "GrpcServer::multiplexed is installed but no gRPC service \
-                                 was registered; serving HTTP only"
-                            );
-                            router
-                        }
-                    }));
-                }
+                        tracing::info!(
+                            services = ?names,
+                            "Multiplexing gRPC services onto the HTTP port \
+                             (content-type routing)"
+                        );
+                        let mux = MultiplexService::new(routes.prepare(), router);
+                        r2e_core::http::Router::new().fallback_service(mux)
+                    }
+                    None => {
+                        tracing::warn!(
+                            "GrpcServer::multiplexed is installed but no gRPC service \
+                             was registered; serving HTTP only"
+                        );
+                        router
+                    }
+                });
             }
-        }));
+        }
 
         (GrpcMarker,)
     }

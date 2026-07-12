@@ -48,7 +48,7 @@ use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use r2e_core::config::ConfigProperties;
-use r2e_core::plugin::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginInstallContext, PreStatePlugin};
 
 pub use r2e_core::rt::{JobHandle, JoinError};
 
@@ -379,16 +379,14 @@ impl PreStatePlugin for Executor {
         let executor = PoolExecutor::new(config);
         let shutdown_handle = executor.clone();
 
-        ctx.add_deferred(DeferredAction::new("Executor", move |dctx| {
-            dctx.on_shutdown_async(move || async move {
-                let timeout = shutdown_handle.shutdown_timeout();
-                if timeout.is_zero() {
-                    shutdown_handle.shutdown();
-                    return;
-                }
-                let _ = shutdown_handle.shutdown_graceful(timeout).await;
-            });
-        }));
+        ctx.on_shutdown_async(move || async move {
+            let timeout = shutdown_handle.shutdown_timeout();
+            if timeout.is_zero() {
+                shutdown_handle.shutdown();
+                return;
+            }
+            let _ = shutdown_handle.shutdown_graceful(timeout).await;
+        });
 
         (executor,)
     }

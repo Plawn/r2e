@@ -60,7 +60,7 @@ use std::sync::Arc;
 
 use r2e_core::http::routing::{get, post};
 use r2e_core::http::Router;
-use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::{PluginInstallContext, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
@@ -202,11 +202,7 @@ impl PreStatePlugin for OidcRuntime {
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         let oidc_state = self.state;
         let base_path = self.base_path;
-        ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
-            dctx.add_layer(Box::new(move |router| {
-                router.merge(oidc_routes(oidc_state, &base_path))
-            }));
-        }));
+        ctx.add_layer(move |router| router.merge(oidc_routes(oidc_state, &base_path)));
 
         (self.claims_validator,)
     }

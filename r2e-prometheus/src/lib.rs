@@ -63,7 +63,7 @@ pub use prometheus;
 
 use handler::metrics_handler;
 use r2e_core::http::routing::get;
-use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::{PluginInstallContext, PreStatePlugin};
 
 /// A handle to the shared Prometheus metrics registry.
 ///
@@ -171,13 +171,11 @@ impl PreStatePlugin for Prometheus {
         // Defer layer + route installation to post-state phase
         let config = self.config;
         let endpoint = self.endpoint;
-        ctx.add_deferred(DeferredAction::new("Prometheus", move |dctx| {
-            dctx.add_layer(Box::new(move |router| {
-                router
-                    .route(&endpoint, get(metrics_handler))
-                    .layer(PrometheusLayer::new(config))
-            }));
-        }));
+        ctx.add_layer(move |router| {
+            router
+                .route(&endpoint, get(metrics_handler))
+                .layer(PrometheusLayer::new(config))
+        });
 
         (handle,)
     }
