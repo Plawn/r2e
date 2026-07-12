@@ -1,3 +1,4 @@
+use super::validation::MissingKeyError;
 use super::{ConfigError, R2eConfig};
 
 /// The empty `Children` list for configs with no nested `#[config(section)]`
@@ -34,6 +35,15 @@ pub struct PropertyMeta {
     /// not consulted: a `required` property has no default, so validation
     /// pairs `required` with this probe.
     pub resolvable: fn(&R2eConfig, &PropertyMeta) -> bool,
+    /// Phase-1 validator for the nested type carried by an `is_section`
+    /// property: recurses into the section under `full_key` and returns its
+    /// missing required keys with full per-property metadata. Chosen by
+    /// `#[derive(ConfigProperties)]` alongside `from_config`, which owns the
+    /// presence semantics: a mandatory section recurses unconditionally, an
+    /// `Option`/`#[config(section, default)]` section only when present
+    /// (`has_prefix`), a map section once per sub-key entry. `None` on leaf
+    /// properties (and on manual impls that opt out of nested reporting).
+    pub validate_nested: Option<fn(&R2eConfig, &PropertyMeta) -> Vec<MissingKeyError>>,
 }
 
 impl PropertyMeta {
