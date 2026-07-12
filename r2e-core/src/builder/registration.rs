@@ -55,7 +55,7 @@ use crate::type_list::ControllerTuple;
 ///     .build_state()
 ///     .await
 /// ```
-pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>: Sized {
+pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>: Sized {
     /// Register a [`FeatureModule`]: its providers, controllers, and
     /// import/export declarations, in one call.
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
@@ -67,11 +67,13 @@ pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>: Sized {
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>;
 }
 
-impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx> RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx>
+impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
+    RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
     for AppBuilder<NoState, P, R, Mods>
 {
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
@@ -83,10 +85,11 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx> RegisterModule<P, R, Mods, DepIdx, Exp
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>,
     {
-        self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx>()
+        self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>()
     }
 }
 

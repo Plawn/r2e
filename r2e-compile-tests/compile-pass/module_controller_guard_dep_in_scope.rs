@@ -76,6 +76,7 @@ impl FeatureModule for GoodModule {
     type Controllers = (GoodController,);
     type Exports = TCons<Svc, TNil>;
     type Imports = TNil;
+    type RequiredPlugins = ();
 }
 
 fn main() {

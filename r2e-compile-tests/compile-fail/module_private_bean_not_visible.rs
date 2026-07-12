@@ -31,7 +31,7 @@ impl FeatureModule for UserModule {
     type Providers = TCons<Secret, TCons<Api, TNil>>;
     type Controllers = ();
     type Exports = TCons<Api, TNil>; // Secret stays private
-    type Imports = TNil;
+    type Imports = TNil; type RequiredPlugins = ();
 }
 
 #[controller(path = "/spy")]

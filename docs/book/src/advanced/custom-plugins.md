@@ -1,6 +1,6 @@
 # Custom Plugins
 
-Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin` / `RawPreStatePlugin`).
+Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin`, which provides beans before `build_state()`).
 
 ## Post-state plugins
 
@@ -71,14 +71,22 @@ pub struct MyPlugin {
 }
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyPluginConfig;
+    // `Provided` is a tuple of beans: `(A,)` for one, `(A, B)` for several, `()` for none.
+    type Provided = (MyPluginConfig,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();      // no post-state dependencies (see "Consuming application beans")
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyPluginConfig {
-        self.config
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
+        // `install` takes `&mut self`, so move the owned field out with `take`.
+        (std::mem::take(&mut self.config),)
     }
 }
 ```
+
+Every `PreStatePlugin` must declare `type LateDeps` and `type Config` — set it to `()` unless the
+plugin consumes an application bean after `build_state()` (see
+[Consuming application beans](#consuming-application-beans)).
 
 ### Compile-time dependency checking
 
@@ -91,11 +99,13 @@ use tokio_util::sync::CancellationToken;
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyService;
+    type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
-        MyService::new(pool, token)
+    fn install(&mut self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+        (MyService::new(pool, token),)
     }
 }
 ```
@@ -114,6 +124,88 @@ AppBuilder::new()
     .plugin(Scheduler)
 ```
 
+> **`Deps` are `.provide()` values only.** Because `install` runs *before* the
+> bean graph is built, every type in `Deps` must be a `.provide(instance)`
+> value. A `.register::<T>()`-ed (factory-built) type in `Deps` passes the
+> call-site check but panics at runtime — the panic tells you to move it to
+> `LateDeps`. See the next section.
+
+## Consuming application beans
+
+`Deps` can only name beans that already exist when the plugin installs — i.e.
+things you handed to `.provide(instance)`. To consume a **factory-built** bean
+(`.register::<T>()`), or a bean another plugin provides, use the second stage of
+a plugin's lifecycle:
+
+```text
+  .plugin(Me)              build_state()             (serve)
+       │                        │                       │
+       ▼                        ▼                       ▼
+    install(Deps)  ─────►  [bean graph built]  ─►  configure(LateDeps)
+```
+
+Declare the beans you need after `build_state()` in `LateDeps`, and read them in
+`configure`. `LateDeps` is appended to the builder's requirement list and
+verified against the **final** provision list at `build_state()` — so the
+dependency may even be registered *after* your `.plugin()` call:
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+
+pub struct MetricsExporter;
+
+impl PreStatePlugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    type Deps = ();
+    // `MetricsRegistry` is a factory-built bean (`.register::<MetricsRegistry>()`),
+    // so it cannot be a `Deps` — it does not exist yet at install time.
+    type LateDeps = (MetricsRegistry,);
+    type Config = ();
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+        (ExporterHandle::new(),)
+    }
+
+    // Runs after `build_state()`, with the whole bean graph materialized.
+    // Consumes `self`, and receives the loaded typed `Config` (here `()`).
+    fn configure(
+        self,
+        (handle,): &(ExporterHandle,),
+        (registry,): (MetricsRegistry,),
+        _config: Option<()>,
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        let handle = handle.clone();
+        ctx.on_serve(move |_sc| handle.bind(registry));
+    }
+}
+```
+
+```rust
+// `MetricsRegistry` is registered AFTER the plugin — still fine, because
+// `LateDeps` is checked at `build_state()`, not at the `.plugin()` call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::<MetricsRegistry>()
+    .build_state().await
+```
+
+`configure` consumes the plugin instance (`self`) — so it can merge programmatic
+builder settings with file config — and receives a borrowed copy of the plugin's
+`Provided` beans, the resolved `LateDeps`, the loaded typed `Config`
+(`Option<Self::Config>`, see [Typed configuration](#typed-configuration)), and a
+`DeferredContext` — the same post-state surface as deferred actions (`add_layer`,
+`store_data`, `on_serve`, `on_shutdown`, …). Its default is a no-op, so plugins
+with `type LateDeps = ()` and `type Config = ()` never need to write it.
+
+> **`install` takes `&mut self`.** So the instance survives into `configure`
+> (which takes `self` by value). If `install` needs to move an owned field out,
+> use `std::mem::take` or `.clone()`, or just leave the field for `configure`.
+
+**Decision rule:** `Deps` = pre-built infrastructure you hand to `.provide()`;
+`LateDeps` = anything else, including factory-built beans and beans other
+plugins provide.
+
 Usage:
 
 ```rust
@@ -124,114 +216,205 @@ AppBuilder::new()
     // ...
 ```
 
+## Typed configuration
+
+A plugin can declare a typed config section — the same `#[derive(ConfigProperties)]`
+machinery controllers use for `#[config(section)]`. The framework loads and
+**validates** that section and hands it to `configure` as `Option<Self::Config>`.
+`config_get` on `PluginInstallContext` stays as the stringly, low-level fallback.
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+use r2e::prelude::ConfigProperties;
+
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct MetricsCfg {
+    pub endpoint: Option<String>,   // optional keys let the builder win
+    pub namespace: Option<String>,
+}
+
+pub struct Metrics { endpoint: Option<String> }  // programmatic builder setting
+
+impl PreStatePlugin for Metrics {
+    type Provided = ();
+    type Deps = ();
+    type LateDeps = ();
+    type Config = MetricsCfg;                           // typed section
+    const CONFIG_PREFIX: Option<&'static str> = Some("metrics");   // metrics.* in YAML
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+
+    fn configure(
+        self,
+        _p: &(),
+        (): (),
+        config: Option<MetricsCfg>,      // loaded + validated file config
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        // Precedence: builder setting (self) > file config > default.
+        let endpoint = self.endpoint
+            .or_else(|| config.and_then(|c| c.endpoint))
+            .unwrap_or_else(|| "/metrics".into());
+        ctx.add_layer(Box::new(move |router| router /* mount `endpoint` */));
+    }
+}
+```
+
+Rules for the delivered `config`:
+
+- **`Config = ()`** (the default surface) — no config; `CONFIG_PREFIX` stays
+  `None`; `configure` gets `None`.
+- **Presence-based (optional section).** `configure` gets `Some(cfg)` only when
+  `CONFIG_PREFIX` is `Some(prefix)`, config was loaded (`load_config` /
+  `with_config`), **and** at least one key lives under `prefix`. No config
+  loaded, or an absent section → `None`. This mirrors a controller's
+  `Option<Section>`.
+- **Validation.** A present-but-malformed section (missing required key, wrong
+  type) **panics at boot** — during `build_state()` — with the same
+  missing-key / type-mismatch report a controller `#[config]` mismatch produces,
+  naming the plugin and section. The precedence is: **builder setting > file
+  config > default**.
+
+`CONFIG_PREFIX` is an associated const with a default (`None`), so a plugin that
+reads no config writes only `type Config = ();`. Config is delivered at
+`configure` time (never at `install`) because that is the first point where
+`R2eConfig` is guaranteed loaded — `load_config` always precedes `build_state()`,
+whereas `.plugin()` calls may run before it.
+
+## Enabling and disabling a plugin from config
+
+Any plugin with a `CONFIG_PREFIX` gets an on/off switch for free: the boolean key
+`<prefix>.enabled` (default **true**) controls whether the plugin's **post-state
+effects** run. Set it to `false` to turn the plugin off without touching code:
+
+```yaml
+prometheus:
+  enabled: false      # no /metrics route, no tracking layer
+```
+
+When disabled, the plugin's sugar (layers, `store_data`, serve/shutdown hooks),
+its explicit deferred actions, **and** its `configure` are all skipped. What
+does **not** change:
+
+- **Its provided beans still exist.** The provision list is fixed at compile
+  time, so a disabled plugin never removes its beans — anything injecting them
+  keeps working. Disabling gates the plugin's *wiring*, not its beans.
+- **`install` still runs** (it happens pre-state, before config is guaranteed
+  loaded). Keep `install` cheap and put config-dependent work in `configure` or
+  sugar so "disabled" is genuinely inert — this is why the built-in plugins
+  defer their routes/layers to `configure`.
+- **Lifecycle hooks still run.** `run_post_construct` / `run_pre_destroy` for
+  provided beans fire regardless, because those beans are real and may be
+  injected elsewhere.
+
+Plugins with no `CONFIG_PREFIX`, and apps that never load config, are always
+enabled (the flag defaults to on).
+
 ## Deferred actions
 
 For plugins that need to set up infrastructure after state is built but during serve:
 
+Call the sugar methods on `PluginInstallContext` directly — plain closures, no
+`Box`, no `DeferredAction`:
+
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = CancellationToken;
+    type Provided = (CancellationToken,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
-
         let t = token.clone();
-        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
-            // Add a Tower layer
-            dctx.add_layer(Box::new(|router| router.layer(r2e::http::Extension("my-plugin-data"))));
 
-            // Store data for later access
-            dctx.store_data(MyPluginHandle::new());
+        // Add a Tower layer
+        ctx.add_layer(|router| router.layer(r2e::http::Extension("my-plugin-data")));
 
-            // Hook into server lifecycle
-            let t2 = t.clone();
-            dctx.on_serve(move |_tasks, _cancel_token| {
-                tracing::info!("Plugin started");
-            });
+        // Store data for later access
+        ctx.store_data(MyPluginHandle::new());
 
-            dctx.on_shutdown(move || {
-                t2.cancel();
-                tracing::info!("Plugin shutting down");
-            });
-        }));
+        // Hook into server lifecycle
+        ctx.on_serve(move |_serve_ctx| {
+            tracing::info!("Plugin started");
+        });
 
-        token
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Plugin shutting down");
+        });
+
+        (token,)
     }
 }
 ```
 
-### DeferredContext methods
+### `PluginInstallContext` post-state methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_layer` | `(&mut self, Box<dyn FnOnce(Router) -> Router + Send>)` | Add a Tower layer to the router |
+| `add_layer` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add a Tower layer to the router |
+| `wrap_router` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add an outermost transport-level router transform |
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | Store a value keyed by type for later retrieval |
-| `on_serve` | `(&mut self, FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken))` | Run when the server starts listening |
-| `on_shutdown` | `(&mut self, FnOnce())` | Run during graceful shutdown |
+| `on_serve` | `<F: FnOnce(ServeContext) + Send + 'static>(&mut self, F)` | Run when the server starts listening |
+| `on_shutdown` | `<F: FnOnce() + Send + 'static>(&mut self, F)` | Run during graceful shutdown |
+| `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | Run (and await) during graceful shutdown |
 
-## Pre-state plugins (advanced path)
+These calls are buffered and flushed as a single deferred action after
+`build_state()`, named after the plugin type. For advanced control,
+`ctx.add_deferred(DeferredAction::new(name, |dctx| { .. }))` is the low-level
+escape hatch — its actions run before the buffered sugar action.
 
-For plugins that need to provide **multiple** beans or need full builder access,
-implement `RawPreStatePlugin` instead of `PreStatePlugin`:
+## Multiple provided beans
+
+A `PreStatePlugin` can provide **several** beans — just make `Provided` a longer
+tuple and return all of them. No builder generics, no `with_updated_types()`:
 
 ```rust
-use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 
-pub struct MyAdvancedPlugin;
+pub struct MyMultiPlugin;
 
-impl RawPreStatePlugin for MyAdvancedPlugin {
+impl PreStatePlugin for MyMultiPlugin {
     // Provides two beans: CancellationToken and MyRegistry
-    type Provisions = TCons<CancellationToken, TCons<MyRegistry, TNil>>;
-    type Required = TNil;
+    type Provided = (CancellationToken, MyRegistry);
+    type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-    where
-        P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
-    {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
         let token = CancellationToken::new();
         let registry = MyRegistry::new();
 
-        app.provide(token)
-           .provide(registry)
-           .add_deferred(DeferredAction::new("my-advanced-plugin", |ctx| {
-               ctx.on_shutdown(|| { tracing::info!("Shutting down"); });
-           }))
-           .with_updated_types()
+        let t = token.clone();
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Shutting down");
+        });
+
+        (token, registry)
     }
 }
 ```
 
-Usage is the same — `.plugin()` accepts both `PreStatePlugin` and `RawPreStatePlugin`:
+Both beans are then injectable by type (`#[inject] token: CancellationToken`,
+`#[inject] registry: MyRegistry`).
 
-```rust
-AppBuilder::new()
-    .plugin(MyAdvancedPlugin)
-    .build_state()
-    .await
-    // ...
-```
+### Escape hatch: `RawPreStatePlugin`
 
-**When to use which:**
-
-| | `PreStatePlugin` | `RawPreStatePlugin` |
-|---|---|---|
-| Provides | Single bean | Multiple beans |
-| Generics | None | `<P, R>` on `install()` |
-| Dependencies | `type Deps = (A, B)` (compile-time checked) | Manual via builder |
-| Config access | Via `PluginInstallContext` | Via `app.r2e_config()` |
-| `with_updated_types()` | Not needed (handled automatically) | Required |
+`RawPreStatePlugin` is the internal, HList-based trait that `.plugin()` actually
+dispatches on; every `PreStatePlugin` gets one for free via a blanket impl.
+Because `PreStatePlugin` now covers multiple provided beans, the **only** reason
+to hand-write a `RawPreStatePlugin` is to call arbitrary builder methods
+(`.register()`, `.provide()`, `.when()`, …) during install. It is `#[doc(hidden)]`
+and almost never needed — reach for it only when a plugin genuinely has to drive
+the builder itself.
 
 ## Step-by-step: Request ID plugin
 
@@ -282,8 +465,7 @@ AppBuilder::new()
 A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -293,45 +475,44 @@ pub struct HealthChecker {
 }
 
 impl PreStatePlugin for HealthChecker {
-    type Provided = CancellationToken;
+    type Provided = (CancellationToken,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
         let interval = self.interval;
-        let url = self.url;
+        let url = std::mem::take(&mut self.url);
         let t = token.clone();
+        let t2 = token.clone();
 
-        ctx.add_deferred(DeferredAction::new("health-checker", move |dctx: &mut DeferredContext| {
-            let t2 = t.clone();
-
-            // Start the checker when the server begins serving
-            dctx.on_serve(move |_tasks, _cancel_token| {
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = tokio::time::sleep(interval) => {
-                                match reqwest::get(&url).await {
-                                    Ok(resp) => tracing::info!("Health check: {}", resp.status()),
-                                    Err(e) => tracing::warn!("Health check failed: {}", e),
-                                }
-                            }
-                            _ = t2.cancelled() => {
-                                tracing::info!("Health checker stopped");
-                                break;
+        // Start the checker when the server begins serving
+        ctx.on_serve(move |_serve_ctx| {
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(interval) => {
+                            match reqwest::get(&url).await {
+                                Ok(resp) => tracing::info!("Health check: {}", resp.status()),
+                                Err(e) => tracing::warn!("Health check failed: {}", e),
                             }
                         }
+                        _ = t2.cancelled() => {
+                            tracing::info!("Health checker stopped");
+                            break;
+                        }
                     }
-                });
+                }
             });
+        });
 
-            // Cancel the checker on shutdown
-            dctx.on_shutdown(move || {
-                t.cancel();
-            });
-        }));
+        // Cancel the checker on shutdown
+        ctx.on_shutdown(move || {
+            t.cancel();
+        });
 
-        token
+        (token,)
     }
 }
 ```

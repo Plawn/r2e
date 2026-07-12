@@ -42,7 +42,7 @@ pub mod ws;
 #[doc(hidden)]
 pub use serde_json;
 
-pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
+pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, PreDestroy, Producer};
 pub use lazy::Lazy;
 pub use builder::{
     AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
@@ -50,7 +50,8 @@ pub use builder::{
 };
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
-    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,
+    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PluginConfig,
+    PropertyMeta,
     deserialize_value,
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,

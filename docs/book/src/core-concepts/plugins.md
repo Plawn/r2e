@@ -55,6 +55,38 @@ AppBuilder::new()
 |-----------------|-------------|
 | `Scheduler` | Background task scheduling runtime |
 
+## Enabling and disabling plugins from config
+
+Any plugin with a config section (a `CONFIG_PREFIX`) can be switched off from
+YAML with `<prefix>.enabled: false` — no code change:
+
+```yaml
+prometheus:
+  enabled: false
+```
+
+The default is `true`. A disabled plugin skips its post-state wiring (routes,
+layers, serve/shutdown hooks, and its `configure` step), but **its provided beans
+still exist** — anything injecting them keeps working. See
+[Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
+for the full semantics.
+
+## Requiring a plugin from a feature module
+
+A feature module can declare the plugins it depends on so a missing plugin is a
+clear compile error naming the plugin, instead of a confusing missing-bean error:
+
+```rust
+#[module(
+    controllers(JobController),
+    requires_plugins(Scheduler),
+)]
+pub struct JobsModule;
+```
+
+If `Scheduler` is not `.plugin(Scheduler)`-ed before `register_module::<JobsModule>()`,
+the build fails with a message pointing at `.plugin(Scheduler)`.
+
 ## Plugin ordering
 
 Plugins are installed in registration order. Some have ordering requirements:
@@ -85,25 +117,26 @@ AppBuilder::new()
 Implement the `Plugin` trait for plugins that install after `build_state()`:
 
 ```rust
-use r2e::prelude::*; // Plugin, Router
+use r2e::prelude::*; // Plugin, AppBuilder
 
 pub struct MyPlugin;
 
-impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
-    fn install(self, router: Router<S>) -> Router<S> {
+impl Plugin for MyPlugin {
+    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         // Add routes, layers, or middleware
-        router.route("/my-endpoint", get(|| async { "Hello from plugin" }))
-    }
-
-    fn should_be_last(&self) -> bool {
-        false
+        app.register_routes(Router::new().route("/my-endpoint", get(|| async { "Hello from plugin" })))
     }
 }
 ```
 
+`should_be_last()` (default `false`) marks plugins that must be the outermost
+layer — the builder warns if anything is installed after one.
+
 ### Pre-state plugins (simple path)
 
-Implement `PreStatePlugin` for plugins that provide a single bean. No builder generics needed:
+Implement `PreStatePlugin` for plugins that provide beans. `Provided` is a
+**tuple** of beans — `(A,)` for one, `(A, B)` for several, `()` for none — and
+`install` returns that tuple. No builder generics needed:
 
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext};
@@ -111,84 +144,148 @@ use r2e::{PreStatePlugin, PluginInstallContext};
 pub struct MyPreStatePlugin;
 
 impl PreStatePlugin for MyPreStatePlugin {
-    type Provided = MyConfig;
+    type Provided = (MyConfig,);
     type Deps = ();
+    type LateDeps = ();      // no post-state dependencies
+    type Config = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyConfig {
-        MyConfig::default()
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
+        (MyConfig::default(),)
     }
 }
 ```
+
+Every impl declares `type LateDeps` — set it to `()` unless the plugin consumes
+an application bean after `build_state()` (see
+[Consuming application beans](#consuming-application-beans)).
 
 Plugins can declare typed dependencies via `Deps`. The compiler verifies at each `.plugin()` call that all deps have already been provided:
 
 ```rust
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyService;
+    type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
-        MyService::new(pool, token)
+    fn install(&mut self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+        (MyService::new(pool, token),)
     }
 }
 ```
+
+`Deps` must be `.provide(instance)` values — `install` runs before the bean
+graph exists. To consume a factory-built bean (`.register::<T>()`) or a bean
+another plugin provides, use `LateDeps` + `configure` (next-but-one section).
+
+### Consuming application beans
+
+A pre-state plugin has a **two-stage lifecycle**: `install` (before
+`build_state()`) and `configure` (after it). `Deps` resolve at install time and
+can only name `.provide()`-d beans; `LateDeps` resolve in `configure` from the
+fully materialized bean graph, so they can name **any** bean — factory-built
+(`.register::<T>()`) or provided by another plugin.
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+
+pub struct MetricsExporter;
+
+impl PreStatePlugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    type Deps = ();
+    type LateDeps = (MetricsRegistry,);   // factory-built; not available at install
+    type Config = ();
+
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+        (ExporterHandle::new(),)
+    }
+
+    fn configure(
+        self,
+        (handle,): &(ExporterHandle,),
+        (registry,): (MetricsRegistry,),
+        _config: Option<()>,
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        let handle = handle.clone();
+        ctx.on_serve(move |_sc| handle.bind(registry));
+    }
+}
+
+// `MetricsRegistry` may be registered AFTER the plugin — `LateDeps` is checked
+// against the final provision list at `build_state()`, not at the call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::<MetricsRegistry>()
+    .build_state().await
+```
+
+`configure` gets a borrowed copy of the plugin's `Provided`, the resolved
+`LateDeps`, and a `DeferredContext` (same surface as deferred actions). Its
+default is a no-op. **Rule:** `Deps` = pre-built infrastructure you `.provide()`;
+`LateDeps` = anything else, including factory-built beans.
 
 ### Deferred actions
 
-For plugins that need to perform setup after state construction, use `DeferredAction` via the context:
+For plugins that need to perform setup after state construction, call the
+context's sugar methods directly — pass plain closures, no `Box`, no
+`DeferredAction`:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyToken;
+    type Provided = (MyToken,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
         let t = token.clone();
-        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
-            dctx.add_layer(Box::new(|router| router));
-            dctx.on_serve(|_tasks, _token| { /* run when server starts */ });
-            dctx.on_shutdown(move || { t.cancel(); });
-        }));
-        token
+        ctx.add_layer(|router| router);
+        ctx.on_serve(|_serve_ctx| { /* run when server starts */ });
+        ctx.on_shutdown(move || { t.cancel(); });
+        (token,)
     }
 }
 ```
 
-`DeferredContext` provides:
+`PluginInstallContext` provides:
 - `add_layer()` — add a Tower layer
+- `wrap_router()` — add an outermost transport-level router transform
 - `store_data()` — store data in the builder
 - `on_serve()` — register a serve hook
-- `on_shutdown()` — register a shutdown hook
+- `on_shutdown()` / `on_shutdown_async()` — register a shutdown hook
 
-### Pre-state plugins (advanced path)
+These calls are buffered and flushed as a single deferred action after
+`build_state()`. For advanced control, `ctx.add_deferred(DeferredAction::new(..))`
+is the low-level escape hatch (it runs before the buffered sugar action).
 
-For plugins that need to provide **multiple** beans or need full builder access,
-implement `RawPreStatePlugin`:
+### Multiple provided beans
+
+To provide **multiple** beans, widen the `Provided` tuple and return all of
+them — still on the simple `PreStatePlugin` path, no builder generics:
 
 ```rust
-use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext};
 
 pub struct MultiProvider;
 
-impl RawPreStatePlugin for MultiProvider {
-    type Provisions = TCons<TokenA, TCons<TokenB, TNil>>;
-    type Required = TNil;
+impl PreStatePlugin for MultiProvider {
+    type Provided = (TokenA, TokenB);
+    type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-    where
-        P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
-    {
-        app.provide(TokenA::new())
-           .provide(TokenB::new())
-           .with_updated_types()
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
+        (TokenA::new(), TokenB::new())
     }
 }
 ```
+
+The lower-level `RawPreStatePlugin` trait (`#[doc(hidden)]`, HList-based) still
+backs `.plugin()` via a blanket impl, but you only need to implement it directly
+when a plugin must call arbitrary builder methods (`.register()`, `.provide()`,
+…) itself — a rare escape hatch.

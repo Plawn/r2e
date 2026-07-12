@@ -25,6 +25,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 config_file: None,
                 config_overrides: Vec::new(),
                 stop_handle: None,
+                bean_disposers: Vec::new(),
             },
             state: NoState,
             bean_context: Arc::new(crate::beans::BeanContext::empty()),
@@ -49,6 +50,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Access the bean registry (for internal use by the blanket PreStatePlugin impl).
     pub(crate) fn bean_registry(&self) -> &BeanRegistry {
         &self.shared.bean_registry
+    }
+
+    /// Mutable access to the bean registry (for internal use by the blanket
+    /// `PreStatePlugin` impl to deposit a plugin's provided beans).
+    pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
+        &mut self.shared.bean_registry
     }
 
     /// Access the loaded config (for internal use by the blanket PreStatePlugin impl).
@@ -101,6 +108,41 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// struct when [`build_state`](Self::build_state) is called.
     pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
         self.shared.bean_registry.provide(bean);
+        self.with_updated_types()
+    }
+
+    /// Provide a pre-built bean **and** run its
+    /// [`PostConstruct`](crate::PostConstruct) hook once the graph is resolved.
+    ///
+    /// Like [`provide`](Self::provide), but the value opts into the same
+    /// lifecycle as a factory bean's `#[post_construct]`: the hook fires during
+    /// [`build_state`](Self::build_state), **after** every factory-bean
+    /// post-construct, and a failure surfaces as the same
+    /// [`BeanError::PostConstruct`](crate::BeanError::PostConstruct). The hook
+    /// reads the bean by type from the resolved graph, so a pinned test override
+    /// is the value it runs against.
+    pub fn provide_with_post_construct<B: Clone + Send + Sync + 'static + crate::PostConstruct>(
+        mut self,
+        bean: B,
+    ) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
+        self.shared.bean_registry.provide(bean);
+        self.shared.bean_registry.register_provided_post_construct::<B>();
+        self.with_updated_types()
+    }
+
+    /// Provide a pre-built bean **and** register its
+    /// [`PreDestroy`](crate::PreDestroy) disposal hook.
+    ///
+    /// The hook runs during graceful shutdown, as part of the async
+    /// shutdown-hook phase, after plugin shutdown hooks and in reverse
+    /// registration order relative to other bean disposers. It reads the bean by
+    /// type from the resolved graph (override-aware).
+    pub fn provide_with_pre_destroy<B: Clone + Send + Sync + 'static + crate::PreDestroy>(
+        mut self,
+        bean: B,
+    ) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
+        self.shared.bean_registry.provide(bean);
+        self.shared.bean_registry.register_pre_destroy::<B>();
         self.with_updated_types()
     }
 
@@ -435,7 +477,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        R: TAppend<Pl::AllRequired>,
+        // Only the pre-state `Deps` (`Required`) are checked here, against the
+        // provisions present so far. The `LateDeps` portion of `AllRequired` is
+        // appended to `R` and verified against the final provision list at
+        // `build_state()`.
         Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
@@ -453,7 +499,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        R: TAppend<Pl::AllRequired>,
         Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
@@ -461,25 +507,25 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
     /// Add a deferred action to be executed after state resolution.
     ///
-    /// This is called by [`PreStatePlugin`] implementations to register setup
-    /// that needs to run after `build_state()` is called.
+    /// This is the low-level escape hatch. [`PreStatePlugin`] implementations
+    /// usually reach for the sugar methods on [`PluginInstallContext`]
+    /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) instead — those buffer
+    /// plain closures and are flushed into a single deferred action.
     ///
-    /// # Example
+    /// # Example (sugar — preferred)
     ///
     /// ```ignore
     /// impl PreStatePlugin for MyPlugin {
-    ///     type Provided = MyToken;
+    ///     type Provided = (MyToken,);
     ///     type Deps = ();
     ///
-    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
+    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
-    ///         ctx.add_deferred(DeferredAction::new("MyPlugin", move |dctx| {
-    ///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
-    ///             dctx.on_shutdown(|| { /* cleanup */ });
-    ///         }));
-    ///         token
+    ///         ctx.add_layer(move |router| router.layer(Extension(handle)));
+    ///         ctx.on_shutdown(|| { /* cleanup */ });
+    ///         (token,)
     ///     }
     /// }
     /// ```
@@ -508,7 +554,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// the public face is
     /// [`RegisterModule::register_module`](super::RegisterModule::register_module),
     /// which infers them.
-    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx>(
+    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>(
         mut self,
     ) -> ModuleRegistered<M, P, R, Mods>
     where
@@ -521,6 +567,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        // Every required plugin must already be installed (its provisions in P).
+        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
         M::Exports: TAppend<P>,
         R: TAppend<M::Imports>,
     {
@@ -633,7 +681,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             }
 
             // Phase 2: full resolution (construct all beans)
-            let ctx = registry.resolve().await?;
+            let mut ctx = registry.resolve().await?;
+            self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
             let ctx = Arc::new(ctx);
 
@@ -650,7 +699,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         #[cfg(not(feature = "dev-reload"))]
         {
             let registry = std::mem::take(&mut self.shared.bean_registry);
-            let ctx = registry.resolve().await?;
+            let mut ctx = registry.resolve().await?;
+            self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
 
             Ok(Mods::register_controllers(AppBuilder::from_pre(

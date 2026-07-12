@@ -21,8 +21,7 @@ use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::StatusCode;
-use r2e_core::type_list::{TAppend, TCons, TNil};
-use r2e_core::{AppBuilder, BeanContext, DeferredAction, RawPreStatePlugin};
+use r2e_core::{AppBuilder, BeanContext, PluginInstallContext, PreStatePlugin};
 
 /// Handle to the scheduler runtime.
 ///
@@ -154,8 +153,8 @@ impl Default for ScheduledJobRegistry {
 /// - Provide a [`ScheduledJobRegistry`] bean for querying registered jobs
 /// - Automatically set up the scheduler backend
 ///
-/// This plugin uses the [`RawPreStatePlugin`] API because it provides
-/// **two** beans (`CancellationToken` and `ScheduledJobRegistry`).
+/// This plugin provides **two** beans (`CancellationToken` and
+/// `ScheduledJobRegistry`) via a tuple `Provided` type.
 ///
 /// # Example
 ///
@@ -190,18 +189,17 @@ impl Default for ScheduledJobRegistry {
 /// ```
 pub struct Scheduler;
 
-impl RawPreStatePlugin for Scheduler {
-    type Provisions = TCons<CancellationToken, TCons<ScheduledJobRegistry, TNil>>;
-    type Required = TNil;
+impl PreStatePlugin for Scheduler {
+    type Provided = (CancellationToken, ScheduledJobRegistry);
+    type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install<P, R, Mods>(
-        self,
-        app: AppBuilder<r2e_core::builder::NoState, P, R, Mods>,
-    ) -> AppBuilder<r2e_core::builder::NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-    where
-        P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
-    {
+    fn install(
+        &mut self,
+        (): (),
+        ctx: &mut PluginInstallContext<'_>,
+    ) -> (CancellationToken, ScheduledJobRegistry) {
         let token = CancellationToken::new();
         let job_registry = ScheduledJobRegistry::new();
         let handle = SchedulerHandle::new(token.clone());
@@ -210,31 +208,26 @@ impl RawPreStatePlugin for Scheduler {
         let token_for_serve = token.clone();
         let job_registry_for_serve = job_registry.clone();
 
-        app.provide(token)
-            .provide(job_registry)
-            .add_deferred(DeferredAction::new("Scheduler", move |ctx| {
-                // Add the layer that provides SchedulerHandle via extension.
-                ctx.add_layer(Box::new(move |router| {
-                    router.layer(r2e_core::http::Extension(handle))
-                }));
+        // Add the layer that provides SchedulerHandle via extension.
+        ctx.add_layer(move |router| router.layer(r2e_core::http::Extension(handle)));
 
-                // Store the task registry for use during controller registration.
-                ctx.store_data(task_registry);
+        // Store the task registry for use during controller registration.
+        ctx.store_data(task_registry);
 
-                // Register a serve hook to start scheduled tasks. Drains only
-                // scheduler-owned tasks from the shared registry so hooks for
-                // other subsystems don't see them.
-                ctx.on_serve(move |serve_ctx| {
-                    let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
-                    start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
-                });
+        // Register a serve hook to start scheduled tasks. Drains only
+        // scheduler-owned tasks from the shared registry so hooks for
+        // other subsystems don't see them.
+        ctx.on_serve(move |serve_ctx| {
+            let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
+            start_scheduled_tasks(tasks, token_for_serve, job_registry_for_serve);
+        });
 
-                // Register shutdown hook.
-                ctx.on_shutdown(move || {
-                    cancel_for_stopper.cancel();
-                });
-            }))
-            .with_updated_types()
+        // Register shutdown hook.
+        ctx.on_shutdown(move || {
+            cancel_for_stopper.cancel();
+        });
+
+        (token, job_registry)
     }
 }
 

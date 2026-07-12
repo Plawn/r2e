@@ -63,7 +63,38 @@ pub use prometheus;
 
 use handler::metrics_handler;
 use r2e_core::http::routing::get;
-use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::prelude::ConfigProperties;
+use r2e_core::{DeferredContext, PluginInstallContext, PreStatePlugin};
+
+/// Typed configuration for the [`Prometheus`] plugin, read from the
+/// `prometheus.*` YAML section.
+///
+/// Every field is optional: an absent key falls through to the programmatic
+/// builder setting (which takes precedence) or the built-in default. The
+/// section as a whole is optional too — omit it entirely and the plugin runs on
+/// builder settings / defaults.
+///
+/// ```yaml
+/// prometheus:
+///   endpoint: /metrics
+///   namespace: myapp
+///   buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+///   exclude_paths: ["/health", "/metrics"]
+/// ```
+///
+/// Precedence for each knob: **programmatic builder setting > this file config >
+/// default**.
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct PrometheusConfig {
+    /// Metrics endpoint path (default `/metrics`).
+    pub endpoint: Option<String>,
+    /// Namespace prefix applied to every metric name.
+    pub namespace: Option<String>,
+    /// Histogram buckets for request duration, in seconds.
+    pub buckets: Option<Vec<f64>>,
+    /// Request paths excluded from metrics tracking.
+    pub exclude_paths: Option<Vec<String>>,
+}
 
 /// A handle to the shared Prometheus metrics registry.
 ///
@@ -85,23 +116,32 @@ use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
 ///     }
 /// }
 /// ```
-#[derive(Clone)]
-pub struct PrometheusRegistry {
-    inner: prometheus::Registry,
-}
+#[derive(Clone, Default)]
+pub struct PrometheusRegistry;
 
 impl PrometheusRegistry {
-    /// Register a custom Prometheus collector (counter, gauge, histogram, etc.).
+    /// Register a custom Prometheus collector (counter, gauge, histogram, etc.)
+    /// on the shared global registry.
+    ///
+    /// The global registry is initialized by the plugin's `configure` step
+    /// (during `build_state()`), so this is safe to call from runtime code —
+    /// request handlers, serve hooks, or a service method invoked after startup.
     pub fn register(
         &self,
         collector: Box<dyn prometheus::core::Collector>,
     ) -> prometheus::Result<()> {
-        self.inner.register(collector)
+        registry().register(collector)
     }
 
-    /// Access the underlying `prometheus::Registry`.
-    pub fn inner(&self) -> &prometheus::Registry {
-        &self.inner
+    /// Access the shared global `prometheus::Registry`.
+    ///
+    /// Never panics: if the plugin's `configure` step has not initialized the
+    /// registry (notably when the plugin is disabled via
+    /// `prometheus.enabled = false`), a default-configured registry is lazily
+    /// created — real and registrable, just not exported at the metrics
+    /// endpoint.
+    pub fn inner(&self) -> &'static prometheus::Registry {
+        registry()
     }
 }
 
@@ -127,17 +167,28 @@ impl PrometheusRegistry {
 ///     .build())
 /// ```
 pub struct Prometheus {
-    endpoint: String,
-    config: MetricsConfig,
+    // Programmatic overrides. `None` means "not set by the builder" — the value
+    // falls through to file config, then the default. This lets the builder
+    // take precedence over file config only where it was explicitly set.
+    endpoint: Option<String>,
+    namespace: Option<String>,
+    buckets: Option<Vec<f64>>,
+    exclude_paths: Option<Vec<String>>,
     collectors: Vec<Box<dyn prometheus::core::Collector>>,
 }
 
 impl Prometheus {
     /// Create a new Prometheus plugin with the given metrics endpoint.
+    ///
+    /// The endpoint is treated as an explicit builder setting, so it takes
+    /// precedence over a `prometheus.endpoint` file value. To let file config
+    /// drive the endpoint, use [`Prometheus::builder`] without `.endpoint(..)`.
     pub fn new(endpoint: &str) -> Self {
         Self {
-            endpoint: endpoint.to_string(),
-            config: MetricsConfig::default(),
+            endpoint: Some(endpoint.to_string()),
+            namespace: None,
+            buckets: None,
+            exclude_paths: None,
             collectors: Vec::new(),
         }
     }
@@ -148,38 +199,93 @@ impl Prometheus {
     }
 }
 
+/// Merge programmatic builder settings (highest precedence), the loaded file
+/// [`PrometheusConfig`] section, and built-in defaults into the effective
+/// endpoint + [`MetricsConfig`].
+///
+/// Exposed (hidden) so the precedence contract can be unit-tested without the
+/// global metrics singleton.
+#[doc(hidden)]
+pub fn resolve_config(
+    endpoint: Option<String>,
+    namespace: Option<String>,
+    buckets: Option<Vec<f64>>,
+    exclude_paths: Option<Vec<String>>,
+    file: Option<PrometheusConfig>,
+) -> (String, MetricsConfig) {
+    let file = file.unwrap_or_default();
+    let endpoint = endpoint
+        .or(file.endpoint)
+        .unwrap_or_else(|| "/metrics".to_string());
+
+    let mut config = MetricsConfig::default();
+    if let Some(ns) = namespace.or(file.namespace) {
+        config.namespace = Some(ns);
+    }
+    if let Some(b) = buckets.or(file.buckets) {
+        config.buckets = b;
+    }
+    if let Some(ep) = exclude_paths.or(file.exclude_paths) {
+        config.exclude_paths = ep;
+    }
+    (endpoint, config)
+}
+
 impl PreStatePlugin for Prometheus {
-    type Provided = PrometheusRegistry;
+    type Provided = (PrometheusRegistry,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = PrometheusConfig;
+    const CONFIG_PREFIX: Option<&'static str> = Some("prometheus");
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        // Initialize global metrics singleton
-        let m = init_metrics(&self.config);
+    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+        // All config-dependent work (metric init, custom collectors, the layer
+        // and route) is deferred to `configure`, where file config is
+        // guaranteed loaded. The injectable handle delegates to the global
+        // registry that `configure` initializes.
+        (PrometheusRegistry,)
+    }
 
-        // Register user-supplied collectors
-        for collector in self.collectors {
+    fn configure(
+        self,
+        _provided: &Self::Provided,
+        (): (),
+        config: Option<PrometheusConfig>,
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        let Prometheus {
+            endpoint,
+            namespace,
+            buckets,
+            exclude_paths,
+            collectors,
+        } = self;
+        let (endpoint, metrics_config) =
+            resolve_config(endpoint, namespace, buckets, exclude_paths, config);
+
+        // Initialize the global metrics singleton with the merged config.
+        if is_initialized() {
+            // Something (e.g. a provided-bean post_construct, which runs before
+            // deferred actions) touched the lazily-default-initialized registry
+            // first — the merged config below is then a no-op for metric setup.
+            tracing::warn!(
+                "Prometheus metrics were initialized before the plugin's configure step; \
+                 builder/file configuration (namespace, buckets) may not have been applied"
+            );
+        }
+        let m = init_metrics(&metrics_config);
+        for collector in collectors {
             m.registry
                 .register(collector)
                 .expect("Failed to register custom Prometheus collector");
         }
 
-        // Create the injectable handle (cheap Arc clone)
-        let handle = PrometheusRegistry {
-            inner: m.registry.clone(),
-        };
-
-        // Defer layer + route installation to post-state phase
-        let config = self.config;
-        let endpoint = self.endpoint;
-        ctx.add_deferred(DeferredAction::new("Prometheus", move |dctx| {
-            dctx.add_layer(Box::new(move |router| {
-                router
-                    .route(&endpoint, get(metrics_handler))
-                    .layer(PrometheusLayer::new(config))
-            }));
+        // Install the /metrics route + tracking layer post-state.
+        ctx.add_layer(Box::new(move |router| {
+            router
+                .route(&endpoint, get(metrics_handler))
+                .layer(PrometheusLayer::new(metrics_config))
         }));
-
-        handle
     }
 }
 
@@ -258,22 +364,16 @@ impl PrometheusBuilder {
     }
 
     /// Build the Prometheus plugin.
+    ///
+    /// Builder settings left unset stay `None` so file config (then defaults)
+    /// can supply them; settings that were called take precedence over file
+    /// config.
     pub fn build(self) -> Prometheus {
-        let mut config = MetricsConfig::default();
-
-        if let Some(ns) = self.namespace {
-            config.namespace = Some(ns);
-        }
-        if let Some(b) = self.buckets {
-            config.buckets = b;
-        }
-        if !self.exclude_paths.is_empty() {
-            config.exclude_paths = self.exclude_paths;
-        }
-
         Prometheus {
-            endpoint: self.endpoint.unwrap_or_else(|| "/metrics".to_string()),
-            config,
+            endpoint: self.endpoint,
+            namespace: self.namespace,
+            buckets: self.buckets,
+            exclude_paths: (!self.exclude_paths.is_empty()).then_some(self.exclude_paths),
             collectors: self.collectors,
         }
     }

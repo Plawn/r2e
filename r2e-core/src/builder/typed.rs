@@ -16,8 +16,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         state: T,
         bean_context: Arc<crate::beans::BeanContext>,
     ) -> Self {
-        // Take the deferred actions before creating the builder.
+        // Take the deferred actions before creating the builder. The loaded
+        // config is moved out too, so it can be lent to every `DeferredContext`
+        // (plugins load their typed `Config` from it in `configure`).
         let deferred_actions = std::mem::take(&mut shared.deferred_actions);
+        let deferred_config = shared.config.clone();
+        // Pre-destroy disposers drained from the resolved graph at build_state().
+        let bean_disposers = std::mem::take(&mut shared.bean_disposers);
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
@@ -41,7 +46,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             _modules: PhantomData,
         };
 
-        // Execute deferred actions (new API).
+        // Execute deferred actions (new API). They run here — after the bean
+        // graph is resolved — so `ctx.bean_context()` exposes the fully
+        // materialized graph (this is what backs plugin `configure`/`LateDeps`).
         for action in deferred_actions {
             let mut ctx = DeferredContext {
                 layers: &mut builder.shared.custom_layers,
@@ -50,9 +57,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 serve_hooks: &mut builder.serve_hooks,
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
                 async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
+                bean_context: &builder.bean_context,
+                config: deferred_config.as_ref(),
             };
             (action.action)(&mut ctx);
         }
+
+        // Bean pre-destroy disposers run within the async shutdown phase, after
+        // the plugin async-shutdown hooks registered above (reverse registration
+        // order among themselves was applied during resolution).
+        builder.plugin_async_shutdown_hooks.extend(bean_disposers);
 
         builder
     }
@@ -506,7 +520,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     tracing::warn!(
                         controller = std::any::type_name::<C>(),
                         "Scheduled tasks found but no scheduler installed. \
-                         Add `.with_plugin(Scheduler)` before build_state()."
+                         Add `.plugin(Scheduler)` before build_state()."
                     );
                 }
             }

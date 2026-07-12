@@ -212,6 +212,28 @@ Key points:
 
 **Don't** use it for: construction logic (belongs in the constructor), event subscriptions (`#[consumer]`), periodic work (`#[scheduled]`).
 
+### Lifecycle for pre-built (`provide`-d) beans
+
+`#[post_construct]` attaches to factory beans (`#[bean]` / `register`). A value
+handed to `.provide(instance)` can opt into the **same** lifecycle explicitly —
+and into disposal via the symmetric `PreDestroy` trait:
+
+```rust,ignore
+AppBuilder::new()
+    // T: PostConstruct — hook runs during build_state(), after every
+    // factory-bean post-construct.
+    .provide_with_post_construct(cache)
+    // T: PreDestroy — pre_destroy() runs during graceful shutdown.
+    .provide_with_pre_destroy(pool)
+    .build_state().await;
+```
+
+Both hooks read the bean from the resolved graph by type (a pinned test
+override is honoured); a failing post-construct fails `build_state()` with
+`BeanError::PostConstruct`; disposers run in reverse registration order during
+shutdown. Plugins opt their `Provided` beans in the same way via
+`ctx.run_post_construct::<T>()` / `ctx.run_pre_destroy::<T>()`.
+
 ## Reading beans from state
 
 Because the state is an inferred HList (not a struct with named fields), you read

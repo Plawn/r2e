@@ -23,7 +23,7 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
-    ModuleScope,
+    ModuleScope, RequiredPluginsInstalled,
 };
 use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::meta::MetaRegistry;
@@ -62,11 +62,14 @@ pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
-/// `Provisions` and `Required` lists are appended to `P` and `R`.
+/// `Provisions` join `P`, and **both** its call-site `Required` (`Deps`) and
+/// its post-state `LateRequired` (`LateDeps`) join `R`. Only `Required` is
+/// checked at the call site; `LateRequired` is verified against the final
+/// provision list at `build_state()`.
 pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
     <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
-    <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
+    <R as TAppend<<Pl as RawPreStatePlugin>::AllRequired>>::Output,
     Mods,
 >;
 
@@ -209,6 +212,10 @@ struct BuilderConfig {
     /// Stop handle wired via [`AppBuilder::with_stop_handle`]; `prepare()`
     /// creates one lazily when absent.
     stop_handle: Option<StopHandle>,
+    /// Pre-destroy disposers, drained from the resolved [`BeanContext`] at
+    /// `build_state()` and folded into the async shutdown phase by
+    /// [`AppBuilder::from_pre`].
+    bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
 }
 
 /// Builder for assembling a R2E application.

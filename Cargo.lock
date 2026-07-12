@@ -5871,6 +5871,7 @@ dependencies = [
  "r2e-core",
  "tokio",
  "tower",
+ "tracing",
 ]
 
 [[package]]

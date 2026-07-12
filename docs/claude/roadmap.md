@@ -61,6 +61,34 @@ testcontainers-Postgres-by-hand → `DevPostgres`. Do after (or interleaved
 with) the corresponding gap tasks so the migration lands on supported API
 instead of re-pinning to internals.
 
+## Plugin DX/DI overhaul (PR #29) — SHIPPED (phases 1–6)
+
+The plugin system rework landed in six phases (authoritative reference:
+`docs/claude/plugins.md`). Shipped:
+
+- **1–2** — `PreStatePlugin` simplified surface (typed `Provided`/`Deps`, no
+  builder generics), tuple `Provided` for multi-bean plugins.
+- **3** — `LateDeps` + post-state `configure` (resolves factory-built and
+  other-plugin beans after `build_state()`).
+- **4** — typed `Config` / `CONFIG_PREFIX`, boot-time section validation,
+  builder > file > default precedence (Prometheus reference).
+- **5** — provided-bean lifecycle hooks (`run_post_construct` / `run_pre_destroy`).
+- **6** — conditional plugins (`<prefix>.enabled`, config-driven, beans always
+  survive) + module-declared required plugins (`#[module(requires_plugins(..))]`
+  / `FeatureModule::RequiredPlugins`, plugin-named compile diagnostic).
+
+**Leftovers folded back into this backlog:**
+
+- **Type-level `Deps`-hole fix (deferred from phase 3)** — a `.register()`-ed
+  type in a plugin's `Deps` still panics at runtime (steering to `LateDeps`)
+  rather than failing at compile time; tagging `P` was judged to churn
+  `Contains`/`AllSatisfied` everywhere. Revisit only if it bites in practice.
+- **Serve-path e2e per plugin** — still open, see **W4** below (phase-6's
+  `enabled` gate widens the surface: a disabled plugin's serve promise must
+  also be verified as *absent*).
+- **Full disposal semantics** — phase 5 shipped opt-in `run_pre_destroy`; the
+  general `@PreDestroy`/drain-ordering story stays under **W5**.
+
 ## W4 — Plugin serve-path e2e audit
 
 The item-12 failure mode (gRPC `serve()` silently unwired) generalized:

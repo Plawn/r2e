@@ -30,6 +30,7 @@ struct ModuleArgs {
     controllers: Vec<Type>,
     exports: Vec<Type>,
     imports: Vec<Type>,
+    requires_plugins: Vec<Type>,
 }
 
 impl Parse for ModuleArgs {
@@ -59,12 +60,13 @@ impl Parse for ModuleArgs {
                 "controllers" => args.controllers = types,
                 "exports" => args.exports = types,
                 "imports" => args.imports = types,
+                "requires_plugins" => args.requires_plugins = types,
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown key `{other}` in #[module] — expected `providers`, \
-                             `controllers`, `exports`, or `imports`"
+                             `controllers`, `exports`, `imports`, or `requires_plugins`"
                         ),
                     ));
                 }
@@ -108,6 +110,10 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let controller_types = &args.controllers;
     let controllers = quote! { ( #(#controller_types,)* ) };
 
+    // `RequiredPlugins` is a tuple of plugin types (same shape as controllers).
+    let required_plugin_types = &args.requires_plugins;
+    let required_plugins = quote! { ( #(#required_plugin_types,)* ) };
+
     quote! {
         #item
 
@@ -116,6 +122,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             type Controllers = #controllers;
             type Exports = #exports;
             type Imports = #imports;
+            type RequiredPlugins = #required_plugins;
         }
     }
     .into()

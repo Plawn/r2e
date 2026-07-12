@@ -1,0 +1,95 @@
+error[E0277]: type `MissingBean` was not provided to the AppBuilder
+  --> compile-fail/plugin_late_deps_missing.rs:30:14
+   |
+30 |             .build_state()
+   |              ^^^^^^^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
+   |
+   = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+help: the following other types implement trait `Contains<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   | impl<H, T> Contains<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `Contains<H, Here>`
+...
+   | impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `Contains<H, There<I>>`
+...
+   | impl<H, T> Contains<H, Here> for HCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, T>` implements `Contains<H, Here>`
+   | impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `TCons<MissingBean, TNil>` to implement `AllSatisfied<TNil, (_, ())>`
+note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         R: AllSatisfied<P, W>,
+   |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+
+error[E0277]: type `MissingBean` was not provided to the AppBuilder
+  --> compile-fail/plugin_late_deps_missing.rs:27:9
+   |
+27 | /         AppBuilder::new()
+28 | |             .plugin(NeedsLateBean)
+29 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
+30 | |             .build_state()
+   | |__________________________^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
+   |
+   = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+help: the following other types implement trait `Contains<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   | impl<H, T> Contains<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `Contains<H, Here>`
+...
+   | impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `Contains<H, There<I>>`
+...
+   | impl<H, T> Contains<H, Here> for HCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, T>` implements `Contains<H, Here>`
+   | impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `TCons<MissingBean, TNil>` to implement `AllSatisfied<TNil, (_, ())>`
+note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         R: AllSatisfied<P, W>,
+   |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+
+error[E0277]: type `MissingBean` was not provided to the AppBuilder
+  --> compile-fail/plugin_late_deps_missing.rs:31:14
+   |
+31 |             .await
+   |              ^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
+   |
+   = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+help: the following other types implement trait `Contains<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   | impl<H, T> Contains<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `Contains<H, Here>`
+...
+   | impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `Contains<H, There<I>>`
+...
+   | impl<H, T> Contains<H, Here> for HCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, T>` implements `Contains<H, Here>`
+   | impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `TCons<MissingBean, TNil>` to implement `AllSatisfied<TNil, (_, ())>`
+note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         R: AllSatisfied<P, W>,
+   |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`

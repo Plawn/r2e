@@ -78,7 +78,7 @@ pub use crate::controller::ContextConstruct;
 pub use crate::decorator::{DecoratorSpec, SelfBuilt};
 pub use crate::module::FeatureModule;
 pub use crate::extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via};
-pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue, NoChildren, PropertyMeta};
+pub use crate::config::{R2eConfig, ConfigProperties, ConfigValue, ConfigError, ConfigValidationDetail, FromConfigValue, NoChildren, PluginConfig, PropertyMeta};
 pub use crate::controller::Controller as ControllerTrait;
 pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::guards::{

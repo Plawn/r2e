@@ -60,7 +60,7 @@ use std::sync::Arc;
 
 use r2e_core::http::routing::{get, post};
 use r2e_core::http::Router;
-use r2e_core::{DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::{PluginInstallContext, PreStatePlugin};
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
@@ -196,28 +196,33 @@ pub struct OidcRuntime {
 }
 
 impl PreStatePlugin for OidcRuntime {
-    type Provided = Arc<JwtClaimsValidator>;
+    type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
-        let oidc_state = self.state;
-        let base_path = self.base_path;
-        ctx.add_deferred(DeferredAction::new("OidcServer", move |dctx| {
-            dctx.add_layer(Box::new(move |router| {
-                router.merge(oidc_routes(oidc_state, &base_path))
-            }));
-        }));
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
+        // `install` takes `&mut self`; the layer closure needs owned values, so
+        // clone the (cheap `Arc`) state and take the base path out.
+        let oidc_state = self.state.clone();
+        let base_path = std::mem::take(&mut self.base_path);
+        ctx.add_layer(move |router| router.merge(oidc_routes(oidc_state, &base_path)));
 
-        self.claims_validator
+        (self.claims_validator.clone(),)
     }
 }
 
 impl PreStatePlugin for OidcServer {
-    type Provided = Arc<JwtClaimsValidator>;
+    type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
+    type LateDeps = ();
+    type Config = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> Arc<JwtClaimsValidator> {
-        self.build().install((), ctx)
+    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
+        // Take ownership out of `&mut self` (OidcServer: Default) to build the
+        // runtime, then delegate to its `install`.
+        let mut runtime = std::mem::take(self).build();
+        runtime.install((), ctx)
     }
 }
 

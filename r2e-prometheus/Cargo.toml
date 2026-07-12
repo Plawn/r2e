@@ -13,6 +13,7 @@ description = "Prometheus metrics plugin for R2E - HTTP request tracking and /me
 [dependencies]
 r2e-core = {workspace = true}
 prometheus = {workspace = true}
+tracing = {workspace = true}
 tower = {workspace = true}
 pin-project-lite = {workspace = true}
 http = {workspace = true}

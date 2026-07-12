@@ -324,6 +324,41 @@ The `#[bean]` macro generates:
 | Database migrations | Periodic tasks (use `#[scheduled]`) |
 | Validation that needs other beans | Simple field init |
 
+## Lifecycle for `.provide()`-d / plugin beans
+
+`#[post_construct]` above attaches to **factory** beans (`#[bean]`/`register`).
+Values entering the graph via `.provide(instance)` — including every plugin's
+`Provided` beans — are lifecycle citizens too, but **opt-in explicitly** (there
+is no trait detection on stable):
+
+| | Post-construct | Pre-destroy (disposal) |
+|---|---|---|
+| Hook trait | `PostConstruct` | `PreDestroy` (`fn pre_destroy(&self) -> Pin<Box<dyn Future<Output=()> + Send>>`) |
+| Plain `.provide()` | `AppBuilder::provide_with_post_construct(value)` | `AppBuilder::provide_with_pre_destroy(value)` |
+| Plugin `Provided` bean | `ctx.run_post_construct::<T>()` in `install` | `ctx.run_pre_destroy::<T>()` in `install` |
+| Registry primitive | `BeanRegistry::register_provided_post_construct::<T>()` | `BeanRegistry::register_pre_destroy::<T>()` |
+
+**Both surfaces exist because neither alone covers both audiences**: a plain
+`.provide()` user can't reach a plugin's framework-deposited `Provided` element,
+and a plugin-only method wouldn't help direct `.provide()` users. Both funnel
+into the same `BeanRegistry` primitives.
+
+Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
+
+- **Hooks read the target bean by type from the resolved graph** — so a pinned
+  test override (`override_bean` / `pin_provide`) is the value the hook runs
+  against, not the pre-override instance.
+- **Post-construct ordering:** provided post-constructs run during
+  `build_state()`, **after every factory-bean post-construct**, in registration
+  order. Failures surface as the same `BeanError::PostConstruct` (→
+  `build_state()` panics).
+- **Disposal (`PreDestroy`) ordering:** disposers materialize against the
+  resolved graph, ride on the `BeanContext`, are drained at `build_state()` and
+  folded into the **async shutdown phase** — running after the plugin async
+  shutdown hooks, in **reverse registration order** among themselves (last
+  registered disposes first). This is the `@PreDestroy` foundation; existing
+  subsystems (Scheduler/Executor) still cancel via plugin shutdown hooks.
+
 ## Key files
 
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
