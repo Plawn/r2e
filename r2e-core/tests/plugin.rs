@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http_body_util::BodyExt;
+use r2e_core::beans::{Bean, BeanContext, BeanRegistry, Registrable};
 use r2e_core::builder::ServeContext;
 use r2e_core::http::routing::get;
 use r2e_core::http::{Body, Request, StatusCode};
@@ -12,7 +13,8 @@ use r2e_core::plugin::{
     PreStatePlugin,
 };
 use r2e_core::type_list::BeanAccess;
-use r2e_core::AppBuilder;
+use r2e_core::{AppBuilder, TNil};
+use std::any::TypeId;
 use tower::ServiceExt;
 
 #[allow(clippy::too_many_arguments)]
@@ -23,6 +25,7 @@ fn make_deferred_context<'a>(
     serve_hooks: &'a mut Vec<Box<dyn FnOnce(ServeContext) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
     async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
+    bean_context: &'a r2e_core::BeanContext,
 ) -> DeferredContext<'a> {
     DeferredContext {
         layers,
@@ -31,6 +34,7 @@ fn make_deferred_context<'a>(
         serve_hooks,
         shutdown_hooks,
         async_shutdown_hooks,
+        bean_context,
     }
 }
 
@@ -48,6 +52,7 @@ fn deferred_context_add_layer() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
+    let bean_context = r2e_core::BeanContext::empty();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -55,6 +60,7 @@ fn deferred_context_add_layer() {
         &mut serve_hooks,
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
+        &bean_context,
     );
     ctx.add_layer(Box::new(|router| router));
     assert_eq!(layers.len(), 1);
@@ -68,6 +74,7 @@ fn deferred_context_wrap_router_is_separate_from_layers() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
+    let bean_context = r2e_core::BeanContext::empty();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -75,6 +82,7 @@ fn deferred_context_wrap_router_is_separate_from_layers() {
         &mut serve_hooks,
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
+        &bean_context,
     );
     ctx.wrap_router(Box::new(|router| router));
     assert_eq!(router_wraps.len(), 1);
@@ -89,6 +97,7 @@ fn deferred_context_store_data() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
+    let bean_context = r2e_core::BeanContext::empty();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -96,6 +105,7 @@ fn deferred_context_store_data() {
         &mut serve_hooks,
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
+        &bean_context,
     );
     ctx.store_data(42u32);
     assert!(plugin_data.contains_key(&std::any::TypeId::of::<u32>()));
@@ -115,6 +125,7 @@ fn deferred_context_on_serve() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
+    let bean_context = r2e_core::BeanContext::empty();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -122,6 +133,7 @@ fn deferred_context_on_serve() {
         &mut serve_hooks,
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
+        &bean_context,
     );
     ctx.on_serve(|_serve_ctx| {});
     assert_eq!(serve_hooks.len(), 1);
@@ -141,6 +153,7 @@ struct SingleProvider;
 impl PreStatePlugin for SingleProvider {
     type Provided = (Alpha,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         (Alpha(7),)
@@ -154,6 +167,7 @@ struct MultiProvider;
 impl PreStatePlugin for MultiProvider {
     type Provided = (Alpha, Beta);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
         (Alpha(42), Beta("hello".into()))
@@ -166,6 +180,7 @@ struct NoProvider;
 impl PreStatePlugin for NoProvider {
     type Provided = ();
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) {
         ctx.add_deferred(DeferredAction::new("no-provider", |_dctx| {}));
@@ -212,6 +227,7 @@ fn deferred_context_on_shutdown() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
+    let bean_context = r2e_core::BeanContext::empty();
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -219,6 +235,7 @@ fn deferred_context_on_shutdown() {
         &mut serve_hooks,
         &mut shutdown_hooks,
         &mut async_shutdown_hooks,
+        &bean_context,
     );
     ctx.on_shutdown(|| {});
     assert_eq!(shutdown_hooks.len(), 1);
@@ -251,6 +268,7 @@ struct SugarBuildPlugin;
 impl PreStatePlugin for SugarBuildPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         ctx.store_data(StoredData(42));
@@ -302,6 +320,7 @@ struct EveryHookPlugin {
 impl PreStatePlugin for EveryHookPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         let log = self.log;
@@ -388,4 +407,159 @@ fn plugin_action_name_trims_to_last_segment() {
     assert_eq!(plugin_action_name::<SugarBuildPlugin>(), "SugarBuildPlugin");
     // …and a primitive with no path is returned as-is.
     assert_eq!(plugin_action_name::<u32>(), "u32");
+}
+
+// ── LateDeps + configure (Phase 3) ──────────────────────────────────────────
+
+/// A shared sink the `configure` hook writes into, so the test can observe
+/// which `LateDeps` value it received.
+#[derive(Clone, Default)]
+struct ConfigureLog(Arc<Mutex<Vec<u32>>>);
+
+impl ConfigureLog {
+    fn push(&self, value: u32) {
+        self.0.lock().unwrap().push(value);
+    }
+    fn values(&self) -> Vec<u32> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// A **factory-built** bean: constructed by the bean graph, never handed to
+/// `.provide()`. Its `build` stamps a recognizable value so a test can tell the
+/// factory-built instance apart from a hand-provided one.
+#[derive(Clone, Debug, PartialEq)]
+struct FactoryBean(u32);
+
+impl Bean for FactoryBean {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> Self {
+        FactoryBean(99)
+    }
+}
+
+impl Registrable for FactoryBean {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
+/// `LateDeps = (Alpha,)` where `Alpha` is `.provide()`-d after the plugin.
+struct LateProvidedPlugin {
+    log: ConfigureLog,
+}
+
+impl PreStatePlugin for LateProvidedPlugin {
+    type Provided = (ConfigureLog,);
+    type Deps = ();
+    type LateDeps = (Alpha,);
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+        (self.log,)
+    }
+
+    fn configure((log,): &(ConfigureLog,), (alpha,): (Alpha,), _ctx: &mut DeferredContext<'_>) {
+        log.push(alpha.0);
+    }
+}
+
+#[r2e_core::test]
+async fn late_deps_resolves_provided_bean_in_configure() {
+    let log = ConfigureLog::default();
+    // `Alpha` is provided AFTER `.plugin()` — `LateDeps` is not checked at the
+    // call site, only against the final provision list at `build_state()`.
+    let _app = AppBuilder::new()
+        .plugin(LateProvidedPlugin { log: log.clone() })
+        .provide(Alpha(7))
+        .build_state()
+        .await;
+    assert_eq!(log.values(), vec![7], "configure received the provided Alpha");
+}
+
+/// THE acceptance test's plugin: `LateDeps = (FactoryBean,)` — a bean that only
+/// the graph can build, registered *after* this plugin.
+struct LateFactoryPlugin {
+    log: ConfigureLog,
+}
+
+impl PreStatePlugin for LateFactoryPlugin {
+    type Provided = (ConfigureLog,);
+    type Deps = ();
+    type LateDeps = (FactoryBean,);
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+        (self.log,)
+    }
+
+    fn configure(
+        (log,): &(ConfigureLog,),
+        (fb,): (FactoryBean,),
+        _ctx: &mut DeferredContext<'_>,
+    ) {
+        log.push(fb.0);
+    }
+}
+
+#[r2e_core::test]
+async fn late_deps_resolves_factory_built_bean_registered_after_plugin() {
+    let log = ConfigureLog::default();
+    // `FactoryBean` is `.register()`-ed AFTER the plugin. Under the old `Deps`
+    // machinery this would panic at runtime ("registered but not materialized");
+    // as a `LateDeps` it resolves from the fully built graph in `configure`.
+    let app = AppBuilder::new()
+        .plugin(LateFactoryPlugin { log: log.clone() })
+        .register::<FactoryBean>()
+        .build_state()
+        .await;
+    // configure saw the factory-built instance (build() stamped 99).
+    assert_eq!(log.values(), vec![99]);
+    // …and the same bean is a normal member of the resolved graph.
+    assert_eq!(
+        app.bean_context().as_ref().get::<FactoryBean>(),
+        FactoryBean(99)
+    );
+}
+
+/// `configure` reaching for the `DeferredContext` surface (store_data + a layer).
+struct LateConfigureCtxPlugin;
+
+impl PreStatePlugin for LateConfigureCtxPlugin {
+    type Provided = (SugarMarker,);
+    type Deps = ();
+    type LateDeps = (Alpha,);
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+        (SugarMarker,)
+    }
+
+    fn configure(_p: &(SugarMarker,), (alpha,): (Alpha,), ctx: &mut DeferredContext<'_>) {
+        let v = alpha.0;
+        ctx.store_data(StoredData(v));
+        ctx.add_layer(Box::new(move |router| {
+            router.route("/late", get(move || async move { format!("late-{v}") }))
+        }));
+    }
+}
+
+#[r2e_core::test]
+async fn configure_can_use_deferred_context() {
+    let app = AppBuilder::new()
+        .plugin(LateConfigureCtxPlugin)
+        .provide(Alpha(5))
+        .build_state()
+        .await;
+
+    // `store_data` from configure landed in plugin_data.
+    assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(5));
+
+    // …and the layer configure added produced a reachable route.
+    let router = app.build();
+    let (status, body) = get_route(router, "/late").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "late-5");
 }
