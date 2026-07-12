@@ -12,8 +12,10 @@ use crate::config::PulsarConfig;
 pub(crate) struct PulsarInner {
     pub config: PulsarConfig,
     pub pulsar: Pulsar<TokioExecutor>,
-    /// Cached producers per topic. `Producer` is not `Send` across tasks,
-    /// so we guard with a `Mutex` and reuse per topic name.
-    pub producers: Mutex<HashMap<String, Producer<TokioExecutor>>>,
+    /// Cached producers per topic. The outer `Mutex` guards only the map and is
+    /// held briefly to clone a per-topic `Arc<Mutex<Producer>>`; the inner mutex
+    /// serializes sends on that one topic. This keeps emits on distinct topics
+    /// (and a first-emit broker connect) from blocking one another.
+    pub producers: Mutex<HashMap<String, Arc<Mutex<Producer<TokioExecutor>>>>>,
     pub state: Arc<BackendState>,
 }

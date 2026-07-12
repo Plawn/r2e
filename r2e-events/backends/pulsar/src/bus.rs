@@ -62,16 +62,25 @@ impl PulsarEventBus {
         self.inner.config.full_topic_name(topic_name)
     }
 
-    /// Get or create a cached producer for a topic.
+    /// Get or create a cached per-topic producer handle.
+    ///
+    /// The map lock is taken only briefly to clone (fast path) or double-check
+    /// and insert (slow path) the per-topic `Arc<Mutex<Producer>>`. The broker
+    /// connect happens OUTSIDE the map lock so a first emit to a new topic does
+    /// not block emits on other topics.
     async fn get_or_create_producer(
         &self,
         full_topic: &str,
-    ) -> Result<(), EventBusError> {
-        let mut producers = self.inner.producers.lock().await;
-        if producers.contains_key(full_topic) {
-            return Ok(());
+    ) -> Result<Arc<tokio::sync::Mutex<pulsar::producer::Producer<TokioExecutor>>>, EventBusError> {
+        // Fast path: return the existing handle under a brief map lock.
+        {
+            let producers = self.inner.producers.lock().await;
+            if let Some(handle) = producers.get(full_topic) {
+                return Ok(handle.clone());
+            }
         }
 
+        // Slow path: build the producer without holding the map lock.
         let producer = self
             .inner
             .pulsar
@@ -81,8 +90,15 @@ impl PulsarEventBus {
             .await
             .map_err(map_pulsar_error)?;
 
-        producers.insert(full_topic.to_string(), producer);
-        Ok(())
+        // Double-checked insert: if another task raced us and inserted first,
+        // keep theirs and drop ours (the un-inserted `producer` is dropped
+        // cleanly when the closure that never ran goes out of scope).
+        let mut producers = self.inner.producers.lock().await;
+        let handle = producers
+            .entry(full_topic.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(producer)))
+            .clone();
+        Ok(handle)
     }
 
     /// Build message properties from `EventMetadata`.
@@ -100,8 +116,8 @@ impl PulsarEventBus {
     ) -> Result<(), EventBusError> {
         let full_topic = self.full_topic(topic_name);
 
-        // Ensure producer exists
-        self.get_or_create_producer(&full_topic).await?;
+        // Resolve the per-topic producer handle (builds outside any map lock).
+        let producer = self.get_or_create_producer(&full_topic).await?;
 
         let properties = Self::build_properties(metadata);
 
@@ -118,14 +134,11 @@ impl PulsarEventBus {
             deliver_at_time: None,
         };
 
-        // Lock the producers only for the send; release before awaiting the broker receipt.
+        // Lock only this topic's producer for the send; other topics proceed in
+        // parallel. Release before awaiting the broker receipt.
         let receipt = {
-            let mut producers = self.inner.producers.lock().await;
-            let producer = producers
-                .get_mut(&full_topic)
-                .ok_or_else(|| EventBusError::Other(format!("producer not found for {full_topic}")))?;
-
-            producer
+            let mut guard = producer.lock().await;
+            guard
                 .send_non_blocking(msg)
                 .await
                 .map_err(|e: PulsarError| map_pulsar_error(e))?
