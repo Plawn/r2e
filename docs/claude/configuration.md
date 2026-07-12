@@ -451,6 +451,7 @@ struct PropertyMeta {
     env_var: Option<String>,
     is_section: bool,
     resolvable: fn(&R2eConfig, &PropertyMeta) -> bool,  // generated presence oracle
+    validate_nested: Option<fn(&R2eConfig, &PropertyMeta) -> Vec<MissingKeyError>>,  // generated section recursion
 }
 ```
 
@@ -461,6 +462,15 @@ instead of re-implementing resolution. Non-section properties use
 `PropertyMeta::standard_sources`, which reads `full_key`/`env_var` as data so
 the probe can't desync from the fields; manual `PropertyMeta` constructions
 should use it too.
+
+`validate_nested` is `Some` only on `is_section` properties: it recurses with
+`validate_section::<Child>` under `full_key`, so ALL nested missing required
+keys are reported in one phase-1 pass with full metadata (instead of the
+phase-2 `from_config` probe short-circuiting on the first `NotFound`). The
+derive bakes the presence semantics next to `from_config`: mandatory section →
+recurse unconditionally; `Option` / `#[config(section, default)]` → only when
+`has_prefix`; map section → once per `sub_keys` entry. Manual `PropertyMeta`
+constructions may use `None` (no nested reporting).
 
 ### Registry
 

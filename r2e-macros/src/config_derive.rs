@@ -214,6 +214,68 @@ fn resolvability_probe(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
     quote! { #krate::config::typed::PropertyMeta::standard_sources }
 }
 
+/// Nested-section validator stored in `PropertyMeta::validate_nested` — the
+/// phase-1 twin of the section `field_inits`: it recurses with
+/// `validate_section` exactly when `from_config` would construct the nested
+/// section, so every nested missing required key is reported with full
+/// metadata instead of short-circuiting on the first `NotFound`.
+fn nested_section_validator(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2 {
+    if f.is_section {
+        let section_ty = if f.is_option {
+            option_inner_type(&f.ty).unwrap()
+        } else {
+            &f.ty
+        };
+        // Map-valued section: one recursion per existing entry — an absent
+        // prefix yields no sub-keys, matching from_config's empty map / None.
+        if f.is_map_section {
+            let value_ty = string_map_value_type(section_ty).unwrap();
+            return quote! {
+                Some(|__config, __meta| {
+                    __config
+                        .sub_keys(&__meta.full_key)
+                        .into_iter()
+                        .flat_map(|__k| {
+                            let __child_prefix = format!("{}.{}", __meta.full_key, __k);
+                            #krate::config::validate_section::<#value_ty>(
+                                __config,
+                                Some(&__child_prefix),
+                            )
+                        })
+                        .collect()
+                })
+            };
+        }
+        // Optional / defaulted section: absence is legal (from_config yields
+        // None / Default::default()), so only a present section is validated.
+        if f.is_option || f.default_flag {
+            return quote! {
+                Some(|__config, __meta| {
+                    if __config.has_prefix(&__meta.full_key) {
+                        #krate::config::validate_section::<#section_ty>(
+                            __config,
+                            Some(&__meta.full_key),
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                })
+            };
+        }
+        // Mandatory section: recurse unconditionally — an absent section
+        // reports every nested required key at once.
+        return quote! {
+            Some(|__config, __meta| {
+                #krate::config::validate_section::<#section_ty>(
+                    __config,
+                    Some(&__meta.full_key),
+                )
+            })
+        };
+    }
+    quote! { None }
+}
+
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     match &input.data {
         Data::Struct(data) => generate_struct(input, data),
@@ -344,6 +406,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
             };
             let is_section = f.is_section;
             let probe = resolvability_probe(f, &krate);
+            let nested_validator = nested_section_validator(f, &krate);
             quote! {
                 {
                     let __full_key = match __prefix {
@@ -360,6 +423,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                         env_var: #env_var_tok,
                         is_section: #is_section,
                         resolvable: #probe,
+                        validate_nested: #nested_validator,
                     }
                 }
             }
@@ -969,6 +1033,7 @@ fn generate_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<Token
                     // env_var is None, so this probes the config map only —
                     // matching from_config, which reads the tag from the map.
                     resolvable: #krate::config::typed::PropertyMeta::standard_sources,
+                    validate_nested: None,
                 }]
             }
 

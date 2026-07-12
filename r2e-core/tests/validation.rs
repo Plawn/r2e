@@ -117,6 +117,178 @@ fn test_property_meta_resolvable_probe_section() {
     assert!(child.is_resolvable(&config));
 }
 
+// ── Nested-section phase-1 reporting (task #660) ────────────────────────────
+// `validate_section` recurses into `#[config(section)]` props via the
+// derive-generated `PropertyMeta::validate_nested` hook: ALL nested missing
+// required keys are reported in one pass with full metadata, instead of the
+// phase-2 from_config probe short-circuiting on the first `NotFound`.
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct NestedLeafConfig {
+    /// Connection URL for the nested service.
+    pub url: String,
+    pub port: i64,
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct NestedParentConfig {
+    pub name: String,
+    #[config(section)]
+    pub db: NestedLeafConfig,
+}
+
+#[test]
+fn test_validate_section_reports_all_nested_missing_keys_with_metadata() {
+    let config = R2eConfig::empty();
+    let errors = validate_section::<NestedParentConfig>(&config, Some("app"));
+
+    let keys: Vec<&str> = errors.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["app.name", "app.db.url", "app.db.port"],
+        "one pass must report the parent key and every nested key: {errors:?}"
+    );
+
+    let url = errors.iter().find(|e| e.key == "app.db.url").unwrap();
+    assert_eq!(url.source, "app.db");
+    assert_eq!(url.expected_type, "String");
+    assert_eq!(url.env_hint, "APP_DB_URL");
+    assert_eq!(
+        url.description.as_deref(),
+        Some("Connection URL for the nested service.")
+    );
+
+    let port = errors.iter().find(|e| e.key == "app.db.port").unwrap();
+    assert_eq!(port.expected_type, "i64");
+}
+
+#[test]
+fn test_validate_section_nested_passes_when_all_keys_present() {
+    let yaml = r#"
+app:
+  name: "svc"
+  db:
+    url: "postgres://localhost/db"
+    port: 5432
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let errors = validate_section::<NestedParentConfig>(&config, Some("app"));
+    assert!(errors.is_empty(), "fully-populated nested config: {errors:?}");
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct DeepParentConfig {
+    #[config(section)]
+    pub middle: NestedParentConfig,
+}
+
+#[test]
+fn test_validate_section_recurses_through_multiple_levels() {
+    let config = R2eConfig::empty();
+    let errors = validate_section::<DeepParentConfig>(&config, Some("root"));
+
+    let keys: Vec<&str> = errors.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["root.middle.name", "root.middle.db.url", "root.middle.db.port"],
+        "grandchild keys must be reported too: {errors:?}"
+    );
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct OptionalSectionConfig {
+    #[config(section)]
+    pub db: Option<NestedLeafConfig>,
+}
+
+#[test]
+fn test_validate_section_skips_absent_optional_section() {
+    let config = R2eConfig::empty();
+    let errors = validate_section::<OptionalSectionConfig>(&config, Some("app"));
+    assert!(
+        errors.is_empty(),
+        "an absent optional section is legal (from_config yields None): {errors:?}"
+    );
+}
+
+#[test]
+fn test_validate_section_validates_present_optional_section() {
+    let config = R2eConfig::from_yaml_str("app:\n  db:\n    port: 5432").unwrap();
+    let errors = validate_section::<OptionalSectionConfig>(&config, Some("app"));
+    assert_eq!(errors.len(), 1, "present optional section must be validated: {errors:?}");
+    assert_eq!(errors[0].key, "app.db.url");
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, Default)]
+struct DefaultableLeafConfig {
+    pub host: String,
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct DefaultedSectionConfig {
+    #[config(section, default)]
+    pub cache: DefaultableLeafConfig,
+}
+
+#[test]
+fn test_validate_section_skips_absent_defaulted_section() {
+    let config = R2eConfig::empty();
+    let errors = validate_section::<DefaultedSectionConfig>(&config, Some("app"));
+    assert!(
+        errors.is_empty(),
+        "an absent #[config(section, default)] falls back to Default: {errors:?}"
+    );
+}
+
+#[test]
+fn test_validate_section_validates_present_defaulted_section() {
+    let config = R2eConfig::from_yaml_str("app:\n  cache:\n    ttl: 30").unwrap();
+    let errors = validate_section::<DefaultedSectionConfig>(&config, Some("app"));
+    assert_eq!(errors.len(), 1, "present defaulted section must be validated: {errors:?}");
+    assert_eq!(errors[0].key, "app.cache.host");
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct MapSectionConfig {
+    #[config(section)]
+    pub endpoints: std::collections::HashMap<String, NestedLeafConfig>,
+}
+
+#[test]
+fn test_validate_section_validates_each_map_section_entry() {
+    let yaml = r#"
+app:
+  endpoints:
+    orders:
+      url: "http://orders"
+      port: 80
+    billing:
+      port: 443
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let errors = validate_section::<MapSectionConfig>(&config, Some("app"));
+    assert_eq!(errors.len(), 1, "only the incomplete entry must report: {errors:?}");
+    assert_eq!(errors[0].key, "app.endpoints.billing.url");
+    assert_eq!(errors[0].source, "app.endpoints.billing");
+}
+
+#[test]
+fn test_validate_section_skips_absent_map_section() {
+    let config = R2eConfig::empty();
+    let errors = validate_section::<MapSectionConfig>(&config, Some("app"));
+    assert!(
+        errors.is_empty(),
+        "an absent map section is an empty map, nothing to validate: {errors:?}"
+    );
+}
+
 // A serde-backed FromConfigValue type: conversion failures surface as
 // ConfigError::Deserialize, which validate_section must report, not swallow.
 #[derive(serde::Deserialize, r2e_macros::FromConfigValue, Clone, Debug)]
