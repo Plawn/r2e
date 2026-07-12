@@ -181,7 +181,12 @@ impl KafkaConfig {
                 } else {
                     "false"
                 },
-            );
+            )
+            // At-least-once delivery: librdkafka periodically (auto)commits only
+            // offsets we explicitly store via `store_offset` after local handlers
+            // ack. Disabling automatic offset storage prevents committing an
+            // offset at receive time, before its handlers have run.
+            .set("enable.auto.offset.store", "false");
 
         if let Some(ref mechanism) = self.sasl_mechanism {
             config.set("sasl.mechanism", mechanism);
@@ -193,6 +198,7 @@ impl KafkaConfig {
             config.set("sasl.password", password);
         }
 
+        // Overrides applied last so users retain final precedence over defaults.
         for (k, v) in &self.overrides {
             config.set(k, v);
         }

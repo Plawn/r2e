@@ -45,6 +45,8 @@ mod bus;
 mod config;
 mod error;
 mod inner;
+#[doc(hidden)]
+pub mod offset_tracker;
 
 pub use builder::KafkaEventBusBuilder;
 pub use bus::KafkaEventBus;

@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler};
+use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
@@ -24,6 +24,7 @@ use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
 use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
+use crate::offset_tracker::OffsetTracker;
 
 /// Apache Kafka-backed event bus.
 ///
@@ -388,6 +389,18 @@ async fn run_consumer_inner(
 
     tracing::info!(topic = %topic_name, "Kafka consumer started");
 
+    // At-least-once delivery: offsets are stored only after local handlers
+    // complete. Handlers run concurrently (pipelined), so completions arrive
+    // out of order; the tracker advances each partition's commit watermark over
+    // the contiguous prefix of acked offsets. Fresh per consumer lifetime — on
+    // reconnect it is dropped and the new consumer resumes from the last commit.
+    let mut tracker = OffsetTracker::new();
+    // Completed dispatches report (partition, offset, outcome) back to this
+    // loop. Unbounded so a spawned completion task never blocks the loop (the
+    // loop is the sole receiver and both sends and drains this channel).
+    let (completion_tx, mut completion_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(i32, i64, DispatchOutcome)>();
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -405,12 +418,60 @@ async fn run_consumer_inner(
                             }
                         };
 
+                        let partition = borrowed_msg.partition();
+                        let offset = borrowed_msg.offset();
+                        // Register the offset as in flight before dispatch, so
+                        // out-of-order completions cannot advance the commit
+                        // watermark past it.
+                        tracker.on_receive(partition, offset);
+
                         let metadata = extract_metadata_from_kafka(&borrowed_msg);
-                        inner.state.dispatch_from_poller(type_id, payload, metadata).await;
+                        // Returns once handler tasks are spawned (permit-bounded);
+                        // the loop stays pipelined and keeps pulling messages.
+                        let completion = inner
+                            .state
+                            .dispatch_from_poller_tracked(type_id, payload, metadata)
+                            .await;
+
+                        let tx = completion_tx.clone();
+                        r2e_core::rt::spawn(async move {
+                            let outcome = completion.outcome().await;
+                            // Receiver lives for the consumer loop — ignore send
+                            // errors that only occur after the loop has exited.
+                            let _ = tx.send((partition, offset, outcome));
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
                         r2e_core::rt::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+            Some((partition, offset, outcome)) = completion_rx.recv() => {
+                match outcome {
+                    DispatchOutcome::Ack => {
+                        if let Some(store_offset) = tracker.on_ack(partition, offset) {
+                            // `store_offset` is the message offset; librdkafka's
+                            // periodic auto-commit picks it up (+1 internally).
+                            if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
+                                tracing::warn!(
+                                    topic = %topic_name,
+                                    partition,
+                                    offset = store_offset,
+                                    "failed to store Kafka offset: {e}"
+                                );
+                            }
+                        }
+                    }
+                    DispatchOutcome::Nack => {
+                        tracker.on_nack(partition, offset);
+                        tracing::warn!(
+                            topic = %topic_name,
+                            partition,
+                            offset,
+                            "handler nacked without DLQ capture — not committing offset; \
+                             message will be redelivered on rebalance/reconnect"
+                        );
                     }
                 }
             }
