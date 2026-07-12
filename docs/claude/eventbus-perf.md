@@ -4,7 +4,10 @@ Status: **IN PROGRESS** (validated 2026-07-12; P1 + a 10-finding review-fix
 pass landed on branch `events/p1-ack-after-handler` — shared
 `WatermarkTracker`/`spawn_completion_forwarder`, rebalance-aware Kafka
 tracking, manual-commit progress, RabbitMQ ported to the shared engine
-(P4.1), poison→DLQ parking, emit_and_wait outcome recorded for the poller).
+(P4.1), poison→DLQ parking, emit_and_wait outcome recorded for the poller.
+P2 landed 2026-07-12: u128 event ids, RabbitMQ reconnect + per-consumer
+channels, Pulsar per-topic producer locks, Kafka non-blocking shutdown
+flush; P2.5 decision deferred by the user).
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -76,48 +79,54 @@ see P4 for keeping this pipelined rather than serial).
 
 ## P2 — Reliability bugs (fix regardless of P1 timing)
 
-- [ ] **P2.1 Cross-process `event_id` collision in the dedup set.**
-      `EventMetadata::event_id` is a process-local `AtomicU64` starting at 1
-      (`src/lib.rs:88,109`); the `emit_and_wait` dedup set keys on that u64
-      (`src/backend/state.rs:342,401`). Two instances of the same app
-      generate colliding ids → instance B's poller silently DROPS instance
-      A's message when B has the same id pending, then double-dispatches its
-      own. Near-certain in multi-instance deployments. Fix: globally unique
-      event id — `(process_uuid, counter)` or a u128/UUID; adjust
-      `EventMetadata`, the codec (`src/backend/metadata_codec.rs`), and the
-      dedup set key. Breaking change to `EventMetadata` is fine.
-- [ ] **P2.2 RabbitMQ: reconnect never reconnects.** The `Connection` is
-      dropped at the end of `connect` (`backends/rabbitmq/src/builder.rs:67`,
-      channel created once at `:74`); on disconnect `run_consumer` re-invokes
-      `basic_consume` on the same dead channel forever
-      (`backends/rabbitmq/src/bus.rs:419-449,459`). Any broker blip
-      permanently kills publish + consume. Fix: retain the `Connection`,
-      recreate channel (or connection) inside the retry loop.
-- [ ] **P2.3 RabbitMQ: single shared channel for publish + all consumers**
-      (`backends/rabbitmq/src/inner.rs:10`). One failed publish closes the
-      channel and takes down every consumer. Fix: dedicated channel per
-      consumer + a publisher channel (small pool optional). Do together with
-      P2.2.
-- [ ] **P2.4 Pulsar: global producer mutex held across `.await`.** One
-      `Mutex<HashMap<String, Producer>>` (`backends/pulsar/src/inner.rs:17`)
-      is held across `send_non_blocking(...).await`
-      (`backends/pulsar/src/bus.rs:118-128`) and across producer
-      build/connect (`bus.rs:66-81`): all emits on all topics serialize on
-      one lock; the first emit to a new topic blocks everyone for a broker
-      connect. Fix: `HashMap<String, Arc<Mutex<Producer>>>` — short map
-      lock to clone the per-topic `Arc`, send under the per-topic lock only;
-      build producers outside the map lock (double-checked insert).
+- [x] **P2.1 Cross-process `event_id` collision in the dedup set.** Fixed:
+      `EventMetadata::event_id` is now a globally-unique `u128` = per-process
+      random 64-bit identity (high bits, drawn once from a seeded `RandomState`
+      hasher + wall-clock nanos + a stack address — no new dependency) packed
+      with the per-process `AtomicU64` counter (low bits) via
+      `compose_event_id`. The codec (`src/backend/metadata_codec.rs`) now
+      encodes/decodes the id as a decimal `u128` string (wire header
+      `r2e-event-id` widened from u64 to u128 range), and the dedup set
+      (`LocallyDispatchedSet` in `src/backend/state.rs`) keys on `u128`.
+      Distinct instances no longer collide, so a poller never drops a peer's
+      message. Tests in `tests/event_id.rs` assert cross-process uniqueness
+      and codec round-trip of a high-bit-set id.
+- [x] **P2.2 RabbitMQ: reconnect never reconnects.** Fixed: `RabbitMqInner`
+      now retains the `Connection` behind a mutex; `create_channel` reconnects
+      it transparently when the link is down (serialized, so concurrent
+      callers open at most one new connection). The consumer loop creates a
+      fresh channel + re-declares its queue on each (re)connect, and now
+      **breaks** on a stream-level `Err` (previously it slept and spun on the
+      dead channel forever) so the backoff/reconnect path actually engages.
+      The publisher channel is (re)created lazily via `publisher_channel`,
+      recovering after a broker blip.
+- [x] **P2.3 RabbitMQ: single shared channel for publish + all consumers.**
+      Fixed together with P2.2: one dedicated channel **per consumer** (owned
+      by `run_consumer_inner`, dropped/closed only when that consumer exits)
+      plus a **separate** lazily-created publisher channel. A failed publish
+      now only tears down the publisher channel; consumers are unaffected.
+- [x] **P2.4 Pulsar: global producer mutex held across `.await`.** Fixed:
+      the producer map is now `Mutex<HashMap<String, Arc<Mutex<Producer>>>>`.
+      The map lock is held only for the lookup/insert (never across a broker
+      connect or a send); producers are built outside the map lock with a
+      double-checked `entry().or_insert_with` (a losing racer's producer is
+      dropped cleanly). Sends serialize per topic only, and the receipt is
+      still awaited with no lock held.
 - [ ] **P2.5 `emit_and_wait` on distributed backends: cross-instance double
       processing.** It dispatches locally AND publishes to the broker; the
       dedup set only suppresses the echo in the SAME process — another
       consumer-group member will process the broker copy too. Decide:
       accept + document ("local handlers run synchronously, group delivery
       still happens once somewhere"), or change semantics (e.g. don't
-      publish, or don't locally dispatch, on distributed backends). Design
-      decision — resolve with the user before implementing.
-- [ ] **P2.6 Kafka: blocking `producer.flush` in async shutdown**
-      (`backends/kafka/src/bus.rs:330`) — wrap in `spawn_blocking`.
-      Shutdown-only, low priority but trivial.
+      publish, or don't locally dispatch, on distributed backends).
+      **Decision deferred (2026-07-12): user chose to leave this open** —
+      revisit in a later pass; do not implement without a new decision.
+- [x] **P2.6 Kafka: blocking `producer.flush` in async shutdown.** Fixed:
+      shutdown flush now runs in `spawn_blocking` (flush errors still
+      propagate; a JoinError is logged and swallowed). Noted but not fixed:
+      the final `commit_consumer_state(CommitMode::Sync)` in the consumer
+      drain tail is also blocking, but moving it needs care around the
+      `StreamConsumer` borrow + manual-commit invariants — possible follow-up.
 
 ## P3 — Producer throughput (unblock >1/RTT emit)
 
@@ -203,6 +212,13 @@ Shared (`src/backend/`):
 - [ ] **P5.5** `ensure_topic` steady-state lock: `is_topic_ensured` takes a
       global `Mutex<HashSet>` on every publish (`state.rs:220-222`) —
       per-topic cached flag / lock-free snapshot.
+- [ ] **P5.6b** Reconnect/backoff loop is triplicated: iggy `run_poller`,
+      kafka `run_consumer`, and rabbitmq `run_consumer` (added by P2.2) carry
+      near-verbatim copies of the same policy (1s initial, double,
+      `.min(max_backoff)`, reset after a healthy run > backoff×4,
+      cancel-aware select). Extract a shared `reconnect_loop` driver into
+      `src/backend/` (next to `WatermarkTracker`) — flagged by the P2 review;
+      deferred because it touches iggy/kafka outside that pass's scope.
 - [ ] **P5.6** Typed error classification: Iggy/Kafka `map_*_error` classify
       by `msg.contains("connect")` substring matching
       (`backends/iggy/src/error.rs:7-11`, `backends/kafka/src/error.rs:6-16`)
