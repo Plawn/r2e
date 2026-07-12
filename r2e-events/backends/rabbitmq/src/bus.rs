@@ -17,7 +17,7 @@ use serde::Serialize;
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler};
+use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
@@ -340,14 +340,16 @@ impl EventBus for RabbitMqEventBus {
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
 
-            // Publish to RabbitMQ
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
-            // Also dispatch locally and wait
+            // Dispatch locally FIRST: this records the local outcome for the
+            // poller dedup. Publishing before recording would race the poller
+            // consuming the broker copy. If the local dispatch errors, skip the
+            // publish entirely.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -368,14 +370,14 @@ impl EventBus for RabbitMqEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
 
-            // Publish to RabbitMQ
-            bus.publish(&topic_name, payload.clone(), &metadata).await?;
-
-            // Also dispatch locally and wait
+            // Dispatch locally FIRST (see `emit_and_wait`): records the local
+            // outcome for the poller dedup before the broker copy can be seen.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata)
-                .await
+                .dispatch_local(type_id, &payload, metadata.clone())
+                .await?;
+
+            bus.publish(&topic_name, payload, &metadata).await
         }
     }
 
@@ -475,6 +477,10 @@ async fn run_consumer_inner(
 
     tracing::info!(queue = %queue_name, "consumer started");
 
+    // Shared owned handle for logging inside per-delivery acker tasks (cheap to
+    // clone; avoids a String allocation per delivery).
+    let queue: Arc<str> = Arc::from(queue_name);
+
     let mut consumer = consumer;
     loop {
         tokio::select! {
@@ -485,114 +491,46 @@ async fn run_consumer_inner(
             delivery = consumer.next() => {
                 match delivery {
                     Some(Ok(delivery)) => {
+                        // Delegate all at-least-once logic to the shared engine:
+                        // dedup, deserialization, handler collection, retry, DLQ
+                        // capture, poison-message handling, backpressure and
+                        // panic-safety. The returned completion resolves once all
+                        // handlers finish, so the loop stays pipelined.
                         let metadata = extract_metadata_from_delivery(&delivery);
-                        let payload = delivery.data.as_slice();
+                        let completion = inner
+                            .state
+                            .dispatch_from_poller_tracked(type_id, &delivery.data, metadata)
+                            .await;
 
-                        // Skip if this event was already dispatched locally by emit_and_wait.
-                        if inner.state.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).remove(metadata.event_id) {
-                            if let Err(e) = delivery.ack(BasicAckOptions::default()).await {
-                                tracing::error!(queue = %queue_name, "failed to ack deduped delivery: {e}");
-                            }
-                            continue;
-                        }
-
-                        // Phase 1: Collect handlers and deserialize under lock, then release.
-                        let collected = {
-                            let map = inner.state.handlers.read().await;
-                            map.get(&type_id).map(|topic_handlers| {
-                                let deser_result = (topic_handlers.deserializer)(payload);
-                                let handlers: Vec<_> = topic_handlers.entries.iter()
-                                    .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                                    .map(|entry| (entry.handler.clone(), entry.retry_policy.clone()))
-                                    .collect();
-                                (deser_result, handlers)
-                            })
-                        };
-                        // RwLock released here
-
-                        // Phase 2: Dispatch handlers and collect results.
-                        let dispatch_ok = match collected {
-                            None => true, // No handlers — ack anyway
-                            Some((Err(err), _)) => {
-                                tracing::error!(queue = %queue_name, "failed to deserialize event: {err}");
-                                false
-                            }
-                            Some((Ok(event), handlers)) => {
-                                let dlq_payload = payload.to_vec();
-                                let mut tasks = Vec::with_capacity(handlers.len());
-
-                                for (h, retry_policy) in &handlers {
-                                    let e = event.clone();
-                                    let m = metadata.clone();
-                                    let h = h.clone();
-                                    let retry_policy = retry_policy.clone();
-
-                                    // Backpressure: acquire permit BEFORE spawning.
-                                    let permit = inner.state.handler_semaphore.clone()
-                                        .acquire_owned().await.expect("semaphore closed");
-                                    let guard = inner.state.acquire_in_flight();
-
-                                    tasks.push(r2e_core::rt::spawn(async move {
-                                        let _guard = guard;
-                                        let result = if let Some(ref policy) = retry_policy {
-                                            r2e_events::backend::BackendState::invoke_with_retry(&h, &e, &m, policy).await
-                                        } else {
-                                            h(e, m).await
-                                        };
-                                        drop(permit);
-                                        result
-                                    }));
-                                }
-
-                                // Wait for all handler tasks and check results.
-                                let mut all_ack = true;
-                                for task in tasks {
-                                    match task.await {
-                                        Ok(HandlerResult::Ack) => {}
-                                        Ok(HandlerResult::Nack(reason)) => {
-                                            tracing::warn!(queue = %queue_name, "handler returned Nack: {reason}");
-                                            all_ack = false;
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(queue = %queue_name, "handler task panicked: {e}");
-                                            all_ack = false;
-                                        }
+                        // lapin's `Acker` is an owned, per-delivery handle usable
+                        // from any task, so spawn a small follow-up task to ack/nack
+                        // without serializing the poll loop. DLQ-captured and poison
+                        // messages resolve as Ack in the shared engine, so
+                        // `requeue: true` on Nack can only redeliver genuinely
+                        // failed (retryable) messages, never poison payloads.
+                        let acker = delivery.acker;
+                        let queue = queue.clone();
+                        r2e_core::rt::spawn(async move {
+                            match completion.outcome().await {
+                                DispatchOutcome::Ack => {
+                                    if let Err(e) = acker.ack(BasicAckOptions::default()).await {
+                                        tracing::error!(queue = %queue, "failed to ack delivery: {e}");
                                     }
                                 }
-
-                                // Publish to DLQ on final failure if configured.
-                                if !all_ack {
-                                    if let Some(ref publisher) = inner.state.dlq_publisher {
-                                        for (_, retry_policy) in &handlers {
-                                            if let Some(ref policy) = retry_policy {
-                                                if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                                                    publisher(dlq_topic.clone(), dlq_payload.clone(), metadata.clone()).await;
-                                                }
-                                            }
-                                        }
+                                DispatchOutcome::Nack => {
+                                    tracing::warn!(queue = %queue, "dispatch nacked, requeueing delivery");
+                                    if let Err(e) = acker
+                                        .nack(BasicNackOptions {
+                                            requeue: true,
+                                            ..BasicNackOptions::default()
+                                        })
+                                        .await
+                                    {
+                                        tracing::error!(queue = %queue, "failed to nack delivery: {e}");
                                     }
                                 }
-
-                                all_ack
                             }
-                        };
-
-                        // Ack or nack the delivery
-                        if dispatch_ok {
-                            if let Err(e) = delivery.ack(BasicAckOptions::default()).await {
-                                tracing::error!(queue = %queue_name, "failed to ack delivery: {e}");
-                            }
-                        } else {
-                            if let Err(e) = delivery
-                                .nack(BasicNackOptions {
-                                    requeue: true,
-                                    ..BasicNackOptions::default()
-                                })
-                                .await
-                            {
-                                tracing::error!(queue = %queue_name, "failed to nack delivery: {e}");
-                            }
-                        }
+                        });
                     }
                     Some(Err(e)) => {
                         tracing::warn!(queue = %queue_name, "consumer error: {e}");
