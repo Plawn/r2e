@@ -695,6 +695,15 @@ where
     {
         let deps = T::Deps::resolve(app.bean_registry());
         let name = plugin_action_name::<T>();
+        // The `<prefix>.enabled` config gate (phase 6). When a plugin declares a
+        // `CONFIG_PREFIX` and `<prefix>.enabled` is `false`, its POST-STATE
+        // effects are skipped: the buffered sugar action, any explicit
+        // `add_deferred` actions, and `configure`. Beans it `Provided` still
+        // exist in the graph (the type-level provision list is fixed at compile
+        // time — disabling a plugin never removes its beans), and its
+        // lifecycle-hook registrars (`run_post_construct`/`run_pre_destroy`) still
+        // run, since those beans are real and may be injected by other code.
+        let prefix = T::CONFIG_PREFIX;
         // Keep the plugin instance alive past `install` so `configure` can move
         // it in by value (and merge its programmatic fields with file config).
         let mut plugin = self;
@@ -710,14 +719,16 @@ where
         };
         let mut builder = app;
         for action in deferred {
-            builder = builder.add_deferred(action);
+            // Gate every buffered/explicit post-state action on `<prefix>.enabled`.
+            builder = builder.add_deferred(gate_on_enabled(action, prefix));
         }
         // Keep a copy of the provided beans for the post-state `configure`
         // call — `provide_all` consumes the original into the registry.
         let provided_for_configure = provided.clone_all();
         provided.provide_all(builder.bean_registry_mut());
         // Apply any post-construct / pre-destroy registrations the plugin opted
-        // its `Provided` beans into — after the values are deposited.
+        // its `Provided` beans into — after the values are deposited. NOT gated
+        // by `enabled`: the beans still exist, so their lifecycle stays honest.
         for op in registry_ops {
             op(builder.bean_registry_mut());
         }
@@ -726,8 +737,18 @@ where
         // guaranteed loaded (so typed `Config` is delivered here, not at
         // install). Runs as a deferred action (post-resolution). For
         // `LateDeps = ()`, `Config = ()`, and the default (no-op) `configure`,
-        // this is an inert closure.
+        // this is an inert closure. Also gated on `<prefix>.enabled`; this action
+        // is the single place we emit the "plugin disabled" diagnostic, since
+        // exactly one configure action is scheduled per plugin.
         builder = builder.add_deferred(DeferredAction::new(name, move |dctx| {
+            if !plugin_config_enabled(dctx.config(), prefix) {
+                tracing::info!(
+                    plugin = name,
+                    "plugin disabled via `{}.enabled = false`; post-state effects skipped (its beans remain in the graph)",
+                    prefix.unwrap_or(name),
+                );
+                return;
+            }
             let late = <T::LateDeps as PluginDeps>::resolve_from_context(dctx.bean_context());
             let config = load_plugin_config::<T>(dctx.config(), name);
             PreStatePlugin::configure(plugin, &provided_for_configure, late, config, dctx);
@@ -768,6 +789,38 @@ fn load_plugin_config<T: PreStatePlugin>(
         <T::Config as PluginConfig>::plugin_load(config, prefix)
             .expect("plugin config section validated but failed to construct"),
     )
+}
+
+/// Whether a plugin's post-state effects should run, per the `<prefix>.enabled`
+/// convention (phase 6).
+///
+/// Returns `true` (enabled) when the plugin declares no `CONFIG_PREFIX`, when no
+/// config was loaded, or when the `<prefix>.enabled` key is absent — the flag
+/// defaults to `true`, so plugins are on unless explicitly turned off. Only an
+/// explicit `<prefix>.enabled = false` disables them.
+pub(crate) fn plugin_config_enabled(
+    config: Option<&crate::config::R2eConfig>,
+    prefix: Option<&'static str>,
+) -> bool {
+    let (Some(prefix), Some(config)) = (prefix, config) else {
+        return true;
+    };
+    config
+        .get::<bool>(&format!("{prefix}.enabled"))
+        .unwrap_or(true)
+}
+
+/// Wrap a plugin-scheduled [`DeferredAction`] so it runs only when the plugin is
+/// enabled (`<prefix>.enabled != false`). A disabled plugin's sugar and explicit
+/// deferred actions become inert; the "disabled" diagnostic is emitted once from
+/// the `configure` action instead (see the blanket `install`).
+fn gate_on_enabled(action: DeferredAction, prefix: Option<&'static str>) -> DeferredAction {
+    let DeferredAction { name, action } = action;
+    DeferredAction::new(name, move |dctx| {
+        if plugin_config_enabled(dctx.config(), prefix) {
+            action(dctx);
+        }
+    })
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────
