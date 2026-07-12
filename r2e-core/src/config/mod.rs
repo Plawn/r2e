@@ -430,6 +430,60 @@ impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
     }
 }
 
+// ── PluginConfig trait ───────────────────────────────────────────────────
+
+/// The typed-configuration surface of a [`PreStatePlugin`](crate::PreStatePlugin).
+///
+/// A plugin names a `Config` type (its [`PreStatePlugin::Config`](crate::PreStatePlugin::Config))
+/// plus a section prefix
+/// ([`PreStatePlugin::CONFIG_PREFIX`](crate::PreStatePlugin::CONFIG_PREFIX)). At
+/// `configure` time — after `build_state()`, when [`R2eConfig`] is guaranteed
+/// loaded — the framework loads and validates that section and hands the plugin
+/// an `Option<Config>` (see the loading rules on
+/// [`PreStatePlugin::configure`](crate::PreStatePlugin::configure)).
+///
+/// This trait is implemented for two shapes, mirroring [`LoadableConfig`]:
+///
+/// - `()` — the "no config" case. `type Config = ();` (the default surface);
+///   loading always yields nothing and validation always passes.
+/// - any `T: ConfigProperties` — the section is read via
+///   [`ConfigProperties::from_config`] and validated via
+///   [`validate_section`](crate::config::validate_section), so a plugin section
+///   produces exactly the same missing-key / type-mismatch boot errors a
+///   controller's `#[config(section)]` does.
+///
+/// Because the `ConfigProperties` impl is blanket, plugin authors never write a
+/// `PluginConfig` impl by hand: a `#[derive(ConfigProperties)]` struct is a
+/// valid `type Config` out of the box.
+pub trait PluginConfig: Send + Sized + 'static {
+    /// Construct the config from the loaded [`R2eConfig`] at the given prefix.
+    fn plugin_load(config: &R2eConfig, prefix: &str) -> Result<Self, ConfigError>;
+
+    /// Validate the section at `prefix` — the same missing-key / type-mismatch
+    /// walk controllers use. An empty vec means the section is valid.
+    fn plugin_validate(config: &R2eConfig, prefix: &str) -> Vec<MissingKeyError>;
+}
+
+impl PluginConfig for () {
+    fn plugin_load(_config: &R2eConfig, _prefix: &str) -> Result<(), ConfigError> {
+        Ok(())
+    }
+
+    fn plugin_validate(_config: &R2eConfig, _prefix: &str) -> Vec<MissingKeyError> {
+        Vec::new()
+    }
+}
+
+impl<T: ConfigProperties + Send + 'static> PluginConfig for T {
+    fn plugin_load(config: &R2eConfig, prefix: &str) -> Result<T, ConfigError> {
+        T::from_config(config, Some(prefix))
+    }
+
+    fn plugin_validate(config: &R2eConfig, prefix: &str) -> Vec<MissingKeyError> {
+        validate_section::<T>(config, Some(prefix))
+    }
+}
+
 /// Resolve `${...}` placeholders in all string values of the config map.
 fn resolve_string_values(
     values: &mut HashMap<String, ConfigValue>,

@@ -16,8 +16,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         state: T,
         bean_context: Arc<crate::beans::BeanContext>,
     ) -> Self {
-        // Take the deferred actions before creating the builder.
+        // Take the deferred actions before creating the builder. The loaded
+        // config is moved out too, so it can be lent to every `DeferredContext`
+        // (plugins load their typed `Config` from it in `configure`).
         let deferred_actions = std::mem::take(&mut shared.deferred_actions);
+        let deferred_config = shared.config.clone();
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
@@ -53,6 +56,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
                 async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
                 bean_context: &builder.bean_context,
+                config: deferred_config.as_ref(),
             };
             (action.action)(&mut ctx);
         }

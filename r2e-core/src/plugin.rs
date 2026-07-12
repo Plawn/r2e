@@ -452,23 +452,67 @@ pub trait PreStatePlugin: Send + 'static {
     /// ```
     type LateDeps: crate::type_list::PluginDeps;
 
+    /// The plugin's typed configuration section.
+    ///
+    /// Set to `()` (the common case) for a plugin that reads no typed config —
+    /// it can still reach for the stringly [`PluginInstallContext::config_get`]
+    /// escape hatch. For typed config, set this to any
+    /// `#[derive(ConfigProperties)]` struct and point [`CONFIG_PREFIX`](Self::CONFIG_PREFIX)
+    /// at its YAML section. The framework then loads and validates that section
+    /// after `build_state()` and hands it to [`configure`](Self::configure) — a
+    /// malformed value produces the same boot error a controller's
+    /// `#[config(section)]` mismatch does.
+    ///
+    /// On stable Rust associated types have no defaults, so every impl must
+    /// write it explicitly (`type Config = ();`).
+    type Config: crate::config::PluginConfig;
+
+    /// The YAML section prefix for [`Config`](Self::Config).
+    ///
+    /// `None` (the default) disables typed-config loading — use it with
+    /// `type Config = ();`. `Some("prometheus")` loads the `Config` from the
+    /// `prometheus.*` section. The section is treated as **optional**
+    /// (presence-based, like a controller's `Option<Section>`): if no config was
+    /// loaded, or no key lives under the prefix, [`configure`](Self::configure)
+    /// receives `None`. A present-but-invalid section is a boot error.
+    const CONFIG_PREFIX: Option<&'static str> = None;
+
     /// Install the plugin in the pre-state phase.
     ///
     /// `deps` contains the resolved dependency values declared by [`Deps`](Self::Deps).
     /// Return the value to be provided to the bean registry. Optionally
     /// register deferred actions via `ctx.add_deferred()`.
-    fn install(self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
+    ///
+    /// Takes `&mut self` (not `self`) so the plugin instance survives into the
+    /// post-state [`configure`](Self::configure) call, where the loaded config
+    /// is available to merge with programmatic builder settings. Move owned
+    /// fields out with [`std::mem::take`] / clone if `install` needs them, or
+    /// leave them for `configure` (which receives `self` by value).
+    fn install(&mut self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
 
     /// Configure the plugin in the **post-state** phase, after `build_state()`.
     ///
-    /// Called once with the plugin's [`Provided`](Self::Provided) beans (as a
-    /// borrowed copy) and its resolved [`LateDeps`](Self::LateDeps), plus a
-    /// [`DeferredContext`] for adding layers, serve/shutdown hooks, or plugin
-    /// data — exactly the same surface deferred actions get. Use this to wire
-    /// up anything that needs a factory-built or app-level bean.
+    /// Called once — consuming the plugin instance (`self`) so it can merge its
+    /// programmatic builder settings with file config — with the plugin's
+    /// [`Provided`](Self::Provided) beans (as a borrowed copy), its resolved
+    /// [`LateDeps`](Self::LateDeps), the loaded typed [`Config`](Self::Config)
+    /// (see below), and a [`DeferredContext`] for adding layers, serve/shutdown
+    /// hooks, or plugin data — exactly the same surface deferred actions get.
+    /// Use this to wire up anything that needs a factory-built or app-level bean.
     ///
-    /// The default is a no-op, so plugins with `type LateDeps = ()` and no
-    /// post-state work need not implement it.
+    /// The default is a no-op, so plugins with `type LateDeps = ()`,
+    /// `type Config = ()`, and no post-state work need not implement it.
+    ///
+    /// # `config`
+    ///
+    /// `config` is `Some(cfg)` only when [`CONFIG_PREFIX`](Self::CONFIG_PREFIX)
+    /// is `Some(prefix)`, config was loaded, and a key lives under that prefix;
+    /// otherwise it is `None` (see the presence rules on
+    /// [`CONFIG_PREFIX`](Self::CONFIG_PREFIX)). When the section is present but
+    /// malformed, the framework panics with a controller-grade validation error
+    /// **before** calling `configure`. Precedence for a config-consuming plugin
+    /// is: explicit builder setting (a field on `self`) > `config` (file) >
+    /// built-in default.
     ///
     /// # `provided` and pinned overrides
     ///
@@ -488,14 +532,17 @@ pub trait PreStatePlugin: Send + 'static {
     ///     type Provided = (ExporterHandle,);
     ///     type Deps = ();
     ///     type LateDeps = (MetricsRegistry,); // registered elsewhere via `.register()`
+    ///     type Config = ();
     ///
-    ///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    ///     fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
     ///         (ExporterHandle::new(),)
     ///     }
     ///
     ///     fn configure(
+    ///         self,
     ///         (handle,): &(ExporterHandle,),
     ///         (registry,): (MetricsRegistry,),
+    ///         _config: Option<()>,
     ///         ctx: &mut DeferredContext<'_>,
     ///     ) {
     ///         let handle = handle.clone();
@@ -505,10 +552,14 @@ pub trait PreStatePlugin: Send + 'static {
     /// ```
     #[allow(unused_variables)]
     fn configure(
+        self,
         provided: &Self::Provided,
         deps: Self::LateDeps,
+        config: Option<Self::Config>,
         ctx: &mut DeferredContext<'_>,
-    ) {
+    ) where
+        Self: Sized,
+    {
     }
 }
 
@@ -608,9 +659,14 @@ where
     {
         let deps = T::Deps::resolve(app.bean_registry());
         let name = plugin_action_name::<T>();
+        // Keep the plugin instance alive past `install` so `configure` can move
+        // it in by value (and merge its programmatic fields with file config).
+        let mut plugin = self;
         let (provided, deferred) = {
             let mut ctx = PluginInstallContext::new(app.r2e_config_ref());
-            let provided = PreStatePlugin::install(self, deps, &mut ctx);
+            // Fully qualify: `install`/`configure` exist on both this trait and
+            // `RawPreStatePlugin`, so `plugin.install(..)` would be ambiguous.
+            let provided = PreStatePlugin::install(&mut plugin, deps, &mut ctx);
             (provided, ctx.flush(name))
         };
         let mut builder = app;
@@ -622,15 +678,52 @@ where
         let provided_for_configure = provided.clone_all();
         provided.provide_all(builder.bean_registry_mut());
         // Schedule `configure` to run after `build_state()`, when the full bean
-        // graph is available to resolve `LateDeps` from. Runs as a deferred
-        // action (post-resolution). For `LateDeps = ()` with the default
-        // (no-op) `configure`, this is an inert closure.
+        // graph is available to resolve `LateDeps` from AND `R2eConfig` is
+        // guaranteed loaded (so typed `Config` is delivered here, not at
+        // install). Runs as a deferred action (post-resolution). For
+        // `LateDeps = ()`, `Config = ()`, and the default (no-op) `configure`,
+        // this is an inert closure.
         builder = builder.add_deferred(DeferredAction::new(name, move |dctx| {
             let late = <T::LateDeps as PluginDeps>::resolve_from_context(dctx.bean_context());
-            T::configure(&provided_for_configure, late, dctx);
+            let config = load_plugin_config::<T>(dctx.config(), name);
+            PreStatePlugin::configure(plugin, &provided_for_configure, late, config, dctx);
         }));
         builder.with_updated_types()
     }
+}
+
+/// Load and validate a plugin's typed [`Config`](PreStatePlugin::Config) section
+/// at `configure` time, when [`R2eConfig`](crate::config::R2eConfig) is
+/// guaranteed loaded.
+///
+/// The section is optional (presence-based, like a controller's
+/// `Option<Section>`): returns `None` when config loading is disabled
+/// (`CONFIG_PREFIX == None`), no config was loaded, or no key lives under the
+/// prefix. A present-but-invalid section panics with the same validation report
+/// a controller `#[config]` mismatch produces (`plugin` names the plugin in the
+/// message).
+fn load_plugin_config<T: PreStatePlugin>(
+    config: Option<&crate::config::R2eConfig>,
+    plugin: &str,
+) -> Option<T::Config> {
+    use crate::config::PluginConfig;
+
+    let prefix = T::CONFIG_PREFIX?;
+    let config = config?;
+    if !config.has_prefix(prefix) {
+        return None;
+    }
+    let errors = <T::Config as PluginConfig>::plugin_validate(config, prefix);
+    if !errors.is_empty() {
+        panic!(
+            "Invalid configuration for plugin `{plugin}` (section `{prefix}`):\n{}",
+            crate::config::ConfigValidationError { errors }
+        );
+    }
+    Some(
+        <T::Config as PluginConfig>::plugin_load(config, prefix)
+            .expect("plugin config section validated but failed to construct"),
+    )
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────
@@ -720,6 +813,13 @@ pub struct DeferredContext<'a> {
     /// `LateDeps` resolution.
     #[doc(hidden)]
     pub bean_context: &'a crate::beans::BeanContext,
+    /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any. Deferred
+    /// actions run inside `build_state()`, which always follows `load_config` /
+    /// `with_config`, so this backs a plugin's post-state typed-`Config` loading
+    /// (see [`configure`](crate::PreStatePlugin::configure)). `None` only when
+    /// neither `load_config` nor `with_config` was called.
+    #[doc(hidden)]
+    pub config: Option<&'a crate::config::R2eConfig>,
 }
 
 impl DeferredContext<'_> {
@@ -732,6 +832,15 @@ impl DeferredContext<'_> {
     /// hook resolves its `LateDeps`.
     pub fn bean_context(&self) -> &crate::beans::BeanContext {
         self.bean_context
+    }
+
+    /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any.
+    ///
+    /// `Some` whenever `load_config` / `with_config` was called (the reliable
+    /// point for config — it always precedes `build_state()`). This is the
+    /// low-level counterpart to a plugin's typed [`Config`](crate::PreStatePlugin::Config).
+    pub fn config(&self) -> Option<&crate::config::R2eConfig> {
+        self.config
     }
 
     /// Add a layer to the router.

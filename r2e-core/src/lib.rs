@@ -50,7 +50,8 @@ pub use builder::{
 };
 pub use config::{
     ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
-    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PropertyMeta,
+    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PluginConfig,
+    PropertyMeta,
     deserialize_value,
     R2eConfig, RegisteredSection, SecretResolver, register_section, registered_sections,
     validate_keys, validate_section,
