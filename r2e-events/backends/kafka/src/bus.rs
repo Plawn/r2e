@@ -373,8 +373,20 @@ impl EventBus for KafkaEventBus {
 
             inner.state.handlers.write().await.clear();
 
-            // Flush the producer
-            inner.producer.flush(timeout).map_err(map_kafka_error)?;
+            // Flush the producer. `flush` blocks the calling thread until the
+            // queue drains, so run it on the blocking pool rather than stalling
+            // the async runtime thread during shutdown. `FutureProducer` is an
+            // `Arc` handle and cheap to clone.
+            let producer = inner.producer.clone();
+            match r2e_core::rt::spawn_blocking(move || producer.flush(timeout)).await {
+                Ok(res) => res.map_err(map_kafka_error)?,
+                Err(join_err) => {
+                    // The blocking flush task panicked or was cancelled. On
+                    // shutdown we log and continue rather than propagating a
+                    // panic — the process is going away regardless.
+                    tracing::warn!(error = %join_err, "kafka producer flush task failed during shutdown");
+                }
+            }
 
             Ok(())
         }
