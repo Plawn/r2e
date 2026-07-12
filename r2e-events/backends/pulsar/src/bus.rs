@@ -8,13 +8,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use pulsar::consumer::Consumer;
+use pulsar::message::proto::MessageIdData;
 use pulsar::producer::Message as ProducerMessage;
 use pulsar::{TokioExecutor, Error as PulsarError};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler, HEADER_PARTITION_KEY};
+use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler, HEADER_PARTITION_KEY};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
@@ -428,24 +429,46 @@ async fn run_poller_inner(
 
     tracing::info!(topic = %full_topic, "poller started");
 
+    // Per-message ack decisions flow back on this bounded channel. The consumer
+    // is `!Sync` and its `ack`/`nack` take `&mut self`, so only the consume loop
+    // may touch it — completion tasks send the decision here and the loop applies
+    // it inline. The bound provides backpressure on ack throughput.
+    let (ack_tx, mut ack_rx) =
+        tokio::sync::mpsc::channel::<(String, MessageIdData, DispatchOutcome)>(ACK_CHANNEL_CAPACITY);
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %full_topic, "poller cancelled");
                 break;
             }
+            // Apply an ack/nack decision once its handlers have finished. Acks are
+            // per-message and order-independent in Pulsar, so no watermark tracking.
+            Some((msg_topic, msg_id, outcome)) = ack_rx.recv() => {
+                apply_ack(&mut consumer, full_topic, &msg_topic, msg_id, outcome).await;
+            }
             msg = futures_util::StreamExt::next(&mut consumer) => {
                 match msg {
                     Some(Ok(received)) => {
                         let metadata = extract_metadata_from_message(&received);
-                        let payload = &received.payload.data;
+                        let msg_topic = received.topic.clone();
+                        let msg_id = received.message_id.id.clone();
 
-                        inner.state.dispatch_from_poller(type_id, payload, metadata).await;
+                        // Stay pipelined: dispatch returns once handler tasks are
+                        // spawned (permit-bounded), so we keep pulling messages.
+                        let completion = inner
+                            .state
+                            .dispatch_from_poller_tracked(type_id, &received.payload.data, metadata)
+                            .await;
 
-                        // Acknowledge the message after dispatch
-                        if let Err(e) = consumer.ack(&received).await {
-                            tracing::warn!(topic = %full_topic, "failed to ack message: {e}");
-                        }
+                        // Ack the broker copy only AFTER local handlers complete
+                        // (at-least-once). A follow-up task awaits the outcome and
+                        // sends the decision back to the loop.
+                        let ack_tx = ack_tx.clone();
+                        r2e_core::rt::spawn(async move {
+                            let outcome = completion.outcome().await;
+                            let _ = ack_tx.send((msg_topic, msg_id, outcome)).await;
+                        });
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "consumer error: {e}");
@@ -456,6 +479,53 @@ async fn run_poller_inner(
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    // Drain pending ack decisions best-effort before dropping the consumer.
+    // Unacked messages are redelivered (the at-least-once guarantee), so a
+    // bounded drain suffices: dropping our own sender lets `recv` return `None`
+    // once every completion task has reported, and the timeout caps how long we
+    // wait on stragglers still running a handler.
+    drop(ack_tx);
+    let drain = async {
+        while let Some((msg_topic, msg_id, outcome)) = ack_rx.recv().await {
+            apply_ack(&mut consumer, full_topic, &msg_topic, msg_id, outcome).await;
+        }
+    };
+    let _ = r2e_core::rt::timeout(ACK_DRAIN_TIMEOUT, drain).await;
+}
+
+/// Capacity of the per-poller ack-decision channel. Bounds how many completed
+/// messages may await acking before completion tasks apply backpressure.
+const ACK_CHANNEL_CAPACITY: usize = 1024;
+
+/// Best-effort deadline for draining pending ack decisions on poller shutdown.
+const ACK_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Apply a single ack/nack decision to the consumer.
+///
+/// `msg_topic` is the message's origin topic (routes multi-topic consumers to
+/// the right internal consumer); `full_topic` is used only for logging.
+async fn apply_ack(
+    consumer: &mut Consumer<Vec<u8>, TokioExecutor>,
+    full_topic: &str,
+    msg_topic: &str,
+    msg_id: MessageIdData,
+    outcome: DispatchOutcome,
+) {
+    match outcome {
+        DispatchOutcome::Ack => {
+            if let Err(e) = consumer.ack_with_id(msg_topic, msg_id).await {
+                tracing::warn!(topic = %full_topic, "failed to ack message: {e}");
+            }
+        }
+        DispatchOutcome::Nack => {
+            // A handler failed without DLQ capture — negative-ack so Pulsar
+            // redelivers after negativeAckRedeliveryDelay (at-least-once).
+            if let Err(e) = consumer.nack_with_id(msg_topic, msg_id).await {
+                tracing::warn!(topic = %full_topic, "failed to nack message: {e}");
             }
         }
     }
