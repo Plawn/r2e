@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use r2e_core::builder::ServeContext;
 use r2e_core::plugin::{AsyncShutdownHook, DeferredAction, DeferredContext};
+use r2e_core::type_list::BeanAccess;
+use r2e_core::{AppBuilder, PluginInstallContext, PreStatePlugin};
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
@@ -114,6 +116,59 @@ fn deferred_context_on_serve() {
     );
     ctx.on_serve(|_serve_ctx| {});
     assert_eq!(serve_hooks.len(), 1);
+}
+
+// ── Tuple `Provided` (PreStatePlugin) ──────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
+struct Alpha(u32);
+
+#[derive(Clone, Debug, PartialEq)]
+struct Beta(String);
+
+/// Provides a single bean via the one-tuple `(T,)` form.
+struct SingleProvider;
+
+impl PreStatePlugin for SingleProvider {
+    type Provided = (Alpha,);
+    type Deps = ();
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+        (Alpha(7),)
+    }
+}
+
+/// Provides two beans in one plugin — the case that used to require
+/// `RawPreStatePlugin`.
+struct MultiProvider;
+
+impl PreStatePlugin for MultiProvider {
+    type Provided = (Alpha, Beta);
+    type Deps = ();
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
+        (Alpha(42), Beta("hello".into()))
+    }
+}
+
+#[r2e_core::test]
+async fn single_provision_plugin_resolves_from_state() {
+    let app = AppBuilder::new().plugin(SingleProvider).build_state().await;
+    let state = app.state();
+    assert_eq!(state.get::<Alpha>(), Alpha(7));
+    // Also resolvable through the retained bean context (the `#[inject]` path).
+    assert_eq!(app.bean_context().as_ref().get::<Alpha>(), Alpha(7));
+}
+
+#[r2e_core::test]
+async fn multi_provision_plugin_resolves_both_beans_from_state() {
+    let app = AppBuilder::new().plugin(MultiProvider).build_state().await;
+    let state = app.state();
+    assert_eq!(state.get::<Alpha>(), Alpha(42));
+    assert_eq!(state.get::<Beta>(), Beta("hello".into()));
+    // Both are injectable via the bean context, by type.
+    assert_eq!(app.bean_context().as_ref().get::<Alpha>(), Alpha(42));
+    assert_eq!(app.bean_context().as_ref().get::<Beta>(), Beta("hello".into()));
 }
 
 #[test]

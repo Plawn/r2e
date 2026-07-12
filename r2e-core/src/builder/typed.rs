@@ -506,7 +506,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     tracing::warn!(
                         controller = std::any::type_name::<C>(),
                         "Scheduled tasks found but no scheduler installed. \
-                         Add `.with_plugin(Scheduler)` before build_state()."
+                         Add `.plugin(Scheduler)` before build_state()."
                     );
                 }
             }

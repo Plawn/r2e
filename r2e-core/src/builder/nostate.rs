@@ -51,6 +51,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         &self.shared.bean_registry
     }
 
+    /// Mutable access to the bean registry (for internal use by the blanket
+    /// `PreStatePlugin` impl to deposit a plugin's provided beans).
+    pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
+        &mut self.shared.bean_registry
+    }
+
     /// Access the loaded config (for internal use by the blanket PreStatePlugin impl).
     ///
     /// Named differently from [`AppBuilder<T>::r2e_config()`] to avoid a method
@@ -468,10 +474,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///
     /// ```ignore
     /// impl PreStatePlugin for MyPlugin {
-    ///     type Provided = MyToken;
+    ///     type Provided = (MyToken,);
     ///     type Deps = ();
     ///
-    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
+    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
@@ -479,7 +485,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
     ///             dctx.on_shutdown(|| { /* cleanup */ });
     ///         }));
-    ///         token
+    ///         (token,)
     ///     }
     /// }
     /// ```

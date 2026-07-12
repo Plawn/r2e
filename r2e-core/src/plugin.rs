@@ -13,7 +13,7 @@
 //! Both traits use the same `.with(plugin)` method on `AppBuilder`.
 
 use crate::builder::{AppBuilder, NoState};
-use crate::type_list::{PluginDeps, TAppend, TCons};
+use crate::type_list::{PluginDeps, PluginProvisions, TAppend};
 use std::any::Any;
 
 // ── Post-state Plugin trait ────────────────────────────────────────────────
@@ -80,10 +80,10 @@ pub trait Plugin: Send + 'static {
 /// Plugins can read configuration values loaded by [`AppBuilder::load_config`]:
 ///
 /// ```ignore
-/// fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyConfig {
+/// fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
 ///     let name = ctx.config_get::<String>("my_plugin.name")
 ///         .unwrap_or_else(|| "default".into());
-///     MyConfig { name }
+///     (MyConfig { name },)
 /// }
 /// ```
 ///
@@ -95,11 +95,11 @@ pub trait Plugin: Send + 'static {
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = MyThing;
+///     type Provided = (MyThing,);
 ///     type Deps = (DbPool, CancellationToken);
 ///
-///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> MyThing {
-///         MyThing::new(pool, token)
+///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyThing,) {
+///         (MyThing::new(pool, token),)
 ///     }
 /// }
 /// ```
@@ -143,12 +143,17 @@ impl<'a> PluginInstallContext<'a> {
     }
 }
 
-/// A plugin that runs in the pre-state phase and provides a single bean.
+/// A plugin that runs in the pre-state phase and provides beans.
 ///
 /// This is the **simplified** plugin API — most plugins should implement this
 /// trait. The `install` method receives resolved dependencies as a typed tuple
 /// and a [`PluginInstallContext`] for registering deferred actions. No builder
 /// generics, no `with_updated_types()`.
+///
+/// [`Provided`](Self::Provided) is a **tuple** of beans: `(A,)` for a single
+/// bean, `(A, B)` for several, or `()` for none. This covers multi-bean plugins
+/// too — there is no longer any need to drop down to [`RawPreStatePlugin`] just
+/// to provide more than one bean.
 ///
 /// # Compile-Time Dependency Checking
 ///
@@ -167,8 +172,9 @@ impl<'a> PluginInstallContext<'a> {
 ///     .plugin(Scheduler)
 /// ```
 ///
-/// For plugins that need to provide **multiple** beans or need full builder
-/// access, implement [`RawPreStatePlugin`] instead.
+/// For plugins that need arbitrary builder access (calling `.register()`,
+/// `.provide()`, etc. by hand), implement [`RawPreStatePlugin`] instead — but
+/// that is rarely necessary.
 ///
 /// Every `PreStatePlugin` is automatically a [`RawPreStatePlugin`] via a blanket
 /// impl, so both work with `.plugin()`.
@@ -183,11 +189,11 @@ impl<'a> PluginInstallContext<'a> {
 /// pub struct MyPlugin { pub value: String }
 ///
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = String;
+///     type Provided = (String,);
 ///     type Deps = ();
 ///
-///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> String {
-///         self.value
+///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (String,) {
+///         (self.value,)
 ///     }
 /// }
 /// ```
@@ -196,17 +202,36 @@ impl<'a> PluginInstallContext<'a> {
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = MyService;
+///     type Provided = (MyService,);
 ///     type Deps = (DbPool, CancellationToken);
 ///
-///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> MyService {
-///         MyService::new(pool, token)
+///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+///         (MyService::new(pool, token),)
+///     }
+/// }
+/// ```
+///
+/// Multi-bean plugin:
+///
+/// ```ignore
+/// impl PreStatePlugin for Scheduler {
+///     type Provided = (CancellationToken, ScheduledJobRegistry);
+///     type Deps = ();
+///
+///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, ScheduledJobRegistry) {
+///         let token = CancellationToken::new();
+///         let registry = ScheduledJobRegistry::new();
+///         // ... ctx.add_deferred(...) for layers/hooks ...
+///         (token, registry)
 ///     }
 /// }
 /// ```
 pub trait PreStatePlugin: Send + 'static {
-    /// The bean type this plugin provides to the bean registry.
-    type Provided: Clone + Send + Sync + 'static;
+    /// The **tuple** of bean types this plugin provides to the bean registry.
+    ///
+    /// Use `(A,)` for a single bean, `(A, B)` for several, or `()` for none.
+    /// Each element must be `Clone + Send + Sync + 'static`.
+    type Provided: PluginProvisions;
 
     /// Bean dependencies this plugin requires, as a concrete tuple.
     ///
@@ -231,44 +256,21 @@ pub trait PreStatePlugin: Send + 'static {
     fn install(self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
 }
 
-/// A pre-state plugin with full builder access (advanced API).
+/// Internal machinery backing [`PreStatePlugin`] — **not** part of the public
+/// plugin-authoring surface.
 ///
-/// Implement this trait when your plugin needs to:
-/// - Provide **multiple** bean types (via `type Provisions = TCons<A, TCons<B, TNil>>`)
-/// - Call arbitrary builder methods (`.register()`, `.provide()`, etc.)
+/// This trait is the HList-based, full-builder-access form that `.plugin()`
+/// actually dispatches on. Every [`PreStatePlugin`] gets a `RawPreStatePlugin`
+/// impl for free via the blanket impl below, which is how multi-bean plugins,
+/// deferred actions, and compile-time dependency checking are wired into the
+/// builder's type-level provision/requirement lists.
 ///
-/// Most plugins should implement [`PreStatePlugin`] instead — it's simpler and
-/// automatically provides a `RawPreStatePlugin` impl via a blanket implementation.
-///
-/// # Example
-///
-/// ```ignore
-/// use r2e_core::{RawPreStatePlugin, AppBuilder, DeferredAction};
-/// use r2e_core::builder::NoState;
-/// use r2e_core::type_list::{TAppend, TCons, TNil};
-/// use tokio_util::sync::CancellationToken;
-///
-/// pub struct Scheduler;
-///
-/// impl RawPreStatePlugin for Scheduler {
-///     type Provisions = TCons<CancellationToken, TCons<JobRegistry, TNil>>;
-///     type Required = TNil;
-///
-///     fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
-///         -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-///     where
-///         P: TAppend<Self::Provisions>,
-///         R: TAppend<Self::Required>,
-///     {
-///         let token = CancellationToken::new();
-///         let registry = JobRegistry::new();
-///         app.provide(token)
-///             .provide(registry)
-///             .add_deferred(DeferredAction::new("Scheduler", |ctx| { /* ... */ }))
-///             .with_updated_types()
-///     }
-/// }
-/// ```
+/// **Almost no one should implement this directly.** The simplified
+/// [`PreStatePlugin`] now supports multiple provided beans (via a tuple
+/// [`Provided`](PreStatePlugin::Provided)), so the only remaining reason to
+/// hand-write a `RawPreStatePlugin` is to call arbitrary builder methods
+/// (`.register()`, `.provide()`, `.when()`, …) during install. It is kept as an
+/// escape hatch for that case.
 ///
 /// # `Required = TNil` and `with_updated_types()`
 ///
@@ -276,6 +278,7 @@ pub trait PreStatePlugin: Send + 'static {
 /// `<R as TAppend<TNil>>::Output == R`. Since `R` is a phantom type parameter,
 /// call [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
 /// `install()` to perform the zero-cost phantom type conversion.
+#[doc(hidden)]
 pub trait RawPreStatePlugin: Send + 'static {
     /// The type-level list of bean types this plugin provides.
     ///
@@ -300,9 +303,16 @@ pub trait RawPreStatePlugin: Send + 'static {
 }
 
 // Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
+//
+// The plugin's `Provided` tuple maps to the type-level provision list via
+// `PluginProvisions::AsList`, and its values are deposited into the bean
+// registry with a single `provide_all` (value-level insertion only). The
+// type-level list is then advanced in one phantom `with_updated_types()` cast —
+// this keeps override/pinning/ordering semantics identical to calling
+// `.provide()` per bean, which matters for `TestApp` bean overrides.
 impl<T: PreStatePlugin> RawPreStatePlugin for T {
-    type Provisions = TCons<T::Provided, crate::type_list::TNil>;
-    type Required = <T::Deps as crate::type_list::PluginDeps>::AsList;
+    type Provisions = <T::Provided as PluginProvisions>::AsList;
+    type Required = <T::Deps as PluginDeps>::AsList;
 
     fn install<P, R, Mods>(
         self,
@@ -322,7 +332,8 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
         for action in deferred {
             builder = builder.add_deferred(action);
         }
-        builder.provide(provided).with_updated_types()
+        provided.provide_all(builder.bean_registry_mut());
+        builder.with_updated_types()
     }
 }
 
@@ -338,10 +349,10 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = MyToken;
+///     type Provided = (MyToken,);
 ///     type Deps = ();
 ///
-///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
+///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
 ///         let token = MyToken::new();
 ///         let handle = MyHandle::new(token.clone());
 ///
@@ -349,7 +360,7 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 ///             dctx.add_layer(Box::new(move |router| router.layer(Extension(handle))));
 ///             dctx.on_shutdown(|| { /* cleanup */ });
 ///         }));
-///         token
+///         (token,)
 ///     }
 /// }
 /// ```
