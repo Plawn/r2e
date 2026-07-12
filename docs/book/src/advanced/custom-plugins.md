@@ -74,12 +74,17 @@ impl PreStatePlugin for MyPlugin {
     // `Provided` is a tuple of beans: `(A,)` for one, `(A, B)` for several, `()` for none.
     type Provided = (MyPluginConfig,);
     type Deps = ();
+    type LateDeps = ();      // no post-state dependencies (see "Consuming application beans")
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
         (self.config,)
     }
 }
 ```
+
+Every `PreStatePlugin` must declare `type LateDeps` — set it to `()` unless the
+plugin consumes an application bean after `build_state()` (see
+[Consuming application beans](#consuming-application-beans)).
 
 ### Compile-time dependency checking
 
@@ -94,6 +99,7 @@ pub struct MyPlugin;
 impl PreStatePlugin for MyPlugin {
     type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
+    type LateDeps = ();
 
     fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
         (MyService::new(pool, token),)
@@ -114,6 +120,77 @@ AppBuilder::new()
     .plugin(MyPlugin)           // error: DbPool not in provisions
     .plugin(Scheduler)
 ```
+
+> **`Deps` are `.provide()` values only.** Because `install` runs *before* the
+> bean graph is built, every type in `Deps` must be a `.provide(instance)`
+> value. A `.register::<T>()`-ed (factory-built) type in `Deps` passes the
+> call-site check but panics at runtime — the panic tells you to move it to
+> `LateDeps`. See the next section.
+
+## Consuming application beans
+
+`Deps` can only name beans that already exist when the plugin installs — i.e.
+things you handed to `.provide(instance)`. To consume a **factory-built** bean
+(`.register::<T>()`), or a bean another plugin provides, use the second stage of
+a plugin's lifecycle:
+
+```text
+  .plugin(Me)              build_state()             (serve)
+       │                        │                       │
+       ▼                        ▼                       ▼
+    install(Deps)  ─────►  [bean graph built]  ─►  configure(LateDeps)
+```
+
+Declare the beans you need after `build_state()` in `LateDeps`, and read them in
+`configure`. `LateDeps` is appended to the builder's requirement list and
+verified against the **final** provision list at `build_state()` — so the
+dependency may even be registered *after* your `.plugin()` call:
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+
+pub struct MetricsExporter;
+
+impl PreStatePlugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    type Deps = ();
+    // `MetricsRegistry` is a factory-built bean (`.register::<MetricsRegistry>()`),
+    // so it cannot be a `Deps` — it does not exist yet at install time.
+    type LateDeps = (MetricsRegistry,);
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+        (ExporterHandle::new(),)
+    }
+
+    // Runs after `build_state()`, with the whole bean graph materialized.
+    fn configure(
+        (handle,): &(ExporterHandle,),
+        (registry,): (MetricsRegistry,),
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        let handle = handle.clone();
+        ctx.on_serve(move |_sc| handle.bind(registry));
+    }
+}
+```
+
+```rust
+// `MetricsRegistry` is registered AFTER the plugin — still fine, because
+// `LateDeps` is checked at `build_state()`, not at the `.plugin()` call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::<MetricsRegistry>()
+    .build_state().await
+```
+
+`configure` receives a borrowed copy of the plugin's `Provided` beans, the
+resolved `LateDeps`, and a `DeferredContext` — the same post-state surface as
+deferred actions (`add_layer`, `store_data`, `on_serve`, `on_shutdown`, …). Its
+default is a no-op, so plugins with `type LateDeps = ()` never need to write it.
+
+**Decision rule:** `Deps` = pre-built infrastructure you hand to `.provide()`;
+`LateDeps` = anything else, including factory-built beans and beans other
+plugins provide.
 
 Usage:
 
@@ -141,6 +218,7 @@ pub struct MyPlugin;
 impl PreStatePlugin for MyPlugin {
     type Provided = (CancellationToken,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
@@ -198,6 +276,7 @@ impl PreStatePlugin for MyMultiPlugin {
     // Provides two beans: CancellationToken and MyRegistry
     type Provided = (CancellationToken, MyRegistry);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
         let token = CancellationToken::new();
@@ -288,6 +367,7 @@ pub struct HealthChecker {
 impl PreStatePlugin for HealthChecker {
     type Provided = (CancellationToken,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();

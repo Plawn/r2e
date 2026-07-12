@@ -115,6 +115,7 @@ pub struct MyPreStatePlugin;
 impl PreStatePlugin for MyPreStatePlugin {
     type Provided = (MyConfig,);
     type Deps = ();
+    type LateDeps = ();      // no post-state dependencies
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
         (MyConfig::default(),)
@@ -122,18 +123,72 @@ impl PreStatePlugin for MyPreStatePlugin {
 }
 ```
 
+Every impl declares `type LateDeps` — set it to `()` unless the plugin consumes
+an application bean after `build_state()` (see
+[Consuming application beans](#consuming-application-beans)).
+
 Plugins can declare typed dependencies via `Deps`. The compiler verifies at each `.plugin()` call that all deps have already been provided:
 
 ```rust
 impl PreStatePlugin for MyPlugin {
     type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
+    type LateDeps = ();
 
     fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
         (MyService::new(pool, token),)
     }
 }
 ```
+
+`Deps` must be `.provide(instance)` values — `install` runs before the bean
+graph exists. To consume a factory-built bean (`.register::<T>()`) or a bean
+another plugin provides, use `LateDeps` + `configure` (next-but-one section).
+
+### Consuming application beans
+
+A pre-state plugin has a **two-stage lifecycle**: `install` (before
+`build_state()`) and `configure` (after it). `Deps` resolve at install time and
+can only name `.provide()`-d beans; `LateDeps` resolve in `configure` from the
+fully materialized bean graph, so they can name **any** bean — factory-built
+(`.register::<T>()`) or provided by another plugin.
+
+```rust
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+
+pub struct MetricsExporter;
+
+impl PreStatePlugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    type Deps = ();
+    type LateDeps = (MetricsRegistry,);   // factory-built; not available at install
+
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+        (ExporterHandle::new(),)
+    }
+
+    fn configure(
+        (handle,): &(ExporterHandle,),
+        (registry,): (MetricsRegistry,),
+        ctx: &mut DeferredContext<'_>,
+    ) {
+        let handle = handle.clone();
+        ctx.on_serve(move |_sc| handle.bind(registry));
+    }
+}
+
+// `MetricsRegistry` may be registered AFTER the plugin — `LateDeps` is checked
+// against the final provision list at `build_state()`, not at the call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::<MetricsRegistry>()
+    .build_state().await
+```
+
+`configure` gets a borrowed copy of the plugin's `Provided`, the resolved
+`LateDeps`, and a `DeferredContext` (same surface as deferred actions). Its
+default is a no-op. **Rule:** `Deps` = pre-built infrastructure you `.provide()`;
+`LateDeps` = anything else, including factory-built beans.
 
 ### Deferred actions
 
@@ -147,6 +202,7 @@ use r2e::{PreStatePlugin, PluginInstallContext};
 impl PreStatePlugin for MyPlugin {
     type Provided = (MyToken,);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
@@ -183,6 +239,7 @@ pub struct MultiProvider;
 impl PreStatePlugin for MultiProvider {
     type Provided = (TokenA, TokenB);
     type Deps = ();
+    type LateDeps = ();
 
     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
         (TokenA::new(), TokenB::new())
