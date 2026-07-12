@@ -12,12 +12,13 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, Handler, HEADER_TIMESTAMP};
+use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler, HEADER_TIMESTAMP};
 use r2e_events::{
     EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
 };
 
 use crate::builder::IggyEventBusBuilder;
+use crate::commit::compute_commit_offsets;
 use crate::config::IggyConfig;
 use crate::error::map_iggy_error;
 use crate::inner::IggyInner;
@@ -429,7 +430,9 @@ async fn run_poller_inner(
 
     let mut consumer = match consumer_result {
         Ok(builder) => builder
-            .auto_commit(AutoCommit::When(AutoCommitWhen::PollingMessages))
+            // At-least-once delivery: disable broker-side auto-commit and store
+            // offsets manually only after local handlers complete (see below).
+            .auto_commit(AutoCommit::Disabled)
             .create_consumer_group_if_not_exists()
             .auto_join_consumer_group()
             .polling_strategy(PollingStrategy::next())
@@ -449,26 +452,88 @@ async fn run_poller_inner(
 
     tracing::info!(topic = %topic_name, "poller started");
 
+    // At-least-once: process one polled batch at a time. All handlers in a
+    // batch run concurrently (permit-bounded inside `dispatch_from_poller_tracked`);
+    // offsets are stored only for the contiguous acked prefix of each partition
+    // once every handler in the batch has finished. On restart the uncommitted
+    // tail is redelivered by the broker.
+    //
+    // `ready_chunks` groups the messages the consumer has buffered from a server
+    // poll into one batch, closing the batch when the underlying stream goes
+    // pending (i.e. the next server poll is in flight).
+    let batch_capacity = (inner.config.poll_batch_size.max(1)) as usize;
+    let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "poller cancelled");
                 break;
             }
-            msg = futures_util::StreamExt::next(&mut consumer) => {
-                match msg {
-                    Some(Ok(received)) => {
-                        let metadata = extract_metadata_from_message(&received.message);
-                        inner.state.dispatch_from_poller(type_id, &received.message.payload, metadata).await;
-                    }
-                    Some(Err(e)) => {
-                        tracing::warn!(topic = %topic_name, "poll error: {e}");
-                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
-                    }
+            batch = futures_util::StreamExt::next(&mut batches) => {
+                let batch = match batch {
+                    Some(batch) => batch,
                     None => {
                         tracing::info!(topic = %topic_name, "consumer stream ended");
                         break;
                     }
+                };
+
+                // Spawn handlers for every message in the batch; keep each
+                // message's partition and offset alongside its completion.
+                let mut pending = Vec::with_capacity(batch.len());
+                for item in &batch {
+                    match item {
+                        Ok(received) => {
+                            let partition_id = received.partition_id;
+                            let offset = received.message.header.offset;
+                            let metadata = extract_metadata_from_message(&received.message);
+                            let completion = inner.state
+                                .dispatch_from_poller_tracked(
+                                    type_id,
+                                    &received.message.payload,
+                                    metadata,
+                                )
+                                .await;
+                            pending.push((partition_id, offset, completion));
+                        }
+                        Err(e) => {
+                            tracing::warn!(topic = %topic_name, "poll error: {e}");
+                        }
+                    }
+                }
+
+                // Await every handler outcome before committing anything.
+                let mut outcomes = Vec::with_capacity(pending.len());
+                let mut had_nack = false;
+                for (partition_id, offset, completion) in pending {
+                    let outcome = completion.outcome().await;
+                    if outcome == DispatchOutcome::Nack {
+                        had_nack = true;
+                    }
+                    outcomes.push((partition_id, offset, outcome));
+                }
+
+                // Store the highest safe offset per partition (acked prefix only).
+                for (partition_id, offset) in compute_commit_offsets(outcomes) {
+                    if let Err(e) =
+                        batches.get_ref().store_offset(offset, Some(partition_id)).await
+                    {
+                        tracing::warn!(
+                            topic = %topic_name,
+                            partition_id,
+                            offset,
+                            "failed to store Iggy consumer offset: {e}"
+                        );
+                    }
+                }
+
+                if had_nack {
+                    tracing::warn!(
+                        topic = %topic_name,
+                        "one or more handlers nacked without DLQ capture; \
+                         uncommitted messages will be redelivered on restart"
+                    );
                 }
             }
         }
