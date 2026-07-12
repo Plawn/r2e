@@ -1,8 +1,8 @@
 # EventBus Performance & Reliability Roadmap
 
-Status: **PROPOSED — awaiting validation** (audit 2026-07-12). Once validated,
-this is the working plan; check items off as they land. Hub referenced from
-`roadmap.md` (W8).
+Status: **IN PROGRESS** (validated 2026-07-12; P1 landed on branch
+`events/p1-ack-after-handler`). Check items off as they land. Hub referenced
+from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
 distributed backends (`backends/iggy`, `backends/kafka`, `backends/pulsar`,
@@ -44,31 +44,31 @@ after crash is expected; per-message handler outcome must flow back to the
 poller (dispatch can no longer be pure fire-and-forget on the consume path —
 see P4 for keeping this pipelined rather than serial).
 
-- [ ] **P1.1 Shared dispatch: outcome-aware variant.** Add a
+- [x] **P1.1 Shared dispatch: outcome-aware variant.** Add a
       `dispatch_from_poller`-style path in `backend/state.rs` that returns a
       per-message completion (all-Ack / any-Nack) without serializing the
       poll loop: spawn handler tasks as today, but hand the poller a future
       (or channel) resolving when all handlers for that message finish. The
       poller acks/commits from that signal — pipelined, permit-bounded.
-- [ ] **P1.2 Kafka: manual offset store.** `enable.auto.commit=false` +
+- [x] **P1.2 Kafka: manual offset store.** `enable.auto.commit=false` +
       `store_offset` after successful dispatch, periodic commit (or
       auto-commit with manual store). Today: librdkafka auto-commit commits
       at `recv()` time regardless of handler outcome
       (`backends/kafka/src/config.rs:126`, consume loop
       `backends/kafka/src/bus.rs:407-409`).
-- [ ] **P1.3 Iggy: commit after consume.** Replace
+- [x] **P1.3 Iggy: commit after consume.** Replace
       `AutoCommit::When(PollingMessages)` (`backends/iggy/src/bus.rs:432`)
       with `ConsumingAllMessages` or manual commit after dispatch completes.
-- [ ] **P1.4 Pulsar: ack after handler.** Move `consumer.ack(&received)`
+- [x] **P1.4 Pulsar: ack after handler.** Move `consumer.ack(&received)`
       (`backends/pulsar/src/bus.rs:443-446`) behind the P1.1 completion
       signal; negative-ack on failure for redelivery.
-- [ ] **P1.5 RabbitMQ: keep ack-after-handler, drop the serial loop.**
+- [x] **P1.5 RabbitMQ: keep ack-after-handler, drop the serial loop.**
       RabbitMQ is the only backend that already acks on handler outcome —
       but at the cost of a strictly serial consume loop
       (`backends/rabbitmq/src/bus.rs:549-561`). Port it onto P1.1 so it
       pipelines (tracked as P4.1; P1.5 is just "don't regress semantics
       while fixing P4.1").
-- [ ] **P1.6 Docs.** State the delivery guarantee (at-least-once, idempotent
+- [x] **P1.6 Docs.** State the delivery guarantee (at-least-once, idempotent
       handlers) in crate docs + `docs/claude/subsystems.md` EventBus section.
 
 ## P2 — Reliability bugs (fix regardless of P1 timing)
