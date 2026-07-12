@@ -129,9 +129,11 @@ AppBuilder::new()
 
 For plugins that need to set up infrastructure after state is built but during serve:
 
+Call the sugar methods on `PluginInstallContext` directly — plain closures, no
+`Box`, no `DeferredAction`:
+
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
@@ -142,40 +144,44 @@ impl PreStatePlugin for MyPlugin {
 
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
-
         let t = token.clone();
-        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
-            // Add a Tower layer
-            dctx.add_layer(Box::new(|router| router.layer(r2e::http::Extension("my-plugin-data"))));
 
-            // Store data for later access
-            dctx.store_data(MyPluginHandle::new());
+        // Add a Tower layer
+        ctx.add_layer(|router| router.layer(r2e::http::Extension("my-plugin-data")));
 
-            // Hook into server lifecycle
-            let t2 = t.clone();
-            dctx.on_serve(move |_tasks, _cancel_token| {
-                tracing::info!("Plugin started");
-            });
+        // Store data for later access
+        ctx.store_data(MyPluginHandle::new());
 
-            dctx.on_shutdown(move || {
-                t2.cancel();
-                tracing::info!("Plugin shutting down");
-            });
-        }));
+        // Hook into server lifecycle
+        ctx.on_serve(move |_serve_ctx| {
+            tracing::info!("Plugin started");
+        });
+
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Plugin shutting down");
+        });
 
         (token,)
     }
 }
 ```
 
-### DeferredContext methods
+### `PluginInstallContext` post-state methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_layer` | `(&mut self, Box<dyn FnOnce(Router) -> Router + Send>)` | Add a Tower layer to the router |
+| `add_layer` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add a Tower layer to the router |
+| `wrap_router` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add an outermost transport-level router transform |
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | Store a value keyed by type for later retrieval |
-| `on_serve` | `(&mut self, FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken))` | Run when the server starts listening |
-| `on_shutdown` | `(&mut self, FnOnce())` | Run during graceful shutdown |
+| `on_serve` | `<F: FnOnce(ServeContext) + Send + 'static>(&mut self, F)` | Run when the server starts listening |
+| `on_shutdown` | `<F: FnOnce() + Send + 'static>(&mut self, F)` | Run during graceful shutdown |
+| `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | Run (and await) during graceful shutdown |
+
+These calls are buffered and flushed as a single deferred action after
+`build_state()`, named after the plugin type. For advanced control,
+`ctx.add_deferred(DeferredAction::new(name, |dctx| { .. }))` is the low-level
+escape hatch — its actions run before the buffered sugar action.
 
 ## Multiple provided beans
 
@@ -183,7 +189,7 @@ A `PreStatePlugin` can provide **several** beans — just make `Provided` a long
 tuple and return all of them. No builder generics, no `with_updated_types()`:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyMultiPlugin;
@@ -198,12 +204,10 @@ impl PreStatePlugin for MyMultiPlugin {
         let registry = MyRegistry::new();
 
         let t = token.clone();
-        ctx.add_deferred(DeferredAction::new("my-multi-plugin", move |dctx| {
-            dctx.on_shutdown(move || {
-                t.cancel();
-                tracing::info!("Shutting down");
-            });
-        }));
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Shutting down");
+        });
 
         (token, registry)
     }
@@ -272,8 +276,7 @@ AppBuilder::new()
 A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -291,35 +294,32 @@ impl PreStatePlugin for HealthChecker {
         let interval = self.interval;
         let url = self.url;
         let t = token.clone();
+        let t2 = token.clone();
 
-        ctx.add_deferred(DeferredAction::new("health-checker", move |dctx: &mut DeferredContext| {
-            let t2 = t.clone();
-
-            // Start the checker when the server begins serving
-            dctx.on_serve(move |_tasks, _cancel_token| {
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = tokio::time::sleep(interval) => {
-                                match reqwest::get(&url).await {
-                                    Ok(resp) => tracing::info!("Health check: {}", resp.status()),
-                                    Err(e) => tracing::warn!("Health check failed: {}", e),
-                                }
-                            }
-                            _ = t2.cancelled() => {
-                                tracing::info!("Health checker stopped");
-                                break;
+        // Start the checker when the server begins serving
+        ctx.on_serve(move |_serve_ctx| {
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(interval) => {
+                            match reqwest::get(&url).await {
+                                Ok(resp) => tracing::info!("Health check: {}", resp.status()),
+                                Err(e) => tracing::warn!("Health check failed: {}", e),
                             }
                         }
+                        _ = t2.cancelled() => {
+                            tracing::info!("Health checker stopped");
+                            break;
+                        }
                     }
-                });
+                }
             });
+        });
 
-            // Cancel the checker on shutdown
-            dctx.on_shutdown(move || {
-                t.cancel();
-            });
-        }));
+        // Cancel the checker on shutdown
+        ctx.on_shutdown(move || {
+            t.cancel();
+        });
 
         (token,)
     }

@@ -137,11 +137,12 @@ impl PreStatePlugin for MyPlugin {
 
 ### Deferred actions
 
-For plugins that need to perform setup after state construction, use `DeferredAction` via the context:
+For plugins that need to perform setup after state construction, call the
+context's sugar methods directly — pass plain closures, no `Box`, no
+`DeferredAction`:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
-use r2e::plugin::DeferredContext;
+use r2e::{PreStatePlugin, PluginInstallContext};
 
 impl PreStatePlugin for MyPlugin {
     type Provided = (MyToken,);
@@ -150,21 +151,24 @@ impl PreStatePlugin for MyPlugin {
     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
         let t = token.clone();
-        ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
-            dctx.add_layer(Box::new(|router| router));
-            dctx.on_serve(|_serve_ctx| { /* run when server starts */ });
-            dctx.on_shutdown(move || { t.cancel(); });
-        }));
+        ctx.add_layer(|router| router);
+        ctx.on_serve(|_serve_ctx| { /* run when server starts */ });
+        ctx.on_shutdown(move || { t.cancel(); });
         (token,)
     }
 }
 ```
 
-`DeferredContext` provides:
+`PluginInstallContext` provides:
 - `add_layer()` — add a Tower layer
+- `wrap_router()` — add an outermost transport-level router transform
 - `store_data()` — store data in the builder
 - `on_serve()` — register a serve hook
-- `on_shutdown()` — register a shutdown hook
+- `on_shutdown()` / `on_shutdown_async()` — register a shutdown hook
+
+These calls are buffered and flushed as a single deferred action after
+`build_state()`. For advanced control, `ctx.add_deferred(DeferredAction::new(..))`
+is the low-level escape hatch (it runs before the buffered sugar action).
 
 ### Multiple provided beans
 
