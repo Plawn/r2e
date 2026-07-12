@@ -1,6 +1,6 @@
 # Custom Plugins
 
-Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin` / `RawPreStatePlugin`).
+Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin`, which provides beans before `build_state()`).
 
 ## Post-state plugins
 
@@ -71,11 +71,12 @@ pub struct MyPlugin {
 }
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyPluginConfig;
+    // `Provided` is a tuple of beans: `(A,)` for one, `(A, B)` for several, `()` for none.
+    type Provided = (MyPluginConfig,);
     type Deps = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyPluginConfig {
-        self.config
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
+        (self.config,)
     }
 }
 ```
@@ -91,11 +92,11 @@ use tokio_util::sync::CancellationToken;
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyService;
+    type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
-        MyService::new(pool, token)
+    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+        (MyService::new(pool, token),)
     }
 }
 ```
@@ -136,10 +137,10 @@ use tokio_util::sync::CancellationToken;
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = CancellationToken;
+    type Provided = (CancellationToken,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
 
         let t = token.clone();
@@ -162,7 +163,7 @@ impl PreStatePlugin for MyPlugin {
             });
         }));
 
-        token
+        (token,)
     }
 }
 ```
@@ -176,62 +177,51 @@ impl PreStatePlugin for MyPlugin {
 | `on_serve` | `(&mut self, FnOnce(Vec<Box<dyn Any + Send>>, CancellationToken))` | Run when the server starts listening |
 | `on_shutdown` | `(&mut self, FnOnce())` | Run during graceful shutdown |
 
-## Pre-state plugins (advanced path)
+## Multiple provided beans
 
-For plugins that need to provide **multiple** beans or need full builder access,
-implement `RawPreStatePlugin` instead of `PreStatePlugin`:
+A `PreStatePlugin` can provide **several** beans — just make `Provided` a longer
+tuple and return all of them. No builder generics, no `with_updated_types()`:
 
 ```rust
-use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
 use tokio_util::sync::CancellationToken;
 
-pub struct MyAdvancedPlugin;
+pub struct MyMultiPlugin;
 
-impl RawPreStatePlugin for MyAdvancedPlugin {
+impl PreStatePlugin for MyMultiPlugin {
     // Provides two beans: CancellationToken and MyRegistry
-    type Provisions = TCons<CancellationToken, TCons<MyRegistry, TNil>>;
-    type Required = TNil;
+    type Provided = (CancellationToken, MyRegistry);
+    type Deps = ();
 
-    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-    where
-        P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
-    {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
         let token = CancellationToken::new();
         let registry = MyRegistry::new();
 
-        app.provide(token)
-           .provide(registry)
-           .add_deferred(DeferredAction::new("my-advanced-plugin", |ctx| {
-               ctx.on_shutdown(|| { tracing::info!("Shutting down"); });
-           }))
-           .with_updated_types()
+        let t = token.clone();
+        ctx.add_deferred(DeferredAction::new("my-multi-plugin", move |dctx| {
+            dctx.on_shutdown(move || {
+                t.cancel();
+                tracing::info!("Shutting down");
+            });
+        }));
+
+        (token, registry)
     }
 }
 ```
 
-Usage is the same — `.plugin()` accepts both `PreStatePlugin` and `RawPreStatePlugin`:
+Both beans are then injectable by type (`#[inject] token: CancellationToken`,
+`#[inject] registry: MyRegistry`).
 
-```rust
-AppBuilder::new()
-    .plugin(MyAdvancedPlugin)
-    .build_state()
-    .await
-    // ...
-```
+### Escape hatch: `RawPreStatePlugin`
 
-**When to use which:**
-
-| | `PreStatePlugin` | `RawPreStatePlugin` |
-|---|---|---|
-| Provides | Single bean | Multiple beans |
-| Generics | None | `<P, R>` on `install()` |
-| Dependencies | `type Deps = (A, B)` (compile-time checked) | Manual via builder |
-| Config access | Via `PluginInstallContext` | Via `app.r2e_config()` |
-| `with_updated_types()` | Not needed (handled automatically) | Required |
+`RawPreStatePlugin` is the internal, HList-based trait that `.plugin()` actually
+dispatches on; every `PreStatePlugin` gets one for free via a blanket impl.
+Because `PreStatePlugin` now covers multiple provided beans, the **only** reason
+to hand-write a `RawPreStatePlugin` is to call arbitrary builder methods
+(`.register()`, `.provide()`, `.when()`, …) during install. It is `#[doc(hidden)]`
+and almost never needed — reach for it only when a plugin genuinely has to drive
+the builder itself.
 
 ## Step-by-step: Request ID plugin
 
@@ -293,10 +283,10 @@ pub struct HealthChecker {
 }
 
 impl PreStatePlugin for HealthChecker {
-    type Provided = CancellationToken;
+    type Provided = (CancellationToken,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> CancellationToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
         let token = CancellationToken::new();
         let interval = self.interval;
         let url = self.url;
@@ -331,7 +321,7 @@ impl PreStatePlugin for HealthChecker {
             });
         }));
 
-        token
+        (token,)
     }
 }
 ```

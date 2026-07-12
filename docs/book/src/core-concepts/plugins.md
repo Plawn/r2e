@@ -103,7 +103,9 @@ impl<S: Clone + Send + Sync + 'static> Plugin<S> for MyPlugin {
 
 ### Pre-state plugins (simple path)
 
-Implement `PreStatePlugin` for plugins that provide a single bean. No builder generics needed:
+Implement `PreStatePlugin` for plugins that provide beans. `Provided` is a
+**tuple** of beans — `(A,)` for one, `(A, B)` for several, `()` for none — and
+`install` returns that tuple. No builder generics needed:
 
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext};
@@ -111,11 +113,11 @@ use r2e::{PreStatePlugin, PluginInstallContext};
 pub struct MyPreStatePlugin;
 
 impl PreStatePlugin for MyPreStatePlugin {
-    type Provided = MyConfig;
+    type Provided = (MyConfig,);
     type Deps = ();
 
-    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> MyConfig {
-        MyConfig::default()
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
+        (MyConfig::default(),)
     }
 }
 ```
@@ -124,11 +126,11 @@ Plugins can declare typed dependencies via `Deps`. The compiler verifies at each
 
 ```rust
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyService;
+    type Provided = (MyService,);
     type Deps = (DbPool, CancellationToken);
 
-    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> MyService {
-        MyService::new(pool, token)
+    fn install(self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
+        (MyService::new(pool, token),)
     }
 }
 ```
@@ -142,18 +144,18 @@ use r2e::{PreStatePlugin, PluginInstallContext, DeferredAction};
 use r2e::plugin::DeferredContext;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = MyToken;
+    type Provided = (MyToken,);
     type Deps = ();
 
-    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> MyToken {
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
         let t = token.clone();
         ctx.add_deferred(DeferredAction::new("my-plugin", move |dctx: &mut DeferredContext| {
             dctx.add_layer(Box::new(|router| router));
-            dctx.on_serve(|_tasks, _token| { /* run when server starts */ });
+            dctx.on_serve(|_serve_ctx| { /* run when server starts */ });
             dctx.on_shutdown(move || { t.cancel(); });
         }));
-        token
+        (token,)
     }
 }
 ```
@@ -164,31 +166,27 @@ impl PreStatePlugin for MyPlugin {
 - `on_serve()` — register a serve hook
 - `on_shutdown()` — register a shutdown hook
 
-### Pre-state plugins (advanced path)
+### Multiple provided beans
 
-For plugins that need to provide **multiple** beans or need full builder access,
-implement `RawPreStatePlugin`:
+To provide **multiple** beans, widen the `Provided` tuple and return all of
+them — still on the simple `PreStatePlugin` path, no builder generics:
 
 ```rust
-use r2e::{RawPreStatePlugin, AppBuilder, DeferredAction};
-use r2e::builder::NoState;
-use r2e::type_list::{TAppend, TCons, TNil};
+use r2e::{PreStatePlugin, PluginInstallContext};
 
 pub struct MultiProvider;
 
-impl RawPreStatePlugin for MultiProvider {
-    type Provisions = TCons<TokenA, TCons<TokenB, TNil>>;
-    type Required = TNil;
+impl PreStatePlugin for MultiProvider {
+    type Provided = (TokenA, TokenB);
+    type Deps = ();
 
-    fn install<P, R, Mods>(self, app: AppBuilder<NoState, P, R, Mods>)
-        -> AppBuilder<NoState, <P as TAppend<Self::Provisions>>::Output, <R as TAppend<Self::Required>>::Output, Mods>
-    where
-        P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
-    {
-        app.provide(TokenA::new())
-           .provide(TokenB::new())
-           .with_updated_types()
+    fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
+        (TokenA::new(), TokenB::new())
     }
 }
 ```
+
+The lower-level `RawPreStatePlugin` trait (`#[doc(hidden)]`, HList-based) still
+backs `.plugin()` via a blanket impl, but you only need to implement it directly
+when a plugin must call arbitrary builder methods (`.register()`, `.provide()`,
+…) itself — a rare escape hatch.
