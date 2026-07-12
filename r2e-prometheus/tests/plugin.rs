@@ -195,3 +195,42 @@ async fn malformed_config_section_panics_at_boot() {
         .build_state()
         .await;
 }
+
+#[r2e_core::test]
+async fn disabled_via_config_skips_route_and_layer_but_keeps_registry() {
+    // `prometheus.enabled: false` gates the plugin's post-state effects: the
+    // `configure` step (which mounts the /metrics route and the tracking layer)
+    // is skipped. The `PrometheusRegistry` bean is still provided, because the
+    // type-level provision list is fixed at compile time.
+    let config = R2eConfig::from_yaml_str("prometheus:\n  enabled: false\n").unwrap();
+    let app = AppBuilder::new()
+        .with_config(config)
+        .plugin(Prometheus::new("/metrics"))
+        .build_state()
+        .await;
+
+    // Registry bean survives the disable.
+    let _registry: PrometheusRegistry = app.state().get::<PrometheusRegistry>();
+
+    // But the /metrics route was never mounted.
+    let router = app.build();
+    assert_eq!(
+        status_of(router, "/metrics").await,
+        StatusCode::NOT_FOUND,
+        "disabled plugin mounts no /metrics route"
+    );
+}
+
+#[r2e_core::test]
+async fn enabled_true_via_config_mounts_route() {
+    // Explicit `enabled: true` behaves like the default: the /metrics route is
+    // mounted.
+    let config = R2eConfig::from_yaml_str("prometheus:\n  enabled: true\n").unwrap();
+    let app = AppBuilder::new()
+        .with_config(config)
+        .plugin(Prometheus::new("/metrics"))
+        .build_state()
+        .await;
+
+    assert_eq!(status_of(app.build(), "/metrics").await, StatusCode::OK);
+}
