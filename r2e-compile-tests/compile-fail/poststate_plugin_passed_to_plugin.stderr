@@ -1,0 +1,20 @@
+error[E0277]: `MyPostStatePlugin` does not implement a pre-state plugin trait (`PreStatePlugin`/`RawPreStatePlugin`), the API used by `.plugin()`
+  --> compile-fail/poststate_plugin_passed_to_plugin.rs:21:14
+   |
+21 |             .plugin(MyPostStatePlugin)
+   |              ^^^^^^ `.plugin()` needs a pre-state plugin
+   |
+help: the trait `PreStatePlugin` is not implemented for `MyPostStatePlugin`
+  --> compile-fail/poststate_plugin_passed_to_plugin.rs:9:1
+   |
+ 9 | pub struct MyPostStatePlugin;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: if `MyPostStatePlugin` is a post-state plugin, install it with `.with(MyPostStatePlugin)` AFTER `build_state()` instead of `.plugin(MyPostStatePlugin)`
+   = help: the following other types implement trait `PreStatePlugin`:
+             Executor
+             GrpcServer
+             OidcRuntime
+             OidcServer
+             Prometheus
+             Scheduler
+   = note: required for `MyPostStatePlugin` to implement `r2e::RawPreStatePlugin`
