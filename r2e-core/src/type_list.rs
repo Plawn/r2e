@@ -420,11 +420,31 @@ pub trait PluginDeps: Send {
 
     /// Resolve all dependency values from the bean registry.
     ///
+    /// This is the **pre-state** resolution path used for
+    /// [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): it runs during
+    /// plugin install, before the bean graph is built, so it can only see
+    /// beans supplied via `.provide(instance)`.
+    ///
     /// # Panics
     ///
     /// Panics if a required bean is not present. This should never happen when
     /// the compile-time `AllSatisfied` bound on `.plugin()` is satisfied.
     fn resolve(registry: &crate::beans::BeanRegistry) -> Self;
+
+    /// Resolve all dependency values from the fully materialized
+    /// [`BeanContext`](crate::beans::BeanContext).
+    ///
+    /// This is the **post-state** resolution path used for
+    /// [`PreStatePlugin::LateDeps`](crate::PreStatePlugin::LateDeps): it runs
+    /// after `build_state()`, so every bean — `.provide()`-d, `.register()`-ed
+    /// (factory-built), or produced by another plugin — is available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a required bean is absent from the context. This should never
+    /// happen: `LateDeps` is appended to the builder's requirement list and
+    /// verified against the final provision list at `build_state()`.
+    fn resolve_from_context(ctx: &crate::beans::BeanContext) -> Self;
 }
 
 // Arity 0
@@ -432,6 +452,8 @@ impl PluginDeps for () {
     type AsList = TNil;
 
     fn resolve(_registry: &crate::beans::BeanRegistry) -> Self {}
+
+    fn resolve_from_context(_ctx: &crate::beans::BeanContext) -> Self {}
 }
 
 macro_rules! impl_plugin_deps {
@@ -451,8 +473,11 @@ macro_rules! impl_plugin_deps {
                                     "PluginDeps: bean `{name}` is registered via `.register::<{name}>()` but not \
                                      yet materialized — plugin `Deps` can only reference types supplied via \
                                      `.provide(instance)` at plugin-install time (beans are built later, after all \
-                                     plugins install). Change the provider to `.provide(...)` or move the plugin \
-                                     install call after the relevant bean has been provided.",
+                                     plugins install). Move `{name}` from the plugin's `Deps` to its `LateDeps`: \
+                                     `LateDeps` is resolved after `build_state()` from the full bean graph, so it \
+                                     can consume `.register()`-ed and factory-built beans. Handle it in \
+                                     `configure()` instead of `install()`. (Alternatively, change the provider to \
+                                     `.provide(instance)`.)",
                                     name = std::any::type_name::<$T>()
                                 )
                             } else {
@@ -462,6 +487,19 @@ macro_rules! impl_plugin_deps {
                                 )
                             }
                         }),
+                )+)
+            }
+
+            fn resolve_from_context(ctx: &crate::beans::BeanContext) -> Self {
+                ($(
+                    ctx.try_get::<$T>().unwrap_or_else(|| {
+                        panic!(
+                            "PluginDeps: bean `{}` not found in the resolved bean context (this is a bug — \
+                             `LateDeps` is appended to the builder's requirement list and should have been \
+                             verified against the final provision list at `build_state()`)",
+                            std::any::type_name::<$T>()
+                        )
+                    }),
                 )+)
             }
         }
@@ -525,6 +563,15 @@ pub trait PluginProvisions: Send {
     /// harnesses) are respected because insertion goes through
     /// [`BeanRegistry::provide`](crate::beans::BeanRegistry::provide).
     fn provide_all(self, registry: &mut crate::beans::BeanRegistry);
+
+    /// Clone every provided bean into a fresh tuple of the same shape.
+    ///
+    /// Used by the blanket [`RawPreStatePlugin`](crate::plugin::RawPreStatePlugin)
+    /// impl to keep a copy of the provided beans for the post-state
+    /// [`configure`](crate::PreStatePlugin::configure) call, since
+    /// [`provide_all`](Self::provide_all) consumes the original by depositing
+    /// it into the registry.
+    fn clone_all(&self) -> Self;
 }
 
 // Arity 0 — a plugin that provides no beans (only deferred actions).
@@ -532,6 +579,8 @@ impl PluginProvisions for () {
     type AsList = TNil;
 
     fn provide_all(self, _registry: &mut crate::beans::BeanRegistry) {}
+
+    fn clone_all(&self) -> Self {}
 }
 
 macro_rules! impl_plugin_provisions {
@@ -544,6 +593,10 @@ macro_rules! impl_plugin_provisions {
 
             fn provide_all(self, registry: &mut crate::beans::BeanRegistry) {
                 $( registry.provide(self.$idx); )+
+            }
+
+            fn clone_all(&self) -> Self {
+                ($( self.$idx.clone(), )+)
             }
         }
     };

@@ -102,6 +102,7 @@ pub trait Plugin: Send + 'static {
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyThing,);
 ///     type Deps = (DbPool, CancellationToken);
+///     type LateDeps = ();
 ///
 ///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyThing,) {
 ///         (MyThing::new(pool, token),)
@@ -283,6 +284,37 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// and a [`PluginInstallContext`] for registering deferred actions. No builder
 /// generics, no `with_updated_types()`.
 ///
+/// # Two-stage lifecycle
+///
+/// A pre-state plugin participates in two phases of app assembly:
+///
+/// 1. **install** — runs at `.plugin()` time, *before* the bean graph is built.
+///    It produces the plugin's [`Provided`](Self::Provided) beans and may
+///    register deferred actions. Its [`Deps`](Self::Deps) are resolved here, so
+///    they can only name beans already supplied via `.provide(instance)`.
+/// 2. **configure** — runs *after* [`build_state()`](crate::AppBuilder::build_state),
+///    with the fully materialized bean graph in hand. Its
+///    [`LateDeps`](Self::LateDeps) can name **any** bean — `.provide()`-d,
+///    `.register()`-ed (factory-built), or produced by another plugin.
+///
+/// ```text
+///   .plugin(Me)              build_state()             (serve)
+///        │                        │                       │
+///        ▼                        ▼                       ▼
+///     install(Deps)  ─────►  [bean graph built]  ─►  configure(LateDeps)
+/// ```
+///
+/// ## `Deps` vs `LateDeps`
+///
+/// - **`Deps`** = pre-built infrastructure you hand to `.provide()` (a
+///   `DbPool`, a `CancellationToken`). Available at install time.
+/// - **`LateDeps`** = anything else, including **factory-built beans**
+///   (`.register::<T>()`) and beans other plugins provide. Available only in
+///   `configure()`.
+///
+/// Rule of thumb: if the type is `.provide()`-d, put it in `Deps`; otherwise
+/// put it in `LateDeps` and consume it from `configure()`.
+///
 /// [`Provided`](Self::Provided) is a **tuple** of beans: `(A,)` for a single
 /// bean, `(A, B)` for several, or `()` for none. This covers multi-bean plugins
 /// too — there is no longer any need to drop down to [`RawPreStatePlugin`] just
@@ -324,6 +356,7 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (String,);
 ///     type Deps = ();
+///     type LateDeps = ();
 ///
 ///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (String,) {
 ///         (self.value,)
@@ -337,6 +370,7 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyService,);
 ///     type Deps = (DbPool, CancellationToken);
+///     type LateDeps = ();
 ///
 ///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
 ///         (MyService::new(pool, token),)
@@ -350,6 +384,7 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// impl PreStatePlugin for Scheduler {
 ///     type Provided = (CancellationToken, ScheduledJobRegistry);
 ///     type Deps = ();
+///     type LateDeps = ();
 ///
 ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, ScheduledJobRegistry) {
 ///         let token = CancellationToken::new();
@@ -383,8 +418,30 @@ pub trait PreStatePlugin: Send + 'static {
     /// **Constraint:** plugin install runs *before* the bean graph is built,
     /// so every type listed here must be a `.provide(instance)` value, not a
     /// `.register::<T>()` registration. If a `register`-ed (factory-built) type
-    /// appears in `Deps`, runtime resolution panics with a clear message.
+    /// appears in `Deps`, runtime resolution panics with a message steering you
+    /// to move it to [`LateDeps`](Self::LateDeps). For beans that are not
+    /// `.provide()`-d, use `LateDeps` + [`configure`](Self::configure) instead.
     type Deps: crate::type_list::PluginDeps;
+
+    /// Bean dependencies resolved **after** `build_state()`, from the fully
+    /// materialized bean graph.
+    ///
+    /// Unlike [`Deps`](Self::Deps), these may name any bean — including
+    /// `.register::<T>()`-ed (factory-built) beans and beans other plugins
+    /// provide — because they are resolved in [`configure`](Self::configure),
+    /// after the whole graph is constructed. They are appended to the builder's
+    /// requirement list and verified against the **final** provision list at
+    /// `build_state()` (not at the `.plugin()` call site), so a dependency may
+    /// be `.register()`-ed *after* this plugin is installed.
+    ///
+    /// Most plugins set this to `()` (no late dependencies). On stable Rust
+    /// associated types have no defaults, so every impl must write it
+    /// explicitly:
+    ///
+    /// ```ignore
+    /// type LateDeps = ();
+    /// ```
+    type LateDeps: crate::type_list::PluginDeps;
 
     /// Install the plugin in the pre-state phase.
     ///
@@ -392,6 +449,47 @@ pub trait PreStatePlugin: Send + 'static {
     /// Return the value to be provided to the bean registry. Optionally
     /// register deferred actions via `ctx.add_deferred()`.
     fn install(self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
+
+    /// Configure the plugin in the **post-state** phase, after `build_state()`.
+    ///
+    /// Called once with the plugin's [`Provided`](Self::Provided) beans (as a
+    /// borrowed copy) and its resolved [`LateDeps`](Self::LateDeps), plus a
+    /// [`DeferredContext`] for adding layers, serve/shutdown hooks, or plugin
+    /// data — exactly the same surface deferred actions get. Use this to wire
+    /// up anything that needs a factory-built or app-level bean.
+    ///
+    /// The default is a no-op, so plugins with `type LateDeps = ()` and no
+    /// post-state work need not implement it.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// impl PreStatePlugin for MetricsExporter {
+    ///     type Provided = (ExporterHandle,);
+    ///     type Deps = ();
+    ///     type LateDeps = (MetricsRegistry,); // registered elsewhere via `.register()`
+    ///
+    ///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    ///         (ExporterHandle::new(),)
+    ///     }
+    ///
+    ///     fn configure(
+    ///         (handle,): &(ExporterHandle,),
+    ///         (registry,): (MetricsRegistry,),
+    ///         ctx: &mut DeferredContext<'_>,
+    ///     ) {
+    ///         let handle = handle.clone();
+    ///         ctx.on_serve(move |_sc| handle.bind(registry));
+    ///     }
+    /// }
+    /// ```
+    #[allow(unused_variables)]
+    fn configure(
+        provided: &Self::Provided,
+        deps: Self::LateDeps,
+        ctx: &mut DeferredContext<'_>,
+    ) {
+    }
 }
 
 /// Internal machinery backing [`PreStatePlugin`] — **not** part of the public
@@ -429,8 +527,22 @@ pub trait RawPreStatePlugin: Send + 'static {
     /// For multiple: `TCons<A, TCons<B, TNil>>`.
     type Provisions;
 
-    /// Bean dependencies this plugin requires from the bean graph.
+    /// Bean dependencies this plugin requires from the bean graph, checked at
+    /// the `.plugin()` **call site** against the provisions present so far.
+    ///
+    /// This is the pre-state `Deps` list: it must already be provided when the
+    /// plugin is installed. It is a *sublist* of [`AllRequired`](Self::AllRequired)
+    /// (the part that gets a call-site check).
     type Required;
+
+    /// The full requirement list appended to the builder's `R`: the pre-state
+    /// `Deps` (`Required`) concatenated with the post-state `LateDeps`.
+    ///
+    /// Only [`Required`](Self::Required) is checked at the `.plugin()` call
+    /// site; the `LateDeps` portion rides along in `R` and is verified against
+    /// the **final** provision list at `build_state()`, so a `LateDeps` bean may
+    /// be registered *after* this plugin is installed.
+    type AllRequired;
 
     /// Install the plugin in the pre-state phase with full builder access.
     ///
@@ -442,7 +554,7 @@ pub trait RawPreStatePlugin: Send + 'static {
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>;
+        R: TAppend<Self::AllRequired>;
 }
 
 // Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
@@ -453,9 +565,18 @@ pub trait RawPreStatePlugin: Send + 'static {
 // type-level list is then advanced in one phantom `with_updated_types()` cast —
 // this keeps override/pinning/ordering semantics identical to calling
 // `.provide()` per bean, which matters for `TestApp` bean overrides.
-impl<T: PreStatePlugin> RawPreStatePlugin for T {
+impl<T> RawPreStatePlugin for T
+where
+    T: PreStatePlugin,
+    // `AsList` is always a `TCons`/`TNil` chain, so this always holds — but it
+    // must be stated for the `AllRequired` associated type below to be
+    // well-formed for an abstract `T`.
+    <T::Deps as PluginDeps>::AsList: TAppend<<T::LateDeps as PluginDeps>::AsList>,
+{
     type Provisions = <T::Provided as PluginProvisions>::AsList;
     type Required = <T::Deps as PluginDeps>::AsList;
+    type AllRequired =
+        <<T::Deps as PluginDeps>::AsList as TAppend<<T::LateDeps as PluginDeps>::AsList>>::Output;
 
     fn install<P, R, Mods>(
         self,
@@ -463,7 +584,7 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
+        R: TAppend<Self::AllRequired>,
     {
         let deps = T::Deps::resolve(app.bean_registry());
         let name = plugin_action_name::<T>();
@@ -476,7 +597,18 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
         for action in deferred {
             builder = builder.add_deferred(action);
         }
+        // Keep a copy of the provided beans for the post-state `configure`
+        // call — `provide_all` consumes the original into the registry.
+        let provided_for_configure = provided.clone_all();
         provided.provide_all(builder.bean_registry_mut());
+        // Schedule `configure` to run after `build_state()`, when the full bean
+        // graph is available to resolve `LateDeps` from. Runs as a deferred
+        // action (post-resolution). For `LateDeps = ()` with the default
+        // (no-op) `configure`, this is an inert closure.
+        builder = builder.add_deferred(DeferredAction::new(name, move |dctx| {
+            let late = <T::LateDeps as PluginDeps>::resolve_from_context(dctx.bean_context());
+            T::configure(&provided_for_configure, late, dctx);
+        }));
         builder.with_updated_types()
     }
 }
@@ -501,6 +633,7 @@ impl<T: PreStatePlugin> RawPreStatePlugin for T {
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyToken,);
 ///     type Deps = ();
+///     type LateDeps = ();
 ///
 ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
 ///         let token = MyToken::new();
@@ -560,9 +693,27 @@ pub struct DeferredContext<'a> {
     /// Shutdown hooks from plugins (async, awaited during shutdown).
     #[doc(hidden)]
     pub async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
+    /// The fully resolved bean graph, available because deferred actions run
+    /// after `build_state()`. Read beans out of it via
+    /// [`bean_context`](DeferredContext::bean_context) — this is what backs a
+    /// plugin's post-state [`configure`](crate::PreStatePlugin::configure)
+    /// `LateDeps` resolution.
+    #[doc(hidden)]
+    pub bean_context: &'a crate::beans::BeanContext,
 }
 
 impl DeferredContext<'_> {
+    /// The fully resolved bean graph.
+    ///
+    /// Deferred actions run after `build_state()`, so every bean —
+    /// `.provide()`-d, `.register()`-ed (factory-built), or produced by another
+    /// plugin — is materialized and readable here (`ctx.bean_context().get::<T>()`).
+    /// This is how a plugin's [`configure`](crate::PreStatePlugin::configure)
+    /// hook resolves its `LateDeps`.
+    pub fn bean_context(&self) -> &crate::beans::BeanContext {
+        self.bean_context
+    }
+
     /// Add a layer to the router.
     pub fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
         self.layers.push(layer);

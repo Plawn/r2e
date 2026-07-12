@@ -62,11 +62,14 @@ pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
-/// `Provisions` and `Required` lists are appended to `P` and `R`.
+/// `Provisions` join `P`, and **both** its call-site `Required` (`Deps`) and
+/// its post-state `LateRequired` (`LateDeps`) join `R`. Only `Required` is
+/// checked at the call site; `LateRequired` is verified against the final
+/// provision list at `build_state()`.
 pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
     <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
-    <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
+    <R as TAppend<<Pl as RawPreStatePlugin>::AllRequired>>::Output,
     Mods,
 >;
 

@@ -41,7 +41,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             _modules: PhantomData,
         };
 
-        // Execute deferred actions (new API).
+        // Execute deferred actions (new API). They run here — after the bean
+        // graph is resolved — so `ctx.bean_context()` exposes the fully
+        // materialized graph (this is what backs plugin `configure`/`LateDeps`).
         for action in deferred_actions {
             let mut ctx = DeferredContext {
                 layers: &mut builder.shared.custom_layers,
@@ -50,6 +52,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 serve_hooks: &mut builder.serve_hooks,
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
                 async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
+                bean_context: &builder.bean_context,
             };
             (action.action)(&mut ctx);
         }

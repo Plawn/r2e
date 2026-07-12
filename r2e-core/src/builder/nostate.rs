@@ -441,7 +441,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        R: TAppend<Pl::AllRequired>,
+        // Only the pre-state `Deps` (`Required`) are checked here, against the
+        // provisions present so far. The `LateDeps` portion of `AllRequired` is
+        // appended to `R` and verified against the final provision list at
+        // `build_state()`.
         Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
@@ -459,7 +463,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        R: TAppend<Pl::AllRequired>,
         Pl::Required: AllSatisfied<P, RIdx>,
     {
         plugin.install(self)
