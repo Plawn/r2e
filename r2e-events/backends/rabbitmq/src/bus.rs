@@ -8,10 +8,9 @@ use std::sync::Arc;
 
 use lapin::options::{
     BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicPublishOptions,
-    QueueBindOptions, QueueDeclareOptions,
 };
 use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
-use lapin::BasicProperties;
+use lapin::{BasicProperties, Channel};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use futures_util::StreamExt;
@@ -65,74 +64,6 @@ impl RabbitMqEventBus {
         self.inner.state.resolve_topic::<E>()
     }
 
-    /// Ensure a queue exists and is bound to the exchange for the given topic.
-    async fn ensure_queue(&self, topic_name: &str) -> Result<String, EventBusError> {
-        let queue_name = format!("{}.{}", self.inner.config.consumer_group, topic_name);
-
-        if self.inner.state.is_topic_ensured(topic_name) {
-            return Ok(queue_name);
-        }
-
-        if !self.inner.config.auto_create {
-            self.inner.state.set_topic_ensured(topic_name);
-            return Ok(queue_name);
-        }
-
-        // Build queue arguments
-        let mut args = FieldTable::default();
-
-        if let Some(ttl) = self.inner.config.message_ttl_ms {
-            args.insert(
-                ShortString::from("x-message-ttl"),
-                AMQPValue::LongUInt(ttl),
-            );
-        }
-
-        if let Some(ref dlx) = self.inner.config.dead_letter_exchange {
-            args.insert(
-                ShortString::from("x-dead-letter-exchange"),
-                AMQPValue::LongString(LongString::from(dlx.as_bytes())),
-            );
-        }
-
-        // Declare queue
-        self.inner
-            .channel
-            .queue_declare(
-                queue_name.as_str().into(),
-                QueueDeclareOptions {
-                    durable: self.inner.config.durable,
-                    ..QueueDeclareOptions::default()
-                },
-                args,
-            )
-            .await
-            .map_err(map_lapin_error)?;
-
-        // Bind queue to exchange with routing key = topic name
-        self.inner
-            .channel
-            .queue_bind(
-                queue_name.as_str().into(),
-                self.inner.config.exchange.as_str().into(),
-                topic_name.into(),
-                QueueBindOptions::default(),
-                FieldTable::default(),
-            )
-            .await
-            .map_err(map_lapin_error)?;
-
-        tracing::info!(
-            queue = %queue_name,
-            exchange = %self.inner.config.exchange,
-            routing_key = %topic_name,
-            "declared and bound queue"
-        );
-
-        self.inner.state.set_topic_ensured(topic_name);
-        Ok(queue_name)
-    }
-
     /// Build AMQP BasicProperties from EventMetadata.
     fn build_properties(&self, metadata: &EventMetadata) -> BasicProperties {
         let pairs = encode_metadata(metadata);
@@ -157,6 +88,11 @@ impl RabbitMqEventBus {
     }
 
     /// Publish a serialized event to RabbitMQ.
+    ///
+    /// Uses the dedicated publisher channel, recreating it (and reconnecting the
+    /// underlying connection if needed) when the stored one has dropped. A
+    /// publish failure only affects the publisher channel — consumer channels
+    /// are independent.
     async fn publish(
         &self,
         topic_name: &str,
@@ -164,9 +100,9 @@ impl RabbitMqEventBus {
         metadata: &EventMetadata,
     ) -> Result<(), EventBusError> {
         let props = self.build_properties(metadata);
+        let channel = self.inner.publisher_channel().await?;
 
-        self.inner
-            .channel
+        channel
             .basic_publish(
                 self.inner.config.exchange.as_str().into(),
                 topic_name.into(),
@@ -230,17 +166,16 @@ impl EventBus for RabbitMqEventBus {
 
             let (id, is_first) = inner.state.register_handler::<E>(h).await;
 
-            // If this is the first subscriber for this type, set up the consumer
+            // If this is the first subscriber for this type, set up the consumer.
             if is_first {
-                let queue_name = bus.ensure_queue(&topic_name).await?;
+                let (channel, queue_name) = setup_consumer_queue(&inner, &topic_name).await?;
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
-                let queue_clone = queue_name.clone();
 
                 r2e_core::rt::spawn(async move {
-                    run_consumer(inner_clone, type_id, queue_clone, cancel).await;
+                    run_consumer(inner_clone, type_id, topic_name, cancel, Some((channel, queue_name))).await;
                 });
             }
 
@@ -275,15 +210,14 @@ impl EventBus for RabbitMqEventBus {
             let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
 
             if is_first {
-                let queue_name = bus.ensure_queue(&topic_name).await?;
+                let (channel, queue_name) = setup_consumer_queue(&inner, &topic_name).await?;
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
-                let queue_clone = queue_name.clone();
 
                 r2e_core::rt::spawn(async move {
-                    run_consumer(inner_clone, type_id, queue_clone, cancel).await;
+                    run_consumer(inner_clone, type_id, topic_name, cancel, Some((channel, queue_name))).await;
                 });
             }
 
@@ -407,22 +341,48 @@ impl EventBus for RabbitMqEventBus {
             // Clear handlers
             inner.state.handlers.write().await.clear();
 
-            // Close the channel gracefully
-            if let Err(e) = inner.channel.close(200, "shutdown".into()).await {
-                tracing::warn!("error closing RabbitMQ channel: {e}");
-            }
+            // Close the connection gracefully (closes all channels with it).
+            inner.close().await;
 
             Ok(())
         }
     }
 }
 
-/// Background consumer loop for a single queue/topic with automatic reconnection.
+/// Create a dedicated consumer channel and declare+bind its queue.
+///
+/// Called synchronously from `subscribe` for the first subscriber of a type so
+/// that (a) the queue binding exists before `subscribe` returns — an `emit`
+/// issued immediately afterwards can no longer be dropped by the topic exchange
+/// — and (b) a declare failure (e.g. `PRECONDITION_FAILED` on conflicting queue
+/// props) propagates out of `subscribe` instead of being swallowed by the
+/// background task. The live channel is handed to `run_consumer` for its first
+/// iteration rather than declared-and-dropped: dropping the channel would delete
+/// an exclusive/auto-delete queue before the consumer could attach.
+async fn setup_consumer_queue(
+    inner: &Arc<RabbitMqInner>,
+    topic_name: &str,
+) -> Result<(Channel, String), EventBusError> {
+    let channel = inner.new_consumer_channel().await?;
+    let queue_name = inner.ensure_queue(&channel, topic_name).await?;
+    Ok((channel, queue_name))
+}
+
+/// Background consumer loop for a single topic with automatic reconnection.
+///
+/// The first iteration consumes `initial` — the channel+queue already declared
+/// and bound synchronously by `subscribe` — so the binding is guaranteed live
+/// before the subscriber returned. Each subsequent (reconnect) iteration creates
+/// a fresh dedicated channel (reconnecting the shared connection if the broker
+/// link dropped), re-declares the queue and starts a new `basic_consume`. When
+/// the consume stream ends or errors — the signal of a dropped channel/connection
+/// — the loop backs off and reconnects.
 async fn run_consumer(
     inner: Arc<RabbitMqInner>,
     type_id: TypeId,
-    queue_name: String,
+    topic_name: String,
     cancel: CancellationToken,
+    mut initial: Option<(Channel, String)>,
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
     let reconnect = inner.config.reconnect;
@@ -430,7 +390,9 @@ async fn run_consumer(
 
     loop {
         let start = std::time::Instant::now();
-        run_consumer_inner(&inner, type_id, &queue_name, &cancel).await;
+        // `initial` is consumed on the first pass; reconnect passes get `None`
+        // and rebuild their own channel/queue.
+        run_consumer_inner(&inner, type_id, &topic_name, &cancel, initial.take()).await;
 
         if cancel.is_cancelled() || !reconnect {
             break;
@@ -441,7 +403,7 @@ async fn run_consumer(
             backoff = std::time::Duration::from_secs(1);
         }
 
-        tracing::warn!(queue = %queue_name, "RabbitMQ consumer disconnected, reconnecting in {backoff:?}");
+        tracing::warn!(topic = %topic_name, "RabbitMQ consumer disconnected, reconnecting in {backoff:?}");
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = r2e_core::rt::sleep(backoff) => {},
@@ -453,15 +415,41 @@ async fn run_consumer(
 async fn run_consumer_inner(
     inner: &Arc<RabbitMqInner>,
     type_id: TypeId,
-    queue_name: &str,
+    topic_name: &str,
     cancel: &CancellationToken,
+    initial: Option<(Channel, String)>,
 ) {
+    // The channel is kept alive for the whole function; dropping it on return
+    // closes only this consumer's channel.
+    let (channel, queue_name) = match initial {
+        // First iteration: reuse the channel `subscribe` already declared+bound.
+        Some(ready) => ready,
+        // Reconnect iteration: create a fresh dedicated channel (reconnecting
+        // the shared connection if it dropped) and re-declare/bind the queue.
+        None => {
+            let channel = match inner.new_consumer_channel().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(topic = %topic_name, "failed to create consumer channel: {e}");
+                    return;
+                }
+            };
+            let queue_name = match inner.ensure_queue(&channel, topic_name).await {
+                Ok(q) => q,
+                Err(e) => {
+                    tracing::error!(topic = %topic_name, "failed to declare queue: {e}");
+                    return;
+                }
+            };
+            (channel, queue_name)
+        }
+    };
+
     // Start consuming from the queue
     let consumer_tag = format!("r2e-{}", queue_name);
-    let consumer = match inner
-        .channel
+    let consumer = match channel
         .basic_consume(
-            queue_name.into(),
+            queue_name.as_str().into(),
             consumer_tag.as_str().into(),
             BasicConsumeOptions::default(),
             FieldTable::default(),
@@ -479,7 +467,7 @@ async fn run_consumer_inner(
 
     // Shared owned handle for logging inside per-delivery acker tasks (cheap to
     // clone; avoids a String allocation per delivery).
-    let queue: Arc<str> = Arc::from(queue_name);
+    let queue: Arc<str> = Arc::from(queue_name.as_str());
 
     let mut consumer = consumer;
     loop {
@@ -533,8 +521,12 @@ async fn run_consumer_inner(
                         });
                     }
                     Some(Err(e)) => {
-                        tracing::warn!(queue = %queue_name, "consumer error: {e}");
-                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
+                        // A stream-level error means the channel/connection has
+                        // dropped: break so the outer loop reconnects with
+                        // backoff (previously this slept and spun on the dead
+                        // channel forever — the P2.2 bug).
+                        tracing::warn!(queue = %queue_name, "consumer error, reconnecting: {e}");
+                        break;
                     }
                     None => {
                         tracing::info!(queue = %queue_name, "consumer stream ended");

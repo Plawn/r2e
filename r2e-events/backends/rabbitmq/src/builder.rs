@@ -1,17 +1,10 @@
 use std::sync::Arc;
 
-use lapin::{
-    options::ExchangeDeclareOptions,
-    types::FieldTable,
-    Connection, ConnectionProperties, ExchangeKind,
-};
-
 use r2e_events::backend::{BackendState, TopicRegistry};
 use r2e_events::EventBusError;
 
 use crate::bus::RabbitMqEventBus;
 use crate::config::RabbitMqConfig;
-use crate::error::map_lapin_error;
 use crate::inner::RabbitMqInner;
 
 /// Builder for [`RabbitMqEventBus`].
@@ -51,60 +44,23 @@ impl RabbitMqEventBusBuilder {
 
     /// Connect to the RabbitMQ broker and return a ready-to-use [`RabbitMqEventBus`].
     pub async fn connect(self) -> Result<RabbitMqEventBus, EventBusError> {
-        // Build connection properties
-        // lapin 4 uses the tokio runtime by default (default-runtime feature),
-        // so no explicit executor/reactor wiring is required.
-        let conn_props = ConnectionProperties::default()
-            .with_connection_name(
-                self.config
-                    .connection_name
-                    .clone()
-                    .unwrap_or_else(|| "r2e-events-rabbitmq".into())
-                    .into(),
-            );
-
-        // Connect to RabbitMQ
-        let connection = Connection::connect(&self.config.uri, conn_props)
-            .await
-            .map_err(map_lapin_error)?;
+        // Open the connection. It is retained on the inner so channels can be
+        // transparently recreated after a broker blip (publisher + per-consumer
+        // channels are created lazily from it).
+        let connection = RabbitMqInner::connect(&self.config).await?;
 
         tracing::info!(uri = %self.config.uri, "connected to RabbitMQ");
 
-        // Create a channel
-        let channel = connection.create_channel().await.map_err(map_lapin_error)?;
+        let inner = RabbitMqInner::new(
+            self.config,
+            connection,
+            Arc::new(BackendState::new(self.topic_registry)),
+        );
 
-        // Set QoS (prefetch count)
-        channel
-            .basic_qos(
-                self.config.prefetch_count,
-                lapin::options::BasicQosOptions::default(),
-            )
-            .await
-            .map_err(map_lapin_error)?;
-
-        // Declare the topic exchange if auto_create is on
-        if self.config.auto_create {
-            channel
-                .exchange_declare(
-                    self.config.exchange.as_str().into(),
-                    ExchangeKind::Topic,
-                    ExchangeDeclareOptions {
-                        durable: self.config.durable,
-                        ..ExchangeDeclareOptions::default()
-                    },
-                    FieldTable::default(),
-                )
-                .await
-                .map_err(map_lapin_error)?;
-
-            tracing::info!(exchange = %self.config.exchange, "declared topic exchange");
-        }
-
-        let inner = RabbitMqInner {
-            config: self.config,
-            channel,
-            state: Arc::new(BackendState::new(self.topic_registry)),
-        };
+        // Prime the publisher channel now so exchange declaration and other
+        // configuration errors surface at `connect()` time rather than on the
+        // first `emit`.
+        inner.publisher_channel().await?;
 
         Ok(RabbitMqEventBus {
             inner: Arc::new(inner),

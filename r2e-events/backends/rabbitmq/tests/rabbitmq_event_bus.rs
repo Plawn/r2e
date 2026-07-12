@@ -16,6 +16,11 @@ fn config_defaults() {
     assert!(config.dead_letter_exchange.is_none());
     assert_eq!(config.heartbeat, 60);
     assert!(config.connection_name.is_none());
+    assert!(config.reconnect);
+    assert_eq!(
+        config.reconnect_max_backoff,
+        std::time::Duration::from_secs(60)
+    );
 }
 
 // ── Config builder ───────────────────────────────────────────────────
@@ -34,6 +39,8 @@ fn config_builder() {
         .dead_letter_exchange("dlx")
         .heartbeat(30)
         .connection_name("my-conn")
+        .reconnect(false)
+        .reconnect_max_backoff(std::time::Duration::from_secs(5))
         .build();
 
     assert_eq!(config.uri, "amqp://user:pass@rabbitmq:5672/vhost");
@@ -47,6 +54,11 @@ fn config_builder() {
     assert_eq!(config.dead_letter_exchange.as_deref(), Some("dlx"));
     assert_eq!(config.heartbeat, 30);
     assert_eq!(config.connection_name.as_deref(), Some("my-conn"));
+    assert!(!config.reconnect);
+    assert_eq!(
+        config.reconnect_max_backoff,
+        std::time::Duration::from_secs(5)
+    );
 }
 
 // ── Compile-time assertions ──────────────────────────────────────────
