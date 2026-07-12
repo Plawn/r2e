@@ -151,6 +151,30 @@ impl PreStatePlugin for MultiProvider {
     }
 }
 
+/// Provides nothing — only registers a deferred action.
+struct NoProvider;
+
+impl PreStatePlugin for NoProvider {
+    type Provided = ();
+    type Deps = ();
+
+    fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) {
+        ctx.add_deferred(DeferredAction::new("no-provider", |_dctx| {}));
+    }
+}
+
+#[r2e_core::test]
+async fn zero_provision_plugin_builds_and_keeps_other_beans() {
+    // `type Provided = ()` maps to TNil: nothing is added to the state, and
+    // the builder still accepts the plugin (and its deferred action).
+    let app = AppBuilder::new()
+        .plugin(NoProvider)
+        .provide(Alpha(1))
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<Alpha>(), Alpha(1));
+}
+
 #[r2e_core::test]
 async fn single_provision_plugin_resolves_from_state() {
     let app = AppBuilder::new().plugin(SingleProvider).build_state().await;
