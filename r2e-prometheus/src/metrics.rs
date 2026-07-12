@@ -98,16 +98,19 @@ pub fn is_initialized() -> bool {
     METRICS.get().is_some()
 }
 
-/// Get the global metrics instance.
-/// Panics if metrics haven't been initialized.
+/// Get the global metrics instance, lazily initializing with defaults.
+///
+/// Normally `init_metrics` runs first (from the plugin's `configure` step with
+/// the merged builder/file config). Lazy default-init exists for the disabled
+/// plugin case (`prometheus.enabled = false` skips `configure`, but the
+/// `PrometheusRegistry` bean stays injectable and must not panic): callers get
+/// a real registry that simply is not exported at the metrics endpoint.
 pub fn metrics() -> &'static Metrics {
-    METRICS
-        .get()
-        .expect("Metrics not initialized. Call init_metrics() first.")
+    METRICS.get_or_init(|| Metrics::new(&MetricsConfig::default()))
 }
 
-/// Get the global prometheus Registry.
-/// Panics if metrics haven't been initialized.
+/// Get the global prometheus Registry (lazily default-initialized; see
+/// [`metrics`]).
 pub fn registry() -> &'static Registry {
     &metrics().registry
 }

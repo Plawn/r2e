@@ -209,8 +209,16 @@ async fn disabled_via_config_skips_route_and_layer_but_keeps_registry() {
         .build_state()
         .await;
 
-    // Registry bean survives the disable.
-    let _registry: PrometheusRegistry = app.state().get::<PrometheusRegistry>();
+    // Registry bean survives the disable — and stays USABLE: its accessors
+    // lazily default-initialize the global registry instead of panicking
+    // ("beans remain in the graph" contract of the enabled gate). The global
+    // is process-wide, so an enabled test may have initialized it first; the
+    // assertion that matters here is "no panic + registrable".
+    let registry: PrometheusRegistry = app.state().get::<PrometheusRegistry>();
+    let counter = prometheus::Counter::new("disabled_plugin_probe", "probe").unwrap();
+    registry
+        .register(Box::new(counter))
+        .expect("handle of a disabled plugin must accept collectors without panicking");
 
     // But the /metrics route was never mounted.
     let router = app.build();

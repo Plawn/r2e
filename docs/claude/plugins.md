@@ -174,6 +174,12 @@ effects**. When `<prefix>.enabled = false`:
   list is fixed at compile time, so disabling a plugin never removes its beans —
   `state.get::<ProvidedBean>()` still resolves. Code injecting a disabled
   plugin's bean keeps compiling and running; only the plugin's wiring is inert.
+  **Author obligation:** a provided bean must therefore stay *usable* (no
+  panic) even when `configure` never ran. If the bean is a handle to state that
+  `configure` initializes, degrade gracefully — Prometheus is the reference:
+  `PrometheusRegistry` accessors lazily default-initialize the global registry
+  (real and registrable, just not exported at `/metrics`), and `configure`
+  warns if it finds the registry pre-initialized.
 
 **Not gated:**
 

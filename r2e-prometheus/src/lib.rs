@@ -135,10 +135,11 @@ impl PrometheusRegistry {
 
     /// Access the shared global `prometheus::Registry`.
     ///
-    /// # Panics
-    ///
-    /// Panics if metrics have not been initialized yet (i.e. before the
-    /// plugin's `configure` step has run during `build_state()`).
+    /// Never panics: if the plugin's `configure` step has not initialized the
+    /// registry (notably when the plugin is disabled via
+    /// `prometheus.enabled = false`), a default-configured registry is lazily
+    /// created — real and registrable, just not exported at the metrics
+    /// endpoint.
     pub fn inner(&self) -> &'static prometheus::Registry {
         registry()
     }
@@ -263,6 +264,15 @@ impl PreStatePlugin for Prometheus {
             resolve_config(endpoint, namespace, buckets, exclude_paths, config);
 
         // Initialize the global metrics singleton with the merged config.
+        if is_initialized() {
+            // Something (e.g. a provided-bean post_construct, which runs before
+            // deferred actions) touched the lazily-default-initialized registry
+            // first — the merged config below is then a no-op for metric setup.
+            tracing::warn!(
+                "Prometheus metrics were initialized before the plugin's configure step; \
+                 builder/file configuration (namespace, buckets) may not have been applied"
+            );
+        }
         let m = init_metrics(&metrics_config);
         for collector in collectors {
             m.registry
