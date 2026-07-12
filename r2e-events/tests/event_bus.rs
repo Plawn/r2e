@@ -823,7 +823,7 @@ async fn test_metadata_propagated_to_handler() {
 #[r2e_core::test]
 async fn test_auto_generated_metadata_has_unique_ids() {
     let bus = LocalEventBus::new();
-    let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u64>::new()));
+    let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u128>::new()));
 
     let ids_clone = ids.clone();
     bus.subscribe(move |envelope: EventEnvelope<TestEvent>| {

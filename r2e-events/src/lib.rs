@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -107,13 +107,44 @@ impl fmt::Debug for SubscriptionHandle {
 
 // ── EventMetadata ──────────────────────────────────────────────────────
 
-static GLOBAL_EVENT_ID: AtomicU64 = AtomicU64::new(1);
+/// Per-process random identity, occupying the high 64 bits of every
+/// `event_id`. Generated once, lazily, on first event emission.
+static PROCESS_ID: OnceLock<u64> = OnceLock::new();
+
+/// Per-process monotonic counter, occupying the low 64 bits of `event_id`.
+static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Draw a random 64-bit value from the OS CSPRNG (via `uuid`, already a
+/// workspace dependency of the framework).
+fn generate_process_id() -> u64 {
+    uuid::Uuid::new_v4().as_u64_pair().0
+}
+
+/// The per-process identity that prefixes every `event_id` on this instance.
+fn process_id() -> u64 {
+    *PROCESS_ID.get_or_init(generate_process_id)
+}
+
+/// Compose a `u128` event id from a 64-bit process identity (high bits) and a
+/// 64-bit counter (low bits). Exposed for tests that need to assert
+/// cross-process uniqueness with deterministic inputs.
+#[doc(hidden)]
+pub fn compose_event_id(process_id: u64, counter: u64) -> u128 {
+    ((process_id as u128) << 64) | (counter as u128)
+}
+
+/// Generate the next globally-unique event id for this process.
+fn next_event_id() -> u128 {
+    compose_event_id(process_id(), EVENT_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 /// Metadata attached to every emitted event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventMetadata {
-    /// Unique event identifier (auto-generated).
-    pub event_id: u64,
+    /// Globally-unique event identifier (auto-generated): a `u128` whose high
+    /// 64 bits are a per-process random identity and low 64 bits a per-process
+    /// counter, so ids never collide across instances of the same app.
+    pub event_id: u128,
     /// Optional correlation id for tracing across services.
     pub correlation_id: Option<String>,
     /// Timestamp in epoch milliseconds.
@@ -128,7 +159,7 @@ impl EventMetadata {
     /// Create new metadata with auto-generated event_id and current timestamp.
     pub fn new() -> Self {
         Self {
-            event_id: GLOBAL_EVENT_ID.fetch_add(1, Ordering::Relaxed),
+            event_id: next_event_id(),
             correlation_id: None,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)

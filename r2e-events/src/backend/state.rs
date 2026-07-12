@@ -25,8 +25,8 @@ use super::topic::TopicRegistry;
 /// evicted before inserting the new one. Evictions are logged as warnings and
 /// counted via `eviction_count`.
 pub struct LocallyDispatchedSet {
-    set: HashMap<u64, bool>,
-    order: VecDeque<u64>,
+    set: HashMap<u128, bool>,
+    order: VecDeque<u128>,
     capacity: usize,
     /// Total number of entries evicted because the set was full.
     eviction_count: u64,
@@ -44,7 +44,7 @@ impl LocallyDispatchedSet {
 
     /// Record an event ID as locally dispatched with its outcome
     /// (`all_acked` = every local handler acked).
-    pub fn insert(&mut self, id: u64, all_acked: bool) {
+    pub fn insert(&mut self, id: u128, all_acked: bool) {
         if self.set.contains_key(&id) {
             return;
         }
@@ -79,7 +79,7 @@ impl LocallyDispatchedSet {
     /// Remove an event ID, returning the recorded local outcome if it was
     /// present (`Some(true)` = handlers all acked, `Some(false)` = at least
     /// one nacked or panicked).
-    pub fn remove(&mut self, id: u64) -> Option<bool> {
+    pub fn remove(&mut self, id: u128) -> Option<bool> {
         self.set.remove(&id)
     }
 
@@ -500,7 +500,7 @@ impl BackendState {
     }
 
     /// Record an `emit_and_wait` local dispatch outcome for the poller dedup.
-    fn record_local_dispatch(&self, event_id: u64, all_acked: bool) {
+    fn record_local_dispatch(&self, event_id: u128, all_acked: bool) {
         self.locally_dispatched
             .lock()
             .unwrap_or_else(|e| e.into_inner())

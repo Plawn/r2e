@@ -46,7 +46,7 @@ pub fn decode_metadata(
         let v = value.as_ref();
         match k {
             HEADER_EVENT_ID => {
-                if let Ok(id) = v.parse::<u64>() {
+                if let Ok(id) = v.parse::<u128>() {
                     metadata.event_id = id;
                 }
             }
