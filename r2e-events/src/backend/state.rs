@@ -89,6 +89,64 @@ impl LocallyDispatchedSet {
 /// Default maximum concurrent handlers for distributed backends.
 pub const DEFAULT_BACKEND_CONCURRENCY: usize = 1024;
 
+/// Per-message outcome of dispatching to local handlers.
+///
+/// Drives the broker ack/commit decision for at-least-once delivery:
+/// pollers ack/commit on [`DispatchOutcome::Ack`] and skip the ack (or
+/// negative-ack) on [`DispatchOutcome::Nack`] so the broker redelivers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    /// Safe to ack/commit: every handler acked (after retries), every nacked
+    /// handler's payload was captured to a DLQ, there were no matching
+    /// handlers, the message was already dispatched locally by
+    /// `emit_and_wait`, or the payload failed to deserialize (poison
+    /// messages are dropped with an error log, not redelivered).
+    Ack,
+    /// At least one handler nacked (or panicked) without DLQ capture —
+    /// skip the ack/commit so the broker redelivers the message.
+    Nack,
+}
+
+/// Completion signal for one dispatched message.
+///
+/// Returned by [`BackendState::dispatch_from_poller_tracked`] immediately
+/// after the handler tasks are spawned (permit-bounded), so the poller can
+/// keep pulling messages while handlers run. Await [`outcome`] — typically
+/// from a spawned follow-up task or an ordered ack pipeline — to learn
+/// whether the message can be acked/committed.
+///
+/// [`outcome`]: DispatchCompletion::outcome
+pub struct DispatchCompletion {
+    resolved: Option<DispatchOutcome>,
+    receivers: Vec<tokio::sync::oneshot::Receiver<bool>>,
+}
+
+impl DispatchCompletion {
+    /// A completion that resolves immediately with the given outcome.
+    pub fn resolved(outcome: DispatchOutcome) -> Self {
+        Self { resolved: Some(outcome), receivers: Vec::new() }
+    }
+
+    /// Resolve once every handler spawned for this message has finished.
+    ///
+    /// A handler task that panics counts as a nack (the message will be
+    /// redelivered).
+    pub async fn outcome(self) -> DispatchOutcome {
+        if let Some(outcome) = self.resolved {
+            return outcome;
+        }
+        let mut outcome = DispatchOutcome::Ack;
+        for rx in self.receivers {
+            match rx.await {
+                Ok(true) => {}
+                // false = nack without DLQ capture; Err = handler task panicked.
+                Ok(false) | Err(_) => outcome = DispatchOutcome::Nack,
+            }
+        }
+        outcome
+    }
+}
+
 /// Shared inner state for distributed event bus backends.
 ///
 /// Contains all fields that are common across backends (Iggy, Kafka,
@@ -386,20 +444,46 @@ impl BackendState {
 
     /// Dispatch a message from a poller to local handlers (fire-and-forget with in-flight tracking).
     ///
-    /// Backpressure: a semaphore permit is acquired **before** spawning each handler
-    /// task, so the poller naturally slows down when handlers are saturated.
+    /// Identical to [`dispatch_from_poller_tracked`] except the per-message
+    /// outcome is discarded — use the tracked variant when the poller needs
+    /// to ack/commit based on handler results (at-least-once delivery).
     ///
-    /// Panic-safety: each task holds an [`InFlightGuard`] that decrements the
-    /// in-flight counter on drop, even on panic.
+    /// [`dispatch_from_poller_tracked`]: Self::dispatch_from_poller_tracked
     pub async fn dispatch_from_poller(
         self: &Arc<Self>,
         type_id: TypeId,
         payload: &[u8],
         metadata: EventMetadata,
     ) {
+        // Dropping the completion is fine: handler tasks are already spawned.
+        let _ = self.dispatch_from_poller_tracked(type_id, payload, metadata).await;
+    }
+
+    /// Dispatch a message from a poller to local handlers, returning a
+    /// per-message [`DispatchCompletion`].
+    ///
+    /// Returns as soon as all handler tasks are spawned (permit-bounded), so
+    /// the poll loop stays pipelined. The completion resolves when every
+    /// handler for the message has finished: [`DispatchOutcome::Ack`] when the
+    /// broker copy can be acked/committed, [`DispatchOutcome::Nack`] when at
+    /// least one handler failed without DLQ capture and the broker should
+    /// redeliver.
+    ///
+    /// Backpressure: a semaphore permit is acquired **before** spawning each handler
+    /// task, so the poller naturally slows down when handlers are saturated.
+    ///
+    /// Panic-safety: each task holds an [`InFlightGuard`] that decrements the
+    /// in-flight counter on drop, even on panic; a panicked handler resolves
+    /// the completion as [`DispatchOutcome::Nack`].
+    pub async fn dispatch_from_poller_tracked(
+        self: &Arc<Self>,
+        type_id: TypeId,
+        payload: &[u8],
+        metadata: EventMetadata,
+    ) -> DispatchCompletion {
         // Skip if this event was already dispatched locally by emit_and_wait.
         if self.locally_dispatched.lock().unwrap_or_else(|e| e.into_inner()).remove(metadata.event_id) {
-            return;
+            return DispatchCompletion::resolved(DispatchOutcome::Ack);
         }
 
         // Collect handlers and deserialize under the lock, then release before spawning.
@@ -407,14 +491,15 @@ impl BackendState {
             let map = self.handlers.read().await;
             let topic_handlers = match map.get(&type_id) {
                 Some(th) => th,
-                None => return,
+                None => return DispatchCompletion::resolved(DispatchOutcome::Ack),
             };
 
             let event = match (topic_handlers.deserializer)(payload) {
                 Ok(e) => e,
                 Err(err) => {
+                    // Poison message: ack it away rather than redeliver forever.
                     tracing::error!("failed to deserialize event: {err}");
-                    return;
+                    return DispatchCompletion::resolved(DispatchOutcome::Ack);
                 }
             };
 
@@ -438,6 +523,7 @@ impl BackendState {
         };
         // RwLock released here — subscribe/unsubscribe can proceed.
 
+        let mut receivers = Vec::with_capacity(handler_data.len());
         for (h, retry_policy) in handler_data {
             let e = event.clone();
             let m = metadata.clone();
@@ -453,6 +539,9 @@ impl BackendState {
 
             let guard = self.acquire_in_flight();
 
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            receivers.push(rx);
+
             // The poller loop already runs on the control plane (registered at
             // startup), so plain `spawn` keeps handler tasks there.
             r2e_core::rt::spawn(async move {
@@ -463,20 +552,29 @@ impl BackendState {
                     h(e, m).await
                 };
                 drop(permit);
-                if let HandlerResult::Nack(ref reason) = result {
-                    tracing::warn!("event handler returned Nack: {reason}");
-                    if let Some(ref policy) = retry_policy {
-                        if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                            if let (Some((ref pl, ref meta)), Some(ref publisher)) =
-                                (&dlq_data, &state.dlq_publisher)
-                            {
-                                publisher(dlq_topic.clone(), pl.as_ref().clone(), meta.clone()).await;
+                let acked = match result {
+                    HandlerResult::Ack => true,
+                    HandlerResult::Nack(ref reason) => {
+                        tracing::warn!("event handler returned Nack: {reason}");
+                        let mut captured = false;
+                        if let Some(ref policy) = retry_policy {
+                            if let Some(ref dlq_topic) = policy.dead_letter_topic {
+                                if let (Some((ref pl, ref meta)), Some(ref publisher)) =
+                                    (&dlq_data, &state.dlq_publisher)
+                                {
+                                    publisher(dlq_topic.clone(), pl.as_ref().clone(), meta.clone()).await;
+                                    captured = true;
+                                }
                             }
                         }
+                        captured
                     }
-                }
+                };
+                // Receiver may be gone (untracked dispatch) — ignore send errors.
+                let _ = tx.send(acked);
             });
         }
+        DispatchCompletion { resolved: None, receivers }
     }
 
     /// Configure filter and retry policy on an existing handler entry.
