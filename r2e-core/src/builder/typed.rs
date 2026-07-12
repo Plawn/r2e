@@ -21,6 +21,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // (plugins load their typed `Config` from it in `configure`).
         let deferred_actions = std::mem::take(&mut shared.deferred_actions);
         let deferred_config = shared.config.clone();
+        // Pre-destroy disposers drained from the resolved graph at build_state().
+        let bean_disposers = std::mem::take(&mut shared.bean_disposers);
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
@@ -60,6 +62,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             };
             (action.action)(&mut ctx);
         }
+
+        // Bean pre-destroy disposers run within the async shutdown phase, after
+        // the plugin async-shutdown hooks registered above (reverse registration
+        // order among themselves was applied during resolution).
+        builder.plugin_async_shutdown_hooks.extend(bean_disposers);
 
         builder
     }

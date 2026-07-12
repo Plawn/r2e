@@ -222,6 +222,20 @@ pub trait PostConstruct: Clone + Send + Sync + 'static {
     fn post_construct(&self) -> crate::lifecycle::LifecycleFuture<'_>;
 }
 
+/// Disposal hook, the symmetric counterpart of [`PostConstruct`].
+///
+/// Implement this trait to run cleanup logic (close pools, flush buffers,
+/// cancel background work) during the server's graceful-shutdown sequence.
+/// A `PreDestroy` hook is invoked against the bean **as it lives in the
+/// resolved graph** (override included), and runs as part of the async
+/// shutdown phase — see
+/// [`AppBuilder::provide_with_pre_destroy`](crate::AppBuilder::provide_with_pre_destroy)
+/// and [`PluginInstallContext::run_pre_destroy`](crate::PluginInstallContext::run_pre_destroy)
+/// for the invocation order.
+pub trait PreDestroy: Clone + Send + Sync + 'static {
+    fn pre_destroy(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
 /// Unified registration entry point for beans, async beans, and producers.
 ///
 /// Implemented automatically by `#[bean]`, `#[derive(Bean)]`, and `#[producer]`
@@ -266,6 +280,12 @@ pub struct BeanContext {
     /// Shared via `Arc` so clones (used by lazy factory snapshots) see
     /// already-resolved values from the same `OnceLock` instances.
     lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>>,
+    /// Pre-destroy disposal hooks, built during [`resolve`](BeanRegistry::resolve)
+    /// from the fully resolved graph. Drained by the builder into the async
+    /// shutdown phase. Not carried across [`Clone`] (lazy factory snapshots must
+    /// not re-run disposal). Behind a `Mutex` so `BeanContext` stays `Sync`
+    /// despite the `FnOnce` hooks (which are `Send` but not `Sync`).
+    disposers: std::sync::Mutex<Vec<crate::plugin::AsyncShutdownHook>>,
 }
 
 impl Clone for BeanContext {
@@ -279,6 +299,8 @@ impl Clone for BeanContext {
             overlay: HashMap::new(),
             // Share the same lazy slots so all clones see resolved values.
             lazy_slots: Arc::clone(&self.lazy_slots),
+            // Disposal hooks are owned by the primary context only.
+            disposers: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -310,7 +332,18 @@ impl BeanContext {
             base: Arc::new(entries),
             overlay: HashMap::new(),
             lazy_slots: Arc::new(RwLock::new(HashMap::new())),
+            disposers: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Drain the pre-destroy disposal hooks built during resolution.
+    ///
+    /// Called once by the builder to move the disposers into the async
+    /// shutdown phase. Returns an empty vec on any context that never carried
+    /// disposers (e.g. a lazy-factory snapshot clone or the `with_state` path).
+    #[doc(hidden)]
+    pub fn take_disposers(&mut self) -> Vec<crate::plugin::AsyncShutdownHook> {
+        std::mem::take(&mut *self.disposers.lock().expect("disposers lock poisoned"))
     }
 
     /// Attach lazy bean slots to this context.
@@ -411,6 +444,11 @@ type PostConstructFn = Box<
         > + Send,
 >;
 
+/// A pre-destroy disposer builder: given the fully resolved [`BeanContext`],
+/// it reads the target bean (by type, override-aware) and produces the boxed
+/// async shutdown hook that will run `PreDestroy::pre_destroy` at shutdown.
+type DisposerBuilder = Box<dyn FnOnce(&BeanContext) -> crate::plugin::AsyncShutdownHook + Send>;
+
 /// Registration for a lazy bean: excluded from the topological sort,
 /// resolved on first `get::<T>()` call.
 struct LazyBeanRegistration {
@@ -452,6 +490,16 @@ pub struct BeanRegistry {
     /// harnesses that pre-configure the builder *before* handing it to the
     /// application's assembly function (see `AppBuilder::override_bean`).
     pinned: HashSet<TypeId>,
+    /// Post-construct hooks for **provided** values (`.provide()` / plugin
+    /// `Provided` beans), which have no `BeanRegistration` to hang a hook on.
+    /// Each reads its target bean by type from the resolved context (so a
+    /// pinned override is honoured) and awaits `PostConstruct::post_construct`.
+    /// Run in registration order, **after** all factory-bean post-constructs.
+    provided_post_constructs: Vec<PostConstructFn>,
+    /// Pre-destroy disposer builders for provided/plugin beans. Materialized
+    /// against the resolved graph at the end of `resolve` and carried on the
+    /// [`BeanContext`] for the builder to drain into the shutdown sequence.
+    disposers: Vec<DisposerBuilder>,
 }
 
 struct BeanRegistration {
@@ -597,6 +645,8 @@ impl BeanRegistry {
             lazy_beans: Vec::new(),
             provided: HashMap::new(),
             pinned: HashSet::new(),
+            provided_post_constructs: Vec::new(),
+            disposers: Vec::new(),
         }
     }
 
@@ -767,6 +817,40 @@ impl BeanRegistry {
                 })
             }));
         }
+    }
+
+    /// Register a post-construct hook for a **provided** value.
+    ///
+    /// Unlike [`register_post_construct`](Self::register_post_construct), which
+    /// attaches to a factory `BeanRegistration`, this queues a standalone hook
+    /// for a value deposited via [`provide`](Self::provide) (or a plugin's
+    /// `Provided` tuple). The hook reads `T` from the resolved context by type —
+    /// so a pinned override is honoured — and runs during
+    /// [`resolve`](Self::resolve), **after** every factory-bean post-construct,
+    /// through the same `BeanError::PostConstruct` error path.
+    pub fn register_provided_post_construct<T: PostConstruct>(&mut self) {
+        self.provided_post_constructs.push(Box::new(|ctx: BeanContext| {
+            Box::pin(async move {
+                let bean: T = ctx.get();
+                bean.post_construct().await?;
+                Ok(ctx)
+            })
+        }));
+    }
+
+    /// Register a pre-destroy disposal hook for a provided/plugin bean.
+    ///
+    /// The hook reads `T` from the resolved graph (override-aware) and is run,
+    /// as part of the async shutdown phase, in reverse registration order — see
+    /// [`AppBuilder::provide_with_pre_destroy`](crate::AppBuilder::provide_with_pre_destroy).
+    pub fn register_pre_destroy<T: PreDestroy>(&mut self) {
+        self.disposers.push(Box::new(|ctx: &BeanContext| {
+            let bean: T = ctx.get();
+            Box::new(move || {
+                Box::pin(async move { bean.pre_destroy().await })
+                    as Pin<Box<dyn Future<Output = ()> + Send>>
+            }) as crate::plugin::AsyncShutdownHook
+        }));
     }
 
     /// Register a bean via factory closure that receives `R2eConfig`.
@@ -943,6 +1027,10 @@ impl BeanRegistry {
             entries.insert(tid, value);
         }
 
+        // Lift the lifecycle hooks out before the bean fields are consumed.
+        let provided_post_constructs = std::mem::take(&mut self.provided_post_constructs);
+        let disposer_builders = std::mem::take(&mut self.disposers);
+
         // Resolve default/alternative beans: remove overridable registrations
         // that have been superseded by a later registration of the same TypeId.
         Self::resolve_alternatives(&mut self.beans);
@@ -996,6 +1084,15 @@ impl BeanRegistry {
             ctx
         };
 
+        // Run post-construct hooks for provided/plugin beans, after every
+        // factory-bean post-construct. Reads each target by type from the
+        // resolved context (pinned overrides honoured).
+        for pc_fn in provided_post_constructs {
+            ctx = pc_fn(ctx)
+                .await
+                .map_err(|e| BeanError::PostConstruct(e.to_string()))?;
+        }
+
         // ── Lazy beans ──────────────────────────────────────────────────
         if !self.lazy_beans.is_empty() {
             // Validate lazy bean dependencies: all deps must exist in the
@@ -1046,6 +1143,16 @@ impl BeanRegistry {
                     .expect("Lazy slots lock poisoned")
                     .insert(lazy_reg.type_id, slot);
             }
+        }
+
+        // Materialize pre-destroy disposers against the fully resolved graph and
+        // stash them on the context. Reversed so disposal runs in reverse
+        // registration order (last registered disposes first).
+        if !disposer_builders.is_empty() {
+            let mut hooks: Vec<crate::plugin::AsyncShutdownHook> =
+                disposer_builders.into_iter().map(|d| d(&ctx)).collect();
+            hooks.reverse();
+            ctx.disposers = std::sync::Mutex::new(hooks);
         }
 
         Ok(ctx)

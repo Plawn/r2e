@@ -42,7 +42,7 @@ pub mod ws;
 #[doc(hidden)]
 pub use serde_json;
 
-pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, Producer};
+pub use beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, PreDestroy, Producer};
 pub use lazy::Lazy;
 pub use builder::{
     AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,

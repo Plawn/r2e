@@ -115,6 +115,11 @@ pub struct PluginInstallContext<'a> {
     /// [`on_serve`](Self::on_serve), etc.). Flushed as ONE [`DeferredAction`]
     /// by the blanket `RawPreStatePlugin` impl — see [`flush`](Self::flush).
     sugar: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+    /// Lifecycle-hook registrars applied to the bean registry right after the
+    /// plugin's `Provided` values are deposited. Backs
+    /// [`run_post_construct`](Self::run_post_construct) /
+    /// [`run_pre_destroy`](Self::run_pre_destroy).
+    registry_ops: Vec<Box<dyn FnOnce(&mut crate::beans::BeanRegistry) + Send>>,
     config: Option<&'a crate::config::R2eConfig>,
 }
 
@@ -124,8 +129,39 @@ impl<'a> PluginInstallContext<'a> {
         Self {
             deferred: Vec::new(),
             sugar: Vec::new(),
+            registry_ops: Vec::new(),
             config,
         }
+    }
+
+    /// Run a [`PostConstruct`](crate::PostConstruct) hook for one of this
+    /// plugin's `Provided` beans once the graph is resolved.
+    ///
+    /// The plugin's `Provided` values are second-class lifecycle citizens by
+    /// default (deposited straight into the graph). Call this in `install` to
+    /// opt a provided type `B` into the same post-construct lifecycle as a
+    /// factory bean: the hook fires during `build_state()`, after every
+    /// factory-bean post-construct, reading `B` from the resolved graph.
+    pub fn run_post_construct<B: crate::PostConstruct>(&mut self) {
+        self.registry_ops
+            .push(Box::new(|reg| reg.register_provided_post_construct::<B>()));
+    }
+
+    /// Register a [`PreDestroy`](crate::PreDestroy) disposal hook for one of
+    /// this plugin's `Provided` beans, run during graceful shutdown.
+    ///
+    /// See [`AppBuilder::provide_with_pre_destroy`](crate::AppBuilder::provide_with_pre_destroy)
+    /// for the invocation order.
+    pub fn run_pre_destroy<B: crate::PreDestroy>(&mut self) {
+        self.registry_ops
+            .push(Box::new(|reg| reg.register_pre_destroy::<B>()));
+    }
+
+    /// Drain the buffered bean-registry lifecycle registrars (internal).
+    pub(crate) fn take_registry_ops(
+        &mut self,
+    ) -> Vec<Box<dyn FnOnce(&mut crate::beans::BeanRegistry) + Send>> {
+        std::mem::take(&mut self.registry_ops)
     }
 
     /// Register a deferred action to run after state resolution.
@@ -662,12 +698,15 @@ where
         // Keep the plugin instance alive past `install` so `configure` can move
         // it in by value (and merge its programmatic fields with file config).
         let mut plugin = self;
-        let (provided, deferred) = {
+        let (provided, registry_ops, deferred) = {
             let mut ctx = PluginInstallContext::new(app.r2e_config_ref());
             // Fully qualify: `install`/`configure` exist on both this trait and
             // `RawPreStatePlugin`, so `plugin.install(..)` would be ambiguous.
             let provided = PreStatePlugin::install(&mut plugin, deps, &mut ctx);
-            (provided, ctx.flush(name))
+            // Lift the lifecycle registrars (run_post_construct / run_pre_destroy)
+            // out before `flush` consumes the context.
+            let registry_ops = ctx.take_registry_ops();
+            (provided, registry_ops, ctx.flush(name))
         };
         let mut builder = app;
         for action in deferred {
@@ -677,6 +716,11 @@ where
         // call — `provide_all` consumes the original into the registry.
         let provided_for_configure = provided.clone_all();
         provided.provide_all(builder.bean_registry_mut());
+        // Apply any post-construct / pre-destroy registrations the plugin opted
+        // its `Provided` beans into — after the values are deposited.
+        for op in registry_ops {
+            op(builder.bean_registry_mut());
+        }
         // Schedule `configure` to run after `build_state()`, when the full bean
         // graph is available to resolve `LateDeps` from AND `R2eConfig` is
         // guaranteed loaded (so typed `Config` is delivered here, not at

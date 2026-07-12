@@ -212,6 +212,10 @@ struct BuilderConfig {
     /// Stop handle wired via [`AppBuilder::with_stop_handle`]; `prepare()`
     /// creates one lazily when absent.
     stop_handle: Option<StopHandle>,
+    /// Pre-destroy disposers, drained from the resolved [`BeanContext`] at
+    /// `build_state()` and folded into the async shutdown phase by
+    /// [`AppBuilder::from_pre`].
+    bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
 }
 
 /// Builder for assembling a R2E application.
