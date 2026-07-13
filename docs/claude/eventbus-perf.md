@@ -7,7 +7,9 @@ tracking, manual-commit progress, RabbitMQ ported to the shared engine
 (P4.1), poison→DLQ parking, emit_and_wait outcome recorded for the poller.
 P2 landed 2026-07-12: u128 event ids, RabbitMQ reconnect + per-consumer
 channels, Pulsar per-topic producer locks, Kafka non-blocking shutdown
-flush; P2.5 decision deferred by the user).
+flush. P2.5 resolved and landed 2026-07-13: Vert.x-pure API —
+emit_and_wait removed, request/respond on all backends + #[consumer]
+responder sugar + shared reconnect_loop; see the P2.5 resolution section).
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -112,21 +114,70 @@ see P4 for keeping this pipelined rather than serial).
       double-checked `entry().or_insert_with` (a losing racer's producer is
       dropped cleanly). Sends serialize per topic only, and the receipt is
       still awaited with no lock held.
-- [ ] **P2.5 `emit_and_wait` on distributed backends: cross-instance double
-      processing.** It dispatches locally AND publishes to the broker; the
-      dedup set only suppresses the echo in the SAME process — another
-      consumer-group member will process the broker copy too. Decide:
-      accept + document ("local handlers run synchronously, group delivery
-      still happens once somewhere"), or change semantics (e.g. don't
-      publish, or don't locally dispatch, on distributed backends).
-      **Decision deferred (2026-07-12): user chose to leave this open** —
-      revisit in a later pass; do not implement without a new decision.
+- [x] **P2.5 `emit_and_wait` on distributed backends: cross-instance double
+      processing.** **RESOLVED by decision 2026-07-13 (user): Vert.x-pure
+      API, LANDED same day** — see the "P2.5 resolution" section below.
+      `emit_and_wait` removed entirely (with the dispatch-local +
+      `locally_dispatched` dedup machinery; P5.3 moot); `request`/`respond`
+      implemented on LocalEventBus + all four backends + `#[consumer]`
+      responder sugar. A review-fix pass hardened it: reply-publish failure
+      no longer acks/commits the request (kafka/pulsar/rabbitmq), Pulsar
+      reply consumer starts at Earliest, per-instance (not per-process)
+      reply topics, dedicated `r2e-request-id` header so the user's
+      correlation_id survives, no-responder always yields an error reply.
 - [x] **P2.6 Kafka: blocking `producer.flush` in async shutdown.** Fixed:
       shutdown flush now runs in `spawn_blocking` (flush errors still
       propagate; a JoinError is logged and swallowed). Noted but not fixed:
       the final `commit_consumer_state(CommitMode::Sync)` in the consumer
       drain tail is also blocking, but moving it needs care around the
       `StreamConsumer` borrow + manual-commit invariants — possible follow-up.
+
+## P2.5 resolution — Vert.x-pure API (decided 2026-07-13)
+
+Industry survey conclusion: no established system offers "emit and await all
+subscribers" in distributed mode. Vert.x/Quarkus has `publish` (fan-out,
+fire-and-forget, no reply possible) and `request` (point-to-point, ONE
+consumer replies, timeout); Spring's synchronous `publishEvent` is strictly
+in-process; broker systems only await the broker ack. The user chose the
+**Vert.x-pure** model over the Spring hybrid:
+
+- **`emit_and_wait` / `emit_and_wait_with` are REMOVED from the `EventBus`
+  trait and every implementation.** `emit` stays fan-out with no handler
+  await. Tests that need determinism use `request` or in-flight draining.
+- **The entire local-echo machinery goes with it:** `LocallyDispatchedSet`
+  in `src/backend/state.rs`, `record_local_dispatch`, the poller-side dedup
+  check, and the dispatch-local-before-publish path from the P1 pass. One
+  delivery path per consumer group — the P2.5 double-processing problem is
+  removed, not patched. P5.3 is moot.
+- **New `request<Req, Resp>` / `respond<Req, Resp>` API** (all backends):
+  - `bus.request(req) -> Result<Resp, EventBusError>` — point-to-point,
+    awaits ONE responder's reply. Default timeout 30s, configurable per
+    backend (`request_timeout`); `request_with` takes explicit
+    timeout/metadata. Errors: `NoResponder`, `RequestTimeout`,
+    `Remote(String)` (responder returned an error — Vert.x ReplyException
+    equivalent).
+  - `bus.respond(handler)` — registers the responder for `Req`. **At most
+    one responder per request type per process** (second registration
+    errors). Cross-instance load balancing comes from the broker
+    (queue/consumer-group semantics), not in-process round-robin.
+  - Transport: Local = direct call. RabbitMQ = classic RPC (Direct
+    Reply-To `amq.rabbitmq.reply-to` + correlation_id). Kafka/Pulsar/Iggy =
+    shared request topic + per-instance reply topic
+    (`<prefix>.replies.<process-id>`) + correlation header
+    (ReplyingKafkaTemplate pattern). Correlation ids reuse the u128
+    `event_id` scheme from P2.1.
+- **Macro sugar (same pass):** a `#[consumer]` method with a non-`()`
+  return type becomes a responder (Quarkus `@ConsumeEvent`-style — the
+  return value IS the reply); wired through routes codegen +
+  `register_controller`.
+
+Execution waves: (1) shared crate — trait change, LocalEventBus,
+removal of the dedup machinery, shared request/reply plumbing in
+`src/backend/` (pending-request correlation map, reply metadata headers);
+(2) four backend agents in parallel; (3) macros + example-app, parallel
+with (2); (4) review pass + docs (book `event-bus.md`,
+`features/07-evenements.md`, `subsystems.md`, root `CLAUDE.md` crate
+description) + commits.
 
 ## P3 — Producer throughput (unblock >1/RTT emit)
 
@@ -202,23 +253,35 @@ Shared (`src/backend/`):
       type, decode borrowing `&str` (`src/backend/metadata_codec.rs:11-75`;
       per-backend extract fns each allocate a second Vec + to_string per
       header).
-- [ ] **P5.3** Dedup-set fast path: skip the global `locally_dispatched`
-      Mutex per consumed message when the set is empty (atomic counter
-      check) — apps that never call `emit_and_wait` currently pay it for
-      nothing (`src/backend/state.rs:342,401`).
+- [x] **P5.3** ~~Dedup-set fast path~~ — moot: the `locally_dispatched`
+      dedup set was deleted entirely by the P2.5 Vert.x-pure pass (no
+      local-echo suppression exists anymore).
+- [ ] **P5.9** Responder throughput: the request-topic consumers process
+      requests strictly sequentially on kafka/pulsar/iggy (await the user
+      responder before the next receive) — one slow responder invocation
+      head-of-line-blocks every queued request on that instance (RabbitMQ
+      spawns per delivery). Needs bounded concurrent dispatch that still
+      respects commit ordering (Kafka offsets). Flagged by the P2.5 review;
+      deferred — fits the P4 consumer-throughput work.
+- [ ] **P5.10** `respond` API polish: the handler must return
+      `Result<Resp, String>`, so the macro codegen and every manual caller
+      stringify errors themselves. Accepting `E: Display` and mapping to the
+      remote-error string inside the events crate would single-source the
+      flattening. Flagged by the P2.5 review; deferred (API polish).
+- [ ] **P5.11** Reply-topic hygiene: per-instance reply topics
+      (`<prefix>.replies.<instance-hex>`) accumulate on the broker across
+      restarts (kafka/pulsar/iggy). Decide retention/cleanup (short
+      retention config, non-persistent topics on Pulsar, or startup GC).
 - [ ] **P5.4** Deserialize outside the handlers read lock: clone the
       `DeserializerFn` + handler list under the lock, drop it, then
       deserialize (`src/backend/state.rs:352,413`).
 - [ ] **P5.5** `ensure_topic` steady-state lock: `is_topic_ensured` takes a
       global `Mutex<HashSet>` on every publish (`state.rs:220-222`) —
       per-topic cached flag / lock-free snapshot.
-- [ ] **P5.6b** Reconnect/backoff loop is triplicated: iggy `run_poller`,
-      kafka `run_consumer`, and rabbitmq `run_consumer` (added by P2.2) carry
-      near-verbatim copies of the same policy (1s initial, double,
-      `.min(max_backoff)`, reset after a healthy run > backoff×4,
-      cancel-aware select). Extract a shared `reconnect_loop` driver into
-      `src/backend/` (next to `WatermarkTracker`) — flagged by the P2 review;
-      deferred because it touches iggy/kafka outside that pass's scope.
+- [x] **P5.6b** Reconnect/backoff loop duplication — done with the P2.5
+      pass: shared `reconnect_loop` driver in `src/backend/reconnect.rs`,
+      adopted by every consumer/poller/responder/reply loop in all four
+      backends (10 call sites).
 - [ ] **P5.6** Typed error classification: Iggy/Kafka `map_*_error` classify
       by `msg.contains("connect")` substring matching
       (`backends/iggy/src/error.rs:7-11`, `backends/kafka/src/error.rs:6-16`)

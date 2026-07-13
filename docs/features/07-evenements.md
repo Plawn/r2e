@@ -91,21 +91,43 @@ event_bus.emit(UserCreatedEvent {
     name: "Alice".into(),
     email: "alice@example.com".into(),
 }).await;
-
-// Emit and wait for all handlers to complete
-event_bus.emit_and_wait(UserCreatedEvent {
-    user_id: 42,
-    name: "Alice".into(),
-    email: "alice@example.com".into(),
-}).await;
 ```
 
-### Difference between `emit` and `emit_and_wait`
+`emit` is fan-out publish/subscribe (Vert.x `publish` semantics): every
+subscriber receives a copy, the emitter never waits for handlers and cannot
+observe a reply.
+
+### Request-reply: `request` / `respond`
+
+When you need a **result** back, use the point-to-point request-reply API
+(Vert.x `request` semantics) instead of waiting on subscribers:
+
+```rust
+// Responder side — at most one responder per request type per process.
+event_bus.respond(|envelope: EventEnvelope<GreetRequest>| async move {
+    Ok::<_, String>(GreetReply { message: format!("Hello {}", envelope.event.name) })
+}).await?;
+
+// Requester side — exactly one responder replies, with a timeout (30s default).
+let reply: GreetReply = event_bus.request(GreetRequest { name: "Alice".into() }).await?;
+
+// Explicit timeout
+let reply: GreetReply = event_bus
+    .request_with(GreetRequest { name: "Alice".into() },
+                  RequestOptions::new().with_timeout(Duration::from_secs(5)))
+    .await?;
+```
+
+A responder error surfaces to the caller as `EventBusError::Remote`;
+`NoResponder` is only detectable in-process (on distributed backends an
+absent responder manifests as `RequestTimeout`). In controllers, a
+`#[consumer]` method with a non-`()` return type is automatically registered
+as a responder — its return value is the reply.
 
 | Method | Behavior |
 |--------|----------|
-| `emit()` | Spawns handlers as Tokio tasks, returns immediately |
-| `emit_and_wait()` | Spawns handlers, waits for all of them to complete |
+| `emit()` | Fan-out: spawns all subscribers as Tokio tasks, returns immediately |
+| `request()` | Point-to-point: exactly one responder replies; awaits that reply with a timeout |
 
 ### 5. Integration in a service
 

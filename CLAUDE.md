@@ -46,7 +46,7 @@ r2e-macros      → Proc-macro crate. #[controller] + #[routes] generate Axum ha
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, build_state → HList state, serve_auto), Controller trait, ContextConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
-r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
+r2e-events      → In-process EventBus with typed pub/sub (emit/subscribe fan-out) plus point-to-point request-reply (request/respond). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
   backends/iggy     → Apache Iggy EventBus backend: persistent distributed event streaming.
   backends/kafka    → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
   backends/pulsar   → Apache Pulsar EventBus backend: distributed event streaming.
