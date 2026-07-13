@@ -5,7 +5,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::producer::FutureProducer;
 
-use r2e_events::backend::{BackendState, TopicRegistry};
+use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::EventBusError;
 
 use crate::bus::KafkaEventBus;
@@ -56,10 +56,22 @@ impl KafkaEventBusBuilder {
             .create()
             .map_err(map_kafka_error)?;
 
+        // Mint one instance nonce per bus and derive its (constant) reply topic
+        // once — both the reply topic and the reply consumer group embed this id
+        // so two bus instances sharing a config in one process stay disjoint.
+        let instance_id = instance_id();
+        let reply_topic = reply_topic(&self.config.group_id, instance_id);
+
         let inner = KafkaInner {
             config: self.config,
             producer,
             state: Arc::new(BackendState::new(self.topic_registry)),
+            pending: Arc::new(PendingRequests::new()),
+            reply_consumer: tokio::sync::OnceCell::new(),
+            responder_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            shutdown_notify: tokio::sync::Notify::new(),
+            instance_id,
+            reply_topic,
         };
 
         Ok(KafkaEventBus {

@@ -19,17 +19,20 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
-    decode_metadata, encode_metadata, spawn_completion_forwarder, DispatchOutcome, Handler,
-    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    await_reply, decode_metadata, encode_metadata, encode_reply_headers, reconnect_loop,
+    request_topic, spawn_completion_forwarder, DispatchOutcome, Handler, WatermarkTracker,
+    COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
+    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
+    ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
 use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
+use crate::request::{run_reply_consumer, run_responder_consumer};
 
 /// Interval between periodic offset commits when `enable_auto_commit` is
 /// `false` — librdkafka's periodic committer is off, so the consume loop drives
@@ -76,8 +79,8 @@ impl ConsumerContext for R2eConsumerContext {
 ///
 /// # Limitations
 ///
-/// - `emit_and_wait` publishes to Kafka AND waits for **local** handlers only.
-///   It cannot wait for handlers on remote instances.
+/// - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+///   point-to-point request-reply.
 /// - One event type per topic (the deserializer is registered on first `subscribe`).
 #[derive(Clone)]
 pub struct KafkaEventBus {
@@ -118,39 +121,109 @@ impl KafkaEventBus {
         metadata: &EventMetadata,
     ) -> Result<(), EventBusError> {
         self.ensure_topic(topic_name).await?;
-
         let pairs = encode_metadata(metadata);
+        produce_with_headers(
+            &self.inner.producer,
+            topic_name,
+            &payload,
+            metadata.partition_key.as_deref(),
+            pairs,
+        )
+        .await
+    }
 
-        let mut record = FutureRecord::to(topic_name).payload(&payload);
+    /// The per-instance, instance-private reply topic for request-reply.
+    ///
+    /// Named `<group-id>.replies.<instance-id-hex>` so only this bus instance
+    /// consumes its own replies. Formatted once at construction and cached on
+    /// [`KafkaInner`], so this just clones the stored string.
+    fn reply_topic_name(&self) -> String {
+        self.inner.reply_topic.clone()
+    }
 
-        // Use partition_key as the Kafka message key
-        if let Some(ref key) = metadata.partition_key {
-            record = record.key(key);
-        }
-
-        // Encode metadata as Kafka headers
-        let header_storage: Vec<(String, Vec<u8>)> = pairs
-            .into_iter()
-            .map(|(k, v)| (k, v.into_bytes()))
-            .collect();
-
-        let mut owned_headers = rdkafka::message::OwnedHeaders::new();
-        for (k, v) in &header_storage {
-            owned_headers = owned_headers.insert(rdkafka::message::Header {
-                key: k,
-                value: Some(v),
-            });
-        }
-        record = record.headers(owned_headers);
-
+    /// Ensure this process's reply consumer is running (started lazily on the
+    /// first request). Creates the reply topic and spawns the routing task
+    /// exactly once, keeping its cancel token for shutdown.
+    async fn ensure_reply_consumer(&self) -> Result<(), EventBusError> {
         self.inner
-            .producer
-            .send(record, Duration::from_secs(5))
-            .await
-            .map_err(|(e, _)| map_kafka_error(e))?;
+            .reply_consumer
+            .get_or_try_init(|| async {
+                let topic = self.reply_topic_name();
+                self.ensure_topic(&topic).await?;
 
+                let cancel = CancellationToken::new();
+                let inner = self.inner.clone();
+                let cancel_child = cancel.clone();
+                r2e_core::rt::spawn(async move {
+                    run_reply_consumer(inner, topic, cancel_child).await;
+                });
+                Ok::<_, EventBusError>(cancel)
+            })
+            .await?;
         Ok(())
     }
+
+    /// Publish a request to `topic_name`, tagging it with the `correlation_id`
+    /// and the `reply_to` topic so the responder can route the reply back.
+    async fn publish_request(
+        &self,
+        topic_name: &str,
+        payload: Vec<u8>,
+        metadata: &EventMetadata,
+        correlation_id: u128,
+        reply_to: &str,
+    ) -> Result<(), EventBusError> {
+        self.ensure_topic(topic_name).await?;
+
+        // The request id rides its own dedicated header slot, so the user's
+        // correlation id in the metadata flows through untouched.
+        let mut pairs = encode_metadata(metadata);
+        pairs.extend(encode_reply_headers(correlation_id, Some(reply_to), None));
+
+        produce_with_headers(
+            &self.inner.producer,
+            topic_name,
+            &payload,
+            metadata.partition_key.as_deref(),
+            pairs,
+        )
+        .await
+    }
+}
+
+/// Produce one record to Kafka with the given string headers (encoded as UTF-8
+/// header values). Shared by the emit, request, and reply publish paths.
+pub(crate) async fn produce_with_headers(
+    producer: &rdkafka::producer::FutureProducer,
+    topic_name: &str,
+    payload: &[u8],
+    key: Option<&str>,
+    pairs: Vec<(String, String)>,
+) -> Result<(), EventBusError> {
+    let mut record = FutureRecord::to(topic_name).payload(payload);
+
+    if let Some(k) = key {
+        record = record.key(k);
+    }
+
+    let header_storage: Vec<(String, Vec<u8>)> =
+        pairs.into_iter().map(|(k, v)| (k, v.into_bytes())).collect();
+
+    let mut owned_headers = rdkafka::message::OwnedHeaders::new();
+    for (k, v) in &header_storage {
+        owned_headers = owned_headers.insert(rdkafka::message::Header {
+            key: k,
+            value: Some(v),
+        });
+    }
+    record = record.headers(owned_headers);
+
+    producer
+        .send(record, Duration::from_secs(5))
+        .await
+        .map_err(|(e, _)| map_kafka_error(e))?;
+
+    Ok(())
 }
 
 impl EventBus for KafkaEventBus {
@@ -296,58 +369,106 @@ impl EventBus for KafkaEventBus {
         }
     }
 
-    fn emit_and_wait<E>(&self, event: E) -> impl Future<Output = Result<(), EventBusError>> + Send
+    fn request_with<Req, Resp>(
+        &self,
+        req: Req,
+        options: RequestOptions,
+    ) -> impl Future<Output = Result<Resp, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: Serialize + Send + Sync + 'static,
+        Resp: DeserializeOwned + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
-            let metadata = EventMetadata::new();
+            // Start (once) the per-process reply consumer before publishing so
+            // the reply cannot be missed. An absent responder on every instance
+            // manifests here as `RequestTimeout` — nothing consumes the request
+            // topic, so no reply ever arrives.
+            bus.ensure_reply_consumer().await?;
 
-            // Dispatch locally (recording the outcome for poller dedup) BEFORE
-            // publishing — publishing first races the poller consuming the
-            // broker copy before the local outcome is recorded.
-            bus.inner
-                .state
-                .dispatch_local(type_id, &payload, metadata.clone())
+            let payload = serde_json::to_vec(&req)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let request_topic_name = request_topic(&bus.resolve_topic::<Req>());
+            let reply_to = bus.reply_topic_name();
+
+            let (correlation_id, guard, rx) = bus.inner.pending.register();
+
+            let metadata = options.metadata.unwrap_or_default();
+            bus.publish_request(&request_topic_name, payload, &metadata, correlation_id, &reply_to)
                 .await?;
 
-            bus.publish(&topic_name, payload, &metadata).await
+            // Await the reply, the timeout, or a shutdown signal. The pending
+            // guard drops after, evicting the correlation entry so a late reply
+            // is discarded instead of leaking a map slot. Our shutdown signal is
+            // a `Notify`, so pass its `notified()` future as the shutdown future.
+            let result =
+                await_reply::<Resp>(rx, options.timeout, bus.inner.shutdown_notify.notified()).await;
+            drop(guard);
+            result
         }
     }
 
-    fn emit_and_wait_with<E>(
+    fn respond<Req, Resp, F, Fut>(
         &self,
-        event: E,
-        metadata: EventMetadata,
-    ) -> impl Future<Output = Result<(), EventBusError>> + Send
+        handler: F,
+    ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: DeserializeOwned + Send + Sync + 'static,
+        Resp: Serialize + Send + 'static,
+        F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
+            let type_id = TypeId::of::<Req>();
+            let type_name = std::any::type_name::<Req>();
 
-            // Dispatch locally (recording the outcome for poller dedup) BEFORE
-            // publishing — publishing first races the poller consuming the
-            // broker copy before the local outcome is recorded.
+            // At most one responder per type per process (errors on a duplicate)
+            // — registered before spawning so a duplicate does not start a
+            // second consumer.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata.clone())
+                .register_responder::<Req, Resp, F, Fut>(handler)
                 .await?;
 
-            bus.publish(&topic_name, payload, &metadata).await
+            let request_topic_name = request_topic(&bus.resolve_topic::<Req>());
+            bus.ensure_topic(&request_topic_name).await?;
+
+            let cancel = CancellationToken::new();
+            bus.inner
+                .responder_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(type_id, cancel.clone());
+
+            let inner = bus.inner.clone();
+            let cancel_child = cancel.clone();
+            let topic = request_topic_name.clone();
+            r2e_core::rt::spawn(async move {
+                run_responder_consumer(inner, type_id, topic, cancel_child).await;
+            });
+
+            let inner_unreg = bus.inner.clone();
+            Ok(ResponderHandle::new(type_name, move || {
+                if let Some(cancel) = inner_unreg
+                    .responder_cancels
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&type_id)
+                {
+                    cancel.cancel();
+                }
+                let inner = inner_unreg.clone();
+                // Unregister may be triggered from a handler, so route to the
+                // control plane in sharded mode.
+                r2e_core::rt::spawn_ctl(async move {
+                    inner.state.unregister_responder(type_id).await;
+                });
+            }))
         }
     }
 
@@ -355,6 +476,15 @@ impl EventBus for KafkaEventBus {
         let inner = self.inner.clone();
         async move {
             inner.state.cancel_all_pollers();
+            for (_, cancel) in inner
+                .responder_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain()
+            {
+                cancel.cancel();
+            }
+            inner.state.responders.write().await.clear();
             inner.state.handlers.write().await.clear();
         }
     }
@@ -368,6 +498,21 @@ impl EventBus for KafkaEventBus {
             inner.state.shutdown.store(true, Ordering::Release);
 
             inner.state.cancel_all_pollers();
+
+            // Stop the request-reply consumers and fail in-flight requesters so
+            // they return `Shutdown` instead of blocking to their timeout.
+            if let Some(cancel) = inner.reply_consumer.get() {
+                cancel.cancel();
+            }
+            for (_, cancel) in inner
+                .responder_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain()
+            {
+                cancel.cancel();
+            }
+            inner.shutdown_notify.notify_waiters();
 
             inner.state.wait_in_flight(timeout).await?;
 
@@ -400,30 +545,15 @@ async fn run_consumer(
     topic_name: String,
     cancel: CancellationToken,
 ) {
-    let max_backoff = inner.config.reconnect_max_backoff;
-    let reconnect = inner.config.reconnect;
-    let mut backoff = Duration::from_secs(1);
-
-    loop {
-        let start = std::time::Instant::now();
-        run_consumer_inner(&inner, type_id, &topic_name, &cancel).await;
-
-        if cancel.is_cancelled() || !reconnect {
-            break;
-        }
-
-        // Reset backoff if the consumer ran successfully for a while
-        if start.elapsed() > backoff * 4 {
-            backoff = Duration::from_secs(1);
-        }
-
-        tracing::warn!(topic = %topic_name, "Kafka consumer disconnected, reconnecting in {backoff:?}");
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = r2e_core::rt::sleep(backoff) => {},
-        }
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    let label = format!("Kafka consumer [{topic_name}]");
+    reconnect_loop(
+        inner.config.reconnect,
+        inner.config.reconnect_max_backoff,
+        &cancel,
+        &label,
+        || run_consumer_inner(&inner, type_id, &topic_name, &cancel),
+    )
+    .await;
 }
 
 async fn run_consumer_inner(
@@ -587,10 +717,10 @@ fn apply_completion(
     }
 }
 
-/// Extract `EventMetadata` from Kafka message headers.
-fn extract_metadata_from_kafka(msg: &rdkafka::message::BorrowedMessage<'_>) -> EventMetadata {
+/// Collect a Kafka message's headers into UTF-8 `(key, value)` string pairs,
+/// skipping any header whose value is absent or not valid UTF-8.
+pub(crate) fn kafka_header_pairs(msg: &rdkafka::message::BorrowedMessage<'_>) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
-
     if let Some(headers) = msg.headers() {
         for header in headers.iter() {
             if let Some(value) = header.value {
@@ -600,6 +730,10 @@ fn extract_metadata_from_kafka(msg: &rdkafka::message::BorrowedMessage<'_>) -> E
             }
         }
     }
+    pairs
+}
 
-    decode_metadata(pairs.into_iter())
+/// Extract `EventMetadata` from Kafka message headers.
+fn extract_metadata_from_kafka(msg: &rdkafka::message::BorrowedMessage<'_>) -> EventMetadata {
+    decode_metadata(kafka_header_pairs(msg).into_iter())
 }
