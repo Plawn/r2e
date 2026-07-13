@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pulsar::{Authentication, Pulsar, TokioExecutor};
 use tokio::sync::Mutex;
 
-use r2e_events::backend::{BackendState, TopicRegistry};
+use r2e_events::backend::{instance_id, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::EventBusError;
 
 use crate::bus::PulsarEventBus;
@@ -62,11 +62,20 @@ impl PulsarEventBusBuilder {
 
         let pulsar = builder.build().await.map_err(map_pulsar_error)?;
 
+        // Mint one instance nonce per bus. The instance-private reply topic is
+        // derived from it (and cached) on first request-reply use.
+        let instance = instance_id();
+
         let inner = PulsarInner {
             config: self.config,
             pulsar,
             producers: Mutex::new(HashMap::new()),
             state: Arc::new(BackendState::new(self.topic_registry)),
+            instance_id: instance,
+            reply_topic_full: std::sync::OnceLock::new(),
+            pending: Arc::new(PendingRequests::new()),
+            reply_consumer: std::sync::OnceLock::new(),
+            responder_cancels: std::sync::Mutex::new(HashMap::new()),
         };
 
         Ok(PulsarEventBus {
