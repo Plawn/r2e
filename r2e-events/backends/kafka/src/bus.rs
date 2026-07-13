@@ -24,8 +24,8 @@ use r2e_events::backend::{
     COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
-    ResponderHandle, SubscriptionHandle,
+    EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
+    RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
@@ -191,6 +191,31 @@ impl KafkaEventBus {
     }
 }
 
+fn build_record<'a>(
+    topic_name: &'a str,
+    payload: &'a [u8],
+    key: Option<&'a str>,
+    pairs: Vec<(String, String)>,
+) -> FutureRecord<'a, str, [u8]> {
+    let mut record = FutureRecord::to(topic_name).payload(payload);
+
+    if let Some(k) = key {
+        record = record.key(k);
+    }
+
+    let header_bytes: Vec<(String, Vec<u8>)> =
+        pairs.into_iter().map(|(k, v)| (k, v.into_bytes())).collect();
+
+    let mut owned_headers = rdkafka::message::OwnedHeaders::new();
+    for (k, v) in &header_bytes {
+        owned_headers = owned_headers.insert(rdkafka::message::Header {
+            key: k,
+            value: Some(v),
+        });
+    }
+    record.headers(owned_headers)
+}
+
 /// Produce one record to Kafka with the given string headers (encoded as UTF-8
 /// header values). Shared by the emit, request, and reply publish paths.
 pub(crate) async fn produce_with_headers(
@@ -200,23 +225,7 @@ pub(crate) async fn produce_with_headers(
     key: Option<&str>,
     pairs: Vec<(String, String)>,
 ) -> Result<(), EventBusError> {
-    let mut record = FutureRecord::to(topic_name).payload(payload);
-
-    if let Some(k) = key {
-        record = record.key(k);
-    }
-
-    let header_storage: Vec<(String, Vec<u8>)> =
-        pairs.into_iter().map(|(k, v)| (k, v.into_bytes())).collect();
-
-    let mut owned_headers = rdkafka::message::OwnedHeaders::new();
-    for (k, v) in &header_storage {
-        owned_headers = owned_headers.insert(rdkafka::message::Header {
-            key: k,
-            value: Some(v),
-        });
-    }
-    record = record.headers(owned_headers);
+    let record = build_record(topic_name, payload, key, pairs);
 
     producer
         .send(record, Duration::from_secs(5))
@@ -224,6 +233,37 @@ pub(crate) async fn produce_with_headers(
         .map_err(|(e, _)| map_kafka_error(e))?;
 
     Ok(())
+}
+
+/// Like [`produce_with_headers`] but returns an [`EmitReceipt`] without
+/// awaiting the broker acknowledgement. Uses `send_result` (non-blocking
+/// enqueue into librdkafka's producer buffer); returns a receipt wrapping
+/// the `DeliveryFuture` so the caller can optionally confirm later.
+///
+/// Fails immediately with `EventBusError` if the producer queue is full
+/// (no retry, unlike the blocking `send` path).
+pub(crate) fn produce_nowait(
+    producer: &rdkafka::producer::FutureProducer,
+    topic_name: &str,
+    payload: &[u8],
+    key: Option<&str>,
+    pairs: Vec<(String, String)>,
+) -> Result<EmitReceipt, EventBusError> {
+    let record = build_record(topic_name, payload, key, pairs);
+
+    let delivery = producer
+        .send_result(record)
+        .map_err(|(e, _)| map_kafka_error(e))?;
+
+    Ok(EmitReceipt::new(async move {
+        match delivery.await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err((e, _))) => Err(map_kafka_error(e)),
+            Err(_) => Err(EventBusError::Other(
+                "kafka delivery cancelled (producer dropped)".to_string(),
+            )),
+        }
+    }))
 }
 
 impl EventBus for KafkaEventBus {
@@ -366,6 +406,62 @@ impl EventBus for KafkaEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            let metadata = EventMetadata::new();
+
+            bus.ensure_topic(&topic_name).await?;
+            let pairs = encode_metadata(&metadata);
+            produce_nowait(
+                &bus.inner.producer,
+                &topic_name,
+                &payload,
+                metadata.partition_key.as_deref(),
+                pairs,
+            )
+        }
+    }
+
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+
+            bus.ensure_topic(&topic_name).await?;
+            let pairs = encode_metadata(&metadata);
+            produce_nowait(
+                &bus.inner.producer,
+                &topic_name,
+                &payload,
+                metadata.partition_key.as_deref(),
+                pairs,
+            )
         }
     }
 

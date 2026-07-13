@@ -21,8 +21,8 @@ use r2e_events::backend::{
     Handler, HEADER_REPLY_ERROR,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
-    ResponderHandle, SubscriptionHandle,
+    EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
+    RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::RabbitMqEventBusBuilder;
@@ -112,7 +112,7 @@ impl RabbitMqEventBus {
     /// Uses the dedicated publisher channel, recreating it (and reconnecting the
     /// underlying connection if needed) when the stored one has dropped. A
     /// publish failure only affects the publisher channel — consumer channels
-    /// are independent.
+    /// are independent. Awaits the publisher confirm for durability.
     async fn publish(
         &self,
         topic_name: &str,
@@ -136,6 +136,34 @@ impl RabbitMqEventBus {
             .map_err(map_lapin_error)?;
 
         Ok(())
+    }
+
+    /// Publish without awaiting the publisher confirm. Returns an
+    /// [`EmitReceipt`] wrapping the confirm future.
+    async fn publish_nowait(
+        &self,
+        topic_name: &str,
+        payload: Vec<u8>,
+        metadata: &EventMetadata,
+    ) -> Result<EmitReceipt, EventBusError> {
+        let props = self.build_properties(metadata);
+        let channel = self.inner.publisher_channel().await?;
+
+        let confirm = channel
+            .basic_publish(
+                self.inner.config.exchange.as_str().into(),
+                topic_name.into(),
+                BasicPublishOptions::default(),
+                &payload,
+                props,
+            )
+            .await
+            .map_err(map_lapin_error)?;
+
+        Ok(EmitReceipt::new(async move {
+            confirm.await.map_err(map_lapin_error)?;
+            Ok(())
+        }))
     }
 }
 
@@ -277,6 +305,44 @@ impl EventBus for RabbitMqEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            let metadata = EventMetadata::new();
+            bus.publish_nowait(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            bus.publish_nowait(&topic_name, payload, &metadata).await
         }
     }
 

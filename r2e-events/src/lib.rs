@@ -32,6 +32,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -82,6 +83,46 @@ impl fmt::Display for EventBusError {
 }
 
 impl std::error::Error for EventBusError {}
+
+// ── EmitReceipt ───────────────────────────────────────────────────────
+
+/// Handle returned by [`EventBus::emit_nowait`] / [`EventBus::emit_nowait_with`].
+///
+/// Wraps the broker confirmation as a future. The caller can:
+/// - Drop it for fire-and-forget (the message is already in-flight).
+/// - Call [`confirm`](EmitReceipt::confirm) to await the broker acknowledgement.
+/// - Collect many receipts and `try_join_all(receipts.into_iter().map(|r| r.confirm()))`
+///   for batch confirmation.
+pub struct EmitReceipt {
+    inner: Pin<Box<dyn Future<Output = Result<(), EventBusError>> + Send>>,
+}
+
+impl EmitReceipt {
+    /// Create a receipt from a future that resolves when the broker confirms.
+    pub fn new(fut: impl Future<Output = Result<(), EventBusError>> + Send + 'static) -> Self {
+        Self {
+            inner: Box::pin(fut),
+        }
+    }
+
+    /// Create an already-resolved receipt (for `LocalEventBus` or fallback).
+    pub fn ready() -> Self {
+        Self {
+            inner: Box::pin(std::future::ready(Ok(()))),
+        }
+    }
+
+    /// Await broker confirmation. Equivalent to using [`EventBus::emit`] directly.
+    pub async fn confirm(self) -> Result<(), EventBusError> {
+        self.inner.await
+    }
+}
+
+impl fmt::Debug for EmitReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EmitReceipt").finish_non_exhaustive()
+    }
+}
 
 // ── SubscriptionHandle ─────────────────────────────────────────────────
 
@@ -482,6 +523,53 @@ pub trait EventBus: Clone + Send + Sync + 'static {
     where
         E: Serialize + Send + Sync + 'static;
 
+    /// Emit an event without waiting for the broker acknowledgement.
+    ///
+    /// Returns an [`EmitReceipt`] that the caller can:
+    /// - Drop for fire-and-forget (the message is already in-flight).
+    /// - [`confirm`](EmitReceipt::confirm) to await the broker ack.
+    /// - Collect and batch-confirm via `try_join_all`.
+    ///
+    /// Errors returned by the outer `Result` are pre-flight failures
+    /// (serialization, shutdown, queue-full). Broker-level errors surface
+    /// through [`EmitReceipt::confirm`].
+    ///
+    /// The default implementation delegates to [`emit`](EventBus::emit)
+    /// (blocking until the broker confirms) and returns a ready receipt —
+    /// backends override for true non-blocking behavior.
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let this = self.clone();
+        async move {
+            this.emit(event).await?;
+            Ok(EmitReceipt::ready())
+        }
+    }
+
+    /// Emit an event with explicit metadata without waiting for the broker
+    /// acknowledgement.
+    ///
+    /// See [`emit_nowait`](EventBus::emit_nowait) for semantics.
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let this = self.clone();
+        async move {
+            this.emit_with(event, metadata).await?;
+            Ok(EmitReceipt::ready())
+        }
+    }
+
     /// Send a point-to-point request and await the responder's reply.
     ///
     /// Exactly one responder (registered via [`respond`]) handles the request
@@ -562,8 +650,8 @@ pub mod prelude {
     pub use crate::backend::DeserializerFn;
     pub use crate::sse_bridge::SseBridgeExt;
     pub use crate::{
-        Event, EventBus, EventBusError, EventEnvelope, EventFilter, EventMetadata, HandlerResult,
-        LocalEventBus, RequestOptions, ResponderHandle, RetryPolicy, SubscriptionHandle,
-        SubscriptionId, DEFAULT_REQUEST_TIMEOUT,
+        EmitReceipt, Event, EventBus, EventBusError, EventEnvelope, EventFilter, EventMetadata,
+        HandlerResult, LocalEventBus, RequestOptions, ResponderHandle, RetryPolicy,
+        SubscriptionHandle, SubscriptionId, DEFAULT_REQUEST_TIMEOUT,
     };
 }

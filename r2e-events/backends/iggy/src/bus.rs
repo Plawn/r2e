@@ -19,8 +19,8 @@ use r2e_events::backend::{
     HEADER_PARTITION_KEY, HEADER_TIMESTAMP,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
-    ResponderHandle, SubscriptionHandle,
+    EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
+    RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::IggyEventBusBuilder;
@@ -385,6 +385,108 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            let metadata = EventMetadata::new();
+
+            let headers = Self::build_headers(&metadata)?;
+            bus.ensure_topic(&topic_name).await?;
+
+            let stream_id = Identifier::named(&bus.inner.config.stream_name)
+                .map_err(map_iggy_error)?;
+            let topic_id =
+                Identifier::named(&topic_name).map_err(map_iggy_error)?;
+            let partitioning = match metadata.partition_key.as_deref() {
+                Some(key) => Partitioning::messages_key_str(key)
+                    .map_err(|e| EventBusError::Serialization(e.to_string()))?,
+                None => Partitioning::balanced(),
+            };
+            let msg = IggyMessage::builder()
+                .payload(bytes::Bytes::from(payload))
+                .user_headers(headers)
+                .build()
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+
+            let client = bus.inner.client.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            r2e_core::rt::spawn(async move {
+                let result = client
+                    .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
+                    .await;
+                let _ = tx.send(result.map_err(map_iggy_error));
+            });
+
+            Ok(EmitReceipt::new(async move {
+                rx.await.map_err(|_| {
+                    EventBusError::Other("iggy send task dropped".to_string())
+                })?
+            }))
+        }
+    }
+
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+
+            let headers = Self::build_headers(&metadata)?;
+            bus.ensure_topic(&topic_name).await?;
+
+            let stream_id = Identifier::named(&bus.inner.config.stream_name)
+                .map_err(map_iggy_error)?;
+            let topic_id =
+                Identifier::named(&topic_name).map_err(map_iggy_error)?;
+            let partitioning = match metadata.partition_key.as_deref() {
+                Some(key) => Partitioning::messages_key_str(key)
+                    .map_err(|e| EventBusError::Serialization(e.to_string()))?,
+                None => Partitioning::balanced(),
+            };
+            let msg = IggyMessage::builder()
+                .payload(bytes::Bytes::from(payload))
+                .user_headers(headers)
+                .build()
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+
+            let client = bus.inner.client.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            r2e_core::rt::spawn(async move {
+                let result = client
+                    .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
+                    .await;
+                let _ = tx.send(result.map_err(map_iggy_error));
+            });
+
+            Ok(EmitReceipt::new(async move {
+                rx.await.map_err(|_| {
+                    EventBusError::Other("iggy send task dropped".to_string())
+                })?
+            }))
         }
     }
 

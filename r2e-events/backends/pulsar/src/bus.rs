@@ -22,8 +22,8 @@ use r2e_events::backend::{
     Handler, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT, HEADER_PARTITION_KEY,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
-    ResponderHandle, SubscriptionHandle,
+    EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
+    RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::PulsarEventBusBuilder;
@@ -158,6 +158,49 @@ impl PulsarEventBus {
             .map_err(|e| EventBusError::Other(format!("send receipt error: {e}")))?;
 
         Ok(())
+    }
+
+    /// Like [`publish`] but returns an [`EmitReceipt`] without awaiting the
+    /// broker acknowledgement.
+    async fn publish_nowait(
+        &self,
+        topic_name: &str,
+        payload: Vec<u8>,
+        metadata: &EventMetadata,
+    ) -> Result<EmitReceipt, EventBusError> {
+        let full_topic = self.full_topic(topic_name);
+
+        let producer = self.get_or_create_producer(&full_topic).await?;
+
+        let properties = Self::build_properties(metadata);
+
+        let partition_key = metadata.partition_key.clone();
+
+        let msg = ProducerMessage {
+            payload,
+            properties,
+            partition_key,
+            ordering_key: None,
+            replicate_to: Vec::new(),
+            event_time: None,
+            schema_version: None,
+            deliver_at_time: None,
+        };
+
+        let receipt = {
+            let mut guard = producer.lock().await;
+            guard
+                .send_non_blocking(msg)
+                .await
+                .map_err(|e: PulsarError| map_pulsar_error(e))?
+        };
+
+        Ok(EmitReceipt::new(async move {
+            receipt
+                .await
+                .map_err(|e| EventBusError::Other(format!("send receipt error: {e}")))?;
+            Ok(())
+        }))
     }
 
     /// Publish a message to an already-fully-qualified topic with explicit
@@ -376,6 +419,44 @@ impl EventBus for PulsarEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            let metadata = EventMetadata::new();
+            bus.publish_nowait(&topic_name, payload, &metadata).await
+        }
+    }
+
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: Serialize + Send + Sync + 'static,
+    {
+        let bus = self.clone();
+        async move {
+            bus.inner.state.check_shutdown()?;
+
+            let payload = serde_json::to_vec(&event)
+                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
+            let topic_name = bus.resolve_topic::<E>();
+            bus.publish_nowait(&topic_name, payload, &metadata).await
         }
     }
 

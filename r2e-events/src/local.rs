@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tokio::sync::{Notify, RwLock, Semaphore};
 
 use crate::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
-    ResponderHandle, SubscriptionHandle, SubscriptionId,
+    EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
+    RequestOptions, ResponderHandle, SubscriptionHandle, SubscriptionId,
 };
 
 use crate::EventFilter;
@@ -286,6 +286,35 @@ impl EventBus for LocalEventBus {
         let type_id = TypeId::of::<E>();
         let event = Arc::new(event) as Arc<dyn Any + Send + Sync>;
         self.dispatch(type_id, event, metadata)
+    }
+
+    fn emit_nowait<E>(
+        &self,
+        event: E,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: serde::Serialize + Send + Sync + 'static,
+    {
+        let fut = self.emit(event);
+        async move {
+            fut.await?;
+            Ok(EmitReceipt::ready())
+        }
+    }
+
+    fn emit_nowait_with<E>(
+        &self,
+        event: E,
+        metadata: EventMetadata,
+    ) -> impl Future<Output = Result<EmitReceipt, EventBusError>> + Send
+    where
+        E: serde::Serialize + Send + Sync + 'static,
+    {
+        let fut = self.emit_with(event, metadata);
+        async move {
+            fut.await?;
+            Ok(EmitReceipt::ready())
+        }
     }
 
     fn request_with<Req, Resp>(

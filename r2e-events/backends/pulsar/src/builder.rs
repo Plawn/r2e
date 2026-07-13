@@ -60,6 +60,9 @@ impl PulsarEventBusBuilder {
             });
         }
 
+        builder = builder
+            .with_tls_hostname_verification_enabled(self.config.tls_hostname_verification);
+
         let pulsar = builder.build().await.map_err(map_pulsar_error)?;
 
         // Mint one instance nonce per bus. The instance-private reply topic is

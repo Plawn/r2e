@@ -171,6 +171,10 @@ impl RabbitMqInner {
 
         let channel = self.create_channel().await?;
         self.declare_exchange(&channel).await?;
+        channel
+            .confirm_select(lapin::options::ConfirmSelectOptions::default())
+            .await
+            .map_err(map_lapin_error)?;
         // Store the fresh channel back through the write guard; the guard is
         // dropped immediately, never held across an await.
         *self.publisher.write().unwrap_or_else(|e| e.into_inner()) = Some(channel.clone());

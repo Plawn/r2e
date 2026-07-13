@@ -10,6 +10,11 @@ channels, Pulsar per-topic producer locks, Kafka non-blocking shutdown
 flush. P2.5 resolved and landed 2026-07-13: Vert.x-pure API —
 emit_and_wait removed, request/respond on all backends + #[consumer]
 responder sugar + shared reconnect_loop; see the P2.5 resolution section).
+P3 landed 2026-07-13: `emit_nowait`/`emit_nowait_with` on `EventBus` trait
++ all backends (Kafka `send_result` + batching config, RabbitMQ
+`confirm_select` + pipelined confirms, Pulsar receipt wrapping +
+`tls_hostname_verification` wired, Iggy spawn-based nowait); `EmitReceipt`
+with optional `confirm()`. Dead Pulsar `batch_size` field removed.
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -185,33 +190,32 @@ Shared problem: every `emit` serializes with serde_json and awaits one full
 broker round-trip. A sequential `for e in batch { bus.emit(e).await }` caps
 at a few hundred msg/s on every backend.
 
-- [ ] **P3.1 API: decide the shape of fast emit.** Options: (a) `emit` stays
-      awaited-durable and add `emit_nowait`/batched variant; (b) `emit`
-      becomes enqueue-into-batcher and `emit_and_confirm` awaits the broker
-      receipt. Pick once, apply to all backends + `EventBus` trait. (Trait
-      change = breaking, fine.)
-- [ ] **P3.2 Kafka.** Don't await the delivery future per message on the
-      fast path (librdkafka batches internally); surface
-      `linger.ms`, `batch.size`/`batch.num.messages`,
-      `queue.buffering.max.*`, `message.timeout.ms`, `enable.idempotence`
-      as first-class config (`backends/kafka/src/config.rs:141-164`
-      currently exposes none — only raw `overrides`).
-- [ ] **P3.3 Iggy: producer-side batcher.** Today one single-message
-      `send_messages` per emit (`backends/iggy/src/bus.rs:143-147`).
-      Add a channel + background flush task coalescing same-topic messages
-      into one `send_messages` batch (size/linger thresholds).
-- [ ] **P3.4 RabbitMQ: real publisher confirms.** `confirm_select` is never
-      called, so the awaited `PublisherConfirm` resolves `NotRequested` —
-      `persistent`/`durable` defaults advertise durability that doesn't
-      exist (`backends/rabbitmq/src/bus.rs:177-180`). Enable confirms on the
-      publisher channel and pipeline them (don't await per-message serially).
-- [ ] **P3.5 Pulsar: wire the dead config + optional no-receipt emit.**
-      `batch_size`, `auto_create`, `default_partitions`,
-      `tls_hostname_verification` are parsed but never applied
-      (`backends/pulsar/src/config.rs:45-51`); wire them into
-      producer/consumer builders or delete them. After P2.4, concurrent
-      emitters pipeline; optionally add a variant that doesn't await the
-      receipt (folds into P3.1).
+- [x] **P3.1 API: decide the shape of fast emit.** Decision: option (a) —
+      `emit` stays awaited-durable, new `emit_nowait` / `emit_nowait_with`
+      return `EmitReceipt` (drop = fire-and-forget, `.confirm().await` =
+      durable, collect + `try_join_all` = batch confirm). `EmitReceipt` in
+      shared `r2e-events` crate; trait has default impls delegating to `emit`.
+- [x] **P3.2 Kafka.** `emit_nowait` uses `send_result` (non-blocking enqueue
+      into librdkafka's producer buffer); wraps the `DeliveryFuture` in
+      `EmitReceipt`. Surfaced first-class config: `linger_ms`, `batch_size`,
+      `queue_buffering_max_messages`, `queue_buffering_max_kbytes`,
+      `message_timeout_ms`, `enable_idempotence` (all `Option`, default =
+      librdkafka default; `overrides` keeps final precedence).
+- [x] **P3.3 Iggy: spawn-based nowait.** `emit_nowait` spawns the
+      `send_messages` call in a background task and returns an `EmitReceipt`
+      backed by a oneshot. Unblocks the caller immediately. Full channel +
+      background flush batcher (coalescing same-topic messages) deferred to
+      a follow-up if spawn-per-emit throughput is insufficient.
+- [x] **P3.4 RabbitMQ: real publisher confirms.** `confirm_select` now called
+      on every publisher channel (re)creation — `PublisherConfirm` resolves
+      with an actual broker ack (not `NotRequested`). `emit` correctly awaits
+      the confirm (truly durable now). `emit_nowait` returns the
+      `PublisherConfirm` wrapped in `EmitReceipt` without awaiting it.
+- [x] **P3.5 Pulsar: dead config cleanup + nowait.** `tls_hostname_verification`
+      wired to the Pulsar client builder. Dead `batch_size` field removed
+      (was consumer-named but unused). `auto_create`, `default_partitions`
+      documented as reserved for future admin API. `emit_nowait` wraps the
+      `SendFuture` receipt in `EmitReceipt` without awaiting it.
 
 ## P4 — Consumer throughput
 
