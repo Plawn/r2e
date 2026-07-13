@@ -104,8 +104,10 @@ pub struct BackendState {
     pub in_flight: AtomicUsize,
     /// Notified when `in_flight` drops to zero.
     pub in_flight_zero: Notify,
-    /// Set of topics already ensured to exist in the backend.
-    pub ensured_topics: Mutex<HashSet<String>>,
+    /// Set of topics already ensured to exist in the backend. Uses
+    /// `std::sync::RwLock` so the hot-path `is_topic_ensured` check takes a
+    /// shared read lock (no contention with concurrent emits).
+    pub ensured_topics: std::sync::RwLock<HashSet<String>>,
     /// Request-reply responders, keyed by request `TypeId`. At most one per
     /// type (enforced by [`register_responder`](BackendState::register_responder)).
     pub responders: RwLock<HashMap<TypeId, ResponderFn>>,
@@ -187,7 +189,7 @@ impl BackendState {
             poller_cancels: Mutex::new(HashMap::new()),
             in_flight: AtomicUsize::new(0),
             in_flight_zero: Notify::new(),
-            ensured_topics: Mutex::new(HashSet::new()),
+            ensured_topics: std::sync::RwLock::new(HashSet::new()),
             responders: RwLock::new(HashMap::new()),
             dlq_publisher,
             handler_semaphore: Arc::new(Semaphore::new(max_concurrency)),
@@ -233,24 +235,34 @@ impl BackendState {
     /// Resolve the topic name for an event type.
     ///
     /// Uses `std::sync::RwLock` (not async) — this is a fast HashMap lookup
-    /// called on every emit, so we avoid Tokio runtime overhead.
-    pub fn resolve_topic<E: 'static>(&self) -> String {
+    /// called on every emit, so we avoid Tokio runtime overhead. Returns
+    /// `Arc<str>` so callers can hold the name cheaply without cloning.
+    pub fn resolve_topic<E: 'static>(&self) -> Arc<str> {
         let type_id = TypeId::of::<E>();
         let type_name = std::any::type_name::<E>();
-        let reg = self.topic_registry.read().unwrap_or_else(|e| e.into_inner());
-        reg.resolve(type_id, type_name)
+        {
+            let reg = self.topic_registry.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(topic) = reg.get(type_id) {
+                return topic;
+            }
+        }
+
+        self.topic_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .resolve(type_id, type_name)
     }
 
     /// Check if a topic has already been ensured.
     ///
     /// Returns `true` if the topic was previously marked as ensured.
     pub fn is_topic_ensured(&self, topic_name: &str) -> bool {
-        self.ensured_topics.lock().unwrap_or_else(|e| e.into_inner()).contains(topic_name)
+        self.ensured_topics.read().unwrap_or_else(|e| e.into_inner()).contains(topic_name)
     }
 
     /// Mark a topic as ensured (call after successful creation).
     pub fn set_topic_ensured(&self, topic_name: &str) {
-        self.ensured_topics.lock().unwrap_or_else(|e| e.into_inner()).insert(topic_name.to_string());
+        self.ensured_topics.write().unwrap_or_else(|e| e.into_inner()).insert(topic_name.to_string());
     }
 
     /// Register a handler for an event type, returning `(handler_id, is_first_for_type)`.
@@ -364,15 +376,16 @@ impl BackendState {
     /// one responder per request type per process). The stored [`ResponderFn`]
     /// deserializes the request bytes, invokes `handler`, and serializes the
     /// reply — see [`invoke_responder`](Self::invoke_responder).
-    pub async fn register_responder<Req, Resp, F, Fut>(
+    pub async fn register_responder<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> Result<(), EventBusError>
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let type_id = TypeId::of::<Req>();
         let type_name = std::any::type_name::<Req>();
@@ -385,7 +398,7 @@ impl BackendState {
                     Box::pin(async move {
                         match fut.await {
                             Ok(resp) => serde_json::to_vec(&resp).map_err(|e| e.to_string()),
-                            Err(msg) => Err(msg),
+                            Err(e) => Err(e.to_string()),
                         }
                     })
                 }
@@ -503,60 +516,56 @@ impl BackendState {
         payload: &[u8],
         metadata: EventMetadata,
     ) -> DispatchCompletion {
-        // Collect handlers and deserialize under the lock, then release before spawning.
-        let (event, handler_data, dlq_data) = {
+        // Clone handler data under the read lock, then release before
+        // deserializing so the CPU-bound serde work doesn't block
+        // subscribe/unsubscribe.
+        let (deserializer, handler_data, dlq_data) = {
             let map = self.handlers.read().await;
             let topic_handlers = match map.get(&type_id) {
                 Some(th) => th,
                 None => return DispatchCompletion::resolved(DispatchOutcome::Ack),
             };
 
-            let event = match (topic_handlers.deserializer)(payload) {
-                Ok(e) => e,
-                Err(err) => {
-                    // Poison message: never redeliver forever. Park it in the
-                    // matching handlers' DLQs when configured, then ack it away.
-                    tracing::error!("failed to deserialize event: {err}");
-                    let mut dlq_topics: Vec<String> = topic_handlers.entries.iter()
-                        .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                        .filter_map(|entry| {
-                            entry.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.clone())
-                        })
-                        .collect();
-                    drop(map); // release the handlers lock before awaiting
-                    dlq_topics.sort();
-                    dlq_topics.dedup();
-                    if let Some(ref publisher) = self.dlq_publisher {
-                        for topic in dlq_topics {
-                            publisher(topic, payload.to_vec(), metadata.clone()).await;
-                        }
-                    }
-                    return DispatchCompletion::resolved(DispatchOutcome::Ack);
-                }
-            };
+            let deser = topic_handlers.deserializer.clone();
 
             let handlers: Vec<_> = topic_handlers.entries.iter()
                 .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                .map(|entry| (entry.handler.clone(), entry.retry_policy.clone()))
+                .map(|entry| (entry.handler.clone(), entry.retry_policy.clone(), entry.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.clone())))
                 .collect();
 
             // Pre-allocate DLQ data only if any handler has a DLQ configured.
             let has_dlq = self.dlq_publisher.is_some()
-                && topic_handlers.entries.iter().any(|e| {
-                    e.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.as_ref()).is_some()
-                });
+                && handlers.iter().any(|(_, _, dlq)| dlq.is_some());
             let dlq_data: Option<(Arc<Vec<u8>>, EventMetadata)> = if has_dlq {
                 Some((Arc::new(payload.to_vec()), metadata.clone()))
             } else {
                 None
             };
 
-            (event, handlers, dlq_data)
+            (deser, handlers, dlq_data)
         };
-        // RwLock released here — subscribe/unsubscribe can proceed.
+        // RwLock released — deserialize outside the lock.
+
+        let event = match deserializer(payload) {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::error!("failed to deserialize event: {err}");
+                let mut dlq_topics: Vec<String> = handler_data.iter()
+                    .filter_map(|(_, _, dlq)| dlq.clone())
+                    .collect();
+                dlq_topics.sort();
+                dlq_topics.dedup();
+                if let Some(ref publisher) = self.dlq_publisher {
+                    for topic in dlq_topics {
+                        publisher(topic, payload.to_vec(), metadata.clone()).await;
+                    }
+                }
+                return DispatchCompletion::resolved(DispatchOutcome::Ack);
+            }
+        };
 
         let mut receivers = Vec::with_capacity(handler_data.len());
-        for (h, retry_policy) in handler_data {
+        for (h, retry_policy, _dlq_topic) in handler_data {
             let e = event.clone();
             let m = metadata.clone();
             let state = self.clone();

@@ -1,31 +1,39 @@
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Registry mapping event `TypeId`s to topic names.
 #[derive(Debug, Default)]
 pub struct TopicRegistry {
-    map: HashMap<TypeId, String>,
+    map: HashMap<TypeId, Arc<str>>,
 }
 
 impl TopicRegistry {
     /// Register an explicit topic name for event type `E`.
     pub fn register<E: 'static>(&mut self, topic: impl Into<String>) {
-        self.map.insert(TypeId::of::<E>(), topic.into());
+        self.map.insert(TypeId::of::<E>(), Arc::from(topic.into()));
     }
 
     /// Register a topic name by raw `TypeId` (for runtime registration).
     pub fn register_by_type_id(&mut self, type_id: TypeId, topic: impl Into<String>) {
-        self.map.insert(type_id, topic.into());
+        self.map.insert(type_id, Arc::from(topic.into()));
     }
 
     /// Resolve the topic name for a given `TypeId`.
     ///
-    /// Returns the registered name, or falls back to a sanitized `type_name`.
-    pub fn resolve(&self, type_id: TypeId, type_name: &str) -> String {
+    /// Return a previously resolved topic, if any.
+    pub fn get(&self, type_id: TypeId) -> Option<Arc<str>> {
+        self.map.get(&type_id).cloned()
+    }
+
+    /// Returns the registered name, or inserts and returns a sanitized
+    /// `type_name` fallback. The fallback is cached so subsequent resolves are
+    /// allocation-free.
+    pub fn resolve(&mut self, type_id: TypeId, type_name: &str) -> Arc<str> {
         self.map
-            .get(&type_id)
-            .cloned()
-            .unwrap_or_else(|| sanitize_topic_name(type_name))
+            .entry(type_id)
+            .or_insert_with(|| Arc::from(sanitize_topic_name(type_name)))
+            .clone()
     }
 }
 

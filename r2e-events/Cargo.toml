@@ -12,6 +12,7 @@ description = "In-process typed event bus for R2E - publish/subscribe with async
 
 [dependencies]
 r2e-core = {workspace = true}
+arc-swap = "1"
 tokio = {workspace = true, features = ["macros", "rt", "sync", "time"]}
 tokio-util = {workspace = true}
 serde = {workspace = true}

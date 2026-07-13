@@ -15,9 +15,9 @@ mod watermark;
 
 pub use dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 pub use metadata_codec::{
-    decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers, ReplyHeaders,
-    HEADER_CORRELATION_ID, HEADER_EVENT_ID, HEADER_PARTITION_KEY, HEADER_REPLY_ERROR,
-    HEADER_REPLY_TO, HEADER_REQUEST_ID, HEADER_TIMESTAMP, HEADER_USER_PREFIX,
+    decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers, HeaderPair,
+    ReplyHeaders, HEADER_CORRELATION_ID, HEADER_EVENT_ID, HEADER_PARTITION_KEY,
+    HEADER_REPLY_ERROR, HEADER_REPLY_TO, HEADER_REQUEST_ID, HEADER_TIMESTAMP, HEADER_USER_PREFIX,
 };
 pub use pending::{await_reply, PendingGuard, PendingRequests, ReplyResult};
 pub use reconnect::reconnect_loop;

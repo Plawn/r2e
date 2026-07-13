@@ -1,4 +1,10 @@
+use std::borrow::Cow;
+
 use crate::EventMetadata;
+
+/// A header key-value pair. Keys are `Cow<'static, str>` — static for
+/// built-in headers, owned only for user-defined headers (`r2e-h-*`).
+pub type HeaderPair = (Cow<'static, str>, String);
 
 pub const HEADER_EVENT_ID: &str = "r2e-event-id";
 pub const HEADER_TIMESTAMP: &str = "r2e-timestamp";
@@ -18,33 +24,38 @@ pub const HEADER_REPLY_TO: &str = "r2e-reply-to";
 /// is the remote-error payload (surfaced as [`crate::EventBusError::Remote`]).
 pub const HEADER_REPLY_ERROR: &str = "r2e-reply-error";
 
-/// Encode [`EventMetadata`] into string key-value pairs suitable for
-/// message headers in any distributed backend.
-pub fn encode_metadata(metadata: &EventMetadata) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-
-    pairs.push((
-        HEADER_EVENT_ID.to_string(),
+/// Lazily encode [`EventMetadata`] into key-value pairs suitable for message
+/// headers in any distributed backend.
+///
+/// Keys are `Cow<'static, str>` — static for built-in headers, owned only
+/// for user-defined headers (`r2e-h-*`).
+pub fn encode_metadata(metadata: &EventMetadata) -> impl Iterator<Item = HeaderPair> + '_ {
+    std::iter::once((
+        Cow::Borrowed(HEADER_EVENT_ID),
         metadata.event_id.to_string(),
-    ));
-    pairs.push((
-        HEADER_TIMESTAMP.to_string(),
+    ))
+    .chain(std::iter::once((
+        Cow::Borrowed(HEADER_TIMESTAMP),
         metadata.timestamp.to_string(),
-    ));
-
-    if let Some(ref cid) = metadata.correlation_id {
-        pairs.push((HEADER_CORRELATION_ID.to_string(), cid.clone()));
-    }
-
-    if let Some(ref pk) = metadata.partition_key {
-        pairs.push((HEADER_PARTITION_KEY.to_string(), pk.clone()));
-    }
-
-    for (k, v) in &metadata.headers {
-        pairs.push((format!("{HEADER_USER_PREFIX}{k}"), v.clone()));
-    }
-
-    pairs
+    )))
+    .chain(
+        metadata
+            .correlation_id
+            .iter()
+            .map(|cid| (Cow::Borrowed(HEADER_CORRELATION_ID), cid.clone())),
+    )
+    .chain(
+        metadata
+            .partition_key
+            .iter()
+            .map(|key| (Cow::Borrowed(HEADER_PARTITION_KEY), key.clone())),
+    )
+    .chain(metadata.headers.iter().map(|(key, value)| {
+        (
+            Cow::Owned(format!("{HEADER_USER_PREFIX}{key}")),
+            value.clone(),
+        )
+    }))
 }
 
 /// Decode [`EventMetadata`] from string key-value pairs (message headers).
@@ -108,25 +119,30 @@ pub struct ReplyHeaders {
     pub reply_error: Option<String>,
 }
 
-/// Encode request-reply control headers into string key-value pairs.
+/// Lazily encode request-reply control headers into string key-value pairs.
 ///
 /// The request id uses the dedicated [`HEADER_REQUEST_ID`] slot (never the
 /// user's [`HEADER_CORRELATION_ID`]). Pass `reply_to` on a request; pass
 /// `reply_error` on a failed reply.
-pub fn encode_reply_headers(
+pub fn encode_reply_headers<'a>(
     request_id: u128,
-    reply_to: Option<&str>,
-    reply_error: Option<&str>,
-) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    pairs.push((HEADER_REQUEST_ID.to_string(), request_id.to_string()));
-    if let Some(rt) = reply_to {
-        pairs.push((HEADER_REPLY_TO.to_string(), rt.to_string()));
-    }
-    if let Some(err) = reply_error {
-        pairs.push((HEADER_REPLY_ERROR.to_string(), err.to_string()));
-    }
-    pairs
+    reply_to: Option<&'a str>,
+    reply_error: Option<&'a str>,
+) -> impl Iterator<Item = HeaderPair> + 'a {
+    std::iter::once((
+        Cow::Borrowed(HEADER_REQUEST_ID),
+        request_id.to_string(),
+    ))
+    .chain(
+        reply_to
+            .into_iter()
+            .map(|topic| (Cow::Borrowed(HEADER_REPLY_TO), topic.to_string())),
+    )
+    .chain(
+        reply_error
+            .into_iter()
+            .map(|error| (Cow::Borrowed(HEADER_REPLY_ERROR), error.to_string())),
+    )
 }
 
 /// Decode request-reply control headers from message headers.

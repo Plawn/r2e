@@ -33,7 +33,6 @@ fn config_defaults() {
     assert_eq!(config.topic_prefix, "persistent://public/default/");
     assert!(config.auto_create);
     assert_eq!(config.default_partitions, 0);
-    assert_eq!(config.batch_size, 100);
     assert!(!config.tls_hostname_verification);
     assert!(config.auth_token.is_none());
     assert!(matches!(
@@ -53,7 +52,6 @@ fn config_builder() {
         .topic_prefix("persistent://my-tenant/my-ns/")
         .auth_token("jwt-token-here")
         .tls_hostname_verification(true)
-        .batch_size(50)
         .default_partitions(4)
         .auto_create(false)
         .build();
@@ -67,7 +65,6 @@ fn config_builder() {
     assert_eq!(config.topic_prefix, "persistent://my-tenant/my-ns/");
     assert_eq!(config.auth_token.as_deref(), Some("jwt-token-here"));
     assert!(config.tls_hostname_verification);
-    assert_eq!(config.batch_size, 50);
     assert_eq!(config.default_partitions, 4);
     assert!(!config.auto_create);
 }
@@ -150,7 +147,7 @@ fn metadata_roundtrip() {
         .with_header("source", "test");
 
     // Encode to pairs (as would be stored in Pulsar message properties)
-    let pairs = encode_metadata(&metadata);
+    let pairs: Vec<_> = encode_metadata(&metadata).collect();
 
     // Decode back
     let decoded = decode_metadata(pairs.into_iter());
@@ -261,7 +258,8 @@ fn reply_headers_request_roundtrip() {
     use r2e_events::backend::{decode_reply_headers, encode_reply_headers};
 
     // A request carries a request id + reply-to (no error).
-    let pairs = encode_reply_headers(0xABCD_1234, Some("persistent://x/replies.00"), None);
+    let pairs: Vec<_> =
+        encode_reply_headers(0xABCD_1234, Some("persistent://x/replies.00"), None).collect();
     let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k, v))).unwrap();
 
     assert_eq!(decoded.request_id, 0xABCD_1234);
@@ -274,7 +272,7 @@ fn reply_headers_error_reply_roundtrip() {
     use r2e_events::backend::{decode_reply_headers, encode_reply_headers};
 
     // An error reply echoes the request id and carries the error payload.
-    let pairs = encode_reply_headers(99, None, Some("boom"));
+    let pairs: Vec<_> = encode_reply_headers(99, None, Some("boom")).collect();
     let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k, v))).unwrap();
 
     assert_eq!(decoded.request_id, 99);
@@ -306,7 +304,7 @@ async fn register_responder_rejects_duplicate() {
     let state = BackendState::new(TopicRegistry::default());
 
     let first = state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok(Pong(env.event.0))
         })
         .await;
@@ -314,7 +312,7 @@ async fn register_responder_rejects_duplicate() {
 
     // A second responder for the same request type is rejected.
     let second = state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok(Pong(env.event.0))
         })
         .await;

@@ -811,9 +811,7 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
             // rejected topic/deserializer/filter/retry/dlq here.
             if let crate::types::ConsumerKind::Responder { resp_type, fallible } = &cm.kind {
                 let reply_map = if *fallible {
-                    quote! {
-                        ::core::result::Result::map_err(__reply, |__e| ::std::string::ToString::to_string(&__e))
-                    }
+                    quote! { __reply }
                 } else {
                     quote! {
                         ::core::result::Result::<#resp_type, ::std::string::String>::Ok(__reply)
@@ -823,7 +821,7 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
                     {
                         let __event_bus = __core.#bus_field.clone();
                         let __responder_core = __core.clone();
-                        let __handle = #events_krate::EventBus::respond::<#event_type, #resp_type, _, _>(
+                        let __handle = #events_krate::EventBus::respond::<#event_type, #resp_type, _, _, _>(
                             &__event_bus,
                             move |__envelope: #events_krate::EventEnvelope<#event_type>| {
                                 let __ctrl = __responder_core.clone();

@@ -29,6 +29,17 @@ fn new_state() -> Arc<BackendState> {
     Arc::new(BackendState::new(TopicRegistry::default()))
 }
 
+#[test]
+fn default_topic_is_cached_by_type_id() {
+    let state = new_state();
+
+    let first = state.resolve_topic::<TestEvent>();
+    let second = state.resolve_topic::<TestEvent>();
+
+    assert_eq!(&*first, "backend_state.TestEvent");
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tracked_dispatch_all_ack() {
     let state = new_state();
@@ -242,7 +253,7 @@ struct Pong {
 async fn responder_invoke_returns_serialized_reply() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: env.event.n + 1 })
         })
         .await
@@ -262,7 +273,7 @@ async fn responder_invoke_returns_serialized_reply() {
 async fn responder_error_surfaces_as_err_bytes() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|_env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|_env: EventEnvelope<Ping>| async move {
             Err::<Pong, String>("nope".to_string())
         })
         .await
@@ -289,13 +300,13 @@ async fn invoke_without_responder_is_none() {
 async fn second_responder_for_same_type_is_rejected() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|_e: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: 0 })
         })
         .await
         .unwrap();
     let second = state
-        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|_e: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: 1 })
         })
         .await;
@@ -306,14 +317,14 @@ async fn second_responder_for_same_type_is_rejected() {
 async fn unregister_responder_allows_reregistration() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|_e: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: 0 })
         })
         .await
         .unwrap();
     state.unregister_responder(TypeId::of::<Ping>()).await;
     state
-        .register_responder::<Ping, Pong, _, _>(|e: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|e: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: e.event.n * 2 })
         })
         .await
@@ -335,7 +346,7 @@ async fn unregister_responder_allows_reregistration() {
 async fn build_reply_success_has_no_error() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok::<Pong, String>(Pong { n: env.event.n + 1 })
         })
         .await
@@ -354,7 +365,7 @@ async fn build_reply_success_has_no_error() {
 async fn build_reply_responder_error_carries_message_and_placeholder() {
     let state = new_state();
     state
-        .register_responder::<Ping, Pong, _, _>(|_env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|_env: EventEnvelope<Ping>| async move {
             Err::<Pong, String>("nope".to_string())
         })
         .await

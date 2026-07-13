@@ -74,6 +74,7 @@ impl PulsarEventBusBuilder {
             pulsar,
             producers: Mutex::new(HashMap::new()),
             state: Arc::new(BackendState::new(self.topic_registry)),
+            full_topics: std::sync::RwLock::new(HashMap::new()),
             instance_id: instance,
             reply_topic_full: std::sync::OnceLock::new(),
             pending: Arc::new(PendingRequests::new()),

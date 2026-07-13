@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
-use iggy::prelude::IggyClient;
+use iggy::prelude::{IggyClient, Identifier};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -20,6 +21,12 @@ pub(crate) struct IggyInner {
     /// Cached instance-private reply topic (`<consumer_group>.replies.<id-hex>`),
     /// derived once from `instance_id` instead of per request.
     pub reply_topic: String,
+    /// Cached `Identifier` for the stream name — constant for the bus lifetime,
+    /// avoids re-parsing on every publish.
+    pub stream_id: Identifier,
+    /// Cached `Identifier`s for topic names, populated on first use per topic.
+    /// Avoids `Identifier::named()` parsing on every publish.
+    pub topic_ids: RwLock<HashMap<Arc<str>, Identifier>>,
     /// Correlation map for in-flight request-reply calls (`request`/`respond`).
     pub pending: Arc<PendingRequests>,
     /// Notified on shutdown so requesters awaiting a reply fail fast with

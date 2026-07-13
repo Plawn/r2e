@@ -27,7 +27,7 @@ use r2e_events::{
 
 use crate::builder::RabbitMqEventBusBuilder;
 use crate::config::RabbitMqConfig;
-use crate::error::map_lapin_error;
+use crate::error::{map_lapin_error, require_publisher_ack};
 use crate::inner::{RabbitMqInner, DIRECT_REPLY_TO};
 
 /// RabbitMQ-backed event bus using AMQP 0-9-1.
@@ -64,7 +64,7 @@ impl RabbitMqEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    fn resolve_topic<E: 'static>(&self) -> String {
+    fn resolve_topic<E: 'static>(&self) -> Arc<str> {
         self.inner.state.resolve_topic::<E>()
     }
 
@@ -75,7 +75,7 @@ impl RabbitMqEventBus {
 
         for (k, v) in pairs {
             headers.insert(
-                ShortString::from(k),
+                ShortString::from(k.as_ref()),
                 AMQPValue::LongString(LongString::from(v.as_bytes())),
             );
         }
@@ -122,7 +122,7 @@ impl RabbitMqEventBus {
         let props = self.build_properties(metadata);
         let channel = self.inner.publisher_channel().await?;
 
-        channel
+        let confirmation = channel
             .basic_publish(
                 self.inner.config.exchange.as_str().into(),
                 topic_name.into(),
@@ -134,8 +134,7 @@ impl RabbitMqEventBus {
             .map_err(map_lapin_error)?
             .await
             .map_err(map_lapin_error)?;
-
-        Ok(())
+        require_publisher_ack(confirmation)
     }
 
     /// Publish without awaiting the publisher confirm. Returns an
@@ -161,8 +160,8 @@ impl RabbitMqEventBus {
             .map_err(map_lapin_error)?;
 
         Ok(EmitReceipt::new(async move {
-            confirm.await.map_err(map_lapin_error)?;
-            Ok(())
+            let confirmation = confirm.await.map_err(map_lapin_error)?;
+            require_publisher_ack(confirmation)
         }))
     }
 }
@@ -387,7 +386,7 @@ impl EventBus for RabbitMqEventBus {
             // Publish on the requester channel — the same channel its Direct
             // Reply-To consumer runs on (an AMQP requirement).
             let channel = bus.inner.requester_channel().await?;
-            channel
+            let confirmation = channel
                 .basic_publish(
                     bus.inner.config.exchange.as_str().into(),
                     request_topic.as_str().into(),
@@ -399,6 +398,7 @@ impl EventBus for RabbitMqEventBus {
                 .map_err(map_lapin_error)?
                 .await
                 .map_err(map_lapin_error)?;
+            require_publisher_ack(confirmation)?;
 
             // Shared request tail: races the reply against the timeout and the
             // per-bus shutdown token (`request_cancel`, mapped to
@@ -420,15 +420,16 @@ impl EventBus for RabbitMqEventBus {
     /// (at-least-once; a duplicate reply is dropped by the requester once its
     /// correlation entry is gone). At most one responder per request type per
     /// process — a second registration returns an error out of this call.
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
@@ -442,7 +443,7 @@ impl EventBus for RabbitMqEventBus {
             // broker.
             bus.inner
                 .state
-                .register_responder::<Req, Resp, F, Fut>(handler)
+                .register_responder::<Req, Resp, E, F, Fut>(handler)
                 .await?;
 
             let request_topic = request_topic(&bus.resolve_topic::<Req>());
@@ -490,7 +491,7 @@ impl EventBus for RabbitMqEventBus {
                 // Stop the request consumer and drop the responder.
                 cancel.cancel();
                 let inner = inner_unreg.clone();
-                r2e_core::rt::spawn(async move {
+                r2e_core::rt::spawn_ctl(async move {
                     inner.state.unregister_responder(type_id).await;
                 });
             }))
@@ -567,7 +568,7 @@ async fn setup_consumer_queue(
 async fn run_consumer(
     inner: Arc<RabbitMqInner>,
     type_id: TypeId,
-    topic_name: String,
+    topic_name: Arc<str>,
     cancel: CancellationToken,
     mut initial: Option<(Channel, String)>,
 ) {
@@ -833,7 +834,7 @@ async fn run_responder_inner(
                                     props = props.with_headers(headers);
                                 }
 
-                                if let Err(e) = channel
+                                match channel
                                     .basic_publish(
                                         "".into(),
                                         reply_to.as_str().into(),
@@ -843,8 +844,22 @@ async fn run_responder_inner(
                                     )
                                     .await
                                 {
-                                    tracing::error!(queue = %queue, "failed to publish reply: {e}");
-                                    reply_publish_failed = true;
+                                    Err(e) => {
+                                        tracing::error!(queue = %queue, "failed to publish reply: {e}");
+                                        reply_publish_failed = true;
+                                    }
+                                    Ok(confirm) => match confirm.await {
+                                        Ok(confirmation) => {
+                                            if let Err(e) = require_publisher_ack(confirmation) {
+                                                tracing::error!(queue = %queue, "reply publish was not acknowledged: {e}");
+                                                reply_publish_failed = true;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(queue = %queue, "failed to confirm reply publish: {e}");
+                                            reply_publish_failed = true;
+                                        }
+                                    },
                                 }
                             }
 

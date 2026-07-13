@@ -145,6 +145,10 @@ impl RabbitMqInner {
             .await
             .map_err(map_lapin_error)?;
         self.declare_exchange(&channel).await?;
+        channel
+            .confirm_select(lapin::options::ConfirmSelectOptions::default())
+            .await
+            .map_err(map_lapin_error)?;
         Ok(channel)
     }
 
@@ -330,6 +334,10 @@ impl RabbitMqInner {
 
         let channel = self.create_channel().await?;
         self.declare_exchange(&channel).await?;
+        channel
+            .confirm_select(lapin::options::ConfirmSelectOptions::default())
+            .await
+            .map_err(map_lapin_error)?;
 
         // Start the Direct Reply-To consumer on this channel (no_ack: replies on
         // the pseudo-queue are auto-acked by the broker).

@@ -13,6 +13,10 @@ use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
 
+/// Short retention for instance-private reply topics. These topics are unique
+/// per bus lifetime and would otherwise accumulate after restarts.
+pub(crate) const REPLY_TOPIC_RETENTION_MS: &str = "300000";
+
 /// Builder for [`KafkaEventBus`].
 ///
 /// # Example
@@ -84,17 +88,14 @@ impl KafkaEventBusBuilder {
 pub(crate) async fn ensure_topic_exists(
     config: &KafkaConfig,
     topic_name: &str,
+    retention_ms: Option<&str>,
 ) -> Result<(), EventBusError> {
     let admin_client: AdminClient<DefaultClientContext> = config
         .to_admin_client_config()
         .create()
         .map_err(map_kafka_error)?;
 
-    let new_topic = NewTopic::new(
-        topic_name,
-        config.default_partitions,
-        TopicReplication::Fixed(config.default_replication_factor),
-    );
+    let new_topic = topic_definition(config, topic_name, retention_ms);
 
     let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
@@ -124,5 +125,38 @@ pub(crate) async fn ensure_topic_exists(
             // Non-fatal — topic might already exist or auto.create.topics.enable is on
             Ok(())
         }
+    }
+}
+
+fn topic_definition<'a>(
+    config: &KafkaConfig,
+    topic_name: &'a str,
+    retention_ms: Option<&'a str>,
+) -> NewTopic<'a> {
+    let mut topic = NewTopic::new(
+        topic_name,
+        config.default_partitions,
+        TopicReplication::Fixed(config.default_replication_factor),
+    );
+    if let Some(retention_ms) = retention_ms {
+        topic = topic.set("retention.ms", retention_ms);
+    }
+    topic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reply_topic_retention_is_short() {
+        let config = KafkaConfig::default();
+        let topic = topic_definition(
+            &config,
+            "r2e.replies.instance",
+            Some(REPLY_TOPIC_RETENTION_MS),
+        );
+
+        assert_eq!(topic.config, vec![("retention.ms", "300000")]);
     }
 }

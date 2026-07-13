@@ -124,6 +124,14 @@ absent responder manifests as `RequestTimeout`). In controllers, a
 `#[consumer]` method with a non-`()` return type is automatically registered
 as a responder — its return value is the reply.
 
+Distributed backends use an instance-private `.replies.<instance-id>` topic.
+Kafka auto-created reply topics receive a five-minute retention automatically;
+with external Kafka provisioning, configure `retention.ms=300000`. For Pulsar,
+configure a short namespace `messageTTL` plus subscription expiration. For
+Iggy, enable topic expiry when available or garbage-collect stale `.replies.`
+topics without active consumers. Keep retention longer than the maximum
+request timeout.
+
 | Method | Behavior |
 |--------|----------|
 | `emit()` | Fan-out: spawns all subscribers as Tokio tasks, returns immediately |

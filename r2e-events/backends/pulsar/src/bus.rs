@@ -61,13 +61,22 @@ impl PulsarEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    fn resolve_topic<E: 'static>(&self) -> String {
+    fn resolve_topic<E: 'static>(&self) -> Arc<str> {
         self.inner.state.resolve_topic::<E>()
     }
 
-    /// Build the full Pulsar topic name (with prefix).
-    fn full_topic(&self, topic_name: &str) -> String {
-        self.inner.config.full_topic_name(topic_name)
+    /// Build the full Pulsar topic name (with prefix), cached per short name.
+    fn full_topic(&self, topic_name: &str) -> Arc<str> {
+        {
+            let cache = self.inner.full_topics.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(full) = cache.get(topic_name) {
+                return full.clone();
+            }
+        }
+        let full: Arc<str> = Arc::from(self.inner.config.full_topic_name(topic_name));
+        self.inner.full_topics.write().unwrap_or_else(|e| e.into_inner())
+            .insert(Arc::from(topic_name), full.clone());
+        full
     }
 
     /// Get or create a cached per-topic producer handle.
@@ -111,8 +120,10 @@ impl PulsarEventBus {
 
     /// Build message properties from `EventMetadata`.
     fn build_properties(metadata: &EventMetadata) -> HashMap<String, String> {
-        let pairs = encode_metadata(metadata);
-        pairs.into_iter().collect()
+        encode_metadata(metadata)
+            .into_iter()
+            .map(|(k, v)| (k.into_owned(), v))
+            .collect()
     }
 
     /// Publish a serialized event to Pulsar.
@@ -249,7 +260,7 @@ impl PulsarEventBus {
     /// `config.subscription` in one process get distinct reply topics, so their
     /// `Exclusive` reply subscriptions never collide. The requester advertises it
     /// in the request's reply-to header; the reply consumer subscribes to it.
-    fn reply_topic_full(&self) -> String {
+    fn reply_topic_full(&self) -> Arc<str> {
         self.inner
             .reply_topic_full
             .get_or_init(|| {
@@ -492,9 +503,9 @@ impl EventBus for PulsarEventBus {
             let (id, guard, rx) = bus.inner.pending.register();
 
             let mut properties: HashMap<String, String> =
-                encode_metadata(&metadata).into_iter().collect();
+                encode_metadata(&metadata).into_iter().map(|(k, v)| (k.into_owned(), v)).collect();
             for (k, v) in encode_reply_headers(id, Some(&reply_to), None) {
-                properties.insert(k, v);
+                properties.insert(k.into_owned(), v);
             }
 
             bus.publish_to_full(&full_request_topic, payload, properties, partition_key)
@@ -520,15 +531,16 @@ impl EventBus for PulsarEventBus {
         }
     }
 
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
@@ -541,7 +553,7 @@ impl EventBus for PulsarEventBus {
             // duplicate before any consumer is started.
             bus.inner
                 .state
-                .register_responder::<Req, Resp, F, Fut>(handler)
+                .register_responder::<Req, Resp, E, F, Fut>(handler)
                 .await?;
 
             // Consume the shared request topic with a `Shared` subscription so
@@ -638,7 +650,7 @@ impl EventBus for PulsarEventBus {
 async fn run_poller(
     inner: Arc<PulsarInner>,
     type_id: TypeId,
-    full_topic: String,
+    full_topic: Arc<str>,
     config: PulsarConfig,
     cancel: CancellationToken,
 ) {
@@ -813,7 +825,7 @@ fn extract_metadata_from_message(
 async fn run_responder(
     inner: Arc<PulsarInner>,
     type_id: TypeId,
-    full_topic: String,
+    full_topic: Arc<str>,
     cancel: CancellationToken,
 ) {
     let label = format!("Pulsar responder [{full_topic}]");
@@ -967,6 +979,7 @@ async fn handle_request(
     let properties: HashMap<String, String> =
         encode_reply_headers(reply_headers.request_id, None, error.as_deref())
             .into_iter()
+            .map(|(k, v)| (k.into_owned(), v))
             .collect();
 
     // Reuse the per-topic producer cache to publish the reply to the requester's
@@ -990,7 +1003,7 @@ async fn handle_request(
 /// [`PendingRequests::complete_reply`]: r2e_events::backend::PendingRequests::complete_reply
 async fn run_reply_consumer(
     inner: Arc<PulsarInner>,
-    full_topic: String,
+    full_topic: Arc<str>,
     cancel: CancellationToken,
 ) {
     let label = format!("Pulsar reply consumer [{full_topic}]");

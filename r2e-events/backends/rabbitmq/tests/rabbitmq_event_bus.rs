@@ -203,7 +203,7 @@ mod responder {
         let state = state();
 
         let first = state
-            .register_responder::<GetUser, User, _, _>(|env: EventEnvelope<GetUser>| async move {
+            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
                 Ok(User {
                     id: env.event.id,
                     name: "Alice".into(),
@@ -213,7 +213,7 @@ mod responder {
         assert!(first.is_ok(), "first responder should register");
 
         let second = state
-            .register_responder::<GetUser, User, _, _>(|env: EventEnvelope<GetUser>| async move {
+            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
                 Ok(User {
                     id: env.event.id,
                     name: "Bob".into(),
@@ -231,7 +231,7 @@ mod responder {
         let state = state();
 
         state
-            .register_responder::<GetUser, User, _, _>(|_env: EventEnvelope<GetUser>| async move {
+            .register_responder::<GetUser, User, String, _, _>(|_env: EventEnvelope<GetUser>| async move {
                 Ok(User {
                     id: 1,
                     name: "Alice".into(),
@@ -245,7 +245,7 @@ mod responder {
             .await;
 
         let again = state
-            .register_responder::<GetUser, User, _, _>(|_env: EventEnvelope<GetUser>| async move {
+            .register_responder::<GetUser, User, String, _, _>(|_env: EventEnvelope<GetUser>| async move {
                 Ok(User {
                     id: 2,
                     name: "Bob".into(),
@@ -261,7 +261,7 @@ mod responder {
 
         let state = state();
         state
-            .register_responder::<GetUser, User, _, _>(|env: EventEnvelope<GetUser>| async move {
+            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
                 Ok(User {
                     id: env.event.id,
                     name: format!("user-{}", env.event.id),

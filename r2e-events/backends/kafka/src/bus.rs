@@ -20,15 +20,17 @@ use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
     await_reply, decode_metadata, encode_metadata, encode_reply_headers, reconnect_loop,
-    request_topic, spawn_completion_forwarder, DispatchOutcome, Handler, WatermarkTracker,
-    COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    request_topic, spawn_completion_forwarder, DispatchOutcome, Handler, HeaderPair,
+    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
 };
 use r2e_events::{
     EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
     RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
-use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder};
+use crate::builder::{
+    ensure_topic_exists, KafkaEventBusBuilder, REPLY_TOPIC_RETENTION_MS,
+};
 use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
@@ -94,12 +96,21 @@ impl KafkaEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    fn resolve_topic<E: 'static>(&self) -> String {
+    fn resolve_topic<E: 'static>(&self) -> Arc<str> {
         self.inner.state.resolve_topic::<E>()
     }
 
     /// Ensure a topic exists in Kafka (idempotent, cached).
     async fn ensure_topic(&self, topic_name: &str) -> Result<(), EventBusError> {
+        self.ensure_topic_with_retention(topic_name, None).await
+    }
+
+    /// Ensure a topic with an optional broker-side retention override.
+    async fn ensure_topic_with_retention(
+        &self,
+        topic_name: &str,
+        retention_ms: Option<&str>,
+    ) -> Result<(), EventBusError> {
         if !self.inner.config.auto_create {
             return Ok(());
         }
@@ -108,7 +119,7 @@ impl KafkaEventBus {
             return Ok(());
         }
 
-        ensure_topic_exists(&self.inner.config, topic_name).await?;
+        ensure_topic_exists(&self.inner.config, topic_name, retention_ms).await?;
         self.inner.state.set_topic_ensured(topic_name);
         Ok(())
     }
@@ -149,7 +160,8 @@ impl KafkaEventBus {
             .reply_consumer
             .get_or_try_init(|| async {
                 let topic = self.reply_topic_name();
-                self.ensure_topic(&topic).await?;
+                self.ensure_topic_with_retention(&topic, Some(REPLY_TOPIC_RETENTION_MS))
+                    .await?;
 
                 let cancel = CancellationToken::new();
                 let inner = self.inner.clone();
@@ -177,8 +189,11 @@ impl KafkaEventBus {
 
         // The request id rides its own dedicated header slot, so the user's
         // correlation id in the metadata flows through untouched.
-        let mut pairs = encode_metadata(metadata);
-        pairs.extend(encode_reply_headers(correlation_id, Some(reply_to), None));
+        let pairs = encode_metadata(metadata).chain(encode_reply_headers(
+            correlation_id,
+            Some(reply_to),
+            None,
+        ));
 
         produce_with_headers(
             &self.inner.producer,
@@ -195,7 +210,7 @@ fn build_record<'a>(
     topic_name: &'a str,
     payload: &'a [u8],
     key: Option<&'a str>,
-    pairs: Vec<(String, String)>,
+    pairs: impl IntoIterator<Item = HeaderPair>,
 ) -> FutureRecord<'a, str, [u8]> {
     let mut record = FutureRecord::to(topic_name).payload(payload);
 
@@ -203,14 +218,11 @@ fn build_record<'a>(
         record = record.key(k);
     }
 
-    let header_bytes: Vec<(String, Vec<u8>)> =
-        pairs.into_iter().map(|(k, v)| (k, v.into_bytes())).collect();
-
     let mut owned_headers = rdkafka::message::OwnedHeaders::new();
-    for (k, v) in &header_bytes {
+    for (key, value) in pairs {
         owned_headers = owned_headers.insert(rdkafka::message::Header {
-            key: k,
-            value: Some(v),
+            key: key.as_ref(),
+            value: Some(value.as_bytes()),
         });
     }
     record.headers(owned_headers)
@@ -223,7 +235,7 @@ pub(crate) async fn produce_with_headers(
     topic_name: &str,
     payload: &[u8],
     key: Option<&str>,
-    pairs: Vec<(String, String)>,
+    pairs: impl IntoIterator<Item = HeaderPair>,
 ) -> Result<(), EventBusError> {
     let record = build_record(topic_name, payload, key, pairs);
 
@@ -247,7 +259,7 @@ pub(crate) fn produce_nowait(
     topic_name: &str,
     payload: &[u8],
     key: Option<&str>,
-    pairs: Vec<(String, String)>,
+    pairs: impl IntoIterator<Item = HeaderPair>,
 ) -> Result<EmitReceipt, EventBusError> {
     let record = build_record(topic_name, payload, key, pairs);
 
@@ -506,15 +518,16 @@ impl EventBus for KafkaEventBus {
         }
     }
 
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
@@ -528,7 +541,7 @@ impl EventBus for KafkaEventBus {
             // second consumer.
             bus.inner
                 .state
-                .register_responder::<Req, Resp, F, Fut>(handler)
+                .register_responder::<Req, Resp, E, F, Fut>(handler)
                 .await?;
 
             let request_topic_name = request_topic(&bus.resolve_topic::<Req>());
@@ -638,7 +651,7 @@ impl EventBus for KafkaEventBus {
 async fn run_consumer(
     inner: Arc<KafkaInner>,
     type_id: TypeId,
-    topic_name: String,
+    topic_name: Arc<str>,
     cancel: CancellationToken,
 ) {
     let label = format!("Kafka consumer [{topic_name}]");

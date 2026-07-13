@@ -179,7 +179,8 @@ async fn await_reply_bad_payload_is_serialization_error() {
 
 #[test]
 fn reply_headers_roundtrip_request() {
-    let pairs = encode_reply_headers(1234567890123456789, Some("app.replies.abcd"), None);
+    let pairs: Vec<_> =
+        encode_reply_headers(1234567890123456789, Some("app.replies.abcd"), None).collect();
     // The request id owns its own dedicated header slot.
     assert!(pairs.iter().any(|(k, _)| k == HEADER_REQUEST_ID));
     // It must NOT leak into the user's correlation-id slot.
@@ -187,7 +188,7 @@ fn reply_headers_roundtrip_request() {
     assert!(pairs.iter().any(|(k, v)| k == HEADER_REPLY_TO && v == "app.replies.abcd"));
     assert!(!pairs.iter().any(|(k, _)| k == HEADER_REPLY_ERROR));
 
-    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(decoded.request_id, 1234567890123456789);
     assert_eq!(decoded.reply_to.as_deref(), Some("app.replies.abcd"));
@@ -196,8 +197,8 @@ fn reply_headers_roundtrip_request() {
 
 #[test]
 fn reply_headers_roundtrip_error_reply() {
-    let pairs = encode_reply_headers(42, None, Some("handler failed"));
-    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let pairs: Vec<_> = encode_reply_headers(42, None, Some("handler failed")).collect();
+    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(decoded.request_id, 42);
     assert_eq!(decoded.reply_to, None);
@@ -218,15 +219,20 @@ fn user_correlation_id_survives_alongside_request_id() {
     let mut metadata = EventMetadata::new();
     metadata.correlation_id = Some("user-corr-123".to_string());
 
-    let mut pairs = encode_metadata(&metadata);
-    pairs.extend(encode_reply_headers(777, Some("app.replies.f00d"), None));
+    let pairs: Vec<_> = encode_metadata(&metadata)
+        .chain(encode_reply_headers(
+            777,
+            Some("app.replies.f00d"),
+            None,
+        ))
+        .collect();
 
     // The user correlation id decodes unchanged.
-    let decoded_meta = decode_metadata(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    let decoded_meta = decode_metadata(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())));
     assert_eq!(decoded_meta.correlation_id.as_deref(), Some("user-corr-123"));
 
     // The internal request id decodes independently.
-    let decoded_reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let decoded_reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(decoded_reply.request_id, 777);
     assert_eq!(decoded_reply.reply_to.as_deref(), Some("app.replies.f00d"));

@@ -20,6 +20,10 @@ pub(crate) struct PulsarInner {
     /// (and a first-emit broker connect) from blocking one another.
     pub producers: Mutex<HashMap<String, Arc<Mutex<Producer<TokioExecutor>>>>>,
     pub state: Arc<BackendState>,
+    /// Cached fully-qualified topic names (`topic_prefix + short_name`),
+    /// populated on first use per short topic name. Avoids `format!` on every
+    /// publish.
+    pub full_topics: std::sync::RwLock<HashMap<Arc<str>, Arc<str>>>,
     /// Per-bus-instance nonce identifying this bus's private reply topic. Minted
     /// once at build time (never the process id): two bus instances sharing a
     /// `config.subscription` in one process must not derive the same reply topic,
@@ -28,7 +32,7 @@ pub(crate) struct PulsarInner {
     /// Fully-qualified, instance-private reply topic, derived once from
     /// `instance_id` on first use and reused for every request (both as the
     /// requester's reply-to header and the reply consumer's subscribed topic).
-    pub reply_topic_full: OnceLock<String>,
+    pub reply_topic_full: OnceLock<Arc<str>>,
     /// Requester-side correlation map: request id → the waiting caller's reply
     /// channel. Populated by `request_with`, drained by the reply consumer.
     pub pending: Arc<PendingRequests>,

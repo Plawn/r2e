@@ -32,11 +32,11 @@ fn config_defaults() {
     assert_eq!(config.stream_name, "r2e-events");
     assert_eq!(config.consumer_group, "r2e-app");
     assert!(config.auto_create);
-    assert_eq!(config.default_partitions, 1);
-    assert_eq!(config.poll_batch_size, 100);
+    assert_eq!(config.default_partitions, 3);
+    assert_eq!(config.poll_batch_size, 1000);
     assert_eq!(
         config.poll_interval,
-        std::time::Duration::from_millis(100)
+        std::time::Duration::from_millis(10)
     );
     assert!(config.username.is_none());
     assert!(config.password.is_none());
@@ -186,8 +186,7 @@ fn reply_headers_survive_iggy_message_roundtrip() {
     let metadata = EventMetadata::new()
         .with_correlation_id("user-corr-9")
         .with_header("source", "test");
-    let mut pairs = encode_metadata(&metadata);
-    pairs.extend(encode_reply_headers(
+    let pairs = encode_metadata(&metadata).chain(encode_reply_headers(
         request_id,
         Some("r2e-app.replies.00ff"),
         None,

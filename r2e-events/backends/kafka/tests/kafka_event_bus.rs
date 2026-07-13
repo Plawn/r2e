@@ -200,9 +200,10 @@ fn reply_header_roundtrip_ok() {
     use r2e_events::backend::{decode_reply_headers, encode_reply_headers};
 
     // A successful reply: correlation id echoed, no reply-to, no error.
-    let pairs = encode_reply_headers(0x1234_5678_9abc_def0_1111_2222_3333_4444, None, None);
+    let pairs: Vec<_> =
+        encode_reply_headers(0x1234_5678_9abc_def0_1111_2222_3333_4444, None, None).collect();
     // Simulate the produce -> consume header path (UTF-8 string values).
-    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(decoded.request_id, 0x1234_5678_9abc_def0_1111_2222_3333_4444);
     assert!(decoded.reply_to.is_none());
@@ -214,8 +215,8 @@ fn reply_header_roundtrip_error() {
     use r2e_events::backend::{decode_reply_headers, encode_reply_headers};
 
     // A failed reply carries the remote-error payload.
-    let pairs = encode_reply_headers(99, None, Some("boom"));
-    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let pairs: Vec<_> = encode_reply_headers(99, None, Some("boom")).collect();
+    let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(decoded.request_id, 99);
     assert_eq!(decoded.reply_error.as_deref(), Some("boom"));
@@ -240,8 +241,9 @@ fn request_id_is_separate_from_user_correlation_id() {
     let request_id: u128 = 0xaaaa_bbbb_cccc_dddd;
     let reply_to = "r2e-app.replies.00000000cafef00d";
 
-    let mut pairs = encode_metadata(&metadata);
-    pairs.extend(encode_reply_headers(request_id, Some(reply_to), None));
+    let pairs: Vec<_> = encode_metadata(&metadata)
+        .chain(encode_reply_headers(request_id, Some(reply_to), None))
+        .collect();
 
     // The request id rides its own slot; the user's correlation id rides its own.
     assert_eq!(
@@ -255,7 +257,7 @@ fn request_id_is_separate_from_user_correlation_id() {
         "the user's correlation id flows through untouched"
     );
 
-    let reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
     assert_eq!(reply.request_id, request_id);
     assert_eq!(reply.reply_to.as_deref(), Some(reply_to));
@@ -288,7 +290,7 @@ async fn responder_registration_is_unique_per_type() {
     let state = BackendState::new(TopicRegistry::default());
 
     let first = state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok(Pong { n: env.event.n + 1 })
         })
         .await;
@@ -296,7 +298,7 @@ async fn responder_registration_is_unique_per_type() {
 
     // A second responder for the same request type is rejected.
     let second = state
-        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+        .register_responder::<Ping, Pong, String, _, _>(|env: EventEnvelope<Ping>| async move {
             Ok(Pong { n: env.event.n })
         })
         .await;
@@ -321,7 +323,7 @@ async fn invoke_responder_round_trips_bytes_and_absence() {
 
     let state = BackendState::new(TopicRegistry::default());
     state
-        .register_responder::<Req, Resp, _, _>(|env: EventEnvelope<Req>| async move {
+        .register_responder::<Req, Resp, String, _, _>(|env: EventEnvelope<Req>| async move {
             if env.event.v < 0 {
                 Err("negative".to_string())
             } else {

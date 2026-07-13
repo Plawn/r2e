@@ -53,7 +53,7 @@ impl IggyEventBus {
     }
 
     /// Resolve the topic name for an event type.
-    fn resolve_topic<E: 'static>(&self) -> String {
+    fn resolve_topic<E: 'static>(&self) -> Arc<str> {
         self.inner.state.resolve_topic::<E>()
     }
 
@@ -116,6 +116,22 @@ impl IggyEventBus {
         headers_from_pairs(encode_metadata(metadata))
     }
 
+    /// Resolve (or cache) the `Identifier` for a topic name. The identifier is
+    /// cached per topic string so `Identifier::named()` is not re-parsed on every
+    /// publish.
+    fn resolve_topic_id(&self, topic_name: &str) -> Result<Identifier, EventBusError> {
+        {
+            let cache = self.inner.topic_ids.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(id) = cache.get(topic_name) {
+                return Ok(id.clone());
+            }
+        }
+        let id = Identifier::named(topic_name).map_err(map_iggy_error)?;
+        self.inner.topic_ids.write().unwrap_or_else(|e| e.into_inner())
+            .insert(Arc::from(topic_name), id.clone());
+        Ok(id)
+    }
+
     /// Send a single message to a topic with pre-built headers and an optional
     /// partition key. Ensures the topic exists first (idempotent).
     async fn send_message(
@@ -127,9 +143,8 @@ impl IggyEventBus {
     ) -> Result<(), EventBusError> {
         self.ensure_topic(topic_name).await?;
 
-        let stream_id =
-            Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
-        let topic_id = Identifier::named(topic_name).map_err(map_iggy_error)?;
+        let stream_id = &self.inner.stream_id;
+        let topic_id = self.resolve_topic_id(topic_name)?;
 
         let partitioning = match partition_key {
             Some(key) => Partitioning::messages_key_str(key)
@@ -145,7 +160,7 @@ impl IggyEventBus {
 
         self.inner
             .client
-            .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
+            .send_messages(stream_id, &topic_id, &partitioning, &mut [msg])
             .await
             .map_err(map_iggy_error)?;
 
@@ -212,15 +227,17 @@ const REPLY_PARTITION: u32 = 1;
 /// message headers).
 #[doc(hidden)]
 pub fn headers_from_pairs(
-    pairs: Vec<(String, String)>,
+    pairs: impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
 ) -> Result<BTreeMap<HeaderKey, HeaderValue>, EventBusError> {
     let mut headers = BTreeMap::new();
     for (k, v) in pairs {
+        let k = k.as_ref();
         if k == HEADER_PARTITION_KEY {
             continue;
         }
+        let v = v.into();
         headers.insert(
-            HeaderKey::try_from(k.as_str())
+            HeaderKey::try_from(k)
                 .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
             HeaderValue::try_from(v.as_str())
                 .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
@@ -407,10 +424,8 @@ impl EventBus for IggyEventBus {
             let headers = Self::build_headers(&metadata)?;
             bus.ensure_topic(&topic_name).await?;
 
-            let stream_id = Identifier::named(&bus.inner.config.stream_name)
-                .map_err(map_iggy_error)?;
-            let topic_id =
-                Identifier::named(&topic_name).map_err(map_iggy_error)?;
+            let stream_id = bus.inner.stream_id.clone();
+            let topic_id = bus.resolve_topic_id(&topic_name)?;
             let partitioning = match metadata.partition_key.as_deref() {
                 Some(key) => Partitioning::messages_key_str(key)
                     .map_err(|e| EventBusError::Serialization(e.to_string()))?,
@@ -458,10 +473,8 @@ impl EventBus for IggyEventBus {
             let headers = Self::build_headers(&metadata)?;
             bus.ensure_topic(&topic_name).await?;
 
-            let stream_id = Identifier::named(&bus.inner.config.stream_name)
-                .map_err(map_iggy_error)?;
-            let topic_id =
-                Identifier::named(&topic_name).map_err(map_iggy_error)?;
+            let stream_id = bus.inner.stream_id.clone();
+            let topic_id = bus.resolve_topic_id(&topic_name)?;
             let partitioning = match metadata.partition_key.as_deref() {
                 Some(key) => Partitioning::messages_key_str(key)
                     .map_err(|e| EventBusError::Serialization(e.to_string()))?,
@@ -526,8 +539,11 @@ impl EventBus for IggyEventBus {
             // untouched; the u128 request-reply id travels via the reply headers
             // in their own dedicated header slot.
             let metadata = options.metadata.unwrap_or_default();
-            let mut pairs = encode_metadata(&metadata);
-            pairs.extend(encode_reply_headers(request_id, Some(&reply_to), None));
+            let pairs = encode_metadata(&metadata).chain(encode_reply_headers(
+                request_id,
+                Some(&reply_to),
+                None,
+            ));
             let headers = headers_from_pairs(pairs)?;
 
             bus.send_message(&req_topic, payload, headers, metadata.partition_key.as_deref())
@@ -542,15 +558,16 @@ impl EventBus for IggyEventBus {
         }
     }
 
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
@@ -560,7 +577,7 @@ impl EventBus for IggyEventBus {
             // is already registered — at most one responder per type per process).
             bus.inner
                 .state
-                .register_responder::<Req, Resp, F, Fut>(handler)
+                .register_responder::<Req, Resp, E, F, Fut>(handler)
                 .await?;
 
             let type_id = TypeId::of::<Req>();
@@ -659,7 +676,7 @@ impl EventBus for IggyEventBus {
 async fn run_poller(
     inner: Arc<IggyInner>,
     type_id: TypeId,
-    topic_name: String,
+    topic_name: Arc<str>,
     cancel: CancellationToken,
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;

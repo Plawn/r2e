@@ -59,8 +59,8 @@ fn codec_round_trip_preserves_large_u128_id() {
     meta.partition_key = Some("pk-1".to_string());
     meta = meta.with_header("k", "v");
 
-    let encoded = encode_metadata(&meta);
-    let decoded = decode_metadata(encoded.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    let encoded: Vec<_> = encode_metadata(&meta).collect();
+    let decoded = decode_metadata(encoded.iter().map(|(k, v)| (k.as_ref(), v.as_str())));
 
     assert_eq!(decoded.event_id, meta.event_id);
     assert_eq!(decoded.correlation_id, meta.correlation_id);

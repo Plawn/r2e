@@ -77,12 +77,16 @@ impl IggyEventBusBuilder {
         let instance = instance_id();
         let reply_topic_name = reply_topic(&self.config.consumer_group, instance);
 
+        let stream_id = Identifier::named(&self.config.stream_name).map_err(map_iggy_error)?;
+
         let inner = IggyInner {
             config: self.config,
             client: Arc::new(client),
             state: Arc::new(BackendState::new(self.topic_registry)),
             instance_id: instance,
             reply_topic: reply_topic_name,
+            stream_id,
+            topic_ids: std::sync::RwLock::new(std::collections::HashMap::new()),
             pending: Arc::new(PendingRequests::new()),
             shutdown_notify: tokio::sync::Notify::new(),
             rr_cancels: std::sync::Mutex::new(Default::default()),

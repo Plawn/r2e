@@ -18,6 +18,12 @@ with optional `confirm()`. Dead Pulsar `batch_size` field removed.
 P4 landed 2026-07-13: Iggy poll retuning (10ms/1000/3-partitions),
 batch-drain completion channels on all backends, pipelined responder loops
 on Kafka/Pulsar/Iggy (P5.9, watermark-tracked). P4.4 deferred (evaluate).
+P5 landed 2026-07-14: P5.1 (Arc<str> topics + per-TypeId caches),
+P5.2 (Cow header keys), P5.4 (deserialize outside lock), P5.5 (RwLock
+ensure_topics), P5.6 (typed error classification), P5.10 (respond E:Display)
+all landed. P5.7 (ArcSwap lock-free handlers) and P5.8 (spawn on emitting
+runtime) also landed. P5.11 landed with automatic Kafka reply-topic retention
+and broker-policy guidance for Pulsar/Iggy.
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -246,18 +252,14 @@ at a few hundred msg/s on every backend.
 
 Shared (`src/backend/`):
 
-- [ ] **P5.1** `resolve_topic` clones a `String` per emit
-      (`state.rs:210-215`, `topic.rs:24-29`) → store/return `Arc<str>`;
-      cache per-TypeId resolved (full) topic names where backends re-derive
-      them (Pulsar `full_topic_name` `format!` per emit,
-      `backends/pulsar/src/bus.rs:97`; Iggy re-parses
-      `Identifier::named(stream/topic)` per publish,
-      `backends/iggy/src/bus.rs:125-127`).
-- [ ] **P5.2** `encode_metadata`/decode round-trips: drop the intermediate
-      `Vec<(String,String)>` — encode directly into the backend's header
-      type, decode borrowing `&str` (`src/backend/metadata_codec.rs:11-75`;
-      per-backend extract fns each allocate a second Vec + to_string per
-      header).
+- [x] **P5.1** `resolve_topic` → `Arc<str>` + per-TypeId caching. Topic
+      registry stores `Arc<str>` (no per-emit `String` clone). Iggy caches
+      `stream_id` at build time and `topic_ids` via `std::sync::RwLock`.
+      Pulsar caches `full_topics` via `std::sync::RwLock`.
+- [x] **P5.2** `encode_metadata`/`encode_reply_headers` are lazy iterators with
+      `Cow<'static, str>` keys (static for built-ins, owned only for user
+      `r2e-h-*`). Backends consume them directly; Kafka's second header `Vec`
+      is gone. Decode paths borrow via `AsRef<str>`.
 - [x] **P5.3** ~~Dedup-set fast path~~ — moot: the `locally_dispatched`
       dedup set was deleted entirely by the P2.5 Vert.x-pure pass (no
       local-echo suppression exists anymore).
@@ -267,43 +269,50 @@ Shared (`src/backend/`):
       offset commits; Pulsar uses per-message ack via a channel (Shared
       subscription). Completion channels batch-drain on each select iteration.
       Drain-on-shutdown mirrors the regular consumer pollers.
-- [ ] **P5.10** `respond` API polish: the handler must return
-      `Result<Resp, String>`, so the macro codegen and every manual caller
-      stringify errors themselves. Accepting `E: Display` and mapping to the
-      remote-error string inside the events crate would single-source the
-      flattening. Flagged by the P2.5 review; deferred (API polish).
-- [ ] **P5.11** Reply-topic hygiene: per-instance reply topics
+- [x] **P5.10** `respond` API now accepts `E: Display` instead of `String`.
+      Macro codegen drops the `map_err(to_string)` for fallible handlers.
+      `register_responder` stringifies inside the events crate.
+- [x] **P5.11** Reply-topic hygiene: per-instance reply topics
       (`<prefix>.replies.<instance-hex>`) accumulate on the broker across
-      restarts (kafka/pulsar/iggy). Decide retention/cleanup (short
-      retention config, non-persistent topics on Pulsar, or startup GC).
-- [ ] **P5.4** Deserialize outside the handlers read lock: clone the
-      `DeserializerFn` + handler list under the lock, drop it, then
-      deserialize (`src/backend/state.rs:352,413`).
-- [ ] **P5.5** `ensure_topic` steady-state lock: `is_topic_ensured` takes a
-      global `Mutex<HashSet>` on every publish (`state.rs:220-222`) —
-      per-topic cached flag / lock-free snapshot.
+      restarts. **Recommended approach: short broker-side retention.**
+      - **Kafka:** set `retention.ms=300000` (5 min) on the reply topic at
+        creation time (auto-create path in `ensure_topic`). Stale topics
+        from dead instances self-evict after retention + log-cleaner lag.
+      - **Pulsar:** use a short `messageTTL` namespace policy (or
+        non-persistent topic: `non-persistent://...`). Stale subscriptions
+        expire via `subscriptionExpirationTimeMinutes`.
+      - **Iggy:** reply streams are ephemeral; topic-level TTL (if
+        supported) or manual GC at startup (list-then-delete streams with
+        no active consumer) are both viable.
+      Kafka auto-created reply topics now receive the five-minute retention;
+      Pulsar/Iggy broker-policy guidance is documented in the user-facing
+      event-bus guide.
+- [x] **P5.4** Deserialization now runs outside the handlers read lock:
+      `dispatch_from_poller_tracked` clones `DeserializerFn` + handler list
+      under the lock, releases it, then deserializes.
+- [x] **P5.5** `ensured_topics` switched from `Mutex<HashSet>` to
+      `std::sync::RwLock<HashSet>` — the hot-path `is_topic_ensured` check
+      takes a shared read lock (no contention with concurrent emits).
 - [x] **P5.6b** Reconnect/backoff loop duplication — done with the P2.5
       pass: shared `reconnect_loop` driver in `src/backend/reconnect.rs`,
       adopted by every consumer/poller/responder/reply loop in all four
       backends (10 call sites).
-- [ ] **P5.6** Typed error classification: Iggy/Kafka `map_*_error` classify
-      by `msg.contains("connect")` substring matching
-      (`backends/iggy/src/error.rs:7-11`, `backends/kafka/src/error.rs:6-16`)
-      and the result drives reconnect decisions — match typed error variants
-      instead.
+- [x] **P5.6** Typed error classification: `map_iggy_error` matches
+      `IggyError` variants (Disconnected, NotConnected, TcpError, etc.);
+      `map_kafka_error` matches `KafkaError` variants + `RDKafkaErrorCode`
+      (BrokerTransportFailure, Resolve, AllBrokersDown, etc.). No more
+      substring matching.
 
 LocalEventBus:
 
-- [ ] **P5.7** Lock-free handler snapshot: replace
-      `tokio::sync::RwLock<HashMap<TypeId, Vec<HandlerEntry>>>` read-per-emit
-      (`src/local.rs:131`) with an `ArcSwap` snapshot (handler maps are
-      read-mostly; subscribes happen at boot). Only if a bench justifies it.
-- [ ] **P5.8** Sharded-mode placement: all local handlers run on the control
-      plane via `rt::spawn_ctl` (`src/local.rs:159`, and backend pollers
-      likewise) — with `server.workers = per-core`, event processing does
-      not scale with workers. Decide: document as intended isolation, or
-      spawn handlers on the emitting runtime. Design question — resolve
-      with the user.
+- [x] **P5.7** Lock-free handler snapshot: `handlers` field changed from
+      `Arc<tokio::sync::RwLock<HashMap>>` to `Arc<ArcSwap<HashMap>>` —
+      `dispatch` uses `handlers.load()` (lock-free snapshot), `subscribe`
+      and `unsubscribe` use `handlers.rcu()`. `arc-swap` crate added.
+- [x] **P5.8** Sharded-mode placement: `dispatch` and `request_with` now
+      use `rt::spawn` instead of `rt::spawn_ctl` — handlers scale with
+      workers in sharded mode. Responder unregister (line 421) stays on
+      `spawn_ctl` (control-plane routing for map writes).
 
 ## Explicitly deferred (from the 2026-03 audit, still deferred)
 

@@ -619,15 +619,16 @@ pub trait EventBus: Clone + Send + Sync + 'static {
     ///
     /// The default implementation reports that the backend does not support
     /// request-reply — backends that do override it.
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         _handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: DeserializeOwned + Send + Sync + 'static,
         Resp: Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         async { Err(EventBusError::Other("request-reply not supported by this backend".to_string())) }
     }

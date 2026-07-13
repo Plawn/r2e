@@ -4,6 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 use tokio::sync::{Notify, RwLock, Semaphore};
 
 use crate::{
@@ -30,6 +32,7 @@ type LocalResponder = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 struct HandlerEntry {
     id: u64,
     handler: Handler,
@@ -55,7 +58,7 @@ pub const DEFAULT_MAX_CONCURRENCY: usize = 1024;
 /// serializes events — dispatch uses `Arc<dyn Any>` downcasting internally.
 #[derive(Clone)]
 pub struct LocalEventBus {
-    handlers: Arc<RwLock<HashMap<TypeId, Vec<HandlerEntry>>>>,
+    handlers: Arc<ArcSwap<HashMap<TypeId, Vec<HandlerEntry>>>>,
     /// At most one responder per request `TypeId` (request-reply).
     responders: Arc<RwLock<HashMap<TypeId, LocalResponder>>>,
     semaphore: Option<Arc<Semaphore>>,
@@ -92,7 +95,7 @@ impl LocalEventBus {
     /// a handler completes.
     pub fn with_concurrency(max_concurrent: usize) -> Self {
         Self {
-            handlers: Arc::new(RwLock::new(HashMap::new())),
+            handlers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             responders: Arc::new(RwLock::new(HashMap::new())),
             semaphore: Some(Arc::new(Semaphore::new(max_concurrent))),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -108,7 +111,7 @@ impl LocalEventBus {
     /// handlers can process them, memory usage will grow unbounded.
     pub fn unbounded() -> Self {
         Self {
-            handlers: Arc::new(RwLock::new(HashMap::new())),
+            handlers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             responders: Arc::new(RwLock::new(HashMap::new())),
             semaphore: None,
             next_id: Arc::new(AtomicU64::new(1)),
@@ -166,10 +169,9 @@ impl LocalEventBus {
             return Err(EventBusError::Shutdown);
         }
 
-        // Collect matching handlers under the lock, then release before
-        // acquiring semaphore permits (which can block).
+        // Load a lock-free snapshot of the handler map.
         let handler_snapshot: Vec<Handler> = {
-            let map = self.handlers.read().await;
+            let map = self.handlers.load();
             match map.get(&type_id) {
                 Some(entries) => entries
                     .iter()
@@ -179,15 +181,12 @@ impl LocalEventBus {
                 None => return Ok(()),
             }
         };
-        // RwLock released here — semaphore acquire will not block subscribe/unsubscribe.
 
         for h in handler_snapshot {
             let e = event.clone();
             let m = metadata.clone();
             let in_flight = self.in_flight.clone();
             let in_flight_zero = self.in_flight_zero.clone();
-
-            in_flight.fetch_add(1, Ordering::Relaxed);
 
             let permit = match &self.semaphore {
                 Some(sem) => Some(
@@ -198,7 +197,12 @@ impl LocalEventBus {
                 ),
                 None => None,
             };
-            r2e_core::rt::spawn_ctl(async move {
+
+            // Increment AFTER acquiring the permit and immediately before
+            // spawn — if the dispatch future is dropped while awaiting the
+            // semaphore, the counter stays accurate and wait_idle won't hang.
+            in_flight.fetch_add(1, Ordering::Relaxed);
+            r2e_core::rt::spawn(async move {
                 let _guard = InFlightGuard { in_flight, in_flight_zero };
                 let result = h(e, m).await;
                 drop(permit);
@@ -240,25 +244,26 @@ impl EventBus for LocalEventBus {
             });
 
             let handlers_for_unsub = handlers.clone();
-            let mut map = handlers.write().await;
-            map.entry(type_id).or_default().push(HandlerEntry {
-                id,
-                handler: h,
-                filter: None,
+            handlers.rcu(|map| {
+                let mut new_map = HashMap::clone(map);
+                new_map.entry(type_id).or_default().push(HandlerEntry {
+                    id,
+                    handler: h.clone(),
+                    filter: None,
+                });
+                new_map
             });
 
             Ok(SubscriptionHandle::new(
                 SubscriptionId(id),
                 move || {
                     let handlers = handlers_for_unsub.clone();
-                    // Always spawn a task to avoid borrow issues with try_write.
-                    // Unsubscribe can be triggered from a request handler, so
-                    // route to the control plane in sharded mode.
-                    r2e_core::rt::spawn_ctl(async move {
-                        let mut map = handlers.write().await;
-                        if let Some(entries) = map.get_mut(&type_id) {
+                    handlers.rcu(move |map| {
+                        let mut new_map = HashMap::clone(map);
+                        if let Some(entries) = new_map.get_mut(&type_id) {
                             entries.retain(|e| e.id != id);
                         }
+                        new_map
                     });
                 },
             ))
@@ -348,7 +353,7 @@ impl EventBus for LocalEventBus {
             // Invoke on the control plane with in-flight tracking, mirroring the
             // emit dispatch discipline; time out waiting for the reply.
             in_flight.fetch_add(1, Ordering::Relaxed);
-            let handle = r2e_core::rt::spawn_ctl(async move {
+            let handle = r2e_core::rt::spawn(async move {
                 let _guard = InFlightGuard { in_flight, in_flight_zero };
                 responder(req_any, metadata).await
             });
@@ -369,15 +374,16 @@ impl EventBus for LocalEventBus {
         }
     }
 
-    fn respond<Req, Resp, F, Fut>(
+    fn respond<Req, Resp, E, F, Fut>(
         &self,
         handler: F,
     ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
         Req: serde::de::DeserializeOwned + Send + Sync + 'static,
         Resp: serde::Serialize + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+        Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
         let responders = self.responders.clone();
         let shutdown = self.shutdown.clone();
@@ -396,7 +402,7 @@ impl EventBus for LocalEventBus {
                 Box::pin(async move {
                     match fut.await {
                         Ok(resp) => Ok(Box::new(resp) as Box<dyn Any + Send>),
-                        Err(msg) => Err(msg),
+                        Err(e) => Err(e.to_string()),
                     }
                 })
             });
@@ -426,7 +432,7 @@ impl EventBus for LocalEventBus {
         let handlers = self.handlers.clone();
         let responders = self.responders.clone();
         async move {
-            handlers.write().await.clear();
+            handlers.store(Arc::new(HashMap::new()));
             responders.write().await.clear();
         }
     }
@@ -440,10 +446,8 @@ impl EventBus for LocalEventBus {
         let in_flight_zero = self.in_flight_zero.clone();
         let handlers = self.handlers.clone();
         async move {
-            // Set the shutdown flag
             shutdown.store(true, Ordering::Release);
 
-            // Wait for in-flight handlers to complete (with timeout)
             if in_flight.load(Ordering::Acquire) > 0 {
                 let wait = async {
                     loop {
@@ -455,8 +459,7 @@ impl EventBus for LocalEventBus {
                     }
                 };
                 if r2e_core::rt::timeout(timeout, wait).await.is_err() {
-                    // Clear handlers anyway
-                    handlers.write().await.clear();
+                    handlers.store(Arc::new(HashMap::new()));
                     return Err(EventBusError::Other(format!(
                         "shutdown timed out with {} handlers still in flight",
                         in_flight.load(Ordering::Acquire)
@@ -464,8 +467,7 @@ impl EventBus for LocalEventBus {
                 }
             }
 
-            // Clear all handlers
-            handlers.write().await.clear();
+            handlers.store(Arc::new(HashMap::new()));
             Ok(())
         }
     }

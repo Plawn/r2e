@@ -121,7 +121,10 @@ pub struct GreetReply {
 }
 ```
 
-Register the responder with `respond`. The handler receives the request and returns `Result<Resp, String>` — the `Ok` value becomes the reply, and `Err(msg)` reaches the requester as `EventBusError::Remote(msg)`:
+Register the responder with `respond`. The handler receives the request and
+returns `Result<Resp, E>` where `E: Display` — the `Ok` value becomes the
+reply, and the displayed error reaches the requester as
+`EventBusError::Remote(msg)`:
 
 ```rust
 event_bus.respond(|req: EventEnvelope<GreetRequest>| async move {
@@ -189,6 +192,24 @@ let reply: GreetReply = self.event_bus
 | `Remote(msg)` | The responder ran but returned `Err(msg)` (the Vert.x `ReplyException` equivalent). |
 
 `respond` returns a `ResponderHandle`; call `unregister()` on it to remove the responder so a different one can take its place.
+
+### Distributed reply-topic retention
+
+Kafka, Pulsar, and Iggy route replies through an instance-private topic named
+`<prefix>.replies.<instance-id>`. A new topic is used after each process
+restart, so old reply topics need short broker-side retention:
+
+- **Kafka:** auto-created reply topics receive `retention.ms=300000` (five
+  minutes) automatically. If `auto_create` is disabled, apply the same setting
+  in your topic provisioning.
+- **Pulsar:** configure a short namespace `messageTTL` and a
+  `subscriptionExpirationTimeMinutes` policy, or use non-persistent topics for
+  replies where appropriate.
+- **Iggy:** configure topic expiry/TTL when supported by the deployed version,
+  or periodically remove stale `.replies.` topics that have no active consumer.
+
+The retention window should remain longer than the maximum request timeout so
+late replies can still be delivered while their requester is alive.
 
 ## Concurrency and backpressure
 
@@ -280,7 +301,7 @@ impl UserService {
 - `subscribe`: `E: DeserializeOwned + Send + Sync + 'static`
 - `emit`: `E: Serialize + Send + Sync + 'static`
 - `request`: `Req: Serialize + Send + Sync + 'static`, `Resp: DeserializeOwned + Send + 'static`
-- `respond`: `Req: DeserializeOwned + Send + Sync + 'static`, `Resp: Serialize + Send + 'static`; handler returns `Result<Resp, String>`
+- `respond`: `Req: DeserializeOwned + Send + Sync + 'static`, `Resp: Serialize + Send + 'static`; handler returns `Result<Resp, E>` with `E: Display + Send + 'static`
 - Handler `F`: `Fn(Arc<E>) -> Fut + Send + Sync + 'static`
 - Future `Fut`: `Future<Output = ()> + Send + 'static`
 
