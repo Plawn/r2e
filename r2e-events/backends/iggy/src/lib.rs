@@ -34,7 +34,8 @@
 //!
 //! # Limitations
 //!
-//! - `emit_and_wait` publishes to Iggy AND waits for **local** handlers only.
+//! - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+//!   point-to-point request-reply.
 //! - One event type per topic (determined by first `subscribe` call).
 
 mod builder;
@@ -48,6 +49,8 @@ mod topic;
 
 pub use builder::IggyEventBusBuilder;
 pub use bus::IggyEventBus;
+#[doc(hidden)]
+pub use bus::{headers_from_pairs, reply_headers_from_message};
 pub use config::{IggyConfig, IggyConfigBuilder, Transport};
 pub use error::map_iggy_error;
 pub use r2e_events::backend::sanitize_topic_name;

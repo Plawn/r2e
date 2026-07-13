@@ -13,11 +13,14 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
-    decode_metadata, encode_metadata, spawn_completion_forwarder, DispatchOutcome, Handler,
-    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT, HEADER_TIMESTAMP,
+    await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
+    reconnect_loop, request_topic, spawn_completion_forwarder, DispatchOutcome, Handler,
+    ReplyHeaders, WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    HEADER_PARTITION_KEY, HEADER_TIMESTAMP,
 };
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
+    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
+    ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::IggyEventBusBuilder;
@@ -35,8 +38,8 @@ use crate::inner::IggyInner;
 ///
 /// # Limitations
 ///
-/// - `emit_and_wait` publishes to Iggy AND waits for **local** handlers only.
-///   It cannot wait for handlers on remote instances.
+/// - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+///   point-to-point request-reply.
 /// - One event type per topic (the deserializer is registered on first `subscribe`).
 #[derive(Clone)]
 pub struct IggyEventBus {
@@ -54,8 +57,21 @@ impl IggyEventBus {
         self.inner.state.resolve_topic::<E>()
     }
 
-    /// Ensure a topic exists in Iggy (idempotent, cached).
+    /// Ensure a topic exists in Iggy (idempotent, cached) with the configured
+    /// default partition count.
     async fn ensure_topic(&self, topic_name: &str) -> Result<(), EventBusError> {
+        self.ensure_topic_with_partitions(topic_name, self.inner.config.default_partitions)
+            .await
+    }
+
+    /// Ensure a topic exists in Iggy (idempotent, cached) with an explicit
+    /// partition count. Used for the per-process reply topic, which is
+    /// single-partition and consumed by a standalone consumer.
+    async fn ensure_topic_with_partitions(
+        &self,
+        topic_name: &str,
+        partitions: u32,
+    ) -> Result<(), EventBusError> {
         if !self.inner.config.auto_create {
             return Ok(());
         }
@@ -73,7 +89,7 @@ impl IggyEventBus {
             .create_topic(
                 &stream_id,
                 topic_name,
-                self.inner.config.default_partitions,
+                partitions,
                 CompressionAlgorithm::default(),
                 None,
                 IggyExpiry::NeverExpire,
@@ -97,31 +113,17 @@ impl IggyEventBus {
     fn build_headers(
         metadata: &EventMetadata,
     ) -> Result<BTreeMap<HeaderKey, HeaderValue>, EventBusError> {
-        let pairs = encode_metadata(metadata);
-        let mut headers = BTreeMap::new();
-
-        for (k, v) in pairs {
-            // Skip partition_key — it's used for Iggy partitioning, not headers
-            if k == r2e_events::backend::HEADER_PARTITION_KEY {
-                continue;
-            }
-            headers.insert(
-                HeaderKey::try_from(k.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-                HeaderValue::try_from(v.as_str())
-                    .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
-            );
-        }
-
-        Ok(headers)
+        headers_from_pairs(encode_metadata(metadata))
     }
 
-    /// Publish a serialized event to Iggy.
-    async fn publish(
+    /// Send a single message to a topic with pre-built headers and an optional
+    /// partition key. Ensures the topic exists first (idempotent).
+    async fn send_message(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
-        metadata: &EventMetadata,
+        headers: BTreeMap<HeaderKey, HeaderValue>,
+        partition_key: Option<&str>,
     ) -> Result<(), EventBusError> {
         self.ensure_topic(topic_name).await?;
 
@@ -129,13 +131,11 @@ impl IggyEventBus {
             Identifier::named(&self.inner.config.stream_name).map_err(map_iggy_error)?;
         let topic_id = Identifier::named(topic_name).map_err(map_iggy_error)?;
 
-        let partitioning = match &metadata.partition_key {
+        let partitioning = match partition_key {
             Some(key) => Partitioning::messages_key_str(key)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?,
             None => Partitioning::balanced(),
         };
-
-        let headers = Self::build_headers(metadata)?;
 
         let msg = IggyMessage::builder()
             .payload(bytes::Bytes::from(payload))
@@ -151,6 +151,98 @@ impl IggyEventBus {
 
         Ok(())
     }
+
+    /// Publish a serialized event to Iggy.
+    async fn publish(
+        &self,
+        topic_name: &str,
+        payload: Vec<u8>,
+        metadata: &EventMetadata,
+    ) -> Result<(), EventBusError> {
+        let headers = Self::build_headers(metadata)?;
+        self.send_message(topic_name, payload, headers, metadata.partition_key.as_deref())
+            .await
+    }
+
+    /// Ensure the per-process reply poller is running.
+    ///
+    /// Called on the first `request`: creates the instance-private reply topic
+    /// (single-partition) and starts exactly one reply poller for the process.
+    /// The poller routes incoming replies to [`PendingRequests`] by correlation
+    /// id. Concurrent first-requests double-check under the lock so only one
+    /// poller is ever spawned.
+    async fn ensure_reply_poller_started(&self) -> Result<(), EventBusError> {
+        {
+            let guard = self.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.reply_poller.is_some() {
+                return Ok(());
+            }
+        }
+
+        let reply = self.inner.reply_topic.clone();
+        // Reply topic is instance-private and correlation-routed in-process, so
+        // a single partition is sufficient (consumed by a standalone consumer).
+        self.ensure_topic_with_partitions(&reply, 1).await?;
+
+        let cancel = {
+            let mut guard = self.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.reply_poller.is_some() {
+                return Ok(());
+            }
+            let cancel = CancellationToken::new();
+            guard.reply_poller = Some(cancel.clone());
+            cancel
+        };
+
+        let bus = self.clone();
+        r2e_core::rt::spawn(async move {
+            run_reply_poller(bus, reply, cancel).await;
+        });
+
+        Ok(())
+    }
+}
+
+/// Partition id of the single-partition per-process reply topic (Iggy
+/// partitions are 1-based).
+const REPLY_PARTITION: u32 = 1;
+
+/// Build an Iggy user-header map from encoded key/value pairs, skipping the
+/// partition-key pseudo-header (that value drives Iggy partitioning, not
+/// message headers).
+#[doc(hidden)]
+pub fn headers_from_pairs(
+    pairs: Vec<(String, String)>,
+) -> Result<BTreeMap<HeaderKey, HeaderValue>, EventBusError> {
+    let mut headers = BTreeMap::new();
+    for (k, v) in pairs {
+        if k == HEADER_PARTITION_KEY {
+            continue;
+        }
+        headers.insert(
+            HeaderKey::try_from(k.as_str())
+                .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
+            HeaderValue::try_from(v.as_str())
+                .map_err(|e: IggyError| EventBusError::Serialization(e.to_string()))?,
+        );
+    }
+    Ok(headers)
+}
+
+/// Decode request-reply control headers from an Iggy message, or `None` when
+/// the message carries no correlation id (not part of a request-reply exchange).
+#[doc(hidden)]
+pub fn reply_headers_from_message(message: &IggyMessage) -> Option<ReplyHeaders> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    if let Ok(Some(headers)) = message.user_headers_map() {
+        for (key, value) in &headers {
+            let (Ok(k), Ok(v)) = (key.as_str(), value.as_str()) else {
+                continue;
+            };
+            pairs.push((k.to_string(), v.to_string()));
+        }
+    }
+    decode_reply_headers(pairs.into_iter())
 }
 
 impl EventBus for IggyEventBus {
@@ -296,62 +388,107 @@ impl EventBus for IggyEventBus {
         }
     }
 
-    fn emit_and_wait<E>(&self, event: E) -> impl Future<Output = Result<(), EventBusError>> + Send
+    fn request_with<Req, Resp>(
+        &self,
+        req: Req,
+        options: RequestOptions,
+    ) -> impl Future<Output = Result<Resp, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: Serialize + Send + Sync + 'static,
+        Resp: DeserializeOwned + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
+            // Serialize the request up front (so we fail before touching the
+            // broker on a bad payload).
+            let payload = serde_json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
-            let metadata = EventMetadata::new();
 
-            // Dispatch locally and wait FIRST: dispatch_local records the local
-            // outcome so the poller dedups the broker copy. Publishing before
-            // this races the poller consuming that copy. If the local dispatch
-            // errors, don't publish.
-            bus.inner
-                .state
-                .dispatch_local(type_id, &payload, metadata.clone())
+            let base_topic = bus.resolve_topic::<Req>();
+            let req_topic = request_topic(&base_topic);
+            let reply_to = bus.inner.reply_topic.clone();
+
+            // Ensure the per-process reply poller is live before we publish so a
+            // fast reply is never missed.
+            bus.ensure_reply_poller_started().await?;
+
+            // Register the pending entry BEFORE publishing so an in-flight reply
+            // has a slot to complete. The guard evicts the entry on drop
+            // (timeout / shutdown / early return).
+            let (request_id, _guard, rx) = bus.inner.pending.register();
+
+            // Build request headers: metadata + reply-to control headers. The
+            // request metadata's own correlation_id (a user string) is left
+            // untouched; the u128 request-reply id travels via the reply headers
+            // in their own dedicated header slot.
+            let metadata = options.metadata.unwrap_or_default();
+            let mut pairs = encode_metadata(&metadata);
+            pairs.extend(encode_reply_headers(request_id, Some(&reply_to), None));
+            let headers = headers_from_pairs(pairs)?;
+
+            bus.send_message(&req_topic, payload, headers, metadata.partition_key.as_deref())
                 .await?;
 
-            // Then publish to Iggy.
-            bus.publish(&topic_name, payload, &metadata).await
+            // Await the reply, the request timeout, or a shutdown signal (a
+            // `Notify`, passed as the shutdown future). A missing responder is
+            // not a silent drop: the responder poller always publishes an error
+            // reply, so it surfaces as `EventBusError::Remote` rather than a
+            // full-timeout wait.
+            await_reply::<Resp>(rx, options.timeout, bus.inner.shutdown_notify.notified()).await
         }
     }
 
-    fn emit_and_wait_with<E>(
+    fn respond<Req, Resp, F, Fut>(
         &self,
-        event: E,
-        metadata: EventMetadata,
-    ) -> impl Future<Output = Result<(), EventBusError>> + Send
+        handler: F,
+    ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: DeserializeOwned + Send + Sync + 'static,
+        Resp: Serialize + Send + 'static,
+        F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
-
-            // Dispatch locally and wait FIRST: dispatch_local records the local
-            // outcome so the poller dedups the broker copy. Publishing before
-            // this races the poller consuming that copy. If the local dispatch
-            // errors, don't publish.
+            // Register the single responder for this request type (errors if one
+            // is already registered — at most one responder per type per process).
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata.clone())
+                .register_responder::<Req, Resp, F, Fut>(handler)
                 .await?;
 
-            // Then publish to Iggy.
-            bus.publish(&topic_name, payload, &metadata).await
+            let type_id = TypeId::of::<Req>();
+            let base_topic = bus.resolve_topic::<Req>();
+            let req_topic = request_topic(&base_topic);
+            bus.ensure_topic(&req_topic).await?;
+
+            let cancel = CancellationToken::new();
+            {
+                let mut guard = bus.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+                guard.responder_pollers.push(cancel.clone());
+            }
+
+            let poller_bus = bus.clone();
+            let poller_topic = req_topic.clone();
+            let poller_cancel = cancel.clone();
+            r2e_core::rt::spawn(async move {
+                run_responder_poller(poller_bus, type_id, poller_topic, poller_cancel).await;
+            });
+
+            let inner = bus.inner.clone();
+            let type_name = std::any::type_name::<Req>();
+            Ok(ResponderHandle::new(type_name, move || {
+                // Stop the responder poller and drop the responder registration.
+                cancel.cancel();
+                let inner = inner.clone();
+                r2e_core::rt::spawn(async move {
+                    inner.state.unregister_responder(type_id).await;
+                });
+            }))
         }
     }
 
@@ -359,6 +496,17 @@ impl EventBus for IggyEventBus {
         let inner = self.inner.clone();
         async move {
             inner.state.cancel_all_pollers();
+            // Stop the request-reply pollers and drop any responder registrations.
+            {
+                let mut rr = inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(c) = rr.reply_poller.take() {
+                    c.cancel();
+                }
+                for c in rr.responder_pollers.drain(..) {
+                    c.cancel();
+                }
+            }
+            inner.state.responders.write().await.clear();
             inner.state.handlers.write().await.clear();
         }
     }
@@ -374,6 +522,20 @@ impl EventBus for IggyEventBus {
 
             // Cancel all pollers
             inner.state.cancel_all_pollers();
+
+            // Cancel the request-reply pollers and fail any pending requests:
+            // waking the shutdown notifier makes requesters awaiting a reply
+            // return `Shutdown` instead of waiting out their timeout.
+            {
+                let mut rr = inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(c) = rr.reply_poller.take() {
+                    c.cancel();
+                }
+                for c in rr.responder_pollers.drain(..) {
+                    c.cancel();
+                }
+            }
+            inner.shutdown_notify.notify_waiters();
 
             // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;
@@ -400,28 +562,11 @@ async fn run_poller(
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
     let reconnect = inner.config.reconnect;
-    let mut backoff = std::time::Duration::from_secs(1);
-
-    loop {
-        let start = std::time::Instant::now();
-        run_poller_inner(&inner, type_id, &topic_name, &cancel).await;
-
-        if cancel.is_cancelled() || !reconnect {
-            break;
-        }
-
-        // Reset backoff if the poller ran successfully for a while
-        if start.elapsed() > backoff * 4 {
-            backoff = std::time::Duration::from_secs(1);
-        }
-
-        tracing::warn!(topic = %topic_name, "Iggy poller disconnected, reconnecting in {backoff:?}");
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = r2e_core::rt::sleep(backoff) => {},
-        }
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    let label = format!("Iggy poller [{topic_name}]");
+    reconnect_loop(reconnect, max_backoff, &cancel, &label, || {
+        run_poller_inner(&inner, type_id, &topic_name, &cancel)
+    })
+    .await;
 }
 
 async fn run_poller_inner(
@@ -636,4 +781,263 @@ fn extract_metadata_from_message(message: &IggyMessage) -> EventMetadata {
     }
 
     decode_metadata(pairs.into_iter())
+}
+
+// ── Request-reply pollers ──────────────────────────────────────────────
+
+/// Per-process reply poller with automatic reconnection.
+///
+/// Consumes the instance-private reply topic with a standalone (non-group)
+/// consumer so only this process reads its own replies, and routes each reply
+/// to the waiting requester by correlation id.
+async fn run_reply_poller(bus: IggyEventBus, reply_topic_name: String, cancel: CancellationToken) {
+    let max_backoff = bus.inner.config.reconnect_max_backoff;
+    let reconnect = bus.inner.config.reconnect;
+    let label = format!("Iggy reply poller [{reply_topic_name}]");
+    reconnect_loop(reconnect, max_backoff, &cancel, &label, || {
+        run_reply_poller_inner(&bus, &reply_topic_name, &cancel)
+    })
+    .await;
+}
+
+async fn run_reply_poller_inner(
+    bus: &IggyEventBus,
+    reply_topic_name: &str,
+    cancel: &CancellationToken,
+) {
+    let inner = &bus.inner;
+    // Process-unique standalone consumer: only this instance consumes its own
+    // reply topic. Default (interval) auto-commit is fine — a lost reply just
+    // becomes a `RequestTimeout`, and offsets should advance so old replies are
+    // not reprocessed after a reconnect.
+    let consumer_name = format!("r2e-reply-{:016x}", inner.instance_id);
+    let consumer_result = inner.client.consumer(
+        &consumer_name,
+        &inner.config.stream_name,
+        reply_topic_name,
+        REPLY_PARTITION,
+    );
+
+    let mut consumer = match consumer_result {
+        Ok(builder) => builder
+            .polling_strategy(PollingStrategy::next())
+            .poll_interval(IggyDuration::from(inner.config.poll_interval))
+            .batch_length(inner.config.poll_batch_size)
+            .build(),
+        Err(e) => {
+            tracing::error!(topic = %reply_topic_name, "failed to create Iggy reply consumer: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = consumer.init().await {
+        tracing::error!(topic = %reply_topic_name, "failed to init Iggy reply consumer: {e}");
+        return;
+    }
+
+    tracing::info!(topic = %reply_topic_name, "reply poller started");
+
+    let batch_capacity = (inner.config.poll_batch_size.max(1)) as usize;
+    let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!(topic = %reply_topic_name, "reply poller cancelled");
+                break;
+            }
+            batch = futures_util::StreamExt::next(&mut batches) => {
+                let batch = match batch {
+                    Some(batch) => batch,
+                    None => {
+                        tracing::info!(topic = %reply_topic_name, "reply consumer stream ended");
+                        break;
+                    }
+                };
+
+                for item in &batch {
+                    match item {
+                        Ok(received) => {
+                            let Some(headers) = reply_headers_from_message(&received.message) else {
+                                tracing::debug!(topic = %reply_topic_name, "reply without request id, ignored");
+                                continue;
+                            };
+                            // Single-sources the Remote-vs-Ok decision and
+                            // routes the reply to the waiting requester by id.
+                            inner.pending.complete_reply(&headers, received.message.payload.to_vec());
+                        }
+                        Err(e) => {
+                            tracing::warn!(topic = %reply_topic_name, "reply poll error: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Responder poller with automatic reconnection.
+///
+/// Consumes the shared request topic via the app's consumer group (broker-side
+/// load balancing across instances), invokes the registered responder, sends
+/// the reply, then commits the request offset — reply-then-commit for
+/// at-least-once delivery.
+async fn run_responder_poller(
+    bus: IggyEventBus,
+    type_id: TypeId,
+    req_topic: String,
+    cancel: CancellationToken,
+) {
+    let max_backoff = bus.inner.config.reconnect_max_backoff;
+    let reconnect = bus.inner.config.reconnect;
+    let label = format!("Iggy responder poller [{req_topic}]");
+    reconnect_loop(reconnect, max_backoff, &cancel, &label, || {
+        run_responder_poller_inner(&bus, type_id, &req_topic, &cancel)
+    })
+    .await;
+}
+
+async fn run_responder_poller_inner(
+    bus: &IggyEventBus,
+    type_id: TypeId,
+    req_topic: &str,
+    cancel: &CancellationToken,
+) {
+    let inner = &bus.inner;
+    let consumer_result = inner.client.consumer_group(
+        &inner.config.consumer_group,
+        &inner.config.stream_name,
+        req_topic,
+    );
+
+    let mut consumer = match consumer_result {
+        Ok(builder) => builder
+            // Manual commit: store the offset only after the reply is sent.
+            .auto_commit(AutoCommit::Disabled)
+            .create_consumer_group_if_not_exists()
+            .auto_join_consumer_group()
+            .polling_strategy(PollingStrategy::next())
+            .poll_interval(IggyDuration::from(inner.config.poll_interval))
+            .batch_length(inner.config.poll_batch_size)
+            .build(),
+        Err(e) => {
+            tracing::error!(topic = %req_topic, "failed to create Iggy responder consumer: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = consumer.init().await {
+        tracing::error!(topic = %req_topic, "failed to init Iggy responder consumer: {e}");
+        return;
+    }
+
+    tracing::info!(topic = %req_topic, "responder poller started");
+
+    let batch_capacity = (inner.config.poll_batch_size.max(1)) as usize;
+    let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!(topic = %req_topic, "responder poller cancelled");
+                break;
+            }
+            batch = futures_util::StreamExt::next(&mut batches) => {
+                let batch = match batch {
+                    Some(batch) => batch,
+                    None => {
+                        tracing::info!(topic = %req_topic, "responder consumer stream ended");
+                        break;
+                    }
+                };
+
+                // Sequential per message: reply-then-commit. Processing in order
+                // means a single stored offset never skips an unhandled message.
+                for item in &batch {
+                    match item {
+                        Ok(received) => {
+                            let partition_id = received.partition_id;
+                            let offset = received.message.header.offset;
+
+                            if !handle_request(bus, type_id, req_topic, &received.message).await {
+                                // Reply send failed: do NOT commit. Return so the
+                                // reconnect loop redelivers from the last committed
+                                // offset (at-least-once).
+                                return;
+                            }
+
+                            if let Err(e) = batches
+                                .get_ref()
+                                .store_offset(offset, Some(partition_id))
+                                .await
+                            {
+                                tracing::warn!(
+                                    topic = %req_topic,
+                                    partition_id,
+                                    offset,
+                                    "failed to store responder offset: {e}"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(topic = %req_topic, "responder poll error: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Handle one request message: invoke the responder and publish the reply.
+///
+/// Returns `true` when the request offset may be committed (reply sent, or the
+/// message is not a well-formed request and can be skipped), and `false` when
+/// the reply send failed and the message should be redelivered.
+async fn handle_request(
+    bus: &IggyEventBus,
+    type_id: TypeId,
+    req_topic: &str,
+    message: &IggyMessage,
+) -> bool {
+    let Some(headers) = reply_headers_from_message(message) else {
+        tracing::debug!(topic = %req_topic, "request without reply headers, skipping");
+        return true;
+    };
+    let Some(reply_to) = headers.reply_to else {
+        tracing::debug!(topic = %req_topic, "request without reply-to, skipping");
+        return true;
+    };
+
+    let metadata = extract_metadata_from_message(message);
+    // `build_reply` single-sources the responder-outcome mapping and ALWAYS
+    // yields a reply — including for the no-responder case, where it returns a
+    // `b"null"` placeholder payload (Iggy rejects empty payloads) plus an error
+    // header, so the requester surfaces `Remote` instead of waiting out its
+    // full timeout.
+    let (reply_payload, reply_error) = bus
+        .inner
+        .state
+        .build_reply(type_id, message.payload.as_ref(), metadata)
+        .await;
+
+    let reply_headers = match headers_from_pairs(encode_reply_headers(
+        headers.request_id,
+        None,
+        reply_error.as_deref(),
+    )) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(topic = %req_topic, "failed to build reply headers: {e}");
+            return true;
+        }
+    };
+
+    match bus.send_message(&reply_to, reply_payload, reply_headers, None).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(topic = %reply_to, "failed to send reply: {e}");
+            false
+        }
+    }
 }

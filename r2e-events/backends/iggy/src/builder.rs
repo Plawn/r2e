@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use iggy::prelude::*;
 
-use r2e_events::backend::{BackendState, TopicRegistry};
+use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::EventBusError;
 
 use crate::bus::IggyEventBus;
@@ -72,10 +72,20 @@ impl IggyEventBusBuilder {
             ensure_stream(&client, &self.config.stream_name).await?;
         }
 
+        // Mint one instance nonce per bus and derive its private reply topic
+        // once, so two bus instances in one process never share a reply topic.
+        let instance = instance_id();
+        let reply_topic_name = reply_topic(&self.config.consumer_group, instance);
+
         let inner = IggyInner {
             config: self.config,
             client: Arc::new(client),
             state: Arc::new(BackendState::new(self.topic_registry)),
+            instance_id: instance,
+            reply_topic: reply_topic_name,
+            pending: Arc::new(PendingRequests::new()),
+            shutdown_notify: tokio::sync::Notify::new(),
+            rr_cancels: std::sync::Mutex::new(Default::default()),
         };
 
         Ok(IggyEventBus {
