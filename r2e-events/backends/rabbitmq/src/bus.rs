@@ -16,15 +16,19 @@ use serde::Serialize;
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use r2e_events::backend::{decode_metadata, encode_metadata, DispatchOutcome, Handler};
+use r2e_events::backend::{
+    await_reply, decode_metadata, encode_metadata, reconnect_loop, request_topic, DispatchOutcome,
+    Handler, HEADER_REPLY_ERROR,
+};
 use r2e_events::{
-    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
+    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, RequestOptions,
+    ResponderHandle, SubscriptionHandle,
 };
 
 use crate::builder::RabbitMqEventBusBuilder;
 use crate::config::RabbitMqConfig;
 use crate::error::map_lapin_error;
-use crate::inner::RabbitMqInner;
+use crate::inner::{RabbitMqInner, DIRECT_REPLY_TO};
 
 /// RabbitMQ-backed event bus using AMQP 0-9-1.
 ///
@@ -44,8 +48,8 @@ use crate::inner::RabbitMqInner;
 ///
 /// # Limitations
 ///
-/// - `emit_and_wait` publishes to RabbitMQ AND waits for **local** handlers only.
-///   It cannot wait for handlers on remote instances.
+/// - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+///   point-to-point request-reply.
 /// - RabbitMQ has no native partitioning. `partition_key` is stored as an AMQP
 ///   header but does not affect routing.
 #[derive(Clone)]
@@ -85,6 +89,22 @@ impl RabbitMqEventBus {
         }
 
         props
+    }
+
+    /// Build the AMQP properties for a request-reply request.
+    ///
+    /// Carries the event metadata as headers (like a normal publish) plus the
+    /// Direct Reply-To address (`reply_to = amq.rabbitmq.reply-to`) and the
+    /// pending `correlation_id`, so the responder knows where to send the reply
+    /// and the requester's reply consumer can match it.
+    fn build_request_properties(
+        &self,
+        metadata: &EventMetadata,
+        correlation_id: u128,
+    ) -> BasicProperties {
+        self.build_properties(metadata)
+            .with_reply_to(ShortString::from(DIRECT_REPLY_TO))
+            .with_correlation_id(ShortString::from(correlation_id.to_string()))
     }
 
     /// Publish a serialized event to RabbitMQ.
@@ -260,58 +280,154 @@ impl EventBus for RabbitMqEventBus {
         }
     }
 
-    fn emit_and_wait<E>(&self, event: E) -> impl Future<Output = Result<(), EventBusError>> + Send
+    /// Send a point-to-point request via classic AMQP RPC (Direct Reply-To).
+    ///
+    /// The request is published to the topic exchange with routing key
+    /// `<topic>.requests` (the shared request queue's binding) carrying
+    /// `reply_to = amq.rabbitmq.reply-to` and a correlation id; the single
+    /// responder's reply is routed back onto this process's requester channel
+    /// and matched by correlation id.
+    ///
+    /// On distributed backends there is no way to distinguish "no responder is
+    /// registered anywhere" from "the responder is slow": with no consumer on
+    /// the shared request queue the request simply sits unconsumed, so an absent
+    /// responder manifests as [`EventBusError::RequestTimeout`], not
+    /// [`EventBusError::NoResponder`]. A responder that returns an error surfaces
+    /// as [`EventBusError::Remote`].
+    fn request_with<Req, Resp>(
+        &self,
+        req: Req,
+        options: RequestOptions,
+    ) -> impl Future<Output = Result<Resp, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: Serialize + Send + Sync + 'static,
+        Resp: DeserializeOwned + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
+            let payload = serde_json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
-            let metadata = EventMetadata::new();
+            let request_topic = request_topic(&bus.resolve_topic::<Req>());
+            let metadata = options.metadata.unwrap_or_default();
 
-            // Dispatch locally FIRST: this records the local outcome for the
-            // poller dedup. Publishing before recording would race the poller
-            // consuming the broker copy. If the local dispatch errors, skip the
-            // publish entirely.
-            bus.inner
-                .state
-                .dispatch_local(type_id, &payload, metadata.clone())
-                .await?;
+            // Register the pending entry BEFORE publishing so a fast reply can
+            // never race ahead of the correlation map. The guard evicts the entry
+            // on drop (timeout / shutdown / early return).
+            let (id, _guard, rx) = bus.inner.pending.register();
+            let props = bus.build_request_properties(&metadata, id);
 
-            bus.publish(&topic_name, payload, &metadata).await
+            // Publish on the requester channel — the same channel its Direct
+            // Reply-To consumer runs on (an AMQP requirement).
+            let channel = bus.inner.requester_channel().await?;
+            channel
+                .basic_publish(
+                    bus.inner.config.exchange.as_str().into(),
+                    request_topic.as_str().into(),
+                    BasicPublishOptions::default(),
+                    &payload,
+                    props,
+                )
+                .await
+                .map_err(map_lapin_error)?
+                .await
+                .map_err(map_lapin_error)?;
+
+            // Shared request tail: races the reply against the timeout and the
+            // per-bus shutdown token (`request_cancel`, mapped to
+            // `EventBusError::Shutdown`). `_guard` stays alive across this await,
+            // evicting the pending entry on return so a late reply is discarded.
+            let cancel = bus.inner.request_cancel.clone();
+            await_reply::<Resp>(rx, options.timeout, cancel.cancelled()).await
         }
     }
 
-    fn emit_and_wait_with<E>(
+    /// Register the single responder for request type `Req` (classic AMQP RPC).
+    ///
+    /// Starts a consumer on the shared, `consumer_group`-independent request
+    /// queue `<topic>.requests`. Every instance consumes that one queue, so the
+    /// broker load-balances requests across instances, delivering each to exactly
+    /// one responder. Each request is dispatched to `handler`, the reply is
+    /// published to the request's Direct Reply-To address with the same
+    /// correlation id, and the request is acked only after the reply is published
+    /// (at-least-once; a duplicate reply is dropped by the requester once its
+    /// correlation entry is gone). At most one responder per request type per
+    /// process — a second registration returns an error out of this call.
+    fn respond<Req, Resp, F, Fut>(
         &self,
-        event: E,
-        metadata: EventMetadata,
-    ) -> impl Future<Output = Result<(), EventBusError>> + Send
+        handler: F,
+    ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static,
+        Req: DeserializeOwned + Send + Sync + 'static,
+        Resp: Serialize + Send + 'static,
+        F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
     {
         let bus = self.clone();
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let type_id = TypeId::of::<E>();
-            let payload = serde_json::to_vec(&event)
-                .map_err(|e| EventBusError::Serialization(e.to_string()))?;
-            let topic_name = bus.resolve_topic::<E>();
+            let type_id = TypeId::of::<Req>();
+            let type_name = std::any::type_name::<Req>();
 
-            // Dispatch locally FIRST (see `emit_and_wait`): records the local
-            // outcome for the poller dedup before the broker copy can be seen.
+            // Register the responder first — surfaces the "already registered"
+            // error (one responder per type per process) before we touch the
+            // broker.
             bus.inner
                 .state
-                .dispatch_local(type_id, &payload, metadata.clone())
+                .register_responder::<Req, Resp, F, Fut>(handler)
                 .await?;
 
-            bus.publish(&topic_name, payload, &metadata).await
+            let request_topic = request_topic(&bus.resolve_topic::<Req>());
+
+            // Declare + bind the shared request queue synchronously so the
+            // binding is live before `respond` returns and a declare failure
+            // propagates out instead of being swallowed by the background task.
+            // Unregister the responder if this setup fails.
+            let setup = async {
+                let channel = bus.inner.new_consumer_channel().await?;
+                let queue_name = bus
+                    .inner
+                    .ensure_request_queue(&channel, &request_topic)
+                    .await?;
+                Ok::<_, EventBusError>((channel, queue_name))
+            }
+            .await;
+
+            let (channel, queue_name) = match setup {
+                Ok(ready) => ready,
+                Err(e) => {
+                    bus.inner.state.unregister_responder(type_id).await;
+                    return Err(e);
+                }
+            };
+
+            let cancel = bus.inner.state.register_poller_cancel(type_id);
+
+            let inner_clone = bus.inner.clone();
+            let cancel_task = cancel.clone();
+            let topic_task = request_topic.clone();
+            r2e_core::rt::spawn(async move {
+                run_responder(
+                    inner_clone,
+                    type_id,
+                    topic_task,
+                    cancel_task,
+                    Some((channel, queue_name)),
+                )
+                .await;
+            });
+
+            let inner_unreg = bus.inner.clone();
+            Ok(ResponderHandle::new(type_name, move || {
+                // Stop the request consumer and drop the responder.
+                cancel.cancel();
+                let inner = inner_unreg.clone();
+                r2e_core::rt::spawn(async move {
+                    inner.state.unregister_responder(type_id).await;
+                });
+            }))
         }
     }
 
@@ -332,8 +448,13 @@ impl EventBus for RabbitMqEventBus {
             // Set shutdown flag
             inner.state.shutdown.store(true, Ordering::Release);
 
-            // Cancel all consumer tasks
+            // Cancel all consumer tasks (event pollers + responder request
+            // consumers, both registered via `register_poller_cancel`).
             inner.state.cancel_all_pollers();
+
+            // Fail in-flight requesters promptly rather than making them wait
+            // out their timeouts; each drops its pending entry on return.
+            inner.request_cancel.cancel();
 
             // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;
@@ -386,30 +507,15 @@ async fn run_consumer(
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
     let reconnect = inner.config.reconnect;
-    let mut backoff = std::time::Duration::from_secs(1);
+    let label = format!("RabbitMQ consumer [{topic_name}]");
 
-    loop {
-        let start = std::time::Instant::now();
-        // `initial` is consumed on the first pass; reconnect passes get `None`
-        // and rebuild their own channel/queue.
-        run_consumer_inner(&inner, type_id, &topic_name, &cancel, initial.take()).await;
-
-        if cancel.is_cancelled() || !reconnect {
-            break;
-        }
-
-        // Reset backoff if the consumer ran successfully for a while
-        if start.elapsed() > backoff * 4 {
-            backoff = std::time::Duration::from_secs(1);
-        }
-
-        tracing::warn!(topic = %topic_name, "RabbitMQ consumer disconnected, reconnecting in {backoff:?}");
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = r2e_core::rt::sleep(backoff) => {},
-        }
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    // `initial.take()` is consumed on the first attempt; reconnect attempts get
+    // `None` (the shared driver takes an `FnMut`, so the captured `Option` is
+    // preserved across attempts) and rebuild their own channel/queue.
+    reconnect_loop(reconnect, max_backoff, &cancel, &label, || {
+        run_consumer_inner(&inner, type_id, &topic_name, &cancel, initial.take())
+    })
+    .await;
 }
 
 async fn run_consumer_inner(
@@ -530,6 +636,182 @@ async fn run_consumer_inner(
                     }
                     None => {
                         tracing::info!(queue = %queue_name, "consumer stream ended");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Background responder loop for one request type, with automatic reconnection.
+///
+/// Mirrors [`run_consumer`]'s reconnect skeleton (backoff, cancel-aware select,
+/// first-iteration channel reuse) but dispatches each request to the registered
+/// responder and publishes the reply, rather than fanning out to subscribers.
+async fn run_responder(
+    inner: Arc<RabbitMqInner>,
+    type_id: TypeId,
+    request_topic: String,
+    cancel: CancellationToken,
+    mut initial: Option<(Channel, String)>,
+) {
+    let max_backoff = inner.config.reconnect_max_backoff;
+    let reconnect = inner.config.reconnect;
+    let label = format!("RabbitMQ responder [{request_topic}]");
+
+    // First attempt consumes `initial.take()` (the channel+queue `respond`
+    // already declared+bound); reconnect attempts rebuild their own.
+    reconnect_loop(reconnect, max_backoff, &cancel, &label, || {
+        run_responder_inner(&inner, type_id, &request_topic, &cancel, initial.take())
+    })
+    .await;
+}
+
+async fn run_responder_inner(
+    inner: &Arc<RabbitMqInner>,
+    type_id: TypeId,
+    request_topic: &str,
+    cancel: &CancellationToken,
+    initial: Option<(Channel, String)>,
+) {
+    let (channel, queue_name) = match initial {
+        Some(ready) => ready,
+        None => {
+            let channel = match inner.new_consumer_channel().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(topic = %request_topic, "failed to create responder channel: {e}");
+                    return;
+                }
+            };
+            let queue_name = match inner.ensure_request_queue(&channel, request_topic).await {
+                Ok(q) => q,
+                Err(e) => {
+                    tracing::error!(topic = %request_topic, "failed to declare request queue: {e}");
+                    return;
+                }
+            };
+            (channel, queue_name)
+        }
+    };
+
+    let consumer_tag = format!("r2e-responder-{queue_name}");
+    let mut consumer = match channel
+        .basic_consume(
+            queue_name.as_str().into(),
+            consumer_tag.as_str().into(),
+            BasicConsumeOptions::default(),
+            FieldTable::default(),
+        )
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(queue = %queue_name, "failed to start responder consumer: {e}");
+            return;
+        }
+    };
+
+    tracing::info!(queue = %queue_name, "responder started");
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::info!(queue = %queue_name, "responder cancelled");
+                break;
+            }
+            delivery = consumer.next() => {
+                match delivery {
+                    Some(Ok(delivery)) => {
+                        // Invoke the responder, publish the reply to the request's
+                        // Direct Reply-To address, then ack — off the poll loop so
+                        // requests pipeline. `reply_to` is the broker-rewritten
+                        // pseudo-queue; publish it via the default exchange.
+                        let metadata = extract_metadata_from_delivery(&delivery);
+                        let reply_to = delivery
+                            .properties
+                            .reply_to()
+                            .as_ref()
+                            .map(|s| s.to_string());
+                        let correlation_id = delivery.properties.correlation_id().clone();
+                        let payload = delivery.data;
+                        let acker = delivery.acker;
+                        let inner = inner.clone();
+                        let channel = channel.clone();
+                        let queue = queue_name.clone();
+                        r2e_core::rt::spawn(async move {
+                            // Shared outcome mapping: Ok reply bytes / responder
+                            // error / (mid-flight-unregistered) no-responder all
+                            // collapse to `(body, error)` with the shared wording.
+                            let (body, error) = inner
+                                .state
+                                .build_reply(type_id, &payload, metadata)
+                                .await;
+
+                            // Track a failed reply publish so we can nack+requeue
+                            // instead of losing the request (at-least-once).
+                            let mut reply_publish_failed = false;
+                            if let Some(reply_to) = reply_to {
+                                let mut props = BasicProperties::default()
+                                    .with_content_type(ShortString::from("application/json"));
+                                if let Some(cid) = correlation_id {
+                                    props = props.with_correlation_id(cid);
+                                }
+                                if let Some(msg) = &error {
+                                    let mut headers = FieldTable::default();
+                                    headers.insert(
+                                        ShortString::from(HEADER_REPLY_ERROR),
+                                        AMQPValue::LongString(LongString::from(msg.as_bytes())),
+                                    );
+                                    props = props.with_headers(headers);
+                                }
+
+                                if let Err(e) = channel
+                                    .basic_publish(
+                                        "".into(),
+                                        reply_to.as_str().into(),
+                                        BasicPublishOptions::default(),
+                                        &body,
+                                        props,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!(queue = %queue, "failed to publish reply: {e}");
+                                    reply_publish_failed = true;
+                                }
+                            }
+
+                            if reply_publish_failed {
+                                // The reply never made it out — nack+requeue so the
+                                // request is redelivered (bounded by the broker's
+                                // redelivery) rather than acked and lost. An error
+                                // reply that published successfully still acks.
+                                tracing::warn!(queue = %queue, "reply publish failed, requeueing request");
+                                if let Err(e) = acker
+                                    .nack(BasicNackOptions {
+                                        requeue: true,
+                                        ..BasicNackOptions::default()
+                                    })
+                                    .await
+                                {
+                                    tracing::error!(queue = %queue, "failed to nack request: {e}");
+                                }
+                            } else {
+                                // Ack the request after the reply is published (or
+                                // when there was no reply-to to answer).
+                                if let Err(e) = acker.ack(BasicAckOptions::default()).await {
+                                    tracing::error!(queue = %queue, "failed to ack request: {e}");
+                                }
+                            }
+                        });
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!(queue = %queue_name, "responder consumer error, reconnecting: {e}");
+                        break;
+                    }
+                    None => {
+                        tracing::info!(queue = %queue_name, "responder consumer stream ended");
                         break;
                     }
                 }

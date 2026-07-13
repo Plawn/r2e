@@ -46,7 +46,8 @@
 //!
 //! # Limitations
 //!
-//! - `emit_and_wait` publishes to RabbitMQ AND waits for **local** handlers only.
+//! - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+//!   point-to-point request-reply.
 //! - RabbitMQ has no native partitioning. `partition_key` is stored as a header only.
 
 mod builder;
