@@ -38,3 +38,40 @@ pub fn sanitize_topic_name(name: &str) -> String {
         .replace('>', "")
         .replace(' ', "")
 }
+
+/// Suffix appended to an event topic to form its request-reply request topic.
+pub const REQUEST_TOPIC_SUFFIX: &str = ".requests";
+
+/// The request topic for an event topic: `<event_topic>.requests`.
+///
+/// Requesters publish to this shared topic; the responder (one per request
+/// type per consumer group) consumes it and replies to the per-request
+/// [`reply_topic`].
+pub fn request_topic(event_topic: &str) -> String {
+    format!("{event_topic}{REQUEST_TOPIC_SUFFIX}")
+}
+
+/// The per-bus-instance reply topic: `<topic_prefix>.replies.<instance-id-hex>`.
+///
+/// Each bus instance consumes its own reply topic; responders publish replies
+/// here (named by the request's `reply-to` header) and the instance's reply
+/// consumer correlates them back to the waiting requester.
+///
+/// `instance_id` must be a per-bus-instance nonce (mint one with
+/// [`instance_id`]), NOT the process id: two bus instances sharing a config in
+/// one process would otherwise collide on the same reply topic and steal each
+/// other's replies.
+pub fn reply_topic(topic_prefix: &str, instance_id: u64) -> String {
+    format!("{topic_prefix}.replies.{instance_id:016x}")
+}
+
+/// Mint a fresh random 64-bit nonce identifying one bus instance.
+///
+/// Drawn from the OS CSPRNG (via `uuid`). Each call returns a new value; a
+/// backend calls this once per bus instance and passes the result to
+/// [`reply_topic`] so its reply topic is unique even when several bus instances
+/// share a config within a single process.
+pub fn instance_id() -> u64 {
+    let (hi, lo) = uuid::Uuid::new_v4().as_u64_pair();
+    hi ^ lo
+}

@@ -5,6 +5,17 @@
 //! Pulsar, RabbitMQ) live in `r2e-events/backends/` and share the utilities
 //! in [`backend`].
 //!
+//! # Messaging models
+//!
+//! - **`emit`** — fan-out publish/subscribe. Every subscriber receives a copy;
+//!   the emitter does not wait for handlers and cannot observe a reply
+//!   (Vert.x `publish` semantics).
+//! - **`request` / `respond`** — point-to-point request-reply. Exactly one
+//!   responder replies; the requester awaits that reply with a timeout
+//!   (Vert.x `request` semantics). At most one responder may be registered per
+//!   request type per process; cross-instance load balancing comes from the
+//!   broker's queue/consumer-group semantics, not in-process round-robin.
+//!
 //! # Delivery semantics (distributed backends)
 //!
 //! **At-least-once.** The broker copy of a message is acked/committed only
@@ -16,16 +27,14 @@
 //! acked; a payload that fails to deserialize (poison message) is parked in
 //! the matching handlers' configured dead-letter topics (when any) and then
 //! acked — never redelivered forever; a panicking handler counts as a
-//! `Nack`. `emit_and_wait` runs local handlers **before** publishing to the
-//! broker; if a local handler nacks, the broker copy is nacked too so the
-//! event is redelivered.
+//! `Nack`. There is a single delivery path per consumer group.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -47,6 +56,13 @@ pub enum EventBusError {
     Connection(String),
     /// The event bus has been shut down.
     Shutdown,
+    /// `request` found no responder registered for the request type.
+    NoResponder,
+    /// `request` did not receive a reply within the configured timeout.
+    RequestTimeout,
+    /// The responder handled the request but returned an error payload
+    /// (Vert.x `ReplyException` equivalent).
+    Remote(String),
     /// Any other error.
     Other(String),
 }
@@ -57,6 +73,9 @@ impl fmt::Display for EventBusError {
             Self::Serialization(msg) => write!(f, "serialization error: {msg}"),
             Self::Connection(msg) => write!(f, "connection error: {msg}"),
             Self::Shutdown => write!(f, "event bus is shut down"),
+            Self::NoResponder => write!(f, "no responder registered for request type"),
+            Self::RequestTimeout => write!(f, "request timed out waiting for a reply"),
+            Self::Remote(msg) => write!(f, "responder returned an error: {msg}"),
             Self::Other(msg) => write!(f, "{msg}"),
         }
     }
@@ -102,6 +121,84 @@ impl fmt::Debug for SubscriptionHandle {
         f.debug_struct("SubscriptionHandle")
             .field("id", &self.id)
             .finish()
+    }
+}
+
+// ── ResponderHandle ────────────────────────────────────────────────────
+
+/// Handle returned by [`EventBus::respond`]. Can be used to unregister the
+/// responder so that a different one may take its place.
+#[derive(Clone)]
+pub struct ResponderHandle {
+    type_name: &'static str,
+    _unregister: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl ResponderHandle {
+    /// Create a new handle for the responder of request type named `type_name`,
+    /// with the given unregister closure.
+    pub fn new(type_name: &'static str, unregister: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            type_name,
+            _unregister: Arc::new(unregister),
+        }
+    }
+
+    /// Remove this responder from the event bus.
+    pub fn unregister(&self) {
+        (self._unregister)();
+    }
+}
+
+impl fmt::Debug for ResponderHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResponderHandle")
+            .field("type_name", &self.type_name)
+            .finish()
+    }
+}
+
+// ── RequestOptions ─────────────────────────────────────────────────────
+
+/// Default timeout applied by [`EventBus::request`].
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Options controlling a single [`EventBus::request_with`] call.
+#[derive(Debug, Clone)]
+pub struct RequestOptions {
+    /// How long to wait for a reply before failing with
+    /// [`EventBusError::RequestTimeout`].
+    pub timeout: Duration,
+    /// Explicit metadata for the request message. When `None`, fresh metadata
+    /// is generated.
+    pub metadata: Option<EventMetadata>,
+}
+
+impl Default for RequestOptions {
+    fn default() -> Self {
+        Self {
+            timeout: DEFAULT_REQUEST_TIMEOUT,
+            metadata: None,
+        }
+    }
+}
+
+impl RequestOptions {
+    /// Options with the default 30s timeout and no explicit metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the reply timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Set explicit request metadata.
+    pub fn with_metadata(mut self, metadata: EventMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 }
 
@@ -385,20 +482,67 @@ pub trait EventBus: Clone + Send + Sync + 'static {
     where
         E: Serialize + Send + Sync + 'static;
 
-    /// Emit an event and wait for all subscribers to complete.
-    /// Metadata is auto-generated.
-    fn emit_and_wait<E>(&self, event: E) -> impl Future<Output = Result<(), EventBusError>> + Send
-    where
-        E: Serialize + Send + Sync + 'static;
-
-    /// Emit an event and wait for all subscribers to complete, with explicit metadata.
-    fn emit_and_wait_with<E>(
+    /// Send a point-to-point request and await the responder's reply.
+    ///
+    /// Exactly one responder (registered via [`respond`]) handles the request
+    /// and produces the reply. Uses [`DEFAULT_REQUEST_TIMEOUT`]. Errors:
+    /// [`EventBusError::NoResponder`] when no responder is registered,
+    /// [`EventBusError::RequestTimeout`] when no reply arrives in time,
+    /// [`EventBusError::Remote`] when the responder returns an error.
+    ///
+    /// The default implementation reports that the backend does not support
+    /// request-reply — backends that do override it.
+    ///
+    /// [`respond`]: EventBus::respond
+    fn request<Req, Resp>(
         &self,
-        event: E,
-        metadata: EventMetadata,
-    ) -> impl Future<Output = Result<(), EventBusError>> + Send
+        req: Req,
+    ) -> impl Future<Output = Result<Resp, EventBusError>> + Send
     where
-        E: Serialize + Send + Sync + 'static;
+        Req: Serialize + Send + Sync + 'static,
+        Resp: DeserializeOwned + Send + 'static,
+    {
+        self.request_with(req, RequestOptions::default())
+    }
+
+    /// Send a point-to-point request with explicit [`RequestOptions`].
+    ///
+    /// See [`request`](EventBus::request). The default implementation reports
+    /// that the backend does not support request-reply.
+    fn request_with<Req, Resp>(
+        &self,
+        _req: Req,
+        _options: RequestOptions,
+    ) -> impl Future<Output = Result<Resp, EventBusError>> + Send
+    where
+        Req: Serialize + Send + Sync + 'static,
+        Resp: DeserializeOwned + Send + 'static,
+    {
+        async { Err(EventBusError::Other("request-reply not supported by this backend".to_string())) }
+    }
+
+    /// Register the single responder for request type `Req`.
+    ///
+    /// The handler receives an [`EventEnvelope<Req>`] and returns
+    /// `Result<Resp, String>` — `Ok(resp)` becomes the reply, `Err(msg)`
+    /// surfaces to the requester as [`EventBusError::Remote`]. At most one
+    /// responder may be registered per request type per process; a second
+    /// registration returns an error.
+    ///
+    /// The default implementation reports that the backend does not support
+    /// request-reply — backends that do override it.
+    fn respond<Req, Resp, F, Fut>(
+        &self,
+        _handler: F,
+    ) -> impl Future<Output = Result<ResponderHandle, EventBusError>> + Send
+    where
+        Req: DeserializeOwned + Send + Sync + 'static,
+        Resp: Serialize + Send + 'static,
+        F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+    {
+        async { Err(EventBusError::Other("request-reply not supported by this backend".to_string())) }
+    }
 
     /// Remove all registered event handlers.
     fn clear(&self) -> impl Future<Output = ()> + Send;
@@ -419,6 +563,7 @@ pub mod prelude {
     pub use crate::sse_bridge::SseBridgeExt;
     pub use crate::{
         Event, EventBus, EventBusError, EventEnvelope, EventFilter, EventMetadata, HandlerResult,
-        LocalEventBus, RetryPolicy, SubscriptionHandle, SubscriptionId,
+        LocalEventBus, RequestOptions, ResponderHandle, RetryPolicy, SubscriptionHandle,
+        SubscriptionId, DEFAULT_REQUEST_TIMEOUT,
     };
 }

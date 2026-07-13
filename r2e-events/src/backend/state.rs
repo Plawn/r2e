@@ -1,97 +1,30 @@
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::{DlqPublisher, EventBusError, EventMetadata, HandlerResult, SubscriptionHandle, SubscriptionId};
+use crate::{DlqPublisher, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle, SubscriptionId};
 use super::dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 use super::topic::TopicRegistry;
 
-/// Bounded map of event IDs that were dispatched locally by `emit_and_wait`,
-/// with the local dispatch outcome (`true` = all handlers acked).
+/// Type-erased request responder for distributed backends.
 ///
-/// Used to prevent double-delivery: when a distributed backend calls
-/// `dispatch_local()` AND publishes to the broker, the background poller
-/// would also receive the same message and dispatch again. This map records
-/// which event IDs were already handled locally — and how they resolved — so
-/// the poller can skip the handlers and ack/nack the broker copy from the
-/// recorded outcome. Backends must record BEFORE publishing (dispatch-local
-/// first), otherwise the poller can race the recording.
-///
-/// Memory is constant: when the map reaches `capacity`, the oldest entry is
-/// evicted before inserting the new one. Evictions are logged as warnings and
-/// counted via `eviction_count`.
-pub struct LocallyDispatchedSet {
-    set: HashMap<u128, bool>,
-    order: VecDeque<u128>,
-    capacity: usize,
-    /// Total number of entries evicted because the set was full.
-    eviction_count: u64,
-}
-
-impl LocallyDispatchedSet {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            set: HashMap::with_capacity(capacity),
-            order: VecDeque::with_capacity(capacity),
-            capacity,
-            eviction_count: 0,
-        }
-    }
-
-    /// Record an event ID as locally dispatched with its outcome
-    /// (`all_acked` = every local handler acked).
-    pub fn insert(&mut self, id: u128, all_acked: bool) {
-        if self.set.contains_key(&id) {
-            return;
-        }
-        // Drain leading ghost entries (already removed from set by the poller)
-        // to prevent unbounded VecDeque growth.
-        while self.order.front().is_some_and(|front| !self.set.contains_key(front)) {
-            self.order.pop_front();
-        }
-        if self.set.len() >= self.capacity {
-            // Evict oldest live entry; skip any remaining ghosts.
-            loop {
-                match self.order.pop_front() {
-                    Some(oldest) if self.set.remove(&oldest).is_some() => {
-                        self.eviction_count += 1;
-                        tracing::warn!(
-                            capacity = self.capacity,
-                            eviction_count = self.eviction_count,
-                            "dedup set at capacity — evicting oldest entry; \
-                             this may cause double-delivery if the poller hasn't processed it yet"
-                        );
-                        break;
-                    }
-                    Some(_) => continue, // ghost entry, skip
-                    None => break,       // deque empty (shouldn't happen)
-                }
-            }
-        }
-        self.set.insert(id, all_acked);
-        self.order.push_back(id);
-    }
-
-    /// Remove an event ID, returning the recorded local outcome if it was
-    /// present (`Some(true)` = handlers all acked, `Some(false)` = at least
-    /// one nacked or panicked).
-    pub fn remove(&mut self, id: u128) -> Option<bool> {
-        self.set.remove(&id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.set.len()
-    }
-
-    /// Total number of entries evicted due to capacity pressure.
-    pub fn eviction_count(&self) -> u64 {
-        self.eviction_count
-    }
-}
+/// Given the raw request payload bytes and its decoded metadata, it
+/// deserializes the request, invokes the user handler, and serializes the
+/// reply — yielding the reply bytes or a remote-error message. A backend's
+/// request-topic consumer only needs bytes-in / reply-bytes-out plus a
+/// "publish reply to `<reply-to>`" callback of its own.
+pub type ResponderFn = Arc<
+    dyn Fn(&[u8], EventMetadata) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Default maximum concurrent handlers for distributed backends.
 pub const DEFAULT_BACKEND_CONCURRENCY: usize = 1024;
@@ -105,9 +38,8 @@ pub const DEFAULT_BACKEND_CONCURRENCY: usize = 1024;
 pub enum DispatchOutcome {
     /// Safe to ack/commit: every handler acked (after retries), every nacked
     /// handler's payload was captured to a DLQ, there were no matching
-    /// handlers, the message was already dispatched locally by
-    /// `emit_and_wait`, or the payload failed to deserialize (poison
-    /// messages are dropped with an error log, not redelivered).
+    /// handlers, or the payload failed to deserialize (poison messages are
+    /// dropped with an error log, not redelivered).
     Ack,
     /// At least one handler nacked (or panicked) without DLQ capture —
     /// skip the ack/commit so the broker redelivers the message.
@@ -174,9 +106,9 @@ pub struct BackendState {
     pub in_flight_zero: Notify,
     /// Set of topics already ensured to exist in the backend.
     pub ensured_topics: Mutex<HashSet<String>>,
-    /// Event IDs that were dispatched locally by `emit_and_wait`, used to
-    /// prevent double-delivery when the poller receives the same message.
-    pub locally_dispatched: Mutex<LocallyDispatchedSet>,
+    /// Request-reply responders, keyed by request `TypeId`. At most one per
+    /// type (enforced by [`register_responder`](BackendState::register_responder)).
+    pub responders: RwLock<HashMap<TypeId, ResponderFn>>,
     /// Optional callback for publishing failed events to a dead-letter topic.
     /// Provided by the backend when constructing `BackendState`.
     pub dlq_publisher: Option<DlqPublisher>,
@@ -256,7 +188,7 @@ impl BackendState {
             in_flight: AtomicUsize::new(0),
             in_flight_zero: Notify::new(),
             ensured_topics: Mutex::new(HashSet::new()),
-            locally_dispatched: Mutex::new(LocallyDispatchedSet::new(8192)),
+            responders: RwLock::new(HashMap::new()),
             dlq_publisher,
             handler_semaphore: Arc::new(Semaphore::new(max_concurrency)),
         }
@@ -426,85 +358,110 @@ impl BackendState {
         })
     }
 
-    /// Dispatch a deserialized event to all local handlers for `emit_and_wait`.
+    /// Register the single request-reply responder for request type `Req`.
     ///
-    /// Records the event ID and the aggregate handler outcome in the
-    /// locally-dispatched map once all handlers have resolved, so the poller
-    /// later acks the broker copy when handlers acked and nacks it (for
-    /// redelivery) when any handler failed. Backends MUST call this BEFORE
-    /// publishing to the broker — recording after the publish races the
-    /// poller consuming the broker copy.
-    pub async fn dispatch_local(
+    /// Returns an error if a responder is already registered for `Req` (at most
+    /// one responder per request type per process). The stored [`ResponderFn`]
+    /// deserializes the request bytes, invokes `handler`, and serializes the
+    /// reply — see [`invoke_responder`](Self::invoke_responder).
+    pub async fn register_responder<Req, Resp, F, Fut>(
+        &self,
+        handler: F,
+    ) -> Result<(), EventBusError>
+    where
+        Req: DeserializeOwned + Send + Sync + 'static,
+        Resp: Serialize + Send + 'static,
+        F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Resp, String>> + Send + 'static,
+    {
+        let type_id = TypeId::of::<Req>();
+        let type_name = std::any::type_name::<Req>();
+
+        let responder: ResponderFn = Arc::new(move |bytes, metadata| {
+            match serde_json::from_slice::<Req>(bytes) {
+                Ok(req) => {
+                    let envelope = EventEnvelope { event: Arc::new(req), metadata };
+                    let fut = handler(envelope);
+                    Box::pin(async move {
+                        match fut.await {
+                            Ok(resp) => serde_json::to_vec(&resp).map_err(|e| e.to_string()),
+                            Err(msg) => Err(msg),
+                        }
+                    })
+                }
+                Err(e) => {
+                    let msg = format!("failed to deserialize request: {e}");
+                    Box::pin(async move { Err(msg) })
+                }
+            }
+        });
+
+        let mut map = self.responders.write().await;
+        if map.contains_key(&type_id) {
+            return Err(EventBusError::Other(format!(
+                "a responder is already registered for request type `{type_name}`"
+            )));
+        }
+        map.insert(type_id, responder);
+        Ok(())
+    }
+
+    /// Remove the responder registered for request type identified by `type_id`.
+    pub async fn unregister_responder(&self, type_id: TypeId) {
+        self.responders.write().await.remove(&type_id);
+    }
+
+    /// Invoke the responder for `type_id` with the raw request `payload` and
+    /// its `metadata`, returning the reply bytes or a remote-error message.
+    ///
+    /// Returns `None` when no responder is registered for `type_id` — the
+    /// backend's request consumer should surface this as "no responder".
+    pub async fn invoke_responder(
         &self,
         type_id: TypeId,
         payload: &[u8],
         metadata: EventMetadata,
-    ) -> Result<(), EventBusError> {
-        let event_id = metadata.event_id;
-
-        // Collect handlers under the lock, then release before spawning/awaiting.
-        let (event, handlers) = {
-            let map = self.handlers.read().await;
-            let topic_handlers = match map.get(&type_id) {
-                Some(th) => th,
-                None => {
-                    // Nothing ran locally, nothing will: ack the broker copy.
-                    self.record_local_dispatch(event_id, true);
-                    return Ok(());
-                }
-            };
-
-            let event = (topic_handlers.deserializer)(payload)
-                .map_err(EventBusError::Serialization)?;
-
-            let handlers: Vec<_> = topic_handlers.entries.iter()
-                .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                .map(|entry| entry.handler.clone())
-                .collect();
-            (event, handlers)
+    ) -> Option<Result<Vec<u8>, String>> {
+        let responder = {
+            let map = self.responders.read().await;
+            map.get(&type_id).cloned()
         };
-        // RwLock released here
-
-        let mut tasks = Vec::with_capacity(handlers.len());
-        for h in handlers {
-            let e = event.clone();
-            let m = metadata.clone();
-            let permit = self.handler_semaphore.clone()
-                .acquire_owned().await
-                .expect("semaphore closed");
-            // Reachable from `emit_and_wait` in a request handler → control plane.
-            tasks.push(r2e_core::rt::spawn_ctl(async move {
-                let result = h(e, m).await;
-                drop(permit);
-                result
-            }));
+        match responder {
+            Some(r) => Some(r(payload, metadata).await),
+            None => None,
         }
-
-        let mut all_acked = true;
-        for task in tasks {
-            match task.await {
-                Ok(HandlerResult::Ack) => {}
-                Ok(HandlerResult::Nack(reason)) => {
-                    tracing::warn!("event handler returned Nack: {reason}");
-                    all_acked = false;
-                }
-                Err(e) => {
-                    tracing::error!("event handler task panicked: {e}");
-                    all_acked = false;
-                }
-            }
-        }
-
-        self.record_local_dispatch(event_id, all_acked);
-        Ok(())
     }
 
-    /// Record an `emit_and_wait` local dispatch outcome for the poller dedup.
-    fn record_local_dispatch(&self, event_id: u128, all_acked: bool) {
-        self.locally_dispatched
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(event_id, all_acked);
+    /// Build the reply payload and optional error for a request of `type_id`,
+    /// single-sourcing the responder-outcome mapping every backend otherwise
+    /// hand-rolls.
+    ///
+    /// Wraps [`invoke_responder`](Self::invoke_responder):
+    /// - responder succeeded → `(reply_bytes, None)`;
+    /// - responder returned an error → `(b"null", Some(msg))`;
+    /// - **no responder registered** → `(b"null", Some("no responder registered
+    ///   for request type"))` — a missing responder ALWAYS produces an error
+    ///   reply, never a silent drop, so the requester surfaces
+    ///   [`EventBusError::Remote`] instead of waiting out the timeout.
+    ///
+    /// The `b"null"` error placeholder is a valid non-empty JSON payload (some
+    /// brokers reject empty payloads); it is ignored by the requester, which
+    /// reads the outcome from the reply-error header. Callers publish the reply
+    /// with `encode_reply_headers(request_id, None, error.as_deref())`.
+    pub async fn build_reply(
+        &self,
+        type_id: TypeId,
+        payload: &[u8],
+        metadata: EventMetadata,
+    ) -> (Vec<u8>, Option<String>) {
+        match self.invoke_responder(type_id, payload, metadata).await {
+            Some(Ok(bytes)) => (bytes, None),
+            Some(Err(msg)) => (b"null".to_vec(), Some(msg)),
+            None => (
+                b"null".to_vec(),
+                Some("no responder registered for request type".to_string()),
+            ),
+        }
     }
 
     /// Dispatch a message from a poller to local handlers (fire-and-forget with in-flight tracking).
@@ -546,22 +503,6 @@ impl BackendState {
         payload: &[u8],
         metadata: EventMetadata,
     ) -> DispatchCompletion {
-        // Skip if this event was already dispatched locally by emit_and_wait:
-        // handlers already ran there, so resolve the broker copy from the
-        // recorded local outcome (nack → broker redelivers, handlers re-run).
-        if let Some(all_acked) = self
-            .locally_dispatched
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(metadata.event_id)
-        {
-            return DispatchCompletion::resolved(if all_acked {
-                DispatchOutcome::Ack
-            } else {
-                DispatchOutcome::Nack
-            });
-        }
-
         // Collect handlers and deserialize under the lock, then release before spawning.
         let (event, handler_data, dlq_data) = {
             let map = self.handlers.read().await;

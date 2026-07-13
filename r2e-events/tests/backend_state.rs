@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use r2e_events::backend::{BackendState, DeserializerFn, DispatchOutcome, Handler, TopicRegistry};
-use r2e_events::{DlqPublisher, EventMetadata, HandlerResult, RetryPolicy};
+use r2e_events::{DlqPublisher, EventEnvelope, EventMetadata, HandlerResult, RetryPolicy};
+use serde::{Deserialize, Serialize};
 
 struct TestEvent;
 
@@ -149,75 +150,6 @@ async fn tracked_dispatch_deserialize_failure_is_ack() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tracked_dispatch_skips_locally_dispatched_event() {
-    let state = new_state();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let handler = counting_handler(calls.clone(), || HandlerResult::Nack("never acked".into()));
-    state
-        .register_handler_with_deserializer::<TestEvent>(handler, test_deserializer())
-        .await;
-
-    let metadata = EventMetadata::new();
-    state
-        .locally_dispatched
-        .lock()
-        .unwrap()
-        .insert(metadata.event_id, true);
-
-    let completion = state
-        .dispatch_from_poller_tracked(TypeId::of::<TestEvent>(), b"{}", metadata)
-        .await;
-
-    // Already handled by emit_and_wait locally: ack the broker copy, skip handlers.
-    assert_eq!(completion.outcome().await, DispatchOutcome::Ack);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn locally_dispatched_nack_outcome_nacks_broker_copy() {
-    let state = new_state();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let handler = counting_handler(calls.clone(), || HandlerResult::Ack);
-    state
-        .register_handler_with_deserializer::<TestEvent>(handler, test_deserializer())
-        .await;
-
-    let metadata = EventMetadata::new();
-    state
-        .locally_dispatched
-        .lock()
-        .unwrap()
-        .insert(metadata.event_id, false);
-
-    let completion = state
-        .dispatch_from_poller_tracked(TypeId::of::<TestEvent>(), b"{}", metadata)
-        .await;
-
-    // Local emit_and_wait handlers nacked: skip handlers, nack the broker copy.
-    assert_eq!(completion.outcome().await, DispatchOutcome::Nack);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn dispatch_local_records_outcome_for_poller() {
-    let state = new_state();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let handler = counting_handler(calls.clone(), || HandlerResult::Nack("boom".into()));
-    state
-        .register_handler_with_deserializer::<TestEvent>(handler, test_deserializer())
-        .await;
-
-    let metadata = EventMetadata::new();
-    let event_id = metadata.event_id;
-    state
-        .dispatch_local(TypeId::of::<TestEvent>(), b"{}", metadata)
-        .await
-        .unwrap();
-
-    assert_eq!(state.locally_dispatched.lock().unwrap().remove(event_id), Some(false));
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn poison_message_routes_to_matching_dlqs_and_acks() {
     let published: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let published_clone = published.clone();
@@ -292,4 +224,158 @@ async fn untracked_dispatch_still_runs_handlers() {
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+// --- Request-reply responder registry (BackendState) ---
+
+#[derive(Serialize, Deserialize)]
+struct Ping {
+    n: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Pong {
+    n: i64,
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn responder_invoke_returns_serialized_reply() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: env.event.n + 1 })
+        })
+        .await
+        .unwrap();
+
+    let payload = serde_json::to_vec(&Ping { n: 41 }).unwrap();
+    let reply = state
+        .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
+        .await
+        .expect("responder registered")
+        .expect("responder succeeded");
+    let pong: Pong = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(pong.n, 42);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn responder_error_surfaces_as_err_bytes() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|_env: EventEnvelope<Ping>| async move {
+            Err::<Pong, String>("nope".to_string())
+        })
+        .await
+        .unwrap();
+
+    let payload = serde_json::to_vec(&Ping { n: 1 }).unwrap();
+    let result = state
+        .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
+        .await
+        .expect("responder registered");
+    assert_eq!(result, Err("nope".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invoke_without_responder_is_none() {
+    let state = new_state();
+    let result = state
+        .invoke_responder(TypeId::of::<Ping>(), b"{}", EventMetadata::new())
+        .await;
+    assert!(result.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn second_responder_for_same_type_is_rejected() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: 0 })
+        })
+        .await
+        .unwrap();
+    let second = state
+        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: 1 })
+        })
+        .await;
+    assert!(second.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unregister_responder_allows_reregistration() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|_e: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: 0 })
+        })
+        .await
+        .unwrap();
+    state.unregister_responder(TypeId::of::<Ping>()).await;
+    state
+        .register_responder::<Ping, Pong, _, _>(|e: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: e.event.n * 2 })
+        })
+        .await
+        .expect("re-registration after unregister should succeed");
+
+    let payload = serde_json::to_vec(&Ping { n: 21 }).unwrap();
+    let reply = state
+        .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
+        .await
+        .unwrap()
+        .unwrap();
+    let pong: Pong = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(pong.n, 42);
+}
+
+// --- build_reply: single-sourced outcome mapping ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn build_reply_success_has_no_error() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|env: EventEnvelope<Ping>| async move {
+            Ok::<Pong, String>(Pong { n: env.event.n + 1 })
+        })
+        .await
+        .unwrap();
+
+    let payload = serde_json::to_vec(&Ping { n: 41 }).unwrap();
+    let (bytes, error) = state
+        .build_reply(TypeId::of::<Ping>(), &payload, EventMetadata::new())
+        .await;
+    assert!(error.is_none());
+    let pong: Pong = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(pong.n, 42);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn build_reply_responder_error_carries_message_and_placeholder() {
+    let state = new_state();
+    state
+        .register_responder::<Ping, Pong, _, _>(|_env: EventEnvelope<Ping>| async move {
+            Err::<Pong, String>("nope".to_string())
+        })
+        .await
+        .unwrap();
+
+    let payload = serde_json::to_vec(&Ping { n: 1 }).unwrap();
+    let (bytes, error) = state
+        .build_reply(TypeId::of::<Ping>(), &payload, EventMetadata::new())
+        .await;
+    assert_eq!(error.as_deref(), Some("nope"));
+    // Non-empty placeholder payload (some brokers reject empty payloads).
+    assert_eq!(bytes, b"null".to_vec());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn build_reply_without_responder_always_produces_error() {
+    // A missing responder must produce an error reply, never a silent drop.
+    let state = new_state();
+    let (bytes, error) = state
+        .build_reply(TypeId::of::<Ping>(), b"{}", EventMetadata::new())
+        .await;
+    assert_eq!(error.as_deref(), Some("no responder registered for request type"));
+    assert_eq!(bytes, b"null".to_vec());
 }
