@@ -1,0 +1,11 @@
+error: `retry` is a fan-out subscriber option and cannot be used on a responder #[consumer] (a method with a non-`()` return type).
+
+       A responder is point-to-point (registered via `EventBus::respond`): exactly one handler replies to each `request`, so `topic`, `deserializer`, `filter`, `retry`, and `dlq` do not apply.
+
+         - For request-reply, keep only `bus`: #[consumer(bus = "event_bus")] async fn handle(&self, event: Arc<Req>) -> Resp
+
+         - For fan-out with retry, return `()` (or `Result<(), E>`) instead.
+  --> compile-fail/consumer_responder_with_retry.rs:30:14
+   |
+30 |     async fn greet(&self, req: std::sync::Arc<GreetRequest>) -> GreetReply {
+   |              ^^^^^

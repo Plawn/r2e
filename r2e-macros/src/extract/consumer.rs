@@ -1,5 +1,38 @@
 //! Consumer-related attribute extraction.
 
+use crate::types::ConsumerKind;
+use crate::type_utils::{is_unit_type, result_ok_type};
+
+/// Classify a `#[consumer]` method by its return type.
+///
+/// - `-> ()` (or an elided return) and `-> Result<(), E>` are fan-out
+///   [`ConsumerKind::Subscriber`]s.
+/// - any other return type is a request-reply [`ConsumerKind::Responder`]:
+///   a bare `-> Resp` (infallible) or `-> Result<Resp, E>` (fallible, `Err`
+///   mapped to the responder error string).
+pub fn classify_consumer_return(output: &syn::ReturnType) -> ConsumerKind {
+    let ty = match output {
+        syn::ReturnType::Default => return ConsumerKind::Subscriber,
+        syn::ReturnType::Type(_, t) => &**t,
+    };
+    if is_unit_type(ty) {
+        return ConsumerKind::Subscriber;
+    }
+    if let Some(ok) = result_ok_type(ty) {
+        if is_unit_type(ok) {
+            return ConsumerKind::Subscriber;
+        }
+        return ConsumerKind::Responder {
+            resp_type: ok.clone(),
+            fallible: true,
+        };
+    }
+    ConsumerKind::Responder {
+        resp_type: ty.clone(),
+        fallible: false,
+    }
+}
+
 /// Parsed configuration from `#[consumer(...)]`.
 pub struct ConsumerConfig {
     pub bus_field: String,

@@ -48,3 +48,15 @@ pub struct UserCreatedEvent {
     pub name: String,
     pub email: String,
 }
+
+/// Point-to-point request asking for a greeting (request-reply demo).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetRequest {
+    pub name: String,
+}
+
+/// Reply produced by the greeting responder.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetReply {
+    pub message: String,
+}

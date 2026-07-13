@@ -805,6 +805,41 @@ fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
             let fn_name = &cm.fn_item.sig.ident;
             let controller_name = &def.controller_name;
 
+            // Responder (non-`()` return): register via `EventBus::respond`.
+            // The method's return value IS the reply. `respond` accepts a
+            // single handler and no fan-out options — parsing has already
+            // rejected topic/deserializer/filter/retry/dlq here.
+            if let crate::types::ConsumerKind::Responder { resp_type, fallible } = &cm.kind {
+                let reply_map = if *fallible {
+                    quote! {
+                        ::core::result::Result::map_err(__reply, |__e| ::std::string::ToString::to_string(&__e))
+                    }
+                } else {
+                    quote! {
+                        ::core::result::Result::<#resp_type, ::std::string::String>::Ok(__reply)
+                    }
+                };
+                return quote! {
+                    {
+                        let __event_bus = __core.#bus_field.clone();
+                        let __responder_core = __core.clone();
+                        let __handle = #events_krate::EventBus::respond::<#event_type, #resp_type, _, _>(
+                            &__event_bus,
+                            move |__envelope: #events_krate::EventEnvelope<#event_type>| {
+                                let __ctrl = __responder_core.clone();
+                                async move {
+                                    let __reply = __ctrl.#fn_name(__envelope.event).await;
+                                    #reply_map
+                                }
+                            },
+                        ).await;
+                        if let Err(__e) = __handle {
+                            eprintln!("[r2e] Failed to register responder: {__e}");
+                        }
+                    }
+                };
+            }
+
             // Optional: register topic before subscribe
             let register_topic = cm.topic.as_ref().map(|topic_str| {
                 quote! {
