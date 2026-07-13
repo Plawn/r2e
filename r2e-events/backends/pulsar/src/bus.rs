@@ -694,10 +694,14 @@ async fn run_poller_inner(
                 tracing::info!(topic = %full_topic, "poller cancelled");
                 break;
             }
-            // Apply an ack/nack decision once its handlers have finished. Acks are
-            // per-message and order-independent in Pulsar, so no watermark tracking.
+            // Apply ack/nack decisions once their handlers have finished. Drain
+            // all pending completions so ack traffic is batched rather than
+            // interleaved one-per-select-iteration with message consumption.
             Some(((msg_topic, msg_id), outcome)) = ack_rx.recv() => {
                 apply_ack(&mut consumer, full_topic, &msg_topic, msg_id, outcome).await;
+                while let Ok(((msg_topic, msg_id), outcome)) = ack_rx.try_recv() {
+                    apply_ack(&mut consumer, full_topic, &msg_topic, msg_id, outcome).await;
+                }
             }
             msg = futures_util::StreamExt::next(&mut consumer) => {
                 match msg {
@@ -849,27 +853,36 @@ async fn run_responder_inner(
 
     tracing::info!(topic = %full_topic, "responder started");
 
+    // Pipelined: spawn a task per request. Ack/nack decisions flow back on a
+    // bounded channel because Pulsar's Consumer is !Sync. Shared subscription
+    // means individual acks are required (no cumulative ack).
+    let (ack_tx, mut ack_rx) =
+        tokio::sync::mpsc::channel::<((String, MessageIdData), bool)>(COMPLETION_CHANNEL_CAPACITY);
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %full_topic, "responder cancelled");
                 break;
             }
+            Some(((msg_topic, msg_id), ok)) = ack_rx.recv() => {
+                apply_responder_ack(&mut consumer, full_topic, &msg_topic, msg_id, ok).await;
+                while let Ok(((msg_topic, msg_id), ok)) = ack_rx.try_recv() {
+                    apply_responder_ack(&mut consumer, full_topic, &msg_topic, msg_id, ok).await;
+                }
+            }
             msg = futures_util::StreamExt::next(&mut consumer) => {
                 match msg {
                     Some(Ok(received)) => {
-                        // Ack the request only after its reply has actually been
-                        // published (at-least-once). If the reply publish failed,
-                        // negative-ack so the broker redelivers the request to
-                        // another instance instead of losing it. An error REPLY
-                        // that published successfully still acks.
-                        if handle_request(inner, type_id, full_topic, &received).await {
-                            if let Err(e) = consumer.ack(&received).await {
-                                tracing::warn!(topic = %full_topic, "failed to ack request: {e}");
-                            }
-                        } else if let Err(e) = consumer.nack(&received).await {
-                            tracing::warn!(topic = %full_topic, "failed to nack request: {e}");
-                        }
+                        let msg_topic = received.topic.clone();
+                        let msg_id = received.message_id.id.clone();
+                        let inner = inner.clone();
+                        let tx = ack_tx.clone();
+                        let topic = full_topic.to_string();
+                        r2e_core::rt::spawn(async move {
+                            let ok = handle_request(&inner, type_id, &topic, &received).await;
+                            let _ = tx.send(((msg_topic, msg_id), ok)).await;
+                        });
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "responder consumer error: {e}");
@@ -882,6 +895,32 @@ async fn run_responder_inner(
                 }
             }
         }
+    }
+
+    // Drain pending ack decisions best-effort before dropping the consumer.
+    drop(ack_tx);
+    let drain = async {
+        while let Some(((msg_topic, msg_id), ok)) = ack_rx.recv().await {
+            apply_responder_ack(&mut consumer, full_topic, &msg_topic, msg_id, ok).await;
+        }
+    };
+    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+}
+
+/// Apply one responder ack/nack decision.
+async fn apply_responder_ack(
+    consumer: &mut Consumer<Vec<u8>, TokioExecutor>,
+    full_topic: &str,
+    msg_topic: &str,
+    msg_id: MessageIdData,
+    ok: bool,
+) {
+    if ok {
+        if let Err(e) = consumer.ack_with_id(msg_topic, msg_id).await {
+            tracing::warn!(topic = %full_topic, "failed to ack request: {e}");
+        }
+    } else if let Err(e) = consumer.nack_with_id(msg_topic, msg_id).await {
+        tracing::warn!(topic = %full_topic, "failed to nack request: {e}");
     }
 }
 

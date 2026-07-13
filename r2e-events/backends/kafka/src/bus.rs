@@ -43,13 +43,13 @@ const MANUAL_COMMIT_INTERVAL: Duration = Duration::from_secs(5);
 /// (driver thread) and the consume loop. Guarded by a `std::sync::Mutex` with
 /// short, await-free critical sections — the callback runs on librdkafka's
 /// driver thread, so an async mutex would be wrong here.
-type SharedTracker = Arc<std::sync::Mutex<WatermarkTracker<i32, i64>>>;
+pub(crate) type SharedTracker = Arc<std::sync::Mutex<WatermarkTracker<i32, i64>>>;
 
 /// rdkafka consumer context that resets watermark tracking on partition
 /// revoke. Without this, a revoke+reassign inside `consumer.recv()` leaves the
 /// tracker's `stored` guard suppressing re-commits of redelivered offsets.
-struct R2eConsumerContext {
-    tracker: SharedTracker,
+pub(crate) struct R2eConsumerContext {
+    pub(crate) tracker: SharedTracker,
 }
 
 impl ClientContext for R2eConsumerContext {}
@@ -744,6 +744,9 @@ async fn run_consumer_inner(
             }
             Some(((partition, offset), outcome)) = completion_rx.recv() => {
                 apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+                while let Ok(((partition, offset), outcome)) = completion_rx.try_recv() {
+                    apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+                }
             }
         }
     }

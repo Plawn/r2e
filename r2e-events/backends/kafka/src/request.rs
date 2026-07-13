@@ -25,11 +25,15 @@ use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
     decode_metadata, decode_reply_headers, encode_reply_headers, reconnect_loop, ReplyHeaders,
+    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
 };
 use r2e_events::EventMetadata;
 
-use crate::bus::{kafka_header_pairs, produce_with_headers};
+use crate::bus::{kafka_header_pairs, produce_with_headers, R2eConsumerContext, SharedTracker};
 use crate::inner::KafkaInner;
+
+/// Interval between periodic offset commits in the pipelined responder loop.
+const RESPONDER_COMMIT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Build the unique, per-instance consumer group for the reply consumer.
 ///
@@ -146,10 +150,17 @@ async fn run_responder_consumer_inner(
     topic_name: &str,
     cancel: &CancellationToken,
 ) {
-    // Consume with the configured group so requests are load-balanced across
-    // instances (queue semantics). Offsets are committed per message only after
-    // the reply is produced — reply-then-commit keeps at-least-once delivery.
-    let consumer: StreamConsumer = match inner.config.to_consumer_client_config().create() {
+    let mut cfg = inner.config.to_consumer_client_config();
+    cfg.set("enable.auto.commit", "false");
+
+    // Pipelined: requests are dispatched as they arrive and their completions
+    // flow back on a bounded channel. A watermark tracker advances the commit
+    // offset over the contiguous prefix of completed requests, so out-of-order
+    // replies never skip an uncommitted offset.
+    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(WatermarkTracker::new()));
+
+    let context = R2eConsumerContext { tracker: tracker.clone() };
+    let consumer: StreamConsumer<R2eConsumerContext> = match cfg.create_with_context(context) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(topic = %topic_name, "failed to create Kafka responder consumer: {e}");
@@ -163,6 +174,9 @@ async fn run_responder_consumer_inner(
     }
 
     tracing::info!(topic = %topic_name, "Kafka responder started");
+    let (completion_tx, mut completion_rx) =
+        tokio::sync::mpsc::channel::<((i32, i64), bool)>(COMPLETION_CHANNEL_CAPACITY);
+    let mut commit_interval = r2e_core::rt::interval(RESPONDER_COMMIT_INTERVAL);
 
     loop {
         tokio::select! {
@@ -170,14 +184,29 @@ async fn run_responder_consumer_inner(
                 tracing::info!(topic = %topic_name, "Kafka responder cancelled");
                 break;
             }
+            _ = commit_interval.tick() => {
+                if let Err(e) = consumer.commit_consumer_state(CommitMode::Async) {
+                    tracing::debug!(topic = %topic_name, "responder periodic commit skipped: {e}");
+                }
+            }
+            Some(((partition, offset), ok)) = completion_rx.recv() => {
+                apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
+                while let Ok(((partition, offset), ok)) = completion_rx.try_recv() {
+                    apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
+                }
+            }
             msg = consumer.recv() => {
                 match msg {
                     Ok(m) => {
+                        let partition = m.partition();
+                        let offset = m.offset();
+                        tracker.lock().unwrap_or_else(|e| e.into_inner()).on_receive(partition, offset);
+
                         let payload = match m.payload() {
                             Some(p) => p.to_vec(),
                             None => {
                                 tracing::warn!(topic = %topic_name, "received request with no payload");
-                                let _ = consumer.commit_message(&m, CommitMode::Async);
+                                let _ = completion_tx.send(((partition, offset), true)).await;
                                 continue;
                             }
                         };
@@ -186,20 +215,12 @@ async fn run_responder_consumer_inner(
                         let reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k, v)));
                         let metadata = decode_metadata(pairs.into_iter());
 
-                        // Reply-then-commit for at-least-once: process fully,
-                        // publish the reply, then advance the offset — but ONLY
-                        // if the reply was actually produced. A failed reply
-                        // produce leaves the offset uncommitted so the broker
-                        // redelivers the request and the requester can be served.
-                        // (A responder error whose error reply produced fine still
-                        // commits — only a failed reply PRODUCE skips the commit.)
-                        if handle_request(inner, type_id, &payload, metadata, reply).await {
-                            if let Err(e) = consumer.commit_message(&m, CommitMode::Async) {
-                                // ERR__NO_OFFSET and transient commit errors are
-                                // benign — the request is simply redelivered.
-                                tracing::debug!(topic = %topic_name, "responder commit skipped: {e}");
-                            }
-                        }
+                        let inner = inner.clone();
+                        let tx = completion_tx.clone();
+                        r2e_core::rt::spawn(async move {
+                            let ok = handle_request(&inner, type_id, &payload, metadata, reply).await;
+                            let _ = tx.send(((partition, offset), ok)).await;
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka responder error: {e}");
@@ -208,6 +229,52 @@ async fn run_responder_consumer_inner(
                 }
             }
         }
+    }
+
+    // Drain pending completions before dropping the consumer.
+    drop(completion_tx);
+    let drain = async {
+        while let Some(((partition, offset), ok)) = completion_rx.recv().await {
+            apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
+        }
+    };
+    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+
+    if let Err(e) = consumer.commit_consumer_state(CommitMode::Sync) {
+        tracing::debug!(topic = %topic_name, "responder final commit skipped: {e}");
+    }
+}
+
+/// Apply a single responder completion to the watermark tracker and store the
+/// offset when the contiguous prefix advances.
+fn apply_responder_completion(
+    consumer: &StreamConsumer<R2eConsumerContext>,
+    tracker: &SharedTracker,
+    topic_name: &str,
+    partition: i32,
+    offset: i64,
+    ok: bool,
+) {
+    let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+    if ok {
+        if let Some(store_offset) = t.on_ack(partition, offset) {
+            if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
+                tracing::warn!(
+                    topic = %topic_name,
+                    partition,
+                    offset = store_offset,
+                    "failed to store responder offset: {e}"
+                );
+            }
+        }
+    } else {
+        t.on_nack(partition, offset);
+        tracing::warn!(
+            topic = %topic_name,
+            partition,
+            offset,
+            "reply publish failed — partition pinned, request redelivered on restart"
+        );
     }
 }
 

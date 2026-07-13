@@ -15,6 +15,9 @@ P3 landed 2026-07-13: `emit_nowait`/`emit_nowait_with` on `EventBus` trait
 `confirm_select` + pipelined confirms, Pulsar receipt wrapping +
 `tls_hostname_verification` wired, Iggy spawn-based nowait); `EmitReceipt`
 with optional `confirm()`. Dead Pulsar `batch_size` field removed.
+P4 landed 2026-07-13: Iggy poll retuning (10ms/1000/3-partitions),
+batch-drain completion channels on all backends, pipelined responder loops
+on Kafka/Pulsar/Iggy (P5.9, watermark-tracked). P4.4 deferred (evaluate).
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -225,17 +228,15 @@ at a few hundred msg/s on every backend.
       prefetch + the shared semaphore. The unconditional `payload.to_vec()`
       DLQ copy is gone (shared `has_dlq` guard applies). Poison messages and
       DLQ-captured nacks now ack (previously requeued forever).
-- [ ] **P4.2 Iggy: retune poll defaults + partitions.**
-      `poll_interval=100ms` × `poll_batch_size=100`
-      (`backends/iggy/src/config.rs:53-54`) caps a poller at ~1k msg/s and
-      adds up to 100ms latency; `default_partitions=1`
-      (`config.rs:36`) makes the consumer group unscalable (horizontal
-      scale-out adds zero parallelism). Poll back-to-back while batches are
-      full (interval only as idle backoff), raise batch size, raise/require
-      partition count, document parallelism = min(partitions, consumers).
-- [ ] **P4.3 Kafka/Pulsar ack-commit batching.** After P1: batch offset
-      stores (Kafka) / acks (Pulsar — verify client-side ack buffering,
-      consider cumulative ack) so ack traffic doesn't serialize the loop.
+- [x] **P4.2 Iggy: retune poll defaults + partitions.** Defaults raised:
+      `poll_interval` 100ms→10ms, `poll_batch_size` 100→1000,
+      `default_partitions` 1→3. Doc comment documents parallelism =
+      min(partitions, consumers).
+- [x] **P4.3 Kafka/Pulsar ack-commit batching.** Kafka was already batched
+      (`store_offset` is in-memory, commits periodic). All three backends
+      (Kafka, Pulsar, Iggy) now batch-drain the completion/ack channel
+      (`try_recv` loop after the first `recv`) so ack traffic is processed in
+      bursts rather than one-per-select-iteration.
 - [ ] **P4.4 (evaluate) Kafka: one `StreamConsumer` per event type**
       (`backends/kafka/src/bus.rs:376`) — N types = N connections + fetch
       loops. Optionally multiplex several topics onto one consumer with a
@@ -260,13 +261,12 @@ Shared (`src/backend/`):
 - [x] **P5.3** ~~Dedup-set fast path~~ — moot: the `locally_dispatched`
       dedup set was deleted entirely by the P2.5 Vert.x-pure pass (no
       local-echo suppression exists anymore).
-- [ ] **P5.9** Responder throughput: the request-topic consumers process
-      requests strictly sequentially on kafka/pulsar/iggy (await the user
-      responder before the next receive) — one slow responder invocation
-      head-of-line-blocks every queued request on that instance (RabbitMQ
-      spawns per delivery). Needs bounded concurrent dispatch that still
-      respects commit ordering (Kafka offsets). Flagged by the P2.5 review;
-      deferred — fits the P4 consumer-throughput work.
+- [x] **P5.9** Responder throughput: pipelined on all four backends. Kafka,
+      Pulsar, and Iggy responder loops now spawn a task per request (like
+      RabbitMQ already did). Kafka/Iggy use watermark tracking for ordered
+      offset commits; Pulsar uses per-message ack via a channel (Shared
+      subscription). Completion channels batch-drain on each select iteration.
+      Drain-on-shutdown mirrors the regular consumer pollers.
 - [ ] **P5.10** `respond` API polish: the handler must return
       `Result<Resp, String>`, so the macro codegen and every manual caller
       stringify errors themselves. Accepting `E: Display` and mapping to the

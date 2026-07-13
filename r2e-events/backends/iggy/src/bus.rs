@@ -752,6 +752,17 @@ async fn run_poller_inner(
                     outcome,
                 )
                 .await;
+                while let Ok(((partition_id, offset), outcome)) = rx.try_recv() {
+                    apply_completion(
+                        &mut tracker,
+                        batches.get_ref(),
+                        topic_name,
+                        partition_id,
+                        offset,
+                        outcome,
+                    )
+                    .await;
+                }
             }
             batch = futures_util::StreamExt::next(&mut batches) => {
                 let batch = match batch {
@@ -1014,7 +1025,6 @@ async fn run_responder_poller_inner(
 
     let mut consumer = match consumer_result {
         Ok(builder) => builder
-            // Manual commit: store the offset only after the reply is sent.
             .auto_commit(AutoCommit::Disabled)
             .create_consumer_group_if_not_exists()
             .auto_join_consumer_group()
@@ -1035,14 +1045,43 @@ async fn run_responder_poller_inner(
 
     tracing::info!(topic = %req_topic, "responder poller started");
 
+    // Pipelined: requests are dispatched as they arrive; completions flow back
+    // on a bounded channel. A watermark tracker advances the commit offset over
+    // the contiguous prefix of completed requests, same as the regular poller.
     let batch_capacity = (inner.config.poll_batch_size.max(1)) as usize;
     let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
+
+    let mut tracker: WatermarkTracker<u32, u64> = WatermarkTracker::new();
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<((u32, u64), bool)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %req_topic, "responder poller cancelled");
                 break;
+            }
+            Some(((partition_id, offset), ok)) = rx.recv() => {
+                apply_responder_completion(
+                    &mut tracker,
+                    batches.get_ref(),
+                    req_topic,
+                    partition_id,
+                    offset,
+                    ok,
+                )
+                .await;
+                while let Ok(((partition_id, offset), ok)) = rx.try_recv() {
+                    apply_responder_completion(
+                        &mut tracker,
+                        batches.get_ref(),
+                        req_topic,
+                        partition_id,
+                        offset,
+                        ok,
+                    )
+                    .await;
+                }
             }
             batch = futures_util::StreamExt::next(&mut batches) => {
                 let batch = match batch {
@@ -1053,33 +1092,25 @@ async fn run_responder_poller_inner(
                     }
                 };
 
-                // Sequential per message: reply-then-commit. Processing in order
-                // means a single stored offset never skips an unhandled message.
                 for item in &batch {
                     match item {
                         Ok(received) => {
                             let partition_id = received.partition_id;
                             let offset = received.message.header.offset;
+                            tracker.on_receive(partition_id, offset);
 
-                            if !handle_request(bus, type_id, req_topic, &received.message).await {
-                                // Reply send failed: do NOT commit. Return so the
-                                // reconnect loop redelivers from the last committed
-                                // offset (at-least-once).
-                                return;
-                            }
-
-                            if let Err(e) = batches
-                                .get_ref()
-                                .store_offset(offset, Some(partition_id))
-                                .await
-                            {
-                                tracing::warn!(
-                                    topic = %req_topic,
-                                    partition_id,
-                                    offset,
-                                    "failed to store responder offset: {e}"
-                                );
-                            }
+                            let bus = bus.clone();
+                            let tx = tx.clone();
+                            let message_payload = received.message.payload.to_vec();
+                            let message_headers = extract_metadata_from_message(&received.message);
+                            let reply_hdrs = reply_headers_from_message(&received.message);
+                            r2e_core::rt::spawn(async move {
+                                let ok = handle_request(
+                                    &bus, type_id, &message_payload, message_headers, reply_hdrs,
+                                )
+                                .await;
+                                let _ = tx.send(((partition_id, offset), ok)).await;
+                            });
                         }
                         Err(e) => {
                             tracing::warn!(topic = %req_topic, "responder poll error: {e}");
@@ -1089,38 +1120,80 @@ async fn run_responder_poller_inner(
             }
         }
     }
+
+    // Drain pending completions best-effort before dropping the consumer.
+    drop(tx);
+    let consumer = batches.get_ref();
+    let drain = async {
+        while let Some(((partition_id, offset), ok)) = rx.recv().await {
+            apply_responder_completion(
+                &mut tracker, consumer, req_topic, partition_id, offset, ok,
+            )
+            .await;
+        }
+    };
+    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
+        tracing::warn!(
+            topic = %req_topic,
+            "timed out draining responder completions; \
+             undrained messages will be redelivered on restart"
+        );
+    }
 }
 
-/// Handle one request message: invoke the responder and publish the reply.
-///
-/// Returns `true` when the request offset may be committed (reply sent, or the
-/// message is not a well-formed request and can be skipped), and `false` when
-/// the reply send failed and the message should be redelivered.
+/// Apply one responder completion to the watermark tracker.
+async fn apply_responder_completion(
+    tracker: &mut WatermarkTracker<u32, u64>,
+    consumer: &IggyConsumer,
+    topic_name: &str,
+    partition_id: u32,
+    offset: u64,
+    ok: bool,
+) {
+    if ok {
+        if let Some(commit) = tracker.on_ack(partition_id, offset) {
+            if let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
+                tracing::warn!(
+                    topic = %topic_name,
+                    partition_id,
+                    offset = commit,
+                    "failed to store responder offset: {e}"
+                );
+            }
+        }
+    } else {
+        tracker.on_nack(partition_id, offset);
+        tracing::warn!(
+            topic = %topic_name,
+            partition_id,
+            offset,
+            "reply publish failed — partition pinned, request redelivered on restart"
+        );
+    }
+}
+
+/// Handle one request: invoke the responder and publish the reply. Works with
+/// pre-extracted owned values so it can run in a spawned task.
 async fn handle_request(
     bus: &IggyEventBus,
     type_id: TypeId,
-    req_topic: &str,
-    message: &IggyMessage,
+    payload: &[u8],
+    metadata: EventMetadata,
+    reply_hdrs: Option<ReplyHeaders>,
 ) -> bool {
-    let Some(headers) = reply_headers_from_message(message) else {
-        tracing::debug!(topic = %req_topic, "request without reply headers, skipping");
+    let Some(headers) = reply_hdrs else {
+        tracing::debug!("request without reply headers, skipping");
         return true;
     };
     let Some(reply_to) = headers.reply_to else {
-        tracing::debug!(topic = %req_topic, "request without reply-to, skipping");
+        tracing::debug!("request without reply-to, skipping");
         return true;
     };
 
-    let metadata = extract_metadata_from_message(message);
-    // `build_reply` single-sources the responder-outcome mapping and ALWAYS
-    // yields a reply — including for the no-responder case, where it returns a
-    // `b"null"` placeholder payload (Iggy rejects empty payloads) plus an error
-    // header, so the requester surfaces `Remote` instead of waiting out its
-    // full timeout.
     let (reply_payload, reply_error) = bus
         .inner
         .state
-        .build_reply(type_id, message.payload.as_ref(), metadata)
+        .build_reply(type_id, payload, metadata)
         .await;
 
     let reply_headers = match headers_from_pairs(encode_reply_headers(
@@ -1130,7 +1203,7 @@ async fn handle_request(
     )) {
         Ok(h) => h,
         Err(e) => {
-            tracing::warn!(topic = %req_topic, "failed to build reply headers: {e}");
+            tracing::warn!("failed to build reply headers: {e}");
             return true;
         }
     };
