@@ -51,6 +51,11 @@ mod proto {
     pub mod ping_server {
         use r2e::r2e_grpc::tonic;
 
+        // tonic-build emits this module-level const; the `#[grpc_routes]`
+        // codegen references `<module>::SERVICE_NAME`, so the stand-in must
+        // provide it too.
+        pub const SERVICE_NAME: &str = "test.Ping";
+
         #[tonic::async_trait]
         pub trait Ping: Send + Sync + 'static {
             async fn ping(
