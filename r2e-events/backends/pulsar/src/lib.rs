@@ -35,7 +35,8 @@
 //!
 //! # Limitations
 //!
-//! - `emit_and_wait` publishes to Pulsar AND waits for **local** handlers only.
+//! - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+//!   point-to-point request-reply.
 //! - One event type per topic (determined by first `subscribe` call).
 
 mod builder;

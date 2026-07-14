@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use iggy::prelude::*;
 
-use r2e_events::backend::{BackendState, TopicRegistry};
-use r2e_events::EventBusError;
+use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
+use r2e_events::{DlqPublisher, EventBusError};
 
 use crate::bus::IggyEventBus;
 use crate::config::{IggyConfig, Transport};
@@ -72,15 +72,43 @@ impl IggyEventBusBuilder {
             ensure_stream(&client, &self.config.stream_name).await?;
         }
 
-        let inner = IggyInner {
-            config: self.config,
-            client: Arc::new(client),
-            state: Arc::new(BackendState::new(self.topic_registry)),
-        };
+        // Mint one instance nonce per bus and derive its private reply topic
+        // once, so two bus instances in one process never share a reply topic.
+        let instance = instance_id();
+        let reply_topic_name = reply_topic(&self.config.consumer_group, instance);
 
-        Ok(IggyEventBus {
-            inner: Arc::new(inner),
-        })
+        let stream_id = Identifier::named(&self.config.stream_name).map_err(map_iggy_error)?;
+
+        let client = Arc::new(client);
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<IggyInner>| {
+            let weak = weak.clone();
+            let dlq: DlqPublisher = Arc::new(move |topic, payload, metadata| {
+                let weak = weak.clone();
+                Box::pin(async move {
+                    let inner = weak.upgrade().ok_or(EventBusError::Shutdown)?;
+                    IggyEventBus { inner }
+                        .publish(&topic, payload, &metadata)
+                        .await
+                })
+            });
+            IggyInner {
+                config: self.config,
+                client,
+                state: Arc::new(BackendState::with_dlq_publisher(
+                    self.topic_registry,
+                    Some(dlq),
+                )),
+                instance_id: instance,
+                reply_topic: reply_topic_name,
+                stream_id,
+                topic_ids: std::sync::RwLock::new(std::collections::HashMap::new()),
+                pending: Arc::new(PendingRequests::new()),
+                request_cancel: tokio_util::sync::CancellationToken::new(),
+                rr_cancels: std::sync::Mutex::new(Default::default()),
+            }
+        });
+
+        Ok(IggyEventBus { inner })
     }
 }
 
@@ -94,9 +122,7 @@ fn build_client(config: &IggyConfig) -> Result<IggyClient, IggyError> {
             .with_quic()
             .with_server_address(config.address.clone())
             .build(),
-        Transport::Http => IggyClientBuilder::new()
-            .with_http()
-            .build(),
+        Transport::Http => IggyClientBuilder::new().with_http().build(),
     }
 }
 

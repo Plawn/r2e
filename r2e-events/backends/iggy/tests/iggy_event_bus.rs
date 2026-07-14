@@ -32,11 +32,11 @@ fn config_defaults() {
     assert_eq!(config.stream_name, "r2e-events");
     assert_eq!(config.consumer_group, "r2e-app");
     assert!(config.auto_create);
-    assert_eq!(config.default_partitions, 1);
-    assert_eq!(config.poll_batch_size, 100);
+    assert_eq!(config.default_partitions, 3);
+    assert_eq!(config.poll_batch_size, 1000);
     assert_eq!(
         config.poll_interval,
-        std::time::Duration::from_millis(100)
+        std::time::Duration::from_millis(10)
     );
     assert!(config.username.is_none());
     assert!(config.password.is_none());
@@ -136,4 +136,150 @@ fn error_display() {
 
     let err = EventBusError::Shutdown;
     assert!(err.to_string().contains("shut down"));
+}
+
+// ── Request-reply topic naming ───────────────────────────────────────
+
+#[test]
+fn request_topic_derives_from_event_topic() {
+    use r2e_events::backend::request_topic;
+
+    assert_eq!(
+        request_topic("orders.OrderPlaced"),
+        "orders.OrderPlaced.requests"
+    );
+}
+
+#[test]
+fn reply_topic_is_instance_scoped() {
+    use r2e_events::backend::{instance_id, reply_topic};
+
+    let iid = instance_id();
+    let a = reply_topic("r2e-app", iid);
+    // `<prefix>.replies.<instance-id-hex>` — prefixed and instance-private.
+    assert!(a.starts_with("r2e-app.replies."));
+    // Stable for the same instance id.
+    assert_eq!(a, reply_topic("r2e-app", iid));
+    // Distinct instance ids yield distinct reply topics (so two bus instances
+    // in one process never cross-consume each other's replies).
+    assert_ne!(
+        reply_topic("r2e-app", iid),
+        reply_topic("r2e-app", iid.wrapping_add(1))
+    );
+    // Distinct prefixes yield distinct reply topics.
+    assert_ne!(reply_topic("a", iid), reply_topic("b", iid));
+}
+
+// ── Request-reply header codec (Iggy round-trip) ─────────────────────
+
+#[test]
+fn reply_headers_survive_iggy_message_roundtrip() {
+    use iggy::prelude::IggyMessage;
+    use r2e_events::backend::{decode_metadata, encode_metadata, encode_reply_headers};
+    use r2e_events::EventMetadata;
+    use r2e_events_iggy::{headers_from_pairs, reply_headers_from_message};
+
+    // Mirror the request path (bus.rs `request_with`): the user's metadata —
+    // including its own `correlation_id` string — is encoded alongside the
+    // internal request-reply headers, which live in a dedicated header slot.
+    let request_id: u128 = 0x1234_5678_9abc_def0_dead_beef_cafe_babe;
+    let metadata = EventMetadata::new()
+        .with_correlation_id("user-corr-9")
+        .with_header("source", "test");
+    let pairs = encode_metadata(&metadata).chain(encode_reply_headers(
+        request_id,
+        Some("r2e-app.replies.00ff"),
+        None,
+    ));
+    let headers = headers_from_pairs(pairs).expect("valid iggy headers");
+
+    let msg = IggyMessage::builder()
+        .payload(bytes::Bytes::from_static(b"{}"))
+        .user_headers(headers)
+        .build()
+        .expect("build message");
+
+    // The internal request-reply id survives in its own slot.
+    let decoded = reply_headers_from_message(&msg).expect("reply headers present");
+    assert_eq!(decoded.request_id, request_id);
+    assert_eq!(decoded.reply_to.as_deref(), Some("r2e-app.replies.00ff"));
+    assert!(decoded.reply_error.is_none());
+
+    // The user's metadata.correlation_id survives the round-trip untouched —
+    // the internal request id never overwrites it.
+    let back_pairs: Vec<(String, String)> = msg
+        .user_headers_map()
+        .expect("headers readable")
+        .expect("headers present")
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str().ok()?.to_string(), v.as_str().ok()?.to_string())))
+        .collect();
+    let meta = decode_metadata(back_pairs.into_iter());
+    assert_eq!(meta.correlation_id.as_deref(), Some("user-corr-9"));
+    assert_eq!(meta.headers.get("source").map(|s| s.as_str()), Some("test"));
+}
+
+#[test]
+fn reply_error_header_survives_roundtrip() {
+    use iggy::prelude::IggyMessage;
+    use r2e_events::backend::encode_reply_headers;
+    use r2e_events_iggy::{headers_from_pairs, reply_headers_from_message};
+
+    let request_id: u128 = 42;
+    let pairs = encode_reply_headers(request_id, None, Some("boom"));
+    let headers = headers_from_pairs(pairs).expect("valid iggy headers");
+
+    // Error replies carry a non-empty placeholder payload (Iggy rejects empty).
+    let msg = IggyMessage::builder()
+        .payload(bytes::Bytes::from_static(b"null"))
+        .user_headers(headers)
+        .build()
+        .expect("build message");
+
+    let decoded = reply_headers_from_message(&msg).expect("reply headers present");
+    assert_eq!(decoded.request_id, request_id);
+    assert_eq!(decoded.reply_error.as_deref(), Some("boom"));
+}
+
+#[test]
+fn plain_message_has_no_reply_headers() {
+    use iggy::prelude::IggyMessage;
+    use r2e_events_iggy::reply_headers_from_message;
+
+    // A message with no user headers is not part of a request-reply exchange.
+    let msg = IggyMessage::builder()
+        .payload(bytes::Bytes::from_static(b"payload"))
+        .build()
+        .expect("build message");
+
+    assert!(reply_headers_from_message(&msg).is_none());
+}
+
+#[cfg(feature = "integration")]
+#[tokio::test(flavor = "multi_thread")]
+async fn live_broker_request_reply_roundtrip() {
+    use r2e_events::{EventBus, EventEnvelope, RequestOptions};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct Ping(u32);
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Pong(u32);
+
+    let nonce = r2e_events::backend::instance_id();
+    let topic = format!("r2e.integration.iggy.{nonce:016x}");
+    let config = IggyConfig::builder()
+        .consumer_group(format!("r2e-integration-{nonce:016x}"))
+        .build();
+    let bus = IggyEventBus::builder(config).topic::<Ping>(topic).connect().await
+        .expect("Iggy broker must be available for integration tests");
+    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
+        Ok::<_, String>(Pong(env.event.0 + 1))
+    }).await.unwrap();
+    let reply: Pong = bus.request_with(
+        Ping(41),
+        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+    ).await.unwrap();
+    assert_eq!(reply, Pong(42));
+    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
 }

@@ -159,3 +159,16 @@ async fn beans_can_be_pinned_over_the_apps_own(app: TestApp, #[inject] users: Us
         .assert_ok();
     assert_eq!(users.count().await, 3);
 }
+
+// ── Request-reply: a responder #[consumer] replies to bus.request ──────────
+
+#[r2e::test(app = example_app::app)]
+async fn request_reply_responder_answers_over_the_bus(app: TestApp) {
+    // GET /events/greet/{name} sends a GreetRequest on the bus and awaits the
+    // responder's GreetReply (registered via EventBus::respond). LocalEventBus
+    // makes the round-trip in-process.
+    let resp = app.get("/events/greet/Alice").send().await;
+    resp.assert_ok();
+    let reply: example_app::models::GreetReply = resp.json();
+    assert_eq!(reply.message, "Hello, Alice!");
+}

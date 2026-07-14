@@ -1,4 +1,4 @@
-use r2e_events::{EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, LocalEventBus, DEFAULT_MAX_CONCURRENCY};
+use r2e_events::{EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, LocalEventBus, RequestOptions, DEFAULT_MAX_CONCURRENCY};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -14,6 +14,23 @@ struct OtherEvent;
 
 #[derive(Serialize, Deserialize)]
 struct SlowEvent;
+
+/// Emit an event, then drain in-flight handlers — the deterministic test
+/// barrier that replaced the removed `emit_and_wait`.
+async fn emit_and_drain<E: Serialize + Send + Sync + 'static>(bus: &LocalEventBus, event: E) {
+    bus.emit(event).await.unwrap();
+    bus.wait_idle().await;
+}
+
+/// `emit_with` + drain — the metadata-carrying variant of [`emit_and_drain`].
+async fn emit_with_and_drain<E: Serialize + Send + Sync + 'static>(
+    bus: &LocalEventBus,
+    event: E,
+    metadata: EventMetadata,
+) {
+    bus.emit_with(event, metadata).await.unwrap();
+    bus.wait_idle().await;
+}
 
 #[r2e_core::test]
 async fn test_emit_and_subscribe() {
@@ -31,7 +48,7 @@ async fn test_emit_and_subscribe() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 42 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 42 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 42);
 }
 
@@ -53,7 +70,7 @@ async fn test_multiple_subscribers() {
         .unwrap();
     }
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
 
@@ -73,7 +90,7 @@ async fn test_no_cross_type_dispatch() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(OtherEvent).await.unwrap();
+    emit_and_drain(&bus, OtherEvent).await;
     assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
@@ -143,7 +160,7 @@ async fn test_unbounded_mode() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -165,7 +182,7 @@ async fn test_with_concurrency_constructor() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 42 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 42 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 42);
 }
 
@@ -198,22 +215,22 @@ async fn test_handler_panic_does_not_crash_emit() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 #[r2e_core::test]
-async fn test_handler_panic_does_not_crash_emit_and_wait() {
+async fn test_handler_panic_does_not_crash_drain() {
     let bus = LocalEventBus::new();
 
     bus.subscribe(move |_: EventEnvelope<TestEvent>| async move {
-        panic!("boom in emit_and_wait");
+        panic!("boom while draining");
     })
     .await
     .unwrap();
 
-    // emit_and_wait does `let _ = task.await` which swallows JoinError
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    // The panic is isolated to the handler task; draining must not observe it.
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
 
     // Should reach here without panic
     let counter = Arc::new(AtomicUsize::new(0));
@@ -228,7 +245,7 @@ async fn test_handler_panic_does_not_crash_emit_and_wait() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -259,7 +276,7 @@ async fn test_panic_releases_permit() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(OtherEvent).await.unwrap();
+    emit_and_drain(&bus, OtherEvent).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -296,7 +313,7 @@ async fn test_multiple_handlers_one_panics_others_run() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
 
@@ -318,7 +335,7 @@ async fn test_err_result_in_handler() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -327,7 +344,7 @@ async fn test_err_result_in_handler() {
 #[r2e_core::test]
 async fn test_late_subscriber_misses_event() {
     let bus = LocalEventBus::new();
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
 
     let counter = Arc::new(AtomicUsize::new(0));
     let c = counter.clone();
@@ -370,7 +387,7 @@ async fn test_concurrent_subscribes() {
         h.await.unwrap();
     }
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 10);
 }
 
@@ -402,7 +419,7 @@ async fn test_subscribe_during_emit() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -424,7 +441,7 @@ async fn test_subscribe_same_event_type_multiple() {
         .unwrap();
     }
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 5);
 }
 
@@ -438,10 +455,10 @@ async fn test_emit_no_subscribers() {
 }
 
 #[r2e_core::test]
-async fn test_emit_and_wait_no_subscribers() {
+async fn test_drain_no_subscribers() {
     let bus = LocalEventBus::new();
     // Should return instantly with no subscribers, no panic
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
 }
 
 #[r2e_core::test]
@@ -485,7 +502,7 @@ async fn test_clone_shares_state() {
 
     // Clone the bus and emit on the clone
     let bus2 = bus.clone();
-    bus2.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus2, TestEvent { value: 1 }).await;
 
     // Handler registered on original should have been invoked via clone
     assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -546,7 +563,7 @@ async fn test_handler_with_long_sleep() {
 }
 
 #[r2e_core::test]
-async fn test_emit_and_wait_waits_for_slow() {
+async fn test_drain_waits_for_slow() {
     let bus = LocalEventBus::new();
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -562,8 +579,8 @@ async fn test_emit_and_wait_waits_for_slow() {
     .await
     .unwrap();
 
-    // emit_and_wait should block until handler completes
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    // draining should block until the handler completes
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -596,7 +613,7 @@ async fn test_handler_spawns_nested_emit() {
     .await
     .unwrap();
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     // Nested emit is fire-and-forget, wait for it
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -620,7 +637,7 @@ async fn test_handler_shared_state_mutation() {
         .unwrap();
     }
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
 
     let mut result = data.lock().await.clone();
     result.sort();
@@ -646,7 +663,7 @@ async fn test_stress_many_events() {
     .unwrap();
 
     for _ in 0..100 {
-        bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+        emit_and_drain(&bus, TestEvent { value: 1 }).await;
     }
     assert_eq!(counter.load(Ordering::SeqCst), 100);
 }
@@ -669,7 +686,7 @@ async fn test_stress_many_subscribers() {
         .unwrap();
     }
 
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 50);
 }
 
@@ -694,7 +711,7 @@ async fn test_stress_concurrent_emit() {
         let bus = bus.clone();
         handles.push(tokio::spawn(async move {
             for _ in 0..10 {
-                bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+                emit_and_drain(&bus, TestEvent { value: 1 }).await;
             }
         }));
     }
@@ -775,7 +792,7 @@ async fn test_unsubscribe_prevents_future_dispatch() {
     .unwrap();
 
     // First emit: handler should fire
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
     // Unsubscribe
@@ -783,7 +800,7 @@ async fn test_unsubscribe_prevents_future_dispatch() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Second emit: handler should NOT fire
-    bus.emit_and_wait(TestEvent { value: 1 }).await.unwrap();
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -823,7 +840,7 @@ async fn test_metadata_propagated_to_handler() {
 #[r2e_core::test]
 async fn test_auto_generated_metadata_has_unique_ids() {
     let bus = LocalEventBus::new();
-    let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u64>::new()));
+    let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u128>::new()));
 
     let ids_clone = ids.clone();
     bus.subscribe(move |envelope: EventEnvelope<TestEvent>| {
@@ -837,7 +854,7 @@ async fn test_auto_generated_metadata_has_unique_ids() {
     .unwrap();
 
     for i in 0..5 {
-        bus.emit_and_wait(TestEvent { value: i }).await.unwrap();
+        emit_and_drain(&bus, TestEvent { value: i }).await;
     }
 
     let collected = ids.lock().await;
@@ -909,7 +926,7 @@ async fn test_shutdown_subscribe_rejected() {
 }
 
 #[r2e_core::test]
-async fn test_emit_and_wait_with_metadata() {
+async fn test_emit_with_metadata_drain() {
     let bus = LocalEventBus::new();
     let received_key = Arc::new(tokio::sync::Mutex::new(None::<String>));
 
@@ -925,7 +942,7 @@ async fn test_emit_and_wait_with_metadata() {
     .unwrap();
 
     let meta = EventMetadata::new().with_partition_key("my-key");
-    bus.emit_and_wait_with(TestEvent { value: 1 }, meta).await.unwrap();
+    emit_with_and_drain(&bus, TestEvent { value: 1 }, meta).await;
 
     let key = received_key.lock().await;
     assert_eq!(key.as_deref(), Some("my-key"));
@@ -945,4 +962,109 @@ async fn test_handler_result_from_result() {
 
     let err: HandlerResult = Err::<(), String>("oops".to_string()).into();
     assert!(matches!(err, HandlerResult::Nack(msg) if msg == "oops"));
+}
+
+// --- Phase 8: request / respond (point-to-point request-reply) ---
+
+#[derive(Serialize, Deserialize)]
+struct Add {
+    a: i64,
+    b: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Sum {
+    total: i64,
+}
+
+#[r2e_core::test]
+async fn test_request_respond_roundtrip() {
+    let bus = LocalEventBus::new();
+
+    bus.respond(|env: EventEnvelope<Add>| async move {
+        Ok::<Sum, String>(Sum {
+            total: env.event.a + env.event.b,
+        })
+    })
+    .await
+    .unwrap();
+
+    let reply: Sum = bus.request(Add { a: 2, b: 40 }).await.unwrap();
+    assert_eq!(reply, Sum { total: 42 });
+}
+
+#[r2e_core::test]
+async fn test_request_without_responder_is_no_responder() {
+    let bus = LocalEventBus::new();
+    let result: Result<Sum, _> = bus.request(Add { a: 1, b: 1 }).await;
+    assert!(matches!(result, Err(EventBusError::NoResponder)));
+}
+
+#[r2e_core::test]
+async fn test_responder_error_maps_to_remote() {
+    let bus = LocalEventBus::new();
+
+    bus.respond(|_env: EventEnvelope<Add>| async move {
+        Err::<Sum, String>("cannot add".to_string())
+    })
+    .await
+    .unwrap();
+
+    let result: Result<Sum, _> = bus.request(Add { a: 1, b: 2 }).await;
+    assert!(matches!(result, Err(EventBusError::Remote(msg)) if msg == "cannot add"));
+}
+
+#[r2e_core::test]
+async fn test_request_times_out_when_responder_is_slow() {
+    let bus = LocalEventBus::new();
+
+    bus.respond(|_env: EventEnvelope<Add>| async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Ok::<Sum, String>(Sum { total: 0 })
+    })
+    .await
+    .unwrap();
+
+    let opts = RequestOptions::new().with_timeout(Duration::from_millis(20));
+    let result: Result<Sum, _> = bus.request_with(Add { a: 1, b: 2 }, opts).await;
+    assert!(matches!(result, Err(EventBusError::RequestTimeout)));
+}
+
+#[r2e_core::test]
+async fn test_second_responder_for_same_type_is_rejected() {
+    let bus = LocalEventBus::new();
+
+    bus.respond(|_env: EventEnvelope<Add>| async move { Ok::<Sum, String>(Sum { total: 0 }) })
+        .await
+        .unwrap();
+
+    let second = bus
+        .respond(|_env: EventEnvelope<Add>| async move { Ok::<Sum, String>(Sum { total: 1 }) })
+        .await;
+    assert!(matches!(second, Err(EventBusError::Other(_))));
+}
+
+#[r2e_core::test]
+async fn test_unregister_responder_allows_reregistration() {
+    let bus = LocalEventBus::new();
+
+    let handle = bus
+        .respond(|_env: EventEnvelope<Add>| async move { Ok::<Sum, String>(Sum { total: 1 }) })
+        .await
+        .unwrap();
+
+    handle.unregister();
+    // Unregister is applied by a spawned task — give it a beat to land.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    bus.respond(|env: EventEnvelope<Add>| async move {
+        Ok::<Sum, String>(Sum {
+            total: env.event.a * env.event.b,
+        })
+    })
+    .await
+    .unwrap();
+
+    let reply: Sum = bus.request(Add { a: 6, b: 7 }).await.unwrap();
+    assert_eq!(reply, Sum { total: 42 });
 }

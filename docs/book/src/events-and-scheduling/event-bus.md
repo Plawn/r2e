@@ -84,40 +84,132 @@ event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
 }).await;
 ```
 
-## Emitting events
+## Two messaging models
 
-### Fire-and-forget
+R2E's bus follows the Vert.x split between two distinct interaction styles:
+
+- **`emit` — fan-out, fire-and-forget** (Vert.x `publish`). Every subscriber receives a copy; the emitter never waits for handlers and cannot observe a reply. Use it for notifications, analytics, logging — anything where the caller does not depend on the outcome.
+- **`request` — point-to-point with one reply** (Vert.x `request`). Exactly one responder handles the message and returns a value; the requester awaits that reply. Use it when you need an answer back.
+
+## Emitting events (fan-out)
 
 ```rust
 self.event_bus.emit(UserCreatedEvent {
     user_id: user.id,
     name: user.name.clone(),
     email: user.email.clone(),
-}).await;
+}).await?;
 ```
 
-Handlers are spawned as concurrent Tokio tasks. `emit()` returns once all handlers have been **spawned** (not completed).
+Handlers are spawned as concurrent Tokio tasks. `emit()` returns once all handlers have been **spawned** (not completed) — it is fire-and-forget by design, so it never blocks on downstream work and never surfaces a handler's result. Emitting respects the [concurrency limit](#concurrency-and-backpressure).
 
-### Wait for completion
+## Request-reply (point-to-point)
+
+When you need a value back, use `request`/`respond` instead of `emit`. One responder is registered per request type; the requester awaits its reply.
+
+Define the request and reply as ordinary event types:
 
 ```rust
-self.event_bus.emit_and_wait(UserCreatedEvent {
-    user_id: user.id,
-    name: user.name.clone(),
-    email: user.email.clone(),
-}).await;
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetReply {
+    pub message: String,
+}
 ```
 
-`emit_and_wait()` blocks until all handlers **complete**. Use this when downstream processing must finish before responding (e.g., when the response depends on a side-effect).
+Register the responder with `respond`. The handler receives the request and
+returns `Result<Resp, E>` where `E: Display` — the `Ok` value becomes the
+reply, and the displayed error reaches the requester as
+`EventBusError::Remote(msg)`:
 
-### Comparison
+```rust
+event_bus.respond(|req: EventEnvelope<GreetRequest>| async move {
+    Ok(GreetReply { message: format!("Hello, {}!", req.event.name) })
+}).await?;
+```
 
-| Method | Spawns handlers | Returns when | Use case |
-|--------|----------------|--------------|----------|
-| `emit()` | Concurrent tasks | All handlers spawned | Notifications, analytics, logging |
-| `emit_and_wait()` | Concurrent tasks | All handlers completed | Side-effects the caller depends on |
+Send a request from anywhere with the injected bus and await the reply:
 
-Both methods respect the [concurrency limit](#concurrency-and-backpressure).
+```rust
+let reply: GreetReply = self.event_bus
+    .request(GreetRequest { name: "Alice".into() })
+    .await?;
+// reply.message == "Hello, Alice!"
+```
+
+### Responder via `#[consumer]`
+
+A `#[consumer]` method with a **non-`()` return type** is registered as a responder automatically (Quarkus `@ConsumeEvent`-style — the return value IS the reply). A `-> ()` consumer stays a plain fan-out subscriber:
+
+```rust
+#[routes]
+impl UserEventConsumer {
+    // Plain fan-out subscriber: `-> ()`, registered via `subscribe`.
+    #[consumer(bus = "event_bus")]
+    async fn on_user_created(&self, event: Arc<UserCreatedEvent>) {
+        tracing::info!(user_id = event.user_id, "user created");
+    }
+
+    // Responder: non-`()` return, registered via `respond`. The return
+    // value is delivered to `bus.request`.
+    #[consumer(bus = "event_bus")]
+    async fn greet(&self, req: Arc<GreetRequest>) -> GreetReply {
+        GreetReply { message: format!("Hello, {}!", req.name) }
+    }
+}
+```
+
+### One responder per type
+
+**At most one responder may be registered per request type per process.** A second registration returns an error. This is deliberate: point-to-point means one reply, so there is no in-process round-robin. Across instances, every responder for a request topic joins the same deterministic broker queue/group/subscription, independent of the fan-out consumer-group setting, so each request goes to one responder.
+
+### Timeouts and errors
+
+`request` applies a **30-second default timeout** (`DEFAULT_REQUEST_TIMEOUT`). Use `request_with` and `RequestOptions` to override the timeout or attach explicit metadata:
+
+```rust
+use std::time::Duration;
+use r2e::r2e_events::RequestOptions;
+
+let reply: GreetReply = self.event_bus
+    .request_with(
+        GreetRequest { name: "Alice".into() },
+        RequestOptions::new().with_timeout(Duration::from_secs(5)),
+    )
+    .await?;
+```
+
+`request` fails with an `EventBusError`:
+
+| Variant | Meaning |
+|---------|---------|
+| `NoResponder` | No responder is registered for the request type. **Local bus only** — distributed backends can't see remote registrations, so an absent responder surfaces as `RequestTimeout` instead. |
+| `RequestTimeout` | No reply arrived within the timeout. |
+| `Remote(msg)` | The responder ran but returned `Err(msg)` (the Vert.x `ReplyException` equivalent). |
+
+`respond` returns a `ResponderHandle`; call `unregister()` on it to remove the responder so a different one can take its place.
+
+### Distributed reply-topic retention
+
+Kafka, Pulsar, and Iggy route replies through an instance-private topic named
+`<prefix>.replies.<instance-id>`. A new topic is used after each process
+restart, so old reply topics need short broker-side retention:
+
+- **Kafka:** auto-created reply topics receive `retention.ms=300000` (five
+  minutes) automatically. If `auto_create` is disabled, apply the same setting
+  in your topic provisioning.
+- **Pulsar:** configure a short namespace `messageTTL` and a
+  `subscriptionExpirationTimeMinutes` policy, or use non-persistent topics for
+  replies where appropriate.
+- **Iggy:** configure topic expiry/TTL when supported by the deployed version,
+  or periodically remove stale `.replies.` topics that have no active consumer.
+
+The retention window should remain longer than the maximum request timeout so
+late replies can still be delivered while their requester is alive.
 
 ## Concurrency and backpressure
 
@@ -158,7 +250,7 @@ bus.emit(OrderPlacedEvent { order_id: 1, total: 99.0 }).await;
 
 ## Panic isolation
 
-If a handler panics, the panic is caught by the Tokio task. Other handlers for the same event continue running, and the bus remains operational. With `emit_and_wait()`, panicked tasks are silently ignored (the `JoinHandle` error is discarded).
+If a handler panics, the panic is caught by the Tokio task. Other handlers for the same event continue running, and the bus remains operational.
 
 This means a single misbehaving handler cannot bring down the event bus.
 
@@ -198,14 +290,18 @@ impl UserService {
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `subscribe` | `async fn subscribe<E, F, Fut>(&self, handler: F)` | Register a handler for event type `E` |
-| `emit` | `async fn emit<E>(&self, event: E)` | Fire-and-forget: spawn handlers, return immediately |
-| `emit_and_wait` | `async fn emit_and_wait<E>(&self, event: E)` | Spawn handlers, wait for all to complete |
+| `subscribe` | `async fn subscribe<E, F, Fut>(&self, handler: F)` | Register a fan-out handler for event type `E` |
+| `emit` | `async fn emit<E>(&self, event: E)` | Fire-and-forget fan-out: spawn handlers, return immediately |
+| `request` | `async fn request<Req, Resp>(&self, req: Req) -> Result<Resp, _>` | Point-to-point: await one responder's reply (30s default timeout) |
+| `request_with` | `async fn request_with<Req, Resp>(&self, req: Req, options: RequestOptions)` | `request` with explicit timeout/metadata |
+| `respond` | `async fn respond<Req, Resp, F, Fut>(&self, handler: F)` | Register the responder for `Req` (one per type per process) |
 | `clear` | `async fn clear(&self)` | Remove all subscribers |
 
 **Type constraints:**
 - `subscribe`: `E: DeserializeOwned + Send + Sync + 'static`
-- `emit`/`emit_and_wait`: `E: Serialize + Send + Sync + 'static`
+- `emit`: `E: Serialize + Send + Sync + 'static`
+- `request`: `Req: Serialize + Send + Sync + 'static`, `Resp: DeserializeOwned + Send + 'static`
+- `respond`: `Req: DeserializeOwned + Send + Sync + 'static`, `Resp: Serialize + Send + 'static`; handler returns `Result<Resp, E>` with `E: Display + Send + 'static`
 - Handler `F`: `Fn(Arc<E>) -> Fut + Send + Sync + 'static`
 - Future `Fut`: `Future<Output = ()> + Send + 'static`
 

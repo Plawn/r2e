@@ -25,6 +25,29 @@ pub fn is_result_like(ty: &Type) -> bool {
     )
 }
 
+/// Return `true` if `ty` is the unit type `()`.
+pub fn is_unit_type(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(t) if t.elems.is_empty())
+}
+
+/// If `ty` is a `Result`-shaped type (`Result`/`ApiResult`/`JsonResult`),
+/// return its first (`Ok`) type argument. Returns `None` for non-`Result`
+/// types or aliases with no angle-bracketed arguments.
+pub fn result_ok_type(ty: &Type) -> Option<&Type> {
+    if !is_result_like(ty) {
+        return None;
+    }
+    let Type::Path(p) = ty else { return None };
+    let last = p.path.segments.last()?;
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })
+}
+
 /// If `ty` is `Option<X>` (or `std::option::Option<X>`), return `Some(X)`.
 /// Otherwise, return `None`.
 pub fn unwrap_option_type(ty: &Type) -> Option<&Type> {

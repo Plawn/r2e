@@ -41,13 +41,14 @@ pub struct PulsarConfig {
     pub topic_prefix: String,
     /// Optional JWT authentication token.
     pub auth_token: Option<String>,
-    /// Whether to verify TLS hostnames.
+    /// Whether to verify TLS hostnames (wired to the Pulsar client builder).
     pub tls_hostname_verification: bool,
-    /// Number of messages to fetch per batch.
-    pub batch_size: u32,
-    /// Whether Pulsar should auto-create topics (Pulsar allows by default).
+    /// Whether Pulsar should auto-create topics. Pulsar auto-creates at the
+    /// namespace level by default; this field is reserved for future admin API
+    /// integration (e.g. explicit topic creation before first publish).
     pub auto_create: bool,
-    /// Default number of partitions for topics (0 = non-partitioned).
+    /// Default number of partitions for topics (0 = non-partitioned). Reserved
+    /// for future admin API integration with partitioned topic creation.
     pub default_partitions: u32,
     /// Whether to automatically reconnect when the consumer disconnects (default: true).
     pub reconnect: bool,
@@ -64,7 +65,6 @@ impl Default for PulsarConfig {
             topic_prefix: "persistent://public/default/".into(),
             auth_token: None,
             tls_hostname_verification: false,
-            batch_size: 100,
             auto_create: true,
             default_partitions: 0,
             reconnect: true,
@@ -119,11 +119,6 @@ impl PulsarConfigBuilder {
 
     pub fn tls_hostname_verification(mut self, enabled: bool) -> Self {
         self.config.tls_hostname_verification = enabled;
-        self
-    }
-
-    pub fn batch_size(mut self, size: u32) -> Self {
-        self.config.batch_size = size;
         self
     }
 

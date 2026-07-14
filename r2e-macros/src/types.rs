@@ -49,7 +49,30 @@ pub struct ConsumerMethod {
     pub retry: Option<u32>,
     pub dlq: Option<String>,
     pub event_type: syn::Type,
+    /// Whether the method is a plain fan-out subscriber (`-> ()` /
+    /// `-> Result<(), E>`) or a request-reply responder (non-`()` return).
+    pub kind: ConsumerKind,
     pub fn_item: syn::ImplItemFn,
+}
+
+/// How a `#[consumer]` method is wired against the [`EventBus`].
+///
+/// Determined from the method's return type: a `()` (or `Result<(), E>`)
+/// return is a fan-out subscriber; any other return type is a Quarkus
+/// `@ConsumeEvent`-style responder whose return value IS the reply.
+pub enum ConsumerKind {
+    /// Fan-out subscriber — registered via `EventBus::subscribe`.
+    Subscriber,
+    /// Request-reply responder — registered via `EventBus::respond`. The
+    /// method's return value is the reply payload.
+    Responder {
+        /// The reply payload type (`Resp`). For a fallible responder this is
+        /// the `Ok` type unwrapped from `Result<Resp, E>`.
+        resp_type: syn::Type,
+        /// `true` when the method returns `Result<Resp, E>` (the `Err` is
+        /// mapped to the responder error string → `EventBusError::Remote`).
+        fallible: bool,
+    },
 }
 
 pub struct ScheduledConfig {

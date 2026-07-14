@@ -129,12 +129,22 @@ reflect pre-refactor idioms in places; align them with blueprint boot, HList
 state, `.register()`, `DecoratorSpec` guards, and pinned test overrides.
 This is also the main lever for the AI-facing-DX gap (Tasker #635).
 
+## W8 — EventBus perf & reliability (hub: `eventbus-perf.md`)
+
+Full 2026-07-12 audit of LocalEventBus + the four distributed backends
+(iggy/kafka/pulsar/rabbitmq). Verdict: local bus and shared `BackendState`
+are sound; the distributed backends are not production-grade (per-emit
+round-trip with no batching, ack/commit before handler = silent at-most-once,
+RabbitMQ reconnect broken, Pulsar global producer lock, cross-process
+event_id dedup collision). Plan, priorities (P1 semantics → P2 bugs → P3/P4
+throughput → P5 micro-opts) and file:line evidence live in
+`docs/claude/eventbus-perf.md`.
+
 ## Tech debt (deferred, low priority)
 
-- **Event bus perf** (2026-03 audit, still deferred): `Arc<EventMetadata>` to
-  avoid N clones per dispatch (revisit if headers/correlation_id get heavily
-  populated with high fan-out); lazy `EventMetadata::new()` (revisit only if
-  a zero-alloc local dispatch path becomes a goal).
+- **Event bus perf** (2026-03 audit): superseded by W8 — the two still-
+  deferred items (`Arc<EventMetadata>`, lazy `EventMetadata::new()`) are
+  carried in `eventbus-perf.md` § Explicitly deferred.
 - **gRPC trybuild fixture** hand-fakes the tonic server surface (no
   proto/build.rs) — drift risk on tonic bumps.
 

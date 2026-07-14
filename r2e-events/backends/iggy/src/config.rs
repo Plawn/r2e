@@ -27,13 +27,18 @@ pub struct IggyConfig {
     pub username: Option<String>,
     /// Password for authentication.
     pub password: Option<String>,
-    /// How often to poll for new messages.
+    /// How often to poll for new messages (idle backoff; effective throughput
+    /// ≈ `poll_batch_size / poll_interval`).
     pub poll_interval: Duration,
     /// Number of messages to fetch per poll.
     pub poll_batch_size: u32,
     /// Whether to auto-create streams, topics, and consumer groups.
     pub auto_create: bool,
     /// Default number of partitions for auto-created topics.
+    ///
+    /// Parallelism = min(partitions, consumers in the group). A single partition
+    /// means horizontal scale-out adds zero consumer parallelism. Set this to at
+    /// least the expected number of consumer instances.
     pub default_partitions: u32,
     /// Whether to automatically reconnect when the consumer disconnects (default: true).
     pub reconnect: bool,
@@ -50,10 +55,10 @@ impl Default for IggyConfig {
             consumer_group: "r2e-app".into(),
             username: None,
             password: None,
-            poll_interval: Duration::from_millis(100),
-            poll_batch_size: 100,
+            poll_interval: Duration::from_millis(10),
+            poll_batch_size: 1000,
             auto_create: true,
-            default_partitions: 1,
+            default_partitions: 3,
             reconnect: true,
             reconnect_max_backoff: Duration::from_secs(60),
         }

@@ -138,21 +138,33 @@ Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`,
 - `EventMetadata` — auto-generated per emit: `event_id`, `timestamp`, optional `correlation_id`, `partition_key`, `headers: HashMap<String, String>`.
 - `HandlerResult` — `Ack` or `Nack(String)`. Implements `From<()>` and `From<Result<(), E>>`.
 - `SubscriptionHandle` — returned by `subscribe()`, supports `unsubscribe()`.
-- `EventBusError` — `Serialization`, `Connection`, `Shutdown`, `Other`.
+- `EventBusError` — `Serialization`, `Connection`, `Shutdown`, `Other`, plus the request-reply variants `NoResponder`, `RequestTimeout`, `Remote(String)`.
+- `RequestOptions` — controls a single `request_with` call: `with_timeout(Duration)` (default `DEFAULT_REQUEST_TIMEOUT` = 30s), `with_metadata(EventMetadata)`.
+- `ResponderHandle` — returned by `respond()`; `unregister()` removes the responder so another may take its place.
 - `Event` trait — opt-in trait with `fn topic() -> &'static str` for distributed backends.
 
 **EventBus trait methods:**
 - `bus.subscribe(|envelope: EventEnvelope<MyEvent>| async { HandlerResult::Ack })` → `Result<SubscriptionHandle, EventBusError>`. Requires `E: DeserializeOwned`.
-- `bus.emit(event)` → `Result<(), EventBusError>`. Fire-and-forget. Requires `E: Serialize`.
+- `bus.emit(event)` → `Result<(), EventBusError>`. Fan-out fire-and-forget (Vert.x `publish`): every subscriber gets a copy, no reply. Requires `E: Serialize`.
 - `bus.emit_with(event, metadata)` → `Result<(), EventBusError>`. Emit with explicit metadata.
-- `bus.emit_and_wait(event)` → `Result<(), EventBusError>`. Waits for all handlers.
-- `bus.emit_and_wait_with(event, metadata)` → `Result<(), EventBusError>`. Waits with explicit metadata.
+- `bus.emit_nowait(event)` → `Result<EmitReceipt, EventBusError>`. Enqueue without waiting for broker ack. The returned `EmitReceipt` lets the caller optionally `.confirm().await` later. Default trait impl delegates to `emit` then returns `EmitReceipt::ready()`.
+- `bus.emit_nowait_with(event, metadata)` → `Result<EmitReceipt, EventBusError>`. Nowait emit with explicit metadata.
+- `EmitReceipt` — opaque handle wrapping a boxed future. `.confirm()` awaits the broker ack. `EmitReceipt::ready()` is an already-resolved receipt (used by `LocalEventBus` and the default trait impl). `EmitReceipt::new(fut)` wraps any `Future<Output = Result<(), EventBusError>> + Send + 'static`.
+- `bus.request(req)` → `Result<Resp, EventBusError>`. Point-to-point request-reply (Vert.x `request`): awaits the single responder's reply, 30s default timeout. Errors: `NoResponder` (local only — distributed backends surface an absent responder as `RequestTimeout`), `RequestTimeout`, `Remote(msg)` (responder returned `Err`).
+- `bus.request_with(req, RequestOptions)` → `Result<Resp, EventBusError>`. Request with explicit timeout/metadata.
+- `bus.respond(handler)` → `Result<ResponderHandle, EventBusError>`. Registers the single responder for `Req`; handler returns `Result<Resp, String>` (the `Ok` value is the reply, `Err(msg)` reaches the requester as `Remote(msg)`). At most one responder per request type per process — a second registration errors. Cross-instance load balancing comes from the broker (queue/consumer-group), not in-process round-robin.
 - `bus.shutdown(timeout)` → `Result<(), EventBusError>`. Graceful shutdown: rejects new emits, waits for in-flight handlers.
 - `bus.clear()` — remove all handlers.
+
+A `#[consumer]` method with a non-`()` return type is macro sugar for a responder (Quarkus `@ConsumeEvent`-style): the return value IS the reply, registered via `respond`; a `-> ()` consumer stays a plain fan-out subscriber registered via `subscribe`.
 
 Event types must derive `Serialize + Deserialize` (required by the trait for backend compatibility; `LocalEventBus` never actually serializes — zero overhead).
 
 Distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) implement the `EventBus` trait. Shared backend utilities are in `r2e_events::backend` — `TopicRegistry`, `BackendState`, `encode_metadata`/`decode_metadata`.
+
+**`emit_nowait` per-backend implementation:** Kafka uses `FutureProducer::send_result()` (sync enqueue, `'static` `DeliveryFuture`); RabbitMQ wraps `PublisherConfirm` (channel has `confirm_select` enabled); Pulsar wraps `send_non_blocking`'s `SendFuture`; Iggy spawns a task + oneshot (SDK has no internal batcher). Kafka also exposes batching config: `linger_ms`, `batch_size`, `queue_buffering_max_messages`, `queue_buffering_max_kbytes`, `message_timeout_ms`, `enable_idempotence`.
+
+**Delivery semantics (distributed backends): at-least-once.** The broker copy is acked/committed only after all local handlers for the message resolve (`BackendState::dispatch_from_poller_tracked` → `DispatchCompletion::outcome()` → `DispatchOutcome::Ack`/`Nack`). Consequences: handlers MUST be idempotent (redelivery after a crash or a `Nack` is expected); a `Nack` whose payload was durably published to a configured DLQ counts as processed (acked), while a failed DLQ publish leaves the source unacked; messages that fail to deserialize (poison messages) are parked in the matching handlers' configured DLQs (when any) before ack, not redelivered; a panicking handler counts as `Nack`. Shared consume-loop machinery in `r2e_events::backend`: `WatermarkTracker` (per-partition commit watermark, nack-pinned) and `spawn_completion_forwarder` + `COMPLETION_CHANNEL_CAPACITY`/`COMPLETION_DRAIN_TIMEOUT` (pipelined ack decisions). Kafka additionally tags completions with a per-partition assignment epoch so outcomes from a revoked assignment cannot acknowledge a redelivery. `LocalEventBus` is in-process only — events don't survive a crash (no delivery guarantee across restarts).
 
 **Declarative consumers on controllers** via `#[consumer(bus = "field_name")]` in a `#[routes]` impl block. Consumers run on the controller core (which always implements `ContextConstruct`), so they work regardless of any `#[inject(identity)]` fields. Consumers are registered automatically by `AppBuilder::register_controller`.
 
@@ -189,7 +201,7 @@ let bus = IggyEventBus::builder(config)
 **Behavior:**
 - `subscribe<E>()` — registers a local handler; on first subscriber for a type, spawns a background poller that creates/joins an Iggy consumer group.
 - `emit()` / `emit_with()` — serializes to JSON, maps `EventMetadata` to Iggy headers (`r2e-event-id`, `r2e-correlation-id`, `r2e-timestamp`, `r2e-h-*`), publishes to Iggy.
-- `emit_and_wait()` — publishes to Iggy AND waits for **local** handlers. Cannot wait for remote consumers (documented limitation).
+- `request()` / `respond()` — point-to-point request-reply over a shared request topic + per-instance reply topic + correlation header (an absent responder surfaces as `RequestTimeout`, not `NoResponder`).
 - `shutdown(timeout)` — cancels pollers, drains in-flight handlers, disconnects client.
 - Topic names default to sanitized `type_name` (`::` → `.`) unless explicitly registered via builder.
 

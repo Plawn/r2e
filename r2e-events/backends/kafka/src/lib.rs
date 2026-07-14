@@ -37,7 +37,8 @@
 //!
 //! # Limitations
 //!
-//! - `emit_and_wait` publishes to Kafka AND waits for **local** handlers only.
+//! - `emit` is fan-out publish/subscribe; use `request`/`respond` for
+//!   point-to-point request-reply.
 //! - One event type per topic (determined by first `subscribe` call).
 
 mod builder;
@@ -45,6 +46,7 @@ mod bus;
 mod config;
 mod error;
 mod inner;
+mod request;
 
 pub use builder::KafkaEventBusBuilder;
 pub use bus::KafkaEventBus;

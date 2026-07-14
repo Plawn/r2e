@@ -257,6 +257,40 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                             )
                         })?;
                     let event_type = extract_event_type_from_arc(&event_param.ty)?;
+                    let kind = classify_consumer_return(&method.sig.output);
+
+                    // A responder (non-`()` return) is point-to-point: exactly
+                    // one handler replies. The fan-out subscriber options
+                    // (`topic`/`deserializer`/`filter`/`retry`/`dlq`) have no
+                    // meaning there — `respond` takes only the handler — so
+                    // reject them rather than silently ignore.
+                    if matches!(kind, ConsumerKind::Responder { .. }) {
+                        let bad = [
+                            ("topic", config.topic.is_some()),
+                            ("deserializer", config.deserializer.is_some()),
+                            ("filter", config.filter.is_some()),
+                            ("retry", config.retry.is_some()),
+                            ("dlq", config.dlq.is_some()),
+                        ]
+                        .into_iter()
+                        .find_map(|(name, present)| present.then_some(name));
+                        if let Some(bad) = bad {
+                            return Err(syn::Error::new(
+                                method.sig.ident.span(),
+                                format!(
+                                    "`{bad}` is a fan-out subscriber option and cannot be used on a \
+                                     responder #[consumer] (a method with a non-`()` return type).\n\
+                                     \nA responder is point-to-point (registered via `EventBus::respond`): \
+                                     exactly one handler replies to each `request`, so `topic`, `deserializer`, \
+                                     `filter`, `retry`, and `dlq` do not apply.\n\
+                                     \n  - For request-reply, keep only `bus`: #[consumer(bus = \"event_bus\")] \
+                                     async fn handle(&self, event: Arc<Req>) -> Resp\n\
+                                     \n  - For fan-out with {bad}, return `()` (or `Result<(), E>`) instead."
+                                ),
+                            ));
+                        }
+                    }
+
                     method.attrs = strip_consumer_attrs(all_attrs);
                     consumer_methods.push(ConsumerMethod {
                         bus_field: config.bus_field,
@@ -266,6 +300,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         retry: config.retry,
                         dlq: config.dlq,
                         event_type,
+                        kind,
                         fn_item: method,
                     });
                 } else if let Some(config) = extract_scheduled(&all_attrs)? {

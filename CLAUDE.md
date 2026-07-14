@@ -46,7 +46,7 @@ r2e-macros      → Proc-macro crate. #[controller] + #[routes] generate Axum ha
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, build_state → HList state, serve_auto), Controller trait, ContextConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
 r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait.
-r2e-events      → In-process EventBus with typed pub/sub (emit, emit_and_wait, subscribe). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
+r2e-events      → In-process EventBus with typed pub/sub (emit/subscribe fan-out) plus point-to-point request-reply (request/respond). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
   backends/iggy     → Apache Iggy EventBus backend: persistent distributed event streaming.
   backends/kafka    → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
   backends/pulsar   → Apache Pulsar EventBus backend: distributed event streaming.
@@ -173,6 +173,7 @@ impl UserController {
 | feature modules, `#[module]`, `register_module`, closed subgraph, module imports/exports/encapsulation, controllers as beans, `from_context`, `ContextConstruct`, context-as-state | `docs/claude/di-builder-refactor.md` |
 | guards/interceptors as beans, `DecoratorSpec`, `DecoratorBean`, guard compile-time deps, once-at-registration guard construction, `Guard<I>`/`Interceptor<R>` redesign | `docs/claude/guards-interceptors.md` |
 | roadmap, backlog, next steps, what to work on, framework gaps, real-app audit (threaty/patina), rejected-design decisions (qualifiers, startup_check) | `docs/claude/roadmap.md` |
+| EventBus perf/reliability work, distributed backend audit (iggy/kafka/pulsar/rabbitmq), delivery semantics (at-least-once, ack-after-handler), producer batching, `BackendState` dedup/event_id, consume pipelining | `docs/claude/eventbus-perf.md` |
 | new transport / wire adapter, `EndpointDeps`, `endpoint_deps_fold`, `register_grpc_service` compile check, `AppBuilderGrpcExt`, ports-and-adapters shape, per-transport guards decision | `docs/claude/transport-adapters.md` |
 | testing DX, app blueprint, `BootableApp`, `TestApp::boot`, `#[r2e::test(app = ...)]`, `override_bean` (pinned overrides), `override_config_value`, `with_profile`, `application-test.yaml`, `.as_user()`, mocks in tests, dev services / testcontainers | `docs/claude/subsystems.md` (TestApp section); open follow-ups in `docs/claude/roadmap.md` |
 
