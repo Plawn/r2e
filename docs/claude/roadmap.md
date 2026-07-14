@@ -129,16 +129,16 @@ reflect pre-refactor idioms in places; align them with blueprint boot, HList
 state, `.register()`, `DecoratorSpec` guards, and pinned test overrides.
 This is also the main lever for the AI-facing-DX gap (Tasker #635).
 
-## W8 — EventBus perf & reliability (hub: `eventbus-perf.md`)
+## W8 — EventBus perf & reliability (hub: `eventbus-perf.md`) — SHIPPED (PR #30)
 
 Full 2026-07-12 audit of LocalEventBus + the four distributed backends
-(iggy/kafka/pulsar/rabbitmq). Verdict: local bus and shared `BackendState`
-are sound; the distributed backends are not production-grade (per-emit
-round-trip with no batching, ack/commit before handler = silent at-most-once,
-RabbitMQ reconnect broken, Pulsar global producer lock, cross-process
-event_id dedup collision). Plan, priorities (P1 semantics → P2 bugs → P3/P4
-throughput → P5 micro-opts) and file:line evidence live in
-`docs/claude/eventbus-perf.md`.
+(iggy/kafka/pulsar/rabbitmq) found: local bus and shared `BackendState`
+sound; distributed backends not production-grade (per-emit round-trip with no
+batching, ack/commit before handler = silent at-most-once, RabbitMQ reconnect
+broken, Pulsar global producer lock, cross-process event_id dedup collision).
+Fixed across P1–P5 (P1 semantics → P2 bugs → P3/P4 throughput → P5 micro-opts);
+only P4.4 deferred. Note the breaking `request`/`respond` API change. Plan and
+file:line evidence live in `docs/claude/eventbus-perf.md`.
 
 ## Tech debt (deferred, low priority)
 

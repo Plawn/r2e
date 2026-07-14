@@ -1,7 +1,7 @@
 error[E0277]: type `AuditSink` was not provided to the AppBuilder
-   --> compile-fail/grpc_intercept_missing_dep.rs:104:38
+   --> compile-fail/grpc_intercept_missing_dep.rs:109:38
     |
-104 |             .register_grpc_service::<PingService>()
+109 |             .register_grpc_service::<PingService>()
     |                                      ^^^^^^^^^^^ missing `.provide::<AuditSink>()` or `.register::<AuditSink>()`
     |
     = help: the trait `Contains<AuditSink, _>` is not implemented for `HNil`
