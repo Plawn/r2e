@@ -1,6 +1,10 @@
 # EventBus Performance & Reliability Roadmap
 
-Status: **IN PROGRESS** (validated 2026-07-12; P1 + a 10-finding review-fix
+Status: **COMPLETE** — all phases P1–P5 landed on branch
+`events/p1-ack-after-handler` and merged to master via PR #30 (2026-07-14).
+The only open item is P4.4 (evaluate multiplexing Kafka consumers), explicitly
+deferred pending a throughput measurement. History below is kept for
+reference. (validated 2026-07-12; P1 + a 10-finding review-fix
 pass landed on branch `events/p1-ack-after-handler` — shared
 `WatermarkTracker`/`spawn_completion_forwarder`, rebalance-aware Kafka
 tracking, manual-commit progress, RabbitMQ ported to the shared engine
