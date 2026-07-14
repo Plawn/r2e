@@ -6,14 +6,12 @@ use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use lapin::options::{
-    BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicPublishOptions,
-};
+use futures_util::StreamExt;
+use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicPublishOptions};
 use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
 use lapin::{BasicProperties, Channel};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
@@ -113,7 +111,7 @@ impl RabbitMqEventBus {
     /// underlying connection if needed) when the stored one has dropped. A
     /// publish failure only affects the publisher channel — consumer channels
     /// are independent. Awaits the publisher confirm for durability.
-    async fn publish(
+    pub(crate) async fn publish(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
@@ -172,7 +170,12 @@ impl EventBus for RabbitMqEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
+            inner
+                .state
+                .topic_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .register_by_type_id(type_id, topic);
         }
     }
 
@@ -184,7 +187,10 @@ impl EventBus for RabbitMqEventBus {
     ) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+            inner
+                .state
+                .configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>()))
+                .await;
         }
     }
 
@@ -215,14 +221,27 @@ impl EventBus for RabbitMqEventBus {
 
             // If this is the first subscriber for this type, set up the consumer.
             if is_first {
-                let (channel, queue_name) = setup_consumer_queue(&inner, &topic_name).await?;
+                let (channel, queue_name) = match setup_consumer_queue(&inner, &topic_name).await {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        inner.state.unregister_handler(type_id, id).await;
+                        return Err(error);
+                    }
+                };
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
 
                 r2e_core::rt::spawn(async move {
-                    run_consumer(inner_clone, type_id, topic_name, cancel, Some((channel, queue_name))).await;
+                    run_consumer(
+                        inner_clone,
+                        type_id,
+                        topic_name,
+                        cancel,
+                        Some((channel, queue_name)),
+                    )
+                    .await;
                 });
             }
 
@@ -254,17 +273,33 @@ impl EventBus for RabbitMqEventBus {
                 Box::pin(handler(envelope))
             });
 
-            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+            let (id, is_first) = inner
+                .state
+                .register_handler_with_deserializer::<E>(h, deserializer)
+                .await;
 
             if is_first {
-                let (channel, queue_name) = setup_consumer_queue(&inner, &topic_name).await?;
+                let (channel, queue_name) = match setup_consumer_queue(&inner, &topic_name).await {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        inner.state.unregister_handler(type_id, id).await;
+                        return Err(error);
+                    }
+                };
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
                 let inner_clone = bus.inner.clone();
 
                 r2e_core::rt::spawn(async move {
-                    run_consumer(inner_clone, type_id, topic_name, cancel, Some((channel, queue_name))).await;
+                    run_consumer(
+                        inner_clone,
+                        type_id,
+                        topic_name,
+                        cancel,
+                        Some((channel, queue_name)),
+                    )
+                    .await;
                 });
             }
 

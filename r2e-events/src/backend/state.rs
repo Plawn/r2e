@@ -9,9 +9,12 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::{DlqPublisher, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle, SubscriptionId};
 use super::dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 use super::topic::TopicRegistry;
+use crate::{
+    DlqPublisher, EventBusError, EventEnvelope, EventMetadata, HandlerResult, SubscriptionHandle,
+    SubscriptionId,
+};
 
 /// Type-erased request responder for distributed backends.
 ///
@@ -38,8 +41,9 @@ pub const DEFAULT_BACKEND_CONCURRENCY: usize = 1024;
 pub enum DispatchOutcome {
     /// Safe to ack/commit: every handler acked (after retries), every nacked
     /// handler's payload was captured to a DLQ, there were no matching
-    /// handlers, or the payload failed to deserialize (poison messages are
-    /// dropped with an error log, not redelivered).
+    /// handlers, or the payload failed to deserialize and was either durably
+    /// parked in every configured DLQ or intentionally dropped because no DLQ
+    /// was configured.
     Ack,
     /// At least one handler nacked (or panicked) without DLQ capture —
     /// skip the ack/commit so the broker redelivers the message.
@@ -63,7 +67,10 @@ pub struct DispatchCompletion {
 impl DispatchCompletion {
     /// A completion that resolves immediately with the given outcome.
     pub fn resolved(outcome: DispatchOutcome) -> Self {
-        Self { resolved: Some(outcome), receivers: Vec::new() }
+        Self {
+            resolved: Some(outcome),
+            receivers: Vec::new(),
+        }
     }
 
     /// Resolve once every handler spawned for this message has finished.
@@ -171,7 +178,10 @@ impl BackendState {
     }
 
     /// Create a new `BackendState` with a DLQ publisher callback.
-    pub fn with_dlq_publisher(topic_registry: TopicRegistry, dlq_publisher: Option<DlqPublisher>) -> Self {
+    pub fn with_dlq_publisher(
+        topic_registry: TopicRegistry,
+        dlq_publisher: Option<DlqPublisher>,
+    ) -> Self {
         Self::with_options(topic_registry, dlq_publisher, DEFAULT_BACKEND_CONCURRENCY)
     }
 
@@ -216,7 +226,9 @@ impl BackendState {
     /// is decremented and waiters are notified.
     pub fn acquire_in_flight(self: &Arc<Self>) -> InFlightGuard {
         self.in_flight.fetch_add(1, Ordering::Release);
-        InFlightGuard { state: self.clone() }
+        InFlightGuard {
+            state: self.clone(),
+        }
     }
 
     /// Register a cancellation token for a background poller.
@@ -241,7 +253,10 @@ impl BackendState {
         let type_id = TypeId::of::<E>();
         let type_name = std::any::type_name::<E>();
         {
-            let reg = self.topic_registry.read().unwrap_or_else(|e| e.into_inner());
+            let reg = self
+                .topic_registry
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(topic) = reg.get(type_id) {
                 return topic;
             }
@@ -257,19 +272,22 @@ impl BackendState {
     ///
     /// Returns `true` if the topic was previously marked as ensured.
     pub fn is_topic_ensured(&self, topic_name: &str) -> bool {
-        self.ensured_topics.read().unwrap_or_else(|e| e.into_inner()).contains(topic_name)
+        self.ensured_topics
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(topic_name)
     }
 
     /// Mark a topic as ensured (call after successful creation).
     pub fn set_topic_ensured(&self, topic_name: &str) {
-        self.ensured_topics.write().unwrap_or_else(|e| e.into_inner()).insert(topic_name.to_string());
+        self.ensured_topics
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(topic_name.to_string());
     }
 
     /// Register a handler for an event type, returning `(handler_id, is_first_for_type)`.
-    pub async fn register_handler<E>(
-        &self,
-        handler: Handler,
-    ) -> (u64, bool)
+    pub async fn register_handler<E>(&self, handler: Handler) -> (u64, bool)
     where
         E: serde::de::DeserializeOwned + Send + Sync + 'static,
     {
@@ -278,7 +296,8 @@ impl BackendState {
                 .map(|e| Arc::new(e) as Arc<dyn std::any::Any + Send + Sync>)
                 .map_err(|e| e.to_string())
         });
-        self.register_handler_inner::<E>(handler, json_deser, None, None).await
+        self.register_handler_inner::<E>(handler, json_deser, None, None)
+            .await
     }
 
     /// Register a handler with a custom deserializer.
@@ -290,7 +309,8 @@ impl BackendState {
     where
         E: Send + Sync + 'static,
     {
-        self.register_handler_inner::<E>(handler, deserializer, None, None).await
+        self.register_handler_inner::<E>(handler, deserializer, None, None)
+            .await
     }
 
     /// Register a handler with full configuration (filter, retry, custom deserializer).
@@ -311,7 +331,8 @@ impl BackendState {
                     .map_err(|e| e.to_string())
             })
         });
-        self.register_handler_inner::<E>(handler, deser, filter, retry_policy).await
+        self.register_handler_inner::<E>(handler, deser, filter, retry_policy)
+            .await
     }
 
     async fn register_handler_inner<E: 'static>(
@@ -327,11 +348,9 @@ impl BackendState {
         let mut map = self.handlers.write().await;
         let is_first = !map.contains_key(&type_id);
 
-        let topic_entry = map.entry(type_id).or_insert_with(|| {
-            TopicHandlers {
-                entries: Vec::new(),
-                deserializer,
-            }
+        let topic_entry = map.entry(type_id).or_insert_with(|| TopicHandlers {
+            entries: Vec::new(),
+            deserializer,
         });
 
         topic_entry.entries.push(HandlerEntry {
@@ -355,19 +374,32 @@ impl BackendState {
             // Unsubscribe can be triggered from a request handler, so route to
             // the control plane in sharded mode.
             r2e_core::rt::spawn_ctl(async move {
-                let mut map = state.handlers.write().await;
-                if let Some(th) = map.get_mut(&type_id) {
-                    th.entries.retain(|e| e.id != handler_id);
-                    if th.entries.is_empty() {
-                        map.remove(&type_id);
-                        let mut cancels = state.poller_cancels.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(cancel) = cancels.remove(&type_id) {
-                            cancel.cancel();
-                        }
-                    }
-                }
+                state.unregister_handler(type_id, handler_id).await;
             });
         })
+    }
+
+    /// Remove a handler immediately, cancelling its poller when it was the last
+    /// handler for the type. Used both by subscription handles and to roll back
+    /// a registration when first-subscriber broker setup fails.
+    pub async fn unregister_handler(&self, type_id: TypeId, handler_id: u64) {
+        let mut map = self.handlers.write().await;
+        let remove_type = if let Some(th) = map.get_mut(&type_id) {
+            th.entries.retain(|e| e.id != handler_id);
+            th.entries.is_empty()
+        } else {
+            false
+        };
+        if remove_type {
+            map.remove(&type_id);
+            let mut cancels = self
+                .poller_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(cancel) = cancels.remove(&type_id) {
+                cancel.cancel();
+            }
+        }
     }
 
     /// Register the single request-reply responder for request type `Req`.
@@ -390,10 +422,13 @@ impl BackendState {
         let type_id = TypeId::of::<Req>();
         let type_name = std::any::type_name::<Req>();
 
-        let responder: ResponderFn = Arc::new(move |bytes, metadata| {
-            match serde_json::from_slice::<Req>(bytes) {
+        let responder: ResponderFn = Arc::new(
+            move |bytes, metadata| match serde_json::from_slice::<Req>(bytes) {
                 Ok(req) => {
-                    let envelope = EventEnvelope { event: Arc::new(req), metadata };
+                    let envelope = EventEnvelope {
+                        event: Arc::new(req),
+                        metadata,
+                    };
                     let fut = handler(envelope);
                     Box::pin(async move {
                         match fut.await {
@@ -406,8 +441,8 @@ impl BackendState {
                     let msg = format!("failed to deserialize request: {e}");
                     Box::pin(async move { Err(msg) })
                 }
-            }
-        });
+            },
+        );
 
         let mut map = self.responders.write().await;
         if map.contains_key(&type_id) {
@@ -491,7 +526,9 @@ impl BackendState {
         metadata: EventMetadata,
     ) {
         // Dropping the completion is fine: handler tasks are already spawned.
-        let _ = self.dispatch_from_poller_tracked(type_id, payload, metadata).await;
+        let _ = self
+            .dispatch_from_poller_tracked(type_id, payload, metadata)
+            .await;
     }
 
     /// Dispatch a message from a poller to local handlers, returning a
@@ -528,14 +565,25 @@ impl BackendState {
 
             let deser = topic_handlers.deserializer.clone();
 
-            let handlers: Vec<_> = topic_handlers.entries.iter()
+            let handlers: Vec<_> = topic_handlers
+                .entries
+                .iter()
                 .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                .map(|entry| (entry.handler.clone(), entry.retry_policy.clone(), entry.retry_policy.as_ref().and_then(|p| p.dead_letter_topic.clone())))
+                .map(|entry| {
+                    (
+                        entry.handler.clone(),
+                        entry.retry_policy.clone(),
+                        entry
+                            .retry_policy
+                            .as_ref()
+                            .and_then(|p| p.dead_letter_topic.clone()),
+                    )
+                })
                 .collect();
 
             // Pre-allocate DLQ data only if any handler has a DLQ configured.
-            let has_dlq = self.dlq_publisher.is_some()
-                && handlers.iter().any(|(_, _, dlq)| dlq.is_some());
+            let has_dlq =
+                self.dlq_publisher.is_some() && handlers.iter().any(|(_, _, dlq)| dlq.is_some());
             let dlq_data: Option<(Arc<Vec<u8>>, EventMetadata)> = if has_dlq {
                 Some((Arc::new(payload.to_vec()), metadata.clone()))
             } else {
@@ -550,17 +598,38 @@ impl BackendState {
             Ok(e) => e,
             Err(err) => {
                 tracing::error!("failed to deserialize event: {err}");
-                let mut dlq_topics: Vec<String> = handler_data.iter()
+                let mut dlq_topics: Vec<String> = handler_data
+                    .iter()
                     .filter_map(|(_, _, dlq)| dlq.clone())
                     .collect();
                 dlq_topics.sort();
                 dlq_topics.dedup();
+                let mut parked = !dlq_topics.is_empty();
                 if let Some(ref publisher) = self.dlq_publisher {
                     for topic in dlq_topics {
-                        publisher(topic, payload.to_vec(), metadata.clone()).await;
+                        if let Err(error) =
+                            publisher(topic.clone(), payload.to_vec(), metadata.clone()).await
+                        {
+                            tracing::error!(topic = %topic, %error, "failed to park poison message in DLQ");
+                            parked = false;
+                        }
                     }
+                } else if parked {
+                    tracing::error!(
+                        "poison message has a configured DLQ but no DLQ publisher is available"
+                    );
+                    parked = false;
                 }
-                return DispatchCompletion::resolved(DispatchOutcome::Ack);
+                // Without a configured DLQ, dropping an undecodable poison
+                // message is intentional. With a DLQ, acknowledge only after
+                // every broker publication succeeded.
+                return DispatchCompletion::resolved(
+                    if parked || handler_data.iter().all(|(_, _, dlq)| dlq.is_none()) {
+                        DispatchOutcome::Ack
+                    } else {
+                        DispatchOutcome::Nack
+                    },
+                );
             }
         };
 
@@ -572,7 +641,8 @@ impl BackendState {
             let dlq_data = dlq_data.clone();
 
             // Backpressure: acquire permit BEFORE spawning to bound task count.
-            let permit = self.handler_semaphore
+            let permit = self
+                .handler_semaphore
                 .clone()
                 .acquire_owned()
                 .await
@@ -592,7 +662,6 @@ impl BackendState {
                 } else {
                     h(e, m).await
                 };
-                drop(permit);
                 let acked = match result {
                     HandlerResult::Ack => true,
                     HandlerResult::Nack(ref reason) => {
@@ -603,19 +672,35 @@ impl BackendState {
                                 if let (Some((ref pl, ref meta)), Some(ref publisher)) =
                                     (&dlq_data, &state.dlq_publisher)
                                 {
-                                    publisher(dlq_topic.clone(), pl.as_ref().clone(), meta.clone()).await;
-                                    captured = true;
+                                    match publisher(
+                                        dlq_topic.clone(),
+                                        pl.as_ref().clone(),
+                                        meta.clone(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => captured = true,
+                                        Err(error) => tracing::error!(
+                                            topic = %dlq_topic,
+                                            %error,
+                                            "failed to publish exhausted event to DLQ"
+                                        ),
+                                    }
                                 }
                             }
                         }
                         captured
                     }
                 };
+                drop(permit);
                 // Receiver may be gone (untracked dispatch) — ignore send errors.
                 let _ = tx.send(acked);
             });
         }
-        DispatchCompletion { resolved: None, receivers }
+        DispatchCompletion {
+            resolved: None,
+            receivers,
+        }
     }
 
     /// Configure filter and retry policy on an existing handler entry.
@@ -633,7 +718,11 @@ impl BackendState {
         let mut map = self.handlers.write().await;
         if let Some(type_id) = type_id_hint {
             if let Some(topic_handlers) = map.get_mut(&type_id) {
-                if let Some(entry) = topic_handlers.entries.iter_mut().find(|e| e.id == handler_id) {
+                if let Some(entry) = topic_handlers
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.id == handler_id)
+                {
                     entry.filter = filter;
                     entry.retry_policy = retry_policy;
                     return;
@@ -642,7 +731,11 @@ impl BackendState {
         }
         // Fallback: scan all types
         for topic_handlers in map.values_mut() {
-            if let Some(entry) = topic_handlers.entries.iter_mut().find(|e| e.id == handler_id) {
+            if let Some(entry) = topic_handlers
+                .entries
+                .iter_mut()
+                .find(|e| e.id == handler_id)
+            {
                 entry.filter = filter;
                 entry.retry_policy = retry_policy;
                 return;
@@ -687,7 +780,12 @@ impl BackendState {
 
     /// Cancel all background pollers.
     pub fn cancel_all_pollers(&self) {
-        let cancels = std::mem::take(&mut *self.poller_cancels.lock().unwrap_or_else(|e| e.into_inner()));
+        let cancels = std::mem::take(
+            &mut *self
+                .poller_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         for cancel in cancels.into_values() {
             cancel.cancel();
         }
@@ -696,10 +794,7 @@ impl BackendState {
     /// Wait for all in-flight handlers to complete, with timeout.
     ///
     /// Returns `Ok(())` if all handlers finished, or `Err` if timed out.
-    pub async fn wait_in_flight(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Result<(), EventBusError> {
+    pub async fn wait_in_flight(&self, timeout: std::time::Duration) -> Result<(), EventBusError> {
         let wait = async {
             loop {
                 // Register the notified future BEFORE checking the counter

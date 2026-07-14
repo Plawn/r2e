@@ -107,6 +107,7 @@ async fn tracked_dispatch_nack_with_dlq_capture_is_ack() {
         let published = published_clone.clone();
         Box::pin(async move {
             published.lock().unwrap().push(topic);
+            Ok(())
         })
     });
     let state = Arc::new(BackendState::with_dlq_publisher(
@@ -122,11 +123,20 @@ async fn tracked_dispatch_nack_with_dlq_capture_is_ack() {
     }
     .with_dlq("dead-letters");
     state
-        .register_handler_full::<serde_json::Value>(handler, Some(test_deserializer()), None, Some(policy))
+        .register_handler_full::<serde_json::Value>(
+            handler,
+            Some(test_deserializer()),
+            None,
+            Some(policy),
+        )
         .await;
 
     let completion = state
-        .dispatch_from_poller_tracked(TypeId::of::<serde_json::Value>(), b"{}", EventMetadata::new())
+        .dispatch_from_poller_tracked(
+            TypeId::of::<serde_json::Value>(),
+            b"{}",
+            EventMetadata::new(),
+        )
         .await;
 
     assert_eq!(completion.outcome().await, DispatchOutcome::Ack);
@@ -168,6 +178,7 @@ async fn poison_message_routes_to_matching_dlqs_and_acks() {
         let published = published_clone.clone();
         Box::pin(async move {
             published.lock().unwrap().push(topic);
+            Ok(())
         })
     });
     let state = Arc::new(BackendState::with_dlq_publisher(
@@ -192,7 +203,11 @@ async fn poison_message_routes_to_matching_dlqs_and_acks() {
         .await;
 
     let completion = state
-        .dispatch_from_poller_tracked(TypeId::of::<serde_json::Value>(), b"garbage", EventMetadata::new())
+        .dispatch_from_poller_tracked(
+            TypeId::of::<serde_json::Value>(),
+            b"garbage",
+            EventMetadata::new(),
+        )
         .await;
 
     // Undecodable payload: parked in the configured DLQ, then acked away.
@@ -217,6 +232,74 @@ async fn tracked_dispatch_panicking_handler_is_nack() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn poison_message_with_unavailable_dlq_is_nack() {
+    let state = new_state();
+    let policy = RetryPolicy {
+        max_retries: 0,
+        ..Default::default()
+    }
+    .with_dlq("poison-dlq");
+    state
+        .register_handler_full::<serde_json::Value>(
+            counting_handler(Arc::new(AtomicUsize::new(0)), || HandlerResult::Ack),
+            Some(failing_deserializer()),
+            None,
+            Some(policy),
+        )
+        .await;
+
+    let completion = state
+        .dispatch_from_poller_tracked(
+            TypeId::of::<serde_json::Value>(),
+            b"garbage",
+            EventMetadata::new(),
+        )
+        .await;
+
+    assert_eq!(completion.outcome().await, DispatchOutcome::Nack);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_dlq_publish_keeps_source_unacked() {
+    let dlq: DlqPublisher = Arc::new(|_topic, _payload, _meta| {
+        Box::pin(async {
+            Err(r2e_events::EventBusError::Connection(
+                "DLQ unavailable".into(),
+            ))
+        })
+    });
+    let state = Arc::new(BackendState::with_dlq_publisher(
+        TopicRegistry::default(),
+        Some(dlq),
+    ));
+    let policy = RetryPolicy {
+        max_retries: 0,
+        ..Default::default()
+    }
+    .with_dlq("dead-letters");
+    state
+        .register_handler_full::<serde_json::Value>(
+            counting_handler(Arc::new(AtomicUsize::new(0)), || {
+                HandlerResult::Nack("boom".into())
+            }),
+            Some(test_deserializer()),
+            None,
+            Some(policy),
+        )
+        .await;
+
+    let completion = state
+        .dispatch_from_poller_tracked(
+            TypeId::of::<serde_json::Value>(),
+            b"{}",
+            EventMetadata::new(),
+        )
+        .await;
+
+    assert_eq!(completion.outcome().await, DispatchOutcome::Nack);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn untracked_dispatch_still_runs_handlers() {
     let state = new_state();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -235,6 +318,30 @@ async fn untracked_dispatch_still_runs_handlers() {
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unregistering_last_handler_allows_first_subscriber_retry() {
+    let state = new_state();
+    let (id, is_first) = state
+        .register_handler_with_deserializer::<TestEvent>(
+            counting_handler(Arc::new(AtomicUsize::new(0)), || HandlerResult::Ack),
+            test_deserializer(),
+        )
+        .await;
+    assert!(is_first);
+
+    state
+        .unregister_handler(TypeId::of::<TestEvent>(), id)
+        .await;
+
+    let (_retry_id, retry_is_first) = state
+        .register_handler_with_deserializer::<TestEvent>(
+            counting_handler(Arc::new(AtomicUsize::new(0)), || HandlerResult::Ack),
+            test_deserializer(),
+        )
+        .await;
+    assert!(retry_is_first);
 }
 
 // --- Request-reply responder registry (BackendState) ---
@@ -387,6 +494,9 @@ async fn build_reply_without_responder_always_produces_error() {
     let (bytes, error) = state
         .build_reply(TypeId::of::<Ping>(), b"{}", EventMetadata::new())
         .await;
-    assert_eq!(error.as_deref(), Some("no responder registered for request type"));
+    assert_eq!(
+        error.as_deref(),
+        Some("no responder registered for request type")
+    );
     assert_eq!(bytes, b"null".to_vec());
 }

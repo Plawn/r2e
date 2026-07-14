@@ -214,10 +214,7 @@ impl KafkaConfig {
             .set("bootstrap.servers", &self.bootstrap_servers)
             .set("group.id", &self.group_id)
             .set("security.protocol", self.security_protocol.as_str())
-            .set(
-                "session.timeout.ms",
-                self.session_timeout_ms.to_string(),
-            )
+            .set("session.timeout.ms", self.session_timeout_ms.to_string())
             .set(
                 "enable.auto.commit",
                 if self.enable_auto_commit {
@@ -242,10 +239,21 @@ impl KafkaConfig {
             config.set("sasl.password", password);
         }
 
-        // Overrides applied last so users retain final precedence over defaults.
+        // Overrides apply to tunables, but the two offset-management settings
+        // below are semantic invariants of the at-least-once implementation.
         for (k, v) in &self.overrides {
             config.set(k, v);
         }
+        config
+            .set(
+                "enable.auto.commit",
+                if self.enable_auto_commit {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .set("enable.auto.offset.store", "false");
 
         config
     }
@@ -394,5 +402,23 @@ impl KafkaConfigBuilder {
 
     pub fn build(self) -> KafkaConfig {
         self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_semantics_cannot_be_overridden() {
+        let config = KafkaConfig::builder()
+            .enable_auto_commit(false)
+            .override_config("enable.auto.commit", "true")
+            .override_config("enable.auto.offset.store", "true")
+            .build()
+            .to_consumer_client_config();
+
+        assert_eq!(config.get("enable.auto.commit"), Some("false"));
+        assert_eq!(config.get("enable.auto.offset.store"), Some("false"));
     }
 }

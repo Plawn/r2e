@@ -6,7 +6,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::producer::FutureProducer;
 
 use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
-use r2e_events::EventBusError;
+use r2e_events::{DlqPublisher, EventBusError};
 
 use crate::bus::KafkaEventBus;
 use crate::config::KafkaConfig;
@@ -66,21 +66,34 @@ impl KafkaEventBusBuilder {
         let instance_id = instance_id();
         let reply_topic = reply_topic(&self.config.group_id, instance_id);
 
-        let inner = KafkaInner {
-            config: self.config,
-            producer,
-            state: Arc::new(BackendState::new(self.topic_registry)),
-            pending: Arc::new(PendingRequests::new()),
-            reply_consumer: tokio::sync::OnceCell::new(),
-            responder_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
-            shutdown_notify: tokio::sync::Notify::new(),
-            instance_id,
-            reply_topic,
-        };
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<KafkaInner>| {
+            let weak = weak.clone();
+            let dlq: DlqPublisher = Arc::new(move |topic, payload, metadata| {
+                let weak = weak.clone();
+                Box::pin(async move {
+                    let inner = weak.upgrade().ok_or(EventBusError::Shutdown)?;
+                    KafkaEventBus { inner }
+                        .publish(&topic, payload, &metadata)
+                        .await
+                })
+            });
+            KafkaInner {
+                config: self.config,
+                producer,
+                state: Arc::new(BackendState::with_dlq_publisher(
+                    self.topic_registry,
+                    Some(dlq),
+                )),
+                pending: Arc::new(PendingRequests::new()),
+                reply_consumer: tokio::sync::OnceCell::new(),
+                responder_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+                request_cancel: tokio_util::sync::CancellationToken::new(),
+                instance_id,
+                reply_topic,
+            }
+        });
 
-        Ok(KafkaEventBus {
-            inner: Arc::new(inner),
-        })
+        Ok(KafkaEventBus { inner })
     }
 }
 

@@ -52,11 +52,21 @@ pub const REQUEST_TOPIC_SUFFIX: &str = ".requests";
 
 /// The request topic for an event topic: `<event_topic>.requests`.
 ///
-/// Requesters publish to this shared topic; the responder (one per request
-/// type per consumer group) consumes it and replies to the per-request
+/// Requesters publish to this shared topic; responders consume it through a
+/// deterministic group shared by every application instance and reply to the
+/// per-request
 /// [`reply_topic`].
 pub fn request_topic(event_topic: &str) -> String {
     format!("{event_topic}{REQUEST_TOPIC_SUFFIX}")
+}
+
+/// Broker consumer-group/subscription used by request responders.
+///
+/// It depends only on the request topic, not on an application's fan-out
+/// consumer group. Every responder for the same request type is therefore a
+/// competing consumer in one broker group.
+pub fn responder_group(request_topic: &str) -> String {
+    format!("r2e.responders.{request_topic}")
 }
 
 /// The per-bus-instance reply topic: `<topic_prefix>.replies.<instance-id-hex>`.

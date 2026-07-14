@@ -165,7 +165,7 @@ impl UserEventConsumer {
 
 ### One responder per type
 
-**At most one responder may be registered per request type per process.** A second registration returns an error. This is deliberate: point-to-point means one reply, so there is no in-process round-robin. When you scale across instances, cross-instance load balancing comes from the broker's queue / consumer-group semantics (each request goes to one consumer), not from the bus.
+**At most one responder may be registered per request type per process.** A second registration returns an error. This is deliberate: point-to-point means one reply, so there is no in-process round-robin. Across instances, every responder for a request topic joins the same deterministic broker queue/group/subscription, independent of the fan-out consumer-group setting, so each request goes to one responder.
 
 ### Timeouts and errors
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use r2e_events::backend::{BackendState, TopicRegistry};
-use r2e_events::EventBusError;
+use r2e_events::{DlqPublisher, EventBusError};
 
 use crate::bus::RabbitMqEventBus;
 use crate::config::RabbitMqConfig;
@@ -51,19 +51,38 @@ impl RabbitMqEventBusBuilder {
 
         tracing::info!(uri = %self.config.uri, "connected to RabbitMQ");
 
-        let inner = RabbitMqInner::new(
-            self.config,
-            connection,
-            Arc::new(BackendState::new(self.topic_registry)),
-        );
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<RabbitMqInner>| {
+            let weak = weak.clone();
+            let dlq: DlqPublisher = Arc::new(move |topic, payload, metadata| {
+                let weak = weak.clone();
+                Box::pin(async move {
+                    let inner = weak.upgrade().ok_or(EventBusError::Shutdown)?;
+                    // A topic-exchange publish with no bound queue is accepted
+                    // but discarded by RabbitMQ. Ensure the current group's
+                    // durable DLQ queue/binding exists before confirming the
+                    // source message as parked.
+                    let setup = inner.new_consumer_channel().await?;
+                    inner.ensure_queue(&setup, &topic).await?;
+                    RabbitMqEventBus { inner }
+                        .publish(&topic, payload, &metadata)
+                        .await
+                })
+            });
+            RabbitMqInner::new(
+                self.config,
+                connection,
+                Arc::new(BackendState::with_dlq_publisher(
+                    self.topic_registry,
+                    Some(dlq),
+                )),
+            )
+        });
 
         // Prime the publisher channel now so exchange declaration and other
         // configuration errors surface at `connect()` time rather than on the
         // first `emit`.
         inner.publisher_channel().await?;
 
-        Ok(RabbitMqEventBus {
-            inner: Arc::new(inner),
-        })
+        Ok(RabbitMqEventBus { inner })
     }
 }

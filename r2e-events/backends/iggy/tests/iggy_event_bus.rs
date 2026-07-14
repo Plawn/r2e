@@ -254,3 +254,32 @@ fn plain_message_has_no_reply_headers() {
 
     assert!(reply_headers_from_message(&msg).is_none());
 }
+
+#[cfg(feature = "integration")]
+#[tokio::test(flavor = "multi_thread")]
+async fn live_broker_request_reply_roundtrip() {
+    use r2e_events::{EventBus, EventEnvelope, RequestOptions};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct Ping(u32);
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Pong(u32);
+
+    let nonce = r2e_events::backend::instance_id();
+    let topic = format!("r2e.integration.iggy.{nonce:016x}");
+    let config = IggyConfig::builder()
+        .consumer_group(format!("r2e-integration-{nonce:016x}"))
+        .build();
+    let bus = IggyEventBus::builder(config).topic::<Ping>(topic).connect().await
+        .expect("Iggy broker must be available for integration tests");
+    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
+        Ok::<_, String>(Pong(env.event.0 + 1))
+    }).await.unwrap();
+    let reply: Pong = bus.request_with(
+        Ping(41),
+        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+    ).await.unwrap();
+    assert_eq!(reply, Pong(42));
+    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
+}

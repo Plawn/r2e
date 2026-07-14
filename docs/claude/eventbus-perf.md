@@ -24,6 +24,14 @@ ensure_topics), P5.6 (typed error classification), P5.10 (respond E:Display)
 all landed. P5.7 (ArcSwap lock-free handlers) and P5.8 (spawn on emitting
 runtime) also landed. P5.11 landed with automatic Kafka reply-topic retention
 and broker-policy guidance for Pulsar/Iggy.
+P1/P2 audit-fix pass landed 2026-07-14: distributed DLQ publishers now
+propagate broker failures before source ack, Kafka completion epochs reject
+stale post-rebalance outcomes, subscription/responder setup rolls back on
+failure, semantic Kafka offset settings cannot be overridden, request
+responders use a deterministic per-topic broker group, request shutdown uses
+sticky cancellation, and RabbitMQ invalidates dead Direct Reply-To consumers.
+The four backend `integration` features now compile live broker request/reply
+round-trip tests for deployment/CI environments that provide the brokers.
 Check items off as they land. Hub referenced from `roadmap.md` (W8).
 
 Scope: `r2e-events` (LocalEventBus + shared `backend` module) and the four
@@ -97,16 +105,15 @@ see P4 for keeping this pipelined rather than serial).
 
 - [x] **P2.1 Cross-process `event_id` collision in the dedup set.** Fixed:
       `EventMetadata::event_id` is now a globally-unique `u128` = per-process
-      random 64-bit identity (high bits, drawn once from a seeded `RandomState`
-      hasher + wall-clock nanos + a stack address — no new dependency) packed
+      random 64-bit identity (high bits, drawn once from an OS-random UUID v4)
+      packed
       with the per-process `AtomicU64` counter (low bits) via
       `compose_event_id`. The codec (`src/backend/metadata_codec.rs`) now
       encodes/decodes the id as a decimal `u128` string (wire header
-      `r2e-event-id` widened from u64 to u128 range), and the dedup set
-      (`LocallyDispatchedSet` in `src/backend/state.rs`) keys on `u128`.
-      Distinct instances no longer collide, so a poller never drops a peer's
-      message. Tests in `tests/event_id.rs` assert cross-process uniqueness
-      and codec round-trip of a high-bit-set id.
+      `r2e-event-id` widened from u64 to u128 range). The former local-echo
+      dedup set was removed with P2.5; the same id scheme now also supplies
+      request/reply ids. Tests in `tests/event_id.rs` assert distinct process
+      identities and codec round-trip of a high-bit-set id.
 - [x] **P2.2 RabbitMQ: reconnect never reconnects.** Fixed: `RabbitMqInner`
       now retains the `Connection` behind a mutex; `create_channel` reconnects
       it transparently when the link is down (serialized, so concurrent
@@ -173,7 +180,8 @@ in-process; broker systems only await the broker ack. The user chose the
   - `bus.respond(handler)` — registers the responder for `Req`. **At most
     one responder per request type per process** (second registration
     errors). Cross-instance load balancing comes from the broker
-    (queue/consumer-group semantics), not in-process round-robin.
+    through a deterministic group/subscription derived from the request topic,
+    not from the application's fan-out consumer group.
   - Transport: Local = direct call. RabbitMQ = classic RPC (Direct
     Reply-To `amq.rabbitmq.reply-to` + correlation_id). Kafka/Pulsar/Iggy =
     shared request topic + per-instance reply topic

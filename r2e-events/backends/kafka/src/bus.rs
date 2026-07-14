@@ -2,6 +2,7 @@
 // that originate from the rdkafka SDK remain on direct tokio and are a
 // documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -11,8 +12,8 @@ use rdkafka::consumer::{
     BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer,
 };
 use rdkafka::message::Headers;
-use rdkafka::ClientContext;
 use rdkafka::producer::{FutureRecord, Producer};
+use rdkafka::ClientContext;
 use rdkafka::Message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -28,9 +29,7 @@ use r2e_events::{
     RequestOptions, ResponderHandle, SubscriptionHandle,
 };
 
-use crate::builder::{
-    ensure_topic_exists, KafkaEventBusBuilder, REPLY_TOPIC_RETENTION_MS,
-};
+use crate::builder::{ensure_topic_exists, KafkaEventBusBuilder, REPLY_TOPIC_RETENTION_MS};
 use crate::config::KafkaConfig;
 use crate::error::map_kafka_error;
 use crate::inner::KafkaInner;
@@ -45,7 +44,71 @@ const MANUAL_COMMIT_INTERVAL: Duration = Duration::from_secs(5);
 /// (driver thread) and the consume loop. Guarded by a `std::sync::Mutex` with
 /// short, await-free critical sections — the callback runs on librdkafka's
 /// driver thread, so an async mutex would be wrong here.
-pub(crate) type SharedTracker = Arc<std::sync::Mutex<WatermarkTracker<i32, i64>>>;
+pub(crate) type SharedTracker = Arc<std::sync::Mutex<KafkaProgress>>;
+
+/// Watermark plus a monotonically increasing assignment epoch per partition.
+/// Completion keys carry the epoch observed at receive time, preventing a slow
+/// handler from an old assignment from acknowledging a redelivery after a
+/// revoke/reassign cycle.
+pub(crate) struct KafkaProgress {
+    tracker: WatermarkTracker<i32, i64>,
+    epochs: HashMap<i32, u64>,
+    next_epoch: u64,
+}
+
+impl KafkaProgress {
+    pub(crate) fn new() -> Self {
+        Self {
+            tracker: WatermarkTracker::new(),
+            epochs: HashMap::new(),
+            next_epoch: 1,
+        }
+    }
+
+    fn fresh_epoch(&mut self) -> u64 {
+        let epoch = self.next_epoch;
+        self.next_epoch = self.next_epoch.wrapping_add(1).max(1);
+        epoch
+    }
+
+    pub(crate) fn assign(&mut self, partition: i32) {
+        let epoch = self.fresh_epoch();
+        self.epochs.insert(partition, epoch);
+    }
+
+    pub(crate) fn revoke(&mut self, partition: i32) {
+        self.epochs.remove(&partition);
+        self.tracker.remove_partition(&partition);
+    }
+
+    pub(crate) fn on_receive(&mut self, partition: i32, offset: i64) -> u64 {
+        let epoch = match self.epochs.get(&partition).copied() {
+            Some(epoch) => epoch,
+            None => {
+                let epoch = self.fresh_epoch();
+                self.epochs.insert(partition, epoch);
+                epoch
+            }
+        };
+        self.tracker.on_receive(partition, offset);
+        epoch
+    }
+
+    pub(crate) fn on_ack(&mut self, epoch: u64, partition: i32, offset: i64) -> Option<i64> {
+        if self.epochs.get(&partition).copied() != Some(epoch) {
+            return None;
+        }
+        self.tracker.on_ack(partition, offset)
+    }
+
+    pub(crate) fn on_nack(&mut self, epoch: u64, partition: i32, offset: i64) -> bool {
+        if self.epochs.get(&partition).copied() != Some(epoch) {
+            return false;
+        }
+        self.tracker.on_nack(partition, offset);
+        true
+    }
+}
 
 /// rdkafka consumer context that resets watermark tracking on partition
 /// revoke. Without this, a revoke+reassign inside `consumer.recv()` leaves the
@@ -62,10 +125,18 @@ impl ConsumerContext for R2eConsumerContext {
         // re-tracked from scratch after reassignment. Short std-mutex hold, no
         // awaits — safe on the driver thread.
         if let Rebalance::Revoke(tpl) = rebalance {
-            let mut tracker = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+            let mut progress = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
             for elem in tpl.elements() {
-                let partition = elem.partition();
-                tracker.remove_partition(&partition);
+                progress.revoke(elem.partition());
+            }
+        }
+    }
+
+    fn post_rebalance(&self, _base: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
+        if let Rebalance::Assign(tpl) = rebalance {
+            let mut progress = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+            for elem in tpl.elements() {
+                progress.assign(elem.partition());
             }
         }
     }
@@ -125,7 +196,7 @@ impl KafkaEventBus {
     }
 
     /// Publish a serialized event to Kafka.
-    async fn publish(
+    pub(crate) async fn publish(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
@@ -284,7 +355,12 @@ impl EventBus for KafkaEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
+            inner
+                .state
+                .topic_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .register_by_type_id(type_id, topic);
         }
     }
 
@@ -296,7 +372,10 @@ impl EventBus for KafkaEventBus {
     ) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+            inner
+                .state
+                .configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>()))
+                .await;
         }
     }
 
@@ -327,7 +406,10 @@ impl EventBus for KafkaEventBus {
 
             // If this is the first subscriber for this type, set up the consumer
             if is_first {
-                bus.ensure_topic(&topic_name).await?;
+                if let Err(error) = bus.ensure_topic(&topic_name).await {
+                    inner.state.unregister_handler(type_id, id).await;
+                    return Err(error);
+                }
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
@@ -367,10 +449,16 @@ impl EventBus for KafkaEventBus {
                 Box::pin(handler(envelope))
             });
 
-            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+            let (id, is_first) = inner
+                .state
+                .register_handler_with_deserializer::<E>(h, deserializer)
+                .await;
 
             if is_first {
-                bus.ensure_topic(&topic_name).await?;
+                if let Err(error) = bus.ensure_topic(&topic_name).await {
+                    inner.state.unregister_handler(type_id, id).await;
+                    return Err(error);
+                }
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
@@ -504,15 +592,22 @@ impl EventBus for KafkaEventBus {
             let (correlation_id, guard, rx) = bus.inner.pending.register();
 
             let metadata = options.metadata.unwrap_or_default();
-            bus.publish_request(&request_topic_name, payload, &metadata, correlation_id, &reply_to)
-                .await?;
+            bus.publish_request(
+                &request_topic_name,
+                payload,
+                &metadata,
+                correlation_id,
+                &reply_to,
+            )
+            .await?;
 
             // Await the reply, the timeout, or a shutdown signal. The pending
             // guard drops after, evicting the correlation entry so a late reply
-            // is discarded instead of leaking a map slot. Our shutdown signal is
-            // a `Notify`, so pass its `notified()` future as the shutdown future.
+            // is discarded instead of leaking a map slot. CancellationToken is
+            // sticky, so shutdown cannot be missed in the publish→wait window.
             let result =
-                await_reply::<Resp>(rx, options.timeout, bus.inner.shutdown_notify.notified()).await;
+                await_reply::<Resp>(rx, options.timeout, bus.inner.request_cancel.cancelled())
+                    .await;
             drop(guard);
             result
         }
@@ -545,7 +640,10 @@ impl EventBus for KafkaEventBus {
                 .await?;
 
             let request_topic_name = request_topic(&bus.resolve_topic::<Req>());
-            bus.ensure_topic(&request_topic_name).await?;
+            if let Err(error) = bus.ensure_topic(&request_topic_name).await {
+                bus.inner.state.unregister_responder(type_id).await;
+                return Err(error);
+            }
 
             let cancel = CancellationToken::new();
             bus.inner
@@ -621,7 +719,7 @@ impl EventBus for KafkaEventBus {
             {
                 cancel.cancel();
             }
-            inner.shutdown_notify.notify_waiters();
+            inner.request_cancel.cancel();
 
             inner.state.wait_in_flight(timeout).await?;
 
@@ -677,17 +775,22 @@ async fn run_consumer_inner(
     // the contiguous prefix of acked offsets. Fresh per consumer lifetime — on
     // reconnect it is dropped and the new consumer resumes from the last commit.
     // Shared with the rebalance callback so revoked partitions reset their state.
-    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(WatermarkTracker::new()));
+    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(KafkaProgress::new()));
 
-    let context = R2eConsumerContext { tracker: tracker.clone() };
-    let consumer: StreamConsumer<R2eConsumerContext> =
-        match inner.config.to_consumer_client_config().create_with_context(context) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(topic = %topic_name, "failed to create Kafka consumer: {e}");
-                return;
-            }
-        };
+    let context = R2eConsumerContext {
+        tracker: tracker.clone(),
+    };
+    let consumer: StreamConsumer<R2eConsumerContext> = match inner
+        .config
+        .to_consumer_client_config()
+        .create_with_context(context)
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(topic = %topic_name, "failed to create Kafka consumer: {e}");
+            return;
+        }
+    };
 
     if let Err(e) = consumer.subscribe(&[topic_name]) {
         tracing::error!(topic = %topic_name, "failed to subscribe to Kafka topic: {e}");
@@ -703,9 +806,10 @@ async fn run_consumer_inner(
 
     // Completed dispatches report (key, outcome) back to this loop on a bounded
     // channel; the forwarder applies backpressure once the loop falls behind.
-    let (completion_tx, mut completion_rx) = tokio::sync::mpsc::channel::<((i32, i64), DispatchOutcome)>(
-        COMPLETION_CHANNEL_CAPACITY,
-    );
+    let (completion_tx, mut completion_rx) = tokio::sync::mpsc::channel::<(
+        (u64, i32, i64),
+        DispatchOutcome,
+    )>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
         tokio::select! {
@@ -737,7 +841,10 @@ async fn run_consumer_inner(
                         // Register the offset as in flight before dispatch, so
                         // out-of-order completions cannot advance the commit
                         // watermark past it.
-                        tracker.lock().unwrap_or_else(|e| e.into_inner()).on_receive(partition, offset);
+                        let epoch = tracker
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .on_receive(partition, offset);
 
                         let metadata = extract_metadata_from_kafka(&borrowed_msg);
                         // Returns once handler tasks are spawned (permit-bounded);
@@ -747,7 +854,7 @@ async fn run_consumer_inner(
                             .dispatch_from_poller_tracked(type_id, payload, metadata)
                             .await;
 
-                        spawn_completion_forwarder(completion, (partition, offset), completion_tx.clone());
+                        spawn_completion_forwarder(completion, (epoch, partition, offset), completion_tx.clone());
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
@@ -755,10 +862,10 @@ async fn run_consumer_inner(
                     }
                 }
             }
-            Some(((partition, offset), outcome)) = completion_rx.recv() => {
-                apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
-                while let Ok(((partition, offset), outcome)) = completion_rx.try_recv() {
-                    apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+            Some(((epoch, partition, offset), outcome)) = completion_rx.recv() => {
+                apply_completion(&consumer, &tracker, topic_name, epoch, partition, offset, outcome);
+                while let Ok(((epoch, partition, offset), outcome)) = completion_rx.try_recv() {
+                    apply_completion(&consumer, &tracker, topic_name, epoch, partition, offset, outcome);
                 }
             }
         }
@@ -770,8 +877,10 @@ async fn run_consumer_inner(
     // running. Undrained completions just mean redelivery (at-least-once).
     drop(completion_tx);
     let drain = async {
-        while let Some(((partition, offset), outcome)) = completion_rx.recv().await {
-            apply_completion(&consumer, &tracker, topic_name, partition, offset, outcome);
+        while let Some(((epoch, partition, offset), outcome)) = completion_rx.recv().await {
+            apply_completion(
+                &consumer, &tracker, topic_name, epoch, partition, offset, outcome,
+            );
         }
     };
     let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
@@ -795,15 +904,19 @@ async fn run_consumer_inner(
 /// The tracker mutex is only held for the tracker call, never across the store.
 fn apply_completion(
     consumer: &StreamConsumer<R2eConsumerContext>,
-    tracker: &std::sync::Mutex<WatermarkTracker<i32, i64>>,
+    tracker: &std::sync::Mutex<KafkaProgress>,
     topic_name: &str,
+    epoch: u64,
     partition: i32,
     offset: i64,
     outcome: DispatchOutcome,
 ) {
     match outcome {
         DispatchOutcome::Ack => {
-            let store = tracker.lock().unwrap_or_else(|e| e.into_inner()).on_ack(partition, offset);
+            let store = tracker
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .on_ack(epoch, partition, offset);
             if let Some(store_offset) = store {
                 // `store_offset` is the message offset; librdkafka commits `+1`.
                 if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
@@ -817,7 +930,14 @@ fn apply_completion(
             }
         }
         DispatchOutcome::Nack => {
-            tracker.lock().unwrap_or_else(|e| e.into_inner()).on_nack(partition, offset);
+            if !tracker
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .on_nack(epoch, partition, offset)
+            {
+                tracing::debug!(topic = %topic_name, partition, offset, epoch, "ignoring stale Kafka completion");
+                return;
+            }
             tracing::warn!(
                 topic = %topic_name,
                 partition,
@@ -831,7 +951,9 @@ fn apply_completion(
 
 /// Collect a Kafka message's headers into UTF-8 `(key, value)` string pairs,
 /// skipping any header whose value is absent or not valid UTF-8.
-pub(crate) fn kafka_header_pairs(msg: &rdkafka::message::BorrowedMessage<'_>) -> Vec<(String, String)> {
+pub(crate) fn kafka_header_pairs(
+    msg: &rdkafka::message::BorrowedMessage<'_>,
+) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     if let Some(headers) = msg.headers() {
         for header in headers.iter() {
@@ -848,4 +970,37 @@ pub(crate) fn kafka_header_pairs(msg: &rdkafka::message::BorrowedMessage<'_>) ->
 /// Extract `EventMetadata` from Kafka message headers.
 fn extract_metadata_from_kafka(msg: &rdkafka::message::BorrowedMessage<'_>) -> EventMetadata {
     decode_metadata(kafka_header_pairs(msg).into_iter())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KafkaProgress;
+
+    #[test]
+    fn stale_completion_cannot_ack_reassigned_delivery() {
+        let mut progress = KafkaProgress::new();
+        progress.assign(0);
+        let old_epoch = progress.on_receive(0, 42);
+
+        progress.revoke(0);
+        progress.assign(0);
+        let new_epoch = progress.on_receive(0, 42);
+
+        assert_ne!(old_epoch, new_epoch);
+        assert_eq!(progress.on_ack(old_epoch, 0, 42), None);
+        assert_eq!(progress.on_ack(new_epoch, 0, 42), Some(42));
+    }
+
+    #[test]
+    fn stale_nack_cannot_pin_reassigned_partition() {
+        let mut progress = KafkaProgress::new();
+        progress.assign(0);
+        let old_epoch = progress.on_receive(0, 7);
+        progress.revoke(0);
+        progress.assign(0);
+        let new_epoch = progress.on_receive(0, 7);
+
+        assert!(!progress.on_nack(old_epoch, 0, 7));
+        assert_eq!(progress.on_ack(new_epoch, 0, 7), Some(7));
+    }
 }

@@ -6,10 +6,10 @@
 //! - Requesters publish to a shared request topic (`<event-topic>.requests`)
 //!   and consume replies on a per-instance, instance-private reply topic
 //!   (`<group-id>.replies.<instance-id-hex>`), correlated by a `u128` id.
-//! - Responders (`respond`) consume the shared request topic with the
-//!   configured consumer group — the broker load-balances requests across
-//!   instances — and publish each reply to the `reply-to` topic named in the
-//!   request headers.
+//! - Responders (`respond`) consume the shared request topic with a deterministic
+//!   group derived from that topic — the broker load-balances requests across
+//!   every instance regardless of its fan-out group — and publish each reply to
+//!   the `reply-to` topic named in the request headers.
 //!
 //! An absent responder manifests to the requester as a
 //! [`RequestTimeout`](r2e_events::EventBusError::RequestTimeout): no instance
@@ -24,8 +24,8 @@ use rdkafka::Message;
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
-    decode_metadata, decode_reply_headers, encode_reply_headers, reconnect_loop, ReplyHeaders,
-    WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    decode_metadata, decode_reply_headers, encode_reply_headers, reconnect_loop, responder_group,
+    ReplyHeaders, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
 };
 use r2e_events::EventMetadata;
 
@@ -73,7 +73,10 @@ async fn run_reply_consumer_inner(
     // Instance-private group; read from the beginning so a reply produced
     // during the join window is not lost (the topic is process-private, so
     // "earliest" only ever yields our own replies).
-    cfg.set("group.id", reply_consumer_group(&inner.config.group_id, inner.instance_id));
+    cfg.set(
+        "group.id",
+        reply_consumer_group(&inner.config.group_id, inner.instance_id),
+    );
     cfg.set("auto.offset.reset", "earliest");
     cfg.set("enable.auto.commit", "true");
     cfg.set("enable.auto.offset.store", "true");
@@ -151,15 +154,18 @@ async fn run_responder_consumer_inner(
     cancel: &CancellationToken,
 ) {
     let mut cfg = inner.config.to_consumer_client_config();
+    cfg.set("group.id", responder_group(topic_name));
     cfg.set("enable.auto.commit", "false");
 
     // Pipelined: requests are dispatched as they arrive and their completions
     // flow back on a bounded channel. A watermark tracker advances the commit
     // offset over the contiguous prefix of completed requests, so out-of-order
     // replies never skip an uncommitted offset.
-    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(WatermarkTracker::new()));
+    let tracker: SharedTracker = Arc::new(std::sync::Mutex::new(crate::bus::KafkaProgress::new()));
 
-    let context = R2eConsumerContext { tracker: tracker.clone() };
+    let context = R2eConsumerContext {
+        tracker: tracker.clone(),
+    };
     let consumer: StreamConsumer<R2eConsumerContext> = match cfg.create_with_context(context) {
         Ok(c) => c,
         Err(e) => {
@@ -175,7 +181,7 @@ async fn run_responder_consumer_inner(
 
     tracing::info!(topic = %topic_name, "Kafka responder started");
     let (completion_tx, mut completion_rx) =
-        tokio::sync::mpsc::channel::<((i32, i64), bool)>(COMPLETION_CHANNEL_CAPACITY);
+        tokio::sync::mpsc::channel::<((u64, i32, i64), bool)>(COMPLETION_CHANNEL_CAPACITY);
     let mut commit_interval = r2e_core::rt::interval(RESPONDER_COMMIT_INTERVAL);
 
     loop {
@@ -189,10 +195,10 @@ async fn run_responder_consumer_inner(
                     tracing::debug!(topic = %topic_name, "responder periodic commit skipped: {e}");
                 }
             }
-            Some(((partition, offset), ok)) = completion_rx.recv() => {
-                apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
-                while let Ok(((partition, offset), ok)) = completion_rx.try_recv() {
-                    apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
+            Some(((epoch, partition, offset), ok)) = completion_rx.recv() => {
+                apply_responder_completion(&consumer, &tracker, topic_name, epoch, partition, offset, ok);
+                while let Ok(((epoch, partition, offset), ok)) = completion_rx.try_recv() {
+                    apply_responder_completion(&consumer, &tracker, topic_name, epoch, partition, offset, ok);
                 }
             }
             msg = consumer.recv() => {
@@ -200,13 +206,16 @@ async fn run_responder_consumer_inner(
                     Ok(m) => {
                         let partition = m.partition();
                         let offset = m.offset();
-                        tracker.lock().unwrap_or_else(|e| e.into_inner()).on_receive(partition, offset);
+                        let epoch = tracker
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .on_receive(partition, offset);
 
                         let payload = match m.payload() {
                             Some(p) => p.to_vec(),
                             None => {
                                 tracing::warn!(topic = %topic_name, "received request with no payload");
-                                let _ = completion_tx.send(((partition, offset), true)).await;
+                                let _ = completion_tx.send(((epoch, partition, offset), true)).await;
                                 continue;
                             }
                         };
@@ -219,7 +228,7 @@ async fn run_responder_consumer_inner(
                         let tx = completion_tx.clone();
                         r2e_core::rt::spawn(async move {
                             let ok = handle_request(&inner, type_id, &payload, metadata, reply).await;
-                            let _ = tx.send(((partition, offset), ok)).await;
+                            let _ = tx.send(((epoch, partition, offset), ok)).await;
                         });
                     }
                     Err(e) => {
@@ -234,8 +243,10 @@ async fn run_responder_consumer_inner(
     // Drain pending completions before dropping the consumer.
     drop(completion_tx);
     let drain = async {
-        while let Some(((partition, offset), ok)) = completion_rx.recv().await {
-            apply_responder_completion(&consumer, &tracker, topic_name, partition, offset, ok);
+        while let Some(((epoch, partition, offset), ok)) = completion_rx.recv().await {
+            apply_responder_completion(
+                &consumer, &tracker, topic_name, epoch, partition, offset, ok,
+            );
         }
     };
     let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
@@ -251,13 +262,14 @@ fn apply_responder_completion(
     consumer: &StreamConsumer<R2eConsumerContext>,
     tracker: &SharedTracker,
     topic_name: &str,
+    epoch: u64,
     partition: i32,
     offset: i64,
     ok: bool,
 ) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     if ok {
-        if let Some(store_offset) = t.on_ack(partition, offset) {
+        if let Some(store_offset) = t.on_ack(epoch, partition, offset) {
             if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
                 tracing::warn!(
                     topic = %topic_name,
@@ -268,7 +280,10 @@ fn apply_responder_completion(
             }
         }
     } else {
-        t.on_nack(partition, offset);
+        if !t.on_nack(epoch, partition, offset) {
+            tracing::debug!(topic = %topic_name, partition, offset, epoch, "ignoring stale Kafka responder completion");
+            return;
+        }
         tracing::warn!(
             topic = %topic_name,
             partition,
@@ -297,7 +312,10 @@ async fn handle_request(
         return true;
     };
     let Some(reply_to) = reply.reply_to else {
-        tracing::warn!(request_id = reply.request_id, "request missing reply-to; dropping");
+        tracing::warn!(
+            request_id = reply.request_id,
+            "request missing reply-to; dropping"
+        );
         return true;
     };
 

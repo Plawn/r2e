@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use iggy::prelude::{IggyClient, Identifier};
-use tokio::sync::Notify;
+use iggy::prelude::{Identifier, IggyClient};
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{BackendState, PendingRequests};
@@ -29,10 +28,10 @@ pub(crate) struct IggyInner {
     pub topic_ids: RwLock<HashMap<Arc<str>, Identifier>>,
     /// Correlation map for in-flight request-reply calls (`request`/`respond`).
     pub pending: Arc<PendingRequests>,
-    /// Notified on shutdown so requesters awaiting a reply fail fast with
+    /// Sticky shutdown token so requesters awaiting a reply fail fast with
     /// [`EventBusError::Shutdown`](r2e_events::EventBusError::Shutdown) instead
     /// of waiting out their per-request timeout.
-    pub shutdown_notify: Notify,
+    pub request_cancel: CancellationToken,
     /// Cancellation tokens for the request-reply poller tasks.
     pub rr_cancels: Mutex<RequestReplyCancels>,
 }

@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
     await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
-    reconnect_loop, request_topic, spawn_completion_forwarder, DispatchOutcome, Handler,
-    ReplyHeaders, WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    reconnect_loop, request_topic, responder_group, spawn_completion_forwarder, DispatchOutcome,
+    Handler, ReplyHeaders, WatermarkTracker, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
     HEADER_PARTITION_KEY, HEADER_TIMESTAMP,
 };
 use r2e_events::{
@@ -121,13 +121,20 @@ impl IggyEventBus {
     /// publish.
     fn resolve_topic_id(&self, topic_name: &str) -> Result<Identifier, EventBusError> {
         {
-            let cache = self.inner.topic_ids.read().unwrap_or_else(|e| e.into_inner());
+            let cache = self
+                .inner
+                .topic_ids
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(id) = cache.get(topic_name) {
                 return Ok(id.clone());
             }
         }
         let id = Identifier::named(topic_name).map_err(map_iggy_error)?;
-        self.inner.topic_ids.write().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .topic_ids
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(Arc::from(topic_name), id.clone());
         Ok(id)
     }
@@ -168,15 +175,20 @@ impl IggyEventBus {
     }
 
     /// Publish a serialized event to Iggy.
-    async fn publish(
+    pub(crate) async fn publish(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
         metadata: &EventMetadata,
     ) -> Result<(), EventBusError> {
         let headers = Self::build_headers(metadata)?;
-        self.send_message(topic_name, payload, headers, metadata.partition_key.as_deref())
-            .await
+        self.send_message(
+            topic_name,
+            payload,
+            headers,
+            metadata.partition_key.as_deref(),
+        )
+        .await
     }
 
     /// Ensure the per-process reply poller is running.
@@ -188,7 +200,11 @@ impl IggyEventBus {
     /// poller is ever spawned.
     async fn ensure_reply_poller_started(&self) -> Result<(), EventBusError> {
         {
-            let guard = self.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = self
+                .inner
+                .rr_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if guard.reply_poller.is_some() {
                 return Ok(());
             }
@@ -200,7 +216,11 @@ impl IggyEventBus {
         self.ensure_topic_with_partitions(&reply, 1).await?;
 
         let cancel = {
-            let mut guard = self.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self
+                .inner
+                .rr_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if guard.reply_poller.is_some() {
                 return Ok(());
             }
@@ -268,7 +288,12 @@ impl EventBus for IggyEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
+            inner
+                .state
+                .topic_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .register_by_type_id(type_id, topic);
         }
     }
 
@@ -280,7 +305,10 @@ impl EventBus for IggyEventBus {
     ) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+            inner
+                .state
+                .configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>()))
+                .await;
         }
     }
 
@@ -311,7 +339,10 @@ impl EventBus for IggyEventBus {
 
             // If this is the first subscriber for this type, set up the poller
             if is_first {
-                bus.ensure_topic(&topic_name).await?;
+                if let Err(error) = bus.ensure_topic(&topic_name).await {
+                    inner.state.unregister_handler(type_id, id).await;
+                    return Err(error);
+                }
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
@@ -351,10 +382,16 @@ impl EventBus for IggyEventBus {
                 Box::pin(handler(envelope))
             });
 
-            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+            let (id, is_first) = inner
+                .state
+                .register_handler_with_deserializer::<E>(h, deserializer)
+                .await;
 
             if is_first {
-                bus.ensure_topic(&topic_name).await?;
+                if let Err(error) = bus.ensure_topic(&topic_name).await {
+                    inner.state.unregister_handler(type_id, id).await;
+                    return Err(error);
+                }
 
                 let cancel = inner.state.register_poller_cancel(type_id);
 
@@ -447,9 +484,8 @@ impl EventBus for IggyEventBus {
             });
 
             Ok(EmitReceipt::new(async move {
-                rx.await.map_err(|_| {
-                    EventBusError::Other("iggy send task dropped".to_string())
-                })?
+                rx.await
+                    .map_err(|_| EventBusError::Other("iggy send task dropped".to_string()))?
             }))
         }
     }
@@ -496,9 +532,8 @@ impl EventBus for IggyEventBus {
             });
 
             Ok(EmitReceipt::new(async move {
-                rx.await.map_err(|_| {
-                    EventBusError::Other("iggy send task dropped".to_string())
-                })?
+                rx.await
+                    .map_err(|_| EventBusError::Other("iggy send task dropped".to_string()))?
             }))
         }
     }
@@ -546,15 +581,20 @@ impl EventBus for IggyEventBus {
             ));
             let headers = headers_from_pairs(pairs)?;
 
-            bus.send_message(&req_topic, payload, headers, metadata.partition_key.as_deref())
-                .await?;
+            bus.send_message(
+                &req_topic,
+                payload,
+                headers,
+                metadata.partition_key.as_deref(),
+            )
+            .await?;
 
-            // Await the reply, the request timeout, or a shutdown signal (a
-            // `Notify`, passed as the shutdown future). A missing responder is
+            // Await the reply, the request timeout, or the sticky shutdown
+            // token. A missing responder is
             // not a silent drop: the responder poller always publishes an error
             // reply, so it surfaces as `EventBusError::Remote` rather than a
             // full-timeout wait.
-            await_reply::<Resp>(rx, options.timeout, bus.inner.shutdown_notify.notified()).await
+            await_reply::<Resp>(rx, options.timeout, bus.inner.request_cancel.cancelled()).await
         }
     }
 
@@ -583,11 +623,18 @@ impl EventBus for IggyEventBus {
             let type_id = TypeId::of::<Req>();
             let base_topic = bus.resolve_topic::<Req>();
             let req_topic = request_topic(&base_topic);
-            bus.ensure_topic(&req_topic).await?;
+            if let Err(error) = bus.ensure_topic(&req_topic).await {
+                bus.inner.state.unregister_responder(type_id).await;
+                return Err(error);
+            }
 
             let cancel = CancellationToken::new();
             {
-                let mut guard = bus.inner.rr_cancels.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = bus
+                    .inner
+                    .rr_cancels
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 guard.responder_pollers.push(cancel.clone());
             }
 
@@ -654,7 +701,7 @@ impl EventBus for IggyEventBus {
                     c.cancel();
                 }
             }
-            inner.shutdown_notify.notify_waiters();
+            inner.request_cancel.cancel();
 
             // Wait for in-flight handlers to complete
             inner.state.wait_in_flight(timeout).await?;
@@ -832,11 +879,21 @@ async fn run_poller_inner(
     let consumer = batches.get_ref();
     let drain = async {
         while let Some(((partition_id, offset), outcome)) = rx.recv().await {
-            apply_completion(&mut tracker, consumer, topic_name, partition_id, offset, outcome)
-                .await;
+            apply_completion(
+                &mut tracker,
+                consumer,
+                topic_name,
+                partition_id,
+                offset,
+                outcome,
+            )
+            .await;
         }
     };
-    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
+    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             topic = %topic_name,
             "timed out draining completions on poller shutdown; \
@@ -890,7 +947,10 @@ fn extract_metadata_from_message(message: &IggyMessage) -> EventMetadata {
     let mut pairs: Vec<(String, String)> = Vec::new();
 
     // Add the Iggy-native timestamp
-    pairs.push((HEADER_TIMESTAMP.to_string(), message.header.timestamp.to_string()));
+    pairs.push((
+        HEADER_TIMESTAMP.to_string(),
+        message.header.timestamp.to_string(),
+    ));
 
     if let Ok(Some(headers)) = message.user_headers_map() {
         for (key, value) in &headers {
@@ -1008,8 +1068,8 @@ async fn run_reply_poller_inner(
 
 /// Responder poller with automatic reconnection.
 ///
-/// Consumes the shared request topic via the app's consumer group (broker-side
-/// load balancing across instances), invokes the registered responder, sends
+/// Consumes the shared request topic via its deterministic responder group
+/// (broker-side load balancing across all instances), invokes the registered responder, sends
 /// the reply, then commits the request offset — reply-then-commit for
 /// at-least-once delivery.
 async fn run_responder_poller(
@@ -1034,11 +1094,10 @@ async fn run_responder_poller_inner(
     cancel: &CancellationToken,
 ) {
     let inner = &bus.inner;
-    let consumer_result = inner.client.consumer_group(
-        &inner.config.consumer_group,
-        &inner.config.stream_name,
-        req_topic,
-    );
+    let group = responder_group(req_topic);
+    let consumer_result = inner
+        .client
+        .consumer_group(&group, &inner.config.stream_name, req_topic);
 
     let mut consumer = match consumer_result {
         Ok(builder) => builder
@@ -1143,13 +1202,14 @@ async fn run_responder_poller_inner(
     let consumer = batches.get_ref();
     let drain = async {
         while let Some(((partition_id, offset), ok)) = rx.recv().await {
-            apply_responder_completion(
-                &mut tracker, consumer, req_topic, partition_id, offset, ok,
-            )
-            .await;
+            apply_responder_completion(&mut tracker, consumer, req_topic, partition_id, offset, ok)
+                .await;
         }
     };
-    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
+    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             topic = %req_topic,
             "timed out draining responder completions; \
@@ -1225,7 +1285,10 @@ async fn handle_request(
         }
     };
 
-    match bus.send_message(&reply_to, reply_payload, reply_headers, None).await {
+    match bus
+        .send_message(&reply_to, reply_payload, reply_headers, None)
+        .await
+    {
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(topic = %reply_to, "failed to send reply: {e}");

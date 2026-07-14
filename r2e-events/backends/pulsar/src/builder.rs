@@ -5,7 +5,7 @@ use pulsar::{Authentication, Pulsar, TokioExecutor};
 use tokio::sync::Mutex;
 
 use r2e_events::backend::{instance_id, BackendState, PendingRequests, TopicRegistry};
-use r2e_events::EventBusError;
+use r2e_events::{DlqPublisher, EventBusError};
 
 use crate::bus::PulsarEventBus;
 use crate::config::PulsarConfig;
@@ -49,8 +49,7 @@ impl PulsarEventBusBuilder {
 
     /// Connect to the Pulsar cluster and return a ready-to-use [`PulsarEventBus`].
     pub async fn connect(self) -> Result<PulsarEventBus, EventBusError> {
-        let mut builder =
-            Pulsar::builder(&self.config.service_url, TokioExecutor);
+        let mut builder = Pulsar::builder(&self.config.service_url, TokioExecutor);
 
         // Configure JWT authentication if a token is provided
         if let Some(ref token) = self.config.auth_token {
@@ -60,8 +59,8 @@ impl PulsarEventBusBuilder {
             });
         }
 
-        builder = builder
-            .with_tls_hostname_verification_enabled(self.config.tls_hostname_verification);
+        builder =
+            builder.with_tls_hostname_verification_enabled(self.config.tls_hostname_verification);
 
         let pulsar = builder.build().await.map_err(map_pulsar_error)?;
 
@@ -69,21 +68,34 @@ impl PulsarEventBusBuilder {
         // derived from it (and cached) on first request-reply use.
         let instance = instance_id();
 
-        let inner = PulsarInner {
-            config: self.config,
-            pulsar,
-            producers: Mutex::new(HashMap::new()),
-            state: Arc::new(BackendState::new(self.topic_registry)),
-            full_topics: std::sync::RwLock::new(HashMap::new()),
-            instance_id: instance,
-            reply_topic_full: std::sync::OnceLock::new(),
-            pending: Arc::new(PendingRequests::new()),
-            reply_consumer: std::sync::OnceLock::new(),
-            responder_cancels: std::sync::Mutex::new(HashMap::new()),
-        };
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<PulsarInner>| {
+            let weak = weak.clone();
+            let dlq: DlqPublisher = Arc::new(move |topic, payload, metadata| {
+                let weak = weak.clone();
+                Box::pin(async move {
+                    let inner = weak.upgrade().ok_or(EventBusError::Shutdown)?;
+                    PulsarEventBus { inner }
+                        .publish(&topic, payload, &metadata)
+                        .await
+                })
+            });
+            PulsarInner {
+                config: self.config,
+                pulsar,
+                producers: Mutex::new(HashMap::new()),
+                state: Arc::new(BackendState::with_dlq_publisher(
+                    self.topic_registry,
+                    Some(dlq),
+                )),
+                full_topics: std::sync::RwLock::new(HashMap::new()),
+                instance_id: instance,
+                reply_topic_full: std::sync::OnceLock::new(),
+                pending: Arc::new(PendingRequests::new()),
+                reply_consumer: std::sync::OnceLock::new(),
+                responder_cancels: std::sync::Mutex::new(HashMap::new()),
+            }
+        });
 
-        Ok(PulsarEventBus {
-            inner: Arc::new(inner),
-        })
+        Ok(PulsarEventBus { inner })
     }
 }

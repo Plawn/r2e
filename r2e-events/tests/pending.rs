@@ -7,11 +7,17 @@ use std::time::Duration;
 
 use r2e_events::backend::{
     await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
-    instance_id, reply_topic, request_topic, PendingRequests, ReplyHeaders, HEADER_CORRELATION_ID,
-    HEADER_REPLY_ERROR, HEADER_REPLY_TO, HEADER_REQUEST_ID,
+    instance_id, reply_topic, request_topic, responder_group, PendingRequests, ReplyHeaders,
+    HEADER_CORRELATION_ID, HEADER_REPLY_ERROR, HEADER_REPLY_TO, HEADER_REQUEST_ID,
 };
 use r2e_events::{EventBusError, EventMetadata};
 use serde::{Deserialize, Serialize};
+
+#[test]
+fn responder_group_depends_only_on_request_topic() {
+    let topic = request_topic("orders");
+    assert_eq!(responder_group(&topic), "r2e.responders.orders.requests");
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn register_then_complete_delivers_reply() {
@@ -157,6 +163,19 @@ async fn await_reply_shutdown_wins() {
     // Shutdown future is already ready; the reply never arrives.
     let result: Result<Pong, _> =
         await_reply(rx, Duration::from_secs(5), std::future::ready(())).await;
+    assert!(matches!(result, Err(EventBusError::Shutdown)));
+    drop(guard);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn await_reply_observes_pre_cancelled_shutdown_token() {
+    let pending = Arc::new(PendingRequests::new());
+    let (_id, guard, rx) = pending.register();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+
+    let result: Result<Pong, _> =
+        await_reply(rx, Duration::from_secs(5), cancel.cancelled()).await;
     assert!(matches!(result, Err(EventBusError::Shutdown)));
     drop(guard);
 }

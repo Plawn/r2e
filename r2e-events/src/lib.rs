@@ -14,7 +14,8 @@
 //!   responder replies; the requester awaits that reply with a timeout
 //!   (Vert.x `request` semantics). At most one responder may be registered per
 //!   request type per process; cross-instance load balancing comes from the
-//!   broker's queue/consumer-group semantics, not in-process round-robin.
+//!   deterministic queue/consumer group derived from the request topic, not
+//!   the application's fan-out group or in-process round-robin.
 //!
 //! # Delivery semantics (distributed backends)
 //!
@@ -389,7 +390,9 @@ pub struct RetryPolicy {
     /// Whether to use exponential backoff (default: true).
     pub exponential_backoff: bool,
     /// Optional dead-letter topic name. Events that exhaust all retries are
-    /// published here. If `None`, failed events are dropped.
+    /// published here. On distributed backends the source is acknowledged only
+    /// after that publication succeeds; without a DLQ, a final `Nack` remains
+    /// unacknowledged for broker redelivery.
     pub dead_letter_topic: Option<String>,
 }
 
@@ -420,9 +423,14 @@ impl RetryPolicy {
 
 // ── DlqPublisher ──────────────────────────────────────────────────────
 
-/// Callback for publishing failed events to a dead-letter topic.
+/// Callback for durably publishing failed events to a dead-letter topic.
+/// Returning an error keeps the source message unacknowledged.
 pub type DlqPublisher = Arc<
-    dyn Fn(String, Vec<u8>, EventMetadata) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+    dyn Fn(
+            String,
+            Vec<u8>,
+            EventMetadata,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), EventBusError>> + Send>>
         + Send
         + Sync,
 >;
@@ -503,7 +511,11 @@ pub trait EventBus: Clone + Send + Sync + 'static {
         F: Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HandlerResult> + Send + 'static,
     {
-        async { Err(EventBusError::Other("subscribe_with_deserializer not supported by this backend".to_string())) }
+        async {
+            Err(EventBusError::Other(
+                "subscribe_with_deserializer not supported by this backend".to_string(),
+            ))
+        }
     }
 
     /// Emit an event, spawning all subscribers as concurrent tasks.
@@ -606,7 +618,11 @@ pub trait EventBus: Clone + Send + Sync + 'static {
         Req: Serialize + Send + Sync + 'static,
         Resp: DeserializeOwned + Send + 'static,
     {
-        async { Err(EventBusError::Other("request-reply not supported by this backend".to_string())) }
+        async {
+            Err(EventBusError::Other(
+                "request-reply not supported by this backend".to_string(),
+            ))
+        }
     }
 
     /// Register the single responder for request type `Req`.
@@ -630,7 +646,11 @@ pub trait EventBus: Clone + Send + Sync + 'static {
         F: Fn(EventEnvelope<Req>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Resp, E>> + Send + 'static,
     {
-        async { Err(EventBusError::Other("request-reply not supported by this backend".to_string())) }
+        async {
+            Err(EventBusError::Other(
+                "request-reply not supported by this backend".to_string(),
+            ))
+        }
     }
 
     /// Remove all registered event handlers.

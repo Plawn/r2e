@@ -11,15 +11,16 @@ use pulsar::consumer::{Consumer, ConsumerOptions, InitialPosition};
 use pulsar::message::proto::command_subscribe::SubType;
 use pulsar::message::proto::MessageIdData;
 use pulsar::producer::Message as ProducerMessage;
-use pulsar::{TokioExecutor, Error as PulsarError};
+use pulsar::{Error as PulsarError, TokioExecutor};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use r2e_events::backend::{
     await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
-    reconnect_loop, reply_topic, request_topic, spawn_completion_forwarder, DispatchOutcome,
-    Handler, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT, HEADER_PARTITION_KEY,
+    reconnect_loop, reply_topic, request_topic, responder_group, spawn_completion_forwarder,
+    DispatchOutcome, Handler, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
+    HEADER_PARTITION_KEY,
 };
 use r2e_events::{
     EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,
@@ -68,13 +69,20 @@ impl PulsarEventBus {
     /// Build the full Pulsar topic name (with prefix), cached per short name.
     fn full_topic(&self, topic_name: &str) -> Arc<str> {
         {
-            let cache = self.inner.full_topics.read().unwrap_or_else(|e| e.into_inner());
+            let cache = self
+                .inner
+                .full_topics
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(full) = cache.get(topic_name) {
                 return full.clone();
             }
         }
         let full: Arc<str> = Arc::from(self.inner.config.full_topic_name(topic_name));
-        self.inner.full_topics.write().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .full_topics
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(Arc::from(topic_name), full.clone());
         full
     }
@@ -88,7 +96,8 @@ impl PulsarEventBus {
     async fn get_or_create_producer(
         &self,
         full_topic: &str,
-    ) -> Result<Arc<tokio::sync::Mutex<pulsar::producer::Producer<TokioExecutor>>>, EventBusError> {
+    ) -> Result<Arc<tokio::sync::Mutex<pulsar::producer::Producer<TokioExecutor>>>, EventBusError>
+    {
         // Fast path: return the existing handle under a brief map lock.
         {
             let producers = self.inner.producers.lock().await;
@@ -127,7 +136,7 @@ impl PulsarEventBus {
     }
 
     /// Publish a serialized event to Pulsar.
-    async fn publish(
+    pub(crate) async fn publish(
         &self,
         topic_name: &str,
         payload: Vec<u8>,
@@ -296,7 +305,12 @@ impl EventBus for PulsarEventBus {
         let topic = topic.to_string();
         async move {
             let type_id = TypeId::of::<E>();
-            inner.state.topic_registry.write().unwrap_or_else(|e| e.into_inner()).register_by_type_id(type_id, topic);
+            inner
+                .state
+                .topic_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .register_by_type_id(type_id, topic);
         }
     }
 
@@ -308,7 +322,10 @@ impl EventBus for PulsarEventBus {
     ) -> impl Future<Output = ()> + Send {
         let inner = self.inner.clone();
         async move {
-            inner.state.configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>())).await;
+            inner
+                .state
+                .configure_handler(handler_id.0, filter, retry_policy, Some(TypeId::of::<E>()))
+                .await;
         }
     }
 
@@ -379,7 +396,10 @@ impl EventBus for PulsarEventBus {
                 Box::pin(handler(envelope))
             });
 
-            let (id, is_first) = inner.state.register_handler_with_deserializer::<E>(h, deserializer).await;
+            let (id, is_first) = inner
+                .state
+                .register_handler_with_deserializer::<E>(h, deserializer)
+                .await;
 
             if is_first {
                 let full_topic = bus.full_topic(&topic_name);
@@ -491,7 +511,8 @@ impl EventBus for PulsarEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
 
             let resolved = bus.resolve_topic::<Req>();
-            let full_request_topic = bus.full_topic(&request_topic(&resolved));
+            let request_topic = request_topic(&resolved);
+            let full_request_topic = bus.full_topic(&request_topic);
             let reply_to = bus.reply_topic_full();
 
             let metadata = options.metadata.unwrap_or_default();
@@ -502,8 +523,10 @@ impl EventBus for PulsarEventBus {
             // future returns (reply, timeout, or error).
             let (id, guard, rx) = bus.inner.pending.register();
 
-            let mut properties: HashMap<String, String> =
-                encode_metadata(&metadata).into_iter().map(|(k, v)| (k.into_owned(), v)).collect();
+            let mut properties: HashMap<String, String> = encode_metadata(&metadata)
+                .into_iter()
+                .map(|(k, v)| (k.into_owned(), v))
+                .collect();
             for (k, v) in encode_reply_headers(id, Some(&reply_to), None) {
                 properties.insert(k.into_owned(), v);
             }
@@ -559,7 +582,9 @@ impl EventBus for PulsarEventBus {
             // Consume the shared request topic with a `Shared` subscription so
             // the broker load-balances each request to exactly one instance.
             let resolved = bus.resolve_topic::<Req>();
-            let full_request_topic = bus.full_topic(&request_topic(&resolved));
+            let request_topic = request_topic(&resolved);
+            let responder_subscription = responder_group(&request_topic);
+            let full_request_topic = bus.full_topic(&request_topic);
 
             let cancel = CancellationToken::new();
             bus.inner
@@ -571,7 +596,14 @@ impl EventBus for PulsarEventBus {
             let inner = bus.inner.clone();
             let cancel_task = cancel.clone();
             r2e_core::rt::spawn(async move {
-                run_responder(inner, type_id, full_request_topic, cancel_task).await;
+                run_responder(
+                    inner,
+                    type_id,
+                    full_request_topic,
+                    responder_subscription,
+                    cancel_task,
+                )
+                .await;
             });
 
             let inner_unreg = bus.inner.clone();
@@ -696,9 +728,10 @@ async fn run_poller_inner(
     // is `!Sync` and its `ack`/`nack` take `&mut self`, so only the consume loop
     // may touch it — completion tasks send the decision here and the loop applies
     // it inline. The bound provides backpressure on ack throughput.
-    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::channel::<((String, MessageIdData), DispatchOutcome)>(
-        COMPLETION_CHANNEL_CAPACITY,
-    );
+    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::channel::<(
+        (String, MessageIdData),
+        DispatchOutcome,
+    )>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
         tokio::select! {
@@ -790,9 +823,7 @@ async fn apply_ack(
 
 /// Collect a Pulsar message's properties (plus its partition key) into the
 /// string key-value pairs the shared codec decodes.
-fn message_property_pairs(
-    message: &pulsar::consumer::Message<Vec<u8>>,
-) -> Vec<(String, String)> {
+fn message_property_pairs(message: &pulsar::consumer::Message<Vec<u8>>) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
 
     for kv in &message.payload.metadata.properties {
@@ -809,9 +840,7 @@ fn message_property_pairs(
 }
 
 /// Extract `EventMetadata` from Pulsar message properties.
-fn extract_metadata_from_message(
-    message: &pulsar::consumer::Message<Vec<u8>>,
-) -> EventMetadata {
+fn extract_metadata_from_message(message: &pulsar::consumer::Message<Vec<u8>>) -> EventMetadata {
     decode_metadata(message_property_pairs(message).into_iter())
 }
 
@@ -826,6 +855,7 @@ async fn run_responder(
     inner: Arc<PulsarInner>,
     type_id: TypeId,
     full_topic: Arc<str>,
+    subscription: String,
     cancel: CancellationToken,
 ) {
     let label = format!("Pulsar responder [{full_topic}]");
@@ -834,7 +864,7 @@ async fn run_responder(
         inner.config.reconnect_max_backoff,
         &cancel,
         &label,
-        || run_responder_inner(&inner, type_id, &full_topic, &cancel),
+        || run_responder_inner(&inner, type_id, &full_topic, &subscription, &cancel),
     )
     .await;
 }
@@ -843,13 +873,14 @@ async fn run_responder_inner(
     inner: &Arc<PulsarInner>,
     type_id: TypeId,
     full_topic: &str,
+    subscription: &str,
     cancel: &CancellationToken,
 ) {
     let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
         .pulsar
         .consumer()
         .with_topic(full_topic)
-        .with_subscription(&inner.config.subscription)
+        .with_subscription(subscription)
         .with_subscription_type(SubType::Shared)
         .with_consumer_name(format!("r2e-responder-{full_topic}"))
         .build()
@@ -985,8 +1016,13 @@ async fn handle_request(
     // Reuse the per-topic producer cache to publish the reply to the requester's
     // instance-private reply topic (already fully qualified). Only ack the
     // request once this publish succeeds — otherwise the reply would be lost.
-    let bus = PulsarEventBus { inner: inner.clone() };
-    match bus.publish_to_full(&reply_to, payload, properties, None).await {
+    let bus = PulsarEventBus {
+        inner: inner.clone(),
+    };
+    match bus
+        .publish_to_full(&reply_to, payload, properties, None)
+        .await
+    {
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(reply_to = %reply_to, "failed to publish reply, redelivering request: {e}");

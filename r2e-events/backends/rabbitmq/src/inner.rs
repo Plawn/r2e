@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use futures_util::StreamExt;
@@ -47,7 +48,8 @@ pub(crate) struct RabbitMqInner {
     /// requires the reply consumer and the request publish to share one channel,
     /// so a single dedicated channel carries both. Stored the same way as the
     /// publisher channel (std `RwLock`, fast-path clone, never held across await).
-    requester: StdRwLock<Option<Channel>>,
+    requester: StdRwLock<Option<RequesterChannel>>,
+    requester_generation: AtomicU64,
     /// Serializes requester-channel rebuilds (and reply-consumer restarts).
     requester_rebuild: Mutex<()>,
     /// Correlation map of in-flight requests → their waiting reply channels.
@@ -56,6 +58,11 @@ pub(crate) struct RabbitMqInner {
     /// [`EventBusError::Shutdown`] instead of blocking until their timeout.
     pub(crate) request_cancel: CancellationToken,
     pub state: Arc<BackendState>,
+}
+
+struct RequesterChannel {
+    generation: u64,
+    channel: Channel,
 }
 
 impl RabbitMqInner {
@@ -70,6 +77,7 @@ impl RabbitMqInner {
             publisher: StdRwLock::new(None),
             publisher_rebuild: Mutex::new(()),
             requester: StdRwLock::new(None),
+            requester_generation: AtomicU64::new(1),
             requester_rebuild: Mutex::new(()),
             pending: Arc::new(PendingRequests::new()),
             request_cancel: CancellationToken::new(),
@@ -318,7 +326,7 @@ impl RabbitMqInner {
     /// The reply consumer runs on the same channel the caller then publishes on
     /// (a Direct Reply-To requirement) and routes every incoming reply into
     /// [`PendingRequests::complete`] by its `correlation_id`.
-    pub(crate) async fn requester_channel(&self) -> Result<Channel, EventBusError> {
+    pub(crate) async fn requester_channel(self: &Arc<Self>) -> Result<Channel, EventBusError> {
         // Fast path: a live channel is already set up.
         if let Some(channel) = self.connected_requester() {
             return Ok(channel);
@@ -356,7 +364,14 @@ impl RabbitMqInner {
             .await
             .map_err(map_lapin_error)?;
 
+        let generation = self.requester_generation.fetch_add(1, Ordering::Relaxed);
+        *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(RequesterChannel {
+            generation,
+            channel: channel.clone(),
+        });
+
         let pending = self.pending.clone();
+        let weak = Arc::downgrade(self);
         r2e_core::rt::spawn(async move {
             let mut consumer = consumer;
             while let Some(next) = consumer.next().await {
@@ -367,9 +382,17 @@ impl RabbitMqInner {
                     Err(_) => break,
                 }
             }
+            if let Some(inner) = weak.upgrade() {
+                let mut requester = inner.requester.write().unwrap_or_else(|e| e.into_inner());
+                if requester
+                    .as_ref()
+                    .is_some_and(|entry| entry.generation == generation)
+                {
+                    *requester = None;
+                }
+            }
         });
 
-        *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(channel.clone());
         Ok(channel)
     }
 
@@ -378,7 +401,7 @@ impl RabbitMqInner {
     fn connected_requester(&self) -> Option<Channel> {
         let guard = self.requester.read().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {
-            Some(channel) if channel.status().connected() => Some(channel.clone()),
+            Some(entry) if entry.channel.status().connected() => Some(entry.channel.clone()),
             _ => None,
         }
     }
