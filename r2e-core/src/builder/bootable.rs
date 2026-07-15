@@ -1,33 +1,36 @@
-//! [`BootableApp`]: the return contract of application **blueprint**
-//! functions.
+//! [`BootableApp`]: the return contract of [`App::build`](crate::App::build).
 //!
-//! A blueprint is the app's single assembly function, shared between
+//! [`App`](crate::App) is the app's single declaration, shared between
 //! production and tests:
 //!
 //! ```ignore
 //! // lib.rs
-//! pub async fn app(b: AppBuilder) -> impl BootableApp {
-//!     b.load_config::<AppConfig>()
-//!         .register::<UserService>()
-//!         .build_state().await
-//!         .with(Health)
-//!         .register_controllers::<(UserController,)>()
+//! impl App for MyApp {
+//!     type Env = ();
+//!     async fn setup() {}
+//!     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+//!         b.load_config::<AppConfig>()
+//!             .register::<UserService>()
+//!             .build_state().await
+//!             .with(Health)
+//!             .register_controllers::<(UserController,)>()
+//!     }
 //! }
 //!
 //! // main.rs
 //! #[r2e::main]
 //! async fn main() {
-//!     example_app::app(AppBuilder::new()).await.serve_auto().await.unwrap();
+//!     r2e::launch::<MyApp>().await.unwrap();
 //! }
 //!
 //! // tests — the harness pre-configures the builder (profile, pinned mocks,
-//! // config overrides) before handing it to the same blueprint:
-//! let app = TestApp::boot(example_app::app).await;
+//! // config overrides) before running the same App:
+//! let app = TestApp::boot::<MyApp>().await;
 //! ```
 //!
-//! The inferred HList state type cannot be named by user code, so the
-//! blueprint returns `impl BootableApp`; the trait exposes exactly what the
-//! two consumers need.
+//! The inferred HList state type cannot be named by user code, so `build`
+//! returns `impl BootableApp`; the trait exposes exactly what the consumers
+//! ([`launch`](crate::launch), the test harness) need.
 
 use std::future::Future;
 

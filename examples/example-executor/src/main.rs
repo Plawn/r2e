@@ -107,7 +107,8 @@ impl TickWorker {
 #[r2e::main]
 async fn main() {
     AppBuilder::new()
-        .with_config(R2eConfig::empty())
+        .override_config(R2eConfig::empty())
+        .load_config::<()>()
         .plugin(Executor)
         .provide(Arc::new(AtomicU64::new(0)))
         .build_state()

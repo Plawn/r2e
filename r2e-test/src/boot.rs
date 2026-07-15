@@ -1,20 +1,19 @@
-//! Booting an application blueprint into a [`TestApp`].
+//! Booting an [`App`] into a [`TestApp`].
 //!
-//! The blueprint is the app's single assembly function (usually
-//! `pub async fn app(b: AppBuilder) -> impl BootableApp` in the app's
-//! `lib.rs`). The harness pre-configures the builder — `test` profile,
-//! pinned mocks, config overrides, a local [`TestJwt`] validator — and hands
-//! it to the blueprint, which assembles the app exactly as production does.
+//! The [`App`] trait is the app's single declaration (`impl App for MyApp` in
+//! the app's `lib.rs`). The harness pre-configures the builder — `test`
+//! profile, pinned mocks, config overrides, a local [`TestJwt`] validator —
+//! then runs `App::setup` + `App::build` to assemble the app exactly as
+//! production does.
 
-use std::future::Future;
 use std::sync::Arc;
 
-use r2e_core::{AppBuilder, BootableApp};
+use r2e_core::{App, AppBuilder, BootableApp};
 
 use crate::{TestApp, TestJwt};
 
 impl TestApp {
-    /// Boot an application blueprint with test defaults:
+    /// Boot an [`App`] with test defaults:
     ///
     /// - active profile forced to `"test"` (so `load_config()` overlays
     ///   `application-test.yaml` when present),
@@ -23,18 +22,16 @@ impl TestApp {
     ///   [`as_user`](crate::TestRequest::as_user) mints accepted tokens with
     ///   no external IdP.
     ///
+    /// Each boot runs `A::setup()` fresh, so every test gets its own
+    /// environment.
+    ///
     /// ```ignore
-    /// let app = TestApp::boot(example_app::app).await;
+    /// let app = TestApp::boot::<MyApp>().await;
     /// app.get("/users").as_user("alice", &["admin"]).send().await.assert_ok();
     /// let service: UserService = app.bean();
     /// ```
-    pub async fn boot<F, Fut, B>(blueprint: F) -> Self
-    where
-        F: FnOnce(AppBuilder) -> Fut,
-        Fut: Future<Output = B>,
-        B: BootableApp,
-    {
-        Self::boot_with(blueprint, |b| b).await
+    pub async fn boot<A: App>() -> Self {
+        Self::boot_with::<A>(|b| b).await
     }
 
     /// [`boot`](Self::boot) with a builder pre-configuration hook — the place
@@ -42,7 +39,7 @@ impl TestApp {
     /// `@TestProfile`):
     ///
     /// ```ignore
-    /// let app = TestApp::boot_with(example_app::app, |b| {
+    /// let app = TestApp::boot_with::<MyApp>(|b| {
     ///     b.override_bean(FakeMailer::new())
     ///         .override_config_value("app.greeting", "hello from tests")
     /// })
@@ -51,38 +48,28 @@ impl TestApp {
     ///
     /// The hook runs after the harness defaults, so it may also re-pin the
     /// JWT validators or change the profile.
-    pub async fn boot_with<F, Fut, B>(
-        blueprint: F,
+    pub async fn boot_with<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
-    ) -> Self
-    where
-        F: FnOnce(AppBuilder) -> Fut,
-        Fut: Future<Output = B>,
-        B: BootableApp,
-    {
+    ) -> Self {
         let jwt = TestJwt::new();
         let builder = AppBuilder::new()
             .with_profile("test")
             .override_bean(Arc::new(jwt.claims_validator()))
             .override_bean(Arc::new(jwt.validator()));
-        let built = blueprint(configure(builder)).await;
+        let env = A::setup().await;
+        let built = A::build(configure(builder), env).await;
         Self::from_bootable(built, Some(jwt)).await
     }
 
-    /// Boot a blueprint **without** the harness JWT wiring — for apps whose
+    /// Boot an [`App`] **without** the harness JWT wiring — for apps whose
     /// validator carries custom behaviour (role extractor, identity type)
     /// that the test wants to keep. The `test` profile is still forced.
-    pub async fn boot_plain<F, Fut, B>(
-        blueprint: F,
+    pub async fn boot_plain<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
-    ) -> Self
-    where
-        F: FnOnce(AppBuilder) -> Fut,
-        Fut: Future<Output = B>,
-        B: BootableApp,
-    {
+    ) -> Self {
         let builder = AppBuilder::new().with_profile("test");
-        let built = blueprint(configure(builder)).await;
+        let env = A::setup().await;
+        let built = A::build(configure(builder), env).await;
         Self::from_bootable(built, None).await
     }
 

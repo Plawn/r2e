@@ -20,11 +20,18 @@ serde_json = "1"
 
 Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler`, `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
-### Minimal Application — the blueprint pattern
+### Minimal Application — the `App` trait
 
-**Always structure an R2E app as a blueprint**: everything except `main()` lives
-in `lib.rs` behind `pub async fn app(b: AppBuilder) -> impl BootableApp`, so the
-exact same app boots in production (`main.rs`) and in tests (`TestApp::boot`).
+**Always declare an R2E app via the `App` trait** (in the prelude): the app lives
+in `lib.rs` as `impl App for MyApp`, so the exact same unit boots in production
+(`main.rs` → `r2e::launch!`), in dev (hot-reload, same `launch!`), and in tests
+(`#[r2e::test(app = MyApp)]`). `main.rs` is a thin shell.
+
+- `App::setup() -> Self::Env` — long-lived resources built **once** (pools, buses).
+  Under the `dev-reload` feature the `Env` survives hot-patches. Nothing to
+  persist? `type Env = ();` + an empty `setup`.
+- `App::build(b, env) -> impl BootableApp` — assembles the app on the builder;
+  **re-run on every hot-patch**. `load_config` is the sole config registration point.
 
 ```rust
 // src/lib.rs
@@ -33,30 +40,31 @@ use r2e::prelude::*;
 pub mod controllers;
 use controllers::hello::HelloController;
 
-/// Application blueprint: assemble the full app on the given builder.
-/// Tests boot this via `#[r2e::test(app = my_app::app)]`.
-pub async fn app(b: AppBuilder) -> impl BootableApp {
-    b.load_config::<()>()                        // application.yaml + env
-        .build_state()                           // resolve bean graph (state is inferred)
-        .await
-        .with(Health)                            // /health → 200 "OK"
-        .with(Tracing)
-        .with(ErrorHandling)                     // panics → JSON 500
-        .register_controller::<HelloController>()
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = ();                               // nothing to persist across hot-patches
+    async fn setup() {}
+
+    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
+        b.load_config::<()>()                    // application.yaml + env (sole config entry)
+            .build_state()                       // resolve bean graph (state is inferred)
+            .await
+            .with(Health)                        // /health → 200 "OK"
+            .with(Tracing)
+            .with(ErrorHandling)                 // panics → JSON 500
+            .register_controller::<HelloController>()
+    }
 }
 ```
 
 ```rust
-// src/main.rs
+// src/main.rs — prod serve AND dev hot-reload (both handled inside launch!)
 use r2e::prelude::*;
 
 #[r2e::main]
 async fn main() {
-    my_app::app(AppBuilder::new())
-        .await
-        .serve_auto()                            // reads server.host / server.port from config
-        .await
-        .unwrap();
+    r2e::launch!(my_app::MyApp).await.unwrap();  // setup() → build() → serve_auto()
 }
 ```
 
@@ -81,7 +89,7 @@ impl HelloController {
 use r2e::prelude::*;
 use r2e_test::TestApp;
 
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]                // app = a TYPE implementing App
 async fn hello_works(app: TestApp) {
     app.get("/hello").send().await.assert_ok();
 }
@@ -114,7 +122,7 @@ compile-time checking and framework integration.
 | Background jobs | `tokio::spawn` in main | `#[scheduled(every = "5m")]` methods, or `PoolExecutor` / `#[derive(BackgroundService)]` |
 | Pub/sub between components | Channels wired by hand | `EventBus` (`.emit()`) + `#[consumer]` methods |
 | Ask another component for a result | Oneshot channels / shared state | `EventBus` `.request()` / `.respond()` (or a `#[consumer]` with a return value) |
-| Test the app | Re-declaring routers in tests | `#[r2e::test(app = my_app::app)]` — boots the real blueprint |
+| Test the app | Re-declaring routers in tests | `#[r2e::test(app = my_app::MyApp)]` — boots the real `App` |
 
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
 integration for control): 1. `#[any]`/`#[fallback]` controller routes →
@@ -368,7 +376,7 @@ checked closed subgraph:
 )]
 pub struct UserModule;
 
-// in the blueprint:
+// in App::build:
 b.register_module::<UserModule>()
 ```
 
@@ -380,6 +388,11 @@ for multiple beans of the same underlying type.
 ---
 
 ## AppBuilder — full assembly order
+
+The chain below is the body of `App::build` (return the `BootableApp` — do NOT
+call a terminal `serve`/`serve_auto` there; `r2e::launch!(A)` does that). The
+`AppBuilder::new()` + terminal `serve_auto()` shown here are what `launch!`
+performs around your `build`.
 
 ```rust
 AppBuilder::new()
@@ -443,7 +456,7 @@ pub struct DatabaseConfig {
     pub pool_size: i64,
 }
 
-// blueprint:
+// in App::build:
 b.load_config::<RootConfig>()             // typed + children as beans
 // controllers/beans then simply:
 #[inject] db_config: DatabaseConfig,      // typed section, injected by type
@@ -1253,32 +1266,37 @@ Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown
 
 ## Testing
 
-The blueprint pattern makes tests boot the **real app** — never re-declare
-controllers/routers in tests.
+The `App` trait makes tests boot the **real app** — never re-declare
+controllers/routers in tests. `app = ...` is the app **TYPE** (implements `App`).
 
 ```rust
 use r2e::prelude::*;
 use r2e_test::TestApp;
 
 // Macro form — binds params: app: TestApp, jwt: TestJwt, #[inject] bean: T
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]
 async fn lists_users(app: TestApp) {
     app.get("/users").as_user("alice", &["user"]).send().await
         .assert_ok()
         .assert_json_path("/0/name", "Alice");
 }
 
-// With overrides: pin mocks and patch config BEFORE the blueprint runs
-#[r2e::test(app = my_app::app, with = |b| b
+// With overrides: pin mocks and patch config BEFORE `build` runs
+#[r2e::test(app = my_app::MyApp, with = |b| b
     .override_bean(MockMailer::new())
     .override_config_value("app.llm.api_key", "test-key"))]
 async fn with_mocks(app: TestApp, #[inject] service: UserService) { ... }
 ```
 
-Explicit form: `TestApp::boot(my_app::app).await`,
-`TestApp::boot_with(my_app::app, |b| ...).await`. Boot forces the `test`
+Explicit form (turbofish TYPE args): `TestApp::boot::<my_app::MyApp>().await`,
+`TestApp::boot_with::<my_app::MyApp>(|b| ...).await`,
+`TestApp::boot_plain::<my_app::MyApp>(|b| ...).await`. Boot forces the `test`
 profile (`application-test.yaml` overlays) and wires a `TestJwt` validator so
 `.as_user(sub, &roles)` mints valid Bearer tokens.
+
+For a fully in-memory config in a test, stash one with
+`.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
+next `load_config::<C>()` uses it instead of reading disk (see Configuration).
 
 - `app.bean::<T>()` — fetch any bean from the booted graph; `app.config()`.
 - `TestRequest`: `.bearer(t)`, `.header(...)`, `.json(body)`, `.form(...)`,
@@ -1302,10 +1320,28 @@ profile (`application-test.yaml` overlays) and wires a `TestJwt` validator so
 
 ## Dev Experience
 
-- `#[r2e::main]` — tokio main + optional hot-reload support. With a parameter
-  (`async fn main(env: AppEnv)`) it auto-calls `setup()` and enables the
-  `dev-reload` hot-patch path (keep long-lived resources in `AppEnv`).
-- `r2e new <name>` — scaffold a project (blueprint layout). `r2e dev` — hot
+- `#[r2e::main]` — tokio main; takes NO parameter and NO setup-fn argument
+  (that convention is gone — passing one is a compile error). The body is
+  just `r2e::launch!(MyApp).await.unwrap()`.
+- Hot reload (`dev-reload` feature): `r2e::launch!` runs the Subsecond hot-patch
+  loop. It is a **macro** (not `launch::<MyApp>()`) because Subsecond only remaps
+  symbols in the *tip crate* that owns `main.rs`; the macro expands its loop —
+  including the concrete function Subsecond patches — into your crate. A generic
+  dispatcher monomorphised from `r2e-core` would never be patched. Without
+  `dev-reload` the macro just calls `r2e::launch::<MyApp>()`.
+  `App::setup()` runs **once** and its `Env` survives every
+  hot-patch (put pools/buses/validators there); `App::build()` re-runs per
+  patch. Keep `load_config` inside `build`: because `build()` re-runs per patch,
+  its `load_config` re-reads `application.yaml` from disk each time, so YAML edits
+  are picked up on the next hot-patch.
+  LIMITATION: Subsecond only patches the **tip crate** (the one with `main.rs`).
+  Edits to code in a *library* crate (e.g. `App`/controllers behind
+  `use my_app::…`) are ignored at runtime even though `build()` re-runs. For
+  hot-reload to apply your edits, the app code you edit must live in the binary
+  crate (`src/main.rs` + its modules), not a sibling `lib.rs`. Integration tests
+  (`#[r2e::test(app = …)]`) still boot the library-crate app normally — they
+  don't use hot-reload.
+- `r2e new <name>` — scaffold a project (`App`-trait layout). `r2e dev` — hot
   reload. `r2e generate controller <Name>` — scaffold pieces. `r2e routes` —
   list routes. `r2e doctor` — diagnose setup.
 - `cargo expand -p <crate>` — inspect macro output when debugging.
@@ -1359,7 +1395,8 @@ Alongside `&self`:
 | Method | Phase | Purpose |
 |--------|-------|---------|
 | `.plugin(p)` | pre-state | Pre-state plugins (Scheduler, GrpcServer, OidcServer, Prometheus) |
-| `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans |
+| `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
+| `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | pre-state | Provide a constructed bean |
 | `.register::<T>()` | pre-state | Register a Bean / AsyncBean / Producer |
 | `.when(cond, \|b\| ...)` | any | Conditional assembly (`config_flag`, `profile_is`) |
@@ -1373,4 +1410,14 @@ Alongside `&self`:
 | `.schedule_task(def)` | post-state | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |
 | `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
-| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router |
+| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
+
+Launching: write `r2e::launch!(MyApp)` in `main.rs`. It expands to an `async`
+block yielding `Result<(), Box<dyn std::error::Error>>` (await it, then
+`.unwrap()`). Without `dev-reload` it calls
+`r2e::launch::<A: App>()`, which runs `A::setup()` →
+`A::build(AppBuilder::new(), env)` → `serve_auto()`. Under `dev-reload` the macro
+instead drives the Subsecond hot-patch loop from a concrete function it expands
+into your crate (a generic dispatcher from `r2e-core` would never be patched).
+This is the one entry point — `main.rs` is just
+`#[r2e::main] async fn main() { r2e::launch!(MyApp).await.unwrap() }`.

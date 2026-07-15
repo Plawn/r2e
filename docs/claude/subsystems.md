@@ -8,8 +8,8 @@ Central orchestrator for assembling an R2E application. Two phases: pre-state an
 AppBuilder::new()
     // ── Pre-state phase ──
     .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
-    .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children
-    // or: .with_config(config)            // provide a pre-loaded R2eConfig (no child auto-registration)
+    .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children (sole config entry)
+    // test harness only: .override_config(cfg) BEFORE load_config stashes an in-memory R2eConfig it uses instead of disk
     .provide(services.pool.clone())        // provide beans
     .register::<CreatePool>()              // async producer (registers SqlitePool)
     .register::<MyAsyncService>()          // async bean constructor
@@ -51,7 +51,7 @@ AppBuilder::new()
 
 `.shutdown_grace_period(Duration)` — optional maximum time for shutdown hooks to complete before force-exiting the process. Without it, the process waits indefinitely.
 
-`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()` or `with_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
+`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
 
 ## TracingConfig (r2e-core)
 
@@ -104,8 +104,8 @@ Because the core never holds identity fields, `ContextConstruct` is available ev
 See [configuration.md](./configuration.md) for the full reference.
 
 **AppBuilder integration** (pre-state methods):
-- `load_config::<C>()` (recommended) — load YAML + env, construct typed config (`C: ConfigProperties`), **auto-register all nested `#[config(section)]` children as beans**, provide both `C` and `R2eConfig` in the type list. Use `load_config::<()>()` for raw only.
-- `with_config(config)` — provide a pre-loaded `R2eConfig` (tests, hot-reload). Does not auto-register typed config children.
+- `load_config::<C>()` (the sole config registration point) — load YAML + env, construct typed config (`C: ConfigProperties`), **auto-register all nested `#[config(section)]` children as beans**, provide both `C` and `R2eConfig` in the type list. Use `load_config::<()>()` for raw only.
+- `override_config(config)` — stash a pre-loaded/in-memory `R2eConfig` that the next `load_config` consumes instead of reading disk (test-harness primitive, not dev-reload plumbing — under `dev-reload`, `build()` re-runs per patch and its `load_config` re-reads `application.yaml`). Not a registration point on its own; `load_config` must still be called (else `build_state` panics).
 
 Config sections registered via `load_config` are available as bean dependencies and for `#[inject]` in controllers.
 
@@ -466,11 +466,11 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 ## Testing (r2e-test)
 
-- **Blueprint boot (the `@QuarkusTest` path)** — apps expose an assembly function `pub async fn app(b: AppBuilder) -> impl BootableApp` in `lib.rs`; tests boot the real app instead of re-declaring controllers:
-  - `TestApp::boot(blueprint).await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
-  - `TestApp::boot_with(blueprint, |b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`). Pinned overrides win over the app's later registrations (first-pin semantics: the harness pre-configures the builder *before* the blueprint runs, so test overrides must beat later registrations).
-  - `TestApp::boot_plain(blueprint, |b| ...).await` — skips the TestJwt wiring.
-  - `#[r2e::test(app = my_app::app)]` — macro form; binds test-fn params: `app: TestApp`, `jwt: TestJwt`, `#[inject] bean: T`. Optional `with = |b| ...` and `jwt = false`.
+- **App boot (the `@QuarkusTest` path)** — apps declare `impl App for MyApp` in `lib.rs` (`setup()` for long-lived resources, `build(b, env) -> impl BootableApp` for assembly); tests boot the real app **by type** instead of re-declaring controllers:
+  - `TestApp::boot::<MyApp>().await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
+  - `TestApp::boot_with::<MyApp>(|b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`; or `b.override_config(cfg)` for a full in-memory config). Pinned overrides win over the app's later registrations (first-pin semantics: the harness pre-configures the builder *before* `build` runs, so test overrides must beat later registrations).
+  - `TestApp::boot_plain::<MyApp>(|b| ...).await` — skips the TestJwt wiring.
+  - `#[r2e::test(app = my_app::MyApp)]` — macro form; `app` is the app **TYPE**. Binds test-fn params: `app: TestApp`, `jwt: TestJwt`, `#[inject] bean: T`. Optional `with = |b| ...` and `jwt = false`.
   - `app.bean::<T>()` — fetch any bean from the booted app's resolved graph. `app.config()`, `app.test_jwt()` accessors. `.as_user(sub, &roles)` on `TestRequest`/`SessionRequest`/`TestSession` mints a Bearer token from the app's `TestJwt` (the `@TestSecurity` equivalent).
 - `TestApp` — wraps a `Router` with an HTTP client for integration testing. Methods: `get`, `post`, `put`, `delete`, `patch`, `request` return `TestRequest` builder. Call `.send().await` to execute. `serve()` spawns a live `TestServer` on a random TCP port (needed for WebSocket/SSE). `from_builder` retains the bean graph (so `bean::<T>()` works); `with_jwt(jwt)` attaches a `TestJwt` to a hand-assembled app.
 - `TestRequest` — builder with: `bearer(token)`, `header(name, value)`, `json(body)`, `body(bytes)`, `form(fields)`, `cookie(name, value)`, `query(key, value)`, `queries(pairs)`, `content_type(ct)`, `file(field, name, ct, data)`, `field(name, value)`, `multipart()`.

@@ -78,7 +78,7 @@ fn parse_workers_above_cap_is_error() {
 fn prepared_app_workers_accessor_ok() {
     let config = R2eConfig::from_yaml_str("server:\n  workers: 2\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .with_state(())
         .prepare("127.0.0.1:0");
     assert_eq!(app.workers().unwrap(), Some(2));
@@ -88,7 +88,7 @@ fn prepared_app_workers_accessor_ok() {
 fn prepared_app_workers_accessor_err() {
     let config = R2eConfig::from_yaml_str("server:\n  workers: 0\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .with_state(())
         .prepare("127.0.0.1:0");
     assert!(app.workers().is_err());
@@ -156,7 +156,7 @@ mod integration {
         let config = R2eConfig::from_yaml_str(&yaml).unwrap();
 
         let app = AppBuilder::new()
-            .with_config(config)
+            .override_config(config).load_config::<()>()
             .with_state(())
             .register_routes(
                 r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })),
@@ -356,7 +356,7 @@ mod integration {
         let config = R2eConfig::from_yaml_str(yaml).unwrap();
         let port = free_port();
         let app = AppBuilder::new()
-            .with_config(config)
+            .override_config(config).load_config::<()>()
             .with_state(())
             .prepare(&format!("127.0.0.1:{port}"));
         let err = app.run().await.expect_err("run() should reject workers=0");

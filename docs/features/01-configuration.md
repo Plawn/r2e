@@ -177,19 +177,21 @@ Field attributes for `ConfigProperties`:
 
 ### Prerequisite for `#[config]`
 
-Nothing to wire by hand. `R2eConfig` is itself a bean in the resolved graph, so `#[config("key")]` fields resolve through it automatically once the app is built with `load_config::<C>()` (typed) or `with_config(R2eConfig::...)` (raw). No `FromRef` impl is needed. `#[config(...)]` fields and typed `#[config_section]` structs are unchanged.
+Nothing to wire by hand. `R2eConfig` is itself a bean in the resolved graph, so `#[config("key")]` fields resolve through it automatically once the app is built with `load_config::<C>()`. No `FromRef` impl is needed. `#[config(...)]` fields and typed `#[config_section]` structs are unchanged.
 
 ### 6. Registering config in AppBuilder
 
 ```rust
-// Recommended: load + auto-register typed config + children
+// Load + auto-register typed config + children — the sole config registration point
 AppBuilder::new()
     .load_config::<RootConfig>()           // loads YAML + env, provides RootConfig + children
     // ...
 
-// Alternative: provide pre-loaded config (no child auto-registration)
+// Tests only: stash an in-memory config for the next load_config::<C>() to use
+// instead of reading disk (part of the override_bean/override_config_value family)
 AppBuilder::new()
-    .with_config(config)
+    .override_config(config)
+    .load_config::<RootConfig>()
     // ...
 ```
 

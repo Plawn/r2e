@@ -46,10 +46,7 @@ impl DataController {
     }
 
     #[get("/search")]
-    async fn search(
-        &self,
-        params: SearchParams,
-    ) -> Result<Json<Vec<UserEntity>>, AppError> {
+    async fn search(&self, params: SearchParams) -> Result<Json<Vec<UserEntity>>, AppError> {
         let mut sql = String::from("SELECT id, name, email FROM users WHERE 1=1");
         let mut bind_name: Option<String> = None;
         let mut bind_email: Option<&str> = None;
@@ -66,8 +63,7 @@ impl DataController {
 
         // SQL is built from static fragments; all user input is passed via bind
         // parameters below, so asserting safety is sound here.
-        let mut query =
-            sqlx::query_as::<_, (i64, String, String)>(sqlx::AssertSqlSafe(sql));
+        let mut query = sqlx::query_as::<_, (i64, String, String)>(sqlx::AssertSqlSafe(sql));
         if let Some(ref pattern) = bind_name {
             query = query.bind(pattern);
         }
@@ -75,9 +71,7 @@ impl DataController {
             query = query.bind(email);
         }
 
-        let rows = query
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = query.fetch_all(&self.pool).await?;
 
         let entities: Vec<UserEntity> = rows
             .into_iter()

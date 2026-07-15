@@ -219,7 +219,7 @@ broadcasts it under the topic's SSE event name (default: the short type name
 of `E`, override via `with_event_name`).
 
 ```rust
-// blueprint — one topic per event type, no newtypes
+// app assembly — one topic per event type, no newtypes
 .provide(SseTopic::<SyncStatus>::new(128))
 .provide(SseTopic::<MatchProgress>::new(128).with_event_name("match"))
 ```

@@ -231,26 +231,32 @@ let expired = jwt.token_builder("user-1")
 let claims_validator = jwt.claims_validator();
 ```
 
-### Blueprint boot
+### App boot
 
-Expose your app's assembly as a blueprint in `lib.rs` and boot the **real**
-application in tests — no copy-pasted setup:
+Implement the `App` trait in `lib.rs` and boot the **real** application in
+tests by type — no copy-pasted setup:
 
 ```rust
 // lib.rs
-pub async fn app(b: AppBuilder) -> impl BootableApp {
-    b.load_config::<AppConfig>()
-        .register::<UserService>()
-        .build_state().await
-        .with(Health)
-        .register_controllers::<(UserController,)>()
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = ();
+    async fn setup() {}
+    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+        b.load_config::<AppConfig>()
+            .register::<UserService>()
+            .build_state().await
+            .with(Health)
+            .register_controllers::<(UserController,)>()
+    }
 }
 ```
 
 ```rust
 use r2e_test::TestApp;
 
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]
 async fn lists_users(app: TestApp, #[inject] users: UserService) {
     // .as_user mints a token accepted by the auto-pinned TestJwt validator
     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
@@ -258,7 +264,7 @@ async fn lists_users(app: TestApp, #[inject] users: UserService) {
 }
 
 // Pin mocks and patch config per test:
-#[r2e::test(app = my_app::app, with = |b| {
+#[r2e::test(app = my_app::MyApp, with = |b| {
     b.override_bean(FakeMailer::new())
         .override_config_value("app.greeting", "hi")
 })]
@@ -266,8 +272,8 @@ async fn with_mock(app: TestApp) { /* ... */ }
 ```
 
 Booting forces the `test` profile, so `application-test.yaml` overlays your
-base config. The non-macro form is `TestApp::boot(my_app::app).await` /
-`TestApp::boot_with(my_app::app, |b| ...).await`.
+base config. The non-macro form is `TestApp::boot::<my_app::MyApp>().await` /
+`TestApp::boot_with::<my_app::MyApp>(|b| ...).await`.
 
 ## Full example
 

@@ -84,7 +84,8 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
 
     // Build the sharded app with the scheduler plugin installed.
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Scheduler)
         .build_state()
         .await;

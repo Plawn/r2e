@@ -12,7 +12,6 @@ use controllers::history_controller::HistoryController;
 
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
     let event_bus = LocalEventBus::new();
     let ws_rooms = WsRooms::new(128);
 
@@ -30,7 +29,7 @@ async fn main() {
     .unwrap();
 
     AppBuilder::new()
-        .with_config(config)
+        .load_config::<()>()
         .provide(event_bus)
         .provide(ws_rooms)
         .provide(pool)

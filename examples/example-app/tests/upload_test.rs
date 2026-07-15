@@ -9,7 +9,10 @@ use r2e_test::TestApp;
 fn derived_multipart_schema_shape() {
     let schema = ProfileUpload::multipart_schema();
     assert_eq!(schema["type"], "object");
-    assert_eq!(schema["properties"]["name"], serde_json::json!({ "type": "string" }));
+    assert_eq!(
+        schema["properties"]["name"],
+        serde_json::json!({ "type": "string" })
+    );
     assert_eq!(
         schema["properties"]["bio"],
         serde_json::json!({ "type": "string" }),
@@ -34,7 +37,7 @@ fn derived_multipart_schema_shape() {
     assert_eq!(required, vec!["name", "avatar"]);
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn typed_multipart_upload_roundtrip(app: TestApp) {
     let resp = app
         .post("/uploads/profile")
@@ -53,7 +56,7 @@ async fn typed_multipart_upload_roundtrip(app: TestApp) {
     assert_eq!(body["attachment_count"], 1);
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn openapi_models_typed_multipart(app: TestApp) {
     let resp = app.get("/openapi.json").send().await;
     resp.assert_ok();
@@ -78,7 +81,7 @@ async fn openapi_models_typed_multipart(app: TestApp) {
     );
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn openapi_models_raw_multipart_as_free_form(app: TestApp) {
     let resp = app.get("/openapi.json").send().await;
     resp.assert_ok();

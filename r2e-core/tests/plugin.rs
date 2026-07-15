@@ -737,7 +737,7 @@ async fn plugin_config_loaded_from_present_section() {
     let sink = Arc::new(Mutex::new(None));
     let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  name: hello\n  count: 5\n").unwrap();
     let _app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .plugin(ConfigReadingPlugin { sink: sink.clone() })
         .build_state()
         .await;
@@ -758,7 +758,7 @@ async fn plugin_config_absent_section_is_none() {
     let sink = Arc::new(Mutex::new(None));
     let config = r2e_core::R2eConfig::from_yaml_str("other:\n  key: 1\n").unwrap();
     let _app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .plugin(ConfigReadingPlugin { sink: sink.clone() })
         .build_state()
         .await;
@@ -787,7 +787,7 @@ async fn plugin_config_malformed_section_panics_at_boot() {
     // validation error naming the plugin and section.
     let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  port: not-a-number\n").unwrap();
     let _app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .plugin(StrictConfigPlugin)
         .build_state()
         .await;
@@ -957,7 +957,7 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
     // No `gated.enabled` key at all → defaults to enabled: sugar + configure run.
     let config = r2e_core::R2eConfig::from_yaml_str("gated:\n  other: 1\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .plugin(GatedPlugin)
         .build_state()
         .await;
@@ -977,7 +977,7 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
 async fn plugin_enabled_false_skips_effects_but_keeps_beans() {
     let config = r2e_core::R2eConfig::from_yaml_str("gated:\n  enabled: false\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config).load_config::<()>()
         .plugin(GatedPlugin)
         .build_state()
         .await;

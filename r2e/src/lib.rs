@@ -109,6 +109,68 @@ pub mod devtools {
     pub use r2e_devtools::*;
 }
 
+/// Launch an [`App`](r2e_core::App) — the canonical `main.rs` entry point.
+///
+/// ```ignore
+/// #[r2e::main]
+/// async fn main() {
+///     r2e::launch!(MyApp).await.unwrap();
+/// }
+/// ```
+///
+/// Expands to an `async` block that yields the same
+/// `Result<(), Box<dyn std::error::Error>>` as [`launch`](r2e_core::launch), so
+/// it is awaited exactly like the function form.
+///
+/// # Why this is a macro and not just `launch::<A>()`
+///
+/// Under the `dev-reload` feature this macro drives the Subsecond hot-patch
+/// loop, and it must do so from a **concrete, named function defined in the tip
+/// crate** (the crate that owns `main.rs`). Subsecond only remaps function
+/// symbols it attributes to the tip crate; a generic dispatcher monomorphised
+/// from `r2e-core` is *not* remapped — its jump-table lookup misses and
+/// hot-patches never reach the rebuilt `App::build`. Because a `macro_rules!`
+/// expands at the call site, the `__r2e_server` function it emits lives in the
+/// user's crate, so patches apply. Without `dev-reload` the macro simply calls
+/// [`launch::<A>()`](r2e_core::launch).
+///
+/// `App::setup` runs **once** (its `Env` survives hot-patches); `App::build`
+/// and serve re-run on every patch, and `build`'s `load_config` re-reads
+/// `application.yaml` per patch so config edits apply on the next patch.
+#[macro_export]
+macro_rules! launch {
+    ($app:ty) => {
+        async {
+            #[cfg(not(feature = "dev-reload"))]
+            {
+                $crate::launch::<$app>().await
+            }
+            #[cfg(feature = "dev-reload")]
+            {
+                // Concrete, named function expanded into the *tip* crate.
+                // Subsecond can discover and remap it, so each hot-patch
+                // re-runs the rebuilt `App::build`. The closure handed to the
+                // loop stays non-capturing (a ZST) so `HotFn` dispatches
+                // through the jump table.
+                async fn __r2e_server(__env: <$app as $crate::App>::Env) {
+                    ::std::eprintln!("[r2e dev-reload] (re)building app");
+                    let __app =
+                        <$app as $crate::App>::build($crate::AppBuilder::new(), __env).await;
+                    if let ::core::result::Result::Err(__e) =
+                        $crate::BootableApp::serve_auto(__app).await
+                    {
+                        ::std::eprintln!("[r2e dev-reload] serve failed: {}", __e);
+                    }
+                }
+
+                let __env = <$app as $crate::App>::setup().await;
+                $crate::devtools::serve_with_hotreload_env(__env, |__e| __r2e_server(__e)).await;
+                ::core::result::Result::<(), ::std::boxed::Box<dyn ::std::error::Error>>::Ok(())
+            }
+        }
+    };
+}
+
 /// Convenience type aliases that depend on types from optional sub-crates.
 pub mod types {
     pub use r2e_core::types::*;

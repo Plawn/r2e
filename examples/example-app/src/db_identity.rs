@@ -12,11 +12,10 @@
 //! macro to reduce boilerplate. Compare with the manual `FromRequestParts` approach
 //! documented in `r2e-security/src/extractor.rs`.
 
-use r2e::{BeanLookup, Identity};
 use r2e::r2e_security::{
-    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims,
-    RoleBasedIdentity,
+    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims, RoleBasedIdentity,
 };
+use r2e::{BeanLookup, Identity};
 use serde::{Deserialize, Serialize};
 
 /// A database-backed user identity.
@@ -78,10 +77,7 @@ impl<S> FromValidatedJwtClaims<S> for DbUser
 where
     S: BeanLookup + Send + Sync,
 {
-    async fn from_jwt_claims(
-        claims: serde_json::Value,
-        state: &S,
-    ) -> Result<Self, r2e::HttpError> {
+    async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, r2e::HttpError> {
         let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
         let auth = AuthenticatedUser::from_claims(claims);
 
@@ -97,9 +93,7 @@ where
 
         let profile = row
             .map(|(id, name, email)| UserProfile { id, name, email })
-            .ok_or_else(|| {
-                r2e::HttpError::not_found(format!("No user profile for sub '{sub}'"))
-            })?;
+            .ok_or_else(|| r2e::HttpError::not_found(format!("No user profile for sub '{sub}'")))?;
 
         Ok(DbUser { auth, profile })
     }

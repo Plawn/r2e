@@ -412,10 +412,10 @@ cargo install dioxus-cli
 
 **How hot-reload works:**
 
-Your app must use the setup/server split pattern (see [Dev Mode](../advanced/dev-mode.md)):
-- `setup()` runs once and returns persistent state (DB pools, config)
-- `#[r2e::main] async fn main(env: AppEnv)` body is hot-patched on changes
-- The `#[r2e::main]` macro auto-generates both normal and hot-reload code paths
+Your app implements the `App` trait (see [Dev Mode](../advanced/dev-mode.md)):
+- `App::setup()` runs once and returns the persistent `Env` (DB pools, buses) — it survives hot-patches
+- `App::build(b, env)` re-runs on each change; its `load_config` re-reads `application.yaml` from disk each patch, so YAML edits apply on the next hot-patch
+- `r2e::launch!(MyApp)` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload` (it must be the `launch!` macro, not `launch::<MyApp>()`, so the hot-patch loop expands into your tip crate)
 
 ---
 

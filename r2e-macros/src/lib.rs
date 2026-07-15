@@ -1318,6 +1318,19 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// Wraps the function body in a Tokio multi-thread runtime and calls
 /// `init_tracing()` automatically (unless disabled).
 ///
+/// The canonical entry point declares the app via `impl r2e::App` and calls
+/// [`r2e::launch`](r2e_core::launch) from a **parameterless** main:
+///
+/// ```ignore
+/// #[r2e::main]
+/// async fn main() {
+///     r2e::launch::<MyApp>().await.unwrap();
+/// }
+/// ```
+///
+/// `main` must take no parameters (the old `setup`-by-convention hot-reload
+/// path was removed; hot-reload now lives inside `launch`).
+///
 /// # Optional arguments
 ///
 /// | Argument | Default | Description |
@@ -1368,11 +1381,11 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Wraps the function body in a Tokio **multi-thread** runtime and calls
 /// `init_tracing()` automatically.
 ///
-/// # Blueprint tests (`app = ...`)
+/// # App tests (`app = ...`)
 ///
-/// With `app = <blueprint fn>`, the macro boots the application blueprint
-/// into a `TestApp` (test profile forced, `TestJwt` validators pinned) and
-/// binds the test function's parameters from it:
+/// With `app = <App type>`, the macro boots the [`App`](r2e_core::App)
+/// implementation into a `TestApp` (test profile forced, `TestJwt` validators
+/// pinned) and binds the test function's parameters from it:
 ///
 /// - `app: TestApp` — the booted app,
 /// - `jwt: TestJwt` — the app's auto-wired `TestJwt`,
@@ -1398,12 +1411,12 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 /// #[r2e::test(tracing = false)]
 /// async fn test_no_tracing() { /* ... */ }
 ///
-/// #[r2e::test(app = example_app::app)]
+/// #[r2e::test(app = MyApp)]
 /// async fn lists_users(app: TestApp) {
 ///     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
 /// }
 ///
-/// #[r2e::test(app = example_app::app, with = |b| b.override_bean(FakeMailer::new()))]
+/// #[r2e::test(app = MyApp, with = |b| b.override_bean(FakeMailer::new()))]
 /// async fn with_mock(app: TestApp, #[inject] mailer: FakeMailer) { /* ... */ }
 /// ```
 #[proc_macro_attribute]

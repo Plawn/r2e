@@ -357,9 +357,11 @@ fn create_search(m: MatchingConfig) -> SearchService { ... }  // MatchingConfig 
 
 ## AppBuilder integration
 
-Two pre-state methods to provide config (call before `.build_state()` or `.with_state()`):
+`load_config` is the **sole** config registration point (call before
+`.build_state()`); `override_config` (below) only stashes an in-memory config
+for `load_config` to consume.
 
-### `load_config::<C>()` — load + provide (recommended)
+### `load_config::<C>()` — load + provide (the one registration point)
 
 The idiomatic way to set up configuration. Loads YAML + env, stores the raw config in the builder, and provides `R2eConfig` in the bean registry. If `C` is not `()`, also constructs the typed config, **auto-registers all nested `#[config(section)]` children as beans** (via `register_children`), and provides both `C` and `R2eConfig` in the compile-time type list.
 
@@ -385,14 +387,37 @@ pub struct RootConfig {
 }
 ```
 
-### `with_config(config)` — provide pre-loaded
+### `override_config(config)` — stash an in-memory config (test harness)
 
-Only needed when you have a pre-loaded `R2eConfig` (hot-reload, custom loading, tests). Prefer `load_config` in all other cases.
+`AppBuilder::with_config` is **deleted**. `load_config` is the sole config
+registration point — even when the config is in memory. `override_config` is a
+pure **stash** in the test-harness `override_*` family (`override_bean`,
+`override_config_value`) — an in-memory config for tests, not dev-reload
+plumbing: it holds a `R2eConfig` that the **next**
+`load_config::<C>()` consumes instead of reading disk. `load_config` still does
+everything else — profile resolution, the `application-test.yaml` overlay, and
+applying any `override_config_value` entries.
 
 ```rust
-let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
-AppBuilder::new().with_config(config)
+// tests: fully in-memory config
+AppBuilder::new()
+    .override_config(R2eConfig::from_yaml_str(yaml)?)   // stash
+    .load_config::<RootConfig>()                        // consumes the stash, registers sections
 ```
+
+Semantics and guards:
+- `override_config_value` **wins over** `override_config` regardless of call order
+  (per-key overrides layer on top of the stashed config).
+- Fail-fast: `build_state` panics if `override_config` was set but `load_config`
+  was never called; `override_config` combined with `with_config_file` panics.
+- Idiomatic guidance: config loaded from disk = just `.load_config::<C>()`;
+  reach for `override_config` only for tests with in-memory configs. It is **not**
+  dev-reload plumbing — under `dev-reload`, `build()` re-runs per patch and its
+  `load_config` re-reads `application.yaml` from disk, so YAML edits apply on the
+  next hot-patch.
+
+> `r2e::launch` (production/dev entry point) uses this internally so YAML is read
+> once and reused across hot-patches — application code never calls it directly.
 
 ---
 

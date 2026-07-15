@@ -76,10 +76,8 @@ async fn main() {
 
     // Config: application.yaml (host/port) overlaid with R2E_-prefixed env vars.
     // `R2E_SERVER_WORKERS` maps to `server.workers` and selects the serve mode.
-    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
-
     AppBuilder::new()
-        .with_config(config)
+        .load_config::<()>()
         .provide(pool)
         .build_state()
         .await

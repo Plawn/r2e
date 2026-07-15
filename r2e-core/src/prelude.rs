@@ -67,7 +67,7 @@ pub use r2e_macros::ApiError;
 
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
-pub use crate::builder::{AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers, RegisterModule};
+pub use crate::builder::{launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers, RegisterModule};
 pub use crate::lifecycle::StopHandle;
 // NOTE: `BeanAccess` is deliberately NOT in the prelude: its blanket impl puts
 // a `get` method on every type, which would shadow inherent `get`s reached

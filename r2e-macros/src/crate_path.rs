@@ -108,16 +108,6 @@ pub fn r2e_scheduler_path() -> TokenStream {
     )
 }
 
-/// Returns the token stream for accessing `r2e_devtools` types.
-pub fn r2e_devtools_path() -> TokenStream {
-    static CACHE: OnceLock<String> = OnceLock::new();
-    resolve_cached(
-        &CACHE,
-        &[("r2e", "devtools"), ("r2e-devtools", "")],
-        "::r2e_devtools",
-    )
-}
-
 /// Returns the token stream for accessing `schemars` through `r2e-openapi`.
 ///
 /// Resolution order:

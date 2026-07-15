@@ -33,7 +33,7 @@ use r2e::r2e_executor::{Executor, PoolExecutor, RejectedError};
 
 AppBuilder::new()
     .plugin(Executor)              // installs PoolExecutor as a bean
-    .with_config(config)
+    .load_config::<()>()           // loads R2eConfig (the plugin reads executor.*)
     // ...
     .build_state().await
 ```

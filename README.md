@@ -120,7 +120,7 @@ Wire it up in `main.rs`:
 #[r2e::main]
 async fn main() {
     let app = AppBuilder::new()
-        .load_config::<()>()          // typed config; use with_config(...) for raw config
+        .load_config::<()>()          // typed config from YAML+env — the sole config registration point
         .register::<UserService>();   // register a #[bean]/#[producer]/AsyncBean type
 
     app.build_state()                 // no type args; async — resolves the bean graph

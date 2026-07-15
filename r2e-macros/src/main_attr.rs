@@ -3,24 +3,25 @@
 //! These wrap the user's `async fn main()` / `async fn test_*()` in a Tokio
 //! runtime and optionally call `init_tracing()`.
 //!
-//! # Hot-reload support
-//!
-//! When a setup function is specified, the macro generates two code paths
-//! gated by `#[cfg(feature = "dev-reload")]`:
+//! The canonical way to declare an app is `impl r2e::App` + a parameterless
+//! `#[r2e::main]` that calls [`r2e::launch`](r2e_core::launch):
 //!
 //! ```ignore
-//! #[r2e::main(setup)]
-//! async fn main(env: AppEnv) {
-//!     // ... body is hot-patched when dev-reload is enabled
+//! #[r2e::main]
+//! async fn main() {
+//!     r2e::launch::<MyApp>().await.unwrap();
 //! }
 //! ```
+//!
+//! Dev-mode hot-reload is handled entirely inside `launch` (behind the
+//! `dev-reload` feature); the macro no longer generates any hot-reload paths.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn};
 
-use crate::crate_path::{r2e_core_path, r2e_devtools_path};
+use crate::crate_path::r2e_core_path;
 
 // ── Argument parsing ─────────────────────────────────────────────────────
 
@@ -29,9 +30,8 @@ struct MainArgs {
     tracing: bool,
     worker_threads: Option<usize>,
     flavor: Option<bool>,
-    /// Optional setup function path for hot-reload support.
-    setup_fn: Option<syn::Path>,
-    /// `#[r2e::test(app = ...)]`: blueprint function to boot into a `TestApp`.
+    /// `#[r2e::test(app = ...)]`: the `App`-implementing type to boot into a
+    /// `TestApp`.
     app_fn: Option<syn::Path>,
     /// `#[r2e::test(app = ..., with = |b| ...)]`: builder pre-configuration hook.
     with_expr: Option<syn::Expr>,
@@ -52,7 +52,6 @@ impl Default for MainArgs {
             tracing: true,
             worker_threads: None,
             flavor: None,
-            setup_fn: None,
             app_fn: None,
             with_expr: None,
             jwt: true,
@@ -114,11 +113,12 @@ impl MainArgs {
                     _ => return Err(meta.error(format!("unknown argument `{key}`"))),
                 }
             } else {
-                // Bare path (e.g. `setup`) → setup function name.
-                if this.setup_fn.is_some() {
-                    return Err(meta.error("setup function already specified"));
-                }
-                this.setup_fn = Some(meta.path);
+                return Err(meta.error(format!(
+                    "unexpected argument `{key}` — `#[r2e::main]` takes no bare-path \
+                     arguments (the old `setup` hot-reload convention was removed; \
+                     declare your app via `impl r2e::App` and call \
+                     `r2e::launch::<MyApp>()`)"
+                )));
             }
             Ok(())
         });
@@ -245,7 +245,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         quote! {}
     };
 
-    // ── Blueprint-boot path: #[r2e::test(app = my_app::app)] ─────────────
+    // ── App-boot path: #[r2e::test(app = MyApp)] ─────────────────────────
     if args.app_fn.is_some() && !is_test {
         return syn::Error::new_spanned(
             sig,
@@ -256,13 +256,13 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
     if args.app_fn.is_none() && (args.with_expr.is_some() || !args.jwt) {
         return syn::Error::new_spanned(
             sig,
-            "`with = ...` and `jwt = ...` require `app = <blueprint fn>`",
+            "`with = ...` and `jwt = ...` require `app = <App type>`",
         )
         .to_compile_error();
     }
-    if let Some(app_fn) = &args.app_fn {
+    if let Some(app_ty) = &args.app_fn {
         return expand_boot_test(
-            app_fn,
+            app_ty,
             args.with_expr.as_ref(),
             args.jwt,
             &func,
@@ -271,72 +271,20 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         );
     }
 
-    // ── Hot-reload path: function has a parameter ─────────────────────────
-    //
-    // If main takes a parameter (e.g. `env: AppEnv`), we generate two cfg-gated
-    // code paths: one that calls the setup function directly, and one that wraps
-    // it with `serve_with_hotreload` for Subsecond hot-patching.
-    //
-    // The setup function is either explicitly specified via `#[r2e::main(my_setup)]`
-    // or defaults to `setup` by convention.
-    if let Some(FnArg::Typed(param)) = sig.inputs.first() {
-        let setup_fn: syn::Path = args.setup_fn.unwrap_or_else(|| {
-            syn::parse_str("setup").unwrap()
-        });
-
-        let env_pat = &param.pat;
-        let env_ty = &param.ty;
-        let body_stmts = &body.stmts;
-        let devtools = r2e_devtools_path();
-
-        return quote! {
-            // Named function in the tip crate — Subsecond can discover and patch it.
-            #[cfg(feature = "dev-reload")]
-            async fn __r2e_server(#env_pat: #env_ty) {
-                #(#body_stmts)*
-            }
-
-            #(#attrs)*
-            #test_attr
-            #vis fn #fn_name() #ret {
-                #tracing_init
-                #runtime_builder
-                    .block_on(async {
-                        #[cfg(not(feature = "dev-reload"))]
-                        {
-                            let #env_pat: #env_ty = #setup_fn().await;
-                            #(#body_stmts)*
-                        }
-                        #[cfg(feature = "dev-reload")]
-                        {
-                            let __r2e_env: #env_ty = #setup_fn().await;
-                            // On each patch, the old server future is dropped and
-                            // __r2e_server is called again with the latest code.
-                            // The closure must remain non-capturing (ZST) so that
-                            // subsecond's HotFn dispatches through the jump table
-                            // correctly — pointer-sized closures trigger the wrong
-                            // call_as_ptr path.
-                            #devtools::serve_with_hotreload_env(
-                                __r2e_env,
-                                |__r2e_arg| __r2e_server(__r2e_arg),
-                            ).await;
-                        }
-                    })
-            }
-        };
-    }
-
-    // setup_fn specified but no parameter on main → error
-    if args.setup_fn.is_some() {
+    // A parameter on `main` used to trigger the hot-reload `setup` convention;
+    // that path is gone. Point users at the `App` + `launch` pattern.
+    if !is_test && sig.inputs.first().is_some() {
         return syn::Error::new_spanned(
             sig,
-            "#[r2e::main(setup_fn)] requires a parameter, e.g.: \
-             async fn main(env: AppEnv) { ... }",
+            "#[r2e::main] does not accept parameters — declare your app via \
+             `impl r2e::App` and call `r2e::launch::<MyApp>()` in a parameterless \
+             main:\n\n    #[r2e::main]\n    async fn main() { \
+             r2e::launch::<MyApp>().await.unwrap() }",
         )
         .to_compile_error();
     }
 
-    // ── Standard path: no setup function ─────────────────────────────────
+    // ── Standard path ─────────────────────────────────────────────────────
     quote! {
         #(#attrs)*
         #test_attr
@@ -362,15 +310,15 @@ fn type_ends_with(ty: &syn::Type, name: &str) -> bool {
     }
 }
 
-/// Codegen for `#[r2e::test(app = <blueprint>)]`: boots the blueprint into a
-/// `TestApp` and binds the test function's parameters from it.
+/// Codegen for `#[r2e::test(app = <MyApp>)]`: boots the `App`-implementing
+/// type into a `TestApp` and binds the test function's parameters from it.
 ///
 /// Parameter forms:
 /// - `app: TestApp` — the booted app (at most one),
 /// - `jwt: TestJwt` — a clone of the app's auto-wired `TestJwt`,
 /// - `#[inject] bean: T` — `app.bean::<T>()` from the resolved graph.
 fn expand_boot_test(
-    app_fn: &syn::Path,
+    app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
     jwt: bool,
     func: &ItemFn,
@@ -390,9 +338,9 @@ fn expand_boot_test(
         None => quote! { |__r2e_b| __r2e_b },
     };
     let boot_call = if jwt {
-        quote! { #test_crate::TestApp::boot_with(#app_fn, #configure).await }
+        quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await }
     } else {
-        quote! { #test_crate::TestApp::boot_plain(#app_fn, #configure).await }
+        quote! { #test_crate::TestApp::boot_plain::<#app_ty>(#configure).await }
     };
 
     // Bind parameters from the booted app. The `TestApp` binding moves the

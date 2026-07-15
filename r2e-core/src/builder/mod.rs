@@ -7,6 +7,7 @@
 //! - [`prepared`]: [`PreparedApp`] + the serving lifecycle (`run()`).
 //! - [`task_registry`]: [`TaskRegistryHandle`] shared by scheduler/gRPC/plugins.
 
+mod app;
 mod bootable;
 mod nostate;
 mod prepared;
@@ -14,6 +15,7 @@ mod registration;
 mod task_registry;
 mod typed;
 
+pub use app::{launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule};
@@ -206,9 +208,14 @@ struct BuilderConfig {
     /// `load_config` instead of the default `application.yaml`.
     config_file: Option<std::path::PathBuf>,
     /// Config keys stashed via [`AppBuilder::override_config_value`] before
-    /// config is loaded; applied on top of whatever `with_config`/`load_config`
-    /// produces.
+    /// config is loaded; applied on top of whatever `load_config` produces
+    /// (always drained *after* the base config, so they win).
     config_overrides: Vec<(String, crate::config::ConfigValue)>,
+    /// Pre-loaded config stashed via [`AppBuilder::override_config`]; consumed
+    /// by `load_config` in place of the disk read. Test harnesses and the
+    /// dev-reload loop set it. Left `Some` at `build_state` (never consumed by
+    /// a `load_config` call) is a panic — the config would be silently ignored.
+    preloaded_config: Option<crate::config::R2eConfig>,
     /// Stop handle wired via [`AppBuilder::with_stop_handle`]; `prepare()`
     /// creates one lazily when absent.
     stop_handle: Option<StopHandle>,

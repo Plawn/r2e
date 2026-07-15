@@ -271,7 +271,7 @@ async fn main() {
     let broadcaster = SseBroadcaster::new(256);
 
     AppBuilder::new()
-        .with_config(R2eConfig::load().unwrap())
+        .load_config::<()>()
         .provide(broadcaster)
         .build_state()
         .await

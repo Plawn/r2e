@@ -474,6 +474,7 @@ fn package_lib_name() -> String {
 fn crud_test(entity_name: &str, lib_name: &str) -> String {
     let snake = to_snake_case(entity_name);
     let plural = pluralize(&snake);
+    let app_name = templates::to_pascal_case(lib_name);
 
     format!(
         r#"use r2e_test::TestApp;
@@ -482,29 +483,30 @@ use serde_json::json;
 // TODO: adapt imports to your project structure
 // use {lib_name}::models::{snake}::{entity_name};
 
-// These tests boot your application blueprint. Expose it in lib.rs:
-//   pub async fn app(b: AppBuilder) -> impl BootableApp {{ ... }}
+// These tests boot your application. Declare it in lib.rs:
+//   pub struct {app_name};
+//   impl App for {app_name} {{ ... }}
 
-#[r2e::test(app = {lib_name}::app)]
+#[r2e::test(app = {lib_name}::{app_name})]
 async fn test_list_{plural}(app: TestApp) {{
     let resp = app.get("/{plural}").as_user("test-user", &["user"]).send().await;
     resp.assert_ok();
 }}
 
-#[r2e::test(app = {lib_name}::app)]
+#[r2e::test(app = {lib_name}::{app_name})]
 async fn test_create_{snake}(app: TestApp) {{
     let body = json!({{ /* fields */ }});
     let resp = app.post("/{plural}").as_user("test-user", &["user"]).json(&body).send().await;
     resp.assert_created();
 }}
 
-#[r2e::test(app = {lib_name}::app)]
+#[r2e::test(app = {lib_name}::{app_name})]
 async fn test_get_{snake}_not_found(app: TestApp) {{
     let resp = app.get("/{plural}/999").as_user("test-user", &["user"]).send().await;
     resp.assert_not_found();
 }}
 
-#[r2e::test(app = {lib_name}::app)]
+#[r2e::test(app = {lib_name}::{app_name})]
 async fn test_delete_{snake}(app: TestApp) {{
     let resp = app.delete("/{plural}/1").as_user("test-user", &["user"]).send().await;
     resp.assert_ok();

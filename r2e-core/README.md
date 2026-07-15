@@ -14,7 +14,7 @@ Fluent two-phase API for assembling an application:
 AppBuilder::new()
     // Phase 1: pre-state (bean registration)
     .plugin(Scheduler)                     // pre-state plugin
-    .load_config::<AppConfig>()             // load yaml + type + provide (or .with_config(config))
+    .load_config::<AppConfig>()             // load yaml + type + provide (the sole config registration point)
     .provide(my_pool.clone())              // pre-built instance
     .register::<UserService>()            // sync bean
     .register::<MyAsyncService>()   // async bean
@@ -153,10 +153,11 @@ AppBuilder::new()
     .load_config::<()>()                   // raw config only
     .load_config::<AppConfig>()            // or: raw + typed config
 
-// Pre-loaded config (tests, hot-reload):
-let config = R2eConfig::load()?;
+// Tests only: stash an in-memory config for the next load_config::<C>()
+// (override_bean/override_config_value family; internal dev-reload plumbing uses it too):
 AppBuilder::new()
-    .with_config(config)
+    .override_config(config)
+    .load_config::<AppConfig>()
 
 // Manual access:
 let config = R2eConfig::load()?;

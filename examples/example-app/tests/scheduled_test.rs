@@ -17,11 +17,7 @@ use tokio_util::sync::CancellationToken;
 // `RegisterController`) lets registration/inference supply it. ───
 
 trait ScheduledExt<S, W>: Sized {
-    fn boxed_tasks(
-        state: &S,
-        core: Arc<Self>,
-        ctx: &r2e::BeanContext,
-    ) -> Vec<Box<dyn Any + Send>>;
+    fn boxed_tasks(state: &S, core: Arc<Self>, ctx: &r2e::BeanContext) -> Vec<Box<dyn Any + Send>>;
 }
 
 impl<C, S, W> ScheduledExt<S, W> for C
@@ -29,11 +25,7 @@ where
     C: ControllerTrait<S, W>,
     S: Clone + Send + Sync + 'static,
 {
-    fn boxed_tasks(
-        state: &S,
-        core: Arc<Self>,
-        ctx: &r2e::BeanContext,
-    ) -> Vec<Box<dyn Any + Send>> {
+    fn boxed_tasks(state: &S, core: Arc<Self>, ctx: &r2e::BeanContext) -> Vec<Box<dyn Any + Send>> {
         <C as ControllerTrait<S, W>>::scheduled_tasks_boxed(state, core, ctx)
     }
 }
@@ -265,11 +257,8 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
         .await;
     let core = Arc::new(AuditedScheduled::from_context(builder.bean_context()));
 
-    let boxed = AuditedScheduled::boxed_tasks(
-        builder.state(),
-        Arc::clone(&core),
-        builder.bean_context(),
-    );
+    let boxed =
+        AuditedScheduled::boxed_tasks(builder.state(), Arc::clone(&core), builder.bean_context());
     let tasks = extract_tasks(boxed);
     assert_eq!(tasks.len(), 2);
 
@@ -353,11 +342,8 @@ async fn controller_level_intercept_promotes_sync_scheduled_method() {
 
     // Fill the core's DecoSlot (the registration path) without starting the
     // scheduler tasks.
-    let _tasks = CtrlLevelScheduled::boxed_tasks(
-        builder.state(),
-        Arc::clone(&core),
-        builder.bean_context(),
-    );
+    let _tasks =
+        CtrlLevelScheduled::boxed_tasks(builder.state(), Arc::clone(&core), builder.bean_context());
 
     // `sync_tick` has NO method-level `#[intercept]`; the controller-level
     // one alone promoted the wrapper — hence the `.await` — and its chain

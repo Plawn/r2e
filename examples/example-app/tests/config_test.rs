@@ -88,7 +88,8 @@ async fn setup_with_option(option_value: Option<&str>) -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(Arc::new(jwt.claims_validator()))
             .build_state()
             .await
@@ -109,11 +110,7 @@ async fn setup() -> (TestApp, TestJwt) {
 async fn test_config_string_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/string")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/string").bearer(&token).send().await;
     resp.assert_ok();
     let name: String = resp.json();
     assert_eq!(name, "MyApp");
@@ -123,11 +120,7 @@ async fn test_config_string_injection() {
 async fn test_config_i64_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/i64")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/i64").bearer(&token).send().await;
     resp.assert_ok();
     let port: i64 = resp.json();
     assert_eq!(port, 8080);
@@ -137,11 +130,7 @@ async fn test_config_i64_injection() {
 async fn test_config_f64_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/f64")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/f64").bearer(&token).send().await;
     resp.assert_ok();
     let rate: f64 = resp.json();
     assert!((rate - 3.14).abs() < f64::EPSILON);
@@ -151,11 +140,7 @@ async fn test_config_f64_injection() {
 async fn test_config_bool_injection() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/bool")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/bool").bearer(&token).send().await;
     resp.assert_ok();
     let debug: bool = resp.json();
     assert!(debug);
@@ -165,11 +150,7 @@ async fn test_config_bool_injection() {
 async fn test_config_option_some() {
     let (app, jwt) = setup_with_option(Some("I exist")).await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/option")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/option").bearer(&token).send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["value"], "I exist");
@@ -179,11 +160,7 @@ async fn test_config_option_some() {
 async fn test_config_option_none() {
     let (app, jwt) = setup_with_option(None).await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/config/option")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/config/option").bearer(&token).send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert!(body["value"].is_null());
@@ -217,7 +194,8 @@ async fn test_config_missing_required_panics() {
     // This should panic during register_controller because the config key is missing
     let _app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(Arc::new(jwt.claims_validator()))
             .build_state()
             .await

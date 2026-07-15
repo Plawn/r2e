@@ -38,10 +38,7 @@ impl IdentityController {
     /// curl -H "Authorization: Bearer $TOKEN" http://localhost:3001/identity/light
     /// ```
     #[get("/light")]
-    async fn light(
-        &self,
-        #[inject(identity)] user: AuthenticatedUser,
-    ) -> Json<AuthenticatedUser> {
+    async fn light(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<AuthenticatedUser> {
         // No DB query — just the JWT claims
         Json(user)
     }
@@ -72,10 +69,7 @@ impl IdentityController {
     /// curl -H "Authorization: Bearer $TOKEN" http://localhost:3001/identity/full
     /// ```
     #[get("/full")]
-    async fn full(
-        &self,
-         #[inject(identity)] user: DbUser,
-    ) -> Json<DbUser> {
+    async fn full(&self, #[inject(identity)] user: DbUser) -> Json<DbUser> {
         // Includes DB lookup for user profile
         Json(user)
     }

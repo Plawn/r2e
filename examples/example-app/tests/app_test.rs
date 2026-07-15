@@ -1,5 +1,5 @@
 //! Blueprint-based integration tests: boot the **real** application through
-//! `example_app::app` instead of re-declaring controllers and services.
+//! `example_app::ExampleApp` instead of re-declaring controllers and services.
 //!
 //! This file is the showcase for the Quarkus-grade testing DX:
 //! - `#[r2e::test(app = ...)]`  → `@QuarkusTest` (boot the real app)
@@ -14,21 +14,21 @@ use r2e_test::{TestApp, TestJwt};
 
 // ── Boot + HTTP ─────────────────────────────────────────────────────────
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn health_endpoint(app: TestApp) {
     let resp = app.get("/health").send().await;
     resp.assert_ok();
     assert_eq!(resp.text(), "OK");
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn anonymous_request_is_rejected(app: TestApp) {
     app.get("/users").send().await.assert_unauthorized();
 }
 
 // ── @TestSecurity: .as_user mints tokens accepted by the pinned validator ──
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn list_users_as_authenticated_user(app: TestApp) {
     let resp = app.get("/users").as_user("user-1", &["user"]).send().await;
     resp.assert_ok();
@@ -37,7 +37,7 @@ async fn list_users_as_authenticated_user(app: TestApp) {
     assert_eq!(users[0].name, "Alice");
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn admin_endpoint_enforces_roles(app: TestApp) {
     app.get("/mixed/admin")
         .as_user("user-1", &["user"])
@@ -54,13 +54,13 @@ async fn admin_endpoint_enforces_roles(app: TestApp) {
 
 // ── Fail-closed auth with #[anonymous] opt-out (ReportController) ────────
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn anonymous_route_is_public(app: TestApp) {
     // No credentials at all — the marked route skips identity extraction.
     app.get("/reports/summary").send().await.assert_ok();
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn unmarked_routes_are_authenticated_by_default(app: TestApp) {
     app.get("/reports/full").send().await.assert_unauthorized();
 
@@ -71,7 +71,7 @@ async fn unmarked_routes_are_authenticated_by_default(app: TestApp) {
         .assert_ok();
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn struct_identity_feeds_roles_without_params(app: TestApp) {
     // Anonymous → 401 from identity extraction (fail-closed default).
     app.get("/reports/audit").send().await.assert_unauthorized();
@@ -90,10 +90,14 @@ async fn struct_identity_feeds_roles_without_params(app: TestApp) {
         .assert_ok();
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn negative_token_paths(app: TestApp, jwt: TestJwt) {
     let bad = jwt.wrong_issuer_token("user-1");
-    app.get("/users").bearer(&bad).send().await.assert_unauthorized();
+    app.get("/users")
+        .bearer(&bad)
+        .send()
+        .await
+        .assert_unauthorized();
 
     app.get("/users")
         .bearer(&TestJwt::malformed_token())
@@ -104,7 +108,7 @@ async fn negative_token_paths(app: TestApp, jwt: TestJwt) {
 
 // ── @Inject: beans from the real app's graph, injected into the test ────
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn beans_are_injectable_into_tests(app: TestApp, #[inject] users: UserService) {
     assert_eq!(users.count().await, 2);
 
@@ -121,11 +125,15 @@ async fn beans_are_injectable_into_tests(app: TestApp, #[inject] users: UserServ
 
 // ── @TestProfile: application-test.yaml + per-test config overrides ─────
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn test_profile_overlays_config(app: TestApp) {
     // application.yaml says "Welcome to R2E!"; application-test.yaml
     // overrides app.greeting under the forced `test` profile.
-    let resp = app.get("/users/greet").as_user("user-1", &["user"]).send().await;
+    let resp = app
+        .get("/users/greet")
+        .as_user("user-1", &["user"])
+        .send()
+        .await;
     resp.assert_ok();
     assert_eq!(resp.text(), "Hello from the test profile!");
 
@@ -135,16 +143,20 @@ async fn test_profile_overlays_config(app: TestApp) {
     );
 }
 
-#[r2e::test(app = example_app::app, with = |b| b.override_config_value("app.greeting", "patched for this test"))]
+#[r2e::test(app = example_app::ExampleApp, with = |b| b.override_config_value("app.greeting", "patched for this test"))]
 async fn config_keys_can_be_patched_per_test(app: TestApp) {
-    let resp = app.get("/users/greet").as_user("user-1", &["user"]).send().await;
+    let resp = app
+        .get("/users/greet")
+        .as_user("user-1", &["user"])
+        .send()
+        .await;
     resp.assert_ok();
     assert_eq!(resp.text(), "patched for this test");
 }
 
 // ── @InjectMock: pin a replacement bean over the app's own registration ──
 
-#[r2e::test(app = example_app::app, with = |b| {
+#[r2e::test(app = example_app::ExampleApp, with = |b| {
     let bus = r2e::r2e_events::LocalEventBus::new();
     b.override_bean(example_app::services::UserService::new(bus))
 })]
@@ -162,7 +174,7 @@ async fn beans_can_be_pinned_over_the_apps_own(app: TestApp, #[inject] users: Us
 
 // ── Request-reply: a responder #[consumer] replies to bus.request ──────────
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn request_reply_responder_answers_over_the_bus(app: TestApp) {
     // GET /events/greet/{name} sends a GreetRequest on the bus and awaits the
     // responder's GreetReply (registered via EventBus::respond). LocalEventBus

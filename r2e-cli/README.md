@@ -64,7 +64,8 @@ my-app/
   proto/
     greeter.proto               # Sample gRPC service definition
   src/
-    main.rs                     # #[r2e::main] with AppBuilder + producers + .serve()
+    lib.rs                      # `impl App for MyApp` (setup/build) + producers
+    main.rs                     # thin: #[r2e::main] async fn main() { r2e::launch!(MyApp).await.unwrap() }
     controllers/
       mod.rs
       hello.rs                  # Hello world controller

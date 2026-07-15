@@ -1,11 +1,11 @@
 //! Example application library.
 //!
 //! Everything except `main()` lives here so that integration tests can boot
-//! the **same** application via the blueprint ([`app`]) instead of
-//! copy-pasting controllers and services:
+//! the **same** application via the [`ExampleApp`] blueprint (the canonical
+//! [`App`] impl) instead of copy-pasting controllers and services:
 //!
 //! ```ignore
-//! #[r2e::test(app = example_app::app)]
+//! #[r2e::test(app = example_app::ExampleApp)]
 //! async fn lists_users(app: TestApp) {
 //!     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
 //! }
@@ -88,9 +88,9 @@ pub fn demo_token() -> String {
     encode(&header, &claims, &EncodingKey::from_secret(DEMO_SECRET)).unwrap()
 }
 
-/// Resources provisioned once. In dev mode they survive hot patches
-/// (`main.rs` keeps the `AppEnv` alive across code reloads); the blueprint
-/// provisions a fresh set per boot.
+/// Resources provisioned once by [`App::setup`]. In dev mode `r2e::launch`
+/// keeps them alive across hot-patches (only [`App::build`] re-runs per
+/// patch); tests provision a fresh set per boot.
 #[derive(Clone)]
 pub struct AppEnv {
     event_bus: LocalEventBus,
@@ -102,7 +102,7 @@ pub struct AppEnv {
 
 /// Provision the app's external resources: in-memory SQLite with seed data,
 /// event bus, JWT validator, SSE broadcaster.
-pub async fn setup() -> AppEnv {
+async fn provision_env() -> AppEnv {
     let event_bus = LocalEventBus::new();
 
     let sec_config = SecurityConfig::new("unused", "r2e-demo", "r2e-app")
@@ -149,89 +149,97 @@ pub async fn setup() -> AppEnv {
     }
 }
 
-/// Application blueprint: provision fresh resources and assemble the full
-/// app. Tests boot this via `TestApp::boot(example_app::app)` or
-/// `#[r2e::test(app = example_app::app)]`.
-pub async fn app(b: AppBuilder) -> impl BootableApp {
-    let env = setup().await;
-    app_with_env(b, env).await
-}
+/// The canonical application blueprint. Production (`r2e::launch!(ExampleApp)`),
+/// dev hot-reload, and tests (`#[r2e::test(app = example_app::ExampleApp)]` /
+/// `TestApp::boot::<ExampleApp>()`) all go through this single [`App`] impl.
+pub struct ExampleApp;
 
-/// Assemble the app on pre-provisioned resources. `main.rs` calls this
-/// directly so the dev hot-reload path can keep [`AppEnv`] alive across
-/// patches.
-pub async fn app_with_env(b: AppBuilder, env: AppEnv) -> impl BootableApp {
-    b.plugin(Scheduler)
-        .plugin(
-            Prometheus::builder()
-                .endpoint("/metrics")
-                .namespace("r2e")
-                .exclude_path("/health")
-                .exclude_path("/metrics")
-                .build(),
-        )
-        .load_config::<controllers::config_controller::RootConfig>()
-        .provide(env.event_bus)
-        .provide(env.pool)
-        .provide(env.claims_validator)
-        .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
-        .provide(r2e::r2e_cache::InMemoryStore::shared())
-        .provide(env.sse_broadcaster)
-        .provide(SseTopic::<models::UserCreatedEvent>::new(64).with_event_name("user_created"))
-        .provide(env.notification_service)
-        .register_module::<UserModule>()
-        .build_state()
-        .await
-        // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is
-        // broadcast on the topic (served at /sse/users) with no liaison code.
-        .bridge_sse::<LocalEventBus, models::UserCreatedEvent>()
-        // Dynamic scheduled task: the schedule is parsed from a string at
-        // runtime (config-driven), unlike the #[scheduled] methods on
-        // ScheduledJobs. Both show up in the ScheduledJobRegistry bean.
-        .schedule_task(ScheduledTaskDef::from_fn(
-            "dynamic_heartbeat",
-            "30s".parse().expect("valid schedule"),
-            || async { tracing::debug!("dynamic heartbeat tick") },
-        ))
-        .with(Health)
-        .with(RequestIdPlugin)
-        .with(SecureHeaders::default())
-        .with(Cors::permissive())
-        .with(Observability::new(
-            ObservabilityConfig::new("r2e-example")
-                .with_service_version("0.1.0")
-                .capture_header("x-request-id"),
-        ))
-        .with(ErrorHandling)
-        .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            r2e::http::StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(30),
-        ))
-        .with(OpenApiPlugin::new(
-            OpenApiConfig::new("R2E Example API", "0.1.1")
-                .with_description("Demo application showcasing all R2E features")
-                .with_docs_ui(true),
-        ))
-        .on_start(|_state| async move {
-            tracing::info!("R2E example-app startup hook executed");
-            Ok(())
-        })
-        .on_stop(|_| async {
-            tracing::info!("R2E example-app shutdown hook executed");
-        })
-        .register_controllers::<(
-            AccountController,
-            ConfigController,
-            DataController,
-            MixedController,
-            IdentityController,
-            ScheduledJobs,
-            SseController,
-            WsEchoController,
-            NotificationController,
-            ReportController,
-            UploadController,
-            ProxyController,
-        )>()
-        .with(NormalizePath)
+impl App for ExampleApp {
+    /// Long-lived resources; in dev mode they survive hot-patches.
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        // Print a demo JWT for curl usage (harmless in tests; this is a demo app).
+        println!("=== Test JWT (valid 1h) ===");
+        println!("{}", demo_token());
+        println!();
+
+        provision_env().await
+    }
+
+    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+        b.plugin(Scheduler)
+            .plugin(
+                Prometheus::builder()
+                    .endpoint("/metrics")
+                    .namespace("r2e")
+                    .exclude_path("/health")
+                    .exclude_path("/metrics")
+                    .build(),
+            )
+            .load_config::<controllers::config_controller::RootConfig>()
+            .provide(env.event_bus)
+            .provide(env.pool)
+            .provide(env.claims_validator)
+            .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
+            .provide(r2e::r2e_cache::InMemoryStore::shared())
+            .provide(env.sse_broadcaster)
+            .provide(SseTopic::<models::UserCreatedEvent>::new(64).with_event_name("user_created"))
+            .provide(env.notification_service)
+            .register_module::<UserModule>()
+            .build_state()
+            .await
+            // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is
+            // broadcast on the topic (served at /sse/users) with no liaison code.
+            .bridge_sse::<LocalEventBus, models::UserCreatedEvent>()
+            // Dynamic scheduled task: the schedule is parsed from a string at
+            // runtime (config-driven), unlike the #[scheduled] methods on
+            // ScheduledJobs. Both show up in the ScheduledJobRegistry bean.
+            .schedule_task(ScheduledTaskDef::from_fn(
+                "dynamic_heartbeat",
+                "30s".parse().expect("valid schedule"),
+                || async { tracing::debug!("dynamic heartbeat tick") },
+            ))
+            .with(Health)
+            .with(RequestIdPlugin)
+            .with(SecureHeaders::default())
+            .with(Cors::permissive())
+            .with(Observability::new(
+                ObservabilityConfig::new("r2e-example")
+                    .with_service_version("0.1.0")
+                    .capture_header("x-request-id"),
+            ))
+            .with(ErrorHandling)
+            .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
+                r2e::http::StatusCode::REQUEST_TIMEOUT,
+                Duration::from_secs(30),
+            ))
+            .with(OpenApiPlugin::new(
+                OpenApiConfig::new("R2E Example API", "0.1.1")
+                    .with_description("Demo application showcasing all R2E features")
+                    .with_docs_ui(true),
+            ))
+            .on_start(|_state| async move {
+                tracing::info!("R2E example-app startup hook executed");
+                Ok(())
+            })
+            .on_stop(|_| async {
+                tracing::info!("R2E example-app shutdown hook executed");
+            })
+            .register_controllers::<(
+                AccountController,
+                ConfigController,
+                DataController,
+                MixedController,
+                IdentityController,
+                ScheduledJobs,
+                SseController,
+                WsEchoController,
+                NotificationController,
+                ReportController,
+                UploadController,
+                ProxyController,
+            )>()
+            .with(NormalizePath)
+    }
 }
