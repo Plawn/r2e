@@ -18,12 +18,19 @@
 //! }
 //! ```
 //!
-//! [`shared()`](DevPostgres::shared) starts the container **once per test
-//! process** and keeps it alive until the process exits (testcontainers'
-//! reaper removes it afterwards); [`start()`](DevPostgres::start) gives an
-//! isolated container whose lifetime follows the returned handle.
+//! [`shared()`](DevPostgres::shared) reuses one stable container across all test
+//! processes in the suite. Every process keeps a TCP lease to a shared Ryuk
+//! reaper; after the last process exits, Ryuk removes all managed containers.
+//! Set `R2E_DEVSERVICES_KEEP=1` to disable reaping for post-mortem inspection.
+//! [`start()`](DevPostgres::start) gives an isolated container whose normal
+//! lifetime follows the returned handle, with Ryuk as a crash-safe fallback.
 //!
 //! Feature flags: `postgres`, `redis`.
+
+#[cfg(any(feature = "postgres", feature = "redis"))]
+mod common;
+#[cfg(any(feature = "postgres", feature = "redis"))]
+mod ryuk;
 
 #[cfg(feature = "postgres")]
 mod postgres;

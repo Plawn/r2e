@@ -47,8 +47,27 @@ let redis = DevRedis::shared().await;
 
 ## Lifecycle
 
-- `shared()` — starts the container **once per test process**, reused across all tests. Testcontainers' reaper cleans up after the process exits.
-- `start()` — starts an isolated container whose lifetime follows the returned handle.
+- `shared()` — reuses one stable container across all test processes. A shared Ryuk reaper removes it after the final process exits.
+- `start()` — starts an isolated container whose lifetime follows the returned handle; Ryuk removes it after a crash or forced process termination.
+- `R2E_DEVSERVICES_KEEP=1` — disables Ryuk and cleanup for post-mortem inspection.
+
+Ryuk is pinned to `testcontainers/ryuk:0.14.0`. It needs access to the
+Docker Unix socket and is started automatically on first use. Its default
+reconnection grace period is 10 seconds, allowing consecutive test binaries
+to join the same session before cleanup begins.
+
+### Ryuk configuration
+
+| Environment variable | Purpose |
+|----------------------|---------|
+| `R2E_DEVSERVICES_DOCKER_SOCKET` | Override the host path of the Docker Unix socket |
+| `R2E_DEVSERVICES_RYUK_RECONNECTION_TIMEOUT` | Grace period as a Go duration, e.g. `3s` (default `10s`) |
+| `R2E_DEVSERVICES_RYUK_PRIVILEGED=1` | Run Ryuk privileged when required by the Docker environment |
+| `R2E_DEVSERVICES_SESSION` | Override the workspace-derived cross-process session identity |
+| `R2E_DEVSERVICES_KEEP=1` | Disable Ryuk and fallback cleanup |
+
+Remote Docker endpoints without a local Unix socket are not currently
+supported by the embedded Ryuk integration.
 
 ## Feature flags
 

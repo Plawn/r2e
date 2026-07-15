@@ -16,9 +16,9 @@ postgres = ["testcontainers-modules/postgres"]
 redis = ["testcontainers-modules/redis"]
 
 [dependencies]
-testcontainers = { workspace = true }
+testcontainers = { workspace = true, features = ["reusable-containers"] }
 testcontainers-modules = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt"] }
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
