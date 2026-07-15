@@ -1,12 +1,13 @@
 use r2e::Identity;
 use r2e::r2e_security::{
-    impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
+    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims,
+    RoleBasedIdentity,
 };
 use serde::Serialize;
 
 /// A tenant-aware identity that includes the tenant_id from JWT claims.
 // Not `Deserialize`: a trusted identity must never be constructible from a
-// request body. Built only via `ClaimsIdentity::from_jwt_claims` after JWT validation.
+// request body. Built only via `FromValidatedJwtClaims::from_jwt_claims` after JWT validation.
 #[derive(Clone, Debug, Serialize)]
 pub struct TenantUser {
     pub auth: AuthenticatedUser,
@@ -37,7 +38,7 @@ impl TenantUser {
     }
 }
 
-impl<S> ClaimsIdentity<S> for TenantUser
+impl<S> FromValidatedJwtClaims<S> for TenantUser
 where
     S: Send + Sync,
 {

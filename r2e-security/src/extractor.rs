@@ -7,7 +7,7 @@ use tracing::{debug, warn};
 
 use crate::error::SecurityError;
 use crate::identity::{AuthenticatedUser, IdentityBuilder};
-use crate::jwt::{JwtClaimsValidator, JwtValidator};
+use crate::jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 
 /// Extract a Bearer token from the Authorization header value.
 pub fn extract_bearer_token(header_value: &str) -> Result<&str, SecurityError> {
@@ -106,10 +106,25 @@ pub async fn extract_jwt_claims<S, I>(
 where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
 {
+    extract_jwt_claims_as::<S, I, serde_json::Value>(parts, state).await
+}
+
+/// Extract, validate and deserialize JWT claims into an application claim set.
+///
+/// This is the typed counterpart of [`extract_jwt_claims`]. It performs no
+/// intermediate `serde_json::Value` allocation.
+pub async fn extract_jwt_claims_as<S, I, C>(
+    parts: &Parts,
+    state: &S,
+) -> Result<C, r2e_core::HttpError>
+where
+    S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
+    C: JwtClaimSet,
+{
     let token = extract_bearer_token_from_parts(parts)?;
     let validator: Arc<JwtClaimsValidator> = state.get_bean();
 
-    let claims = validator.validate(token).await.map_err(|e| {
+    let claims = validator.validate_as(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
         r2e_core::HttpError::from(e)
     })?;

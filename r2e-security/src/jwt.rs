@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use serde::de::DeserializeOwned;
 use tracing::{debug, warn};
 
 use crate::config::SecurityConfig;
@@ -13,6 +14,22 @@ use crate::openid::RoleExtractor;
 enum KeySource {
     Jwks(Arc<JwksCache>),
     Static(Arc<DecodingKey>),
+}
+
+/// A deserializable JWT claim set that exposes its subject for validation.
+///
+/// Implement this trait on application-specific claim structs to deserialize
+/// directly into a typed representation with [`JwtClaimsValidator::validate_as`].
+/// [`serde_json::Value`] implements it for the dynamic/default path.
+pub trait JwtClaimSet: DeserializeOwned + Send {
+    /// Return the JWT subject (`sub`) when present.
+    fn subject(&self) -> Option<&str>;
+}
+
+impl JwtClaimSet for serde_json::Value {
+    fn subject(&self) -> Option<&str> {
+        self.get("sub").and_then(serde_json::Value::as_str)
+    }
 }
 
 /// Low-level JWT claims validator.
@@ -97,6 +114,16 @@ impl JwtClaimsValidator {
     ///
     /// Returns the validated claims as a JSON value.
     pub async fn validate(&self, token: &str) -> Result<serde_json::Value, SecurityError> {
+        self.validate_as(token).await
+    }
+
+    /// Validate a JWT token and deserialize it into an application claim set.
+    ///
+    /// Signature, algorithm, issuer, audience, expiry and subject validation
+    /// are identical to [`validate`](Self::validate). Deserializing directly
+    /// into `C` avoids constructing a `serde_json::Value` when callers use
+    /// typed claims.
+    pub async fn validate_as<C: JwtClaimSet>(&self, token: &str) -> Result<C, SecurityError> {
         // Step 1: Decode header to get kid and algorithm
         let header = decode_header(token)
             .map_err(|e| SecurityError::InvalidToken(format!("Failed to decode header: {e}")))?;
@@ -129,34 +156,30 @@ impl JwtClaimsValidator {
 
         // Step 3: Decode and validate the token using the parameters prepared
         // once when the validator was constructed.
-        let token_data = decode::<serde_json::Value>(token, &decoding_key, &self.validation)
-            .map_err(|e| {
-                let err = match e.kind() {
-                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-                        SecurityError::TokenExpired
-                    }
-                    jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
-                        SecurityError::ValidationFailed("Invalid issuer".into())
-                    }
-                    jsonwebtoken::errors::ErrorKind::InvalidAudience => {
-                        SecurityError::ValidationFailed("Invalid audience".into())
-                    }
-                    jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) => {
-                        SecurityError::ValidationFailed(format!("Missing required claim: {claim}"))
-                    }
-                    _ => SecurityError::InvalidToken(e.to_string()),
-                };
-                warn!(error = %err, "JWT claim validation failed");
-                err
-            })?;
+        let token_data = decode::<C>(token, &decoding_key, &self.validation).map_err(|e| {
+            let err = match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => SecurityError::TokenExpired,
+                jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
+                    SecurityError::ValidationFailed("Invalid issuer".into())
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                    SecurityError::ValidationFailed("Invalid audience".into())
+                }
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) => {
+                    SecurityError::ValidationFailed(format!("Missing required claim: {claim}"))
+                }
+                _ => SecurityError::InvalidToken(e.to_string()),
+            };
+            warn!(error = %err, "JWT claim validation failed");
+            err
+        })?;
 
         // A token must identify its subject. Without a non-empty `sub`, any
         // authorization keyed on the user identity would operate on an empty or
         // ambiguous identifier, so reject it outright.
         let sub = token_data
             .claims
-            .get("sub")
-            .and_then(|v| v.as_str())
+            .subject()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 warn!("JWT rejected: missing or empty 'sub' (subject) claim");

@@ -7,13 +7,15 @@
 //!
 //! Both use the same `JwtClaimsValidator`, so the JWT is validated only once.
 //!
-//! `DbUser` uses the [`ClaimsIdentity`] trait and [`impl_claims_identity_extractor!`]
+//! `DbUser` uses the [`FromValidatedJwtClaims`] trait and
+//! [`impl_claims_identity_extractor!`]
 //! macro to reduce boilerplate. Compare with the manual `FromRequestParts` approach
 //! documented in `r2e-security/src/extractor.rs`.
 
 use r2e::{BeanLookup, Identity};
 use r2e::r2e_security::{
-    impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity,
+    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims,
+    RoleBasedIdentity,
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// Use this when you need user data that isn't in the JWT (e.g., preferences,
 /// profile picture, subscription status).
 // Not `Deserialize`: a trusted identity must never be constructible from a
-// request body. Built only via `ClaimsIdentity::from_jwt_claims` after JWT validation.
+// request body. Built only via `FromValidatedJwtClaims::from_jwt_claims` after JWT validation.
 #[derive(Clone, Debug, Serialize)]
 pub struct DbUser {
     /// The light identity (JWT claims only)
@@ -72,7 +74,7 @@ impl DbUser {
     }
 }
 
-impl<S> ClaimsIdentity<S> for DbUser
+impl<S> FromValidatedJwtClaims<S> for DbUser
 where
     S: BeanLookup + Send + Sync,
 {

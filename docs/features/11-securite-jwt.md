@@ -62,7 +62,7 @@ The `JwksCache` downloads and caches public keys, with automatic refresh.
 The validator is resolved from the bean graph **by type** — there is no
 hand-written state struct and no `FromRef` impl. Provide it once as
 `Arc<JwtClaimsValidator>` and every identity extractor (`AuthenticatedUser` and
-any custom `ClaimsIdentity`) finds it automatically:
+any custom `FromValidatedJwtClaims`) finds it automatically:
 
 ```rust
 use std::sync::Arc;
@@ -119,19 +119,19 @@ Roles are looked up in the following order:
 
 The `RoleExtractor` trait can be implemented to support other formats.
 
-### Custom Identity Types (`ClaimsIdentity`)
+### Custom Identity Types (`FromValidatedJwtClaims`)
 
 To carry data beyond the raw JWT claims (e.g. a DB-backed profile), implement
-`ClaimsIdentity<S>` **generic over the state `S`** — never over a concrete state
+`FromValidatedJwtClaims<S>` **generic over the state `S`** — never over a concrete state
 struct. Read any beans you need (a pool, a repository, …) from the state via
 `state.bean::<T>()` (the `BeanLookup` vocabulary), then call
 `impl_claims_identity_extractor!` to generate the `FromRequestPartsVia` glue:
 
 ```rust
 use r2e::{BeanLookup, Identity};
-use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity};
+use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims};
 
-impl<S> ClaimsIdentity<S> for DbUser
+impl<S> FromValidatedJwtClaims<S> for DbUser
 where
     S: BeanLookup + Send + Sync,
 {
@@ -150,6 +150,57 @@ where
 
 impl_claims_identity_extractor!(DbUser);
 ```
+
+For typed application claims, implement `JwtClaimSet` and select the claims
+type both on the identity trait and the extractor macro:
+
+```rust
+use serde::Deserialize;
+use r2e::Identity;
+use r2e::r2e_security::{
+    impl_claims_identity_extractor, FromValidatedJwtClaims, JwtClaimSet,
+};
+
+#[derive(Deserialize)]
+struct TenantClaims {
+    sub: String,
+    tenant_id: String,
+}
+
+struct TenantUser {
+    sub: String,
+    tenant_id: String,
+}
+
+impl Identity for TenantUser {
+    fn sub(&self) -> &str {
+        &self.sub
+    }
+}
+
+impl JwtClaimSet for TenantClaims {
+    fn subject(&self) -> Option<&str> {
+        Some(&self.sub)
+    }
+}
+
+impl<S: Send + Sync> FromValidatedJwtClaims<S, TenantClaims> for TenantUser {
+    async fn from_jwt_claims(
+        claims: TenantClaims,
+        _state: &S,
+    ) -> Result<Self, r2e::HttpError> {
+        Ok(TenantUser {
+            sub: claims.sub,
+            tenant_id: claims.tenant_id,
+        })
+    }
+}
+
+impl_claims_identity_extractor!(TenantUser, claims = TenantClaims);
+```
+
+This path deserializes the validated payload directly into `TenantClaims` and
+does not build an intermediate `serde_json::Value`.
 
 The same `Arc<JwtClaimsValidator>` bean validates the JWT once; the light
 (`AuthenticatedUser`) and full (`DbUser`) identities share it.

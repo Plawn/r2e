@@ -11,14 +11,14 @@ pub mod openid;
 // Re-export primary public types for convenience.
 pub use config::SecurityConfig;
 pub use error::SecurityError;
-pub use extractor::{extract_jwt_claims, extract_jwt_identity};
+pub use extractor::{extract_jwt_claims, extract_jwt_claims_as, extract_jwt_identity};
 pub use guards::{AllRolesGuard, RoleBasedIdentity, RolesGuard};
 pub use identity::{
     AuthenticatedUser, ClaimsIdentity, DefaultIdentityBuilder, DefaultRoleExtractor,
-    IdentityBuilder, IdentityBuilderWith,
+    FromValidatedJwtClaims, IdentityBuilder, IdentityBuilderWith,
 };
 pub use jwks::JwksCache;
-pub use jwt::{JwtClaimsValidator, JwtValidator};
+pub use jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 
 // Re-export the base RoleExtractor trait at crate root for convenience.
 pub use openid::RoleExtractor;
@@ -33,6 +33,7 @@ pub mod __macro_support {
     pub use r2e_core::type_list::HasBean;
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
+    pub use serde_json;
     pub use crate::guards::AllRolesGuard;
     pub use crate::guards::RolesGuard;
 }

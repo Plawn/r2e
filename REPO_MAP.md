@@ -168,8 +168,8 @@ src/
   config.rs                 SecurityConfig (issuer, audience, JWKS URL, static keys)
   error.rs                  SecurityError enum (MissingAuthHeader, InvalidToken, ...)
   extractor.rs              AuthenticatedUser FromRequestParts impl, extract_bearer_token, extract_jwt_claims
-  identity.rs               AuthenticatedUser struct, IdentityBuilder trait, impl_claims_identity_extractor! macro
-  jwt.rs                    JwtClaimsValidator, JwtValidator — token validation with static key or JWKS
+  identity.rs               AuthenticatedUser, FromValidatedJwtClaims, IdentityBuilder, extractor macro
+  jwt.rs                    JwtClaimSet, JwtClaimsValidator, JwtValidator — typed token validation
   jwks.rs                   JwksCache — background JWKS key refresh
   keycloak.rs               RealmRoleExtractor, ClientRoleExtractor for Keycloak
   openid.rs                 StandardRoleExtractor, Composite, Merge — pluggable role extraction

@@ -1,3 +1,4 @@
+use r2e_core::Identity;
 use serde::Serialize;
 
 use crate::error::SecurityError;
@@ -10,19 +11,21 @@ use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 /// Combined with [`impl_claims_identity_extractor!`], this replaces the need to
 /// manually implement `FromRequestParts` for custom identity types.
 ///
+/// `C` defaults to [`serde_json::Value`]. Use an application struct implementing
+/// [`JwtClaimSet`](crate::JwtClaimSet) to deserialize custom fields directly.
+///
 /// # Example
 ///
 /// ```ignore
-/// use r2e_security::{ClaimsIdentity, AuthenticatedUser, impl_claims_identity_extractor};
+/// use r2e_security::{FromValidatedJwtClaims, AuthenticatedUser, impl_claims_identity_extractor};
 /// use r2e_core::HttpError;
 ///
-/// #[derive(Clone)]
 /// pub struct DbUser {
 ///     pub auth: AuthenticatedUser,
 ///     pub profile: UserProfile,
 /// }
 ///
-/// impl ClaimsIdentity<Services> for DbUser {
+/// impl FromValidatedJwtClaims<Services> for DbUser {
 ///     async fn from_jwt_claims(claims: serde_json::Value, state: &Services) -> Result<Self, HttpError> {
 ///         let auth = AuthenticatedUser::from_claims(claims);
 ///         let profile = fetch_profile(auth.sub(), &state.pool).await?;
@@ -32,22 +35,33 @@ use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 ///
 /// impl_claims_identity_extractor!(DbUser);
 /// ```
-pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
+pub trait FromValidatedJwtClaims<S, C = serde_json::Value>: Identity + Sized
+where
+    C: crate::JwtClaimSet,
+{
     fn from_jwt_claims(
-        claims: serde_json::Value,
+        claims: C,
         state: &S,
     ) -> impl std::future::Future<Output = Result<Self, crate::__macro_support::HttpError>> + Send;
 }
 
+/// Deprecated name for [`FromValidatedJwtClaims`].
+#[deprecated(
+    since = "0.1.0",
+    note = "use `FromValidatedJwtClaims`; it makes the validated-claims construction contract explicit"
+)]
+pub use FromValidatedJwtClaims as ClaimsIdentity;
+
 /// Generate [`FromRequestPartsVia`](r2e_core::extract::FromRequestPartsVia)
 /// and [`OptionalFromRequestPartsVia`](r2e_core::extract::OptionalFromRequestPartsVia)
-/// implementations for an identity type that implements [`ClaimsIdentity`].
+/// implementations for an identity type that implements
+/// [`FromValidatedJwtClaims`].
 ///
 /// This macro eliminates the boilerplate of manually implementing extraction.
 /// It pulls the `Arc<JwtClaimsValidator>` bean from the application state (via
 /// a `HasBean` bound whose index witness is parked in the `ViaBean` marker),
-/// validates the JWT, then delegates to `ClaimsIdentity::from_jwt_claims` for
-/// custom construction.
+/// validates the JWT, then delegates to
+/// `FromValidatedJwtClaims::from_jwt_claims` for custom construction.
 ///
 /// The optional impl enables `Option<YourIdentity>` as a handler parameter:
 /// returns `None` when no `Authorization` header is present, and errors on
@@ -58,14 +72,39 @@ pub trait ClaimsIdentity<S>: Sized + Clone + Send + Sync {
 /// ```ignore
 /// impl_claims_identity_extractor!(DbUser);
 /// ```
+///
+/// One invocation generates implementations for one concrete identity type.
+/// Generic identity families that need additional `impl<T>` parameters are not
+/// supported; wrap a concrete instantiation in a local newtype instead.
+/// Custom typed claims can be selected explicitly:
+///
+/// ```ignore
+/// impl_claims_identity_extractor!(DbUser, claims = DbUserClaims);
+/// ```
 #[macro_export]
 macro_rules! impl_claims_identity_extractor {
-    ($identity:ty) => {
-        impl<S, I> $crate::__macro_support::FromRequestPartsVia<S, $crate::__macro_support::ViaBean<I>> for $identity
+    ($identity:ty $(,)?) => {
+        $crate::impl_claims_identity_extractor!(
+            @impl $identity,
+            $crate::__macro_support::serde_json::Value
+        );
+    };
+
+    ($identity:ty, claims = $claims:ty $(,)?) => {
+        $crate::impl_claims_identity_extractor!(@impl $identity, $claims);
+    };
+
+    (@impl $identity:ty, $claims:ty) => {
+        impl<S, I>
+            $crate::__macro_support::FromRequestPartsVia<S, $crate::__macro_support::ViaBean<I>>
+            for $identity
         where
-            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I> + Send + Sync,
+            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I>
+                + Send
+                + Sync,
             I: Send + Sync,
-            Self: $crate::ClaimsIdentity<S>,
+            $claims: $crate::JwtClaimSet,
+            $identity: $crate::FromValidatedJwtClaims<S, $claims>,
         {
             type Rejection = $crate::__macro_support::HttpError;
 
@@ -73,16 +112,26 @@ macro_rules! impl_claims_identity_extractor {
                 parts: &mut $crate::__macro_support::http::header::Parts,
                 state: &S,
             ) -> Result<Self, Self::Rejection> {
-                let claims = $crate::extract_jwt_claims(parts, state).await?;
-                <$identity as $crate::ClaimsIdentity<S>>::from_jwt_claims(claims, state).await
+                let claims = $crate::extract_jwt_claims_as::<S, I, $claims>(parts, state).await?;
+                <$identity as $crate::FromValidatedJwtClaims<S, $claims>>::from_jwt_claims(
+                    claims, state,
+                )
+                .await
             }
         }
 
-        impl<S, I> $crate::__macro_support::OptionalFromRequestPartsVia<S, $crate::__macro_support::ViaBean<I>> for $identity
+        impl<S, I>
+            $crate::__macro_support::OptionalFromRequestPartsVia<
+                S,
+                $crate::__macro_support::ViaBean<I>,
+            > for $identity
         where
-            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I> + Send + Sync,
+            S: $crate::__macro_support::HasBean<std::sync::Arc<$crate::JwtClaimsValidator>, I>
+                + Send
+                + Sync,
             I: Send + Sync,
-            Self: $crate::ClaimsIdentity<S>,
+            $claims: $crate::JwtClaimSet,
+            $identity: $crate::FromValidatedJwtClaims<S, $claims>,
         {
             type Rejection = $crate::__macro_support::HttpError;
 
@@ -90,12 +139,19 @@ macro_rules! impl_claims_identity_extractor {
                 parts: &mut $crate::__macro_support::http::header::Parts,
                 state: &S,
             ) -> Result<Option<Self>, Self::Rejection> {
-                if !parts.headers.contains_key($crate::__macro_support::http::header::AUTHORIZATION) {
+                if !parts
+                    .headers
+                    .contains_key($crate::__macro_support::http::header::AUTHORIZATION)
+                {
                     return Ok(None);
                 }
 
-                let claims = $crate::extract_jwt_claims(parts, state).await?;
-                let identity = <$identity as $crate::ClaimsIdentity<S>>::from_jwt_claims(claims, state).await?;
+                let claims = $crate::extract_jwt_claims_as::<S, I, $claims>(parts, state).await?;
+                let identity =
+                    <$identity as $crate::FromValidatedJwtClaims<S, $claims>>::from_jwt_claims(
+                        claims, state,
+                    )
+                    .await?;
                 Ok(Some(identity))
             }
         }

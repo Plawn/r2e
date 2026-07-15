@@ -1,12 +1,24 @@
 use r2e_security::config::SecurityConfig;
 use r2e_security::error::SecurityError;
-use r2e_security::jwt::{JwtClaimsValidator, JwtValidator};
+use r2e_security::jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 
 const TEST_SECRET: &[u8] = b"r2e-test-secret-do-not-use-in-production";
 const TEST_ISSUER: &str = "test-issuer";
 const TEST_AUDIENCE: &str = "test-audience";
+
+#[derive(serde::Deserialize)]
+struct TypedClaims {
+    sub: String,
+    tenant_id: String,
+}
+
+impl JwtClaimSet for TypedClaims {
+    fn subject(&self) -> Option<&str> {
+        Some(&self.sub)
+    }
+}
 
 fn test_config() -> SecurityConfig {
     SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
@@ -80,6 +92,30 @@ async fn validate_valid_token() {
     assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
     let roles = claims["roles"].as_array().unwrap();
     assert_eq!(roles[0].as_str().unwrap(), "admin");
+}
+
+#[r2e_core::test]
+async fn validate_typed_claims() {
+    let validator = test_claims_validator();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({
+        "sub": "user-1",
+        "tenant_id": "tenant-a",
+        "iss": TEST_ISSUER,
+        "aud": TEST_AUDIENCE,
+        "exp": now + 3600,
+    });
+
+    let claims: TypedClaims = validator
+        .validate_as(&encode_claims(&claims))
+        .await
+        .unwrap();
+
+    assert_eq!(claims.sub, "user-1");
+    assert_eq!(claims.tenant_id, "tenant-a");
 }
 
 #[r2e_core::test]
