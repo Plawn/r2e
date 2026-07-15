@@ -117,7 +117,7 @@ base64 = "0.22"
 dotenvy = "0.15"
 
 # Dev services (test containers)
-testcontainers = "0.27"
+testcontainers = { version = "0.27", features = ["reusable-containers"] }
 testcontainers-modules = "0.15"
 
 # Security
