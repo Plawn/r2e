@@ -24,7 +24,7 @@ Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx
 
 **Always declare an R2E app via the `App` trait** (in the prelude): the app lives
 in `lib.rs` as `impl App for MyApp`, so the exact same unit boots in production
-(`main.rs` → `r2e::launch`), in dev (hot-reload, same `launch`), and in tests
+(`main.rs` → `r2e::launch!`), in dev (hot-reload, same `launch!`), and in tests
 (`#[r2e::test(app = MyApp)]`). `main.rs` is a thin shell.
 
 - `App::setup() -> Self::Env` — long-lived resources built **once** (pools, buses).
@@ -59,12 +59,12 @@ impl App for MyApp {
 ```
 
 ```rust
-// src/main.rs — prod serve AND dev hot-reload (both handled inside launch)
+// src/main.rs — prod serve AND dev hot-reload (both handled inside launch!)
 use r2e::prelude::*;
 
 #[r2e::main]
 async fn main() {
-    r2e::launch::<my_app::MyApp>().await.unwrap();  // setup() → build() → serve_auto()
+    r2e::launch!(my_app::MyApp).await.unwrap();  // setup() → build() → serve_auto()
 }
 ```
 
@@ -390,8 +390,8 @@ for multiple beans of the same underlying type.
 ## AppBuilder — full assembly order
 
 The chain below is the body of `App::build` (return the `BootableApp` — do NOT
-call a terminal `serve`/`serve_auto` there; `r2e::launch::<A>()` does that). The
-`AppBuilder::new()` + terminal `serve_auto()` shown here are what `launch`
+call a terminal `serve`/`serve_auto` there; `r2e::launch!(A)` does that). The
+`AppBuilder::new()` + terminal `serve_auto()` shown here are what `launch!`
 performs around your `build`.
 
 ```rust
@@ -1322,13 +1322,25 @@ next `load_config::<C>()` uses it instead of reading disk (see Configuration).
 
 - `#[r2e::main]` — tokio main; takes NO parameter and NO setup-fn argument
   (that convention is gone — passing one is a compile error). The body is
-  just `r2e::launch::<MyApp>().await.unwrap()`.
-- Hot reload (`dev-reload` feature): `r2e::launch` runs the Subsecond hot-patch
-  loop internally. `App::setup()` runs **once** and its `Env` survives every
+  just `r2e::launch!(MyApp).await.unwrap()`.
+- Hot reload (`dev-reload` feature): `r2e::launch!` runs the Subsecond hot-patch
+  loop. It is a **macro** (not `launch::<MyApp>()`) because Subsecond only remaps
+  symbols in the *tip crate* that owns `main.rs`; the macro expands its loop —
+  including the concrete function Subsecond patches — into your crate. A generic
+  dispatcher monomorphised from `r2e-core` would never be patched. Without
+  `dev-reload` the macro just calls `r2e::launch::<MyApp>()`.
+  `App::setup()` runs **once** and its `Env` survives every
   hot-patch (put pools/buses/validators there); `App::build()` re-runs per
   patch. Keep `load_config` inside `build`: because `build()` re-runs per patch,
   its `load_config` re-reads `application.yaml` from disk each time, so YAML edits
   are picked up on the next hot-patch.
+  LIMITATION: Subsecond only patches the **tip crate** (the one with `main.rs`).
+  Edits to code in a *library* crate (e.g. `App`/controllers behind
+  `use my_app::…`) are ignored at runtime even though `build()` re-runs. For
+  hot-reload to apply your edits, the app code you edit must live in the binary
+  crate (`src/main.rs` + its modules), not a sibling `lib.rs`. Integration tests
+  (`#[r2e::test(app = …)]`) still boot the library-crate app normally — they
+  don't use hot-reload.
 - `r2e new <name>` — scaffold a project (`App`-trait layout). `r2e dev` — hot
   reload. `r2e generate controller <Name>` — scaffold pieces. `r2e routes` —
   list routes. `r2e doctor` — diagnose setup.
@@ -1398,9 +1410,14 @@ Alongside `&self`:
 | `.schedule_task(def)` | post-state | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |
 | `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
-| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch` calls `serve_auto`) |
+| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
-Launching: `r2e::launch::<A: App>() -> Result<(), Box<dyn std::error::Error>>`
-runs `A::setup()` → `A::build(AppBuilder::new(), env)` → `serve_auto()` (and the
-Subsecond hot-patch loop under `dev-reload`). This is the one entry point —
-`main.rs` is just `#[r2e::main] async fn main() { r2e::launch::<MyApp>().await.unwrap() }`.
+Launching: write `r2e::launch!(MyApp)` in `main.rs`. It expands to an `async`
+block yielding `Result<(), Box<dyn std::error::Error>>` (await it, then
+`.unwrap()`). Without `dev-reload` it calls
+`r2e::launch::<A: App>()`, which runs `A::setup()` →
+`A::build(AppBuilder::new(), env)` → `serve_auto()`. Under `dev-reload` the macro
+instead drives the Subsecond hot-patch loop from a concrete function it expands
+into your crate (a generic dispatcher from `r2e-core` would never be patched).
+This is the one entry point — `main.rs` is just
+`#[r2e::main] async fn main() { r2e::launch!(MyApp).await.unwrap() }`.

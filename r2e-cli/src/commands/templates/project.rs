@@ -251,7 +251,7 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
 
 #[r2e::main]
 async fn main() {{
-    r2e::launch::<{ident}::{app_name}>().await.unwrap();
+    r2e::launch!({ident}::{app_name}).await.unwrap();
 }}
 "#
     )
@@ -360,7 +360,7 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 - **App trait**: the whole app is assembled in `src/lib.rs` in
   `impl App for {app_name}` — `build(b, env)` returns `impl BootableApp`, and
   long-lived resources go in `setup()` (they survive hot-patches). `src/main.rs`
-  only calls `r2e::launch::<{app_name}>()`. Add new controllers/beans/plugins
+  only calls `r2e::launch!({app_name})`. Add new controllers/beans/plugins
   inside `build` — never in `main.rs`, and never build a second `AppBuilder`.
 - **State is inferred**: there is no state struct. `.provide(bean)` /
   `.register::<T>()` before `.build_state().await`; inject by type with

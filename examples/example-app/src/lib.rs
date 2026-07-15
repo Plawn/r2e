@@ -149,7 +149,7 @@ async fn provision_env() -> AppEnv {
     }
 }
 
-/// The canonical application blueprint. Production (`r2e::launch::<ExampleApp>`),
+/// The canonical application blueprint. Production (`r2e::launch!(ExampleApp)`),
 /// dev hot-reload, and tests (`#[r2e::test(app = example_app::ExampleApp)]` /
 /// `TestApp::boot::<ExampleApp>()`) all go through this single [`App`] impl.
 pub struct ExampleApp;

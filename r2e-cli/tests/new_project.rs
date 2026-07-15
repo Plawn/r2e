@@ -72,7 +72,7 @@ fn new_creates_thin_main_rs() {
     // main.rs only launches the app — no assembly lives here.
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
     assert!(main.contains("#[r2e::main]"));
-    assert!(main.contains("r2e::launch::<myapp::Myapp>()"));
+    assert!(main.contains("r2e::launch!(myapp::Myapp)"));
     assert!(!main.contains(".build_state()"));
     assert!(!main.contains("register_controller"));
 }
@@ -144,7 +144,7 @@ fn new_hyphenated_name_uses_crate_ident() {
 
     // Cargo maps `-` to `_` in target names; generated code must use the ident.
     let main = fs::read_to_string("my-app/src/main.rs").unwrap();
-    assert!(main.contains("r2e::launch::<my_app::MyApp>()"));
+    assert!(main.contains("r2e::launch!(my_app::MyApp)"));
     let test = fs::read_to_string("my-app/tests/app.rs").unwrap();
     assert!(test.contains("#[r2e::test(app = my_app::MyApp)]"));
 }

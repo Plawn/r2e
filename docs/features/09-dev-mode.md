@@ -108,16 +108,25 @@ impl App for MyApp {
 // main.rs — one entry point for prod serve AND dev hot-reload
 #[r2e::main]
 async fn main() {
-    r2e::launch::<MyApp>().await.unwrap();
+    r2e::launch!(MyApp).await.unwrap();
 }
 ```
 
-`r2e::launch` runs `setup()` once and re-runs `build()` per hot-patch. Under the
-`dev-reload` feature it drives the Subsecond hot-patch loop internally; without
-it, it serves normally. There is no `#[r2e::main]` parameter and no user-written
-hot-reload machinery — keep `load_config` inside `build()`. Because `build()`
-re-runs per patch, its `load_config` re-reads `application.yaml` from disk each
-time, so YAML edits are picked up on the next hot-patch.
+`r2e::launch!` runs `setup()` once and re-runs `build()` per hot-patch. Under the
+`dev-reload` feature it drives the Subsecond hot-patch loop; without it, it just
+serves normally (delegating to `r2e::launch::<MyApp>()`). There is no
+`#[r2e::main]` parameter and no user-written hot-reload machinery — keep
+`load_config` inside `build()`. Because `build()` re-runs per patch, its
+`load_config` re-reads `application.yaml` from disk each time, so YAML edits are
+picked up on the next hot-patch.
+
+> **Why `launch!` is a macro, not `launch::<MyApp>()`.** Subsecond only remaps
+> function symbols it attributes to the **tip crate** (the crate that owns
+> `main.rs`). A generic hot-reload dispatcher monomorphised from `r2e-core` is
+> *not* remapped — the jump-table lookup misses and patches never reach the
+> rebuilt `build()`. `launch!` is a `macro_rules!` so its hot-reload loop —
+> including the concrete `__r2e_server` function Subsecond patches — expands
+> directly in your crate. Always write `r2e::launch!(MyApp)` in `main.rs`.
 
 4. Run with: `r2e dev`
 
@@ -130,6 +139,29 @@ Source code change
     → patches it into the running process (setup state preserved)
     → ~200-500ms turnaround
 ```
+
+### Important limitation: only the *tip crate* is hot-patched
+
+Subsecond (the engine behind `dx serve --hot-patch`) **only patches the "tip"
+crate — the crate that owns `main.rs`.** Changes to code in *other* crates
+(including a sibling `lib.rs` in the same package, which Cargo compiles as a
+separate library crate) are ignored: the running process keeps serving the
+old code even though `dx` reports "Hot-patching …" and `App::build` re-runs.
+
+**Consequence:** for hot-reload to actually apply your edits, the code you edit
+(controllers, services, `App::build`) must live in the **binary crate**, i.e.
+under `src/main.rs` and its `mod`ules — *not* behind `use my_app::…` from a
+library crate. A thin `main.rs` that only does `use my_app::MyApp;
+r2e::launch!(MyApp)` will re-run the build loop on every patch but serve stale
+code, because `MyApp` and its controllers are compiled into the `my_app`
+library, which Subsecond does not patch.
+
+This is why `r2e::launch!` is a macro rather than `r2e::launch::<A>()`: it
+expands the hot-reload loop (and the concrete `__r2e_server` function Subsecond
+patches) *into the tip crate at the call site*. Keeping the app in the tip crate
+is still required for edits to those app files to take effect. Integration tests
+that boot the app through a library crate (`#[r2e::test(app = …)]`) are
+unaffected — they don't use hot-reload.
 
 ### What goes in `App::setup()` vs `App::build()`
 
@@ -215,7 +247,7 @@ async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         //    list materialized as an HList, inferred by the builder chain
         .build_state().await
         // 5. Post-state: plugins, controllers, hooks. Return the BootableApp —
-        //    do NOT call serve here; r2e::launch does that.
+        //    do NOT call serve here; r2e::launch! does that.
         .with(Health)
         .with(Cors::permissive())
         .register_controller::<UserController>()
@@ -266,8 +298,9 @@ so config file edits are picked up on the next hot-patch (a ~1 ms read beats a
 dev session pinned to stale first-boot config).
 
 > The previous `#[r2e::main] async fn main(env)` + `with_config`/`serve_with_hotreload`
-> hand-wiring is gone: the hot-patch loop is internal to `r2e::launch`. Express
-> the split with `App::setup` / `App::build` instead.
+> hand-wiring is gone: the hot-patch loop lives in the `r2e::launch!` macro
+> (which expands into your crate so Subsecond can patch it). Express the split
+> with `App::setup` / `App::build` instead.
 
 ## Production note
 

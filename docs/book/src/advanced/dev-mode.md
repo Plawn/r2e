@@ -53,13 +53,17 @@ impl App for MyApp {
 // main.rs — one entry point for prod serve AND dev hot-reload
 #[r2e::main]
 async fn main() {
-    r2e::launch::<MyApp>().await.unwrap();
+    r2e::launch!(MyApp).await.unwrap();
 }
 ```
 
-`r2e::launch` runs `setup()` once and re-runs `build()` per hot-patch. Under the
-`dev-reload` feature it drives the Subsecond hot-patch loop internally; `main.rs`
-takes no parameter and needs no hand-written hot-reload machinery.
+`r2e::launch!` runs `setup()` once and re-runs `build()` per hot-patch. Under the
+`dev-reload` feature it drives the Subsecond hot-patch loop; `main.rs` takes no
+parameter and needs no hand-written hot-reload machinery. It is a macro (not
+`launch::<MyApp>()`) because Subsecond only patches functions in the *tip crate*
+that owns `main.rs`; the macro expands its hot-reload loop — including the
+concrete function Subsecond remaps — directly into your crate. Without
+`dev-reload` it just calls `r2e::launch::<MyApp>()`.
 
 ### What goes in `App::setup()` vs `App::build()`
 
@@ -143,7 +147,7 @@ its `load_config` re-reads `application.yaml` from disk each time — deliberate
 so config file edits are picked up on the next hot-patch (the ~1 ms read beats a
 dev session pinned to stale first-boot config). The old
 `#[r2e::main] async fn main(env)` + `with_config` hand-wiring is gone —
-express the split with `App::setup` / `App::build` and launch via `r2e::launch`.
+express the split with `App::setup` / `App::build` and launch via `r2e::launch!`.
 
 ## DevReload plugin
 

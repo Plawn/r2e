@@ -37,7 +37,7 @@ impl App for MyApp {
 // src/main.rs
 #[r2e::main]
 async fn main() {
-    r2e::launch::<my_app::MyApp>().await.unwrap();
+    r2e::launch!(my_app::MyApp).await.unwrap();
 }
 ```
 

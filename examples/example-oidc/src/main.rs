@@ -152,5 +152,5 @@ impl App for OidcApp {
 
 #[r2e::main]
 async fn main() {
-    r2e::launch::<OidcApp>().await.unwrap();
+    r2e::launch!(OidcApp).await.unwrap();
 }

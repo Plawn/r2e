@@ -39,7 +39,7 @@
 //! // ── main.rs ────────────────────────────────────────────────────────
 //! #[r2e::main]
 //! async fn main() {
-//!     r2e::launch::<MyApp>().await.unwrap();
+//!     r2e::launch!(MyApp).await.unwrap();
 //! }
 //!
 //! // ── a test ─────────────────────────────────────────────────────────
@@ -81,46 +81,32 @@ pub trait App {
 /// `server.host`/`server.port` from config, like
 /// [`serve_auto`](BootableApp::serve_auto)).
 ///
-/// This is THE production entry point. Pair it with a parameterless
-/// `#[r2e::main]`:
+/// This is the production entry point. It is invoked for you by the
+/// [`launch!`](crate::launch) macro, which is the canonical `main.rs` form:
 ///
 /// ```ignore
 /// #[r2e::main]
 /// async fn main() {
-///     r2e::launch::<MyApp>().await.unwrap();
+///     r2e::launch!(MyApp).await.unwrap();
 /// }
 /// ```
 ///
-/// With the `dev-reload` feature enabled, [`launch`] runs the app under
-/// Subsecond hot-patching: [`App::setup`] is called **once** and its
-/// environment is kept alive across patches, while [`App::build`] + serve
-/// re-run on every hot-patch. `build`'s `load_config` re-reads
-/// `application.yaml` per patch — deliberately, so config file edits are
-/// picked up on the next hot-patch instead of serving a stale first-boot
-/// config for the whole dev session.
-#[cfg(not(feature = "dev-reload"))]
+/// # Why a macro wraps this in dev mode
+///
+/// Subsecond (the `dev-reload` hot-patch engine) only remaps function symbols
+/// it attributes to the **tip crate** — the crate that owns `main.rs`. A
+/// generic dispatcher monomorphised from `r2e-core` (like an earlier
+/// `launch::<A>` that drove the loop itself) is *not* remapped: the jump-table
+/// lookup misses and hot-patches never reach the rebuilt `App::build`. The
+/// [`launch!`](crate::launch) macro therefore expands the hot-reload loop —
+/// including a concrete, named `__r2e_server` function — directly at the call
+/// site in the tip crate, which is what makes patches actually apply. Under
+/// `dev-reload` that macro calls [`App::setup`] **once** (its environment
+/// survives patches) and re-runs [`App::build`] + serve per hot-patch;
+/// `build`'s `load_config` re-reads `application.yaml` per patch so config
+/// edits are picked up on the next patch. Without `dev-reload` the macro just
+/// calls this function.
 pub async fn launch<A: App>() -> Result<(), Box<dyn std::error::Error>> {
     let env = A::setup().await;
     A::build(AppBuilder::new(), env).await.serve_auto().await
-}
-
-/// See the non-dev-reload variant for the full contract.
-#[cfg(feature = "dev-reload")]
-pub async fn launch<A: App + 'static>() -> Result<(), Box<dyn std::error::Error>> {
-    let env = A::setup().await;
-    // The closure must stay non-capturing (ZST) so Subsecond's HotFn dispatches
-    // through the jump table — everything it needs travels in the `env` arg.
-    r2e_devtools::serve_with_hotreload_env(env, |env| __r2e_launch_patch::<A>(env)).await;
-    Ok(())
-}
-
-/// One hot-patch iteration of the dev-reload [`launch`] loop: rebuild the app
-/// on a fresh builder (so `load_config` re-reads YAML — config edits apply on
-/// the next patch) and serve it.
-#[cfg(feature = "dev-reload")]
-async fn __r2e_launch_patch<A: App + 'static>(env: A::Env) {
-    let app = A::build(AppBuilder::new(), env).await;
-    if let Err(e) = app.serve_auto().await {
-        tracing::error!("dev-reload serve failed: {e}");
-    }
 }

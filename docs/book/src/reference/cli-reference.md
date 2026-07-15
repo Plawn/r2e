@@ -415,7 +415,7 @@ cargo install dioxus-cli
 Your app implements the `App` trait (see [Dev Mode](../advanced/dev-mode.md)):
 - `App::setup()` runs once and returns the persistent `Env` (DB pools, buses) — it survives hot-patches
 - `App::build(b, env)` re-runs on each change; its `load_config` re-reads `application.yaml` from disk each patch, so YAML edits apply on the next hot-patch
-- `r2e::launch::<MyApp>()` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload`
+- `r2e::launch!(MyApp)` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload` (it must be the `launch!` macro, not `launch::<MyApp>()`, so the hot-patch loop expands into your tip crate)
 
 ---
 

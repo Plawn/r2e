@@ -5597,7 +5597,6 @@ dependencies = [
  "garde",
  "http-body-util",
  "libc",
- "r2e-devtools",
  "r2e-http",
  "r2e-macros",
  "serde",

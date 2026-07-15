@@ -15,7 +15,7 @@ default = []
 ws = ["r2e-http/ws"]
 multipart = ["r2e-http/multipart"]
 quic = ["r2e-http/quic"]
-dev-reload = ["dep:r2e-devtools"]
+dev-reload = []
 lazy-fallback-runtime = []
 
 [dependencies]
@@ -38,7 +38,6 @@ uuid = {workspace = true}
 dashmap = {workspace = true}
 bytes = {workspace = true}
 futures-core = {workspace = true}
-r2e-devtools = {workspace = true, optional = true}
 
 [target.'cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))))'.dependencies]
 socket2 = {workspace = true}
