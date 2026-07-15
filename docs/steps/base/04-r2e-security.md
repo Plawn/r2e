@@ -32,6 +32,9 @@ pub struct SecurityConfig {
 
     /// JWKS cache duration in seconds (default: 3600)
     pub jwks_cache_ttl_secs: u64,
+
+    /// Bounded grace period after TTL expiry (default: 3600)
+    pub jwks_max_stale_secs: u64,
 }
 ```
 
@@ -73,7 +76,9 @@ Provide a configurable `RoleExtractor` trait with a default implementation that 
 1. Download public keys from the JWKS endpoint
 2. Index by `kid` (Key ID)
 3. Cache keys with a configurable TTL
-4. Refresh in the background when the TTL expires
+4. Refresh when the TTL expires
+5. Fail closed when the bounded stale grace period expires
+6. Enforce HTTPS for the endpoint and every redirect
 
 ### Implementation
 

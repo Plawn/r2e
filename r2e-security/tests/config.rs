@@ -8,10 +8,14 @@ fn config_new_required_fields() {
         "my-issuer",
         "my-audience",
     );
-    assert_eq!(config.jwks_url, "https://auth.example.com/.well-known/jwks.json");
+    assert_eq!(
+        config.jwks_url,
+        "https://auth.example.com/.well-known/jwks.json"
+    );
     assert_eq!(config.issuer, "my-issuer");
     assert_eq!(config.audience, "my-audience");
     assert_eq!(config.jwks_cache_ttl_secs, 3600); // default
+    assert_eq!(config.jwks_max_stale_secs, 3600); // default
     assert_eq!(config.jwks_min_refresh_interval_secs, 10); // default
     assert_eq!(config.allowed_algorithms, vec![Algorithm::RS256]); // default
 }
@@ -23,9 +27,16 @@ fn config_with_cache_ttl() {
 }
 
 #[test]
+fn config_with_max_stale() {
+    let config = SecurityConfig::new("url", "iss", "aud").with_max_stale(900);
+    assert_eq!(config.jwks_max_stale_secs, 900);
+}
+
+#[test]
 fn config_fields_accessible() {
     let config = SecurityConfig::new("u", "i", "a")
         .with_cache_ttl(60)
+        .with_max_stale(30)
         .with_min_refresh_interval(5)
         .with_allowed_algorithm(Algorithm::HS256);
     // All fields are pub, verify they're accessible and cloneable
@@ -34,6 +45,7 @@ fn config_fields_accessible() {
     assert_eq!(cloned.issuer, "i");
     assert_eq!(cloned.audience, "a");
     assert_eq!(cloned.jwks_cache_ttl_secs, 60);
+    assert_eq!(cloned.jwks_max_stale_secs, 30);
     assert_eq!(cloned.jwks_min_refresh_interval_secs, 5);
     assert_eq!(cloned.allowed_algorithms, vec![Algorithm::HS256]);
 }

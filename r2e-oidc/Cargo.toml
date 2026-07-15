@@ -13,7 +13,7 @@ description = "Embedded OIDC server plugin for R2E - issue JWT tokens without an
 [dependencies]
 r2e-core = {workspace = true}
 r2e-security = {workspace = true}
-jsonwebtoken = {workspace = true, features = ["rust_crypto"]}
+jsonwebtoken = {workspace = true}
 rsa = {workspace = true}
 argon2 = {workspace = true}
 rand = {workspace = true}

@@ -15,6 +15,14 @@ pub struct SecurityConfig {
     /// JWKS cache TTL in seconds (default: 3600)
     pub jwks_cache_ttl_secs: u64,
 
+    /// Maximum time in seconds that an expired cached key may still be used
+    /// after the cache TTL elapses (default: 3600).
+    ///
+    /// Once this grace period expires, authentication fails closed until a
+    /// successful JWKS refresh prevents revoked keys from remaining trusted
+    /// indefinitely during an upstream outage.
+    pub jwks_max_stale_secs: u64,
+
     /// Minimum interval between JWKS refresh attempts in seconds (default: 10)
     pub jwks_min_refresh_interval_secs: u64,
 
@@ -41,12 +49,17 @@ pub struct SecurityConfig {
 
 impl SecurityConfig {
     /// Create a new SecurityConfig with the given parameters and default cache TTL of 3600s.
-    pub fn new(jwks_url: impl Into<String>, issuer: impl Into<String>, audience: impl Into<String>) -> Self {
+    pub fn new(
+        jwks_url: impl Into<String>,
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+    ) -> Self {
         Self {
             jwks_url: jwks_url.into(),
             issuer: issuer.into(),
             audience: audience.into(),
             jwks_cache_ttl_secs: 3600,
+            jwks_max_stale_secs: 3600,
             jwks_min_refresh_interval_secs: 10,
             jwks_request_timeout_secs: 10,
             jwks_connect_timeout_secs: 5,
@@ -59,6 +72,12 @@ impl SecurityConfig {
     /// Set the JWKS cache TTL in seconds.
     pub fn with_cache_ttl(mut self, ttl_secs: u64) -> Self {
         self.jwks_cache_ttl_secs = ttl_secs;
+        self
+    }
+
+    /// Set the grace period during which an expired cached key may be used.
+    pub fn with_max_stale(mut self, max_stale_secs: u64) -> Self {
+        self.jwks_max_stale_secs = max_stale_secs;
         self
     }
 

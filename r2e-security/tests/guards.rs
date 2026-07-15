@@ -89,6 +89,22 @@ async fn roles_guard_rejects_no_identity() {
     assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
 }
 
+#[r2e_core::test]
+async fn roles_guard_rejects_empty_requirements() {
+    let user = TestIdentity {
+        sub: "alice".into(),
+        roles: vec!["admin".into()],
+    };
+    let guard = RolesGuard {
+        required_roles: &[],
+    };
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx = make_ctx(Some(&user), &uri, &headers);
+
+    assert!(guard.check(&ctx).await.is_err());
+}
+
 // ── AllRolesGuard (AND semantics) ──
 
 #[r2e_core::test]
@@ -144,4 +160,20 @@ async fn all_roles_guard_passes_single_role() {
     let ctx = make_ctx(Some(&id), &uri, &headers);
     let result = guard.check(&ctx).await;
     assert!(result.is_ok());
+}
+
+#[r2e_core::test]
+async fn all_roles_guard_rejects_empty_requirements() {
+    let user = TestIdentity {
+        sub: "alice".into(),
+        roles: vec!["admin".into()],
+    };
+    let guard = AllRolesGuard {
+        required_roles: &[],
+    };
+    let uri = make_uri("/test");
+    let headers = HeaderMap::new();
+    let ctx = make_ctx(Some(&user), &uri, &headers);
+
+    assert!(guard.check(&ctx).await.is_err());
 }

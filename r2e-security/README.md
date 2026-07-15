@@ -63,15 +63,23 @@ witness is inferred at the call site); no `state = ...` and no `FromRef` bound i
 Higher-level validator with builder pattern:
 
 ```rust
-use r2e::r2e_security::{JwtValidator, SecurityConfig};
+use std::sync::Arc;
+use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};
 
 // Production: JWKS endpoint
-let config = SecurityConfig::new("https://auth.example.com/.well-known/jwks.json")
-    .with_issuer("https://auth.example.com")
-    .with_audience("my-api");
+let config = SecurityConfig::new(
+    "https://auth.example.com/.well-known/jwks.json",
+    "https://auth.example.com",
+    "my-api",
+);
 
-let validator = JwtValidator::from_config(config).await?;
+let jwks = Arc::new(JwksCache::new(config.clone()).await?);
+let validator = JwtClaimsValidator::new(jwks, config);
 ```
+
+JWKS requests are HTTPS-only by default, including redirects. Cached keys have
+a one-hour TTL and may be used for one additional hour during an upstream
+outage; configure that bounded grace period with `with_max_stale()`.
 
 ### Role-based access control
 

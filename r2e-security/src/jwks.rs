@@ -23,6 +23,12 @@ struct Jwk {
     /// Algorithm (e.g. "RS256")
     #[serde(default)]
     alg: Option<String>,
+    /// Intended key use (e.g. "sig" or "enc")
+    #[serde(default, rename = "use")]
+    key_use: Option<String>,
+    /// Operations for which the key is intended (e.g. ["verify"])
+    #[serde(default)]
+    key_ops: Option<Vec<String>>,
     /// RSA modulus (base64url)
     #[serde(default)]
     n: Option<String>,
@@ -54,6 +60,10 @@ pub struct CachedJwk {
     pub kty: String,
     /// Algorithm the key is intended for (`alg` in the JWK), if advertised.
     pub alg: Option<String>,
+    /// Intended use (`use` in the JWK), if advertised.
+    pub key_use: Option<String>,
+    /// Allowed operations (`key_ops` in the JWK), if advertised.
+    pub key_ops: Option<Vec<String>>,
     pub n: Option<String>,
     pub e: Option<String>,
     pub x: Option<String>,
@@ -72,7 +82,13 @@ impl CachedJwk {
         &self,
         algorithm: Algorithm,
     ) -> Result<DecodingKey, SecurityError> {
-        validate_key_metadata(&self.kty, self.alg.as_deref(), algorithm)?;
+        validate_key_metadata(
+            &self.kty,
+            self.alg.as_deref(),
+            self.key_use.as_deref(),
+            self.key_ops.as_deref(),
+            algorithm,
+        )?;
         self.to_decoding_key()
     }
 
@@ -130,6 +146,8 @@ impl CachedJwk {
 struct CachedKey {
     kty: String,
     alg: Option<String>,
+    key_use: Option<String>,
+    key_ops: Option<Vec<String>>,
     decoding_key: Result<Arc<DecodingKey>, String>,
 }
 
@@ -143,6 +161,8 @@ impl CachedKey {
         Self {
             kty: jwk.kty,
             alg: jwk.alg,
+            key_use: jwk.key_use,
+            key_ops: jwk.key_ops,
             decoding_key,
         }
     }
@@ -151,7 +171,13 @@ impl CachedKey {
         &self,
         algorithm: Algorithm,
     ) -> Result<Arc<DecodingKey>, SecurityError> {
-        validate_key_metadata(&self.kty, self.alg.as_deref(), algorithm)?;
+        validate_key_metadata(
+            &self.kty,
+            self.alg.as_deref(),
+            self.key_use.as_deref(),
+            self.key_ops.as_deref(),
+            algorithm,
+        )?;
         self.decoding_key
             .as_ref()
             .map(Arc::clone)
@@ -169,6 +195,8 @@ fn validation_error_message(error: SecurityError) -> String {
 fn validate_key_metadata(
     kty: &str,
     advertised_algorithm: Option<&str>,
+    key_use: Option<&str>,
+    key_ops: Option<&[String]>,
     algorithm: Algorithm,
 ) -> Result<(), SecurityError> {
     let expected_kty = kty_for_algorithm(algorithm);
@@ -182,6 +210,20 @@ fn validate_key_metadata(
             return Err(SecurityError::ValidationFailed(format!(
                 "JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}"
             )));
+        }
+    }
+    if let Some(key_use) = key_use {
+        if key_use != "sig" {
+            return Err(SecurityError::ValidationFailed(format!(
+                "JWK use '{key_use}' does not permit signature verification"
+            )));
+        }
+    }
+    if let Some(key_ops) = key_ops {
+        if !key_ops.iter().any(|operation| operation == "verify") {
+            return Err(SecurityError::ValidationFailed(
+                "JWK key_ops does not permit signature verification".into(),
+            ));
         }
     }
     Ok(())
@@ -209,13 +251,7 @@ impl JwksCache {
     /// Create a new JWKS cache and perform an initial fetch of keys.
     pub async fn new(config: SecurityConfig) -> Result<Self, SecurityError> {
         validate_jwks_url(&config.jwks_url, config.allow_insecure_jwks_url)?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.jwks_request_timeout_secs))
-            .connect_timeout(Duration::from_secs(config.jwks_connect_timeout_secs))
-            .build()
-            .map_err(|e| {
-                SecurityError::JwksFetchError(format!("Failed to build HTTP client: {e}"))
-            })?;
+        let client = build_jwks_client(&config)?;
         let cache = Self {
             inner: Arc::new(RwLock::new(CacheInner {
                 keys: HashMap::new(),
@@ -254,6 +290,7 @@ impl JwksCache {
         algorithm: Algorithm,
     ) -> Result<Arc<DecodingKey>, SecurityError> {
         let ttl = Duration::from_secs(self.config.jwks_cache_ttl_secs);
+        let max_stale = Duration::from_secs(self.config.jwks_max_stale_secs);
 
         // First, try cache. If stale or missing, attempt a refresh.
         let (force_refresh, had_cached_key) = {
@@ -269,28 +306,36 @@ impl JwksCache {
             }
         };
 
-        // Kid not found (or cache was stale). Attempt refresh, then try again.
-        if let Err(err) = self.try_refresh(force_refresh).await {
-            // If we already hold a (stale) key for this kid, keep serving it
-            // rather than failing auth on a transient JWKS outage. Signing keys
-            // rotate slowly, so a stale-but-valid key is safe to use. Only a
-            // genuinely unknown kid hard-fails here.
-            if had_cached_key {
-                let cache = self.inner.read().await;
-                if let Some(jwk) = cache.keys.get(kid) {
-                    warn!(kid, error = %err, "JWKS refresh failed; using stale cached key");
-                    return jwk.decoding_key_checked(algorithm);
-                }
-            }
-            return Err(err);
-        }
-
+        // Kid not found (or cache was stale). Attempt refresh, then classify the
+        // resulting key by age. A stale key is only usable for a bounded grace
+        // period; after that authentication fails closed until refresh succeeds.
+        let refresh_result = self.try_refresh(force_refresh).await;
         let cache = self.inner.read().await;
-        cache
-            .keys
-            .get(kid)
-            .ok_or_else(|| SecurityError::UnknownKeyId(kid.to_string()))?
-            .decoding_key_checked(algorithm)
+        if let Some(jwk) = cache.keys.get(kid) {
+            if !is_stale(cache.last_refresh, ttl) {
+                return jwk.decoding_key_checked(algorithm);
+            }
+            if can_use_stale(cache.last_refresh, ttl, max_stale) {
+                match &refresh_result {
+                    Err(err) => {
+                        warn!(kid, error = %err, "JWKS refresh failed; using stale cached key");
+                    }
+                    Ok(()) => {
+                        warn!(kid, "JWKS refresh deferred; using stale cached key");
+                    }
+                }
+                return jwk.decoding_key_checked(algorithm);
+            }
+        }
+        drop(cache);
+
+        match refresh_result {
+            Err(err) => Err(err),
+            Ok(()) if had_cached_key => Err(SecurityError::JwksFetchError(format!(
+                "Cached JWKS key '{kid}' exceeded the maximum stale grace period"
+            ))),
+            Ok(()) => Err(SecurityError::UnknownKeyId(kid.to_string())),
+        }
     }
 
     /// Force a refresh of the JWKS cache from the remote endpoint.
@@ -319,6 +364,8 @@ impl JwksCache {
             let cached = CachedJwk {
                 kty: jwk.kty,
                 alg: jwk.alg,
+                key_use: jwk.key_use,
+                key_ops: jwk.key_ops,
                 n: jwk.n,
                 e: jwk.e,
                 x: jwk.x,
@@ -386,17 +433,37 @@ pub fn kty_for_algorithm(algorithm: Algorithm) -> &'static str {
 /// Reject a non-HTTPS JWKS URL unless insecure fetching is explicitly allowed.
 #[doc(hidden)]
 pub fn validate_jwks_url(url: &str, allow_insecure: bool) -> Result<(), SecurityError> {
-    let is_https = url
-        .get(..8)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"));
-    if is_https || allow_insecure {
-        Ok(())
-    } else {
-        Err(SecurityError::JwksFetchError(format!(
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
+        SecurityError::JwksFetchError(format!("Invalid JWKS URL '{url}': {error}"))
+    })?;
+
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if allow_insecure => Ok(()),
+        "http" => Err(SecurityError::JwksFetchError(format!(
             "Refusing to fetch JWKS over a non-HTTPS URL: {url}. \
              Use https:// or call SecurityConfig::allow_insecure_jwks_url() for local development."
-        )))
+        ))),
+        scheme => Err(SecurityError::JwksFetchError(format!(
+            "Unsupported JWKS URL scheme '{scheme}': only https is allowed by default, or http with an explicit insecure opt-in"
+        ))),
     }
+}
+
+/// Build the HTTP client used for JWKS retrieval.
+///
+/// Exposed for integration tests. HTTPS-only mode applies both to initial
+/// requests and every redirect followed by reqwest.
+#[doc(hidden)]
+pub fn build_jwks_client(config: &SecurityConfig) -> Result<reqwest::Client, SecurityError> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.jwks_request_timeout_secs))
+        .connect_timeout(Duration::from_secs(config.jwks_connect_timeout_secs))
+        .https_only(!config.allow_insecure_jwks_url)
+        .build()
+        .map_err(|error| {
+            SecurityError::JwksFetchError(format!("Failed to build HTTP client: {error}"))
+        })
 }
 
 /// Read a response body, failing if it exceeds `max_bytes`.
@@ -450,6 +517,15 @@ pub fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> boo
     }
 }
 
+/// Whether an expired cache entry is still within its configured grace period.
+#[doc(hidden)]
+pub fn can_use_stale(last_refresh: Option<Instant>, ttl: Duration, max_stale: Duration) -> bool {
+    match last_refresh {
+        None => false,
+        Some(ts) => ts.elapsed() <= ttl.saturating_add(max_stale),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +535,8 @@ mod tests {
         let cached = CachedKey::new(CachedJwk {
             kty: "RSA".into(),
             alg: Some("RS256".into()),
+            key_use: Some("sig".into()),
+            key_ops: Some(vec!["verify".into()]),
             n: Some("AQ".into()),
             e: Some("AQAB".into()),
             x: None,

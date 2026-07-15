@@ -1,0 +1,5 @@
+error: #[roles] requires at least one non-empty role
+ --> compile-fail/empty_roles.rs:9:5
+  |
+9 |     #[roles()]
+  |     ^^^^^^^^^^

@@ -105,9 +105,7 @@ pub fn extract_route_kind(attrs: &[syn::Attribute]) -> syn::Result<Option<RouteK
 pub fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
     for attr in attrs {
         if attr.path().is_ident("roles") {
-            let args: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
-                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
-            return Ok(args.iter().map(|lit| lit.value()).collect());
+            return parse_required_roles(attr, "roles");
         }
     }
     Ok(Vec::new())
@@ -116,12 +114,36 @@ pub fn extract_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
 pub fn extract_all_roles(attrs: &[syn::Attribute]) -> syn::Result<Vec<String>> {
     for attr in attrs {
         if attr.path().is_ident("all_roles") {
-            let args: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
-                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
-            return Ok(args.iter().map(|lit| lit.value()).collect());
+            return parse_required_roles(attr, "all_roles");
         }
     }
     Ok(Vec::new())
+}
+
+fn parse_required_roles(attr: &syn::Attribute, name: &str) -> syn::Result<Vec<String>> {
+    let args: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
+        attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+
+    if args.is_empty() {
+        return Err(syn::Error::new_spanned(
+            attr,
+            format!("#[{name}] requires at least one non-empty role"),
+        ));
+    }
+
+    args.iter()
+        .map(|lit| {
+            let role = lit.value();
+            if role.trim().is_empty() {
+                Err(syn::Error::new_spanned(
+                    lit,
+                    format!("#[{name}] roles cannot be empty or whitespace-only"),
+                ))
+            } else {
+                Ok(role)
+            }
+        })
+        .collect()
 }
 
 pub fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<TransactionalConfig>> {

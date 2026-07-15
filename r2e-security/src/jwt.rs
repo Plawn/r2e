@@ -55,6 +55,7 @@ impl JwtClaimsValidator {
         validation.algorithms = config.allowed_algorithms.clone();
         validation.set_issuer(&[&config.issuer]);
         validation.set_audience(&[&config.audience]);
+        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
         validation.validate_exp = true;
         validation.validate_nbf = true;
         validation
@@ -139,6 +140,9 @@ impl JwtClaimsValidator {
                     }
                     jsonwebtoken::errors::ErrorKind::InvalidAudience => {
                         SecurityError::ValidationFailed("Invalid audience".into())
+                    }
+                    jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) => {
+                        SecurityError::ValidationFailed(format!("Missing required claim: {claim}"))
                     }
                     _ => SecurityError::InvalidToken(e.to_string()),
                 };

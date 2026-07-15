@@ -40,10 +40,11 @@ impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
                     .into_response()
             })?;
             let roles = identity.roles();
-            let has_role = self
-                .required_roles
-                .iter()
-                .any(|req| roles.iter().any(|r| r.as_str() == *req));
+            let has_role = !self.required_roles.is_empty()
+                && self
+                    .required_roles
+                    .iter()
+                    .any(|req| roles.iter().any(|r| r.as_str() == *req));
             if has_role {
                 Ok(())
             } else {
@@ -81,10 +82,11 @@ impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
                     .into_response()
             })?;
             let roles = identity.roles();
-            let has_all = self
-                .required_roles
-                .iter()
-                .all(|req| roles.iter().any(|r| r.as_str() == *req));
+            let has_all = !self.required_roles.is_empty()
+                && self
+                    .required_roles
+                    .iter()
+                    .all(|req| roles.iter().any(|r| r.as_str() == *req));
             if has_all {
                 Ok(())
             } else {

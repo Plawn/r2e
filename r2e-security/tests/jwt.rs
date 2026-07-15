@@ -61,6 +61,15 @@ fn valid_token(sub: &str, roles: &[&str]) -> String {
     make_token(sub, roles, None, 3600)
 }
 
+fn encode_claims(claims: &serde_json::Value) -> String {
+    encode(
+        &Header::new(Algorithm::HS256),
+        claims,
+        &EncodingKey::from_secret(TEST_SECRET),
+    )
+    .unwrap()
+}
+
 // ── JwtClaimsValidator ──
 
 #[r2e_core::test]
@@ -217,6 +226,48 @@ async fn validate_wrong_audience() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+}
+
+#[r2e_core::test]
+async fn validate_missing_issuer() {
+    let validator = test_claims_validator();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({
+        "sub": "user-1",
+        "aud": TEST_AUDIENCE,
+        "exp": now + 3600,
+    });
+
+    let err = validator
+        .validate(&encode_claims(&claims))
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, SecurityError::ValidationFailed(_)));
+    assert!(err.to_string().contains("iss"));
+}
+
+#[r2e_core::test]
+async fn validate_missing_audience() {
+    let validator = test_claims_validator();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({
+        "sub": "user-1",
+        "iss": TEST_ISSUER,
+        "exp": now + 3600,
+    });
+
+    let err = validator
+        .validate(&encode_claims(&claims))
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, SecurityError::ValidationFailed(_)));
+    assert!(err.to_string().contains("aud"));
 }
 
 #[r2e_core::test]

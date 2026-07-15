@@ -21,7 +21,7 @@ tower = {workspace = true, features = ["util"]}
 http = {workspace = true}
 http-body-util = {workspace = true}
 bytes = {workspace = true}
-jsonwebtoken = {workspace = true, features = ["rust_crypto"]}
+jsonwebtoken = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
