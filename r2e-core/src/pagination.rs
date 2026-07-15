@@ -1,7 +1,7 @@
-use r2e_core::prelude::Params;
+use r2e_macros::Params;
 use serde::{Deserialize, Serialize};
 
-/// Pagination parameters, extractable from query params.
+/// Zero-based pagination parameters extracted from query parameters.
 #[derive(Debug, Clone, Deserialize, Params)]
 pub struct Pageable {
     #[query]
@@ -12,10 +12,6 @@ pub struct Pageable {
     pub size: u64,
     #[query]
     pub sort: Option<String>,
-}
-
-fn default_page_size() -> u64 {
-    20
 }
 
 impl Default for Pageable {
@@ -30,11 +26,11 @@ impl Default for Pageable {
 
 impl Pageable {
     pub fn offset(&self) -> u64 {
-        self.page * self.size
+        self.page.saturating_mul(self.size)
     }
 }
 
-/// A page of results with pagination metadata.
+/// A page of results and its pagination metadata.
 #[derive(Debug, Clone, Serialize)]
 pub struct Page<T> {
     pub content: Vec<T>,
@@ -49,7 +45,7 @@ impl<T> Page<T> {
         let total_pages = if pageable.size == 0 {
             0
         } else {
-            (total_elements + pageable.size - 1) / pageable.size
+            total_elements.div_ceil(pageable.size)
         };
         Self {
             content,
@@ -58,5 +54,33 @@ impl<T> Page<T> {
             total_elements,
             total_pages,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calculates_page_metadata() {
+        let pageable = Pageable {
+            page: 2,
+            size: 20,
+            sort: None,
+        };
+        let page = Page::new(vec![1, 2], &pageable, 41);
+        assert_eq!(pageable.offset(), 40);
+        assert_eq!(page.total_pages, 3);
+    }
+
+    #[test]
+    fn zero_size_has_no_pages() {
+        let pageable = Pageable {
+            page: 0,
+            size: 0,
+            sort: None,
+        };
+        let page = Page::<()>::new(Vec::new(), &pageable, 10);
+        assert_eq!(page.total_pages, 0);
     }
 }

@@ -154,7 +154,7 @@ Each test creates a temp directory and runs `r2e new` logic.
 | Test | Description |
 |------|-------------|
 | `add_security` | `r2e add security` → adds r2e-security to Cargo.toml |
-| `add_data` | `r2e add data` → adds r2e-data to Cargo.toml |
+| `add_data_sqlx` | `r2e add data-sqlx` → adds r2e-data-sqlx to Cargo.toml |
 | `add_unknown_extension` | `r2e add unknown` → error message |
 | `add_already_present` | Adding already-present dep → no duplication |
 

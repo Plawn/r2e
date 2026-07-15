@@ -401,15 +401,14 @@ impl AdminController {
 }
 ```
 
-## Data (r2e-data)
+## Pagination and database transactions
 
-- `Entity` trait — maps a Rust struct to a SQL table (table name, column list).
-- `QueryBuilder` — fluent SQL query builder (`where_eq`, `where_like`, `order_by`, `limit`, `offset`).
-- `Repository` trait — async CRUD interface (`find_by_id`, `find_all`, `create`, `update`, `delete`).
-- `SqlxRepository` — SQLx-backed implementation of `Repository`.
-- `Pageable` — pagination parameters extracted from query string (page, size, sort).
-- `Page<T>` — paginated response wrapper (content, total_elements, total_pages, page, size).
-- `DataError` — data-layer error type.
+- `Pageable` and `Page<T>` live in `r2e-core` and are always available.
+- `r2e-data-sqlx` contains only cancellation-safe managed SQLx transactions.
+- `r2e-data-diesel` contains only managed Diesel/r2d2 transactions and a
+  blocking-pool `run` helper.
+- CRUD models and queries remain application-owned and use SQLx or Diesel
+  directly.
 
 ## Cache (r2e-cache)
 

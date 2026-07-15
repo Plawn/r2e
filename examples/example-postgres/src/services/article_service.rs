@@ -1,5 +1,4 @@
 use r2e::prelude::*;
-use r2e::r2e_data::{Page, Pageable};
 use sqlx::PgPool;
 
 use crate::error::HttpError;

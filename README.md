@@ -38,7 +38,7 @@ impl UserController {
 - **Event bus** — Typed in-process pub/sub with `#[consumer]` for declarative event handlers
 - **Scheduling** — `#[scheduled(every = 30)]` and `#[scheduled(cron = "0 */5 * * * *")]` for background tasks
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle (begin/commit/rollback)
-- **Data access** — `Entity`, `Repository`, `QueryBuilder`, and `Pageable`/`Page` for database operations
+- **Database ergonomics** — core `Pageable`/`Page` plus cancellation-safe managed SQLx and Diesel transactions
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI at `/docs`
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
@@ -480,9 +480,8 @@ r2e-macros        Proc macros: #[controller], #[routes], #[bean]
 r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
 r2e-events        In-process typed EventBus with pub/sub
 r2e-scheduler     Background task scheduling (interval, cron)
-r2e-data          Database: Entity, Repository, QueryBuilder, Pageable/Page
-r2e-data-sqlx     SQLx backend: SqlxRepository, Tx (sqlite/postgres/mysql)
-r2e-data-diesel   Diesel backend (skeleton): DieselRepository (sqlite/postgres/mysql)
+r2e-data-sqlx     Managed SQLx Tx (sqlite/postgres/mysql)
+r2e-data-diesel   Managed Diesel Tx (sqlite/postgres/mysql)
 r2e-cache         TTL cache with pluggable backends
 r2e-rate-limit    Token-bucket rate limiting with pluggable backends
 r2e-openapi       OpenAPI 3.1.0 spec generation + docs UI

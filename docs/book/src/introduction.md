@@ -42,7 +42,7 @@ If you've used Java's Quarkus, Spring Boot, or C#'s ASP.NET, this should feel fa
 - **Event bus** — Typed in-process pub/sub with `#[consumer]` for declarative event handlers
 - **Scheduling** — `#[scheduled(every = 30)]` and `#[scheduled(cron = "...")]` for background tasks
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle
-- **Data access** — `Entity`, `Repository`, `QueryBuilder`, and `Pageable`/`Page`
+- **Database ergonomics** — core pagination and managed SQLx/Diesel transactions
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI
 - **Configuration** — YAML + env var overlay with profile support

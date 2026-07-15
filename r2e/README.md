@@ -49,12 +49,11 @@ async fn main() {
 | `security`      | **yes** | `r2e-security` — JWT/OIDC auth       |
 | `events`        | **yes** | `r2e-events` — typed event bus       |
 | `utils`         | **yes** | `r2e-utils` — Logged, Timed, Cache   |
-| `data`          | no      | `r2e-data` — Entity, Repository      |
-| `data-sqlx`     | no      | `r2e-data-sqlx` — SQLx backend       |
-| `data-diesel`   | no      | `r2e-data-diesel` — Diesel backend   |
-| `sqlite`        | no      | SQLx + SQLite driver                 |
-| `postgres`      | no      | SQLx + PostgreSQL driver             |
-| `mysql`         | no      | SQLx + MySQL driver                  |
+| `data`          | no      | Compatibility marker; pagination is in core |
+| `data-sqlx`     | no      | Managed SQLx transactions            |
+| `data-diesel`   | no      | Managed Diesel transactions          |
+| `sqlx-{sqlite,postgres,mysql}` | no | SQLx transaction + driver   |
+| `diesel-{sqlite,postgres,mysql}` | no | Diesel transaction + driver |
 | `scheduler`     | no      | `r2e-scheduler` — cron/interval      |
 | `cache`         | no      | `r2e-cache` — TTL caching            |
 | `rate-limit`    | no      | `r2e-rate-limit` — token-bucket      |
@@ -77,9 +76,8 @@ async fn main() {
 | [`r2e-security`](../r2e-security) | JWT validation, JWKS cache, `AuthenticatedUser` extractor |
 | [`r2e-events`](../r2e-events) | In-process typed pub/sub event bus |
 | [`r2e-scheduler`](../r2e-scheduler) | Background task scheduling (interval, cron) |
-| [`r2e-data`](../r2e-data) | Data access abstractions (driver-independent) |
-| [`r2e-data-sqlx`](../r2e-data-sqlx) | SQLx backend — repository, transactions, migrations |
-| [`r2e-data-diesel`](../r2e-data-diesel) | Diesel backend (skeleton) |
+| [`r2e-data-sqlx`](../r2e-data/backends/sqlx) | Managed SQLx transactions |
+| [`r2e-data-diesel`](../r2e-data/backends/diesel) | Managed Diesel transactions |
 | [`r2e-cache`](../r2e-cache) | TTL cache with pluggable backends |
 | [`r2e-rate-limit`](../r2e-rate-limit) | Token-bucket rate limiting |
 | [`r2e-openapi`](../r2e-openapi) | OpenAPI 3.0 spec generation + Swagger UI |

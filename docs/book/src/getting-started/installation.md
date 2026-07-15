@@ -32,7 +32,8 @@ r2e = { version = "0.1", features = ["security", "data", "openapi"] }
 | `security` | JWT/OIDC authentication (`r2e-security`) |
 | `events` | In-process event bus (`r2e-events`) |
 | `scheduler` | Background task scheduling (`r2e-scheduler`) |
-| `data` | Data access abstractions (`r2e-data`, `r2e-data-sqlx`) |
+| `sqlx-{sqlite,postgres,mysql}` | Managed SQLx transaction and selected driver |
+| `diesel-{sqlite,postgres,mysql}` | Managed Diesel transaction and selected driver |
 | `cache` | TTL cache with pluggable backends (`r2e-cache`) |
 | `rate-limit` | Token-bucket rate limiting (`r2e-rate-limit`) |
 | `openapi` | OpenAPI 3.1.0 spec generation (`r2e-openapi`) |

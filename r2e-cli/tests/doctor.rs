@@ -124,10 +124,10 @@ fn doctor_data_feature_without_migrations() {
 
     fs::write(
         "Cargo.toml",
-        "[package]\nname = \"test\"\n[dependencies]\nr2e = \"0.1\"\nr2e-data = \"0.1\"\n",
+        "[package]\nname = \"test\"\n[dependencies]\nr2e = \"0.1\"\nr2e-data-sqlx = \"0.1\"\n",
     )
     .unwrap();
-    // r2e-data dep but no migrations/ → warning
+    // SQLx managed transaction backend but no migrations/ → warning
 
     assert!(doctor::run().is_ok());
 }

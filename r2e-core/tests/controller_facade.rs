@@ -482,7 +482,10 @@ impl r2e_core::DecoratorSpec for GatePre {
 }
 
 impl PreAuthGuard for GatePreReady {
-    fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
+    fn check(
+        &self,
+        _ctx: &PreAuthGuardContext<'_>,
+    ) -> impl Future<Output = Result<(), Response>> + Send {
         let allow = self.allow.0.load(Ordering::SeqCst);
         async move {
             if allow {
@@ -635,18 +638,21 @@ struct Txn {
 impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for Txn {
     type Error = ManagedErr<r2e_core::HttpError>;
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
+    async fn acquire(context: r2e_core::ManagedContext<'_, S>) -> Result<Self, Self::Error> {
         Ok(Txn {
-            released: state
+            released: context
+                .state
                 .bean::<Arc<Mutex<Vec<bool>>>>()
                 .expect("released handle must be provided"),
         })
     }
 
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        self.released.lock().unwrap().push(success);
+    async fn finalize(&mut self, outcome: &r2e_core::ManagedOutcome) -> Result<(), Self::Error> {
+        self.released.lock().unwrap().push(outcome.is_success());
         Ok(())
     }
+
+    fn abort(&mut self) {}
 }
 
 #[controller]
@@ -691,6 +697,115 @@ async fn managed_resource_commit_and_rollback() {
         vec![true, false],
         "commit releases success=true, rollback releases success=false"
     );
+}
+
+struct FirstManaged {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+struct FailingFinalize {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+struct FailingAcquire;
+
+impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for FirstManaged {
+    type Error = ManagedErr<r2e_core::HttpError>;
+
+    async fn acquire(context: r2e_core::ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            events: context.state.bean().expect("events bean must be provided"),
+        })
+    }
+
+    async fn finalize(&mut self, _outcome: &r2e_core::ManagedOutcome) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("first_finalize");
+        Ok(())
+    }
+
+    fn abort(&mut self) {
+        self.events.lock().unwrap().push("first_abort");
+    }
+}
+
+impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for FailingFinalize {
+    type Error = ManagedErr<r2e_core::HttpError>;
+
+    async fn acquire(context: r2e_core::ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            events: context.state.bean().expect("events bean must be provided"),
+        })
+    }
+
+    async fn finalize(&mut self, _outcome: &r2e_core::ManagedOutcome) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("second_finalize");
+        Err(ManagedErr(r2e_core::HttpError::internal("finalize failed")))
+    }
+
+    fn abort(&mut self) {
+        self.events.lock().unwrap().push("second_abort");
+    }
+}
+
+impl<S: Send + Sync> ManagedResource<S> for FailingAcquire {
+    type Error = ManagedErr<r2e_core::HttpError>;
+
+    async fn acquire(_context: r2e_core::ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        Err(ManagedErr(r2e_core::HttpError::internal("acquire failed")))
+    }
+
+    async fn finalize(&mut self, _outcome: &r2e_core::ManagedOutcome) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn abort(&mut self) {}
+}
+
+#[controller]
+struct ManagedSafetyController;
+
+#[routes]
+impl ManagedSafetyController {
+    #[get("/managed/finalize-all")]
+    async fn finalize_all(
+        &self,
+        #[managed] _first: &mut FirstManaged,
+        #[managed] _second: &mut FailingFinalize,
+    ) -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+
+    #[get("/managed/partial-acquire")]
+    async fn partial_acquire(
+        &self,
+        #[managed] _first: &mut FirstManaged,
+        #[managed] _second: &mut FailingAcquire,
+    ) -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+}
+
+#[r2e_core::test]
+async fn managed_resources_finalize_all_and_abort_partial_acquisition() {
+    let events: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let router = r2e_core::AppBuilder::new()
+        .provide(events.clone())
+        .build_state()
+        .await
+        .register_controller::<ManagedSafetyController>()
+        .build();
+
+    let (status, _) = req(router.clone(), "/managed/finalize-all", None, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["second_finalize", "first_finalize", "second_abort"]
+    );
+
+    events.lock().unwrap().clear();
+    let (status, _) = req(router, "/managed/partial-acquire", None, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(*events.lock().unwrap(), vec!["first_abort"]);
 }
 
 // ── 9. SSE identity ─────────────────────────────────────────────────────────
@@ -1007,7 +1122,11 @@ impl Guard<Subject> for AnonProbeReady {
         &self,
         ctx: &GuardContext<'_, Subject>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        let seen = if ctx.identity.is_some() { "some" } else { "none" };
+        let seen = if ctx.identity.is_some() {
+            "some"
+        } else {
+            "none"
+        };
         self.saw.lock().unwrap().push(seen.to_string());
         std::future::ready(Ok(()))
     }

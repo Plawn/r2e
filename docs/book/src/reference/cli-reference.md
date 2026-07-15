@@ -437,7 +437,7 @@ r2e doctor
 | 4 | Controllers directory | Warning | `src/controllers/` exists (counts `.rs` files) |
 | 5 | Rust toolchain | Error | `rustc --version` succeeds |
 | 6 | Dioxus CLI (dx) | Warning | `dx --version` succeeds |
-| 7 | Migrations directory | Warning | If `r2e-data` or `"data"` in Cargo.toml, checks `migrations/` |
+| 7 | Migrations directory | Warning | If a managed database backend is present, checks `migrations/` |
 | 8 | Application entrypoint | Warning | `src/main.rs` contains `.serve(` |
 
 **Output indicators:**
@@ -516,9 +516,8 @@ Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.1` to `[de
 | Extension | Crate | Description |
 |-----------|-------|-------------|
 | `security` | `r2e-security` | JWT/OIDC authentication, `AuthenticatedUser`, role extraction |
-| `data` | `r2e-data` | Entity, Repository, QueryBuilder abstractions |
-| `data-sqlx` | `r2e-data-sqlx` | SQLx backend for Repository |
-| `data-diesel` | `r2e-data-diesel` | Diesel backend for Repository |
+| `data-sqlx` | `r2e-data-sqlx` | Managed SQLx transactions |
+| `data-diesel` | `r2e-data-diesel` | Managed Diesel transactions |
 | `openapi` | `r2e-openapi` | OpenAPI 3.1.0 spec generation + Swagger UI at `/docs` |
 | `events` | `r2e-events` | In-process typed event bus (emit, subscribe) |
 | `scheduler` | `r2e-scheduler` | Background task scheduling (cron, interval, delay) |
@@ -533,7 +532,7 @@ Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.1` to `[de
 
 ```bash
 r2e add security      # adds r2e-security = "0.1"
-r2e add data          # adds r2e-data = "0.1"
+r2e add data-sqlx     # adds r2e-data-sqlx = "0.1"
 r2e add test          # adds r2e-test = "0.1"
 ```
 

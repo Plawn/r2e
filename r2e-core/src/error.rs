@@ -45,7 +45,7 @@ pub enum HttpError {
     },
     /// Error variant that preserves the source error chain.
     ///
-    /// Used by `From` conversions (e.g., `From<DataError>`) to keep the
+    /// Used by `From` conversions to keep the
     /// original error accessible via `std::error::Error::source()`.
     /// The `source` is never exposed to the HTTP client — only `message`.
     ///

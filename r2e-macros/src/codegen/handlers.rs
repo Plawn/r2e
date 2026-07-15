@@ -6,7 +6,6 @@ use syn::spanned::Spanned;
 
 use crate::crate_path::r2e_core_path;
 use crate::routes_parsing::RoutesImplDef;
-use crate::type_utils::is_result_like;
 use crate::types::*;
 
 /// Generate all handler functions for a controller.
@@ -62,7 +61,10 @@ pub(super) fn data_marker() -> syn::Ident {
 /// Pascal-cased so the generated type parameter doesn't trip
 /// `non_camel_case_types` in user crates.
 pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
-    format_ident!("__R2eMp{}", crate::type_utils::to_pascal_case(&method.to_string()))
+    format_ident!(
+        "__R2eMp{}",
+        crate::type_utils::to_pascal_case(&method.to_string())
+    )
 }
 
 /// Bounds placed on the generic state by every generated item that touches it:
@@ -170,7 +172,7 @@ fn build_call_args(
         .map(|(i, _)| {
             let arg_name = format_ident!("__arg_{}", i);
             if managed_indices.contains(i) {
-                quote! { &mut #arg_name }
+                quote! { #arg_name.resource_mut() }
             } else {
                 quote! { #arg_name }
             }
@@ -475,6 +477,8 @@ fn generate_guard_context(
 fn generate_managed_acquire(
     rm: &RouteMethod,
     krate: &TokenStream,
+    controller_name: &str,
+    handler_name: &str,
 ) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
@@ -483,7 +487,9 @@ fn generate_managed_acquire(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                let mut #arg_name = match <#ty as #krate::ManagedResource<__R2eS>>::acquire(&__state).await {
+                let mut #arg_name = match #krate::ManagedGuard::<#ty, __R2eS>::acquire(
+                    #krate::ManagedContext::new(&__state, #controller_name, #handler_name)
+                ).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -496,6 +502,8 @@ fn generate_managed_acquire(
 fn generate_managed_release(
     rm: &RouteMethod,
     krate: &TokenStream,
+    controller_name: &str,
+    handler_name: &str,
 ) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
@@ -505,8 +513,13 @@ fn generate_managed_release(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                if let Err(__e) = <#ty as #krate::ManagedResource<__R2eS>>::release(#arg_name, __success).await {
-                    return __e.into();
+                if let Err(__e) = #arg_name.finalize(&__managed_outcome).await {
+                    #krate::record_managed_finalize_error(
+                        &mut __managed_finalize_error,
+                        __e.into(),
+                        #controller_name,
+                        #handler_name,
+                    );
                 }
             }
         })
@@ -518,24 +531,20 @@ fn generate_body_and_release(
     call_expr: &TokenStream,
     managed_release: &[TokenStream],
     has_managed: bool,
-    is_result: bool,
     krate: &TokenStream,
 ) -> TokenStream {
     if has_managed {
-        if is_result {
-            quote! {
-                let __result = #call_expr;
-                let __success = __result.is_ok();
-                #(#managed_release)*
-                #krate::http::response::IntoResponse::into_response(__result)
+        quote! {
+            let __result = #call_expr;
+            let __response = #krate::http::response::IntoResponse::into_response(__result);
+            let __managed_outcome = #krate::ManagedOutcome::from_status(__response.status());
+            let mut __managed_finalize_error:
+                ::core::option::Option<#krate::http::response::Response> = ::core::option::Option::None;
+            #(#managed_release)*
+            if let ::core::option::Option::Some(__error_response) = __managed_finalize_error {
+                return __error_response;
             }
-        } else {
-            quote! {
-                let __result = #call_expr;
-                let __success = true;
-                #(#managed_release)*
-                #krate::http::response::IntoResponse::into_response(__result)
-            }
+            __response
         }
     } else {
         quote! {
@@ -556,6 +565,8 @@ fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
 fn generate_managed_acquire_ref(
     rm: &RouteMethod,
     krate: &TokenStream,
+    controller_name: &str,
+    handler_name: &str,
 ) -> Vec<TokenStream> {
     rm.managed_params
         .iter()
@@ -564,7 +575,9 @@ fn generate_managed_acquire_ref(
             let ty = &mp.ty;
             let ty_span = ty.span();
             quote_spanned! { ty_span =>
-                let mut #arg_name = match <#ty as #krate::ManagedResource<__R2eS>>::acquire(__state_ref).await {
+                let mut #arg_name = match #krate::ManagedGuard::<#ty, __R2eS>::acquire(
+                    #krate::ManagedContext::new(__state_ref, #controller_name, #handler_name)
+                ).await {
                     Ok(__r) => __r,
                     Err(__e) => return __e.into(),
                 };
@@ -747,17 +760,13 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         let inner_body = if has_intercepts {
             // Wrap the managed lifecycle + call in interceptors.
             // Inside the interceptor closure, use __state_ref for acquire.
-            let is_result = is_result_type(return_type);
             if has_managed {
-                let managed_acquire_ref = generate_managed_acquire_ref(rm, &krate);
-                let managed_release = generate_managed_release(rm, &krate);
-                let body_and_release = generate_body_and_release(
-                    &call_expr,
-                    &managed_release,
-                    true,
-                    is_result,
-                    &krate,
-                );
+                let managed_acquire_ref =
+                    generate_managed_acquire_ref(rm, &krate, controller_name_str, fn_name_str);
+                let managed_release =
+                    generate_managed_release(rm, &krate, controller_name_str, fn_name_str);
+                let body_and_release =
+                    generate_body_and_release(&call_expr, &managed_release, true, &krate);
                 let managed_body = quote! {
                     #(#managed_acquire_ref)*
                     #body_and_release
@@ -794,16 +803,12 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         } else {
             // No interceptors — original behavior
-            let managed_acquire = generate_managed_acquire(rm, &krate);
-            let managed_release = generate_managed_release(rm, &krate);
-            let is_result = is_result_type(return_type);
-            let body_and_release = generate_body_and_release(
-                &call_expr,
-                &managed_release,
-                has_managed,
-                is_result,
-                &krate,
-            );
+            let managed_acquire =
+                generate_managed_acquire(rm, &krate, controller_name_str, fn_name_str);
+            let managed_release =
+                generate_managed_release(rm, &krate, controller_name_str, fn_name_str);
+            let body_and_release =
+                generate_body_and_release(&call_expr, &managed_release, has_managed, &krate);
             quote! {
                 #(#managed_acquire)*
                 #body_and_release
@@ -856,7 +861,9 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
 /// Guard field idents of a decorator set (empty when there is none).
 fn deco_guard_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ident] {
-    set.as_ref().map(|s| s.guard_fields.as_slice()).unwrap_or(&[])
+    set.as_ref()
+        .map(|s| s.guard_fields.as_slice())
+        .unwrap_or(&[])
 }
 
 /// Interceptor field idents of a decorator set (empty when there is none).
@@ -864,13 +871,6 @@ fn deco_intercept_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ide
     set.as_ref()
         .map(|s| s.intercept_fields.as_slice())
         .unwrap_or(&[])
-}
-
-fn is_result_type(return_type: &syn::ReturnType) -> bool {
-    match return_type {
-        syn::ReturnType::Default => false,
-        syn::ReturnType::Type(_, ty) => is_result_like(ty),
-    }
 }
 
 // ── SSE handler generation ───────────────────────────────────────────────
@@ -942,7 +942,8 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         &[],
         deco_path_module,
     );
-    let (predeco_items, _) = super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
+    let (predeco_items, _) =
+        super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
     let has_guards = !sm.decorators.guard_fns.is_empty() && deco_set.is_some();
 
     let mut invocation_prefix_params = Vec::new();
@@ -1096,7 +1097,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         &[],
         deco_path_module,
     );
-    let (predeco_items, _) = super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
+    let (predeco_items, _) =
+        super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
     let has_guards = !wm.decorators.guard_fns.is_empty() && deco_set.is_some();
 
     // Build the shared post-upgrade invocation body. Controller ownership

@@ -79,9 +79,9 @@ r2e-macros (proc-macro, no runtime deps)
     ^
 r2e-core (runtime foundation, re-exports r2e-http as `http` module)
     ^
-r2e-security / r2e-events / r2e-scheduler / r2e-data / r2e-grpc
+r2e-security / r2e-events / r2e-scheduler / r2e-grpc
     ^
-r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
+r2e-data-sqlx / r2e-data-diesel / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
 r2e-prometheus / r2e-observability / r2e-oidc / r2e-openfga / r2e-static
 r2e-events-iggy / r2e-events-kafka / r2e-events-pulsar / r2e-events-rabbitmq
 r2e-devtools / r2e-test

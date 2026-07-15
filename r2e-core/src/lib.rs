@@ -31,6 +31,7 @@ pub mod type_list;
 pub mod tracing_config;
 pub mod types;
 pub mod params;
+pub mod pagination;
 pub mod validation;
 #[cfg(feature = "multipart")]
 pub mod multipart;
@@ -74,8 +75,12 @@ pub use plugin::{
     RawPreStatePlugin,
 };
 pub use event_subscriber::EventSubscriber;
-pub use managed::{ManagedErr, ManagedResource};
+pub use managed::{
+    record_managed_finalize_error, ManagedContext, ManagedErr, ManagedGuard, ManagedOutcome,
+    ManagedOutcomeKind, ManagedResource,
+};
 pub use meta::MetaRegistry;
+pub use pagination::{Page, Pageable};
 pub use plugins::{AdvancedHealth, ConfiguredTracing};
 pub use request_id::{RequestId, RequestIdPlugin};
 pub use secure_headers::SecureHeaders;

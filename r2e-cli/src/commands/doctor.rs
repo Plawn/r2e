@@ -128,7 +128,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         "Migrations directory",
         || {
             let content = std::fs::read_to_string("Cargo.toml").unwrap_or_default();
-            if content.contains("r2e-data") || content.contains("\"data\"") {
+            let uses_database = content.contains("r2e-data-sqlx")
+                || content.contains("r2e-data-diesel")
+                || content.contains("sqlx-sqlite")
+                || content.contains("sqlx-postgres")
+                || content.contains("sqlx-mysql")
+                || content.contains("diesel-sqlite")
+                || content.contains("diesel-postgres")
+                || content.contains("diesel-mysql");
+            if uses_database {
                 if Path::new("migrations").exists() {
                     let count = std::fs::read_dir("migrations")
                         .map(|dir| dir.count())
@@ -136,11 +144,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     CheckResult::Ok(format!("{} migration files", count))
                 } else {
                     CheckResult::Warning(
-                        "Data feature used but no migrations/ directory".into(),
+                        "Database integration used but no migrations/ directory".into(),
                     )
                 }
             } else {
-                CheckResult::Ok("Data feature not used (skipped)".into())
+                CheckResult::Ok("Database integration not used (skipped)".into())
             }
         },
         &mut issues,

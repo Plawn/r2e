@@ -215,17 +215,20 @@ Convenience type aliases:
 
 ## Managed resources
 
-Automatic acquire/release lifecycle for resources like database transactions:
+Cancellation-safe lifecycle for resources like database transactions:
 
 ```rust
-pub trait ManagedResource<S>: Sized {
+pub trait ManagedResource<S>: Sized + Send {
     type Error: Into<Response>;
-    async fn acquire(state: &S) -> Result<Self, Self::Error>;
-    async fn release(self, success: bool) -> Result<(), Self::Error>;
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error>;
+    async fn finalize(&mut self, outcome: &ManagedOutcome) -> Result<(), Self::Error>;
+    fn abort(&mut self);
 }
 ```
 
-`success` is `true` if the handler returned `Ok`, `false` on `Err`. Use `ManagedErr<E>` to wrap any `E: IntoResponse` — for the common case, `ManagedErr<HttpError>`.
+The outcome comes from the built HTTP response (`< 400` succeeds). A guard
+calls `abort` on panic, cancellation, or partial acquisition. Use
+`ManagedErr<E>` to bridge an `E: IntoResponse`.
 
 ```rust
 #[post("/")]

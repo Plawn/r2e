@@ -17,28 +17,12 @@ pub struct CreateUserRequest {
     pub email: String,
 }
 
-/// Entity for the `users` SQL table, used by the data controller.
+/// Database row used by the paginated data controller.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserEntity {
     pub id: i64,
     pub name: String,
     pub email: String,
-}
-
-impl r2e::r2e_data::Entity for UserEntity {
-    type Id = i64;
-    fn table_name() -> &'static str {
-        "users"
-    }
-    fn id_column() -> &'static str {
-        "id"
-    }
-    fn columns() -> &'static [&'static str] {
-        &["id", "name", "email"]
-    }
-    fn id(&self) -> &i64 {
-        &self.id
-    }
 }
 
 /// Event emitted when a new user is created.

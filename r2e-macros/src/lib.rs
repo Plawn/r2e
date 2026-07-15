@@ -756,24 +756,24 @@ pub fn raw(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Mark a handler parameter as a **managed resource** with automatic lifecycle.
 ///
 /// Managed resources implement [`r2e_core::ManagedResource`] and have their
-/// lifecycle (acquire/release) handled automatically by the macro. The parameter
+/// lifecycle (acquire/finalize/abort) handled automatically by the macro. The parameter
 /// type must be a mutable reference (`&mut T`).
 ///
 /// The most common use case is database transactions via `Tx<DB>`:
 ///
 /// ```ignore
-/// use r2e_core::{Tx, HasPool};
+/// use r2e::r2e_data_sqlx::Tx;
 /// use sqlx::Sqlite;
 ///
 /// #[post("/users")]
 /// async fn create(
 ///     &self,
 ///     body: Json<CreateUser>,
-///     #[managed] tx: &mut Tx<Sqlite>,
+///     #[managed] tx: &mut Tx<'_, Sqlite>,
 /// ) -> Result<Json<User>, HttpError> {
 ///     sqlx::query("INSERT INTO users (name) VALUES (?)")
 ///         .bind(&body.name)
-///         .execute(&mut **tx)
+///         .execute(tx.connection())
 ///         .await?;
 ///     Ok(Json(user))
 /// }
@@ -782,14 +782,14 @@ pub fn raw(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// The generated handler will:
 /// 1. Call `ManagedResource::acquire()` before the method body
 /// 2. Pass `&mut resource` to the method
-/// 3. Call `ManagedResource::release(success)` after the method completes
-///    - `success = true` if the method returned `Ok` (or a non-Result type)
-///    - `success = false` if the method returned `Err`
+/// 3. Build the HTTP response and call `ManagedResource::finalize(outcome)`
+/// 4. Call `abort()` from a drop guard on panic, cancellation, partial acquire,
+///    or failed finalization
 ///
 /// For `Tx<DB>`:
 /// - `acquire()` begins a new transaction
-/// - `release(true)` commits the transaction
-/// - `release(false)` does nothing (transaction rolls back on drop)
+/// - responses below status 400 commit the transaction
+/// - `4xx`/`5xx` responses roll it back explicitly
 ///
 /// **Note:** `#[managed]` and `#[transactional]` are mutually exclusive.
 /// Use `#[managed] tx: &mut Tx<...>` instead of `#[transactional]`.

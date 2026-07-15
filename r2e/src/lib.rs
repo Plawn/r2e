@@ -14,12 +14,10 @@
 //! | `security`    | **yes** | `r2e-security`            |
 //! | `events`      | **yes** | `r2e-events`              |
 //! | `utils`       | **yes** | `r2e-utils`               |
-//! | `data`        | no      | `r2e-data` (abstractions) |
 //! | `data-sqlx`   | no      | `r2e-data-sqlx`           |
 //! | `data-diesel` | no      | `r2e-data-diesel`         |
-//! | `sqlite`      | no      | `r2e-data-sqlx/sqlite`    |
-//! | `postgres`    | no      | `r2e-data-sqlx/postgres`  |
-//! | `mysql`       | no      | `r2e-data-sqlx/mysql`     |
+//! | `sqlx-sqlite` / `sqlx-postgres` / `sqlx-mysql` | no | managed SQLx transactions |
+//! | `diesel-sqlite` / `diesel-postgres` / `diesel-mysql` | no | managed Diesel transactions |
 //! | `scheduler`   | no      | `r2e-scheduler`           |
 //! | `executor`    | no      | `r2e-executor` (managed task pool, à la J2EE `ManagedExecutorService`) |
 //! | `cache`       | no      | `r2e-cache`               |
@@ -33,7 +31,7 @@
 //! | `static`      | no      | `r2e-static` (embedded static file serving + SPA fallback) |
 //! | `validation`  | no      | `r2e-core/validation`     |
 //! | `dev-reload`  | no      | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
-//! | `full`        | no      | All of the above (except `dev-reload`) |
+//! | `full`        | no      | Bundled framework modules; database/event backends, QUIC, and dev reload stay opt-in |
 
 // Re-export sub-crates as public modules so they're accessible as
 // `r2e::r2e_core`, `r2e::r2e_events`, etc.
@@ -69,9 +67,6 @@ pub use r2e_events_rabbitmq;
 
 #[cfg(feature = "utils")]
 pub use r2e_utils;
-
-#[cfg(feature = "data")]
-pub use r2e_data;
 
 #[cfg(feature = "data-sqlx")]
 pub use r2e_data_sqlx;
@@ -120,17 +115,14 @@ pub mod types {
 
     /// Paginated JSON result — `Result<Json<Page<T>>, HttpError>`.
     ///
-    /// Available when the `data` feature is enabled.
-    ///
     /// ```ignore
     /// #[get("/users")]
     /// async fn list(&self, pageable: Pageable) -> PagedResult<User> {
     ///     Ok(Json(self.service.list(pageable).await?))
     /// }
     /// ```
-    #[cfg(feature = "data")]
     pub type PagedResult<T> =
-        Result<r2e_core::http::Json<r2e_data::Page<T>>, r2e_core::HttpError>;
+        Result<r2e_core::http::Json<r2e_core::Page<T>>, r2e_core::HttpError>;
 }
 
 /// Unified prelude — import everything with `use r2e::prelude::*`.
@@ -142,9 +134,6 @@ pub mod prelude {
 
     #[cfg(feature = "security")]
     pub use r2e_security::prelude::*;
-
-    #[cfg(feature = "data")]
-    pub use r2e_data::prelude::*;
 
     #[cfg(feature = "data-sqlx")]
     pub use r2e_data_sqlx::prelude::*;

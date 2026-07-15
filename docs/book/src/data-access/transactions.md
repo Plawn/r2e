@@ -1,138 +1,127 @@
-# Transactions and Managed Resources
+# Managed database transactions
 
-R2E provides two approaches for transaction management: `#[managed]` for automatic lifecycle and `#[transactional]` for simple wrapping.
+R2E provides cancellation-safe request transactions for SQLx and Diesel. A
+transaction is acquired before the route runs, committed for responses below
+status 400, and rolled back for `4xx`/`5xx` responses. Panic, cancellation, and
+partial acquisition use a synchronous abort fallback.
 
-## `#[managed]` — Recommended
+## SQLx
 
-The `#[managed]` attribute provides automatic resource lifecycle management:
+Enable one driver and add SQLx for its query API:
 
-```rust
-use r2e::r2e_data_sqlx::Tx;
-use sqlx::Sqlite;
-
-#[post("/")]
-async fn create(
-    &self,
-    body: Json<CreateUserRequest>,
-    #[managed] tx: &mut Tx<'_, Sqlite>,
-) -> Result<Json<User>, HttpError> {
-    sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
-        .bind(&body.name)
-        .bind(&body.email)
-        .execute(tx.as_mut())
-        .await?;
-
-    Ok(Json(user))
-}
+```toml
+[dependencies]
+r2e = { version = "0.1", features = ["sqlx-postgres"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres"] }
 ```
 
-### Lifecycle
-
-1. **Acquire**: `Tx::acquire(&state)` — begins a transaction from the pool
-2. **Handler runs**: receives `&mut Tx` — executes queries within the transaction
-3. **Release**: `Tx::release(self, success)` — commits on success, rolls back on failure
-   - `success = true` if handler returned `Ok` or a non-Result type
-   - `success = false` if handler returned `Err`
-
-### Requirements
-
-`Tx` fetches its pool from the bean graph **by type** — its `acquire` calls
-`state.bean::<Pool<DB>>()`. So the only requirement is that the pool is a bean in
-your application. Provide it before `build_state()`:
+Provide the pool as a bean:
 
 ```rust
-let pool: Pool<Sqlite> = SqlitePool::connect(&url).await?;
+let pool = sqlx::PgPool::connect(&database_url).await?;
 
 AppBuilder::new()
-    .provide(pool)                 // now `Pool<Sqlite>` is resolvable by type
-    // ...
+    .provide(pool)
     .build_state()
-    .await
-    // ...
+    .await;
 ```
 
-There is no `HasPool` state impl to write — the state type is the inferred HList
-of provisions, and `#[managed] tx: &mut Tx<'_, Sqlite>` "just works" once
-`Pool<Sqlite>` has been provided. (If the pool is missing, `acquire` fails at
-request time with a message telling you to `.provide(pool)` before
-`build_state()`.)
-
-## `#[transactional]` — Simple wrapping
-
-For basic transaction wrapping without explicit `Tx` parameter:
+Then request a transaction explicitly:
 
 ```rust
-#[post("/")]
-#[transactional]
-async fn create(&self, body: Json<CreateUserRequest>) -> Result<Json<User>, HttpError> {
-    // self.pool is automatically wrapped in begin()/commit()
-    sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
-        .bind(&body.name)
-        .bind(&body.email)
-        .execute(&self.pool)
-        .await?;
+use r2e::prelude::*;
+use r2e::r2e_data_sqlx::Tx;
+use sqlx::Postgres;
 
-    Ok(Json(user))
+#[post("/users")]
+async fn create(
+    &self,
+    Json(body): Json<CreateUser>,
+    #[managed] tx: &mut Tx<'_, Postgres>,
+) -> Result<StatusCode, HttpError> {
+    sqlx::query("INSERT INTO users(name) VALUES ($1)")
+        .bind(body.name)
+        .execute(tx.connection())
+        .await
+        .map_err(|error| HttpError::internal(error.to_string()))?;
+
+    Ok(StatusCode::CREATED)
 }
 ```
 
-Use `#[transactional(pool = "custom_pool")]` if your pool field has a different name.
+Available façade features are `sqlx-sqlite`, `sqlx-postgres`, and
+`sqlx-mysql`. The shorter `sqlite`, `postgres`, and `mysql` names remain
+compatibility aliases for SQLx.
 
-> **Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code — it's more explicit and flexible.
+## Diesel
 
-## Custom managed resources
+Enable the matching Diesel backend:
 
-Implement `ManagedResource<S>` for any type that needs acquire/release lifecycle:
+```toml
+[dependencies]
+r2e = { version = "0.1", features = ["diesel-postgres"] }
+diesel = { version = "2", features = ["postgres", "r2d2"] }
+```
+
+Provide an r2d2 pool:
 
 ```rust
-use r2e::prelude::*; // ManagedResource, ManagedErr, BeanLookup
+use diesel::{PgConnection, r2d2::{ConnectionManager, Pool}};
 
-pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
+let manager = ConnectionManager::<PgConnection>::new(database_url);
+let pool = Pool::builder().build(manager)?;
 
-impl<S, DB> ManagedResource<S> for Tx<'static, DB>
-where
-    DB: Database,
-    S: BeanLookup + Send + Sync,
-{
-    type Error = ManagedErr<MyHttpError>;
+AppBuilder::new()
+    .provide(pool)
+    .build_state()
+    .await;
+```
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let pool = state.bean::<Pool<DB>>()
-            .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
-        let tx = pool.begin().await
-            .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
-        Ok(Tx(tx))
-    }
+Diesel is synchronous. Use `tx.run(...)` to execute its work on Tokio's
+blocking pool without blocking an async worker:
 
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        if success {
-            self.0.commit().await
-                .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
-        }
-        // On failure: transaction dropped → automatic rollback
-        Ok(())
-    }
+```rust
+use diesel::prelude::*;
+use r2e::prelude::*;
+use r2e::r2e_data_diesel::DieselTx;
+
+#[post("/users")]
+async fn create(
+    &self,
+    Json(body): Json<CreateUser>,
+    #[managed] tx: &mut DieselTx<PgConnection>,
+) -> Result<StatusCode, HttpError> {
+    tx.run(move |connection| {
+        diesel::insert_into(users::table)
+            .values((users::name.eq(body.name), users::email.eq(body.email)))
+            .execute(connection)
+    })
+    .await?;
+
+    Ok(StatusCode::CREATED)
 }
 ```
 
-### Error wrappers
+The Diesel features are `diesel-sqlite`, `diesel-postgres`, and
+`diesel-mysql`. `tx.connection()` is also available when code is already on a
+blocking thread. Diesel's MySQL driver additionally requires a compatible
+native `libmysqlclient`/MariaDB client library at build time.
 
-`ManagedResource::Error` must implement `Into<Response>`. Use `ManagedErr<E>` to wrap your custom error type:
+## Lifecycle and response policy
 
-```rust
-// Your error type
-impl IntoResponse for MyHttpError { /* ... */ }
+For each request R2E performs:
 
-// ManagedResource uses the wrapper
-type Error = ManagedErr<MyHttpError>;
-```
+1. acquire resources in handler parameter order;
+2. run the handler and build its HTTP response;
+3. classify `< 400` as success and `4xx`/`5xx` as failure;
+4. finalize every resource in reverse order;
+5. return a finalization error if commit or rollback failed.
 
-The chain is: `MyHttpError` → `ManagedErr<MyHttpError>` → `Response`.
+Already acquired resources abort if a later acquisition fails. A panic or
+cancelled request drops the managed guard and invokes the same abort fallback.
+SQLx drops its unfinished transaction; Diesel discards an r2d2 connection that
+still owns an open transaction.
 
-## Other managed resource ideas
-
-The pattern isn't limited to transactions:
-
-- **Audit context** — acquire logs "action started", release logs "action completed"
-- **Scoped cache** — acquire creates a request-scoped cache, release flushes it
-- **Connection checkout** — acquire checks out a connection, release returns it
+`#[managed]` and the legacy `#[transactional]` decorator are mutually
+exclusive. Prefer `#[managed]`: it makes the transaction used by each query
+explicit and provides cancellation-safe cleanup.

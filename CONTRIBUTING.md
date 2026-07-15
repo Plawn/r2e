@@ -34,9 +34,9 @@ r2e-macros (proc-macro, no runtime deps)
     ↑
 r2e-core (runtime foundation)
     ↑
-r2e-security / r2e-events / r2e-scheduler / r2e-data
+r2e-security / r2e-events / r2e-scheduler
     ↑
-r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils / r2e-test
+r2e-data-sqlx / r2e-data-diesel / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils / r2e-test
     ↑
 r2e (facade — re-exports everything, feature-gated)
     ↑
@@ -50,8 +50,8 @@ example-app / example-postgres / example-multi-tenant / ...
 | `r2e-security` | JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache |
 | `r2e-events` | In-process typed EventBus with pub/sub |
 | `r2e-scheduler` | Background task scheduling (interval, cron) |
-| `r2e-data` | Database abstractions: Entity, Repository, QueryBuilder, Pageable/Page |
-| `r2e-data-sqlx` | SQLx backend: SqlxRepository, Tx, HasPool, migrations |
+| `r2e-data-sqlx` | Managed SQLx transactions |
+| `r2e-data-diesel` | Managed Diesel transactions |
 | `r2e-cache` | TTL cache with pluggable backends |
 | `r2e-rate-limit` | Token-bucket rate limiting |
 | `r2e-openapi` | OpenAPI 3.1.0 spec generation + docs UI |

@@ -41,19 +41,6 @@ fn add_security() {
 
 #[test]
 #[serial]
-fn add_data() {
-    let tmp = TempDir::new().unwrap();
-    let _cwd = CwdGuard::new(tmp.path());
-    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
-
-    add::run("data").unwrap();
-
-    let cargo = fs::read_to_string("Cargo.toml").unwrap();
-    assert!(cargo.contains("r2e-data"));
-}
-
-#[test]
-#[serial]
 fn add_events() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CwdGuard::new(tmp.path());
@@ -147,7 +134,6 @@ fn add_openapi_includes_schemars() {
 fn add_all_known_extensions() {
     let known = [
         "security",
-        "data",
         "data-sqlx",
         "data-diesel",
         "openapi",

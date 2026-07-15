@@ -81,9 +81,6 @@ pub struct UserController {
     #[inject]
     user_service: UserService,
 
-    #[inject]
-    pool: sqlx::SqlitePool,
-
     #[inject(identity)]
     user: AuthenticatedUser,
 

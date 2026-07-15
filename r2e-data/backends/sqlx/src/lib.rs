@@ -1,105 +1,31 @@
-//! # r2e-data-sqlx — SQLx backend for R2E data layer
+//! Managed SQLx transactions for R2E.
 //!
-//! This crate provides the [SQLx](https://github.com/launchbadge/sqlx)-specific
-//! implementations for R2E's data access layer. It depends on [`r2e-data`] for
-//! the abstract traits and types, and adds the repository wrapper, transaction
-//! utilities, and error bridging needed to talk to a real database.
-//!
-//! # What's in this crate
-//!
-//! | Type | Description |
-//! |------|-------------|
-//! | [`SqlxRepository`] | Generic repository wrapper holding an `sqlx::Pool<DB>` |
-//! | [`Tx`] | Transaction wrapper for use with `#[managed]` — auto-commit / auto-rollback |
-//! | [`HasPool`] | Trait for application states that contain a database pool |
-//! | [`SqlxErrorExt`] | Extension trait to convert `sqlx::Error` → `DataError` (`.into_data_error()`) |
-//! | [`SqlxResult<T>`] | Type alias for `Result<T, DataError>` |
-//! | [`migration`] | Documentation module with guidance on using `sqlx::migrate!()` |
-//!
-//! # Feature flags
-//!
-//! Enable exactly one database driver:
-//!
-//! | Feature    | Driver |
-//! |------------|--------|
-//! | `sqlite`   | SQLite via `sqlx/sqlite` |
-//! | `postgres` | PostgreSQL via `sqlx/postgres` |
-//! | `mysql`    | MySQL via `sqlx/mysql` |
-//!
-//! # Quick start
-//!
-//! ```toml
-//! [dependencies]
-//! r2e-data-sqlx = { version = "0.1", features = ["sqlite"] }
-//! ```
+//! Register an SQLx pool as a bean, then request a [`Tx`] from an HTTP route:
 //!
 //! ```ignore
-//! use r2e_data_sqlx::{SqlxRepository, Tx, HasPool};
-//! use sqlx::Sqlite;
+//! AppBuilder::new().provide(pool).build_state().await;
 //!
-//! // Use SqlxRepository as a convenience pool wrapper
-//! let repo = SqlxRepository::<UserEntity, Sqlite>::new(pool.clone());
-//!
-//! // Use Tx with #[managed] for automatic transaction lifecycle
-//! #[post("/")]
+//! #[post("/users")]
 //! async fn create(
 //!     &self,
-//!     body: Json<CreateUser>,
-//!     #[managed] tx: &mut Tx<'_, Sqlite>,
-//! ) -> Result<Json<User>, HttpError> {
-//!     sqlx::query("INSERT INTO users (name) VALUES (?)")
-//!         .bind(&body.name)
-//!         .execute(tx.as_mut())
-//!         .await?;
-//!     Ok(Json(user))
+//!     #[managed] tx: &mut r2e_data_sqlx::Tx<'_, sqlx::Postgres>,
+//! ) -> Result<StatusCode, HttpError> {
+//!     sqlx::query("INSERT INTO users(name) VALUES ($1)")
+//!         .bind("Ada")
+//!         .execute(tx.connection())
+//!         .await
+//!         .map_err(|error| HttpError::internal(error.to_string()))?;
+//!     Ok(StatusCode::CREATED)
 //! }
 //! ```
 //!
-//! # Transaction management
-//!
-//! The [`Tx`] type implements `ManagedResource` and is designed for use with
-//! R2E's `#[managed]` attribute:
-//!
-//! - **Acquire:** begins a new transaction from the pool
-//! - **Release (success):** commits the transaction
-//! - **Release (failure):** drops the transaction (automatic rollback)
-//!
-//! Your application state must implement [`HasPool<DB>`] for the database type
-//! you're using:
-//!
-//! ```ignore
-//! impl HasPool<Sqlite> for MyState {
-//!     fn pool(&self) -> &Pool<Sqlite> {
-//!         &self.pool
-//!     }
-//! }
-//! ```
-//!
-//! # Error bridging
-//!
-//! Due to Rust's orphan rules, `From<sqlx::Error> for DataError` can't be
-//! implemented here. Use the [`SqlxErrorExt`] trait instead:
-//!
-//! ```ignore
-//! use r2e_data_sqlx::SqlxErrorExt;
-//!
-//! let user = sqlx::query_as("SELECT ...")
-//!     .fetch_one(&pool)
-//!     .await
-//!     .map_err(|e| e.into_data_error())?;
-//! ```
+//! Responses below status 400 commit. Client/server error responses roll back.
+//! Cancellation and panic use SQLx's drop rollback as a safety fallback.
 
-pub mod error;
-pub mod migration;
-pub mod repository;
-pub mod tx;
+mod tx;
 
-pub use error::{SqlxErrorExt, SqlxResult};
-pub use repository::SqlxRepository;
-pub use tx::{HasPool, Tx};
+pub use tx::{SqlxTx, Tx};
 
-/// Re-exports of the most commonly used types from both `r2e-data` and this crate.
 pub mod prelude {
-    pub use crate::{HasPool, SqlxErrorExt, SqlxRepository, Tx};
-    pub use r2e_data::prelude::*;
+    pub use crate::{SqlxTx, Tx};
 }

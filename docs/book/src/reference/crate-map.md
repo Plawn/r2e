@@ -11,9 +11,8 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 | `r2e-cli` | CLI tool for R2E - project scaffolding, code generation, and development server |
 | `r2e-compile-tests` | (no description) |
 | `r2e-core` | Core runtime for R2E web framework - AppBuilder, plugins, guards, and dependency injection |
-| `r2e-data-diesel` | Diesel backend for R2E data layer (skeleton) |
-| `r2e-data-sqlx` | SQLx backend for R2E data layer — SqlxRepository, Tx (resolves the pool from the bean graph by type), ManagedResource impl |
-| `r2e-data` | Data access abstractions for R2E — Entity, Repository, Page, DataError (no driver deps) |
+| `r2e-data-diesel` | Cancellation-safe managed Diesel transactions |
+| `r2e-data-sqlx` | Cancellation-safe managed SQLx transactions |
 | `r2e-devtools` | Subsecond hot-reload integration for R2E |
 | `r2e-events-iggy` | Apache Iggy event bus backend for R2E — persistent distributed event streaming |
 | `r2e-events-kafka` | Apache Kafka event bus backend for R2E — distributed event streaming |
@@ -44,9 +43,9 @@ r2e-macros (proc-macro, no runtime deps)
     ^
 r2e-core (runtime foundation, re-exports r2e-http as `http` module)
     ^
-r2e-security / r2e-events / r2e-scheduler / r2e-data / r2e-grpc
+r2e-security / r2e-events / r2e-scheduler / r2e-grpc
     ^
-r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
+r2e-data-sqlx / r2e-data-diesel / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
 r2e-prometheus / r2e-observability / r2e-oidc / r2e-openfga / r2e-static
 r2e-events-iggy / r2e-events-kafka / r2e-events-pulsar / r2e-events-rabbitmq
 r2e-devtools / r2e-test
@@ -67,12 +66,11 @@ The `r2e` facade crate gates sub-crates behind features.
 | `security` | r2e-security |
 | `events` | r2e-events |
 | `utils` | r2e-utils |
-| `data` | r2e-data |
-| `data-sqlx` | data, r2e-data-sqlx |
-| `data-diesel` | data, r2e-data-diesel |
-| `sqlite` | data-sqlx, r2e-data-sqlx/sqlite |
-| `postgres` | data-sqlx, r2e-data-sqlx/postgres |
-| `mysql` | data-sqlx, r2e-data-sqlx/mysql |
+| `data` | compatibility marker; pagination is always in core |
+| `data-sqlx` | r2e-data-sqlx |
+| `data-diesel` | r2e-data-diesel |
+| `sqlx-{sqlite,postgres,mysql}` | SQLx managed Tx + selected driver |
+| `diesel-{sqlite,postgres,mysql}` | Diesel managed Tx + selected driver |
 | `events-iggy` | events, r2e-events-iggy |
 | `events-kafka` | events, r2e-events-kafka |
 | `events-pulsar` | events, r2e-events-pulsar |

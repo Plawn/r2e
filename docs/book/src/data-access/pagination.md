@@ -7,7 +7,7 @@ R2E provides `Pageable` for extracting pagination parameters from query strings 
 `Pageable` is an Axum `Query` extractor with pagination parameters:
 
 ```rust
-use r2e::r2e_data::{Pageable, Page};
+use r2e::prelude::{Pageable, Page};
 
 #[get("/")]
 async fn list(&self, Query(pageable): Query<Pageable>) -> Result<Json<Page<User>>, HttpError> {
@@ -54,7 +54,7 @@ async fn list(
     &self,
     Query(pageable): Query<Pageable>,
 ) -> Result<Json<Page<User>>, HttpError> {
-    let offset = pageable.page * pageable.size;
+    let offset = pageable.offset();
 
     // Get total count
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
@@ -88,32 +88,5 @@ async fn list(
   "total_pages": 3,
   "page": 0,
   "size": 20
-}
-```
-
-## With QueryBuilder
-
-```rust
-use r2e::r2e_data::QueryBuilder;
-
-#[get("/")]
-async fn list(
-    &self,
-    Query(pageable): Query<Pageable>,
-) -> Result<Json<Page<User>>, HttpError> {
-    let mut qb = QueryBuilder::new("users");
-
-    if let Some(ref sort) = pageable.sort {
-        qb = qb.order_by(sort, true);
-    }
-
-    qb = qb.limit(pageable.size as usize)
-            .offset((pageable.page * pageable.size) as usize);
-
-    let (sql, params) = qb.build_select("id, name, email");
-    let (count_sql, count_params) = QueryBuilder::new("users").build_count();
-
-    // Execute both queries...
-    // Return Page::new(users, &pageable, total)
 }
 ```

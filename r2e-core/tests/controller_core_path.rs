@@ -144,13 +144,15 @@ struct ManagedToken;
 impl<S: Send + Sync> ManagedResource<S> for ManagedToken {
     type Error = ManagedErr<r2e_core::HttpError>;
 
-    async fn acquire(_state: &S) -> Result<Self, Self::Error> {
+    async fn acquire(_context: r2e_core::ManagedContext<'_, S>) -> Result<Self, Self::Error> {
         Ok(ManagedToken)
     }
 
-    async fn release(self, _success: bool) -> Result<(), Self::Error> {
+    async fn finalize(&mut self, _outcome: &r2e_core::ManagedOutcome) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    fn abort(&mut self) {}
 }
 
 #[controller]

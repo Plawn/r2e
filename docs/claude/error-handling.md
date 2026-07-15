@@ -185,11 +185,12 @@ The `#[managed]` attribute enables automatic lifecycle management for resources 
 ### Core trait
 
 ```rust
-pub trait ManagedResource<S>: Sized {
+pub trait ManagedResource<S>: Sized + Send {
     type Error: Into<Response>;
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error>;
-    async fn release(self, success: bool) -> Result<(), Self::Error>;
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error>;
+    async fn finalize(&mut self, outcome: &ManagedOutcome) -> Result<(), Self::Error>;
+    fn abort(&mut self);
 }
 ```
 
@@ -202,7 +203,7 @@ impl UserController {
     async fn create(
         &self,
         body: Json<User>,
-        #[managed] tx: &mut Tx<'_, Sqlite>,  // Acquired before, released after
+        #[managed] tx: &mut Tx<'_, Sqlite>,
     ) -> Result<Json<User>, MyHttpError> {
         sqlx::query("INSERT INTO users ...").execute(tx.as_mut()).await?;
         Ok(Json(user))
@@ -212,13 +213,15 @@ impl UserController {
 
 ### Lifecycle
 
-1. `acquire(&state)` — called before handler, resource obtained from app state
+1. `acquire(context)` — called before handler, resource obtained from app state
 2. Handler receives `&mut Resource`
-3. `release(self, success)` — called after handler
-   - `success = true` if handler returned `Ok` or non-Result type
-   - `success = false` if handler returned `Err`
+3. Build the HTTP response and call `finalize(&outcome)` in reverse order
+4. Call `abort()` from the RAII guard on panic, cancellation, partial acquire,
+   or failed finalization
 
-**Transaction wrapper pattern:** implement `ManagedResource<S>` for `Tx<'a, DB>`, bounding `S: BeanLookup` so `acquire` can fetch the pool from the state by type (`state.bean::<Pool<DB>>()`) and begin a transaction; `release` commits on success and drops (rollback) on failure. Use `ManagedErr<E>` as the error type. You no longer implement a `HasPool<DB> for State` trait — the pool is resolved from the bean graph by type, so `#[managed] tx: &mut Tx<'_, DB>` just works once the `Pool<DB>` has been `.provide()`d. (`r2e-data-sqlx` ships this `Tx` impl.)
+The SQLx and Diesel backend crates provide transaction implementations. They
+resolve pool beans by type, commit responses below 400, roll back `4xx`/`5xx`,
+and use a drop-safe abort fallback.
 
 **Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code.
 

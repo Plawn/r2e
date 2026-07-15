@@ -89,23 +89,24 @@ This generates and opens documentation for all R2E crates.
 | `ScheduleConfig` | Interval/cron/delay configuration |
 | `ScheduledTaskDef<T>` | Task definition |
 
-### r2e-data
+### r2e-core pagination
 
 | Type | Description |
 |------|-------------|
-| `Entity` | Table mapping trait |
-| `QueryBuilder` | Fluent SQL builder |
 | `Pageable` | Pagination parameters |
 | `Page<T>` | Paginated response |
-| `DataError` | Data layer error |
 
 ### r2e-data-sqlx
 
 | Type | Description |
 |------|-------------|
-| `SqlxRepository<E, DB>` | SQLx-backed repository |
-| `Tx<DB>` | Transaction wrapper; `#[managed] tx: &mut Tx<'_, DB>` resolves the `Pool<DB>` from the bean graph by type — just `.provide(pool)` before `build_state()` |
-| `HasPool<DB>` | Optional pool-accessor trait; no longer required for `Tx` (it fetches the pool from the graph via `BeanLookup`) |
+| `Tx<'a, DB>` / `SqlxTx<'a, DB>` | Cancellation-safe managed SQLx transaction |
+
+### r2e-data-diesel
+
+| Type | Description |
+|------|-------------|
+| `Tx<C>` / `DieselTx<C>` | Managed Diesel transaction on an r2d2 connection |
 
 ### r2e-cache
 

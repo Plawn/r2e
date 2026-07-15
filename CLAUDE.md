@@ -53,9 +53,9 @@ r2e-events      → In-process EventBus with typed pub/sub (emit/subscribe fan-o
   backends/rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
 r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
 r2e-executor    → Managed task pool (PoolExecutor) + #[async_exec] + #[derive(BackgroundService)]. Bounded concurrency, graceful drain.
-r2e-data        → Data access abstractions: Entity, Repository, Page, Pageable, DataError. Database backends live in `r2e-data/backends/`.
-  backends/sqlx     → SQLx backend: SqlxRepository, Tx, HasPool, ManagedResource impl, migrations.
-  backends/diesel   → Diesel backend (skeleton): DieselRepository, error bridge.
+r2e-core        → Also owns Page/Pageable and the cancellation-safe ManagedResource lifecycle.
+  r2e-data/backends/sqlx   → Managed SQLx transactions (SQLite/Postgres/MySQL).
+  r2e-data/backends/diesel → Managed Diesel transactions (SQLite/Postgres/MySQL).
 r2e-grpc        → Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports.
 r2e-cache       → TtlCache, pluggable CacheStore trait. The store is a bean: `.provide(InMemoryStore::shared())` (no global).
 r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
@@ -74,7 +74,7 @@ r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messag
 example-app     → Demo app (lib + bin) exercising all features. `lib.rs` exposes the blueprint `app(b) -> impl BootableApp` booted by both `main.rs` and the integration tests.
 ```
 
-Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-data` / `r2e-devtools` / `r2e-static` ← `r2e-events-iggy` / `r2e-events-kafka` / `r2e-events-pulsar` / `r2e-events-rabbitmq` / `r2e-data-sqlx` / `r2e-data-diesel` / `r2e-cache` / `r2e-rate-limit` / `r2e-openapi` / `r2e-utils` / `r2e-test` ← `example-app`
+Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-devtools` / `r2e-static` / `r2e-data-sqlx` / `r2e-data-diesel` / other integrations ← `r2e` ← applications.
 
 **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
@@ -162,7 +162,7 @@ impl UserController {
 | `Bean`, `AsyncBean`, `Producer`, `#[bean]`, `#[producer]`, `#[inject]`, `#[post_construct]`, `BeanRegistry`, `BeanContext`, `build_state`, dependency injection, bean graph | `docs/claude/beans-di.md` |
 | `Plugin`, `PreStatePlugin`, `.plugin()`, `.with()`, `Provided`/`PluginProvisions`, `Deps`/`LateDeps`, `configure`, plugin `Config`/`CONFIG_PREFIX`/`PluginConfig`, `PluginInstallContext`, `DeferredAction`/`DeferredContext`, `store_data`/plugin data, `should_be_last`, writing a new plugin | `docs/claude/plugins.md` |
 | `PoolExecutor`, `JobHandle`, `Executor` plugin, `ExecutorConfig`, `#[async_exec]`, `#[derive(BackgroundService)]`, `ServiceComponent`, `spawn_service`, managed task pool, background workers | `docs/claude/executor.md` |
-| `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, `Repository`, `Entity`, `OpenAPI`, `ContextConstruct`, `AppBuilder`, `TestApp`, `TestJwt`, `TracingConfig`, `LogFormat`, `SpanEvents`, `ConfiguredTracing`, `init_tracing_with_config`, tracing subscriber formatting | `docs/claude/subsystems.md` |
+| `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, managed SQLx/Diesel transactions, `Pageable`, `Page`, `OpenAPI`, `ContextConstruct`, `AppBuilder`, `TestApp`, `TestJwt`, `TracingConfig`, `LogFormat`, `SpanEvents`, `ConfiguredTracing`, `init_tracing_with_config`, tracing subscriber formatting | `docs/claude/subsystems.md` |
 | `prelude`, `use r2e::prelude::*`, feature flags, `Params`, `#[transactional]`, re-exports, what's available by default | `docs/claude/prelude-features.md` |
 | `r2e new`, `r2e dev`, `r2e generate`, `r2e add`, `r2e doctor`, `r2e routes`, CLI templates, scaffolding | `docs/claude/cli.md` |
 | `quic`, `quinn`, `h3`, HTTP/3, `serve_h3`, `QuicEndpoint`, `QuicConnection`, `Alt-Svc`, `build_server_config`, raw QUIC streams, `server.quic.*` | `docs/features/18-quic.md` |

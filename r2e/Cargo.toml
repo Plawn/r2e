@@ -12,17 +12,24 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "data", "data-sqlx", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static"]
+full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
-data = ["dep:r2e-data"]
-data-sqlx = ["data", "dep:r2e-data-sqlx"]
-data-diesel = ["data", "dep:r2e-data-diesel"]
-# Convenience pass-through features for sqlx database drivers
-sqlite = ["data-sqlx", "r2e-data-sqlx/sqlite"]
-postgres = ["data-sqlx", "r2e-data-sqlx/postgres"]
-mysql = ["data-sqlx", "r2e-data-sqlx/mysql"]
+# Compatibility marker: pagination now lives in r2e-core and is always available.
+data = []
+data-sqlx = ["dep:r2e-data-sqlx"]
+data-diesel = ["dep:r2e-data-diesel"]
+sqlx-sqlite = ["data-sqlx", "r2e-data-sqlx/sqlite"]
+sqlx-postgres = ["data-sqlx", "r2e-data-sqlx/postgres"]
+sqlx-mysql = ["data-sqlx", "r2e-data-sqlx/mysql"]
+diesel-sqlite = ["data-diesel", "r2e-data-diesel/sqlite"]
+diesel-postgres = ["data-diesel", "r2e-data-diesel/postgres"]
+diesel-mysql = ["data-diesel", "r2e-data-diesel/mysql"]
+# Compatibility aliases. Prefer backend-qualified driver features above.
+sqlite = ["sqlx-sqlite"]
+postgres = ["sqlx-postgres"]
+mysql = ["sqlx-mysql"]
 events-iggy = ["events", "dep:r2e-events-iggy"]
 events-kafka = ["events", "dep:r2e-events-kafka"]
 events-pulsar = ["events", "dep:r2e-events-pulsar"]
@@ -52,7 +59,6 @@ r2e-macros = {workspace = true}
 r2e-security = {workspace = true, optional = true}
 r2e-events = {workspace = true, optional = true}
 r2e-utils = {workspace = true, optional = true}
-r2e-data = {workspace = true, optional = true}
 r2e-data-sqlx = {workspace = true, optional = true}
 r2e-data-diesel = {workspace = true, optional = true}
 r2e-scheduler = {workspace = true, optional = true}

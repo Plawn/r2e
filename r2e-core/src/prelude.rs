@@ -86,7 +86,10 @@ pub use crate::guards::{
     PreAuthGuardContext,
 };
 pub use crate::interceptors::{Interceptor, InterceptorContext};
-pub use crate::managed::{ManagedErr, ManagedResource};
+pub use crate::managed::{
+    ManagedContext, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,
+};
+pub use crate::pagination::{Page, Pageable};
 pub use crate::plugin::Plugin;
 pub use crate::plugins::{Cors, Tracing, ConfiguredTracing, Health, ErrorHandling, DevReload, NormalizePath, AdvancedHealth};
 pub use crate::tracing_config::{LogFormat, SpanEvents, TracingConfig};

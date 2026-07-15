@@ -45,7 +45,7 @@ enum Commands {
     },
     /// Add an extension to the project
     Add {
-        /// Extension name (e.g. security, data, openapi, events, scheduler)
+        /// Extension name (e.g. security, data-sqlx, openapi, events, scheduler)
         extension: String,
     },
     /// Start the dev server with Subsecond hot-reload

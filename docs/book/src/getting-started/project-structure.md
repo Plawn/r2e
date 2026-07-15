@@ -13,7 +13,7 @@ my-app/
 │   ├── error.rs                  # Custom error type (optional)
 │   ├── models/
 │   │   ├── mod.rs
-│   │   └── user.rs               # Entity definitions, request/response types
+│   │   └── user.rs               # Domain models and request/response types
 │   ├── services/
 │   │   ├── mod.rs
 │   │   └── user_service.rs       # Business logic

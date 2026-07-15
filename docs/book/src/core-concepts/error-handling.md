@@ -244,9 +244,9 @@ The `ManagedResource` trait requires `Error: Into<Response>`. Due to Rust's orph
 impl<S: BeanLookup + Send + Sync> ManagedResource<S> for Tx<'static, Sqlite> {
     type Error = ManagedErr<MyHttpError>;
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error> {
         // Resolve the pool from the bean graph by type (no `HasPool` trait).
-        let pool = state.bean::<Pool<Sqlite>>()
+        let pool = context.state.bean::<Pool<Sqlite>>()
             .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
         let tx = pool.begin().await
             .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;

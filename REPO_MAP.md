@@ -234,41 +234,22 @@ tests/
 
 ---
 
-## r2e-data — Data abstractions
-
-Driver-independent database traits (no SQLx/Diesel dependency).
+## r2e-data-sqlx — Managed SQLx transactions
 
 ```
 src/
   lib.rs                    Entry point
-  entity.rs                 Entity trait (table_name, columns)
-  repository.rs             Repository trait (find_by_id, find_all, create, update, delete)
-  page.rs                   Page<T>, Pageable for pagination
-  error.rs                  DataError enum
+  tx.rs                     Cancellation-safe Tx<'a, DB>
 ```
 
 ---
 
-## r2e-data-sqlx — SQLx backend
+## r2e-data-diesel — Managed Diesel transactions
 
 ```
 src/
   lib.rs                    Entry point
-  repository.rs             SqlxRepository implementation
-  tx.rs                     Tx<'a, DB> transaction wrapper, HasPool trait
-  migration.rs              Migration runner utilities
-  error.rs                  SQLx -> DataError bridging
-```
-
----
-
-## r2e-data-diesel — Diesel backend (skeleton)
-
-```
-src/
-  lib.rs                    Entry point
-  repository.rs             DieselRepository stub
-  error.rs                  Diesel -> DataError bridging
+  lib.rs                    DieselTx<C>, blocking-pool execution, lifecycle
 ```
 
 ---

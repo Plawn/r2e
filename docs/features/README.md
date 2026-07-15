@@ -11,7 +11,7 @@ R2E provides 20 main features, each documented in a dedicated file.
 | 3 | Error Handling | [03-error-handling.md](./03-error-handling.md) | `r2e-core` |
 | 4 | Interceptors | [04-intercepteurs.md](./04-intercepteurs.md) | `r2e-macros` |
 | 5 | OpenAPI | [05-openapi.md](./05-openapi.md) | `r2e-openapi` |
-| 6 | Data / Repository | [06-data-repository.md](./06-data-repository.md) | `r2e-data` |
+| 6 | Pagination / Managed Transactions | [06-data-repository.md](./06-data-repository.md) | `r2e-core`, SQLx/Diesel adapters |
 | 7 | Events | [07-evenements.md](./07-evenements.md) | `r2e-events` |
 | 8 | Scheduling | [08-scheduling.md](./08-scheduling.md) | `r2e-scheduler` |
 | 9 | Development Mode | [09-dev-mode.md](./09-dev-mode.md) | `r2e-core` |
@@ -35,7 +35,7 @@ R2E provides 20 main features, each documented in a dedicated file.
 r2e-macros       Proc-macro. #[controller] + #[routes] generate Axum code.
 r2e-core         Runtime. AppBuilder, Controller, HttpError, config, validation, cache, rate limiter.
 r2e-security     JWT/JWKS, AuthenticatedUser, #[roles].
-r2e-data         Entity, QueryBuilder, Pageable, Page, Repository CRUD.
+r2e-core         Pageable, Page, and the managed-resource lifecycle.
 r2e-events       EventBus trait + LocalEventBus (typed pub/sub).
 r2e-scheduler    Scheduled tasks (interval, cron) with CancellationToken.
 r2e-openapi      OpenAPI 3.1.0 spec generation + Swagger UI.

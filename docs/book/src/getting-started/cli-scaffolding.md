@@ -353,7 +353,7 @@ Methods are color-coded: GET (green), POST (blue), PUT (yellow), DELETE (red), P
 
 ```bash
 r2e add security    # adds r2e-security to Cargo.toml
-r2e add data        # adds r2e-data
+r2e add data-sqlx   # adds the managed SQLx transaction backend
 r2e add openapi     # adds r2e-openapi
 r2e add events      # adds r2e-events
 r2e add scheduler   # adds r2e-scheduler

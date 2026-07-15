@@ -1,132 +1,81 @@
-# Managed Resources
+# Managed resources
 
-The `#[managed]` attribute enables automatic lifecycle management for resources that need acquire/release semantics — transactions, connections, scoped caches, or audit contexts.
-
-## The `ManagedResource` trait
+`#[managed]` gives a route parameter an acquire/finalize lifecycle protected by
+an RAII abort guard.
 
 ```rust
-pub trait ManagedResource<S>: Sized {
+pub trait ManagedResource<S>: Sized + Send {
     type Error: Into<Response>;
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error>;
-    async fn release(self, success: bool) -> Result<(), Self::Error>;
+    async fn acquire(
+        context: ManagedContext<'_, S>,
+    ) -> Result<Self, Self::Error>;
+
+    async fn finalize(
+        &mut self,
+        outcome: &ManagedOutcome,
+    ) -> Result<(), Self::Error>;
+
+    fn abort(&mut self);
 }
 ```
 
-- `acquire()` — called before the handler, obtains the resource from app state
-- `release()` — called after the handler, commits or rolls back
-  - `success = true` — handler returned `Ok` or a non-Result type
-  - `success = false` — handler returned `Err`
+`ManagedContext` exposes the bean state plus controller and handler names.
+`ManagedOutcome` contains the built response status; statuses below 400 are
+successes. `abort` must be synchronous, infallible, non-blocking, and safe to
+call when async finalization cannot run.
 
-## Usage
-
-```rust
-#[post("/")]
-async fn create(
-    &self,
-    body: Json<CreateUserRequest>,
-    #[managed] tx: &mut Tx<'_, Sqlite>,
-) -> Result<Json<User>, MyHttpError> {
-    sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
-        .bind(&body.name)
-        .bind(&body.email)
-        .execute(tx.as_mut())
-        .await?;
-
-    Ok(Json(user))
-}
-```
-
-## Implementing for transactions
+## Custom resource
 
 ```rust
-use r2e::prelude::*; // ManagedResource, ManagedErr, BeanLookup
-use sqlx::{Database, Transaction, Pool};
+use r2e::prelude::*;
 
-pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
-
-impl<S, DB> ManagedResource<S> for Tx<'static, DB>
-where
-    DB: Database,
-    S: BeanLookup + Send + Sync,
-{
-    type Error = ManagedErr<MyHttpError>;
-
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        // The pool is fetched from the bean graph by type — there is no
-        // `HasPool` state trait to implement. Just `.provide(pool)` before
-        // `build_state()` so `Pool<DB>` is resolvable.
-        let pool = state.bean::<Pool<DB>>()
-            .ok_or_else(|| ManagedErr(MyHttpError::Database("pool bean not found".into())))?;
-        let tx = pool.begin().await
-            .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
-        Ok(Tx(tx))
-    }
-
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        if success {
-            self.0.commit().await
-                .map_err(|e| ManagedErr(MyHttpError::Database(e.to_string())))?;
-        }
-        // On failure: transaction dropped → automatic rollback
-        Ok(())
-    }
-}
-```
-
-## Error wrappers
-
-`ManagedResource::Error` must implement `Into<Response>`. Rust's orphan rules prevent implementing foreign traits for foreign types, so R2E provides `ManagedErr<E>` — a generic wrapper over any error type that implements `IntoResponse`.
-
-For the common case where you just want to bubble up the framework's `HttpError`, use `ManagedErr<HttpError>`:
-
-```rust
-// Chain: HttpError → ManagedErr<HttpError> → Response
-type Error = ManagedErr<HttpError>;
-```
-
-## Other resource types
-
-The pattern extends beyond transactions:
-
-### Audit context
-
-```rust
-pub struct AuditContext {
-    started_at: Instant,
-    action: String,
+struct AuditContext {
+    entries: Vec<String>,
 }
 
 impl<S: Send + Sync> ManagedResource<S> for AuditContext {
     type Error = ManagedErr<HttpError>;
 
-    async fn acquire(_state: &S) -> Result<Self, Self::Error> {
-        Ok(AuditContext {
-            started_at: Instant::now(),
-            action: String::new(),
-        })
+    async fn acquire(
+        _context: ManagedContext<'_, S>,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self { entries: Vec::new() })
     }
 
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        let duration = self.started_at.elapsed();
+    async fn finalize(
+        &mut self,
+        outcome: &ManagedOutcome,
+    ) -> Result<(), Self::Error> {
         tracing::info!(
-            action = self.action,
-            success,
-            duration_ms = duration.as_millis(),
-            "Audit: action completed"
+            success = outcome.is_success(),
+            status = %outcome.status,
+            entries = ?self.entries,
+            "request audit completed",
         );
         Ok(())
     }
+
+    fn abort(&mut self) {
+        // Only synchronous best-effort cleanup is allowed here.
+        self.entries.clear();
+    }
+}
+
+#[post("/work")]
+async fn work(
+    &self,
+    #[managed] audit: &mut AuditContext,
+) -> Result<StatusCode, HttpError> {
+    audit.entries.push("work started".into());
+    Ok(StatusCode::NO_CONTENT)
 }
 ```
 
-## Comparison with `#[transactional]`
+With several resources, acquisition follows parameter order and finalization
+uses reverse order. All finalizers run even when one fails. A resource remains
+armed until its finalizer succeeds, so a failed or cancelled finalizer also
+falls back to `abort`.
 
-| Feature | `#[managed]` | `#[transactional]` |
-|---------|-------------|-------------------|
-| Explicit parameter | Yes (`&mut Tx`) | No (wraps `self.pool`) |
-| Custom resource types | Yes | No (transactions only) |
-| Error handling | Configurable via trait | Fixed |
-| Flexibility | High | Convenient |
-
-Prefer `#[managed]` for new code.
+See [Managed database transactions](../data-access/transactions.md) for the
+ready-to-use SQLx and Diesel implementations.

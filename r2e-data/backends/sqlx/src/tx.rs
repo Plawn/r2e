@@ -1,119 +1,173 @@
-//! Transaction wrapper with automatic lifecycle management.
-//!
-//! Provides [`Tx`], [`HasPool`], and a blanket [`ManagedResource`] implementation
-//! so that `#[managed]` handler parameters "just work" for database transactions.
-
-use r2e_core::error::HttpError;
-use r2e_core::managed::{ManagedErr, ManagedResource};
+use r2e_core::{
+    BeanLookup, HttpError, ManagedContext, ManagedErr, ManagedOutcome, ManagedResource,
+};
 use sqlx::{Database, Pool, Transaction};
 use std::ops::{Deref, DerefMut};
 
-/// Trait for application states that contain a database pool.
+/// Request-scoped SQLx transaction managed by R2E.
 ///
-/// Implement this for your app state so that [`Tx`] can acquire transactions
-/// via `#[managed]`:
-///
-/// ```ignore
-/// impl HasPool<Sqlite> for MyState {
-///     fn pool(&self) -> &Pool<Sqlite> {
-///         &self.pool
-///     }
-/// }
-/// ```
-pub trait HasPool<DB: Database> {
-    fn pool(&self) -> &Pool<DB>;
+/// A `Pool<DB>` must be registered as a bean. Successful HTTP responses
+/// (status below 400) commit; error responses roll back explicitly. Dropping
+/// an unfinished transaction provides SQLx's rollback fallback.
+pub struct SqlxTx<'a, DB: Database> {
+    inner: Option<Transaction<'a, DB>>,
 }
 
-/// A wrapper around SQLx [`Transaction`] for use with `#[managed]`.
-///
-/// When used with `#[managed]`, the transaction is:
-/// - Acquired (begun) before the handler executes
-/// - Committed if the handler returns `Ok` (or a non-Result type)
-/// - Rolled back (on drop) if the handler returns `Err` or panics
-///
-/// # Example
-///
-/// ```ignore
-/// use r2e_data_sqlx::Tx;
-/// use sqlx::Sqlite;
-///
-/// #[post("/")]
-/// async fn create(
-///     &self,
-///     body: Json<CreateUser>,
-///     #[managed] tx: &mut Tx<'_, Sqlite>,
-/// ) -> Result<Json<User>, HttpError> {
-///     sqlx::query("INSERT INTO users (name, email) VALUES (?, ?)")
-///         .bind(&body.name)
-///         .bind(&body.email)
-///         .execute(tx.as_mut())
-///         .await
-///         .map_err(|e| HttpError::Internal(e.to_string()))?;
-///     Ok(Json(user))
-/// }
-/// ```
-pub struct Tx<'a, DB: Database>(pub Transaction<'a, DB>);
+/// Backward-compatible short name used in handler signatures.
+pub type Tx<'a, DB> = SqlxTx<'a, DB>;
 
-impl<'a, DB: Database> Deref for Tx<'a, DB> {
+impl<'a, DB: Database> SqlxTx<'a, DB> {
+    pub fn connection(&mut self) -> &mut DB::Connection {
+        self.as_mut()
+    }
+
+    pub fn as_mut(&mut self) -> &mut DB::Connection {
+        &mut *self
+            .inner
+            .as_mut()
+            .expect("managed SQLx transaction has already been finalized")
+    }
+}
+
+impl<'a, DB: Database> Deref for SqlxTx<'a, DB> {
     type Target = Transaction<'a, DB>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.inner
+            .as_ref()
+            .expect("managed SQLx transaction has already been finalized")
     }
 }
 
-impl<'a, DB: Database> DerefMut for Tx<'a, DB> {
+impl<'a, DB: Database> DerefMut for SqlxTx<'a, DB> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        self.inner
+            .as_mut()
+            .expect("managed SQLx transaction has already been finalized")
     }
 }
 
-impl<'a, DB: Database> Tx<'a, DB> {
-    /// Unwraps the `Tx` into the inner `Transaction`.
-    pub fn into_inner(self) -> Transaction<'a, DB> {
-        self.0
-    }
-
-    /// Returns a mutable reference to the underlying connection.
-    pub fn as_mut(&mut self) -> &mut <DB as Database>::Connection {
-        &mut *self.0
-    }
-}
-
-/// `ManagedResource` implementation for `Tx` — handles transaction lifecycle.
-///
-/// - `acquire`: begins a new transaction from the pool
-/// - `release(true)`: commits the transaction
-/// - `release(false)`: drops the transaction (automatic rollback)
-impl<S, DB> ManagedResource<S> for Tx<'static, DB>
+impl<S, DB> ManagedResource<S> for SqlxTx<'static, DB>
 where
     DB: Database,
-    S: r2e_core::type_list::BeanLookup + Send + Sync,
+    S: BeanLookup + Send + Sync,
 {
     type Error = ManagedErr<HttpError>;
 
-    async fn acquire(state: &S) -> Result<Self, Self::Error> {
-        let pool = state.bean::<sqlx::Pool<DB>>().ok_or_else(|| {
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        let pool = context.state.bean::<Pool<DB>>().ok_or_else(|| {
             ManagedErr(HttpError::internal(format!(
-                "database pool bean `{}` not found in application state — .provide(pool) before build_state()",
-                std::any::type_name::<sqlx::Pool<DB>>()
+                "database pool bean `{}` not found for {}::{}; call .provide(pool) before build_state()",
+                std::any::type_name::<Pool<DB>>(),
+                context.controller,
+                context.handler,
             )))
         })?;
-        let tx = pool
+        let transaction = pool
             .begin()
             .await
-            .map_err(|e| ManagedErr(HttpError::internal(e.to_string())))?;
-        Ok(Tx(tx))
+            .map_err(|error| ManagedErr(HttpError::internal(error.to_string())))?;
+        Ok(Self {
+            inner: Some(transaction),
+        })
     }
 
-    async fn release(self, success: bool) -> Result<(), Self::Error> {
-        if success {
-            self.into_inner()
-                .commit()
-                .await
-                .map_err(|e| ManagedErr(HttpError::internal(e.to_string())))?;
-        }
-        // If !success, the transaction is dropped and automatically rolled back
-        Ok(())
+    async fn finalize(&mut self, outcome: &ManagedOutcome) -> Result<(), Self::Error> {
+        let Some(transaction) = self.inner.take() else {
+            return Ok(());
+        };
+        let result = if outcome.is_success() {
+            transaction.commit().await
+        } else {
+            transaction.rollback().await
+        };
+        result.map_err(|error| ManagedErr(HttpError::internal(error.to_string())))
+    }
+
+    fn abort(&mut self) {
+        // SQLx rolls back an unfinished transaction when it is dropped.
+        drop(self.inner.take());
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::*;
+    use r2e_core::{AppBuilder, ManagedGuard};
+    use sqlx::{sqlite::SqlitePoolOptions, Row, Sqlite, SqlitePool};
+
+    async fn pool_with_table() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn commits_successful_outcome() {
+        let app = AppBuilder::new()
+            .provide(pool_with_table().await)
+            .build_state()
+            .await;
+        let mut tx = ManagedGuard::<SqlxTx<'static, Sqlite>, _>::acquire(ManagedContext::new(
+            app.state(),
+            "Test",
+            "commit",
+        ))
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO items(name) VALUES ('committed')")
+            .execute(tx.resource_mut().connection())
+            .await
+            .unwrap();
+        tx.finalize(&ManagedOutcome::from_status(
+            r2e_core::http::StatusCode::CREATED,
+        ))
+        .await
+        .unwrap();
+
+        let pool = app.state().bean::<SqlitePool>().unwrap();
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("count"), 1);
+    }
+
+    #[tokio::test]
+    async fn rolls_back_failure_outcome() {
+        let app = AppBuilder::new()
+            .provide(pool_with_table().await)
+            .build_state()
+            .await;
+        let mut tx = ManagedGuard::<SqlxTx<'static, Sqlite>, _>::acquire(ManagedContext::new(
+            app.state(),
+            "Test",
+            "rollback",
+        ))
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO items(name) VALUES ('rolled back')")
+            .execute(tx.resource_mut().connection())
+            .await
+            .unwrap();
+        tx.finalize(&ManagedOutcome::from_status(
+            r2e_core::http::StatusCode::BAD_REQUEST,
+        ))
+        .await
+        .unwrap();
+
+        let pool = app.state().bean::<SqlitePool>().unwrap();
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("count"), 0);
     }
 }

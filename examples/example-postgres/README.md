@@ -9,7 +9,7 @@ Full CRUD REST API with PostgreSQL demonstrating:
 - `Pageable`/`Page` for paginated listings
 - Custom `HttpError` with `IntoResponse` + `From<sqlx::Error>`
 - Automatic validation via `garde::Validate`
-- `Entity` trait implementation
+- Plain SQLx row models without an extra repository abstraction
 
 ## Running
 

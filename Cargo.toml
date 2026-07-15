@@ -5,7 +5,6 @@ members = [
     "r2e-cache",
     "r2e-rate-limit",
     "r2e-security",
-    "r2e-data",
     "r2e-data/backends/sqlx",
     "r2e-data/backends/diesel",
     "r2e-openapi",
@@ -61,7 +60,6 @@ r2e = { path = "r2e", version = "0.1.0" }
 r2e-core = { path = "r2e-core", version = "0.1.0" }
 r2e-macros = { path = "r2e-macros", version = "0.1.0" }
 r2e-security = { path = "r2e-security", version = "0.1.0" }
-r2e-data = { path = "r2e-data", version = "0.1.0" }
 r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.1.0" }
 r2e-data-diesel = { path = "r2e-data/backends/diesel", version = "0.1.0" }
 r2e-events = { path = "r2e-events", version = "0.1.0" }

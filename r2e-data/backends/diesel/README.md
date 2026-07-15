@@ -1,28 +1,21 @@
 # r2e-data-diesel
 
-[Diesel](https://diesel.rs/) backend for the R2E data layer.
-
-## Status
-
-**Skeleton implementation** — this crate provides the foundation for a Diesel-backed data layer but is not fully implemented yet. Consider using [`r2e-data-sqlx`](../r2e-data-sqlx) for production workloads.
-
-## Feature flags
-
-| Feature | Driver |
-|---------|--------|
-| `sqlite` | SQLite via `diesel/sqlite` |
-| `postgres` | PostgreSQL via `diesel/postgres` |
-| `mysql` | MySQL via `diesel/mysql` |
-
-## Usage
-
-Via the facade crate:
+Cancellation-safe managed Diesel transactions for R2E, backed by an r2d2
+connection pool. This crate intentionally contains no repository abstraction.
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["data-diesel", "sqlite"] }
+r2e = { version = "0.1", features = ["diesel-postgres"] }
+diesel = { version = "2", features = ["postgres", "r2d2"] }
 ```
 
-## License
+Register `Pool<ConnectionManager<C>>` with `.provide(pool)`, then use
+`#[managed] tx: &mut r2e::r2e_data_diesel::DieselTx<C>`. Call `tx.run(...)`
+from async handlers so synchronous Diesel queries execute on Tokio's blocking
+pool.
 
-Apache-2.0
+Responses below 400 commit; `4xx`/`5xx` responses roll back. On panic or
+cancellation the open connection is discarded instead of returned to r2d2.
+
+Features: `sqlite`, `postgres`, `mysql`. The MySQL feature requires a native
+`libmysqlclient`/MariaDB client library, as required by Diesel itself.

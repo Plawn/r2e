@@ -1,4 +1,3 @@
-use r2e::r2e_data::Entity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use garde::Validate;
@@ -11,26 +10,6 @@ pub struct Article {
     pub published: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl Entity for Article {
-    type Id = i64;
-
-    fn table_name() -> &'static str {
-        "articles"
-    }
-
-    fn id_column() -> &'static str {
-        "id"
-    }
-
-    fn columns() -> &'static [&'static str] {
-        &["id", "title", "body", "published", "created_at", "updated_at"]
-    }
-
-    fn id(&self) -> &i64 {
-        &self.id
-    }
 }
 
 #[derive(Debug, Deserialize, Validate, JsonSchema)]

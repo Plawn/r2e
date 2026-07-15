@@ -2436,7 +2436,6 @@ dependencies = [
  "http",
  "jsonwebtoken",
  "r2e",
- "r2e-data-sqlx",
  "r2e-test",
  "schemars 1.2.1",
  "serde",
@@ -5523,7 +5522,6 @@ version = "0.1.0"
 dependencies = [
  "r2e-cache",
  "r2e-core",
- "r2e-data",
  "r2e-data-diesel",
  "r2e-data-sqlx",
  "r2e-devtools",
@@ -5618,19 +5616,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "r2e-data"
-version = "0.1.0"
-dependencies = [
- "r2e-core",
- "serde",
-]
-
-[[package]]
 name = "r2e-data-diesel"
 version = "0.1.0"
 dependencies = [
  "diesel",
- "r2e-data",
+ "r2e-core",
+ "tokio",
 ]
 
 [[package]]
@@ -5638,9 +5629,8 @@ name = "r2e-data-sqlx"
 version = "0.1.0"
 dependencies = [
  "r2e-core",
- "r2e-data",
- "serde_json",
  "sqlx",
+ "tokio",
 ]
 
 [[package]]

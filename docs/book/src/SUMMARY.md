@@ -29,10 +29,8 @@
 
 # Data Access
 
-- [Entities and Repository](./data-access/entities-and-repository.md)
-- [QueryBuilder](./data-access/query-builder.md)
 - [Pagination](./data-access/pagination.md)
-- [Transactions and Managed Resources](./data-access/transactions.md)
+- [Managed Database Transactions](./data-access/transactions.md)
 
 # Events and Scheduling
 
