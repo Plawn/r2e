@@ -102,7 +102,7 @@ compile-time checking and framework integration.
 
 | You want | Do NOT write | Write instead |
 |---|---|---|
-| Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `ClaimsIdentity` |
+| Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `FromValidatedJwtClaims` |
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
 | A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
@@ -113,6 +113,7 @@ compile-time checking and framework integration.
 | Request-scoped values (tenant id, trace ctx) | Extensions + middleware | `#[inject(request)]` field or param |
 | Background jobs | `tokio::spawn` in main | `#[scheduled(every = "5m")]` methods, or `PoolExecutor` / `#[derive(BackgroundService)]` |
 | Pub/sub between components | Channels wired by hand | `EventBus` (`.emit()`) + `#[consumer]` methods |
+| Ask another component for a result | Oneshot channels / shared state | `EventBus` `.request()` / `.respond()` (or a `#[consumer]` with a return value) |
 | Test the app | Re-declaring routers in tests | `#[r2e::test(app = my_app::app)]` — boots the real blueprint |
 
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
@@ -556,8 +557,12 @@ async fn admin_only(&self) -> Json<Data> { ... }
 
 ### Custom identity (database-backed)
 
+Implement `FromValidatedJwtClaims<S>` (generic over the state `S`, never a
+concrete state struct), then `impl_claims_identity_extractor!` generates the
+extraction glue:
+
 ```rust
-use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, ClaimsIdentity, RoleBasedIdentity};
+use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims, RoleBasedIdentity};
 use r2e::{BeanLookup, Identity};
 
 #[derive(Clone, Serialize)]                 // NOT Deserialize — never body-constructible
@@ -572,7 +577,7 @@ impl RoleBasedIdentity for DbUser {
     fn roles(&self) -> &[String] { self.auth.roles() }
 }
 
-impl<S: BeanLookup + Send + Sync> ClaimsIdentity<S> for DbUser {
+impl<S: BeanLookup + Send + Sync> FromValidatedJwtClaims<S> for DbUser {
     async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, HttpError> {
         let auth = AuthenticatedUser::from_claims(claims);
         let pool = state.bean::<SqlitePool>().ok_or_else(|| HttpError::internal("no pool"))?;
@@ -582,6 +587,32 @@ impl<S: BeanLookup + Send + Sync> ClaimsIdentity<S> for DbUser {
 }
 impl_claims_identity_extractor!(DbUser);
 ```
+
+### Typed JWT claims — `JwtClaimSet`
+
+By default `from_jwt_claims` receives `serde_json::Value`. For typed
+application claims, implement `JwtClaimSet` on a `Deserialize` struct and pick
+it as the second type parameter — the validated payload deserializes straight
+into your type (no intermediate `Value`):
+
+```rust
+#[derive(Deserialize)]
+struct TenantClaims { sub: String, tenant_id: String }
+
+impl JwtClaimSet for TenantClaims {
+    fn subject(&self) -> Option<&str> { Some(&self.sub) }
+}
+
+impl<S: Send + Sync> FromValidatedJwtClaims<S, TenantClaims> for TenantUser {
+    async fn from_jwt_claims(claims: TenantClaims, _state: &S) -> Result<Self, HttpError> {
+        Ok(TenantUser { sub: claims.sub, tenant_id: claims.tenant_id })
+    }
+}
+impl_claims_identity_extractor!(TenantUser, claims = TenantClaims);
+```
+
+The same `Arc<JwtClaimsValidator>` bean validates the JWT once; light
+(`AuthenticatedUser`) and custom identities share it.
 
 ---
 
@@ -815,10 +846,43 @@ b.provide(LocalEventBus::new())
 
 ### Emitting
 
+`emit` is fan-out publish/subscribe (Vert.x `publish` semantics): every
+subscriber gets a copy; the emitter never waits for handlers and cannot
+observe a reply. There is NO `emit_and_wait` — to get a result back, use
+request-reply below.
+
 ```rust
-self.event_bus.emit(UserCreatedEvent { user_id: 1 }).await?;   // fire-and-forget
-self.event_bus.emit_and_wait(event).await?;                    // wait for handlers
+self.event_bus.emit(UserCreatedEvent { user_id: 1 }).await?;   // fan-out, awaits broker ack
+
+// High-throughput fire-and-forget: don't wait for the broker ack.
+let receipt: EmitReceipt = self.event_bus.emit_nowait(event).await?;
+// drop the receipt, or `receipt.confirm().await?` later (batch via try_join_all)
 ```
+
+### Request-reply — `request` / `respond`
+
+Point-to-point (Vert.x `request` semantics): exactly one responder per request
+type replies, with a timeout (30s default, `DEFAULT_REQUEST_TIMEOUT`).
+
+```rust
+// Responder side — at most one responder per request type per process.
+event_bus.respond(|envelope: EventEnvelope<GreetRequest>| async move {
+    Ok::<_, String>(GreetReply { message: format!("Hello {}", envelope.event.name) })
+}).await?;
+
+// Requester side.
+let reply: GreetReply = event_bus.request(GreetRequest { name: "Alice".into() }).await?;
+
+// Explicit timeout.
+let reply: GreetReply = event_bus
+    .request_with(req, RequestOptions::new().with_timeout(Duration::from_secs(5)))
+    .await?;
+```
+
+Responder errors surface to the caller as `EventBusError::Remote`;
+`NoResponder` is only detectable in-process (distributed backends manifest an
+absent responder as `RequestTimeout`). All distributed backends support
+request-reply via instance-private reply topics.
 
 ### Consuming — on controllers
 
@@ -840,6 +904,10 @@ impl UserEventConsumer {
 
 Consumers run on the controller core — they cannot access request-scoped
 fields (identity), but work on any controller.
+
+A `#[consumer]` method with a non-`()` return type is automatically registered
+as a **responder**: its argument is the request, its return value is the reply
+(pairs with `event_bus.request::<Req, Resp>(...)`).
 
 ### Consuming — on beans
 

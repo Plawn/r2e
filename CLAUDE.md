@@ -182,6 +182,10 @@ impl UserController {
 2. If your task spans two subsystems (e.g., config + beans), read both — but no more.
 3. If nothing matches, you probably don't need a reference doc. Proceed with the code.
 
+## Keeping `llm.txt` Fresh
+
+`llm.txt` at the repo root is the canonical AI/agent-facing reference that downstream projects rely on. **Any change to a public API surface (traits, macros, builder methods, renames, removals) MUST update the matching `llm.txt` section in the same PR.** Code agents in consumer apps follow `llm.txt` literally — a stale example (e.g. a removed method) makes them generate non-compiling code.
+
 ## Language & Documentation
 
 All documentation, code, comments, and API surfaces are in English.

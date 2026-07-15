@@ -1,5 +1,10 @@
 use super::super::new_project::{DbKind, ProjectOptions};
 
+/// Source for the `r2e` / `r2e-test` crates. R2E is not published to crates.io
+/// yet, so scaffolded projects depend on the GitHub repository directly.
+/// Switch these to `version = "x.y"` once the crates are published.
+const R2E_GIT: &str = "https://github.com/Plawn/r2e";
+
 /// Rust identifier for the crate (Cargo maps `-` to `_` in target names).
 fn crate_ident(name: &str) -> String {
     name.replace('-', "_")
@@ -84,7 +89,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-r2e = {{ version = "0.1"{features_str} }}
+r2e = {{ git = "{R2E_GIT}"{features_str} }}
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
@@ -92,7 +97,7 @@ tracing = "0.1"
 tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}{db_dep}{openapi_dep}{grpc_deps}
 
 [dev-dependencies]
-r2e-test = "0.1"
+r2e-test = {{ git = "{R2E_GIT}" }}
 {grpc_build_deps}"#
     )
 }
