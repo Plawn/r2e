@@ -15,10 +15,8 @@ use controllers::product_controller::ProductController;
 
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
-
     AppBuilder::new()
-        .with_config(config)
+        .load_config::<()>()
         .register::<services::ProductService>()
         .build_state()
         .await

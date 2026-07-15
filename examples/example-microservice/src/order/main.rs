@@ -15,10 +15,8 @@ use controllers::order_controller::OrderController;
 
 #[r2e::main]
 async fn main() {
-    let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
-
     AppBuilder::new()
-        .with_config(config)
+        .load_config::<()>()
         .register::<services::ProductClient>()
         .register::<services::OrderService>()
         .build_state()

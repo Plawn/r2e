@@ -69,11 +69,10 @@ fn new_creates_thin_main_rs() {
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    // main.rs only boots the blueprint — no assembly lives here.
+    // main.rs only launches the app — no assembly lives here.
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
     assert!(main.contains("#[r2e::main]"));
-    assert!(main.contains("myapp::app(AppBuilder::new())"));
-    assert!(main.contains("serve_auto()"));
+    assert!(main.contains("r2e::launch::<myapp::Myapp>()"));
     assert!(!main.contains(".build_state()"));
     assert!(!main.contains("register_controller"));
 }
@@ -87,7 +86,9 @@ fn new_creates_blueprint_lib_rs() {
     new_project::run("myapp", default_opts()).unwrap();
 
     let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("pub async fn app(b: AppBuilder) -> impl BootableApp"));
+    assert!(lib.contains("pub struct Myapp;"));
+    assert!(lib.contains("impl App for Myapp"));
+    assert!(lib.contains("async fn build(b: AppBuilder"));
     // New DI model: state is inferred via `.build_state().await`, no typed state.
     assert!(lib.contains(".build_state()"));
     assert!(!lib.contains("build_state!"));
@@ -105,9 +106,9 @@ fn new_creates_blueprint_test() {
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    // The integration test boots the real blueprint.
+    // The integration test boots the real app.
     let test = fs::read_to_string("myapp/tests/app.rs").unwrap();
-    assert!(test.contains("#[r2e::test(app = myapp::app)]"));
+    assert!(test.contains("#[r2e::test(app = myapp::Myapp)]"));
     assert!(test.contains("TestApp"));
 
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
@@ -124,9 +125,9 @@ fn new_creates_agent_docs() {
     new_project::run("myapp", default_opts()).unwrap();
 
     let agents = fs::read_to_string("myapp/AGENTS.md").unwrap();
-    assert!(agents.contains("Blueprint pattern"));
+    assert!(agents.contains("App trait"));
     assert!(agents.contains("Do X, not Y"));
-    assert!(agents.contains("#[r2e::test(app = myapp::app)]"));
+    assert!(agents.contains("#[r2e::test(app = myapp::Myapp)]"));
 
     // CLAUDE.md imports AGENTS.md — single source of truth.
     let claude = fs::read_to_string("myapp/CLAUDE.md").unwrap();
@@ -143,9 +144,9 @@ fn new_hyphenated_name_uses_crate_ident() {
 
     // Cargo maps `-` to `_` in target names; generated code must use the ident.
     let main = fs::read_to_string("my-app/src/main.rs").unwrap();
-    assert!(main.contains("my_app::app(AppBuilder::new())"));
+    assert!(main.contains("r2e::launch::<my_app::MyApp>()"));
     let test = fs::read_to_string("my-app/tests/app.rs").unwrap();
-    assert!(test.contains("#[r2e::test(app = my_app::app)]"));
+    assert!(test.contains("#[r2e::test(app = my_app::MyApp)]"));
 }
 
 #[test]

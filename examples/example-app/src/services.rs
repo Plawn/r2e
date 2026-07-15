@@ -18,8 +18,16 @@ pub struct UserService {
 impl UserService {
     pub fn new(event_bus: LocalEventBus) -> Self {
         let users = vec![
-            User { id: 1, name: "Alice".into(), email: "alice@example.com".into() },
-            User { id: 2, name: "Bob".into(), email: "bob@example.com".into() },
+            User {
+                id: 1,
+                name: "Alice".into(),
+                email: "alice@example.com".into(),
+            },
+            User {
+                id: 2,
+                name: "Bob".into(),
+                email: "bob@example.com".into(),
+            },
         ];
         Self {
             users: Arc::new(RwLock::new(users)),
@@ -43,7 +51,8 @@ impl UserService {
             users.push(user.clone());
             user
         };
-        let _ = self.event_bus
+        let _ = self
+            .event_bus
             .emit(UserCreatedEvent {
                 user_id: user.id,
                 name: user.name.clone(),

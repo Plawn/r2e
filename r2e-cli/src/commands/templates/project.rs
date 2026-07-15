@@ -10,6 +10,13 @@ fn crate_ident(name: &str) -> String {
     name.replace('-', "_")
 }
 
+/// PascalCase name of the generated `App` struct, derived from the crate name.
+/// Single source of truth so the generated lib.rs, main.rs, integration test,
+/// and AGENTS.md can never disagree on what the app struct is called.
+fn app_ident(name: &str) -> String {
+    super::to_pascal_case(&crate_ident(name))
+}
+
 pub fn cargo_toml(opts: &ProjectOptions) -> String {
     let mut r2e_features = Vec::new();
     if opts.auth {
@@ -102,9 +109,9 @@ r2e-test = {{ git = "{R2E_GIT}" }}
     )
 }
 
-/// The application blueprint (`lib.rs`). Everything except `main()` lives
-/// here so integration tests can boot the exact same app via
-/// `#[r2e::test(app = <crate>::app)]`.
+/// The application declaration (`lib.rs`). The `App` impl lives here so
+/// integration tests can boot the exact same app via
+/// `#[r2e::test(app = <crate>::<App>)]`.
 pub fn lib_rs(opts: &ProjectOptions) -> String {
     let mut imports = String::from("use r2e::prelude::*;\n");
 
@@ -172,91 +179,103 @@ async fn jwt_validator(
     // `.build_state().await`, which infers the application state from the
     // provision list. Plugins and controllers are wired afterward.
     let mut lines: Vec<String> = Vec::new();
-    lines.push("    b".to_string());
+    lines.push("        b".to_string());
 
     if opts.scheduler {
-        lines.push("        .plugin(Scheduler)".to_string());
+        lines.push("            .plugin(Scheduler)".to_string());
     }
     if opts.grpc {
-        lines.push("        .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
+        lines.push("            .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
     }
     // serve_auto() reads server.host/server.port, so config is always loaded.
-    lines.push("        .load_config::<()>()".to_string());
+    lines.push("            .load_config::<()>()".to_string());
     if opts.events {
-        lines.push("        .provide(LocalEventBus::new())".to_string());
+        lines.push("            .provide(LocalEventBus::new())".to_string());
     }
     if opts.db.is_some() {
-        lines.push("        .register::<CreatePool>()".to_string());
+        lines.push("            .register::<CreatePool>()".to_string());
     }
     if opts.auth {
-        lines.push("        .register::<JwtValidator>()".to_string());
+        lines.push("            .register::<JwtValidator>()".to_string());
     }
 
-    lines.push("        .build_state()".to_string());
-    lines.push("        .await".to_string());
-    lines.push("        .with(Health)".to_string());
-    lines.push("        .with(Tracing)".to_string());
+    lines.push("            .build_state()".to_string());
+    lines.push("            .await".to_string());
+    lines.push("            .with(Health)".to_string());
+    lines.push("            .with(Tracing)".to_string());
 
     if opts.openapi {
         lines.push(
-            "        .with(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
+            "            .with(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
                 .to_string(),
         );
     }
 
-    lines.push("        .register_controller::<HelloController>()".to_string());
+    lines.push("            .register_controller::<HelloController>()".to_string());
 
     let builder = lines.join("\n");
+    let app_name = app_ident(&opts.name);
 
     format!(
         r#"// #![recursion_limit = "512"]  // uncomment if you register more than ~127 beans
 {imports}{producers}
-/// Application blueprint: assemble the full app on the given builder.
-///
-/// `main.rs` serves this in production; integration tests boot the **same**
-/// app via `#[r2e::test(app = ...)]` — never re-declare controllers in tests.
-pub async fn app(b: AppBuilder) -> impl BootableApp {{
+/// The application. `main.rs` launches this in production (and, with the
+/// `dev-reload` feature, hot-reloads it); integration tests boot the **same**
+/// unit via `#[r2e::test(app = ...)]` — never re-declare controllers in tests.
+pub struct {app_name};
+
+impl App for {app_name} {{
+    /// Long-lived resources built once. In dev mode they survive hot-patches.
+    /// This app has nothing to persist, so `Env` is `()` and `setup` is empty.
+    type Env = ();
+
+    async fn setup() {{}}
+
+    /// Re-run on every hot-patch: assemble the app on the given builder.
+    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {{
 {builder}
+    }}
 }}
 "#
     )
 }
 
-/// Thin binary entry point — boots the blueprint and serves.
+/// Thin binary entry point — launches the app (prod serve, or hot-reload
+/// under the `dev-reload` feature). `launch` reads `server.host`/`server.port`
+/// from config and calls `serve_auto()` internally.
 pub fn main_rs(opts: &ProjectOptions) -> String {
     let ident = crate_ident(&opts.name);
+    let app_name = app_ident(&opts.name);
     format!(
         r#"use r2e::prelude::*;
 
 #[r2e::main]
 async fn main() {{
-    {ident}::app(AppBuilder::new())
-        .await
-        .serve_auto() // reads server.host / server.port from application.yaml
-        .await
-        .unwrap();
+    r2e::launch::<{ident}::{app_name}>().await.unwrap();
 }}
 "#
     )
 }
 
-/// Integration test booting the real blueprint.
+/// Integration test booting the real application — the same unit `main()`
+/// launches.
 pub fn app_test(opts: &ProjectOptions) -> String {
     let ident = crate_ident(&opts.name);
+    let app_name = app_ident(&opts.name);
     format!(
-        r#"//! Integration tests boot the real application blueprint — the same app
-//! `main()` serves. See AGENTS.md for the testing rules.
+        r#"//! Integration tests boot the real application — the same unit
+//! `main()` launches. See AGENTS.md for the testing rules.
 
 use r2e_test::TestApp;
 
-#[r2e::test(app = {ident}::app)]
+#[r2e::test(app = {ident}::{app_name})]
 async fn hello_works(app: TestApp) {{
     let resp = app.get("/").send().await;
     resp.assert_ok();
     assert_eq!(resp.text(), "Hello, World!");
 }}
 
-#[r2e::test(app = {ident}::app)]
+#[r2e::test(app = {ident}::{app_name})]
 async fn health_works(app: TestApp) {{
     app.get("/health").send().await.assert_ok();
 }}
@@ -325,6 +344,7 @@ impl HelloController {
 /// falling back to raw axum patterns.
 pub fn agents_md(opts: &ProjectOptions) -> String {
     let ident = crate_ident(&opts.name);
+    let app_name = app_ident(&opts.name);
     format!(
         r#"# AGENTS.md — working on this R2E project
 
@@ -337,17 +357,18 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 
 ## Architecture rules
 
-- **Blueprint pattern**: the whole app is assembled in `src/lib.rs` inside
-  `pub async fn app(b: AppBuilder) -> impl BootableApp`. `src/main.rs` only
-  boots it. Add new controllers/beans/plugins to the blueprint — never to
-  `main.rs`, and never build a second `AppBuilder`.
+- **App trait**: the whole app is assembled in `src/lib.rs` in
+  `impl App for {app_name}` — `build(b, env)` returns `impl BootableApp`, and
+  long-lived resources go in `setup()` (they survive hot-patches). `src/main.rs`
+  only calls `r2e::launch::<{app_name}>()`. Add new controllers/beans/plugins
+  inside `build` — never in `main.rs`, and never build a second `AppBuilder`.
 - **State is inferred**: there is no state struct. `.provide(bean)` /
   `.register::<T>()` before `.build_state().await`; inject by type with
   `#[inject]` fields. A missing bean is a compile error at
   `register_controller()`.
 - **Endpoints are controllers**: a `#[controller(path = "...")]` struct +
   `#[routes]` impl per resource. New endpoint → new method on a controller
-  (or a new controller registered in the blueprint).
+  (or a new controller registered in `App::build`).
 
 ## Do X, not Y (axum habits to avoid)
 
@@ -365,12 +386,12 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 
 ## Testing rules
 
-- Integration tests boot the **real blueprint**:
-  `#[r2e::test(app = {ident}::app)] async fn t(app: TestApp)`.
+- Integration tests boot the **real app**:
+  `#[r2e::test(app = {ident}::{app_name})] async fn t(app: TestApp)`.
   Never re-declare controllers or routers in tests.
 - `.as_user("alice", &["admin"])` mints a valid JWT (no IdP needed).
 - Pin mocks / patch config in the boot hook:
-  `#[r2e::test(app = {ident}::app, with = |b| b.override_bean(MockMailer::new())
+  `#[r2e::test(app = {ident}::{app_name}, with = |b| b.override_bean(MockMailer::new())
   .override_config_value("database.url", url))]`.
 - Test-profile config goes in `application-test.yaml` (auto-overlaid).
 - Tests live in `tests/`, one file per feature area.

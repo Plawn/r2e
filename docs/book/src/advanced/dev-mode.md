@@ -12,57 +12,69 @@ R2E supports **Subsecond hot-patching** via Dioxus 0.7 for instant code reloadin
 dev-reload = ["r2e/dev-reload"]
 ```
 
-3. Structure your app with the **setup/server split** pattern:
+3. Structure your app with the **`App` trait** — `setup()` (cold, runs once,
+   survives hot-patches) vs `build()` (hot, re-run on every patch):
 
 ```rust
 #[derive(Clone)]
 struct AppEnv {
     pool: PgPool,
-    config: R2eConfig,
     event_bus: LocalEventBus,
 }
 
-async fn setup() -> AppEnv {
-    // runs ONCE, persists across hot-patches
-    let config = R2eConfig::load().unwrap();
-    let pool = PgPool::connect("...").await.unwrap();
-    let event_bus = LocalEventBus::new();
-    AppEnv { pool, config, event_bus }
-}
+pub struct MyApp;
 
-#[r2e::main]
-async fn main(env: AppEnv) {
-    // this body is hot-patched on every code change
-    AppBuilder::new()
-        .with_config(env.config)
-        .provide(env.event_bus)
-        .provide(env.pool)
-        .register::<UserService>()
-        .build_state().await
-        .with(Health)
-        .with(Cors::permissive())
-        .with(DevReload)
-        .register_controller::<UserController>()
-        .serve("0.0.0.0:3000").await.unwrap();
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        // runs ONCE, persists across hot-patches
+        let pool = PgPool::connect("...").await.unwrap();
+        let event_bus = LocalEventBus::new();
+        AppEnv { pool, event_bus }
+    }
+
+    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+        // this body is hot-patched on every code change
+        b.load_config::<()>()          // sole config entry; re-read from disk per patch (YAML edits apply next patch)
+            .provide(env.event_bus)
+            .provide(env.pool)
+            .register::<UserService>()
+            .build_state().await
+            .with(Health)
+            .with(Cors::permissive())
+            .with(DevReload)
+            .register_controller::<UserController>()
+    }
 }
 ```
 
-The `#[r2e::main]` macro auto-detects the parameter and generates two `#[cfg]`-gated code paths: normal execution and Subsecond hot-patching.
+```rust
+// main.rs — one entry point for prod serve AND dev hot-reload
+#[r2e::main]
+async fn main() {
+    r2e::launch::<MyApp>().await.unwrap();
+}
+```
 
-### What goes in `setup()` vs `main()`
+`r2e::launch` runs `setup()` once and re-runs `build()` per hot-patch. Under the
+`dev-reload` feature it drives the Subsecond hot-patch loop internally; `main.rs`
+takes no parameter and needs no hand-written hot-reload machinery.
+
+### What goes in `App::setup()` vs `App::build()`
 
 This split is critical for correct hot-reload behavior:
 
-| `setup()` — runs once | `main(env)` — hot-patched |
+| `App::setup() -> Env` — runs once | `App::build(b, env)` — hot-patched |
 |---|---|
-| Database pool creation | `AppBuilder` construction |
-| Config loading (`R2eConfig::load`) | Bean graph resolution (`.build_state()`) |
-| Event bus creation | Controller registration |
-| JWT validator setup | Plugin installation |
-| SSE broadcasters, shared channels | Route definitions |
-| Anything expensive or stateful | Anything you want to iterate on quickly |
+| Database pool creation | `AppBuilder` assembly |
+| Event bus creation | `load_config` (re-reads YAML per patch) |
+| JWT validator setup | Bean graph resolution (`.build_state()`) |
+| SSE broadcasters, shared channels | Controller registration |
+| Anything expensive or stateful | Plugin installation, route definitions |
+| Anything you want preserved across patches | Anything you want to iterate on quickly |
 
-**Rule of thumb:** If it holds a connection, spawns a background task, or takes more than a few ms to initialize, put it in `setup()`.
+**Rule of thumb:** If it holds a connection, spawns a background task, or takes more than a few ms to initialize, put it in `setup()` and thread it through `Env`.
 
 4. Run with: `r2e dev`
 
@@ -77,22 +89,9 @@ r2e dev --features openapi scheduler
 ```
 Source code change
     → dx detects change
-    → recompiles ONLY the server closure as a dynamic library
+    → recompiles ONLY App::build as a dynamic library
     → patches it into the running process (setup state preserved)
     → ~200-500ms turnaround
-```
-
-### Specifying a custom setup function
-
-By default, the macro looks for a function named `setup`. Use the attribute argument to specify a different name:
-
-```rust
-async fn my_custom_setup() -> AppEnv { /* ... */ }
-
-#[r2e::main(my_custom_setup)]
-async fn main(env: AppEnv) {
-    // ...
-}
 ```
 
 ### State caching
@@ -111,66 +110,40 @@ Startup hooks (`on_start`), consumer registrations (`#[consumer]`), and schedule
 
 ### Port conflict with Dioxus devserver
 
-The Dioxus devserver (`dx serve`) listens on port **8080** by default. If your R2E app also binds to 8080, requests will be silently intercepted and never reach your app. Use a different port:
+The Dioxus devserver (`dx serve`) listens on port **8080** by default. If your R2E app also binds to 8080, requests will be silently intercepted and never reach your app. Use a different port via config (`launch` reads `server.port`):
 
-```rust
-// Good
-.serve("0.0.0.0:3000").await.unwrap();
-
-// Bad — conflicts with dx devserver
-.serve("0.0.0.0:8080").await.unwrap();
+```yaml
+# application.yaml — keep your app off 8080 during dev
+server:
+  port: 3000
 ```
 
 ## Anti-patterns
 
-**Don't** call `load_config` in `main()` when using hot-reload — it re-reads YAML from disk on every patch:
-
-```rust
-// Bad: re-reads config on every hot-patch
-#[r2e::main]
-async fn main(env: AppEnv) {
-    AppBuilder::new()
-        .load_config::<RootConfig>()  // reads disk every time
-        // ...
-}
-
-// Good: config loaded once in setup, passed via env
-#[r2e::main]
-async fn main(env: AppEnv) {
-    AppBuilder::new()
-        .with_config(env.config)   // reuses pre-loaded config
-        // ...
-}
-```
-
-**Don't** create connection pools or event buses inside `main()` — they leak on every hot-patch:
+**Don't** create connection pools or event buses inside `App::build()` — they are rebuilt and leak on every hot-patch. Build them in `setup()` and thread them through `Env`:
 
 ```rust
 // Bad: new pool on every hot-patch (leaks connections)
-#[r2e::main]
-async fn main(env: AppEnv) {
+async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
     let pool = PgPool::connect("...").await.unwrap();
-    AppBuilder::new().provide(pool)
-    // ...
+    b.provide(pool) /* ... */
 }
 
-// Good: pool created once in setup
-#[r2e::main]
-async fn main(env: AppEnv) {
-    AppBuilder::new().provide(env.pool)
-    // ...
+// Good: pool created once in setup(), reused via env
+async fn setup() -> AppEnv {
+    AppEnv { pool: PgPool::connect("...").await.unwrap() }
+}
+async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    b.provide(env.pool) /* ... */
 }
 ```
 
-**Don't** wrap the server closure in `Arc` — it breaks Subsecond's hot-patching dispatch:
-
-```rust
-// Bad: Arc makes the closure pointer-sized, breaking hot-patch
-let server_fn = Arc::new(|env| async move { /* ... */ });
-
-// Good: use a plain function or non-capturing closure
-async fn __r2e_server(env: AppEnv) { /* ... */ }
-```
+**Do** keep `load_config` inside `build()`. Because `build()` re-runs per patch,
+its `load_config` re-reads `application.yaml` from disk each time — deliberately,
+so config file edits are picked up on the next hot-patch (the ~1 ms read beats a
+dev session pinned to stale first-boot config). The old
+`#[r2e::main] async fn main(env)` + `with_config` hand-wiring is gone —
+express the split with `App::setup` / `App::build` and launch via `r2e::launch`.
 
 ## DevReload plugin
 

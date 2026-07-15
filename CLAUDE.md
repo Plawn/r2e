@@ -65,13 +65,13 @@ r2e-observability → OpenTelemetry plugin: distributed tracing and context prop
 r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external IdP.
 r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-r2e-test        → TestApp (HTTP client + blueprint boot: TestApp::boot / #[r2e::test(app = ...)], bean::<T>() access, .as_user() via auto-wired TestJwt), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
+r2e-test        → TestApp (HTTP client + App boot: TestApp::boot::<A>() / #[r2e::test(app = MyApp)], bean::<T>() access, .as_user() via auto-wired TestJwt), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
 r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, shared-per-process containers, URL injected via override_config_value. Features `postgres`, `redis`.
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
 r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messages.
-example-app     → Demo app (lib + bin) exercising all features. `lib.rs` exposes the blueprint `app(b) -> impl BootableApp` booted by both `main.rs` and the integration tests.
+example-app     → Demo app (lib + bin) exercising all features. `lib.rs` declares the app via `impl App for ...` (`setup`/`build`); `main.rs` runs `r2e::launch::<App>()` and the integration tests boot the same type via `#[r2e::test(app = ...)]`.
 ```
 
 Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-devtools` / `r2e-static` / `r2e-data-sqlx` / `r2e-data-diesel` / other integrations ← `r2e` ← applications.
@@ -175,7 +175,7 @@ impl UserController {
 | roadmap, backlog, next steps, what to work on, framework gaps, real-app audit (threaty/patina), rejected-design decisions (qualifiers, startup_check) | `docs/claude/roadmap.md` |
 | EventBus perf/reliability work, distributed backend audit (iggy/kafka/pulsar/rabbitmq), delivery semantics (at-least-once, ack-after-handler), producer batching, `BackendState` dedup/event_id, consume pipelining | `docs/claude/eventbus-perf.md` |
 | new transport / wire adapter, `EndpointDeps`, `endpoint_deps_fold`, `register_grpc_service` compile check, `AppBuilderGrpcExt`, ports-and-adapters shape, per-transport guards decision | `docs/claude/transport-adapters.md` |
-| testing DX, app blueprint, `BootableApp`, `TestApp::boot`, `#[r2e::test(app = ...)]`, `override_bean` (pinned overrides), `override_config_value`, `with_profile`, `application-test.yaml`, `.as_user()`, mocks in tests, dev services / testcontainers | `docs/claude/subsystems.md` (TestApp section); open follow-ups in `docs/claude/roadmap.md` |
+| testing DX, `App` trait, `App::setup`/`App::build`, `r2e::launch`, `override_config`, `BootableApp`, `TestApp::boot`, `#[r2e::test(app = ...)]`, `override_bean` (pinned overrides), `override_config_value`, `with_profile`, `application-test.yaml`, `.as_user()`, mocks in tests, dev services / testcontainers | `docs/claude/subsystems.md` (TestApp section); open follow-ups in `docs/claude/roadmap.md` |
 
 **Rules:**
 1. Match keywords from your task to the left column. Read **only** the matched file(s).

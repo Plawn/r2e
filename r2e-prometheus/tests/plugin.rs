@@ -142,7 +142,8 @@ async fn endpoint_is_driven_by_file_config() {
     let config =
         R2eConfig::from_yaml_str("prometheus:\n  endpoint: /custom-metrics\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Prometheus::builder().build())
         .build_state()
         .await;
@@ -166,7 +167,8 @@ async fn builder_endpoint_wins_over_file_config() {
     let config =
         R2eConfig::from_yaml_str("prometheus:\n  endpoint: /from-file\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Prometheus::new("/from-builder"))
         .build_state()
         .await;
@@ -190,7 +192,8 @@ async fn malformed_config_section_panics_at_boot() {
     // produces. Boot must fail with a validation error naming the plugin.
     let config = R2eConfig::from_yaml_str("prometheus:\n  buckets: not-a-list\n").unwrap();
     let _app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Prometheus::builder().build())
         .build_state()
         .await;
@@ -204,7 +207,8 @@ async fn disabled_via_config_skips_route_and_layer_but_keeps_registry() {
     // type-level provision list is fixed at compile time.
     let config = R2eConfig::from_yaml_str("prometheus:\n  enabled: false\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Prometheus::new("/metrics"))
         .build_state()
         .await;
@@ -235,7 +239,8 @@ async fn enabled_true_via_config_mounts_route() {
     // mounted.
     let config = R2eConfig::from_yaml_str("prometheus:\n  enabled: true\n").unwrap();
     let app = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .plugin(Prometheus::new("/metrics"))
         .build_state()
         .await;

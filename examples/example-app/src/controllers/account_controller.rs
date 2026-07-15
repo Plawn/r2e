@@ -16,7 +16,6 @@ pub struct AccountController {
 
 #[routes]
 impl AccountController {
-    
     #[get("/greeting")]
     async fn greeting(&self) -> Json<serde_json::Value> {
         println!("he3");

@@ -69,7 +69,10 @@ async fn test_ws_echo_json() {
 async fn test_ws_timeout_on_no_message() {
     let app = setup().await;
     let server = app.serve().await;
-    let mut ws = server.ws("/ws/echo").await.with_timeout(Duration::from_millis(100));
+    let mut ws = server
+        .ws("/ws/echo")
+        .await
+        .with_timeout(Duration::from_millis(100));
     ws.next_text().await.unwrap(); // consume welcome
 
     // No message sent — next_text should timeout

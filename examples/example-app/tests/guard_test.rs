@@ -33,9 +33,7 @@ impl<I: Identity> Guard<I> for DenyGuard {
         &self,
         _ctx: &GuardContext<'_, I>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        async {
-            Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into_response())
-        }
+        async { Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into_response()) }
     }
 }
 
@@ -115,9 +113,7 @@ impl PreAuthGuard for DenyPreAuthGuard {
         &self,
         _ctx: &PreAuthGuardContext<'_>,
     ) -> impl Future<Output = Result<(), Response>> + Send {
-        async {
-            Err(HttpError::Forbidden("Pre-auth denied".into()).into_response())
-        }
+        async { Err(HttpError::Forbidden("Pre-auth denied".into()).into_response()) }
     }
 }
 
@@ -157,28 +153,19 @@ pub struct GuardTestController;
 impl GuardTestController {
     #[get("/allow")]
     #[guard(AllowGuard)]
-    async fn guarded_allow(
-        &self,
-        #[inject(identity)] _user: AuthenticatedUser,
-    ) -> &'static str {
+    async fn guarded_allow(&self, #[inject(identity)] _user: AuthenticatedUser) -> &'static str {
         "allowed"
     }
 
     #[get("/deny")]
     #[guard(DenyGuard)]
-    async fn guarded_deny(
-        &self,
-        #[inject(identity)] _user: AuthenticatedUser,
-    ) -> &'static str {
+    async fn guarded_deny(&self, #[inject(identity)] _user: AuthenticatedUser) -> &'static str {
         "should not reach"
     }
 
     #[get("/sub-check")]
     #[guard(SubCheckGuard)]
-    async fn guarded_sub_check(
-        &self,
-        #[inject(identity)] user: AuthenticatedUser,
-    ) -> Json<String> {
+    async fn guarded_sub_check(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<String> {
         Json(user.sub.clone())
     }
 
@@ -219,7 +206,8 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(Arc::new(jwt.claims_validator()))
             .build_state()
             .await
@@ -236,11 +224,7 @@ async fn setup() -> (TestApp, TestJwt) {
 async fn test_custom_guard_allows() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/guarded/allow")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/guarded/allow").bearer(&token).send().await;
     resp.assert_ok();
     assert_eq!(resp.text(), "allowed");
 }
@@ -309,11 +293,7 @@ async fn test_guard_receives_uri() {
     let token = jwt.token("user-1", &["user"]);
 
     // PathCheckGuard allows paths starting with /guarded
-    let resp = app
-        .get("/guarded/path-check")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/guarded/path-check").bearer(&token).send().await;
     resp.assert_ok();
     assert_eq!(resp.text(), "path ok");
 }
@@ -323,10 +303,7 @@ async fn test_pre_guard_rejects_early() {
     let (app, _jwt) = setup().await;
 
     // Pre-auth guard denies without requiring any JWT
-    app.get("/guarded/pre-deny")
-        .send()
-        .await
-        .assert_forbidden();
+    app.get("/guarded/pre-deny").send().await.assert_forbidden();
 }
 
 #[r2e::test]

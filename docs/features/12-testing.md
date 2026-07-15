@@ -33,16 +33,16 @@ Tests build their state exactly like production: `.provide(...)` /
 is the inferred HList of provided beans — there is no hand-written test state
 struct to maintain.
 
-### Blueprint boot (recommended)
+### App boot (recommended)
 
-Instead of hand-assembling a builder per test file, expose the app's assembly
-as a blueprint (`pub async fn app(b: AppBuilder) -> impl BootableApp` in
-`lib.rs`) and boot the **real** application:
+Instead of hand-assembling a builder per test file, implement the `App` trait
+once in `lib.rs` (production and tests share the same unit) and boot the
+**real** application by type:
 
 ```rust
 use r2e_test::TestApp;
 
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]
 async fn lists_users(app: TestApp, #[inject] users: UserService) {
     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
     assert_eq!(users.count().await, 2);
@@ -53,8 +53,8 @@ Booting forces the `test` profile (`application-test.yaml` overlays the base
 config), pins a local `TestJwt` validator over the app's own (so `.as_user`
 needs no IdP), and retains the bean graph (`app.bean::<T>()`, `#[inject]`
 test parameters). Mocks and config patches go through the `with` hook:
-`#[r2e::test(app = my_app::app, with = |b| b.override_bean(FakeMailer::new()))]`.
-Non-macro forms: `TestApp::boot(my_app::app)`, `TestApp::boot_with`,
+`#[r2e::test(app = my_app::MyApp, with = |b| b.override_bean(FakeMailer::new()))]`.
+Non-macro forms: `TestApp::boot::<my_app::MyApp>()`, `TestApp::boot_with`,
 `TestApp::boot_plain`. See `examples/example-app/tests/app_test.rs` for the
 full showcase.
 

@@ -23,9 +23,21 @@ pub struct ItemService {
 impl ItemService {
     fn new() -> Self {
         let items = vec![
-            Item { id: 1, name: "First".into(), active: true },
-            Item { id: 2, name: "Second".into(), active: true },
-            Item { id: 3, name: "Third".into(), active: false },
+            Item {
+                id: 1,
+                name: "First".into(),
+                active: true,
+            },
+            Item {
+                id: 2,
+                name: "Second".into(),
+                active: true,
+            },
+            Item {
+                id: 3,
+                name: "Third".into(),
+                active: false,
+            },
         ];
         Self {
             items: Arc::new(RwLock::new(items)),
@@ -89,10 +101,7 @@ impl ItemController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(
-        &self,
-        Path(id): Path<u64>,
-    ) -> Result<Json<Item>, HttpError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<Item>, HttpError> {
         self.item_service
             .get(id)
             .await
@@ -117,10 +126,7 @@ impl ItemController {
     }
 
     #[delete("/{id}")]
-    async fn delete(
-        &self,
-        Path(id): Path<u64>,
-    ) -> Result<StatusCode, HttpError> {
+    async fn delete(&self, Path(id): Path<u64>) -> Result<StatusCode, HttpError> {
         if self.item_service.delete(id).await {
             Ok(StatusCode::NO_CONTENT)
         } else {
@@ -149,7 +155,8 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(ItemService::new())
             .provide(Arc::new(jwt.claims_validator()))
             .build_state()
@@ -201,12 +208,7 @@ async fn test_put_update_item() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
     let body = serde_json::json!({ "name": "Updated First" });
-    let resp = app
-        .put("/items/1")
-        .json(&body)
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.put("/items/1").json(&body).bearer(&token).send().await;
     resp.assert_ok();
     let item: Item = resp.json();
     assert_eq!(item.id, 1);

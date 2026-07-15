@@ -1,7 +1,6 @@
 use r2e::prelude::*;
 use r2e::ws::WsStream;
 
-
 #[controller(path = "/ws")]
 pub struct WsEchoController;
 

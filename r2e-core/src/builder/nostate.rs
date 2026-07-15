@@ -24,6 +24,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 forced_profile: None,
                 config_file: None,
                 config_overrides: Vec::new(),
+                preloaded_config: None,
                 stop_handle: None,
                 bean_disposers: Vec::new(),
             },
@@ -171,8 +172,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
     /// Check whether a config key is truthy (a boolean `true`).
     ///
-    /// Requires [`load_config`](Self::load_config) or
-    /// [`with_config`](Self::with_config) to have been called first. Combine it
+    /// Requires [`load_config`](Self::load_config) to have been called first.
+    /// Combine it
     /// with [`when`](Self::when) for conditional assembly, or use it to compute
     /// the flag a `#[producer] -> Option<T>` keys off:
     ///
@@ -189,7 +190,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.shared
             .config
             .as_ref()
-            .expect("config_flag requires config — call .load_config() or .with_config() first")
+            .expect("config_flag requires config — call .load_config() first")
             .try_get::<bool>(key)
             .unwrap_or(false)
     }
@@ -203,9 +204,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// 2. `r2e.profile` config key
     /// 3. `"default"` (fallback)
     ///
-    /// The profile is set when [`load_config`](Self::load_config) or
-    /// [`with_config`](Self::with_config) is called. Before that, it is
-    /// `"default"`.
+    /// The profile is set when [`load_config`](Self::load_config) is called.
+    /// Before that, it is `"default"`.
     pub fn active_profile(&self) -> &str {
         &self.shared.active_profile
     }
@@ -288,52 +288,30 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.with_updated_types()
     }
 
-    /// Provide a pre-loaded configuration to the builder.
-    ///
-    /// Stores the config and provides `R2eConfig` in the bean registry
-    /// (injectable by beans and controllers).
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let config = R2eConfig::load()?;
-    /// AppBuilder::new()
-    ///     .with_config(config)
-    ///     .build_state()
-    ///     .await
-    /// ```
-    pub fn with_config(
-        mut self,
-        mut config: crate::config::R2eConfig,
-    ) -> AppBuilder<NoState, TCons<crate::config::R2eConfig, P>, R, Mods> {
-        assert!(
-            self.shared.config_file.is_none(),
-            "with_config_file() was set but with_config() supplies a pre-loaded \
-             R2eConfig — the custom file would be silently ignored. Either load it \
-             yourself (R2eConfig::load_from) or use load_config() instead."
-        );
-        for (key, value) in self.shared.config_overrides.drain(..) {
-            config.set(&key, value);
-        }
-        self.shared.active_profile =
-            resolve_profile(self.shared.forced_profile.as_deref(), &config);
-        self.shared.config = Some(config.clone());
-        self.shared.bean_registry.provide(config);
-        self.with_updated_types()
-    }
-
     /// Load configuration and provide it to the builder.
     ///
     /// Combines loading, optional typed construction, and registration in one call:
     /// 1. Loads `application.yaml` (or the file set via
-    ///    [`with_config_file`](Self::with_config_file)) + `.env` + env var overlay
+    ///    [`with_config_file`](Self::with_config_file)) + `.env` + env var
+    ///    overlay — **unless** a config was stashed via
+    ///    [`override_config`](Self::override_config), in which case that
+    ///    in-memory config replaces the disk read.
     /// 2. If `C` implements [`ConfigProperties`](crate::config::ConfigProperties),
     ///    constructs the typed config and provides it as a bean
     /// 3. Stores the raw config + provides `R2eConfig` in the bean registry
     ///
+    /// This is the ONLY registration point for config: it honors the profile,
+    /// the `application-{profile}.yaml` overlay, and
+    /// [`override_config_value`](Self::override_config_value) (drained *after*
+    /// the base config, so it always wins — including over
+    /// [`override_config`](Self::override_config)).
+    ///
     /// # Panics
     ///
-    /// Panics if configuration loading or typed construction fails.
+    /// Panics if configuration loading or typed construction fails, or if both
+    /// [`override_config`](Self::override_config) and
+    /// [`with_config_file`](Self::with_config_file) were set (the file could
+    /// not be honored — the pre-loaded config wins).
     ///
     /// # Examples
     ///
@@ -353,13 +331,26 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         C::Children: TAppend<P>,
     {
         let profile = self.shared.forced_profile.as_deref();
-        // An explicitly requested file must exist (load_profiled_from is
-        // strict, and its error names the file); the default is optional.
-        let mut config = match self.shared.config_file.take() {
-            Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile),
-            None => crate::config::R2eConfig::load_profiled(profile),
-        }
-        .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+        let mut config = match self.shared.preloaded_config.take() {
+            // A pre-loaded config (override_config / dev-reload) replaces the
+            // disk read entirely.
+            Some(preloaded) => {
+                assert!(
+                    self.shared.config_file.is_none(),
+                    "override_config() and with_config_file() are mutually exclusive: \
+                     the pre-loaded config replaces the disk read, so the custom file \
+                     would be silently ignored. Drop one of them."
+                );
+                preloaded
+            }
+            // An explicitly requested file must exist (load_profiled_from is
+            // strict, and its error names the file); the default is optional.
+            None => match self.shared.config_file.take() {
+                Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile),
+                None => crate::config::R2eConfig::load_profiled(profile),
+            }
+            .unwrap_or_else(|e| panic!("Failed to load config: {e}")),
+        };
         for (key, value) in self.shared.config_overrides.drain(..) {
             config.set(&key, value);
         }
@@ -379,12 +370,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// silently ignored.
     ///
     /// This is the mock/test-double primitive. A test harness applies its
-    /// overrides *before* handing the builder to the application's assembly
-    /// function, and the app's own registration of the real bean becomes a
-    /// no-op — the pinned instance fills the provision slot instead:
+    /// overrides *before* the application's `App::build` runs, and the app's
+    /// own registration of the real bean becomes a no-op — the pinned instance
+    /// fills the provision slot instead:
     ///
     /// ```ignore
-    /// TestApp::boot_with(my_app::app, |b| b.override_bean(FakeMailer::new())).await
+    /// TestApp::boot_with::<MyApp>(|b| b.override_bean(FakeMailer::new())).await
     /// ```
     ///
     /// The pinned value does not extend the compile-time provision list `P`:
@@ -396,9 +387,50 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self
     }
 
+    /// Supply a pre-loaded [`R2eConfig`](crate::config::R2eConfig) that
+    /// [`load_config`](Self::load_config) consumes **in place of** its disk
+    /// read.
+    ///
+    /// This only stashes the config — it registers nothing on its own.
+    /// `load_config` remains the sole registration point (it honors the
+    /// profile, the `application-{profile}.yaml` overlay, and
+    /// [`override_config_value`](Self::override_config_value)); this method just
+    /// replaces where the base config comes from. So an app that calls
+    /// `override_config` **must** still call `load_config` (any variant,
+    /// e.g. `.load_config::<()>()`), otherwise the config is silently ignored —
+    /// [`build_state`](Self::build_state) panics to catch that mistake.
+    ///
+    /// It exists for test harnesses that build an in-memory config (the
+    /// full-config sibling of [`override_config_value`](Self::override_config_value)).
+    ///
+    /// [`override_config_value`](Self::override_config_value) still wins over
+    /// this config regardless of call order (its overrides are drained after
+    /// the base config in `load_config`). Combining it with
+    /// [`with_config_file`](Self::with_config_file) panics in `load_config` —
+    /// the file could not be honored.
+    ///
+    /// # Panics
+    ///
+    /// Panics if config was already loaded (`override_config` after
+    /// `load_config` could never be consumed — call it earlier in the chain).
+    pub fn override_config(mut self, config: crate::config::R2eConfig) -> Self {
+        assert!(
+            self.shared.config.is_none(),
+            "override_config() was called after load_config() — the pre-loaded \
+             config would never be consumed. Move override_config() before \
+             load_config() in the builder chain."
+        );
+        // Resolve the profile eagerly so reads between override_config and
+        // load_config (e.g. conditional assembly) see the right value.
+        self.shared.active_profile =
+            resolve_profile(self.shared.forced_profile.as_deref(), &config);
+        self.shared.preloaded_config = Some(config);
+        self
+    }
+
     /// Override a single config key on top of whatever
-    /// [`with_config`](Self::with_config) / [`load_config`](Self::load_config)
-    /// loads — regardless of call order.
+    /// [`load_config`](Self::load_config) loads — regardless of call order, and
+    /// winning over [`override_config`](Self::override_config).
     ///
     /// If config is already loaded, the key is set immediately; otherwise it
     /// is stashed and applied right after loading (the `@TestProfile`
@@ -427,8 +459,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// overlay file is derived from the base name (`patina.yaml` + profile
     /// `test` → `patina-test.yaml`); secret resolution, the env overlay, and
     /// [`override_config_value`](Self::override_config_value) apply as usual.
-    /// Combining this with [`with_config`](Self::with_config) (a pre-loaded
-    /// config) is a panic — the file could not be honored.
+    /// Combining this with [`override_config`](Self::override_config) (a
+    /// pre-loaded config) is a panic — the file could not be honored.
     ///
     /// ```ignore
     /// AppBuilder::new()
@@ -629,6 +661,25 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         R: AllSatisfied<P, W>,
         Mods: ModuleList<<P as BuildHList>::Output, MW>,
     {
+        assert!(
+            self.shared.preloaded_config.is_none(),
+            "override_config() was set but load_config() was never called — the \
+             config would be silently ignored; add .load_config::<()>() (or a \
+             typed variant) to the app assembly"
+        );
+        assert!(
+            self.shared.config.is_some() || self.shared.config_overrides.is_empty(),
+            "override_config_value() was set but load_config() was never called — \
+             the override(s) would be silently ignored; add .load_config::<()>() \
+             (or a typed variant) to the app assembly"
+        );
+        assert!(
+            self.shared.config_file.is_none(),
+            "with_config_file() was set but load_config() was never called — the \
+             file would be silently ignored; add .load_config::<()>() (or a typed \
+             variant) to the app assembly"
+        );
+
         #[cfg(feature = "dev-reload")]
         {
             type Cached<P> = (

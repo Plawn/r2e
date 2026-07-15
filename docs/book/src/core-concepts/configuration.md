@@ -439,16 +439,22 @@ AppBuilder::new()
     // ...
 ```
 
-### `with_config(config)` (pre-loaded)
+### `override_config(config)` (tests only)
 
-Only needed when you have a pre-loaded `R2eConfig` (tests, hot-reload, custom loading). Prefer `load_config` in all other cases.
+`load_config` is the only config registration point. `override_config` is a
+test-harness stash (part of the `override_bean`/`override_config_value` family):
+it holds an in-memory `R2eConfig` that the **next** `load_config::<C>()` uses
+instead of reading disk. Prefer plain `load_config` everywhere else; when
+loading real config from disk, just call `.load_config::<C>()`.
 
 ```rust
-let config = R2eConfig::load().unwrap_or_else(|_| R2eConfig::empty());
-AppBuilder::new().with_config(config)
+let config = R2eConfig::from_yaml_str("app:\n  name: test").unwrap();
+AppBuilder::new()
+    .override_config(config)
+    .load_config::<RootConfig>()
 ```
 
-Both methods store the raw config in the builder and provide `R2eConfig` in the
+Both paths provide `R2eConfig` in the
 bean registry. `R2eConfig` is therefore just another bean in the graph — nothing
 to wire by hand. It is available for `#[inject]`/`#[config(...)]` in controllers,
 as a dependency in `#[bean]`/`#[producer]` constructors, and from a `BeanContext`

@@ -106,10 +106,7 @@ impl UserController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(
-        &self,
-        Path(id): Path<u64>,
-    ) -> Result<Json<User>, HttpError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
             None => Err(HttpError::NotFound("User not found".into())),
@@ -119,10 +116,7 @@ impl UserController {
     // Demo: cache_invalidate clears the "users" cache group on create
     #[post("/")]
     #[intercept(CacheInvalidate::group("users"))]
-    async fn create(
-        &self,
-        Json(body): Json<CreateUserRequest>,
-    ) -> Json<User> {
+    async fn create(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
     }
@@ -164,10 +158,7 @@ impl UserController {
     // Demo: rate limiting at handler level with per-user key
     #[post("/rate-limited")]
     #[guard(RateLimit::per_user(5, 60))]
-    async fn create_rate_limited(
-        &self,
-        Json(body): Json<CreateUserRequest>,
-    ) -> Json<User> {
+    async fn create_rate_limited(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
     }

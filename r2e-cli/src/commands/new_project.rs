@@ -227,7 +227,7 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
     println!();
     println!("  cd {}", opts.name);
     println!("  cargo run     # serve");
-    println!("  cargo test    # boots the same app via the blueprint");
+    println!("  cargo test    # boots the same App via #[r2e::test]");
     println!();
 
     if opts.openapi {

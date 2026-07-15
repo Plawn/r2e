@@ -12,26 +12,32 @@ r2e-test = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
-## Recommended pattern: boot your app's blueprint
+## Recommended pattern: boot your `App`
 
-Expose the app's assembly as a **blueprint** function in `lib.rs` (production
-`main.rs` boots the same function), then boot the real application in tests:
+Implement the `App` trait once in `lib.rs` (production `main.rs` and tests boot
+the same unit), then boot the real application in tests by type:
 
 ```rust
 // src/lib.rs
-pub async fn app(b: AppBuilder) -> impl BootableApp {
-    b.load_config::<AppConfig>()
-        .register::<UserService>()
-        .build_state().await
-        .with(Health)
-        .with(ErrorHandling)
-        .register_controllers::<(UserController,)>()
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = ();
+    async fn setup() {}
+    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+        b.load_config::<AppConfig>()
+            .register::<UserService>()
+            .build_state().await
+            .with(Health)
+            .with(ErrorHandling)
+            .register_controllers::<(UserController,)>()
+    }
 }
 
 // src/main.rs
 #[r2e::main]
 async fn main() {
-    my_app::app(AppBuilder::new()).await.serve_auto().await.unwrap();
+    r2e::launch::<my_app::MyApp>().await.unwrap();
 }
 ```
 
@@ -39,7 +45,7 @@ async fn main() {
 // tests/users.rs
 use r2e_test::TestApp;
 
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]
 async fn lists_users(app: TestApp) {
     app.get("/users").as_user("alice", &["user"]).send().await.assert_ok();
 }
@@ -59,7 +65,7 @@ Mocks and config patches go through the `with` hook — overrides are **pinned**
 so the app's own registration of the same type becomes a no-op:
 
 ```rust
-#[r2e::test(app = my_app::app, with = |b| {
+#[r2e::test(app = my_app::MyApp, with = |b| {
     b.override_bean(FakeMailer::new())          // @InjectMock
         .override_config_value("mail.enabled", false)  // @TestProfile
 })]
@@ -110,7 +116,7 @@ use r2e_devservices::DevPostgres;
 #[tokio::test]
 async fn users_are_persisted() {
     let pg = DevPostgres::shared().await; // one container per test process
-    let app = TestApp::boot_with(my_app::app, |b| {
+    let app = TestApp::boot_with::<my_app::MyApp>(|b| {
         b.override_config_value("app.database.url", pg.url())
     })
     .await;

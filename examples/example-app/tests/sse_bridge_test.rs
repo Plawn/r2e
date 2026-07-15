@@ -29,7 +29,7 @@ async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {
     .map(|r| r.unwrap())
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn user_creation_fans_out_to_the_sse_topic(
     app: TestApp,
     #[inject] topic: SseTopic<UserCreatedEvent>,
@@ -58,7 +58,7 @@ async fn user_creation_fans_out_to_the_sse_topic(
     );
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn sse_topic_endpoint_is_reachable(app: TestApp) {
     // The infinite stream can't be collected in-process; hit the endpoint
     // over a live server and assert the SSE handshake headers.

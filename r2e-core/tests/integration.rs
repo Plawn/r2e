@@ -554,7 +554,7 @@ async fn producer_option_present_via_config_flag() {
 
     // Compute the flag from config via the public `config_flag` helper before
     // consuming the builder, then feed it into the producer.
-    let builder = AppBuilder::new().with_config(config);
+    let builder = AppBuilder::new().override_config(config).load_config::<()>();
     let enabled = builder.config_flag("features.test-service");
     assert!(enabled);
 
@@ -575,7 +575,7 @@ async fn producer_option_absent_via_config_flag() {
     let mut config = R2eConfig::empty();
     config.set("features.test-service", ConfigValue::Bool(false));
 
-    let builder = AppBuilder::new().with_config(config);
+    let builder = AppBuilder::new().override_config(config).load_config::<()>();
     let enabled = builder.config_flag("features.test-service");
     assert!(!enabled);
 
@@ -593,7 +593,7 @@ async fn producer_option_absent_via_config_flag() {
 async fn config_flag_missing_key_defaults_to_false() {
     use r2e_core::config::R2eConfig;
 
-    let builder = AppBuilder::new().with_config(R2eConfig::empty());
+    let builder = AppBuilder::new().override_config(R2eConfig::empty()).load_config::<()>();
     // Missing key → `config_flag` yields false → producer emits `None`.
     let enabled = builder.config_flag("features.nonexistent");
     assert!(!enabled);
@@ -627,7 +627,7 @@ async fn profile_is_reflects_active_profile() {
     let mut config = R2eConfig::empty();
     config.set("r2e.profile", ConfigValue::String("prod".into()));
 
-    let builder = AppBuilder::new().with_config(config);
+    let builder = AppBuilder::new().override_config(config).load_config::<()>();
     // `R2E_PROFILE` (if set in the environment) overrides the config key, so
     // pin the expectation to whatever the resolver actually chose.
     let active = builder.active_profile().to_string();

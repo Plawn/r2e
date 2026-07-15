@@ -22,34 +22,61 @@ async fn override_bean_wins_over_later_provide() {
 }
 
 #[r2e_core::test]
-async fn override_config_value_before_with_config() {
+async fn override_config_provides_in_memory_config() {
+    // A key that lives in no YAML on disk must still resolve — proving
+    // load_config consumed the in-memory config instead of reading a file.
+    let mut config = R2eConfig::empty();
+    config.set(
+        "app.only_in_memory",
+        ConfigValue::String("from-memory".into()),
+    );
+
+    let builder = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .build_state()
+        .await;
+
+    let config = builder.bean_context().get::<R2eConfig>();
+    assert_eq!(
+        config.get::<String>("app.only_in_memory").unwrap(),
+        "from-memory"
+    );
+}
+
+#[r2e_core::test]
+async fn override_config_value_before_override_config() {
     let mut config = R2eConfig::empty();
     config.set("app.greeting", ConfigValue::String("prod".into()));
 
     let builder = AppBuilder::new()
         .override_config_value("app.greeting", "patched")
         .override_config_value("app.port", 8081)
-        .with_config(config)
+        .override_config(config)
+        .load_config::<()>()
         .build_state()
         .await;
 
     let config = builder.bean_context().get::<R2eConfig>();
+    // override_config_value wins over override_config regardless of order.
     assert_eq!(config.get::<String>("app.greeting").unwrap(), "patched");
     assert_eq!(config.get::<i64>("app.port").unwrap(), 8081);
 }
 
 #[r2e_core::test]
-async fn override_config_value_after_with_config() {
+async fn override_config_value_after_override_config() {
     let mut config = R2eConfig::empty();
     config.set("app.greeting", ConfigValue::String("prod".into()));
 
     let builder = AppBuilder::new()
-        .with_config(config)
+        .override_config(config)
         .override_config_value("app.greeting", "patched")
+        .load_config::<()>()
         .build_state()
         .await;
 
     let config = builder.bean_context().get::<R2eConfig>();
+    // override_config_value still wins even when set after override_config.
     assert_eq!(config.get::<String>("app.greeting").unwrap(), "patched");
 }
 
@@ -59,11 +86,14 @@ async fn with_profile_forces_active_profile() {
     assert_eq!(builder.active_profile(), "test");
     assert!(builder.profile_is("test"));
 
-    // The forced profile survives a with_config that would otherwise resolve
-    // the profile from the config/env.
+    // The forced profile survives a load_config (via override_config) that
+    // would otherwise resolve the profile from the config/env.
     let mut config = R2eConfig::empty();
     config.set("r2e.profile", ConfigValue::String("prod".into()));
-    let builder = AppBuilder::new().with_profile("test").with_config(config);
+    let builder = AppBuilder::new()
+        .with_profile("test")
+        .override_config(config)
+        .load_config::<()>();
     assert_eq!(builder.active_profile(), "test");
 }
 
@@ -111,10 +141,57 @@ async fn with_config_file_and_profile_overlays_derived_sibling() {
     assert_eq!(config.get::<i64>("app.port").unwrap(), 1234);
 }
 
-#[test]
-#[should_panic(expected = "with_config_file() was set but with_config()")]
-fn with_config_file_then_with_config_panics() {
+#[r2e_core::test]
+#[should_panic(expected = "load_config() was never called")]
+async fn override_config_without_load_config_panics_at_build_state() {
+    // override_config stashes a config but nothing consumes it — build_state
+    // must catch the silent-ignore mistake.
+    let _ = AppBuilder::new()
+        .override_config(R2eConfig::empty())
+        .build_state()
+        .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mutually exclusive")]
+async fn override_config_with_config_file_panics() {
+    // override_config + with_config_file can't both be honored — load_config
+    // panics when it sees both.
     let _ = AppBuilder::new()
         .with_config_file("patina.yaml")
-        .with_config(R2eConfig::empty());
+        .override_config(R2eConfig::empty())
+        .load_config::<()>()
+        .build_state()
+        .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "after load_config()")]
+async fn override_config_after_load_config_panics() {
+    // The stash could never be consumed — fail at the call site with a
+    // message naming the real fault (wrong order), not a missing load_config.
+    let _ = AppBuilder::new()
+        .load_config::<()>()
+        .override_config(R2eConfig::empty());
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "override_config_value() was set but load_config() was never called")]
+async fn override_config_value_without_load_config_panics_at_build_state() {
+    // A stashed key/value with no load_config to drain it would be silently
+    // ignored — build_state must catch it like the override_config case.
+    let _ = AppBuilder::new()
+        .override_config_value("app.x", ConfigValue::from("y"))
+        .build_state()
+        .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "with_config_file() was set but load_config() was never called")]
+async fn with_config_file_without_load_config_panics_at_build_state() {
+    // A config file that no load_config ever reads would be silently ignored.
+    let _ = AppBuilder::new()
+        .with_config_file("patina.yaml")
+        .build_state()
+        .await;
 }

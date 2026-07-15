@@ -1,11 +1,11 @@
 use std::convert::Infallible;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::http::ws::Message;
+use r2e::prelude::*;
 use r2e::ws::WsStream;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::services::NotificationService;
 
@@ -22,14 +22,18 @@ impl NotificationController {
         &self,
         Path(user_id): Path<String>,
     ) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
-        self.notification_service.sse_broadcaster(&user_id).subscribe()
+        self.notification_service
+            .sse_broadcaster(&user_id)
+            .subscribe()
     }
 
     #[ws("/ws/{user_id}")]
     async fn ws_subscribe(&self, mut ws: WsStream, Path(user_id): Path<String>) {
         let room = self.notification_service.ws_room(&user_id);
         let mut rx = room.subscribe();
-        ws.send_text(format!("Connected as user {user_id}")).await.ok();
+        ws.send_text(format!("Connected as user {user_id}"))
+            .await
+            .ok();
 
         loop {
             tokio::select! {

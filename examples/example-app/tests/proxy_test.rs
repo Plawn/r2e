@@ -4,14 +4,14 @@
 
 use r2e_test::TestApp;
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn any_route_requires_proxy_key(app: TestApp) {
     let resp = app.get("/proxy/some/artifact").send().await;
     resp.assert_unauthorized();
     assert_eq!(resp.header("www-authenticate"), Some("ProxyKey"));
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn any_route_echoes_every_method(app: TestApp) {
     let resp = app
         .post("/proxy/npm/lodash")
@@ -34,7 +34,7 @@ async fn any_route_echoes_every_method(app: TestApp) {
     assert_eq!(resp.header("x-proxy-method"), Some("PUT"));
 }
 
-#[r2e::test(app = example_app::app)]
+#[r2e::test(app = example_app::ExampleApp)]
 async fn fallback_catches_unmatched_routes(app: TestApp) {
     let resp = app.get("/definitely/not/a/route").send().await;
     resp.assert_status(r2e::http::StatusCode::NOT_FOUND);

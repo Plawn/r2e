@@ -265,8 +265,9 @@ Rules for the delivered `config`:
 - **`Config = ()`** (the default surface) — no config; `CONFIG_PREFIX` stays
   `None`; `configure` gets `None`.
 - **Presence-based (optional section).** `configure` gets `Some(cfg)` only when
-  `CONFIG_PREFIX` is `Some(prefix)`, config was loaded (`load_config` /
-  `with_config`), **and** at least one key lives under `prefix`. No config
+  `CONFIG_PREFIX` is `Some(prefix)`, config was loaded (`load_config`, or an
+  `override_config` test stash consumed by it), **and** at least one key lives
+  under `prefix`. No config
   loaded, or an absent section → `None`. This mirrors a controller's
   `Option<Section>`.
 - **Validation.** A present-but-malformed section (missing required key, wrong

@@ -1,5 +1,5 @@
+use r2e::multipart::{Multipart, TypedMultipart, UploadedFile};
 use r2e::prelude::*;
-use r2e::multipart::{Multipart, UploadedFile, TypedMultipart};
 use serde_json::Value;
 
 #[derive(FromMultipart)]
@@ -37,15 +37,18 @@ impl UploadController {
     #[post("/raw")]
     async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
         let mut fields = Vec::new();
-        while let Some(field) = multipart.next_field().await.map_err(|e| {
-            HttpError::bad_request(format!("multipart error: {e}"))
-        })? {
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| HttpError::bad_request(format!("multipart error: {e}")))?
+        {
             let name = field.name().unwrap_or("unknown").to_string();
             let file_name = field.file_name().map(|s| s.to_string());
             let content_type = field.content_type().map(|s| s.to_string());
-            let data = field.bytes().await.map_err(|e| {
-                HttpError::internal(format!("failed to read field: {e}"))
-            })?;
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| HttpError::internal(format!("failed to read field: {e}")))?;
             fields.push(serde_json::json!({
                 "name": name,
                 "file_name": file_name,

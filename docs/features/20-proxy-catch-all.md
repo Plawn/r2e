@@ -97,11 +97,11 @@ Reach for the first rung that fits; each step down trades framework integration 
 Everything works through `TestApp` / `oneshot` as usual:
 
 ```rust
-#[r2e::test(app = my_app::app)]
+#[r2e::test(app = my_app::MyApp)]
 async fn fallback_catches_unmatched(app: TestApp) {
     let resp = app.get("/definitely/not/a/route").send().await;
     resp.assert_status(StatusCode::NOT_FOUND);
 }
 ```
 
-See `r2e-core/tests/proxy_routes.rs` (machinery), `examples/example-app/src/controllers/proxy_controller.rs` + `tests/proxy_test.rs` (blueprint usage), and `r2e-compile-tests/compile-fail/fallback_*.rs` (diagnostics).
+See `r2e-core/tests/proxy_routes.rs` (machinery), `examples/example-app/src/controllers/proxy_controller.rs` + `tests/proxy_test.rs` (App usage), and `r2e-compile-tests/compile-fail/fallback_*.rs` (diagnostics).

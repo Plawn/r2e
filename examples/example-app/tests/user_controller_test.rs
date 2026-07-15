@@ -10,9 +10,9 @@ use sqlx::SqlitePool;
 // Re-use the example app types inline since we can't import from a binary crate.
 
 mod common {
+    use r2e::r2e_events::{EventBus, LocalEventBus};
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use r2e::r2e_events::{EventBus, LocalEventBus};
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct User {
@@ -45,8 +45,16 @@ mod common {
     impl UserService {
         pub fn new(event_bus: LocalEventBus) -> Self {
             let users = vec![
-                User { id: 1, name: "Alice".into(), email: "alice@example.com".into() },
-                User { id: 2, name: "Bob".into(), email: "bob@example.com".into() },
+                User {
+                    id: 1,
+                    name: "Alice".into(),
+                    email: "alice@example.com".into(),
+                },
+                User {
+                    id: 2,
+                    name: "Bob".into(),
+                    email: "bob@example.com".into(),
+                },
             ];
             Self {
                 users: Arc::new(RwLock::new(users)),
@@ -70,7 +78,8 @@ mod common {
                 users.push(user.clone());
                 user
             };
-            let _ = self.event_bus
+            let _ = self
+                .event_bus
                 .emit(UserCreatedEvent {
                     user_id: user.id,
                     name: user.name.clone(),
@@ -216,10 +225,7 @@ impl TestUserController {
     }
 
     #[get("/users/{id}")]
-    async fn get_by_id(
-        &self,
-        Path(id): Path<u64>,
-    ) -> Result<Json<User>, HttpError> {
+    async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> {
         match self.user_service.get_by_id(id).await {
             Some(user) => Ok(Json(user)),
             None => Err(HttpError::NotFound("User not found".into())),
@@ -227,10 +233,7 @@ impl TestUserController {
     }
 
     #[post("/users")]
-    async fn create(
-        &self,
-        Json(body): Json<CreateUserRequest>,
-    ) -> Json<User> {
+    async fn create(&self, Json(body): Json<CreateUserRequest>) -> Json<User> {
         let user = self.user_service.create(body.name, body.email).await;
         Json(user)
     }
@@ -296,25 +299,20 @@ async fn setup() -> (TestApp, TestJwt) {
     let event_bus = LocalEventBus::new();
 
     let mut config = R2eConfig::empty();
-    config.set(
-        "app.name",
-        ConfigValue::String("Test App".into()),
-    );
+    config.set("app.name", ConfigValue::String("Test App".into()));
     config.set(
         "app.greeting",
         ConfigValue::String("Hello from tests!".into()),
     );
-    config.set(
-        "app.version",
-        ConfigValue::String("0.0.1-test".into()),
-    );
+    config.set("app.version", ConfigValue::String("0.0.1-test".into()));
 
     let openapi_config =
         r2e::r2e_openapi::OpenApiConfig::new("Test API", "0.1.0").with_docs_ui(true);
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(UserService::new(event_bus.clone()))
             .provide(Arc::new(jwt.claims_validator()))
             .provide(pool)
@@ -378,7 +376,11 @@ async fn test_get_user_by_id() {
 async fn test_get_user_not_found() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    app.get("/users/999").bearer(&token).send().await.assert_not_found();
+    app.get("/users/999")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_not_found();
 }
 
 #[r2e::test]
@@ -397,11 +399,7 @@ async fn test_me_endpoint() {
 async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
-    let resp = app
-        .get("/admin/users")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/admin/users").bearer(&token).send().await;
     resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
@@ -422,11 +420,7 @@ async fn test_admin_endpoint_without_admin_role() {
 async fn test_admin_cached_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
-    let resp = app
-        .get("/admin/users/cached")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/admin/users/cached").bearer(&token).send().await;
     resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
@@ -449,11 +443,7 @@ async fn test_admin_cached_endpoint_without_admin_role() {
 async fn test_config_greeting_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/greeting")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/greeting").bearer(&token).send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["greeting"], "Hello from tests!");
@@ -469,12 +459,7 @@ async fn test_create_user_with_valid_data() {
         name: "Charlie".into(),
         email: "charlie@example.com".into(),
     };
-    let resp = app
-        .post("/users")
-        .json(&body)
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.post("/users").json(&body).bearer(&token).send().await;
     resp.assert_ok();
     let user: User = resp.json();
     assert_eq!(user.name, "Charlie");
@@ -519,11 +504,7 @@ async fn test_create_user_with_empty_name() {
 async fn test_custom_error_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/error/custom")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/error/custom").bearer(&token).send().await;
     resp.assert_status(http::StatusCode::from_u16(418).unwrap());
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"], "I'm a teapot");
@@ -536,11 +517,7 @@ async fn test_custom_error_endpoint() {
 async fn test_cached_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
-    let resp = app
-        .get("/users/cached")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/users/cached").bearer(&token).send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     // Should return the user list as JSON value
@@ -600,7 +577,9 @@ async fn test_openapi_path_params() {
         .as_array()
         .expect("GET /users/{id} should have parameters");
     assert!(
-        params.iter().any(|p| p["name"] == "id" && p["in"] == "path" && p["required"] == true),
+        params
+            .iter()
+            .any(|p| p["name"] == "id" && p["in"] == "path" && p["required"] == true),
         "should have required path param 'id'"
     );
 }
@@ -616,14 +595,24 @@ async fn test_openapi_query_params_from_derive() {
         .as_array()
         .expect("GET /search/ should have parameters from #[derive(Params)]");
 
-    assert_eq!(params.len(), 2, "search endpoint should have 2 query params");
+    assert_eq!(
+        params.len(),
+        2,
+        "search endpoint should have 2 query params"
+    );
 
-    let name_param = params.iter().find(|p| p["name"] == "name").expect("missing 'name' param");
+    let name_param = params
+        .iter()
+        .find(|p| p["name"] == "name")
+        .expect("missing 'name' param");
     assert_eq!(name_param["in"], "query");
     assert_eq!(name_param["required"], false);
     assert_eq!(name_param["schema"]["type"], "string");
 
-    let age_param = params.iter().find(|p| p["name"] == "age").expect("missing 'age' param");
+    let age_param = params
+        .iter()
+        .find(|p| p["name"] == "age")
+        .expect("missing 'age' param");
     assert_eq!(age_param["in"], "query");
     assert_eq!(age_param["required"], false);
     assert_eq!(age_param["schema"]["type"], "integer");
@@ -642,13 +631,23 @@ async fn test_openapi_pageable_params() {
 
     assert_eq!(params.len(), 3, "Pageable should expose page, size, sort");
 
-    assert!(params.iter().any(|p| p["name"] == "page" && p["schema"]["type"] == "integer"));
-    assert!(params.iter().any(|p| p["name"] == "size" && p["schema"]["type"] == "integer"));
-    assert!(params.iter().any(|p| p["name"] == "sort" && p["schema"]["type"] == "string"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "page" && p["schema"]["type"] == "integer"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "size" && p["schema"]["type"] == "integer"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "sort" && p["schema"]["type"] == "string"));
 
     // All Pageable params are optional (they have defaults)
     for p in params {
-        assert_eq!(p["required"], false, "Pageable param '{}' should be optional", p["name"]);
+        assert_eq!(
+            p["required"], false,
+            "Pageable param '{}' should be optional",
+            p["name"]
+        );
     }
 }
 
@@ -704,10 +703,7 @@ async fn test_flat_nested_params_extraction() {
 async fn test_flat_nested_params_defaults() {
     let (app, _jwt) = setup().await;
     // No page/size → Pageable defaults (page=0, size=20)
-    let resp = app
-        .get("/nested/flat?name=bob")
-        .send()
-        .await;
+    let resp = app.get("/nested/flat?name=bob").send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["page"], 0);
@@ -736,10 +732,7 @@ async fn test_prefixed_nested_params_extraction() {
 async fn test_prefixed_nested_params_defaults() {
     let (app, _jwt) = setup().await;
     // Pageable fields without prefix should NOT populate the prefixed params
-    let resp = app
-        .get("/nested/prefixed?page=99&q=test")
-        .send()
-        .await;
+    let resp = app.get("/nested/prefixed?page=99&q=test").send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     // page=99 should NOT be picked up because the prefix is "pageable"
@@ -776,13 +769,28 @@ async fn test_openapi_flat_nested_params() {
         .expect("GET /nested/flat should have parameters");
 
     // Should have: page, size, sort (from Pageable), name, email (own)
-    assert_eq!(params.len(), 5, "flat nested should have 5 params, got: {:?}", params);
+    assert_eq!(
+        params.len(),
+        5,
+        "flat nested should have 5 params, got: {:?}",
+        params
+    );
 
-    assert!(params.iter().any(|p| p["name"] == "page" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "size" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "sort" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "name" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "email" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "page" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "size" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "sort" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "name" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "email" && p["in"] == "query"));
 }
 
 #[r2e::test]
@@ -797,12 +805,25 @@ async fn test_openapi_prefixed_nested_params() {
         .expect("GET /nested/prefixed should have parameters");
 
     // Should have: pageable.page, pageable.size, pageable.sort, q
-    assert_eq!(params.len(), 4, "prefixed nested should have 4 params, got: {:?}", params);
+    assert_eq!(
+        params.len(),
+        4,
+        "prefixed nested should have 4 params, got: {:?}",
+        params
+    );
 
-    assert!(params.iter().any(|p| p["name"] == "pageable.page" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "pageable.size" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "pageable.sort" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "q" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "pageable.page" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "pageable.size" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "pageable.sort" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "q" && p["in"] == "query"));
 }
 
 #[r2e::test]
@@ -816,12 +837,25 @@ async fn test_openapi_custom_prefix_params() {
         .as_array()
         .expect("GET /nested/custom-prefix should have parameters");
 
-    assert_eq!(params.len(), 4, "custom prefix should have 4 params, got: {:?}", params);
+    assert_eq!(
+        params.len(),
+        4,
+        "custom prefix should have 4 params, got: {:?}",
+        params
+    );
 
-    assert!(params.iter().any(|p| p["name"] == "p.page" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "p.size" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "p.sort" && p["in"] == "query"));
-    assert!(params.iter().any(|p| p["name"] == "q" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "p.page" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "p.size" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "p.sort" && p["in"] == "query"));
+    assert!(params
+        .iter()
+        .any(|p| p["name"] == "q" && p["in"] == "query"));
 }
 
 // ─── NormalizePath trailing-slash tests ───

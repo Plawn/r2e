@@ -28,7 +28,7 @@ use r2e_test::TestApp;
 #[tokio::test]
 async fn users_are_persisted() {
     let pg = DevPostgres::shared().await;
-    let app = TestApp::boot_with(my_app::app, |b| {
+    let app = TestApp::boot_with::<my_app::MyApp>(|b| {
         b.override_config_value("app.database.url", pg.url())
     })
     .await;

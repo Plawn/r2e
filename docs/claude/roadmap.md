@@ -140,6 +140,21 @@ Fixed across P1–P5 (P1 semantics → P2 bugs → P3/P4 throughput → P5 micro
 only P4.4 deferred. Note the breaking `request`/`respond` API change. Plan and
 file:line evidence live in `docs/claude/eventbus-perf.md`.
 
+## W9 — `App` trait canonicalization (Tasker #667) — follow-ups
+
+The single canonical app-declaration landed: `impl App for MyApp` (`setup`/`build`)
+launched via `r2e::launch::<A>()`, replacing the inline-main / blueprint-fn /
+`app_with_env` / `#[r2e::main]`-with-param zoo; `with_config` → `override_config`
+(test-harness in-memory stash — no longer dev-reload plumbing; `build` re-runs
+per patch and re-reads `application.yaml` from disk). Docs, `llm.txt`, and CLI
+scaffolding are aligned.
+Remaining:
+- Canonicalize the remaining examples (microservice, postgres, …) to the `App`
+  trait (example-app already migrated).
+- Phase 2: pin previous `BeanContext` instances across hot-patches so **all**
+  bean state survives (not just `Env`) — validate Subsecond vtable semantics
+  before relying on it.
+
 ## Tech debt (deferred, low priority)
 
 - **Event bus perf** (2026-03 audit): superseded by W8 — the two still-

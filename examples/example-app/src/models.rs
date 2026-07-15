@@ -1,6 +1,6 @@
+use garde::Validate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use garde::Validate;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {

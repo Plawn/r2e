@@ -149,8 +149,7 @@ async fn test_consumer_method_invoked() {
 #[r2e::test]
 async fn test_consumer_receives_correct_data() {
     let event_bus = LocalEventBus::new();
-    let received: Arc<tokio::sync::Mutex<Option<String>>> =
-        Arc::new(tokio::sync::Mutex::new(None));
+    let received: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
     let builder = AppBuilder::new()
         .provide(event_bus.clone())
         .provide(received.clone())

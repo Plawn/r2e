@@ -22,8 +22,14 @@ impl UserService {
     fn new() -> Self {
         Self {
             users: vec![
-                User { id: 1, name: "Alice".into() },
-                User { id: 2, name: "Bob".into() },
+                User {
+                    id: 1,
+                    name: "Alice".into(),
+                },
+                User {
+                    id: 2,
+                    name: "Bob".into(),
+                },
             ],
         }
     }
@@ -51,10 +57,7 @@ impl MixedTestController {
 
     /// Protected endpoint — requires JWT.
     #[get("/me")]
-    async fn me(
-        &self,
-        #[inject(identity)] user: AuthenticatedUser,
-    ) -> Json<serde_json::Value> {
+    async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<serde_json::Value> {
         Json(serde_json::json!({
             "sub": user.sub,
             "email": user.email,
@@ -64,19 +67,13 @@ impl MixedTestController {
     /// Protected endpoint with roles.
     #[get("/admin")]
     #[roles("admin")]
-    async fn admin_only(
-        &self,
-        #[inject(identity)] _user: AuthenticatedUser,
-    ) -> Json<Vec<User>> {
+    async fn admin_only(&self, #[inject(identity)] _user: AuthenticatedUser) -> Json<Vec<User>> {
         Json(self.user_service.list())
     }
 
     /// Optional identity — works with or without JWT.
     #[get("/whoami")]
-    async fn whoami(
-        &self,
-        #[inject(identity)] user: Option<AuthenticatedUser>,
-    ) -> Json<String> {
+    async fn whoami(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> Json<String> {
         match user {
             Some(u) => Json(format!("Hello, {}", u.sub)),
             None => Json("Hello, anonymous".to_string()),
@@ -90,7 +87,8 @@ async fn setup() -> (TestApp, TestJwt) {
 
     let app = TestApp::from_builder(
         AppBuilder::new()
-            .with_config(config)
+            .override_config(config)
+            .load_config::<()>()
             .provide(UserService::new())
             .provide(Arc::new(jwt.claims_validator()))
             .build_state()
@@ -118,11 +116,7 @@ async fn test_public_endpoint_no_token() {
 async fn test_protected_endpoint_with_token() {
     let (app, jwt) = setup().await;
     let token = jwt.token_with_claims("user-42", &["user"], Some("test@example.com"));
-    let resp = app
-        .get("/api/me")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/api/me").bearer(&token).send().await;
     resp.assert_ok();
     let body: serde_json::Value = resp.json();
     assert_eq!(body["sub"], "user-42");
@@ -139,11 +133,7 @@ async fn test_protected_endpoint_no_token() {
 async fn test_optional_identity_with_token() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-42", &["user"]);
-    let resp = app
-        .get("/api/whoami")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/api/whoami").bearer(&token).send().await;
     resp.assert_ok();
     let text: String = resp.json();
     assert_eq!(text, "Hello, user-42");
@@ -173,11 +163,7 @@ async fn test_optional_identity_invalid_token() {
 async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
-    let resp = app
-        .get("/api/admin")
-        .bearer(&token)
-        .send()
-        .await;
+    let resp = app.get("/api/admin").bearer(&token).send().await;
     resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
