@@ -126,6 +126,35 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
         Vec::new()
     }
 
+    /// Fill the core's hidden decorator slot from the resolved bean graph.
+    ///
+    /// Called by `register_controller()` **once**, right after `construct`,
+    /// before scheduled tasks are built and before any consumer or direct call
+    /// can fire. The generated impl (for controllers whose `#[scheduled]` /
+    /// `#[consumer]` methods carry `#[intercept(...)]`) delegates to the core's
+    /// [`BeanDecoFill`](crate::decorator::BeanDecoFill) impl; the slot's
+    /// `OnceLock` makes the fill first-write-wins, so repeated calls are no-ops.
+    /// The default implementation is a no-op (no intercepted transverse methods).
+    fn fill_decos(_core: &std::sync::Arc<Self>, _ctx: &crate::beans::BeanContext) {}
+
+    /// Run this controller core's `#[post_construct]` hooks.
+    ///
+    /// Queued at `register_controller()` and awaited at startup **before**
+    /// consumer registrations (mirroring bean `#[post_construct]`, which runs
+    /// during `build_state()` before subscribers). The generated impl delegates
+    /// to the core's [`PostConstruct`](crate::beans::PostConstruct) impl; the
+    /// default returns `Ok(())`. An `Err` fails startup.
+    fn post_construct(
+        _core: std::sync::Arc<Self>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+                + Send,
+        >,
+    > {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Validate all config requirements declared on the controller.
     ///
     /// This covers both `#[config("key")]` individual fields and

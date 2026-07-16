@@ -90,6 +90,13 @@ pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
+/// A queued controller-core `#[post_construct]` future, awaited at startup
+/// before consumer registrations. State-free (the future already captures the
+/// core `Arc`), so — unlike [`ConsumerReg`] — it carries no `T`.
+type PostConstructReg = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
+>;
+
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
 
 /// A meta consumer that drains typed metadata from the registry and returns
@@ -258,6 +265,9 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     meta_registry: MetaRegistry,
     meta_consumers: Vec<MetaConsumer<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
+    /// Controller-core `#[post_construct]` futures, awaited at startup before
+    /// `consumer_registrations`.
+    post_construct_registrations: Vec<PostConstructReg>,
     /// Serve hooks from plugins (called when server starts).
     /// Tasks already capture their state, so only the token is needed.
     serve_hooks: Vec<ServeHook>,

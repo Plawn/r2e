@@ -1,0 +1,5 @@
+error: #[post_construct] method must take only `&self` — no additional parameters
+  --> compile-fail/controller_post_construct_params.rs:14:5
+   |
+14 |     async fn init(&self, _extra: u32) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

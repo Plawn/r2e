@@ -277,6 +277,28 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   `docs/claude/beans-di.md` for the full DX (literal rewrite,
   outside-the-impl limitation).
 
+- **Controller `#[consumer]` interception** (W10 phase 3): the bean-level
+  `#[intercept]` support is now the **shared** path for controllers too — a
+  controller's `#[consumer]` methods (in the `#[routes]` impl) accept
+  method-level `#[intercept(...)]`, plus an impl-level `#[intercept(...)]` on the
+  `#[routes]` block that wraps every `#[scheduled]`+`#[consumer]` method
+  (impl-level outermost, then method-level — same order as bean and
+  controller-level interceptors). Both fan-out subscribers and request-reply
+  responders are covered (`Interceptor::around` is generic over `R`, so the
+  reply flows through). Direct in-code calls on a registered core self-intercept
+  too (the dispatch wrapper reads the core's `DecoSlot`, filled once by
+  `Controller::fill_decos` at `register_controller`) — like scheduled methods; a
+  hand-built `from_context` core that never went through registration has an
+  empty slot and runs undecorated. Each spec's `Deps` is folded into the
+  controller's registration deps, so a missing decorator bean is a compile error
+  at `.register_controller`. `#[routes]` emits this through the same
+  `codegen/transverse.rs` machinery as `#[bean]` ("the controller core IS a
+  bean"); the only per-host differences are the impl target (`Arc<Core>` vs a
+  bean value) and the slot type (`DecoSlot` clones-empty vs the bean's
+  clone-sharing `SharedDecoSlot`). New controller compile errors (previously
+  silently ignored): `#[scheduled]` + `#[consumer]` on one method; `#[intercept]`
+  on a plain (non-route/`#[scheduled]`/`#[consumer]`) method.
+
 - **Module controllers' decorator deps ARE compile-checked** (since the
   post-Phase-6 `EndpointDeps` carrier, formerly `ControllerDeps`): they
   register through the unchecked backend, but the module-scope check folds

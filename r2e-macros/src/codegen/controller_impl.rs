@@ -4,7 +4,8 @@ use proc_macro2::TokenStream;
 
 use quote::{format_ident, quote};
 
-use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
+use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
+use crate::crate_path::r2e_core_path;
 use crate::routes_parsing::RoutesImplDef;
 use crate::type_utils::type_last_segment_is;
 
@@ -33,8 +34,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
-    let register_consumers_fn = generate_consumer_registrations(def);
-    let (scheduled_deco_items, scheduled_tasks_fn) = generate_scheduled_tasks(def, name);
+    // Off-request (transverse) wiring: ScheduledSource / EventSubscriber /
+    // BeanDecoFill / PostConstruct impls (module scope) + the Controller method
+    // overrides that delegate to them.
+    let (transverse_items, transverse_fns) = generate_transverse(def, name);
 
     let has_fallback = def.route_methods.iter().any(|rm| rm.is_fallback);
 
@@ -161,10 +164,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     }
 
     quote! {
-        // Scheduled-method decorator sets + their container (module scope:
-        // the container type is downcast both in the method bodies and in
-        // `scheduled_tasks_boxed`).
-        #scheduled_deco_items
+        // Transverse decorator sets + container/fill impl and the
+        // ScheduledSource/EventSubscriber/PostConstruct impls (module scope:
+        // the container type is downcast in the intercepted method bodies).
+        #transverse_items
 
         #fallback_prefix_assert
 
@@ -204,9 +207,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 #(#register_meta_stmts)*
             }
 
-            #register_consumers_fn
-
-            #scheduled_tasks_fn
+            #transverse_fns
 
             fn validate_config(
                 __config: &#krate::config::R2eConfig,
@@ -789,211 +790,33 @@ fn extract_body_type_info(ty: &syn::Type) -> Option<BodyExtractor> {
     None
 }
 
-/// Generate consumer registration function.
-fn generate_consumer_registrations(def: &RoutesImplDef) -> TokenStream {
-    if def.consumer_methods.is_empty() {
-        return quote! {};
-    }
-
-    let events_krate = r2e_events_path();
-    let consumer_registrations: Vec<_> = def
-        .consumer_methods
-        .iter()
-        .map(|cm| {
-            let bus_field = format_ident!("{}", cm.bus_field);
-            let event_type = &cm.event_type;
-            let fn_name = &cm.fn_item.sig.ident;
-            let controller_name = &def.controller_name;
-
-            // Responder (non-`()` return): register via `EventBus::respond`.
-            // The method's return value IS the reply. `respond` accepts a
-            // single handler and no fan-out options — parsing has already
-            // rejected topic/deserializer/filter/retry/dlq here.
-            if let crate::types::ConsumerKind::Responder { resp_type, fallible } = &cm.kind {
-                let reply_map = if *fallible {
-                    quote! { __reply }
-                } else {
-                    quote! {
-                        ::core::result::Result::<#resp_type, ::std::string::String>::Ok(__reply)
-                    }
-                };
-                return quote! {
-                    {
-                        let __event_bus = __core.#bus_field.clone();
-                        let __responder_core = __core.clone();
-                        let __handle = #events_krate::EventBus::respond::<#event_type, #resp_type, _, _, _>(
-                            &__event_bus,
-                            move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                                let __ctrl = __responder_core.clone();
-                                async move {
-                                    let __reply = __ctrl.#fn_name(__envelope.event).await;
-                                    #reply_map
-                                }
-                            },
-                        ).await;
-                        if let Err(__e) = __handle {
-                            eprintln!("[r2e] Failed to register responder: {__e}");
-                        }
-                    }
-                };
-            }
-
-            // Optional: register topic before subscribe
-            let register_topic = cm.topic.as_ref().map(|topic_str| {
-                quote! {
-                    #events_krate::EventBus::register_topic::<#event_type>(&__event_bus, #topic_str).await;
-                }
-            });
-
-            // Choose subscribe vs subscribe_with_deserializer
-            let subscribe_call = if let Some(ref deser_fn) = cm.deserializer {
-                let deser_ident = format_ident!("{}", deser_fn);
-                quote! {
-                    {
-                        let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(#controller_name::#deser_ident);
-                        let __consumer_core = __core.clone();
-                        #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__event_bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                            let __ctrl = __consumer_core.clone();
-                            async move {
-                                let __result = __ctrl.#fn_name(__envelope.event).await;
-                                ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                            }
-                        }).await
-                    }
-                }
-            } else {
-                quote! {
-                    {
-                        let __consumer_core = __core.clone();
-                        #events_krate::EventBus::subscribe(&__event_bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                            let __ctrl = __consumer_core.clone();
-                            async move {
-                                let __result = __ctrl.#fn_name(__envelope.event).await;
-                                ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                            }
-                        }).await
-                    }
-                }
-            };
-
-            // Build optional filter
-            let has_filter = cm.filter.is_some();
-            let filter_expr = if let Some(ref filter_fn) = cm.filter {
-                let filter_ident = format_ident!("{}", filter_fn);
-                quote! {
-                    Some(std::sync::Arc::new({
-                        let __filter_core = __core.clone();
-                        move |__meta: &#events_krate::EventMetadata| -> bool {
-                            __filter_core.#filter_ident(__meta)
-                        }
-                    }) as #events_krate::EventFilter)
-                }
-            } else {
-                quote! { None }
-            };
-
-            // Build optional retry policy
-            let has_retry = cm.retry.is_some();
-            let retry_expr = if let Some(max_retries) = cm.retry {
-                if let Some(ref dlq_topic) = cm.dlq {
-                    quote! {
-                        Some(#events_krate::RetryPolicy::new(#max_retries).with_dlq(#dlq_topic))
-                    }
-                } else {
-                    quote! {
-                        Some(#events_krate::RetryPolicy::new(#max_retries))
-                    }
-                }
-            } else {
-                quote! { None }
-            };
-
-            // Generate configure_handler call if needed
-            let configure_handler = if has_filter || has_retry {
-                quote! {
-                    if let Ok(ref __h) = __handle {
-                        #events_krate::EventBus::configure_handler::<#event_type>(
-                            &__event_bus_ref,
-                            __h.id(),
-                            #filter_expr,
-                            #retry_expr,
-                        ).await;
-                    }
-                }
-            } else {
-                quote! {}
-            };
-
-            quote! {
-                {
-                    let __event_bus = __core.#bus_field.clone();
-                    let __event_bus_ref = __event_bus.clone();
-                    #register_topic
-                    let __handle = #subscribe_call;
-                    #configure_handler
-                    if let Err(__e) = __handle {
-                        eprintln!("[r2e] Failed to subscribe consumer: {__e}");
-                    }
-                }
-            }
-        })
-        .collect();
-
-    let state_ident = super::handlers::state_generic();
-    quote! {
-        fn register_consumers(
-            _state: #state_ident,
-            __core: ::std::sync::Arc<Self>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-            Box::pin(async move {
-                #(#consumer_registrations)*
-            })
-        }
-    }
-}
-
-/// Generate scheduled tasks function.
+/// Generate the off-request (transverse) wiring for a controller core.
 ///
-/// Note: Scheduling types (ScheduledTaskDef, ScheduleConfig, ScheduledResult, ScheduledTask) live in
-/// `r2e-scheduler`, not `r2e-core`. The macro generates code referencing the
-/// scheduler crate. If users use `#[scheduled]`, they need `r2e-scheduler` as a dep.
+/// Emits, at module scope, the decorator sets + container + `BeanDecoFill` for
+/// intercepted `#[scheduled]`/`#[consumer]` methods, plus the `ScheduledSource`
+/// / `EventSubscriber` impls (for `Arc<Core>` — cores live behind one `Arc` and
+/// may not be `Clone`, so the task/consumer closures clone the `Arc`) and the
+/// `PostConstruct` impl (for the core). Also returns the `Controller` method
+/// overrides (`register_consumers`, `scheduled_tasks_boxed`, `fill_decos`,
+/// `post_construct`) that delegate to those impls — each emitted only when the
+/// controller actually has the relevant methods, so the trait defaults apply
+/// otherwise.
 ///
-/// Tasks capture the state at creation time. They are double-boxed:
-/// 1. `Box<dyn ScheduledTask>` - the trait object
-/// 2. `Box<dyn Any + Send>` - for type erasure in core
-///
-/// This allows the scheduler to downcast back to `Box<dyn ScheduledTask>` and call `start()`.
-///
-/// `#[intercept(...)]` sites (controller-level first, then method-level) are
-/// built once here, from the retained bean context — same
-/// `DecoratorSpec::build` path as route decorators, so bean-reading config
-/// specs work and their `Deps` are folded into `EndpointDeps`. The built
-/// sets go into the core's hidden `DecoSlot` (one container struct per
-/// controller): intercepted scheduled methods read the slot in their own
-/// dispatch wrapper (see `wrapping.rs` — sync sources are promoted to
-/// `async fn` there), so direct in-code calls run the chain too, and the
-/// task closure is always a bare awaited call.
-///
-/// Returns `(module-scope items, trait fn)` — the sets and their container
-/// are module-scope because the method bodies downcast the slot by the
-/// container type.
-fn generate_scheduled_tasks(
-    def: &RoutesImplDef,
-    name: &syn::Ident,
-) -> (TokenStream, TokenStream) {
-    if def.scheduled_methods.is_empty() {
-        return (quote! {}, quote! {});
-    }
-
+/// The container + slot are the same `sched_container_ident` /
+/// `sched_field_ident` the dispatch wrappers in `wrapping.rs` read, so direct
+/// in-code calls run the chain too.
+fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, TokenStream) {
     let krate = r2e_core_path();
-    let sched_krate = r2e_scheduler_path();
     let state_ident = super::handlers::state_generic();
-    let controller_name_str = name.to_string();
-    let container = super::decorators::sched_container_ident(name);
+    let owner_name = name.to_string();
 
-    // Per-method decorator sets (module-scope hidden struct + ctor each).
     let mut module_items: Vec<TokenStream> = Vec::new();
-    let mut deco_sets: Vec<Option<super::decorators::DecoSet>> = Vec::new();
+    // One container field per intercepted transverse method (scheduled OR
+    // consumer) — drives the container struct + fill impl.
+    let mut deco_fields: Vec<DecoFieldDef> = Vec::new();
+
+    // ── Scheduled decorator sets ──
+    let mut sched_sets: Vec<Option<super::decorators::DecoSet>> = Vec::new();
     for sm in &def.scheduled_methods {
         let intercept_exprs: Vec<&syn::Expr> = def
             .controller_intercepts
@@ -1009,117 +832,161 @@ fn generate_scheduled_tasks(
             quote! {},
         );
         module_items.push(items);
-        deco_sets.push(set);
-    }
-
-    // The container: one field per intercepted scheduled method. Filled into
-    // the core's DecoSlot at registration; absent entirely when no scheduled
-    // method has interceptors.
-    let intercepted: Vec<(&crate::types::ScheduledMethod, &super::decorators::DecoSet)> = def
-        .scheduled_methods
-        .iter()
-        .zip(deco_sets.iter())
-        .filter_map(|(sm, set)| set.as_ref().map(|s| (sm, s)))
-        .collect();
-
-    let slot_fill = if intercepted.is_empty() {
-        quote! {}
-    } else {
-        let container_fields: Vec<TokenStream> = intercepted
-            .iter()
-            .map(|(sm, set)| {
-                let field = super::decorators::sched_field_ident(&sm.fn_item.sig.ident);
-                let ty = set.ty();
-                quote! { #field: #ty }
-            })
-            .collect();
-        module_items.push(quote! {
-            #[allow(non_camel_case_types)]
-            #[doc(hidden)]
-            struct #container {
-                #(#container_fields,)*
-            }
-        });
-
-        let field_inits: Vec<TokenStream> = intercepted
-            .iter()
-            .map(|(sm, set)| {
-                let field = super::decorators::sched_field_ident(&sm.fn_item.sig.ident);
-                let ctor = &set.ctor_ident;
-                quote! { #field: #ctor(__ctx) }
-            })
-            .collect();
-        quote! {
-            __core.__r2e_decos.fill(#container {
-                #(#field_inits,)*
+        if let Some(ref s) = set {
+            deco_fields.push(DecoFieldDef {
+                field: super::decorators::sched_field_ident(&sm.fn_item.sig.ident),
+                set_ty: s.ty().clone(),
+                ctor: s.ctor_ident.clone(),
             });
         }
-    };
+        sched_sets.push(set);
+    }
 
-    let task_defs: Vec<TokenStream> = def
-        .scheduled_methods
-        .iter()
-        .zip(deco_sets.iter())
-        .map(|(sm, deco_set)| {
-            let fn_name = &sm.fn_item.sig.ident;
-            let fn_name_str = fn_name.to_string();
-            let task_name =
-                super::scheduled::task_name(&sm.config, &controller_name_str, &fn_name_str);
-
-            let schedule_expr = super::scheduled::schedule_config_expr(&sm.config, &sched_krate);
-            let overlap_expr = super::scheduled::overlap_policy_expr(sm.config.overlap, &sched_krate);
-
-            // Intercepted methods self-intercept in their dispatch wrapper
-            // (slot lookup there; sync sources are promoted to `async fn`),
-            // so the task closure is a bare call — awaited whenever the
-            // emitted method is async (source-async or promoted).
-            let is_async = sm.fn_item.sig.asyncness.is_some();
-            let result_expr = if is_async || deco_set.is_some() {
-                quote! { __ctrl.#fn_name().await }
-            } else {
-                quote! { __ctrl.#fn_name() }
-            };
-
-            quote! {
-                {
-                    let __task_core = __core.clone();
-                    let __task_def = #sched_krate::ScheduledTaskDef {
-                        name: #task_name.to_string(),
-                        schedule: #schedule_expr,
-                        overlap: #overlap_expr,
-                        // The controller core (an `Arc`) is captured directly, so
-                        // the scheduler never clones the app state per tick.
-                        state: (),
-                        task: Box::new(move |(): ()| {
-                            let __ctrl = __task_core.clone();
-                            Box::pin(async move {
-                                #sched_krate::ScheduledResult::log_if_err(
-                                    #result_expr,
-                                    #task_name,
-                                );
-                            })
-                        }),
-                    };
-                    // Double-box: first as trait object, then as Any for type erasure
-                    let __boxed_task: Box<dyn #sched_krate::ScheduledTask> = Box::new(__task_def);
-                    Box::new(__boxed_task) as Box<dyn std::any::Any + Send>
-                }
-            }
-        })
-        .collect();
-
-    let module_items = quote! { #(#module_items)* };
-    let trait_fn = quote! {
-        fn scheduled_tasks_boxed(
-            __state: &#state_ident,
-            __core: ::std::sync::Arc<Self>,
-            __ctx: &#krate::beans::BeanContext,
-        ) -> Vec<Box<dyn std::any::Any + Send>> {
-            #slot_fill
-            vec![#(#task_defs),*]
+    // ── Consumer decorator sets ──
+    for cm in &def.consumer_methods {
+        let intercept_exprs: Vec<&syn::Expr> = def
+            .controller_intercepts
+            .iter()
+            .chain(cm.intercept_fns.iter())
+            .collect();
+        let (items, set) = super::decorators::generate_named_deco_items(
+            name,
+            "Cons",
+            &cm.fn_item.sig.ident,
+            &[],
+            &intercept_exprs,
+            quote! {},
+        );
+        module_items.push(items);
+        if let Some(ref s) = set {
+            deco_fields.push(DecoFieldDef {
+                field: super::decorators::sched_field_ident(&cm.fn_item.sig.ident),
+                set_ty: s.ty().clone(),
+                ctor: s.ctor_ident.clone(),
+            });
         }
-    };
-    (module_items, trait_fn)
+    }
+
+    let has_decos = !deco_fields.is_empty();
+
+    // ── Container + BeanDecoFill for the core (slot = the `DecoSlot` field) ──
+    if has_decos {
+        let container = super::decorators::sched_container_ident(name);
+        let slot_access = quote! { self.__r2e_decos };
+        module_items.push(transverse::deco_container_and_fill(
+            &container,
+            &quote! { #name },
+            &slot_access,
+            &deco_fields,
+        ));
+    }
+
+    // ── PostConstruct impl for the core ──
+    if !def.post_construct_methods.is_empty() {
+        module_items.push(transverse::post_construct_impl(
+            &quote! { #name },
+            &def.post_construct_methods,
+        ));
+    }
+
+    // ── Controller method overrides ──
+    //
+    // A controller core is not a legal `ScheduledSource`/`EventSubscriber` impl
+    // target (`Arc<Core>` breaks the orphan rule, and the bare core is not
+    // `Clone`), so the task-def / subscribe-block bodies are embedded directly
+    // in the overrides, cloning the passed `Arc<Self>` core.
+    let mut controller_fns: Vec<TokenStream> = Vec::new();
+
+    if !def.consumer_methods.is_empty() {
+        let consumers: Vec<ConsumerMethodDef> = def
+            .consumer_methods
+            .iter()
+            .map(|cm| ConsumerMethodDef {
+                bus_field: format_ident!("{}", cm.bus_field),
+                event_type: cm.event_type.clone(),
+                fn_name: cm.fn_item.sig.ident.clone(),
+                kind: cm.kind.clone(),
+                topic: cm.topic.clone(),
+                deserializer: cm.deserializer.clone(),
+                filter: cm.filter.clone(),
+                retry: cm.retry,
+                dlq: cm.dlq.clone(),
+            })
+            .collect();
+        // Custom `deserializer` assoc fns live on the concrete core.
+        let blocks =
+            transverse::event_subscribe_blocks(&quote! { __core }, &quote! { #name }, &consumers);
+        controller_fns.push(quote! {
+            fn register_consumers(
+                _state: #state_ident,
+                __core: ::std::sync::Arc<Self>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                Box::pin(async move {
+                    #(#blocks)*
+                })
+            }
+        });
+    }
+
+    if !def.scheduled_methods.is_empty() {
+        let methods: Vec<ScheduledSourceMethod> = def
+            .scheduled_methods
+            .iter()
+            .zip(sched_sets.iter())
+            .map(|(sm, set)| ScheduledSourceMethod {
+                fn_name: sm.fn_item.sig.ident.clone(),
+                config: sm.config.clone(),
+                // Intercepted methods self-intercept in their dispatch wrapper
+                // (sync sources promoted to `async fn`), so the emitted call is
+                // awaited when the source is async OR it is intercepted.
+                emitted_async: sm.fn_item.sig.asyncness.is_some() || set.is_some(),
+            })
+            .collect();
+        let task_defs = transverse::scheduled_task_defs(&quote! { __core }, &owner_name, &methods);
+        // On the manual (test) path `scheduled_tasks_boxed` is called without a
+        // prior `register_controller`, so fill the slot here too before building
+        // tasks. Registration already filled it via `fill_decos`; the slot's
+        // `OnceLock` makes the repeat a no-op. Emitted only when a slot exists.
+        let slot_fill = if has_decos {
+            quote! {
+                #krate::BeanDecoFill::__r2e_fill_decos(&*__core, __ctx);
+            }
+        } else {
+            quote! {}
+        };
+        controller_fns.push(quote! {
+            fn scheduled_tasks_boxed(
+                _state: &#state_ident,
+                __core: ::std::sync::Arc<Self>,
+                __ctx: &#krate::beans::BeanContext,
+            ) -> Vec<Box<dyn std::any::Any + Send>> {
+                #slot_fill
+                vec![#(#task_defs),*]
+            }
+        });
+    }
+
+    if has_decos {
+        controller_fns.push(quote! {
+            fn fill_decos(__core: &::std::sync::Arc<Self>, __ctx: &#krate::beans::BeanContext) {
+                #krate::BeanDecoFill::__r2e_fill_decos(&**__core, __ctx);
+            }
+        });
+    }
+
+    if !def.post_construct_methods.is_empty() {
+        controller_fns.push(quote! {
+            fn post_construct(
+                __core: ::std::sync::Arc<Self>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> {
+                Box::pin(async move {
+                    #krate::beans::PostConstruct::post_construct(&*__core).await
+                })
+            }
+        });
+    }
+
+    (quote! { #(#module_items)* }, quote! { #(#controller_fns)* })
 }
 
 fn generate_sse_route_metadata(

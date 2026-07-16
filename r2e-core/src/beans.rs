@@ -218,7 +218,13 @@ pub trait Producer: Send + 'static {
 #[cfg(feature = "dev-reload")]
 pub type BeanFingerprints = Vec<(TypeId, &'static str, u64)>;
 
-pub trait PostConstruct: Clone + Send + Sync + 'static {
+/// `Clone` is **not** a supertrait: a bean's post-construct hook is registered
+/// via [`BeanRegistry::register_post_construct`] /
+/// [`register_provided_post_construct`](BeanRegistry::register_provided_post_construct)
+/// (which pull the bean by value from the graph, so they bound `Clone` there),
+/// while a controller core — which is not `Clone` — impls this trait too and is
+/// run from its own `Arc` at startup.
+pub trait PostConstruct: Send + Sync + 'static {
     fn post_construct(&self) -> crate::lifecycle::LifecycleFuture<'_>;
 }
 
@@ -835,7 +841,7 @@ impl BeanRegistry {
     ///
     /// Finds the last `BeanRegistration` matching `T`'s `TypeId` and attaches
     /// the post-construct callback. Called from generated `after_register`.
-    pub fn register_post_construct<T: PostConstruct>(&mut self) {
+    pub fn register_post_construct<T: PostConstruct + Clone>(&mut self) {
         let tid = TypeId::of::<T>();
         if let Some(reg) = self.beans.iter_mut().rev().find(|r| r.type_id == tid) {
             reg.post_construct = Some(Box::new(|ctx: BeanContext| {
@@ -857,7 +863,7 @@ impl BeanRegistry {
     /// so a pinned override is honoured — and runs during
     /// [`resolve`](Self::resolve), **after** every factory-bean post-construct,
     /// through the same `BeanError::PostConstruct` error path.
-    pub fn register_provided_post_construct<T: PostConstruct>(&mut self) {
+    pub fn register_provided_post_construct<T: PostConstruct + Clone>(&mut self) {
         self.provided_post_constructs.push(Box::new(|ctx: BeanContext| {
             Box::pin(async move {
                 let bean: T = ctx.get();
@@ -920,7 +926,7 @@ impl BeanRegistry {
     /// Idempotent per type (default/override registers twice, fills once);
     /// pinning the bean itself skips registration, so the slot stays empty and
     /// methods run undecorated — same as a skipped `#[post_construct]`.
-    pub fn register_deco_fill<T: crate::decorator::BeanDecoFill>(&mut self) {
+    pub fn register_deco_fill<T: crate::decorator::BeanDecoFill + Clone>(&mut self) {
         let tid = TypeId::of::<T>();
         if self.deco_fills.iter().any(|(t, _)| *t == tid) {
             return;

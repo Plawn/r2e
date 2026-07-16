@@ -52,6 +52,9 @@ pub struct ConsumerMethod {
     /// Whether the method is a plain fan-out subscriber (`-> ()` /
     /// `-> Result<(), E>`) or a request-reply responder (non-`()` return).
     pub kind: ConsumerKind,
+    /// Method-level `#[intercept(...)]` sites. Controller-level intercepts are
+    /// prepended (outermost) at codegen time, mirroring the scheduled path.
+    pub intercept_fns: Vec<syn::Expr>,
     pub fn_item: syn::ImplItemFn,
 }
 
@@ -60,6 +63,7 @@ pub struct ConsumerMethod {
 /// Determined from the method's return type: a `()` (or `Result<(), E>`)
 /// return is a fan-out subscriber; any other return type is a Quarkus
 /// `@ConsumeEvent`-style responder whose return value IS the reply.
+#[derive(Clone)]
 pub enum ConsumerKind {
     /// Fan-out subscriber — registered via `EventBus::subscribe`.
     Subscriber,
@@ -75,6 +79,7 @@ pub enum ConsumerKind {
     },
 }
 
+#[derive(Clone)]
 pub struct ScheduledConfig {
     /// Interval in milliseconds (parsed from integer seconds or duration string).
     pub every_ms: Option<u64>,

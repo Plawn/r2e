@@ -7,6 +7,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::codegen::transverse;
 use crate::crate_path::{r2e_core_path, r2e_executor_path};
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
@@ -83,26 +84,56 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .collect();
 
     // ── Core (off-request) methods ──
+    //
+    // `#[intercept(...)]` sets are built once from the bean context at
+    // registration (`fill_decos` → `BeanDecoFill`) and stored in the core's
+    // hidden `DecoSlot`. Intercepted scheduled/consumer methods run the chain
+    // in their own dispatch wrapper (slot lookup), so DIRECT in-code calls are
+    // intercepted too — not just scheduler ticks / event delivery. A sync
+    // scheduled source's wrapper is PROMOTED to `async fn` so the body can
+    // await the chain (DI backlog item 11).
     let consumer_fns: Vec<_> = def
         .consumer_methods
         .iter()
         .map(|cm| {
-            let f = &cm.fn_item;
-            quote! { #f }
+            let intercept_exprs: Vec<&syn::Expr> = def
+                .controller_intercepts
+                .iter()
+                .chain(cm.intercept_fns.iter())
+                .collect();
+            let event_param = cm.fn_item.sig.inputs.iter().find_map(|arg| match arg {
+                syn::FnArg::Typed(pt) => Some(pt.clone()),
+                _ => None,
+            });
+            generate_transverse_method(
+                &cm.fn_item,
+                &intercept_exprs,
+                true, // consumers are always async
+                event_param,
+                format_ident!("__r2e_cons_{}_inner", cm.fn_item.sig.ident),
+                def,
+            )
         })
         .collect();
 
-    // Scheduled methods: `#[intercept(...)]` sets are built once from the
-    // bean context inside `scheduled_tasks_boxed` (controller_impl.rs) and
-    // stored in the core's hidden `DecoSlot`. Intercepted methods run the
-    // chain in their own body (slot lookup), so DIRECT in-code calls are
-    // intercepted too — not just scheduler ticks. A sync source method gets
-    // its dispatch wrapper PROMOTED to `async fn` so the body can await the
-    // chain (DI backlog item 11).
     let scheduled_fns: Vec<TokenStream> = def
         .scheduled_methods
         .iter()
-        .map(|sm| generate_scheduled_method(sm, def))
+        .map(|sm| {
+            let intercept_exprs: Vec<&syn::Expr> = def
+                .controller_intercepts
+                .iter()
+                .chain(sm.intercept_fns.iter())
+                .collect();
+            generate_transverse_method(
+                &sm.fn_item,
+                &intercept_exprs,
+                sm.fn_item.sig.asyncness.is_some(),
+                None, // scheduled methods take only &self
+                format_ident!("__r2e_sched_{}_inner", sm.fn_item.sig.ident),
+                def,
+            )
+        })
         .collect();
 
     let async_exec_fns: Vec<TokenStream> = def
@@ -152,100 +183,53 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// Emit one scheduled method.
+/// Emit one off-request (scheduled / consumer) method, wrapping it in the
+/// interceptor dispatch shell when it has (inferable) `#[intercept]` sites.
 ///
-/// Methods with (inferable) interceptor sites split into a hidden renamed
-/// inner fn plus a dispatch wrapper: the wrapper reads the prebuilt set from
-/// the core's `DecoSlot` (filled at registration by `scheduled_tasks_boxed`)
-/// and runs the chain around the inner call, so the chain applies on every
-/// call path. An unregistered core (slot empty — e.g. a hand-built test
-/// core) runs the inner body undecorated.
+/// The wrapper reads the prebuilt set from the core's `DecoSlot` (filled at
+/// registration by `fill_decos` → `BeanDecoFill`) and runs the chain around the
+/// inner call, so the chain applies on every call path. An unregistered core
+/// (slot empty — e.g. a hand-built test core) runs the inner body undecorated.
 ///
-/// A **sync** source method's wrapper is PROMOTED to `async fn` — the chain
-/// can only run in an async body, and every direct caller already sits in an
-/// async context (handlers, consumers, tasks). The inner fn keeps the source
-/// signature; the promotion is flagged in the wrapper's rustdoc.
+/// A **sync** scheduled source's wrapper is PROMOTED to `async fn` (consumers
+/// are already async) — the chain can only run in an async body. The inner fn
+/// keeps the source signature; the promotion is flagged in the wrapper's
+/// rustdoc.
 ///
-/// Methods without interceptors and methods whose spec type is not
-/// inferable (the compile_error is emitted by the registration pass) are
-/// emitted unchanged.
-fn generate_scheduled_method(sm: &ScheduledMethod, def: &RoutesImplDef) -> TokenStream {
-    let fn_item = &sm.fn_item;
-    let is_async = fn_item.sig.asyncness.is_some();
-    let intercept_exprs: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(sm.intercept_fns.iter())
-        .collect();
-
+/// Methods without interceptors and methods whose spec type is not inferable
+/// (the compile_error is emitted by the registration pass) are emitted
+/// unchanged. Shared with the consumer path via
+/// [`transverse::intercepted_dispatch_wrapper`].
+fn generate_transverse_method(
+    fn_item: &syn::ImplItemFn,
+    intercept_exprs: &[&syn::Expr],
+    source_async: bool,
+    event_param: Option<syn::PatType>,
+    inner_name: syn::Ident,
+    def: &RoutesImplDef,
+) -> TokenStream {
     if intercept_exprs.is_empty()
         || !super::decorators::all_specs_inferable(intercept_exprs.iter().copied())
     {
         return quote! { #fn_item };
     }
 
-    let krate = r2e_core_path();
-    let fn_name = &fn_item.sig.ident;
-    let fn_name_str = fn_name.to_string();
-    let controller_name_str = def.controller_name.to_string();
-    let container = super::decorators::sched_container_ident(&def.controller_name);
-    let field = super::decorators::sched_field_ident(fn_name);
-    let intercept_fields = super::decorators::intercept_field_idents(intercept_exprs.len());
-    let inner_name = format_ident!("__r2e_sched_{}_inner", fn_name);
-
-    let mut inner_fn = fn_item.clone();
-    inner_fn.sig.ident = inner_name.clone();
-    inner_fn.attrs = vec![syn::parse_quote!(#[doc(hidden)])];
-    inner_fn.vis = syn::Visibility::Inherited;
-
-    let attrs = &fn_item.attrs;
-    let vis = &fn_item.vis;
-
-    // Async promotion: a sync source keeps a sync inner fn, but the wrapper
-    // must be async to await the chain. Direct callers get the usual
-    // "consider `.await`" diagnostics; the rustdoc note explains why.
-    let mut sig = fn_item.sig.clone();
-    let promotion_doc = if is_async {
-        quote! {}
-    } else {
-        sig.asyncness = Some(Default::default());
-        quote! {
-            #[doc = ""]
-            #[doc = "*R2E:* promoted to `async fn` by `#[routes]` — this sync `#[scheduled]` \
-                     method has `#[intercept]` sites, and the chain (which must be awaited) \
-                     runs on direct calls too. Call with `.await`."]
-        }
+    let params = transverse::DispatchWrapperParams {
+        container: super::decorators::sched_container_ident(&def.controller_name),
+        field: super::decorators::sched_field_ident(&fn_item.sig.ident),
+        // Controller cores read their `DecoSlot` field directly (not through
+        // `HasDecoSlot` — that is the bean's `SharedDecoSlot`).
+        slot_access: quote! { self.__r2e_decos },
+        inner_name,
+        owner_name_str: def.controller_name.to_string(),
+        source_async,
+        event_param,
+        intercept_count: intercept_exprs.len(),
+        origin_macro: "#[routes]",
     };
-
-    let inner_call = if is_async {
-        quote! { self.#inner_name().await }
-    } else {
-        quote! { self.#inner_name() }
-    };
-
-    let chain = super::decorators::wrap_with_deco_interceptors(
-        inner_call.clone(),
-        &fn_name_str,
-        &controller_name_str,
-        &intercept_fields,
-        &krate,
-    );
-
-    quote! {
-        #inner_fn
-
-        #(#attrs)*
-        #promotion_doc
-        #vis #sig {
-            match self.__r2e_decos.get::<#container>() {
-                Some(__decos) => {
-                    let __deco = &__decos.#field;
-                    #chain
-                }
-                None => #inner_call,
-            }
-        }
-    }
+    // Controller cores are built via `ContextConstruct`, not struct literals in
+    // this impl — no slot-field injection, so the block transform is a no-op.
+    transverse::intercepted_dispatch_wrapper(fn_item, &params, |_block| {})
 }
 
 /// Generate the inner async fn (renamed) and a synchronous wrapper that

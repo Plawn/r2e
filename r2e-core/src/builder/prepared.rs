@@ -22,6 +22,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) drain_hooks: Vec<DrainHook<T>>,
     pub(super) stop_handle: StopHandle,
     pub(super) consumer_registrations: Vec<ConsumerReg<T>>,
+    pub(super) post_construct_registrations: Vec<PostConstructReg>,
     pub(super) serve_hooks: Vec<ServeHook>,
     pub(super) plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     pub(super) plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
@@ -232,6 +233,13 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .clone();
 
         if !skip_lifecycle {
+            // Controller-core `#[post_construct]` hooks run before consumers
+            // (mirroring bean post_construct at `build_state`, before
+            // subscribers). A failure aborts startup.
+            for pc in self.post_construct_registrations {
+                pc.await.map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            }
+
             // Register event consumers
             for reg in self.consumer_registrations {
                 reg(self.state.clone()).await;

@@ -1,6 +1,6 @@
 //! Shared `#[scheduled]` codegen helpers, used by both the controller path
-//! (`controller_impl::generate_scheduled_tasks`) and the bean path
-//! (`bean_attr`'s `ScheduledSource` generation).
+//! (`controller_impl::generate_transverse`) and the bean path
+//! (`bean_attr`'s `ScheduledSource` generation), via `codegen::transverse`.
 
 use proc_macro2::TokenStream;
 use quote::quote;

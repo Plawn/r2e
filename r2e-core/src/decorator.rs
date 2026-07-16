@@ -182,9 +182,15 @@ pub trait HasDecoSlot {
 /// ([`DecoratorSpec::build`]) and fills the shared slot. Registered as a
 /// `build_state()` hook via
 /// [`BeanRegistry::register_deco_fill`](crate::beans::BeanRegistry::register_deco_fill).
-pub trait BeanDecoFill: Clone + Send + Sync + 'static {
+pub trait BeanDecoFill: Send + Sync + 'static {
     /// Build every intercepted method's decorator set from `ctx` and fill the
     /// bean's [`SharedDecoSlot`]. Called once per bean type, at registration.
+    ///
+    /// `Clone` is **not** a supertrait: a bean's fill hook is registered via
+    /// [`BeanRegistry::register_deco_fill`](crate::beans::BeanRegistry::register_deco_fill)
+    /// (which pulls the bean by value from the graph, so it bounds `Clone`
+    /// there), while a controller core — which is not `Clone` — impls this trait
+    /// too and is filled from its own `Arc` at registration.
     fn __r2e_fill_decos(&self, ctx: &BeanContext);
 }
 

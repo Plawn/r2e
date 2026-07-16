@@ -374,6 +374,24 @@ chain.
 
 Lifecycle hooks called **after the entire bean graph is resolved**. All dependencies are available when hooks fire.
 
+Since W10 phase 3 the same attribute also works on **controller** `#[routes]`
+impls (the controller core reuses the bean-level transverse machinery). The
+signature rules are identical; only the timing differs:
+
+- **Bean hooks** run inside `build_state()` — after every factory bean is
+  constructed, before subscribers/scheduled sources are drained.
+- **Controller-core hooks** run **later**, at startup during
+  `register_controller` / `build_with_consumers` (cores are built *after* the
+  bean graph, at registration), **before** that app's consumer registrations
+  begin. An `Err` aborts startup (`serve` returns `Err`; `build_with_consumers`
+  panics — same shape as a bean `#[post_construct]` failure panicking
+  `build_state()`).
+
+On controllers, `#[post_construct]` on a route / `#[scheduled]` / `#[consumer]`
+method, with extra params, or carrying `#[intercept]`, is a compile error (a
+plain lifecycle hook has no dispatch wrapper). See
+`examples/example-app/tests/controller_transverse_test.rs`.
+
 ### Constraints
 
 - Method signature: `fn name(&self)` or `async fn name(&self)` — no extra parameters.
@@ -464,7 +482,8 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `#[scheduled]` scanning + `ScheduledSource` generation, `scan_post_construct_methods` + `PostConstruct` generation)
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper codegen to the shared `codegen/transverse.rs`
+- `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper` (parameterized over impl-target type and decorator-slot access)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros

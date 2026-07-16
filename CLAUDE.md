@@ -123,7 +123,7 @@ impl UserController {
 ```
 
 **Generated items (hidden):**
-- A physical **core** struct (the source struct with request-scoped fields stripped) — holds `#[inject]` + `#[config]` fields plus a hidden `__r2e_decos: DecoSlot` (prebuilt scheduled-method interceptor sets, filled at registration), built once into an `Arc` by `register_controller()`. Cores are not literal-constructible — build via `ContextConstruct::from_context`.
+- A physical **core** struct (the source struct with request-scoped fields stripped) — holds `#[inject]` + `#[config]` fields plus a hidden `__r2e_decos: DecoSlot` (prebuilt `#[scheduled]`/`#[consumer]`-method interceptor sets, filled at registration via `Controller::fill_decos`), built once into an `Arc` by `register_controller()`. Cores are not literal-constructible — build via `ContextConstruct::from_context`. The controller core reuses the same bean-level transverse machinery (`r2e-macros/src/codegen/transverse.rs`) for `#[scheduled]`/`#[consumer]`/`#[intercept]`/`#[post_construct]` ("the controller core IS a bean").
 - `mod __r2e_meta_<Name>` — `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn validate_config()`.
 - `struct __R2eRequestData_<Name><__M>` — state-generic `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`), extracted through `FromRequestPartsVia<S, M>` (R2E-owned trait with a marker slot where bean-backed extractors park their `HasBean` index witnesses — E0207). Marker-only + infallible when there are none.
 - `struct __R2eRequest_<Name>` — the per-request façade: `{ __core: Arc<Core>, <request-scoped fields> }`, with `Deref<Target = Core>`. Route methods run on this; `self.<injected/config>` resolves through `Deref`, `self.<identity/request>` is a direct façade field.
@@ -145,7 +145,7 @@ impl UserController {
 
 **No-op attribute macros:** `#[get]`, `#[any]`, `#[fallback]`, `#[roles]`, `#[anonymous]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
 
-**`#[post_construct]`** — lifecycle hook on `#[bean]` methods. Called after the entire bean graph is resolved. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates `PostConstruct` trait impl.
+**`#[post_construct]`** — lifecycle hook on `#[bean]` methods **and on `#[routes]` controller impls**. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates a `PostConstruct` trait impl. Timing differs by host: bean hooks run inside `build_state()` (after the graph resolves, before subscribers); controller-core hooks run at startup during `register_controller`/`build_with_consumers`, **before** consumer registrations (later than bean hooks, since cores are built after the graph). An `Err` aborts startup. On controllers, `#[post_construct]` combined with a route/`#[scheduled]`/`#[consumer]` marker, or with params, or with `#[intercept]`, is a compile error.
 
 ## Detailed Reference — Read Before You Code
 

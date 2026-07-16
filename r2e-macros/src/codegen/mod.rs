@@ -1,16 +1,21 @@
 //! Code generation for the `#[routes]` attribute macro.
 //!
-//! This module is organized into four submodules:
+//! This module is organized into six submodules:
 //!
 //! - `wrapping`: Method wrapping with interceptors and transactional behavior
 //! - `handlers`: Axum handler function generation
 //! - `decorators`: Guard/interceptor decorator sets (built once from the graph)
+//! - `scheduled`: Shared `#[scheduled]` config/name/overlap emitters
+//! - `transverse`: Shared bean/controller transverse emitters (scheduled
+//!   sources, event subscribers, deco containers, dispatch wrappers,
+//!   post-construct)
 //! - `controller_impl`: Controller trait implementation generation
 
 pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 mod handlers;
 pub(crate) mod scheduled;
+pub(crate) mod transverse;
 mod wrapping;
 
 use proc_macro2::TokenStream;

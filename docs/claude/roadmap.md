@@ -155,7 +155,7 @@ Remaining:
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
   before relying on it.
 
-## W10 — Bean/controller feature unification (in progress — phases 1+2 shipped 2026-07-16)
+## W10 — Bean/controller feature unification (in progress — phases 1–3 shipped 2026-07-16)
 
 Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
 controller-only by implementation accident, not by design — `#[scheduled]`,
@@ -214,10 +214,43 @@ refactor):
    Tests: `examples/example-app/tests/bean_intercept_test.rs`, compile
    pass/fail `bean_intercept*` in `r2e-compile-tests`. Docs: beans-di.md,
    guards-interceptors.md, llm.txt.
-3. **Controller core = bean** — `#[routes]`' transverse codegen
-   (scheduled/consumer collection, interceptor wiring) delegates to the
-   bean-level machinery; `#[post_construct]` becomes valid on controllers for
-   free; delete the duplicated controller-only paths.
+3. **Controller core = bean — DONE (2026-07-16).** `#[routes]`' transverse
+   codegen delegates to the shared emitters in
+   `r2e-macros/src/codegen/transverse.rs` (extracted from `bean_attr.rs` in a
+   first byte-identical-output step, verified via `cargo expand` diff).
+   Deleted: `controller_impl.rs::generate_scheduled_tasks`,
+   `generate_consumer_registrations`, `wrapping.rs::generate_scheduled_method`
+   (~380 lines of duplication). The generated
+   `Controller::scheduled_tasks_boxed`/`register_consumers` overrides embed
+   the shared bodies cloning the `Arc<core>` — a direct
+   `impl ScheduledSource/EventSubscriber for Arc<Name>` in the user crate is
+   an orphan-rule violation (E0117), so the emitters expose the bodies
+   parameterized by an instance expression; beans still get the trait impls.
+   Deco container + `impl BeanDecoFill for Name` fills the existing `DecoSlot`
+   (slot types stay distinct per the phase-2 decision; fill is now an explicit
+   registration step via the new default-no-op `Controller::fill_decos`,
+   called once right after `construct` — required because
+   intercepted-consumers-only controllers need the fill too; the extra fill
+   inside `scheduled_tasks_boxed` is OnceLock-idempotent, kept for the manual
+   test path). **New:** `#[intercept]` on controller `#[consumer]` methods
+   (method + impl level, impl outermost, responders included, direct calls
+   intercepted; spec deps folded into `controller_deps_fold` → missing bean is
+   a compile error at `.register_controller`); `#[post_construct]` on
+   controllers (queued at registration via the new `Controller::post_construct`
+   hook + `post_construct_registrations` builder vec, runs at startup BEFORE
+   consumer registrations at both boot paths — `prepared.rs` serve propagates
+   Err, `build_with_consumers` panics; plain `build()` drops both, documented).
+   `BeanDecoFill`/`PostConstruct` lost their `Clone` supertrait (Clone moved
+   to the bean-registration call sites) so non-Clone controller cores can
+   implement them. New compile errors on controllers (previously silent):
+   `#[scheduled]`+`#[consumer]` on one method, stray `#[intercept]` on a plain
+   method, invalid `#[post_construct]` placements. Tests:
+   `examples/example-app/tests/controller_transverse_test.rs`, compile
+   pass/fail `controller_transverse*`, `controller_scheduled_consumer_conflict`,
+   `controller_post_construct_*`, `controller_stray_intercept`,
+   `consumer_intercept_missing_dep`. Docs: CLAUDE.md, beans-di.md,
+   guards-interceptors.md, subsystems.md, llm.txt. Review gate:
+   pass-with-nits, all nits applied.
 4. **Relocate `#[async_exec]`** (and evaluate `#[transactional]`) to the bean
    level; decide whether controller-only placement is kept or deprecated.
 

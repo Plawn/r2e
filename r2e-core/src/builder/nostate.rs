@@ -37,6 +37,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             meta_registry: MetaRegistry::new(),
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
+            post_construct_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -93,6 +94,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             meta_registry: self.meta_registry,
             meta_consumers: self.meta_consumers,
             consumer_registrations: self.consumer_registrations,
+            post_construct_registrations: self.post_construct_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
@@ -405,7 +407,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     b.override_bean_decorated(CleanupService::new(stub_pool))
     /// }).await
     /// ```
-    pub fn override_bean_decorated<B: crate::decorator::BeanDecoFill>(mut self, value: B) -> Self {
+    pub fn override_bean_decorated<B: crate::decorator::BeanDecoFill + Clone>(
+        mut self,
+        value: B,
+    ) -> Self {
         self.shared.bean_registry.pin_provide(value);
         self.shared.bean_registry.register_deco_fill::<B>();
         self

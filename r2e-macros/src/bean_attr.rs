@@ -4,11 +4,11 @@ use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut;
 use syn::{parse_macro_input, FnArg, ImplItem, Item, ItemImpl, ItemStruct, ReturnType, Type};
 
-use crate::codegen::decorators::{
-    deps_fold_from_base, generate_named_deco_items, intercept_field_idents,
-    wrap_with_deco_interceptors, DecoSet,
+use crate::codegen::decorators::{deps_fold_from_base, generate_named_deco_items, DecoSet};
+use crate::codegen::transverse::{
+    self, ConsumerMethodDef, DecoFieldDef, DispatchWrapperParams, ScheduledSourceMethod,
 };
-use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
+use crate::crate_path::r2e_core_path;
 use crate::extract::consumer::{
     classify_consumer_return, extract_consumer, extract_event_type_from_arc, strip_consumer_attrs,
 };
@@ -18,8 +18,7 @@ use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 use crate::types::ConsumerKind;
 use crate::type_utils::{
-    is_result_like, named_bean_newtype_ident, parse_config_field, parse_config_section_prefix,
-    parse_inject_name,
+    named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
 };
 
 /// Parsed `#[bean(...)]` arguments.
@@ -54,13 +53,6 @@ struct BeanConsumerMethod {
     fn_name: syn::Ident,
     /// Effective `#[intercept(...)]` sites (impl-level first, then method-level).
     intercept_fns: Vec<syn::Expr>,
-}
-
-/// Parsed post-construct method data from a `#[bean]` impl block.
-struct BeanPostConstructMethod {
-    fn_name: syn::Ident,
-    is_async: bool,
-    returns_result: bool,
 }
 
 /// Parsed scheduled method data from a `#[bean]` impl block.
@@ -316,7 +308,7 @@ fn generate(
         ));
     }
 
-    let pc_methods = scan_post_construct_methods(item_impl)?;
+    let pc_methods = transverse::scan_post_construct_methods(item_impl)?;
     if bean_args.lazy && !pc_methods.is_empty() {
         return Err(syn::Error::new_spanned(
             &item_impl.self_ty,
@@ -401,40 +393,20 @@ fn generate(
     let has_decos = !intercepted.is_empty();
 
     // Per-bean decorator container + BeanDecoFill impl (only when at least one
-    // method actually has an inferable interceptor set).
+    // method actually has an inferable interceptor set). The bean reaches its
+    // slot through `HasDecoSlot` (a `SharedDecoSlot`).
     let deco_fill_impl = if has_decos {
         let container = bean_deco_container_ident(&type_ident);
-        let container_fields: Vec<TokenStream2> = intercepted
+        let fields: Vec<DecoFieldDef> = intercepted
             .iter()
-            .map(|im| {
-                let field = bean_deco_field_ident(&im.fn_name);
-                let ty = im.set.ty();
-                quote! { #field: #ty }
+            .map(|im| DecoFieldDef {
+                field: bean_deco_field_ident(&im.fn_name),
+                set_ty: im.set.ty().clone(),
+                ctor: im.set.ctor_ident.clone(),
             })
             .collect();
-        let field_inits: Vec<TokenStream2> = intercepted
-            .iter()
-            .map(|im| {
-                let field = bean_deco_field_ident(&im.fn_name);
-                let ctor = &im.set.ctor_ident;
-                quote! { #field: #ctor(__ctx) }
-            })
-            .collect();
-        quote! {
-            #[allow(non_camel_case_types)]
-            #[doc(hidden)]
-            struct #container {
-                #(#container_fields,)*
-            }
-
-            impl #krate::BeanDecoFill for #self_ty {
-                fn __r2e_fill_decos(&self, __ctx: &#krate::beans::BeanContext) {
-                    <Self as #krate::HasDecoSlot>::__r2e_deco_slot(self).fill(#container {
-                        #(#field_inits,)*
-                    });
-                }
-            }
-        }
+        let slot_access = quote! { <Self as #krate::HasDecoSlot>::__r2e_deco_slot(self) };
+        transverse::deco_container_and_fill(&container, &quote! { #self_ty }, &slot_access, &fields)
     } else {
         quote! {}
     };
@@ -449,9 +421,44 @@ fn generate(
         deps_fold_from_base(base_deps_type.clone(), all_intercept_exprs.iter())
     };
 
-    let scheduled_source_impl = generate_scheduled_source_impl(self_ty, &type_ident, &scheduled_methods);
-    let subscriber_impl = generate_event_subscriber_impl(self_ty, &consumer_methods)?;
-    let post_construct_impl = generate_post_construct_impl(self_ty, &pc_methods);
+    let sched_defs: Vec<ScheduledSourceMethod> = scheduled_methods
+        .iter()
+        .map(|sm| ScheduledSourceMethod {
+            fn_name: sm.fn_name.clone(),
+            config: sm.config.clone(),
+            // Intercepted methods self-intercept in their dispatch wrapper
+            // (sync sources are promoted to `async fn`), so the emitted call is
+            // awaited whenever the source is async OR it has an inferable
+            // interceptor set (a non-inferable set already emits a
+            // compile_error and skips the wrapper — don't stack an
+            // await-on-sync error on top).
+            emitted_async: sm.is_async
+                || intercepted.iter().any(|im| im.fn_name == sm.fn_name),
+        })
+        .collect();
+    let scheduled_source_impl =
+        transverse::scheduled_source_impl(&quote! { #self_ty }, &type_ident.to_string(), &sched_defs);
+
+    let consumer_defs: Vec<ConsumerMethodDef> = consumer_methods
+        .iter()
+        .map(|cm| ConsumerMethodDef {
+            bus_field: syn::Ident::new(&cm.config.bus_field, proc_macro2::Span::call_site()),
+            event_type: cm.event_type.clone(),
+            fn_name: cm.fn_name.clone(),
+            kind: cm.kind.clone(),
+            topic: cm.config.topic.clone(),
+            deserializer: cm.config.deserializer.clone(),
+            filter: cm.config.filter.clone(),
+            retry: cm.config.retry,
+            dlq: cm.config.dlq.clone(),
+        })
+        .collect();
+    // A bean implements `EventSubscriber` for its own type, so custom
+    // `deserializer` associated fns are reached through `Self`.
+    let subscriber_impl =
+        transverse::event_subscriber_impl(&quote! { #self_ty }, &consumer_defs);
+
+    let post_construct_impl = transverse::post_construct_impl(&quote! { #self_ty }, &pc_methods);
 
     let after_register_fn = if !pc_methods.is_empty() || !scheduled_methods.is_empty() || has_decos {
         let pc_hook = (!pc_methods.is_empty())
@@ -671,152 +678,6 @@ fn scan_consumer_methods(
     Ok(consumers)
 }
 
-/// Generate `EventSubscriber` impl if any consumer methods are found.
-fn generate_event_subscriber_impl(
-    self_ty: &syn::Type,
-    consumers: &[BeanConsumerMethod],
-) -> syn::Result<TokenStream2> {
-    if consumers.is_empty() {
-        return Ok(quote! {});
-    }
-
-    let krate = r2e_core_path();
-    let events_krate = r2e_events_path();
-
-    let subscribe_blocks: Vec<_> = consumers
-        .iter()
-        .map(|cm| {
-            let bus_field = syn::Ident::new(&cm.config.bus_field, proc_macro2::Span::call_site());
-            let event_type = &cm.event_type;
-            let fn_name = &cm.fn_name;
-
-            // Responder (non-`()` return): register via `EventBus::respond`.
-            if let ConsumerKind::Responder { resp_type, fallible } = &cm.kind {
-                let reply_map = if *fallible {
-                    quote! { __reply }
-                } else {
-                    quote! { ::core::result::Result::<#resp_type, ::std::string::String>::Ok(__reply) }
-                };
-                return quote! {
-                    {
-                        let __bus = self.#bus_field.clone();
-                        let __responder = self.clone();
-                        let __handle = #events_krate::EventBus::respond::<#event_type, #resp_type, _, _, _>(
-                            &__bus,
-                            move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                                let __this = __responder.clone();
-                                async move {
-                                    let __reply = __this.#fn_name(__envelope.event).await;
-                                    #reply_map
-                                }
-                            },
-                        ).await;
-                        if let Err(__e) = __handle {
-                            eprintln!("[r2e] Failed to register responder: {__e}");
-                        }
-                    }
-                };
-            }
-
-            let register_topic = cm.config.topic.as_ref().map(|topic_str| {
-                quote! {
-                    #events_krate::EventBus::register_topic::<#event_type>(&__bus, #topic_str).await;
-                }
-            });
-
-            let subscribe_call = if let Some(ref deser_fn) = cm.config.deserializer {
-                let deser_ident = syn::Ident::new(deser_fn, proc_macro2::Span::call_site());
-                quote! {
-                    let __deser: #events_krate::backend::DeserializerFn = std::sync::Arc::new(Self::#deser_ident);
-                    #events_krate::EventBus::subscribe_with_deserializer::<#event_type, _, _>(&__bus, __deser, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                        let __this = __this.clone();
-                        async move {
-                            let __result = __this.#fn_name(__envelope.event).await;
-                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                        }
-                    }).await
-                }
-            } else {
-                quote! {
-                    #events_krate::EventBus::subscribe(&__bus, move |__envelope: #events_krate::EventEnvelope<#event_type>| {
-                        let __this = __this.clone();
-                        async move {
-                            let __result = __this.#fn_name(__envelope.event).await;
-                            ::core::convert::Into::<#events_krate::HandlerResult>::into(__result)
-                        }
-                    }).await
-                }
-            };
-
-            let has_filter = cm.config.filter.is_some();
-            let filter_expr = if let Some(ref filter_fn) = cm.config.filter {
-                let filter_ident = syn::Ident::new(filter_fn, proc_macro2::Span::call_site());
-                quote! {
-                    Some(std::sync::Arc::new({
-                        let __this_for_filter = __this_orig.clone();
-                        move |__meta: &#events_krate::EventMetadata| -> bool {
-                            __this_for_filter.#filter_ident(__meta)
-                        }
-                    }) as #events_krate::EventFilter)
-                }
-            } else {
-                quote! { None }
-            };
-
-            let has_retry = cm.config.retry.is_some();
-            let retry_expr = if let Some(max_retries) = cm.config.retry {
-                if let Some(ref dlq_topic) = cm.config.dlq {
-                    quote! { Some(#events_krate::RetryPolicy::new(#max_retries).with_dlq(#dlq_topic)) }
-                } else {
-                    quote! { Some(#events_krate::RetryPolicy::new(#max_retries)) }
-                }
-            } else {
-                quote! { None }
-            };
-
-            let configure_handler = if has_filter || has_retry {
-                quote! {
-                    if let Ok(ref __h) = __handle {
-                        #events_krate::EventBus::configure_handler::<#event_type>(
-                            &__bus_ref,
-                            __h.id(),
-                            #filter_expr,
-                            #retry_expr,
-                        ).await;
-                    }
-                }
-            } else {
-                quote! {}
-            };
-
-            quote! {
-                {
-                    let __bus = self.#bus_field.clone();
-                    let __bus_ref = __bus.clone();
-                    let __this_orig = self.clone();
-                    let __this = self.clone();
-                    #register_topic
-                    let __handle = #subscribe_call;
-                    #configure_handler
-                    if let Err(__e) = __handle {
-                        eprintln!("[r2e] Failed to subscribe consumer: {__e}");
-                    }
-                }
-            }
-        })
-        .collect();
-
-    Ok(quote! {
-        impl #krate::EventSubscriber for #self_ty {
-            fn subscribe(self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-                Box::pin(async move {
-                    #(#subscribe_blocks)*
-                })
-            }
-        }
-    })
-}
-
 /// Scan the impl block for `#[scheduled(...)]` methods.
 fn scan_scheduled_methods(
     item_impl: &ItemImpl,
@@ -862,165 +723,6 @@ fn scan_scheduled_methods(
     }
 
     Ok(methods)
-}
-
-/// Generate the `ScheduledSource` impl if any `#[scheduled]` methods are found.
-fn generate_scheduled_source_impl(
-    self_ty: &syn::Type,
-    type_ident: &syn::Ident,
-    methods: &[BeanScheduledMethod],
-) -> TokenStream2 {
-    if methods.is_empty() {
-        return quote! {};
-    }
-
-    let krate = r2e_core_path();
-    let sched_krate = r2e_scheduler_path();
-    let owner_name = type_ident.to_string();
-
-    let task_defs: Vec<TokenStream2> = methods
-        .iter()
-        .map(|sm| {
-            let fn_name = &sm.fn_name;
-            let task_name = crate::codegen::scheduled::task_name(
-                &sm.config,
-                &owner_name,
-                &fn_name.to_string(),
-            );
-            let schedule_expr =
-                crate::codegen::scheduled::schedule_config_expr(&sm.config, &sched_krate);
-            let overlap_expr =
-                crate::codegen::scheduled::overlap_policy_expr(sm.config.overlap, &sched_krate);
-
-            // Intercepted methods self-intercept in their dispatch wrapper
-            // (sync sources are promoted to `async fn`), so the emitted method
-            // is async whenever the source is async OR it is intercepted.
-            let emitted_async = sm.is_async || !sm.intercept_fns.is_empty();
-            let result_expr = if emitted_async {
-                quote! { __bean.#fn_name().await }
-            } else {
-                quote! { __bean.#fn_name() }
-            };
-
-            quote! {
-                {
-                    let __task_bean = self.clone();
-                    let __task_def = #sched_krate::ScheduledTaskDef {
-                        name: #task_name.to_string(),
-                        schedule: #schedule_expr,
-                        overlap: #overlap_expr,
-                        state: (),
-                        task: Box::new(move |(): ()| {
-                            let __bean = __task_bean.clone();
-                            Box::pin(async move {
-                                #sched_krate::ScheduledResult::log_if_err(
-                                    #result_expr,
-                                    #task_name,
-                                );
-                            })
-                        }),
-                    };
-                    let __boxed_task: Box<dyn #sched_krate::ScheduledTask> = Box::new(__task_def);
-                    Box::new(__boxed_task) as Box<dyn std::any::Any + Send>
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        impl #krate::ScheduledSource for #self_ty {
-            fn scheduled_tasks_boxed(
-                &self,
-                _ctx: &#krate::beans::BeanContext,
-            ) -> Vec<Box<dyn std::any::Any + Send>> {
-                vec![#(#task_defs),*]
-            }
-        }
-    }
-}
-
-/// Scan all `&self` methods in the impl block for `#[post_construct]`.
-fn scan_post_construct_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanPostConstructMethod>> {
-    let mut methods = Vec::new();
-
-    for item in &item_impl.items {
-        if let ImplItem::Fn(method) = item {
-            let has_self = method
-                .sig
-                .inputs
-                .iter()
-                .any(|arg| matches!(arg, FnArg::Receiver(_)));
-            if !has_self {
-                continue;
-            }
-
-            let has_attr = method
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("post_construct"));
-            if !has_attr {
-                continue;
-            }
-
-            let param_count = method.sig.inputs.len();
-            if param_count > 1 {
-                return Err(syn::Error::new_spanned(
-                    &method.sig,
-                    "#[post_construct] method must take only `&self` — no additional parameters",
-                ));
-            }
-
-            let is_async = method.sig.asyncness.is_some();
-            let returns_result = match &method.sig.output {
-                ReturnType::Default => false,
-                ReturnType::Type(_, ty) => is_result_like(ty),
-            };
-
-            methods.push(BeanPostConstructMethod {
-                fn_name: method.sig.ident.clone(),
-                is_async,
-                returns_result,
-            });
-        }
-    }
-
-    Ok(methods)
-}
-
-/// Generate `PostConstruct` impl if any post-construct methods are found.
-fn generate_post_construct_impl(
-    self_ty: &syn::Type,
-    methods: &[BeanPostConstructMethod],
-) -> TokenStream2 {
-    if methods.is_empty() {
-        return quote! {};
-    }
-
-    let krate = r2e_core_path();
-
-    let calls: Vec<TokenStream2> = methods
-        .iter()
-        .map(|m| {
-            let fn_name = &m.fn_name;
-            match (m.is_async, m.returns_result) {
-                (true, true) => quote! { self.#fn_name().await?; },
-                (true, false) => quote! { self.#fn_name().await; },
-                (false, true) => quote! { self.#fn_name()?; },
-                (false, false) => quote! { self.#fn_name(); },
-            }
-        })
-        .collect();
-
-    quote! {
-        impl #krate::beans::PostConstruct for #self_ty {
-            fn post_construct(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>> {
-                Box::pin(async move {
-                    #(#calls)*
-                    Ok(())
-                })
-            }
-        }
-    }
 }
 
 /// Find the constructor method in the impl block.
@@ -1232,91 +934,23 @@ fn emit_intercepted_method(
 ) -> TokenStream2 {
     let krate = r2e_core_path();
     let fn_name = &method.sig.ident;
-    let fn_name_str = fn_name.to_string();
-    let type_ident_str = type_ident(self_ty).to_string();
-    let container = bean_deco_container_ident(&type_ident(self_ty));
-    let field = bean_deco_field_ident(fn_name);
-    let intercept_fields = intercept_field_idents(im.intercept_fns.len());
-    let inner_name = format_ident!("__r2e_bean_{}_inner", fn_name);
-
-    // Inner fn: source body verbatim (attrs stripped), renamed & private.
-    let mut inner_fn = method.clone();
-    inner_fn.sig.ident = inner_name.clone();
-    inner_fn.attrs = strip_consumer_attrs(inner_fn.attrs)
-        .into_iter()
-        .filter(|a| {
-            !a.path().is_ident("post_construct")
-                && !a.path().is_ident("scheduled")
-                && !a.path().is_ident("intercept")
-        })
-        .collect();
-    inner_fn.attrs.push(syn::parse_quote!(#[doc(hidden)]));
-    inner_fn.vis = syn::Visibility::Inherited;
-    if has_intercepts {
-        injector.visit_block_mut(&mut inner_fn.block);
-    }
-
-    // Wrapper signature: keep vis + params + output; promote sync scheduled
-    // sources to async.
-    let vis = &method.vis;
-    let mut sig = method.sig.clone();
-    let promotion_doc = if im.source_async {
-        quote! {}
-    } else {
-        sig.asyncness = Some(Default::default());
-        quote! {
-            #[doc = ""]
-            #[doc = "*R2E:* promoted to `async fn` by `#[bean]` — this sync `#[scheduled]` \
-                     method has `#[intercept]` sites, and the chain (which must be awaited) \
-                     runs on direct calls too. Call with `.await`."]
-        }
+    let params = DispatchWrapperParams {
+        container: bean_deco_container_ident(&type_ident(self_ty)),
+        field: bean_deco_field_ident(fn_name),
+        // The bean reaches its slot through `HasDecoSlot` (a `SharedDecoSlot`).
+        slot_access: quote! { <Self as #krate::HasDecoSlot>::__r2e_deco_slot(self) },
+        inner_name: format_ident!("__r2e_bean_{}_inner", fn_name),
+        owner_name_str: type_ident(self_ty).to_string(),
+        source_async: im.source_async,
+        event_param: im.event_param.clone(),
+        intercept_count: im.intercept_fns.len(),
+        origin_macro: "#[bean]",
     };
-    // Strip wiring attrs from the wrapper's attrs.
-    let wrapper_attrs: Vec<_> = strip_consumer_attrs(method.attrs.clone())
-        .into_iter()
-        .filter(|a| {
-            !a.path().is_ident("post_construct")
-                && !a.path().is_ident("scheduled")
-                && !a.path().is_ident("intercept")
-        })
-        .collect();
-
-    // Inner call: forward the event param for consumers.
-    let arg_forward = im.event_param.as_ref().map(|pt| {
-        let pat = &pt.pat;
-        quote! { #pat }
-    });
-    // The inner fn keeps the source signature: await only when the source is
-    // async (consumers always are; a sync scheduled source is not — its
-    // wrapper is promoted, but the inner call stays sync).
-    let inner_call = if im.source_async {
-        quote! { self.#inner_name(#arg_forward).await }
-    } else {
-        quote! { self.#inner_name(#arg_forward) }
-    };
-
-    let chain = wrap_with_deco_interceptors(
-        inner_call.clone(),
-        &fn_name_str,
-        &type_ident_str,
-        &intercept_fields,
-        &krate,
-    );
-
-
-    quote! {
-        #inner_fn
-
-        #(#wrapper_attrs)*
-        #promotion_doc
-        #vis #sig {
-            match <Self as #krate::HasDecoSlot>::__r2e_deco_slot(self).get::<#container>() {
-                Some(__decos) => {
-                    let __deco = &__decos.#field;
-                    #chain
-                }
-                None => #inner_call,
-            }
+    // The struct-literal injector only runs when the impl has intercept sites
+    // (the only case that materializes the hidden slot field).
+    transverse::intercepted_dispatch_wrapper(method, &params, |block| {
+        if has_intercepts {
+            injector.visit_block_mut(block);
         }
-    }
+    })
 }

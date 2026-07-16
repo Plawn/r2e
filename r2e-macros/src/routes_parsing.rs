@@ -13,6 +13,9 @@ pub struct RoutesImplDef {
     pub consumer_methods: Vec<ConsumerMethod>,
     pub scheduled_methods: Vec<ScheduledMethod>,
     pub async_exec_methods: Vec<AsyncExecMethod>,
+    /// `#[post_construct]` lifecycle methods (bodies stay on the core impl,
+    /// recorded here to drive the `PostConstruct` impl codegen).
+    pub post_construct_methods: Vec<crate::codegen::transverse::PostConstructMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -225,6 +228,13 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller-level intercepts from impl attrs
     let controller_intercepts = extract_intercept_fns(&item.attrs)?;
 
+    // Scan `#[post_construct]` methods up front (the shared bean-side scan
+    // validates `&self` / no extra params). Their bodies still flow to the core
+    // impl below; this drives the generated `PostConstruct` impl. Done before
+    // the `item.items` loop, whose `other_methods` catch-all would otherwise
+    // swallow them silently.
+    let post_construct_methods = crate::codegen::transverse::scan_post_construct_methods(&item)?;
+
     // Classify methods
     let mut route_methods = Vec::new();
     let mut sse_methods = Vec::new();
@@ -239,7 +249,48 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             syn::ImplItem::Fn(mut method) => {
                 let all_attrs = std::mem::take(&mut method.attrs);
 
+                // `#[post_construct]` — a plain lifecycle hook. Its body stays on
+                // the core impl (recorded in `post_construct_methods` above); it
+                // cannot be combined with a route/transverse marker, and being a
+                // plain method it takes no `#[intercept]`.
+                if all_attrs.iter().any(|a| a.path().is_ident("post_construct")) {
+                    let combined = extract_consumer(&all_attrs)?.is_some()
+                        || extract_scheduled(&all_attrs)?.is_some()
+                        || extract_sse_attr(&all_attrs)?.is_some()
+                        || extract_ws_attr(&all_attrs)?.is_some()
+                        || extract_async_exec(&all_attrs)?.is_some()
+                        || extract_route_kind(&all_attrs)?.is_some();
+                    if combined {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[post_construct] cannot be combined with a route, #[scheduled], \
+                             #[consumer], #[sse], #[ws], or #[async_exec] on the same method — \
+                             it is a plain lifecycle hook that runs once after the graph resolves",
+                        ));
+                    }
+                    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[intercept] on a #[post_construct] method is not supported — a plain \
+                             lifecycle hook has no dispatch wrapper to run the interceptor chain",
+                        ));
+                    }
+                    // Strip the marker; the body is emitted on the core impl.
+                    method.attrs = all_attrs
+                        .into_iter()
+                        .filter(|a| !a.path().is_ident("post_construct"))
+                        .collect();
+                    other_methods.push(method);
+                    continue;
+                }
+
                 if let Some(config) = extract_consumer(&all_attrs)? {
+                    if extract_scheduled(&all_attrs)?.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            &method.sig,
+                            "#[scheduled] and #[consumer] cannot be combined on the same method",
+                        ));
+                    }
                     let event_param = method
                         .sig
                         .inputs
@@ -291,7 +342,15 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         }
                     }
 
-                    method.attrs = strip_consumer_attrs(all_attrs);
+                    // Method-level `#[intercept]` sites (controller-level ones
+                    // are prepended at codegen). Strip both `#[consumer]` and
+                    // `#[intercept]` off the emitted body — the dispatch wrapper
+                    // (wrapping.rs) rebuilds the intercepted form when present.
+                    let intercept_fns = extract_intercept_fns(&all_attrs)?;
+                    method.attrs = strip_consumer_attrs(all_attrs)
+                        .into_iter()
+                        .filter(|a| !a.path().is_ident("intercept"))
+                        .collect();
                     consumer_methods.push(ConsumerMethod {
                         bus_field: config.bus_field,
                         topic: config.topic,
@@ -301,6 +360,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         dlq: config.dlq,
                         event_type,
                         kind,
+                        intercept_fns,
                         fn_item: method,
                     });
                 } else if let Some(config) = extract_scheduled(&all_attrs)? {
@@ -465,6 +525,18 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         is_fallback: route_kind.is_fallback,
                     });
                 } else {
+                    // A plain (non-route, non-transverse) method has no dispatch
+                    // wrapper to run an interceptor chain — reject a stray
+                    // `#[intercept]` rather than silently ignore it (mirrors the
+                    // bean `reject_stray_intercepts`).
+                    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[intercept] on a controller method is only supported on route, \
+                             #[scheduled], or #[consumer] methods — a plain method has no dispatch \
+                             wrapper to run the interceptor chain",
+                        ));
+                    }
                     method.attrs = all_attrs;
                     other_methods.push(method);
                 }
@@ -502,6 +574,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         consumer_methods,
         scheduled_methods,
         async_exec_methods,
+        post_construct_methods,
         other_methods,
     })
 }

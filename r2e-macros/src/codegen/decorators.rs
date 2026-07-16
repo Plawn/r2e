@@ -426,10 +426,13 @@ pub(crate) fn deps_fold_from_base<'a>(
 pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
 
-    // Controller-level interceptors are wired into HTTP route handlers and
-    // scheduled tasks (SSE/WS do not run the interceptor chain), so their
-    // deps only matter when at least one such method exists.
-    if !def.route_methods.is_empty() || !def.scheduled_methods.is_empty() {
+    // Controller-level interceptors are wired into HTTP route handlers,
+    // scheduled tasks, and consumers (SSE/WS do not run the interceptor
+    // chain), so their deps only matter when at least one such method exists.
+    if !def.route_methods.is_empty()
+        || !def.scheduled_methods.is_empty()
+        || !def.consumer_methods.is_empty()
+    {
         exprs.extend(&def.controller_intercepts);
     }
     for rm in &def.route_methods {
@@ -437,10 +440,13 @@ pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
         exprs.extend(&rm.decorators.pre_auth_guard_fns);
         exprs.extend(&rm.decorators.intercept_fns);
     }
-    // Scheduled methods run interceptors (built once at registration, from
-    // the retained context, inside `scheduled_tasks_boxed`).
+    // Scheduled + consumer methods run interceptors (built once at
+    // registration, from the retained context, via `fill_decos`).
     for sm in &def.scheduled_methods {
         exprs.extend(&sm.intercept_fns);
+    }
+    for cm in &def.consumer_methods {
+        exprs.extend(&cm.intercept_fns);
     }
     // SSE/WS methods run guards (and pre-auth guards) but not interceptors.
     for sm in &def.sse_methods {

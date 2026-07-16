@@ -383,6 +383,25 @@ impl CacheService {
 }
 ```
 
+`#[post_construct]` also works on **controller** `#[routes]` impls (same
+signature rules). Timing differs: bean hooks run inside `build_state()`;
+controller-core hooks run at startup during `register_controller` /
+`build_with_consumers`, **before** that app's consumer registrations. An `Err`
+aborts startup. On a controller it is a compile error to put `#[post_construct]`
+on a route / `#[scheduled]` / `#[consumer]` method, to give it params, or to add
+`#[intercept]` to it.
+
+```rust
+#[routes]
+impl LifecycleController {
+    #[post_construct]
+    async fn init(&self) { /* runs once at startup, before consumers */ }
+
+    #[consumer(bus = "event_bus")]
+    async fn on_ping(&self, _e: Arc<Ping>) { /* ... */ }
+}
+```
+
 ### Feature modules — `#[module]`
 
 Package a vertical slice (services + controllers) as one registration with a
@@ -943,6 +962,25 @@ fields (identity), but work on any controller.
 A `#[consumer]` method with a non-`()` return type is automatically registered
 as a **responder**: its argument is the request, its return value is the reply
 (pairs with `event_bus.request::<Req, Resp>(...)`).
+
+Controller `#[consumer]` methods accept `#[intercept(...)]` (method-level, plus
+an impl-level `#[intercept(...)]` on the `#[routes]` block that wraps every
+`#[scheduled]`/`#[consumer]` method, impl-level outermost) — same as bean-level
+interceptors, and covering both fan-out subscribers and responders. Direct
+in-code calls on a registered core self-intercept too. A missing decorator bean
+is a compile error at `.register_controller`; `#[scheduled]` + `#[consumer]` on
+one method, or a stray `#[intercept]` on a plain (non-route/scheduled/consumer)
+controller method, is also a compile error.
+
+```rust
+#[routes]
+#[intercept(Audit::spec("impl"))]            // wraps every consumer/scheduled method
+impl PingController {
+    #[consumer(bus = "event_bus")]
+    #[intercept(Audit::spec("method"))]      // runs after the impl-level one
+    async fn on_ping(&self, _e: Arc<Ping>) { /* ... */ }
+}
+```
 
 ### Consuming — on beans
 

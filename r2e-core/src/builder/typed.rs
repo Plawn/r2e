@@ -38,6 +38,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             meta_registry: MetaRegistry::new(),
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
+            post_construct_registrations: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -505,8 +506,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // (by type); named-state controllers read the typed state.
         let state = &self.state;
         let core = Arc::new(C::construct(state, &self.bean_context));
+
+        // Fill the core's decorator slot from the resolved graph — once, right
+        // after construct, before scheduled tasks are built and before any
+        // consumer or direct call can fire. No-op for controllers without
+        // intercepted `#[scheduled]`/`#[consumer]` methods.
+        C::fill_decos(&core, &self.bean_context);
+
         self.routes
             .push(C::routes(state, Arc::clone(&core), &self.bean_context));
+
+        // Queue this core's `#[post_construct]` hooks — awaited at startup
+        // before consumer registrations (no-op future for controllers without
+        // `#[post_construct]`).
+        self.post_construct_registrations
+            .push(C::post_construct(Arc::clone(&core)));
 
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
@@ -655,6 +669,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     /// Assemble the final `axum::Router` from all registered routes and layers.
+    ///
+    /// Startup lifecycle work is NOT run here: consumer registrations AND
+    /// controller `#[post_construct]` hooks are dropped. Use
+    /// [`build_with_consumers`](Self::build_with_consumers) (or `serve`) when
+    /// the app relies on either.
     pub fn build(self) -> crate::http::Router {
         self.build_inner().router
     }
@@ -669,6 +688,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// task start, …) still do not run.
     pub async fn build_with_consumers(self) -> crate::http::Router {
         let built = self.build_inner();
+        // Controller `#[post_construct]` runs before consumers (mirroring bean
+        // post_construct at `build_state`, which runs before subscribers). This
+        // entry point returns a `Router`, so an error fails loudly with a panic —
+        // the same shape as `build_state` panicking on a bean post_construct Err.
+        for pc in built.post_construct_registrations {
+            pc.await
+                .unwrap_or_else(|e| panic!("Controller #[post_construct] hook failed: {e}"));
+        }
         for reg in built.consumer_registrations {
             reg(built.state.clone()).await;
         }
@@ -732,6 +759,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shutdown_hooks: self.shutdown_hooks,
             drain_hooks: self.drain_hooks,
             consumer_registrations: self.consumer_registrations,
+            post_construct_registrations: self.post_construct_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
@@ -822,6 +850,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shutdown_hooks,
             drain_hooks,
             consumer_registrations,
+            post_construct_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
             plugin_async_shutdown_hooks,
@@ -846,6 +875,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             drain_hooks,
             stop_handle,
             consumer_registrations,
+            post_construct_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
             plugin_async_shutdown_hooks,
@@ -897,6 +927,7 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     shutdown_hooks: Vec<ShutdownHook<T>>,
     drain_hooks: Vec<DrainHook<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
+    post_construct_registrations: Vec<PostConstructReg>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,

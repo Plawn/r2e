@@ -142,7 +142,7 @@ impl<'a> PluginInstallContext<'a> {
     /// opt a provided type `B` into the same post-construct lifecycle as a
     /// factory bean: the hook fires during `build_state()`, after every
     /// factory-bean post-construct, reading `B` from the resolved graph.
-    pub fn run_post_construct<B: crate::PostConstruct>(&mut self) {
+    pub fn run_post_construct<B: crate::PostConstruct + Clone>(&mut self) {
         self.registry_ops
             .push(Box::new(|reg| reg.register_provided_post_construct::<B>()));
     }
