@@ -7,13 +7,15 @@ R2E provides declarative background task scheduling with interval, cron, and del
 Enable the scheduler feature and install the `Scheduler` plugin:
 
 ```toml
-r2e = { version = "0.1", features = ["scheduler"] }
+r2e = { version = "0.1", features = ["scheduler"] }   # pulls in "executor"
 ```
 
 ```rust
 use r2e::r2e_scheduler::Scheduler;
+use r2e::r2e_executor::Executor;
 
 AppBuilder::new()
+    .plugin(Executor)                   // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                  // MUST be before build_state()
     .build_state()
     .await
@@ -23,7 +25,7 @@ AppBuilder::new()
     .unwrap();
 ```
 
-The `Scheduler` plugin must be installed **before** `build_state()` because it provides a `CancellationToken` to the bean graph.
+Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` to the bean graph and **requires the `Executor` plugin**: it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`LateDeps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
 
 ## Declaring scheduled tasks
 
@@ -89,16 +91,18 @@ Six fields: `second minute hour day_of_month month day_of_week`
 ## Requirements
 
 - Scheduled methods run on the controller core (built from the bean graph via `ContextConstruct`) and cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable. `ContextConstruct` is generated only when the controller declares **no** struct-level identity; if you need both scheduled tasks and authenticated endpoints, use param-level identity (the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity)). Scheduled methods use only core (`#[inject]` / `#[config]`) fields.
-- The `Scheduler` plugin must be installed before `build_state()`
+- The `Scheduler` **and `Executor`** plugins must be installed before `build_state()` (the Scheduler runs its ticks on the executor pool)
 - Scheduled methods take `&self` only (no additional parameters)
 
 ## How it works
 
 1. `Scheduler` plugin creates a `CancellationToken` and defers setup
-2. `build_state()` provides the token to the bean graph
+2. `build_state()` provides the token to the bean graph and verifies the `PoolExecutor` dependency (`Scheduler::LateDeps`)
 3. `register_controller::<ScheduledJobs>()` collects scheduled task definitions
-4. `serve()` starts all scheduled tasks as Tokio tasks
-5. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled, stopping all tasks
+4. `serve()` starts each schedule loop; every tick body is submitted to the shared `PoolExecutor` and the loop awaits it before the next tick
+5. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled and in-flight ticks drain via the pool (`executor.shutdown-timeout`)
+
+Because ticks run as pool jobs, a panicking tick is contained and logged (its schedule loop keeps running), scheduled work is bounded by `executor.max-concurrent`, and it appears in `ExecutorMetrics`.
 
 ## Error handling in scheduled tasks
 

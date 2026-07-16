@@ -10,8 +10,10 @@ Make runtime-defined task sets — one task per configured source, tenant, or fe
 
 ```rust
 use r2e_scheduler::{AppBuilderSchedulerExt, ScheduledTaskDef, Scheduler};
+use r2e_executor::Executor;
 
 let app = AppBuilder::new()
+    .plugin(Executor)                  // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                 // required — before build_state()
     .provide(sync_service.clone())
     .build_state()
@@ -37,7 +39,7 @@ app.serve("0.0.0.0:3000").await;
 
 Dynamic tasks share the static tasks' lifecycle: started by the scheduler's serve hook, listed in `ScheduledJobRegistry`, stopped via the shared `CancellationToken` on shutdown.
 
-- **Requires `.plugin(Scheduler)`** before `build_state()` — `schedule_task` panics with a clear message otherwise.
+- **Requires `.plugin(Scheduler)` and `.plugin(Executor)`** before `build_state()` — `schedule_task` panics with a clear message if `Scheduler` is missing, and the build fails at `build_state()` (guided missing-`PoolExecutor` error) if `Executor` is missing. Dynamic ticks run on the shared `PoolExecutor` just like `#[scheduled]` ticks (drained on shutdown, bounded by `executor.max-concurrent`, visible in `ExecutorMetrics`).
 - **Register before `serve()`** — the task registry is drained once at serve time; tasks added after boot are never started.
 - `schedule_tasks(impl IntoIterator<Item = ScheduledTaskDef<T>>)` registers a batch with one registry lock.
 

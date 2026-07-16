@@ -45,15 +45,24 @@ Some plugins need to install before `build_state()`. Use `.plugin()` instead of 
 
 ```rust
 AppBuilder::new()
+    .plugin(Executor)     // provides PoolExecutor (Scheduler runs ticks on it)
     .plugin(Scheduler)    // provides CancellationToken + ScheduledJobRegistry
     .build_state()
     .await
     // ...
 ```
 
+`Scheduler` **requires the `Executor` plugin**: it declares
+`type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor`
+in the graph fails at `build_state()` with the guided "missing
+`.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. `LateDeps` are
+checked against the final provision list, so the order between the two plugins does
+not matter.
+
 | Pre-state Plugin | Description |
 |-----------------|-------------|
-| `Scheduler` | Background task scheduling runtime |
+| `Executor` | Managed task pool (`PoolExecutor`) with bounded concurrency and graceful drain |
+| `Scheduler` | Background task scheduling runtime (requires `Executor`; ticks run on its pool) |
 
 ## Enabling and disabling plugins from config
 

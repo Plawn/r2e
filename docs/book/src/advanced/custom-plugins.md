@@ -113,6 +113,7 @@ impl PreStatePlugin for MyPlugin {
 ```rust
 // ✅ Compiles: both deps are provided before MyPlugin
 AppBuilder::new()
+    .plugin(Executor)           // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)          // provides CancellationToken
     .provide(pool)              // provides DbPool
     .plugin(MyPlugin)

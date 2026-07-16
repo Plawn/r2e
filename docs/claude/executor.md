@@ -198,7 +198,7 @@ is a compile error naming the missing type.
 | Slow side-task triggered by an HTTP request, fire-and-forget | `executor.submit_detached(...)` directly |
 | Slow side-task whose result the handler awaits later | `#[async_exec]` returning `Result<JobHandle<T>, RejectedError>` |
 | Periodic / event-driven worker bound to app lifecycle | `#[derive(BackgroundService)]` + `spawn_service::<C>()` |
-| Cron / interval schedule | Existing `#[scheduled]` (no executor needed) |
+| Cron / interval schedule | `#[scheduled]` — requires the `Executor` plugin; ticks run on this pool (drained, bounded, metered) |
 | Submit work from inside a background service | Inject `PoolExecutor` and call `submit*` |
 
 ## Tests

@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler`, `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -330,6 +330,7 @@ fields. Constructor params are resolved from the bean graph **by type**.
 
 ```rust
 let built = AppBuilder::new()
+    .plugin(Executor)                     // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                    // pre-state plugins FIRST
     .load_config::<RootConfig>()          // YAML + env; auto-registers config sections as beans
     .provide(LocalEventBus::new())        // provide constructed values
@@ -417,6 +418,7 @@ performs around your `build`.
 ```rust
 AppBuilder::new()
     // ── Pre-state ──
+    .plugin(Executor)                           // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
@@ -967,13 +969,27 @@ b.provide(SseTopic::<UserCreatedEvent>::new(64).with_event_name("user_created"))
 
 ## Scheduled Tasks
 
-Requires feature: `scheduler`. Install the plugin **before** `build_state()`:
+Requires feature: `scheduler` (pulls in `executor`). **The Scheduler requires the
+Executor plugin** — it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)`
+without a `PoolExecutor` in the graph fails at `build_state()` with the guided
+"missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Install
+both **before** `build_state()` (order between them does not matter):
 
 ```rust
-b.plugin(Scheduler)
+b.plugin(Executor)                          // provides PoolExecutor (Scheduler runs ticks on it)
+ .plugin(Scheduler)
  .build_state().await
  .register_controller::<ScheduledJobs>()   // auto-discovers #[scheduled] methods
 ```
+
+All schedules are driven by a single driver task backed by a min-heap of next-fire
+times (not one Tokio task per schedule). Each tick runs as a pool job
+(`executor.submit(...)`); a job is re-armed only when its own tick completes, so a task
+never overlaps with itself (non-overlap preserved) while different jobs still run
+concurrently. Consequences: in-flight ticks drain on shutdown (bounded by
+`executor.shutdown-timeout`), a panicking tick is contained/logged and the driver keeps
+running, and scheduled work is globally bounded by `executor.max-concurrent` and shows up
+in `ExecutorMetrics`.
 
 ```rust
 #[controller]
@@ -991,8 +1007,17 @@ impl ScheduledJobs {
 
     #[scheduled(cron = "0 */5 * * * *")]              // compile-time validated
     async fn report(&self) { ... }
+
+    #[scheduled(every = "50ms", overlap = "concurrent")] // may overlap with itself
+    async fn poll(&self) { ... }
 }
 ```
+
+Overlap policy — `#[scheduled(overlap = "skip" | "concurrent")]` (default `skip`;
+also valid with `cron`). `skip`: never run a job concurrently with itself (re-arm
+on completion; a due-while-running tick is skipped, cadence preserved).
+`concurrent`: re-arm at fire time so a slow tick never holds back the next one
+(ticks may pile up). Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
 
 Dynamic (config-driven) tasks — post-`build_state()`:
 
@@ -1006,7 +1031,24 @@ use r2e_scheduler::{AppBuilderSchedulerExt, ScheduledTaskDef};
     move |svc| async move { svc.sync().await }))
 ```
 
-Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()`.
+Config (`scheduler.*` YAML section, all optional): `scheduler.enabled = false`
+(standard gate — skips starting tasks, keeps beans); `scheduler.executor =
+"shared"` (default, app-wide `PoolExecutor`) | `"dedicated"` (private pool sized
+by `scheduler.max-concurrent` / `queue-capacity` / `shutdown-timeout`, mirroring
+`executor.*`). `PoolExecutor` stays a hard `LateDeps` requirement even in
+dedicated mode. An unknown `executor` value panics at boot.
+
+Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()` /
+`jobs.job(name)`. `ScheduledJobInfo` carries live stats: `last_run` /
+`next_run` (`chrono::DateTime<Utc>`), `last_duration`, `run_count`,
+`panic_count`, `paused`.
+
+Runtime control — `SchedulerHandle` (extract as a handler param, or
+`SchedulerHandle::channel(token)` when driving `start_jobs` manually):
+`pause(name).await` / `resume(name).await` (a paused job advances cadence but
+never fires) / `trigger_now(name).await` (fire once out of band, allowed even
+when paused; `false` for a `skip` job already in flight). Each returns `bool`
+(`false` = unknown job / no driver).
 `ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
 from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
 
@@ -1269,6 +1311,9 @@ pub struct JobController {
 // #[derive(BackgroundService)] for long-running service components
 ```
 
+The `Scheduler` plugin runs every `#[scheduled]` tick on this pool, so scheduled
+work is drained, bounded, and metered alongside submitted jobs.
+
 Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown.
 
 ---
@@ -1333,8 +1378,21 @@ next `load_config::<C>()` uses it instead of reading disk (see Configuration).
 ### Dev services (containers)
 
 `r2e-devservices` (features `postgres`, `redis`): `DevPostgres::shared().await`
-= one container per test process; wire via
-`b.override_config_value("app.database.url", pg.url())` in the boot hook.
+= one stable container shared by every test process in the workspace session;
+wire via `b.override_config_value("app.database.url", pg.url())` in the boot
+hook. A workspace-scoped `testcontainers/ryuk:0.14.0` reaper holds one TCP
+lease per test process and removes Postgres/Redis after the final process exits
+(10-second reconnection grace by default). `start()` / `start_with_tag(tag)`
+remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
+
+Ryuk requires a local Docker Unix socket. Configuration:
+`R2E_DEVSERVICES_DOCKER_SOCKET` overrides its host path,
+`R2E_DEVSERVICES_RYUK_RECONNECTION_TIMEOUT` changes the grace period,
+`R2E_DEVSERVICES_RYUK_PRIVILEGED=1` enables privileged mode where required,
+and `R2E_DEVSERVICES_SESSION` overrides the workspace-derived session key.
+`R2E_DEVSERVICES_KEEP=1` intentionally disables Ryuk and fallback cleanup for
+post-mortem inspection. Do not implement shared dev services with a bare
+process-local static container: Rust statics are not dropped at process exit.
 
 ---
 
@@ -1418,7 +1476,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | pre-state | Pre-state plugins (Scheduler, GrpcServer, OidcServer, Prometheus) |
+| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], GrpcServer, OidcServer, Prometheus) |
 | `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
 | `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | pre-state | Provide a constructed bean |

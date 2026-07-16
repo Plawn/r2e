@@ -338,6 +338,7 @@ Register the scheduler plugin **before** `build_state()`:
 
 ```rust
 AppBuilder::new()
+    .plugin(Executor)    // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)
     .register::<UserService>()
     .build_state()
@@ -468,7 +469,7 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 | `OidcServer` | Embedded OIDC server (`/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
 | `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install last) |
-| `Scheduler` | Background task scheduling (install via `.plugin()` before `build_state()`) |
+| `Scheduler` | Background task scheduling — requires `Executor`; ticks run on its pool (install via `.plugin()` before `build_state()`) |
 
 ## Crate map
 

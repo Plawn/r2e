@@ -149,7 +149,7 @@ Sharded mode splits work across two kinds of runtime:
 | Work | Runtime |
 |---|---|
 | HTTP request handling | **HTTP workers** (one `current_thread` runtime per worker — the *data plane*) |
-| Scheduler tasks (`#[scheduled]`) | **Control plane** (the caller's main multi-thread runtime) |
+| Scheduler tasks (`#[scheduled]`) | **Control plane** — one driver task spawns via `rt::spawn` (a min-heap of next-fire times drives all schedules); tick bodies are submitted to the `PoolExecutor` (`spawn_ctl`, also control plane) |
 | `ServiceComponent`s / `spawn_service` | Control plane |
 | Event-bus consumers (`#[consumer]`), per-emit handler dispatch | Control plane |
 | QUIC / HTTP3 endpoint | Control plane |

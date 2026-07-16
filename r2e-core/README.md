@@ -13,6 +13,7 @@ Fluent two-phase API for assembling an application:
 ```rust
 AppBuilder::new()
     // Phase 1: pre-state (bean registration)
+    .plugin(Executor)                      // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                     // pre-state plugin
     .load_config::<AppConfig>()             // load yaml + type + provide (the sole config registration point)
     .provide(my_pool.clone())              // pre-built instance

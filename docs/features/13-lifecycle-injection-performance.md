@@ -15,6 +15,7 @@ Everything starts with the fluent construction via `AppBuilder`:
 ```rust
 AppBuilder::new()
     .load_config::<RootConfig>()          // 1. Configuration (typee)
+    .plugin(Executor)                     // 2. Plugins pre-build (pool requis par Scheduler)
     .plugin(Scheduler)                    // 2. Plugins pre-build (taches planifiees)
     .provide(pool)                        // 3. Beans pre-construits (par type)
     .provide(event_bus)
@@ -446,7 +447,9 @@ event_bus.subscribe(move |__envelope: EventEnvelope<UserCreatedEvent>| {
 
 ### 4.2 Usage by Scheduled Tasks
 
-Scheduled tasks likewise capture the shared core; each execution is one `Arc` clone:
+Scheduled tasks likewise capture the shared core; each execution is one `Arc` clone.
+The generated `ScheduledTaskDef` no longer clones the app state on every tick — it
+carries `state: ()`, and the tick body is submitted to the shared `PoolExecutor`:
 
 ```rust
 // Code genere par #[routes] pour #[scheduled(every = 30)]
@@ -454,7 +457,7 @@ let __task_core = __core.clone();
 ScheduledTaskDef {
     name: "MyController_cleanup".to_string(),
     schedule: Schedule::Every(Duration::from_secs(30)),
-    state: __state.clone(),
+    state: (),                             // plus de clone d'etat par tick
     task: Box::new(move |_state| {
         let __ctrl = __task_core.clone();  // un clone d'Arc par execution
         Box::pin(async move {
@@ -463,6 +466,11 @@ ScheduledTaskDef {
     }),
 }
 ```
+
+The scheduler runtime submits each tick to the `PoolExecutor` and awaits its
+`JobHandle` before the next tick — so ticks are drained on shutdown, bounded by
+`executor.max-concurrent`, and a panicking tick is contained without killing its
+schedule loop.
 
 ### 4.3 The Mixed Controller Pattern
 

@@ -51,7 +51,7 @@ r2e-events      → In-process EventBus with typed pub/sub (emit/subscribe fan-o
   backends/kafka    → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
   backends/pulsar   → Apache Pulsar EventBus backend: distributed event streaming.
   backends/rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
-r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown.
+r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancellationToken-based shutdown. All schedules are driven by a single driver task (min-heap of next-fire times), not one Tokio task per schedule. Requires the Executor plugin (`type LateDeps = (PoolExecutor,)`); each tick runs as a pool job (`executor.submit`) so ticks drain on shutdown, panics stay contained, and scheduled work is bounded by `executor.max-concurrent` and visible in `ExecutorMetrics`. Per-task overlap policy (`#[scheduled(overlap = "skip"|"concurrent")]` / `ScheduledTaskDef::with_overlap`, default skip). Runtime control via `SchedulerHandle::{pause,resume,trigger_now}` + live `ScheduledJobInfo` stats. Optional dedicated pool + `scheduler.enabled` gate via `scheduler.*` config (`SchedulerConfig`, `CONFIG_PREFIX = "scheduler"`).
 r2e-executor    → Managed task pool (PoolExecutor) + #[async_exec] + #[derive(BackgroundService)]. Bounded concurrency, graceful drain.
 r2e-core        → Also owns Page/Pageable and the cancellation-safe ManagedResource lifecycle.
   r2e-data/backends/sqlx   → Managed SQLx transactions (SQLite/Postgres/MySQL).
