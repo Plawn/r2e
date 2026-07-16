@@ -1069,6 +1069,14 @@ fn generate_scheduled_tasks(
             };
 
             let schedule_expr = generate_schedule_expr(sm, &sched_krate);
+            let overlap_expr = match sm.config.overlap {
+                crate::types::OverlapMode::Skip => {
+                    quote! { #sched_krate::OverlapPolicy::Skip }
+                }
+                crate::types::OverlapMode::Concurrent => {
+                    quote! { #sched_krate::OverlapPolicy::Concurrent }
+                }
+            };
 
             // Intercepted methods self-intercept in their dispatch wrapper
             // (slot lookup there; sync sources are promoted to `async fn`),
@@ -1087,8 +1095,11 @@ fn generate_scheduled_tasks(
                     let __task_def = #sched_krate::ScheduledTaskDef {
                         name: #task_name.to_string(),
                         schedule: #schedule_expr,
-                        state: __state.clone(),
-                        task: Box::new(move |_state: #state_ident| {
+                        overlap: #overlap_expr,
+                        // The controller core (an `Arc`) is captured directly, so
+                        // the scheduler never clones the app state per tick.
+                        state: (),
+                        task: Box::new(move |(): ()| {
                             let __ctrl = __task_core.clone();
                             Box::pin(async move {
                                 #sched_krate::ScheduledResult::log_if_err(

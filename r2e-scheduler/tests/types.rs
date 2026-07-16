@@ -4,6 +4,7 @@ use std::time::Duration;
 
 fn noop_task_def(name: &str, schedule: ScheduleConfig) -> ScheduledTaskDef<()> {
     ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: name.to_string(),
         schedule,
         state: (),

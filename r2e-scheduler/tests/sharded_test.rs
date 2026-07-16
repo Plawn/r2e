@@ -17,6 +17,7 @@ use std::time::Duration;
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::config::R2eConfig;
 use r2e_core::AppBuilder;
+use r2e_executor::Executor;
 use r2e_scheduler::{ScheduleConfig, Scheduler, ScheduledTask, ScheduledTaskDef};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -56,6 +57,7 @@ fn counting_task(
     counter: Arc<AtomicUsize>,
 ) -> Box<dyn std::any::Any + Send> {
     let def = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: name.to_string(),
         schedule,
         state: counter,
@@ -87,6 +89,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
         .override_config(config)
         .load_config::<()>()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await;
 

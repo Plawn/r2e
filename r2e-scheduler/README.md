@@ -4,7 +4,9 @@ Background task scheduler for R2E — interval, cron, and delayed task execution
 
 ## Overview
 
-Provides a scheduler plugin that auto-discovers `#[scheduled]` methods in controllers and runs them as background Tokio tasks. Tasks are lifecycle-managed via `CancellationToken` for clean shutdown.
+Provides a scheduler plugin that auto-discovers `#[scheduled]` methods in controllers and runs them from a single driver task backed by a min-heap of next-fire times (not one Tokio task per schedule). Each tick body is submitted to the shared `PoolExecutor` (from the `Executor` plugin); a job is re-armed only when its tick completes, so a task never overlaps with itself while different jobs still run concurrently. Tasks are lifecycle-managed via `CancellationToken` for clean shutdown, and in-flight ticks drain through the pool.
+
+**Requires the `Executor` plugin.** `Scheduler` declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. The `scheduler` facade feature pulls in `executor`.
 
 ## Usage
 
@@ -12,17 +14,19 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["scheduler"] }
+r2e = { version = "0.1", features = ["scheduler"] }   # pulls in "executor"
 ```
 
 ## Setup
 
-Install the `Scheduler` plugin **before** `build_state()`:
+Install the `Executor` and `Scheduler` plugins **before** `build_state()` (order between them does not matter):
 
 ```rust
 use r2e::r2e_scheduler::Scheduler;
+use r2e::r2e_executor::Executor;
 
 AppBuilder::new()
+    .plugin(Executor)                       // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)
     .register::<CleanupService>()
     .build_state()
@@ -66,14 +70,44 @@ impl ScheduledJobs {
 | Interval | `every = 30` | Fixed interval in seconds |
 | Interval + delay | `every = 60, delay = 10` | Initial delay before first run |
 | Cron | `cron = "0 */5 * * * *"` | Standard cron expression |
+| Overlap | `overlap = "skip" \| "concurrent"` | Self-overlap policy (default `skip`) |
+
+## Overlap policy
+
+`#[scheduled(overlap = "concurrent")]` (also valid with `cron`) lets a job overlap
+with itself: the next tick is armed at fire time so a slow tick never holds back
+the following one. The default `skip` re-arms on completion, so a job never runs
+concurrently with itself (a due-while-running tick is skipped, cadence preserved).
+Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
+
+## Configuration (`scheduler.*`)
+
+Optional typed config. `scheduler.enabled = false` skips starting tasks (beans
+remain). `scheduler.executor` selects the pool ticks run on: `"shared"` (default,
+the app-wide `PoolExecutor`) or `"dedicated"` (a private pool sized by
+`scheduler.max-concurrent` / `queue-capacity` / `shutdown-timeout`, mirroring
+`executor.*`, with its own graceful drain). `PoolExecutor` stays a required
+`LateDeps` even in dedicated mode; an unknown `executor` value panics at boot.
+
+## Runtime control and stats
+
+Extract a `SchedulerHandle` (or `SchedulerHandle::channel(token)` for a manual
+`start_jobs`) to control jobs by name: `pause(name).await`, `resume(name).await`,
+`trigger_now(name).await` (each `-> bool`). A paused job advances its cadence but
+never fires; `trigger_now` fires once out of band (even when paused). Live per-job
+stats live on `ScheduledJobInfo` via `ScheduledJobRegistry::list_jobs()` /
+`job(name)`: `last_run`, `next_run`, `last_duration`, `run_count`, `panic_count`,
+`paused`.
 
 ## Lifecycle
 
 1. `Scheduler` plugin creates a `CancellationToken` during `plugin()` phase
-2. Tasks are collected from controllers during `register_controller()`
-3. `serve()` starts all tasks as Tokio background tasks
-4. On shutdown signal (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled
-5. All tasks receive the cancellation and stop gracefully
+2. `build_state()` verifies the `PoolExecutor` dependency (`Scheduler::LateDeps`)
+3. Tasks are collected from controllers during `register_controller()`
+4. `serve()` spawns ONE driver task (`start_jobs`) that owns a min-heap of next-fire deadlines for all schedules; when the earliest deadline is reached, due tick bodies are submitted to the shared `PoolExecutor` and each job is re-armed only when its own tick completes
+5. On shutdown signal (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled; the driver stops without aborting in-flight ticks, which drain via the pool (`executor.shutdown-timeout`)
+
+Because ticks run as pool jobs, a panicking tick is contained and logged (the driver keeps running), scheduled work is bounded by `executor.max-concurrent`, and it shows up in `ExecutorMetrics`.
 
 ## Constraints
 

@@ -1,7 +1,7 @@
 //! Scheduled task attribute extraction.
 
 use super::duration::parse_duration_ms;
-use crate::types::ScheduledConfig;
+use crate::types::{OverlapMode, ScheduledConfig};
 
 pub fn strip_scheduled_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs
@@ -39,6 +39,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
             let mut cron: Option<String> = None;
             let mut initial_delay_ms: Option<u64> = None;
             let mut name: Option<String> = None;
+            let mut overlap: OverlapMode = OverlapMode::Skip;
 
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("every") {
@@ -67,12 +68,30 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                     let lit: syn::LitStr = value.parse()?;
                     name = Some(lit.value());
                     Ok(())
+                } else if meta.path.is_ident("overlap") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    overlap = match lit.value().as_str() {
+                        "skip" => OverlapMode::Skip,
+                        "concurrent" => OverlapMode::Concurrent,
+                        other => {
+                            return Err(syn::Error::new(
+                                lit.span(),
+                                format!(
+                                    "invalid overlap policy '{}': expected \"skip\" or \"concurrent\"",
+                                    other
+                                ),
+                            ))
+                        }
+                    };
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, or `name`\n\n\
+                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, `name`, or `overlap`\n\n\
                          examples:\n  #[scheduled(every = 30)]\n  #[scheduled(every = \"5m\")]\n  \
                          #[scheduled(cron = \"0 */5 * * * *\")]\n  \
-                         #[scheduled(every = \"1h\", initial_delay = \"10s\")]"
+                         #[scheduled(every = \"1h\", initial_delay = \"10s\")]\n  \
+                         #[scheduled(every = \"50ms\", overlap = \"concurrent\")]"
                     ))
                 }
             })?;
@@ -105,6 +124,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                 cron,
                 initial_delay_ms,
                 name,
+                overlap,
             }));
         }
     }

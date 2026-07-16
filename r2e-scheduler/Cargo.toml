@@ -12,8 +12,10 @@ description = "Background task scheduler for R2E - interval, cron, and delayed t
 
 [dependencies]
 r2e-core = {workspace = true}
+r2e-executor = {workspace = true}
 tokio = {workspace = true, features = ["rt", "sync", "time"]}
 tokio-util = {workspace = true, features = ["rt"]}
+futures-util = {workspace = true}
 cron = {workspace = true}
 chrono = {workspace = true}
 tracing = {workspace = true}

@@ -497,9 +497,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///
     /// ```ignore
     /// use r2e_scheduler::Scheduler;
+    /// use r2e_executor::Executor;
     ///
     /// AppBuilder::new()
     ///     .plugin(Scheduler)  // Provides CancellationToken + ScheduledJobRegistry
+    ///     .plugin(Executor)   // Scheduler runs ticks on the shared pool
     ///     .build_state()
     ///     .await
     /// ```

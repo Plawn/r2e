@@ -1,15 +1,23 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
-    extract_tasks, ScheduleConfig, ScheduledTask, ScheduledTaskDef,
+    extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask,
+    ScheduledTaskDef, SchedulerCommands,
 };
 use tokio_util::sync::CancellationToken;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// A default-configured pool. Scheduled tick bodies are submitted here; the
+/// pool is kept alive by the spawned schedule task (`start` moves it in).
+fn test_pool() -> PoolExecutor {
+    PoolExecutor::new(ExecutorConfig::default())
+}
 
 fn counting_task(
     name: &str,
@@ -17,6 +25,7 @@ fn counting_task(
     counter: Arc<AtomicUsize>,
 ) -> ScheduledTaskDef<Arc<AtomicUsize>> {
     ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: name.to_string(),
         schedule,
         state: counter,
@@ -28,10 +37,27 @@ fn counting_task(
     }
 }
 
+/// Convert boxed tasks into jobs and hand them to a single driver — the
+/// production path ([`start_jobs`]) exercised directly from tests.
+fn start_jobs_helper(
+    tasks: impl IntoIterator<Item = Box<dyn ScheduledTask>>,
+    token: CancellationToken,
+    pool: PoolExecutor,
+) {
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        token,
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
+}
+
 fn start_task(task: ScheduledTaskDef<impl Clone + Send + Sync + 'static>) -> CancellationToken {
     let token = CancellationToken::new();
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
-    boxed.start(token.clone());
+    start_jobs_helper([boxed], token.clone(), test_pool());
     token
 }
 
@@ -144,6 +170,7 @@ async fn interval_task_state_accessible() {
     let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "logger".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
         state: log.clone(),
@@ -167,14 +194,20 @@ async fn interval_task_state_accessible() {
 async fn interval_task_panic_isolation() {
     let counter = Arc::new(AtomicUsize::new(0));
 
-    // Panicking task — its spawned tokio task will abort on first tick
-    // but should not affect other tasks.
+    // Panicking task — each tick body is submitted to the shared pool, so the
+    // panic is contained in the pool job. The schedule loop logs and keeps
+    // ticking (it does NOT die on the first panic), and other tasks are
+    // unaffected.
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let a = attempts.clone();
     let panic_task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "panicker".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
-        state: (),
-        task: Box::new(|_| {
-            Box::pin(async {
+        state: a,
+        task: Box::new(|a: Arc<AtomicUsize>| {
+            Box::pin(async move {
+                a.fetch_add(1, Ordering::SeqCst);
                 panic!("intentional panic");
             }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }),
@@ -187,15 +220,21 @@ async fn interval_task_panic_isolation() {
     );
 
     let token = CancellationToken::new();
+    let pool = test_pool();
     let boxed_panic: Box<dyn ScheduledTask> = Box::new(panic_task);
-    boxed_panic.start(token.clone());
     let boxed_good: Box<dyn ScheduledTask> = Box::new(good_task);
-    boxed_good.start(token.clone());
+    start_jobs_helper([boxed_panic, boxed_good], token.clone(), pool);
 
     sleep_ms(350).await;
 
     let count = counter.load(Ordering::SeqCst);
     assert!(count >= 3, "good task should be unaffected, got {count}");
+    // The panicking schedule loop survived the panic and kept re-ticking.
+    let tries = attempts.load(Ordering::SeqCst);
+    assert!(
+        tries >= 3,
+        "panicking task loop should keep ticking after a contained panic, got {tries}"
+    );
 }
 
 // ── Phase 4: Cron tests (real time, multi-thread) ──────────────────────────
@@ -274,6 +313,7 @@ async fn cron_multiple_executions() {
 #[test]
 fn extract_tasks_from_boxed() {
     let task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "boxed".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
         state: (),
@@ -298,15 +338,19 @@ async fn multiple_tasks_all_start() {
     let c3 = Arc::new(AtomicUsize::new(0));
 
     let token = CancellationToken::new();
-    for (name, counter) in [("t1", c1.clone()), ("t2", c2.clone()), ("t3", c3.clone())] {
-        let task = counting_task(
-            name,
-            ScheduleConfig::Interval(Duration::from_millis(100)),
-            counter,
-        );
-        let boxed: Box<dyn ScheduledTask> = Box::new(task);
-        boxed.start(token.clone());
-    }
+    let pool = test_pool();
+    let tasks: Vec<Box<dyn ScheduledTask>> =
+        [("t1", c1.clone()), ("t2", c2.clone()), ("t3", c3.clone())]
+            .into_iter()
+            .map(|(name, counter)| {
+                Box::new(counting_task(
+                    name,
+                    ScheduleConfig::Interval(Duration::from_millis(100)),
+                    counter,
+                )) as Box<dyn ScheduledTask>
+            })
+            .collect();
+    start_jobs_helper(tasks, token.clone(), pool);
 
     sleep_ms(350).await;
 
@@ -319,6 +363,7 @@ async fn multiple_tasks_all_start() {
 #[test]
 fn task_name_via_trait() {
     let task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "trait_name".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
         state: (),
@@ -331,6 +376,7 @@ fn task_name_via_trait() {
 #[test]
 fn task_schedule_via_trait() {
     let task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "trait_schedule".to_string(),
         schedule: ScheduleConfig::Cron("0 0 * * * *".to_string()),
         state: (),
@@ -366,15 +412,18 @@ async fn concurrent_tasks_shared_state() {
     let shared = Arc::new(AtomicUsize::new(0));
 
     let token = CancellationToken::new();
-    for name in ["a", "b"] {
-        let task = counting_task(
-            name,
-            ScheduleConfig::Interval(Duration::from_millis(100)),
-            shared.clone(),
-        );
-        let boxed: Box<dyn ScheduledTask> = Box::new(task);
-        boxed.start(token.clone());
-    }
+    let pool = test_pool();
+    let tasks: Vec<Box<dyn ScheduledTask>> = ["a", "b"]
+        .into_iter()
+        .map(|name| {
+            Box::new(counting_task(
+                name,
+                ScheduleConfig::Interval(Duration::from_millis(100)),
+                shared.clone(),
+            )) as Box<dyn ScheduledTask>
+        })
+        .collect();
+    start_jobs_helper(tasks, token.clone(), pool);
 
     sleep_ms(350).await;
 
@@ -392,10 +441,10 @@ async fn concurrent_tasks_independent_state() {
     let task1 = counting_task("ind1", ScheduleConfig::Interval(Duration::from_millis(100)), c1.clone());
     let task2 = counting_task("ind2", ScheduleConfig::Interval(Duration::from_millis(200)), c2.clone());
 
+    let pool = test_pool();
     let b1: Box<dyn ScheduledTask> = Box::new(task1);
-    b1.start(token.clone());
     let b2: Box<dyn ScheduledTask> = Box::new(task2);
-    b2.start(token.clone());
+    start_jobs_helper([b1, b2], token.clone(), pool);
 
     sleep_ms(450).await;
 
@@ -411,6 +460,7 @@ async fn state_mutations_visible_via_arc_mutex() {
     let log: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
 
     let task = ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: "mutator".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
         state: log.clone(),
@@ -432,4 +482,91 @@ async fn state_mutations_visible_via_arc_mutex() {
     for (i, val) in entries.iter().enumerate() {
         assert_eq!(*val, (i + 1) as i32, "entry {i} should be {}", i + 1);
     }
+}
+
+// ── Driver properties: cross-job independence + per-job non-overlap ─────────
+//
+// These run on real time (multi-thread) because they observe genuine
+// concurrency between and within jobs — the whole point of the single-driver
+// model. The driver must never await one job's tick inline (that would
+// serialize other jobs), yet must never fire the SAME job again until its
+// previous tick completes.
+
+#[r2e_core::test]
+async fn jobs_run_concurrently_not_serialized() {
+    let slow_ticks = Arc::new(AtomicUsize::new(0));
+    let fast_ticks = Arc::new(AtomicUsize::new(0));
+
+    // Job A: 50ms cadence, each tick sleeps ~300ms (long-running).
+    let sa = slow_ticks.clone();
+    let slow = ScheduledTaskDef::new(
+        "slow",
+        ScheduleConfig::Interval(Duration::from_millis(50)),
+        sa,
+        |sa: Arc<AtomicUsize>| async move {
+            sa.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        },
+    );
+
+    // Job B: 50ms cadence, fast counter.
+    let fast = counting_task(
+        "fast",
+        ScheduleConfig::Interval(Duration::from_millis(50)),
+        fast_ticks.clone(),
+    );
+
+    let token = CancellationToken::new();
+    let sb: Box<dyn ScheduledTask> = Box::new(slow);
+    let fb: Box<dyn ScheduledTask> = Box::new(fast);
+    start_jobs_helper([sb, fb], token.clone(), test_pool());
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    token.cancel();
+
+    // While A's first tick is still sleeping, B must keep ticking many times.
+    let f = fast_ticks.load(Ordering::SeqCst);
+    assert!(
+        f >= 4,
+        "fast job must keep ticking while the slow job runs, got {f}"
+    );
+    assert!(slow_ticks.load(Ordering::SeqCst) >= 1, "slow job should have fired");
+}
+
+#[r2e_core::test]
+async fn per_job_ticks_never_overlap() {
+    // Gauge of concurrent executions of THIS job; `saw_overlap` latches if it
+    // ever exceeds 1.
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let saw_overlap = Arc::new(AtomicBool::new(false));
+
+    let c = concurrent.clone();
+    let o = saw_overlap.clone();
+    // 50ms cadence but each tick holds for 150ms: without the non-overlap
+    // invariant, ticks would pile up and the gauge would exceed 1.
+    let task = ScheduledTaskDef::new(
+        "overlap_guard",
+        ScheduleConfig::Interval(Duration::from_millis(50)),
+        (c, o),
+        |(c, o): (Arc<AtomicUsize>, Arc<AtomicBool>)| async move {
+            let live = c.fetch_add(1, Ordering::SeqCst) + 1;
+            if live > 1 {
+                o.store(true, Ordering::SeqCst);
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            c.fetch_sub(1, Ordering::SeqCst);
+        },
+    );
+
+    let token = CancellationToken::new();
+    let boxed: Box<dyn ScheduledTask> = Box::new(task);
+    start_jobs_helper([boxed], token.clone(), test_pool());
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    token.cancel();
+
+    assert!(
+        !saw_overlap.load(Ordering::SeqCst),
+        "a job's ticks must never overlap with themselves"
+    );
 }

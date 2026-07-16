@@ -373,6 +373,7 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// ```ignore
 /// AppBuilder::new()
 ///     .plugin(Scheduler)          // provides CancellationToken
+///     .plugin(Executor)           // Scheduler runs ticks on the shared pool
 ///     .provide(pool)              // provides DbPool
 ///     .plugin(MyPlugin { .. })    // ✅ compiles: both deps are in P
 ///
@@ -967,6 +968,22 @@ impl DeferredContext<'_> {
     /// registration or serve hooks.
     pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
         self.plugin_data.insert(std::any::TypeId::of::<D>(), Box::new(data));
+    }
+
+    /// Remove and return plugin data stored earlier, if present.
+    ///
+    /// The counterpart of [`store_data`](Self::store_data) /
+    /// [`PluginInstallContext::store_data`]: a plugin can stash a non-`Clone`
+    /// value at install time (buffered sugar is flushed into plugin data before
+    /// `configure` runs) and move it out here in its
+    /// [`configure`](crate::PreStatePlugin::configure) hook — e.g. a command
+    /// channel receiver that must travel into a serve hook. Returns `None` when
+    /// no value of type `D` was stored.
+    pub fn take_data<D: Any + Send + Sync + 'static>(&mut self) -> Option<D> {
+        self.plugin_data
+            .remove(&std::any::TypeId::of::<D>())
+            .and_then(|d| d.downcast::<D>().ok())
+            .map(|b| *b)
     }
 
     /// Add a serve hook that runs when the server starts.

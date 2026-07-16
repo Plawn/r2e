@@ -22,6 +22,16 @@ impl ScheduledJobs {
     async fn delayed_task(&self) {
         // runs every 60s, first run after 10s delay
     }
+
+    #[scheduled(every = "50ms", overlap = "concurrent")]
+    async fn overlapping_task(&self) {
+        // may overlap with itself under sustained load
+    }
+
+    #[scheduled(cron = "0 */5 * * * *", overlap = "skip")]
+    async fn non_overlapping_cron(&self) {
+        // explicit skip (the default) alongside cron
+    }
 }
 
 fn main() {}

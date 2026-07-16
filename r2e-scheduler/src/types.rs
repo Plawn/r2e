@@ -6,7 +6,26 @@ use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
+
+/// What the scheduler does when a job's own tick is still running as its next
+/// fire time arrives.
+///
+/// The policy is per-job and only concerns a job overlapping *with itself*;
+/// different jobs always run concurrently regardless.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum OverlapPolicy {
+    /// Never run a job concurrently with itself: the next tick is armed only
+    /// when the running one completes. A fire that comes due while the previous
+    /// tick is still in flight is skipped (cadence is preserved — the schedule
+    /// is advanced, not stalled). This is the default.
+    #[default]
+    Skip,
+    /// Let a job overlap with itself: the next tick is armed at *fire* time, so
+    /// a slow tick does not hold back the following one. Ticks pile up under
+    /// sustained load. Interval cadence stays anchored; cron recomputes the next
+    /// fire when the job fires.
+    Concurrent,
+}
 
 /// How a scheduled task should be triggered.
 pub enum ScheduleConfig {
@@ -106,7 +125,24 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
     }
 }
 
-/// A scheduled task that can be started.
+/// A runnable schedule handed to the driver.
+///
+/// Produced by [`ScheduledTask::into_job`]. The task's state is already
+/// captured inside `run` (a clone happens per tick — the documented contract),
+/// so the driver only needs the name, the schedule, and a nullary factory that
+/// produces one tick future per fire.
+pub struct ScheduledJob {
+    /// The name of this task (for logging and the job registry).
+    pub name: String,
+    /// The schedule configuration.
+    pub schedule: ScheduleConfig,
+    /// How this job behaves when a tick is still running as the next fire is due.
+    pub overlap: OverlapPolicy,
+    /// Produces one tick future each time the job fires.
+    pub run: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+}
+
+/// A scheduled task that can be converted into a driver [`ScheduledJob`].
 ///
 /// This trait uses `self: Box<Self>` to allow the task to take ownership
 /// of captured state. No generic type T appears in the trait methods,
@@ -114,6 +150,11 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
 ///
 /// The `'static` bound is required so that `Box<dyn ScheduledTask>` can be
 /// stored as `Box<dyn Any>` for type erasure in the core crate.
+///
+/// All schedules are driven by a single driver task (see
+/// [`start_jobs`](crate::start_jobs)); tick bodies are submitted to the shared
+/// [`PoolExecutor`](r2e_executor::PoolExecutor) rather than run inline, so a
+/// panicking tick is contained in its pool job and the driver keeps ticking.
 pub trait ScheduledTask: Send + 'static {
     /// The name of this task (for logging).
     fn name(&self) -> &str;
@@ -121,11 +162,8 @@ pub trait ScheduledTask: Send + 'static {
     /// The schedule configuration.
     fn schedule(&self) -> &ScheduleConfig;
 
-    /// Start the task with the given cancellation token.
-    ///
-    /// This spawns a Tokio task that runs according to the schedule
-    /// until cancellation is requested.
-    fn start(self: Box<Self>, cancel: CancellationToken);
+    /// Convert into a [`ScheduledJob`] the driver can run.
+    fn into_job(self: Box<Self>) -> ScheduledJob;
 }
 
 /// Extract scheduled tasks from type-erased boxes.
@@ -152,6 +190,10 @@ pub fn extract_tasks(boxed: Vec<Box<dyn Any + Send>>) -> Vec<Box<dyn ScheduledTa
 pub struct ScheduledTaskDef<T: Clone + Send + Sync + 'static> {
     pub name: String,
     pub schedule: ScheduleConfig,
+    /// Self-overlap policy for this task. Defaults to [`OverlapPolicy::Skip`]
+    /// (via [`new`](Self::new) / [`from_fn`](Self::from_fn)); set it with
+    /// [`with_overlap`](Self::with_overlap).
+    pub overlap: OverlapPolicy,
     pub state: T,
     pub task: Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
 }
@@ -189,6 +231,7 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
         Self {
             name,
             schedule,
+            overlap: OverlapPolicy::Skip,
             state,
             task: Box::new(move |state| {
                 let fut = task(state);
@@ -196,6 +239,17 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
                 Box::pin(async move { fut.await.log_if_err(&task_name) })
             }),
         }
+    }
+
+    /// Set this task's self-overlap policy (default [`OverlapPolicy::Skip`]).
+    ///
+    /// ```ignore
+    /// ScheduledTaskDef::from_fn("poll", "50ms".parse()?, || async { work().await })
+    ///     .with_overlap(OverlapPolicy::Concurrent);
+    /// ```
+    pub fn with_overlap(mut self, overlap: OverlapPolicy) -> Self {
+        self.overlap = overlap;
+        self
     }
 
     /// Type-erase this definition into the `Box<dyn Any + Send>` shape stored
@@ -240,27 +294,19 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTask for ScheduledTaskDef<T> {
         &self.schedule
     }
 
-    fn start(self: Box<Self>, cancel: CancellationToken) {
-        let name = self.name;
-        let schedule = self.schedule;
+    fn into_job(self: Box<Self>) -> ScheduledJob {
+        // Move state and the task closure into a nullary factory. For
+        // `#[scheduled]` macro tasks `state` is `()` so this clone is free; for
+        // dynamic tasks with real state, the per-tick clone is the existing
+        // documented contract.
         let state = self.state;
         let task = self.task;
-
-        r2e_core::rt::spawn(async move {
-            tracing::info!(task = %name, "Scheduled task started");
-            match schedule {
-                ScheduleConfig::Interval(interval) => {
-                    run_interval(&name, interval, Duration::ZERO, state, cancel, &*task).await;
-                }
-                ScheduleConfig::IntervalWithDelay { interval, initial_delay } => {
-                    run_interval(&name, interval, initial_delay, state, cancel, &*task).await;
-                }
-                ScheduleConfig::Cron(expr) => {
-                    run_cron(&name, &expr, state, cancel, &*task).await;
-                }
-            }
-            tracing::info!(task = %name, "Scheduled task stopped");
-        });
+        ScheduledJob {
+            name: self.name,
+            schedule: self.schedule,
+            overlap: self.overlap,
+            run: Box::new(move || task(state.clone())),
+        }
     }
 }
 
@@ -281,75 +327,6 @@ impl<E: std::fmt::Display> ScheduledResult for Result<(), E> {
     fn log_if_err(self, task_name: &str) {
         if let Err(e) = self {
             tracing::error!(task = %task_name, error = %e, "Scheduled task failed");
-        }
-    }
-}
-
-async fn run_interval<T: Clone + Send + Sync + 'static>(
-    name: &str,
-    interval: Duration,
-    initial_delay: Duration,
-    state: T,
-    cancel: CancellationToken,
-    task: &(dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync),
-) {
-    if !initial_delay.is_zero() {
-        tokio::select! {
-            _ = r2e_core::rt::sleep(initial_delay) => {},
-            _ = cancel.cancelled() => { return; }
-        }
-    }
-
-    let mut tick = r2e_core::rt::interval(interval);
-    tick.set_missed_tick_behavior(r2e_core::rt::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = tick.tick() => {
-                tracing::debug!(task = %name, "Executing scheduled task");
-                task(state.clone()).await;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            }
-        }
-    }
-}
-
-async fn run_cron<T: Clone + Send + Sync + 'static>(
-    name: &str,
-    expr: &str,
-    state: T,
-    cancel: CancellationToken,
-    task: &(dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync),
-) {
-    let schedule = match expr.parse::<cron::Schedule>() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(task = %name, error = %e, "Invalid cron expression");
-            return;
-        }
-    };
-
-    loop {
-        let now = chrono::Utc::now();
-        let next = match schedule.upcoming(chrono::Utc).next() {
-            Some(n) => n,
-            None => {
-                tracing::warn!(task = %name, "No more upcoming cron executions");
-                break;
-            }
-        };
-
-        let until = (next - now).to_std().unwrap_or(Duration::from_secs(1));
-
-        tokio::select! {
-            _ = r2e_core::rt::sleep(until) => {
-                tracing::debug!(task = %name, "Executing cron task");
-                task(state.clone()).await;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            }
         }
     }
 }

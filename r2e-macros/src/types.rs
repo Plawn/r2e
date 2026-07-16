@@ -82,6 +82,19 @@ pub struct ScheduledConfig {
     /// Initial delay in milliseconds (parsed from integer seconds or duration string).
     pub initial_delay_ms: Option<u64>,
     pub name: Option<String>,
+    /// Self-overlap policy from `#[scheduled(overlap = "...")]` (default `Skip`).
+    pub overlap: OverlapMode,
+}
+
+/// Parsed `overlap = "..."` value for `#[scheduled]` — mirrors
+/// `r2e_scheduler::OverlapPolicy`.
+#[derive(Default, Clone, Copy)]
+pub enum OverlapMode {
+    /// Never run a job concurrently with itself (default).
+    #[default]
+    Skip,
+    /// Let a job overlap with itself.
+    Concurrent,
 }
 
 pub struct ScheduledMethod {

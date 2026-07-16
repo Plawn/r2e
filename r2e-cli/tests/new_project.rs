@@ -379,6 +379,7 @@ fn new_full() {
     assert!(app.contains("LocalEventBus"));
     assert!(app.contains("JwtClaimsValidator"));
     assert!(app.contains("Scheduler"));
+    assert!(app.contains("Executor"));
     assert!(app.contains("OpenApiPlugin"));
     assert!(app.contains("GrpcServer"));
 }

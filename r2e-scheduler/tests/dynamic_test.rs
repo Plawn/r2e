@@ -6,8 +6,10 @@ use std::time::Duration;
 
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::AppBuilder;
+use r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
-    extract_tasks, AppBuilderSchedulerExt, ScheduleConfig, Scheduler, ScheduledTaskDef,
+    extract_tasks, start_jobs, AppBuilderSchedulerExt, ScheduleConfig, ScheduledJobRegistry,
+    ScheduledTaskDef, Scheduler, SchedulerCommands,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 async fn schedule_task_lands_under_scheduler_marker() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
@@ -57,6 +60,7 @@ async fn schedule_tasks_registers_a_config_driven_batch() {
 
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await
         .schedule_tasks(defs);
@@ -77,6 +81,7 @@ async fn dynamic_task_runs_and_stops_on_cancel() {
 
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
@@ -97,9 +102,15 @@ async fn dynamic_task_runs_and_stops_on_cancel() {
     assert_eq!(tasks.len(), 1);
 
     let token = CancellationToken::new();
-    for t in tasks {
-        t.start(token.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        token.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
@@ -125,6 +136,7 @@ async fn result_returning_closure_logs_instead_of_panicking() {
 
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
@@ -145,9 +157,15 @@ async fn result_returning_closure_logs_instead_of_panicking() {
     let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
 
     let token = CancellationToken::new();
-    for t in tasks {
-        t.start(token.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        token.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     token.cancel();
@@ -163,6 +181,7 @@ async fn schedule_task_with_pulls_state_from_bean_context() {
 
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .provide(counter.clone())
         .build_state()
         .await
@@ -186,9 +205,15 @@ async fn schedule_task_with_pulls_state_from_bean_context() {
 
     // The captured state is the provided bean: ticks land on `counter`.
     let token = CancellationToken::new();
-    for t in tasks {
-        t.start(token.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        token.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     token.cancel();
     assert!(
@@ -203,6 +228,7 @@ async fn schedule_tasks_with_builds_a_batch_from_the_context() {
 
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .provide(counter.clone())
         .build_state()
         .await

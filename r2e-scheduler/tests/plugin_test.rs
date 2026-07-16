@@ -4,8 +4,10 @@ use std::time::Duration;
 
 use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::AppBuilder;
+use r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
-    extract_tasks, ScheduleConfig, Scheduler, ScheduledTask, ScheduledTaskDef,
+    extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, Scheduler, ScheduledTask,
+    ScheduledTaskDef, SchedulerCommands,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +19,7 @@ fn counting_task(
     counter: Arc<AtomicUsize>,
 ) -> ScheduledTaskDef<Arc<AtomicUsize>> {
     ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
         name: name.to_string(),
         schedule,
         state: counter,
@@ -41,6 +44,7 @@ fn boxed_task(
 async fn scheduler_plugin_provides_token() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await;
 
@@ -53,6 +57,7 @@ async fn scheduler_plugin_provides_token() {
 async fn scheduler_plugin_stores_registry() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await;
 
@@ -64,6 +69,7 @@ async fn scheduler_plugin_stores_registry() {
 async fn registry_collects_and_extracts() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await;
 
@@ -89,6 +95,7 @@ async fn registry_collects_and_extracts() {
 async fn full_lifecycle_without_serve() {
     let app = AppBuilder::new()
         .plugin(Scheduler)
+        .plugin(Executor)
         .build_state()
         .await;
 
@@ -110,9 +117,15 @@ async fn full_lifecycle_without_serve() {
     assert_eq!(tasks.len(), 1);
 
     let token = CancellationToken::new();
-    for t in tasks {
-        t.start(token.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        token.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
 
     // Let it run a bit
     tokio::time::sleep(Duration::from_millis(200)).await;

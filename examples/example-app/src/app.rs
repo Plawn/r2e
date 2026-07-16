@@ -10,6 +10,7 @@ use r2e::prelude::*;
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 use r2e::r2e_prometheus::Prometheus;
+use r2e::r2e_executor::Executor;
 use r2e::r2e_scheduler::Scheduler;
 
 pub mod controllers;
@@ -77,6 +78,7 @@ impl App for ExampleApp {
 
     async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         b.plugin(Scheduler)
+            .plugin(Executor)
             .plugin(
                 Prometheus::builder()
                     .endpoint("/metrics")

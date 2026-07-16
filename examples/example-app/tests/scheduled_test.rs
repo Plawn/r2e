@@ -4,7 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e::prelude::*;
-use r2e::r2e_scheduler::extract_tasks;
+use r2e::r2e_executor::{ExecutorConfig, PoolExecutor};
+use r2e::r2e_scheduler::{
+    extract_tasks, start_jobs, ScheduledJobRegistry, ScheduledTask, SchedulerCommands,
+};
 use r2e::Controller as ControllerTrait;
 use tokio_util::sync::CancellationToken;
 
@@ -179,9 +182,15 @@ async fn test_scheduled_interval_runs() {
     assert!(!tasks.is_empty(), "Should have at least one scheduled task");
 
     // Start all tasks
-    for task in tasks {
-        task.start(cancel.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        cancel.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
 
     // Wait for at least 2 ticks (interval = 1s, wait 2.5s)
     tokio::time::sleep(Duration::from_millis(2500)).await;
@@ -220,9 +229,16 @@ async fn test_scheduled_cancellation_stops() {
     let boxed_tasks = IntervalCounter::boxed_tasks(builder.state(), core, builder.bean_context());
     let tasks = extract_tasks(boxed_tasks);
 
-    for task in tasks {
-        task.start(cancel.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        cancel.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
 
     // Let it run once
     tokio::time::sleep(Duration::from_millis(1200)).await;
@@ -263,9 +279,15 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
     assert_eq!(tasks.len(), 2);
 
     let cancel = CancellationToken::new();
-    for task in tasks {
-        task.start(cancel.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        cancel.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
     tokio::time::sleep(Duration::from_millis(2500)).await;
     cancel.cancel();
 
@@ -385,9 +407,15 @@ async fn scheduled_task_reuses_supplied_core_for_every_tick() {
 
     let tasks = extract_tasks(boxed);
     let cancel = CancellationToken::new();
-    for task in tasks {
-        task.start(cancel.clone());
-    }
+    let pool = PoolExecutor::new(ExecutorConfig::default());
+    let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
+    start_jobs(
+        jobs,
+        cancel.clone(),
+        pool,
+        ScheduledJobRegistry::new(),
+        SchedulerCommands::disconnected(),
+    );
     tokio::time::sleep(Duration::from_millis(2200)).await;
     cancel.cancel();
 

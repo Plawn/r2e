@@ -123,6 +123,8 @@ pub fn app_rs(opts: &ProjectOptions) -> String {
     }
     if opts.scheduler {
         imports.push_str("use r2e::r2e_scheduler::Scheduler;\n");
+        // Scheduler runs tick bodies on the shared pool from the Executor plugin.
+        imports.push_str("use r2e::r2e_executor::Executor;\n");
     }
     if opts.grpc {
         imports.push_str("use r2e::r2e_grpc::GrpcServer;\n");
@@ -187,6 +189,7 @@ async fn jwt_validator(
 
     if opts.scheduler {
         lines.push("            .plugin(Scheduler)".to_string());
+        lines.push("            .plugin(Executor)".to_string());
     }
     if opts.grpc {
         lines.push("            .plugin(GrpcServer::on_port(\"0.0.0.0:50051\"))".to_string());
