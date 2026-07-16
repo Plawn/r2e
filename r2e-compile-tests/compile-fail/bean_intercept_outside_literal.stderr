@@ -1,0 +1,5 @@
+error[E0063]: missing field `__r2e_decos` in initializer of `CleanupService`
+  --> compile-fail/bean_intercept_outside_literal.rs:29:5
+   |
+29 |     CleanupService { tag: "outside" }
+   |     ^^^^^^^^^^^^^^ missing `__r2e_decos`

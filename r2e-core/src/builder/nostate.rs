@@ -387,6 +387,30 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self
     }
 
+    /// Like [`override_bean`](Self::override_bean), but ALSO decorates the
+    /// pinned instance: its interceptor chains are built from the resolved
+    /// graph at `build_state()` and its decorator slot is filled.
+    ///
+    /// Plain `override_bean` skips **all** of the bean's registration hooks, so
+    /// a pinned instance runs undecorated (its `#[intercept]` sites never
+    /// fire). This sibling re-enables **decoration only**: it queues the
+    /// deco-fill hook via
+    /// [`register_deco_fill`](crate::beans::BeanRegistry::register_deco_fill)
+    /// (TypeId-deduped, run once against the final graph). Everything else the
+    /// pin skips stays skipped — the bean's `#[scheduled]` tasks are still NOT
+    /// collected and its `#[post_construct]` still does NOT run.
+    ///
+    /// ```ignore
+    /// TestApp::boot_with::<MyApp>(|b| {
+    ///     b.override_bean_decorated(CleanupService::new(stub_pool))
+    /// }).await
+    /// ```
+    pub fn override_bean_decorated<B: crate::decorator::BeanDecoFill>(mut self, value: B) -> Self {
+        self.shared.bean_registry.pin_provide(value);
+        self.shared.bean_registry.register_deco_fill::<B>();
+        self
+    }
+
     /// Supply a pre-loaded [`R2eConfig`](crate::config::R2eConfig) that
     /// [`load_config`](Self::load_config) consumes **in place of** its disk
     /// read.

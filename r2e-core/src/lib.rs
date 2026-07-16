@@ -59,7 +59,7 @@ pub use config::{
     validate_keys, validate_section,
 };
 pub use controller::{ContextConstruct, Controller, EndpointDeps};
-pub use decorator::{DecoratorSpec, SelfBuilt};
+pub use decorator::{BeanDecoFill, Decorate, DecoratorSpec, HasDecoSlot, SelfBuilt, SharedDecoSlot};
 pub use module::FeatureModule;
 pub use extract::{
     BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via, ViaAxum, ViaBean, ViaOpt,

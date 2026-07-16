@@ -246,6 +246,37 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
   method — the promotion is flagged in the generated rustdoc. One edge: a
   core that never went through registration (hand-built `from_context` in a
   test) has an empty slot → direct calls run undecorated.
+- **Bean-level decorators** (W10 phase 2): `#[intercept]` also works on
+  `#[scheduled]`/`#[consumer]` methods inside a `#[bean]` impl, plus an
+  impl-level `#[intercept]` on the `#[bean]` impl that wraps every such method
+  (running before method-level ones). Built once at registration from the
+  resolved graph (same `DecoratorSpec::build` path), and each intercept spec's
+  `Deps` is folded into the bean's `Registrable::Deps` (missing bean = compile
+  error at `.register::<T>()`; the runtime `dependencies()` vec stays
+  constructor-only). Consumer interception covers both fan-out subscribers and
+  request-reply responders (`Interceptor::around` is generic over the return
+  type `R`, so the responder reply flows through unchanged).
+
+  **`SharedDecoSlot` vs `DecoSlot`.** Controllers store their prebuilt
+  scheduled sets in a `DecoSlot` on the core; the core lives behind one `Arc`,
+  so `DecoSlot::clone` returning an **empty** slot is harmless. Beans are
+  cloned by **value** everywhere (`ctx.get::<T>()`, constructor injection into
+  dependents) — and those clones are handed out *during* graph resolution,
+  before the slot is filled — so beans use `SharedDecoSlot`, whose `Clone`
+  **shares** the inner `Arc<OnceLock<…>>`. A single fill (once, during
+  `build_state()`, before `#[post_construct]`) is therefore observed by every
+  clone. `#[bean]` on the **struct** injects the hidden `SharedDecoSlot` field
+  and an `impl HasDecoSlot`; the generated wrappers reach it only via
+  `HasDecoSlot` (an `on_unimplemented` diagnostic names the fix if the struct
+  attribute is missing). Sync scheduled sources are promoted to `async fn`,
+  same as controllers; direct in-code calls self-intercept; pinning the bean
+  (`override_bean`) skips the fill → undecorated (two explicit opt-ins re-enable
+  it: `Decorate::decorate(ctx)` for hand-built instances, and
+  `.override_bean_decorated(instance)` on the builder — decoration only, the
+  pin's dropped tasks/`#[post_construct]` stay skipped). See
+  `docs/claude/beans-di.md` for the full DX (literal rewrite,
+  outside-the-impl limitation).
+
 - **Module controllers' decorator deps ARE compile-checked** (since the
   post-Phase-6 `EndpointDeps` carrier, formerly `ControllerDeps`): they
   register through the unchecked backend, but the module-scope check folds

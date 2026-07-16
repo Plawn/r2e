@@ -155,7 +155,7 @@ Remaining:
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
   before relying on it.
 
-## W10 — Bean/controller feature unification (in progress — phase 1 shipped 2026-07-16)
+## W10 — Bean/controller feature unification (in progress — phases 1+2 shipped 2026-07-16)
 
 Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
 controller-only by implementation accident, not by design — `#[scheduled]`,
@@ -194,10 +194,26 @@ refactor):
    `examples/example-app/tests/bean_scheduled_test.rs`, compile-pass/fail in
    `r2e-compile-tests` (`bean_scheduled*`). Docs: beans-di.md, subsystems.md,
    llm.txt.
-2. **Bean-level decorators** — a DecoSlot equivalent on bean cores;
-   `#[intercept]` on bean scheduled/consumer methods through the existing
-   `DecoratorSpec`/`build_decorator` machinery, deps compile-checked like
-   controller decorators.
+2. **Bean-level decorators — DONE (2026-07-16).** `#[intercept]` on bean
+   `#[scheduled]`/`#[consumer]` methods + impl-level `#[intercept]` on the
+   `#[bean]` impl, via the existing `DecoratorSpec`/`build_decorator` +
+   `generate_named_deco_items`/`wrap_with_deco_interceptors` machinery; spec
+   `Deps` folded into `Registrable::Deps` (`deps_fold_from_base`), so a missing
+   bean is a compile error at `.register` (runtime `dependencies()` stays
+   constructor-only). Per-instance storage via a new `SharedDecoSlot`
+   (Arc-shared across clones, unlike controller `DecoSlot` which clones empty —
+   beans are cloned by value before the fill) + `HasDecoSlot` trait
+   (`on_unimplemented` names the fix). `#[bean]` now also works **on the
+   struct** (injects the hidden `pub #[doc(hidden)] __r2e_decos` field + slot
+   impl); the impl macro rewrites in-block struct literals to init it (skips
+   `..rest`). Single fill at `build_state()` before `#[post_construct]`
+   (`BeanRegistry::register_deco_fill` + `BeanDecoFill`). Direct calls
+   self-intercept; sync scheduled sources promoted to `async fn`; consumer
+   interception covers subscribers AND responders (bean `#[consumer]` gained
+   responder support). Rejected: `#[intercept]` on a plain bean method.
+   Tests: `examples/example-app/tests/bean_intercept_test.rs`, compile
+   pass/fail `bean_intercept*` in `r2e-compile-tests`. Docs: beans-di.md,
+   guards-interceptors.md, llm.txt.
 3. **Controller core = bean** — `#[routes]`' transverse codegen
    (scheduled/consumer collection, interceptor wiring) delegates to the
    bean-level machinery; `#[post_construct]` becomes valid on controllers for
@@ -243,3 +259,19 @@ the escape hatch for hand-written loops.
   `GrpcRolesGuard`≈`RolesGuard` ~30-line duplication accepted.
 - **Dev services are explicit** (`DevPostgres::shared()`), never
   config-sniffed.
+- **Bean interception is Quarkus-style, opt-in via `#[bean]` on the struct**
+  (user decision 2026-07-16): direct in-code calls run the chain too (slot
+  field injected by the struct attribute). The Spring-style "ticks/events
+  only" fallback was considered and rejected — no silent semantic split.
+  Accepted DX cost: struct literals outside the `#[bean]` impl block (and
+  field-enumerating derives) need the hidden `__r2e_decos` field.
+- **Pinned override = undecorated** (user decision 2026-07-16): pinning a
+  bean (`override_bean`) skips ALL its hooks — post_construct, scheduled
+  sources, and the decorator fill. One rule, no exceptions. Canonical test
+  pattern: pin the *dependencies*, not the decorated bean, so the graph-built
+  bean keeps its interceptors while IO is faked. **Explicit opt-ins added
+  (2026-07-16, default unchanged):** `Decorate::decorate(ctx)` (blanket
+  extension trait over `BeanDecoFill`, not in the prelude) fills a hand-built
+  instance's slot from a resolved graph; `.override_bean_decorated(instance)`
+  pins AND queues the deco fill (decoration only — the pin's dropped scheduled
+  tasks / skipped `#[post_construct]` stay that way).

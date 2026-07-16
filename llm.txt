@@ -1042,10 +1042,59 @@ b.plugin(Executor).plugin(Scheduler)
 
 Default task name is `<Type>_<method>` (`name = "..."` to override). Needs the
 `scheduler` feature (the generated impl references `r2e_scheduler` types — same
-requirement as controller `#[scheduled]`). Limits:
-`#[intercept]` on a bean scheduled method is a compile error (interceptors on
-scheduled methods are controller-only for now), as are `#[bean(lazy)]` +
-`#[scheduled]` and combining `#[scheduled]` with `#[consumer]` on one method.
+requirement as controller `#[scheduled]`). Limits: `#[bean(lazy)]` +
+`#[scheduled]` is a compile error, as is combining `#[scheduled]` with
+`#[consumer]` on one method.
+
+**Bean-level interceptors.** `#[scheduled]` and `#[consumer]` methods in a
+`#[bean]` impl accept `#[intercept(...)]` (and an impl-level `#[intercept(...)]`
+that wraps every such method, running before method-level ones). Same
+`DecoratorSpec` values as on controllers; their `Deps` are folded into the
+bean's registration deps (missing bean = compile error at `.register`). This
+needs per-instance storage so DIRECT calls self-intercept too, so **`#[bean]`
+must also annotate the struct** (it injects a hidden decorator slot):
+
+```rust
+#[bean]                        // struct form — injects the hidden slot
+#[derive(Clone)]
+pub struct CleanupService { ticks: Arc<AtomicUsize> }
+
+#[bean]                        // impl form
+#[intercept(Logged::info())]   // impl-level: wraps every scheduled/consumer method
+impl CleanupService {
+    pub fn new(ticks: Arc<AtomicUsize>) -> Self { Self { ticks } }
+
+    #[scheduled(every = "5m")]
+    #[intercept(AuditTick::spec("purge"))]   // method-level (after impl-level)
+    async fn purge(&self) { ... }
+}
+```
+
+A sync `#[scheduled]` method with `#[intercept]` is promoted to `async fn`
+(call it with `.await`). Interceptors on bean `#[consumer]` methods work for
+both fan-out subscribers and request-reply responders. `#[intercept]` on a
+plain (non-scheduled/consumer) bean method is a compile error. Struct literals
+of the bean type *outside* the impl block need an explicit
+`__r2e_decos: Default::default()` (the field is `pub #[doc(hidden)]`).
+
+A plain `.override_bean(instance)` pin skips ALL of the bean's hooks, so the
+pinned instance runs **undecorated**. Two explicit opt-ins re-enable decoration
+for instances that bypass normal registration (default unchanged):
+
+```rust
+// Hand-built instance — fill its slot from a resolved graph (Decorate trait,
+// NOT in the prelude): `use r2e::Decorate;`
+let svc = CleanupService::new(stub);
+svc.decorate(app.bean_context());   // idempotent; clones after this share it
+svc.purge().await;                   // now intercepted
+
+// Pinned test double — pin AND decorate (scheduled tasks / post_construct still skipped)
+b.override_bean_decorated(CleanupService::new(stub))
+```
+In tests, pinning the intercepted bean itself (`override_bean(instance)`)
+skips its registration → the slot is never filled → it runs **undecorated**
+(and its scheduled tasks are dropped). To keep interceptors active, pin the
+*dependencies* instead and let the graph build the intercepted bean.
 
 Dynamic (config-driven) tasks — post-`build_state()`:
 

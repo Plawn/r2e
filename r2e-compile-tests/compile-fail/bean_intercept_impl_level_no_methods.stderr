@@ -1,0 +1,13 @@
+error: impl-level #[intercept] on a #[bean] impl requires at least one #[scheduled] or #[consumer] method — it applies to those methods, and there are none here
+  --> compile-fail/bean_intercept_impl_level_no_methods.rs:13:1
+   |
+13 | #[intercept(Logged::info())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::r2e_utils::Logged`
+ --> compile-fail/bean_intercept_impl_level_no_methods.rs:6:5
+  |
+6 | use r2e::r2e_utils::Logged;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -270,6 +270,10 @@ When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventS
 
 Multiple buses of different types are supported — each `#[consumer]` references a different field by name.
 
+Both consumer kinds are supported, classified by return type (same rule as controllers):
+- **fan-out subscriber** — `-> ()` or `-> Result<(), E>` — wired via `EventBus::subscribe`.
+- **request-reply responder** — any other return type — wired via `EventBus::respond`; the method's return value IS the reply. Responders take a single handler, so they reject the fan-out options (`topic`/`deserializer`/`filter`/`retry`/`dlq`).
+
 ## `#[scheduled]` on beans
 
 Beans declare scheduled tasks with the same `#[scheduled]` attribute as controllers (`every`/`cron`, `initial_delay`, `name`, `overlap` — same parser, same compile-time cron validation):
@@ -301,10 +305,70 @@ Semantics shared with controller `#[scheduled]`:
 
 The generated impl references `r2e_scheduler` types, so the app needs the `scheduler` facade feature (same requirement as controller `#[scheduled]`); without it, the error is a raw "cannot find `r2e_scheduler`" pointing at the `#[bean]` impl.
 
-Divergences (W10 phase 1):
-- `#[intercept]` on a bean scheduled method is a **compile error** — interceptors on scheduled methods are controller-only until bean-level decorators land (W10 phase 2).
+Divergences:
+- `#[intercept]` on a bean scheduled method is supported (W10 phase 2 — see below).
 - `#[bean(lazy)]` + `#[scheduled]` is a compile error (like `#[consumer]` and `#[post_construct]`).
 - `#[scheduled]` + `#[consumer]` on the same method is a compile error.
+
+## Bean-level decorators — `#[intercept]` on `#[scheduled]`/`#[consumer]` (W10 phase 2)
+
+`#[scheduled]` and `#[consumer]` methods in a `#[bean]` impl accept
+`#[intercept(...)]`, plus an **impl-level** `#[intercept(...)]` that applies to
+*every* scheduled+consumer method (running BEFORE method-level interceptors,
+same order convention as controller-level interceptors). Interceptors are the
+same `DecoratorSpec` values used on controllers (`SelfBuilt` like
+`Logged::info()`, or bean-reading `#[derive(DecoratorBean)]` specs), built
+**once** at registration from the resolved graph, and their `Deps` are folded
+into the bean's registration deps (a missing bean is a compile error at
+`.register::<T>()`, exactly like a constructor dep).
+
+This needs per-instance storage (so **direct in-code calls** self-intercept
+too, Quarkus-style — `self.tick().await` and `injected_bean.tick().await` run
+the chain), so **`#[bean]` must also annotate the struct**:
+
+```rust
+#[bean]                       // struct form: injects the hidden decorator slot
+#[derive(Clone)]
+pub struct CleanupService {
+    ticks: Arc<AtomicUsize>,
+}
+
+#[bean]                       // impl form
+#[intercept(Logged::info())]  // impl-level: wraps every scheduled/consumer method
+impl CleanupService {
+    pub fn new(ticks: Arc<AtomicUsize>) -> Self {
+        Self { ticks }        // literal auto-rewritten to init the hidden slot
+    }
+
+    #[scheduled(every = "5m")]
+    #[intercept(AuditTick::spec("purge"))]   // method-level, runs after impl-level
+    async fn purge(&self) { /* ... */ }
+
+    #[consumer(bus = "bus")]
+    #[intercept(AuditTick::spec("evt"))]
+    async fn on_event(&self, e: Arc<MyEvent>) -> Reply { /* responder + interceptor */ }
+}
+```
+
+How it works:
+- `#[bean]` on the **struct** injects a hidden `pub #[doc(hidden)] __r2e_decos: SharedDecoSlot` field and an `impl HasDecoSlot`. The generated wrappers reach the slot only through `HasDecoSlot`, so forgetting the struct attribute yields a clear "add `#[bean]` on `struct …`" diagnostic (plus an unavoidable secondary error on the constructor literal).
+- **Clone-sharing:** unlike a controller core's `DecoSlot` (which clones empty), `SharedDecoSlot` **shares** its storage across clones. Beans are cloned by value everywhere (`ctx.get::<T>()`, constructor injection into dependents) — *before* the slot is filled — so a fill through any clone is seen by all. The fill runs once during `build_state()` (from the resolved graph, before `#[post_construct]`).
+- Each intercepted method splits into a hidden `__r2e_bean_<fn>_inner` + a dispatch wrapper that runs the chain when the slot is filled and calls the bare inner otherwise (an unregistered bean — e.g. a hand-built test instance — runs undecorated). A **sync** `#[scheduled]` method with interceptors is **promoted to `async fn`** (the chain must be awaited) — call it with `.await`.
+- **Override skip:** pinning the bean itself (`override_bean`) skips its registration, so the slot is never filled and its methods run undecorated (same as a skipped `#[scheduled]`/`#[post_construct]`). Two explicit opt-ins re-enable decoration for instances that bypass normal registration (the default above is unchanged):
+  - `instance.decorate(ctx)` (the `Decorate` extension trait, blanket-impl'd over `BeanDecoFill`; **not** in the prelude — `use r2e::Decorate`) fills a **hand-built** instance's slot from a resolved `BeanContext`. Idempotent (`OnceLock` first-wins); clones taken after it share the fill. E.g. `let svc = CleanupService::new(stub); svc.decorate(app.bean_context()); svc.purge().await`.
+  - `.override_bean_decorated(instance)` (builder sibling of `override_bean`) pins the instance AND queues its deco fill, so `build_state()` decorates it from the final graph. It re-enables **decoration only** — the pin's dropped `#[scheduled]` tasks stay dropped and `#[post_construct]` stays skipped. The canonical test pattern when you want the interceptors to stay active is to **pin the dependencies, not the decorated bean**: `override_bean(fake_mailer)` and let the graph build the intercepted bean with the fakes injected — full registration, filled slot, decorated methods.
+
+Known limitation (accepted): struct literals of the bean type **outside** the
+`#[bean]` impl block (test mocks, helpers) are not rewritten and fail with
+E0063 `missing field __r2e_decos`. The field is `pub` + `#[doc(hidden)]`, so
+such code can initialize it explicitly (`__r2e_decos: Default::default()`) as
+an escape hatch. Conversely, annotating the struct with `#[bean]` but writing
+*no* intercept sites means the impl-block constructor literal is not rewritten
+→ E0063 on your own literal (fail-loud, documented).
+
+Rejected: `#[intercept]` on a plain bean method (neither `#[scheduled]` nor
+`#[consumer]`) is a compile error — there is no dispatch wrapper to run the
+chain.
 
 ## `#[post_construct]`
 

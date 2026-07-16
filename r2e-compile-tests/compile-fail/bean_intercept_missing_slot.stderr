@@ -1,0 +1,22 @@
+error[E0277]: `CleanupService` has no decorator slot
+  --> compile-fail/bean_intercept_missing_slot.rs:14:1
+   |
+14 | #[bean]
+   | ^^^^^^^ missing the hidden `#[bean]` decorator slot
+   |
+help: the trait `HasDecoSlot` is not implemented for `CleanupService`
+  --> compile-fail/bean_intercept_missing_slot.rs:12:1
+   |
+12 | pub struct CleanupService {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: add `#[bean]` on `struct CleanupService` — `#[intercept]` on a bean `#[scheduled]`/`#[consumer]` method needs the hidden decorator slot injected by the struct attribute
+   = note: this error originates in the attribute macro `bean` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0560]: struct `CleanupService` has no field named `__r2e_decos`
+  --> compile-fail/bean_intercept_missing_slot.rs:14:1
+   |
+14 | #[bean]
+   | ^^^^^^^ `CleanupService` does not have this field
+   |
+   = note: all struct fields are already assigned
+   = note: this error originates in the attribute macro `bean` (in Nightly builds, run with -Z macro-backtrace for more info)

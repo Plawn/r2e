@@ -316,7 +316,7 @@ pub(super) fn sched_field_ident(fn_name: &syn::Ident) -> syn::Ident {
 /// and the registration pass (`controller_impl.rs`) both need them; the
 /// idents are positional (`__i0..`), matching [`generate_named_deco_items`]'s
 /// `DecoSet` layout.
-pub(super) fn intercept_field_idents(count: usize) -> Vec<syn::Ident> {
+pub(crate) fn intercept_field_idents(count: usize) -> Vec<syn::Ident> {
     (0..count).map(|i| format_ident!("__i{}", i)).collect()
 }
 
@@ -389,9 +389,25 @@ pub(crate) fn endpoint_deps_fold<'a>(
     site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
 ) -> TokenStream {
     let krate = r2e_core_path();
+    deps_fold_from_base(
+        quote! { <#endpoint_name as #krate::ContextConstruct>::Deps },
+        site_exprs,
+    )
+}
+
+/// Fold every decorator site's `<Spec as DecoratorSpec>::Deps` onto an
+/// arbitrary `base` dep-list token stream, deduplicated by spec type. Used by
+/// [`endpoint_deps_fold`] (base = `ContextConstruct::Deps`) and by `#[bean]`
+/// (base = the constructor's `TCons` dep list) so bean decorator deps are
+/// compile-checked at `.register::<T>()` alongside the constructor deps.
+pub(crate) fn deps_fold_from_base<'a>(
+    base: TokenStream,
+    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> TokenStream {
+    let krate = r2e_core_path();
 
     let mut seen = std::collections::HashSet::new();
-    let mut deps = quote! { <#endpoint_name as #krate::ContextConstruct>::Deps };
+    let mut deps = base;
     for expr in site_exprs {
         if let Ok((spec, _)) = spec_type_of(expr) {
             if seen.insert(quote!(#spec).to_string()) {
