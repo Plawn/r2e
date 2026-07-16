@@ -401,8 +401,10 @@ Options:
 
 1. Checks that `dx` (Dioxus CLI) is installed (errors with instructions if not)
 2. Generates a `Dioxus.toml` config file if missing (reads project name from `Cargo.toml`)
-3. Runs `dx serve --hot-patch` with the `dev-reload` feature enabled
+3. Supervises `dx serve --hot-patch` with the `dev-reload` feature enabled
 4. Code changes are hot-patched into the running process (~200-500ms turnaround)
+5. Changes to `src/env.rs`, `src/env/**`, `Cargo.toml`, or `build.rs` restart
+   the process so persistent `App::Env` values never cross a layout change
 
 **Prerequisite:**
 
@@ -416,6 +418,8 @@ Your app implements the `App` trait (see [Dev Mode](../advanced/dev-mode.md)):
 - `App::setup()` runs once and returns the persistent `Env` (DB pools, buses) — it survives hot-patches
 - `App::build(b, env)` re-runs on each change; its `load_config` re-reads `application.yaml` from disk each patch, so YAML edits apply on the next hot-patch
 - `r2e::launch!(MyApp)` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload` (it must be the `launch!` macro, not `launch::<MyApp>()`, so the hot-patch loop expands into your tip crate)
+- The canonical app lives in `src/app.rs`: `lib.rs` includes it for tests/prod,
+  while `main.rs` includes it under `dev-reload` so editable code is tip-crate code
 
 ---
 

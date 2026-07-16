@@ -156,12 +156,14 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         templates::project::cargo_toml(opts),
     )?;
 
-    // 2. Blueprint (lib.rs) + thin entry point (main.rs) + integration test.
-    //    The same `app()` boots in production and in tests.
+    // 2. One canonical app source, compiled by the lib for tests/prod and by
+    //    the binary tip crate for real Subsecond hot-patching in dev.
     fs::write(
-        project_dir.join("src/lib.rs"),
-        templates::project::lib_rs(opts),
+        project_dir.join("src/app.rs"),
+        templates::project::app_rs(opts),
     )?;
+    fs::write(project_dir.join("src/lib.rs"), templates::project::lib_rs())?;
+    fs::write(project_dir.join("src/env.rs"), templates::project::env_rs())?;
     fs::write(
         project_dir.join("src/main.rs"),
         templates::project::main_rs(opts),
@@ -210,10 +212,7 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
             project_dir.join("proto/greeter.proto"),
             templates::project::greeter_proto(&opts.name),
         )?;
-        fs::write(
-            project_dir.join("build.rs"),
-            templates::project::build_rs(),
-        )?;
+        fs::write(project_dir.join("build.rs"), templates::project::build_rs())?;
     }
 
     // 8. .gitignore
@@ -231,21 +230,12 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
     println!();
 
     if opts.openapi {
-        println!(
-            "  API docs: {}",
-            "http://localhost:3000/docs".cyan()
-        );
+        println!("  API docs: {}", "http://localhost:3000/docs".cyan());
     }
-    println!(
-        "  Health:   {}",
-        "http://localhost:3000/health".cyan()
-    );
+    println!("  Health:   {}", "http://localhost:3000/health".cyan());
 
     if opts.grpc {
-        println!(
-            "  gRPC:     {}",
-            "localhost:50051".cyan()
-        );
+        println!("  gRPC:     {}", "localhost:50051".cyan());
     }
 
     Ok(())

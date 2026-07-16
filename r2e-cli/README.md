@@ -211,19 +211,24 @@ Start the development server with hot-reload.
 r2e dev [options]
 
 Options:
-  --open    Open browser at http://localhost:3000 after startup
+  --port <PORT>          Forward the application port as R2E_PORT
+  --features <FEAT>...   Enable extra Cargo features
 ```
 
-Wraps [`cargo-watch`](https://github.com/watchexec/cargo-watch) with R2E defaults:
+Supervises `dx serve --hot-patch` with the `dev-reload` feature. Generated
+projects keep one canonical app in `src/app.rs`: the lib includes it for
+tests/prod and the binary includes it in dev so editable code belongs to the
+Subsecond tip crate.
 
-- **Watches:** `src/`, `application.yaml`, `migrations/`
-- **Ignores:** `target/`
-- **Routes:** prints discovered routes before starting the watch loop
+- Controllers, services, and `App::build` use fast hot-patching.
+- `src/env.rs`, `src/env/**`, `Cargo.toml`, and `build.rs` are cold boundaries;
+  changing them restarts the process and recreates `App::Env` safely.
+- `application.yaml` is re-read by `App::build` on the next patch.
 
-Requires `cargo-watch`:
+Requires the Dioxus CLI:
 
 ```bash
-cargo install cargo-watch
+cargo install dioxus-cli
 ```
 
 ---
@@ -245,7 +250,7 @@ Runs 8 checks against the current directory:
 | Configuration file | Warning | `application.yaml` exists |
 | Controllers directory | Warning | `src/controllers/` exists (counts `.rs` files) |
 | Rust toolchain | Error | `rustc --version` succeeds |
-| cargo-watch | Warning | `cargo watch --version` succeeds (needed for `r2e dev`) |
+| Dioxus CLI | Warning | `dx --version` succeeds (needed for `r2e dev`) |
 | Migrations directory | Warning | If a managed database integration is enabled, `migrations/` exists |
 | Application entrypoint | Warning | `src/main.rs` contains a `.serve()` call |
 
@@ -261,7 +266,7 @@ R2E Doctor — Checking project health
   ✓ Configuration file — application.yaml found
   ✓ Controllers directory — 3 controller files
   ✓ Rust toolchain — rustc 1.82.0 (f6e511eec 2024-10-15)
-  ! cargo-watch (for r2e dev) — Not installed. Run: cargo install cargo-watch
+  ! dioxus-cli (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
   ✓ Application entrypoint — serve() call found in main.rs
 

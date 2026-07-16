@@ -69,15 +69,16 @@ R2E supports **Subsecond hot-patching** via Dioxus 0.7. Instead of killing and r
 dev-reload = ["r2e/dev-reload"]
 ```
 
-3. Structure your app with the **`App` trait** — `setup()` (cold, runs once,
-   survives hot-patches) vs `build()` (hot, re-run on every patch):
+3. Put the one canonical **`App` trait** implementation in `src/app.rs`.
+   `lib.rs` includes it for tests/prod and `main.rs` includes it in the binary
+   tip crate only under `dev-reload`:
 
 ```rust
-#[derive(Clone)]
-struct AppEnv {
-    pool: PgPool,
-    event_bus: LocalEventBus,
-}
+// src/app.rs
+pub mod controllers;
+pub mod env;
+
+use env::{setup_env, AppEnv};
 
 pub struct MyApp;
 
@@ -85,10 +86,7 @@ impl App for MyApp {
     type Env = AppEnv;
 
     async fn setup() -> AppEnv {
-        // executed ONCE, persists across hot-patches
-        let pool = PgPool::connect("...").await.unwrap();
-        let event_bus = LocalEventBus::new();
-        AppEnv { pool, event_bus }
+        setup_env().await
     }
 
     async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
@@ -105,7 +103,18 @@ impl App for MyApp {
 ```
 
 ```rust
-// main.rs — one entry point for prod serve AND dev hot-reload
+// src/lib.rs — importable by tests and used by normal production builds
+include!("app.rs");
+```
+
+```rust
+// src/main.rs — compile app.rs in the tip crate only for dev hot-reload
+#[cfg(feature = "dev-reload")]
+include!("app.rs");
+
+#[cfg(not(feature = "dev-reload"))]
+use my_app::MyApp;
+
 #[r2e::main]
 async fn main() {
     r2e::launch!(MyApp).await.unwrap();
@@ -140,7 +149,7 @@ Source code change
     → ~200-500ms turnaround
 ```
 
-### Important limitation: only the *tip crate* is hot-patched
+### Shared-source bridge: tests and real hot-reload together
 
 Subsecond (the engine behind `dx serve --hot-patch`) **only patches the "tip"
 crate — the crate that owns `main.rs`.** Changes to code in *other* crates
@@ -148,20 +157,25 @@ crate — the crate that owns `main.rs`.** Changes to code in *other* crates
 separate library crate) are ignored: the running process keeps serving the
 old code even though `dx` reports "Hot-patching …" and `App::build` re-runs.
 
-**Consequence:** for hot-reload to actually apply your edits, the code you edit
-(controllers, services, `App::build`) must live in the **binary crate**, i.e.
-under `src/main.rs` and its `mod`ules — *not* behind `use my_app::…` from a
-library crate. A thin `main.rs` that only does `use my_app::MyApp;
-r2e::launch!(MyApp)` will re-run the build loop on every patch but serve stale
-code, because `MyApp` and its controllers are compiled into the `my_app`
-library, which Subsecond does not patch.
+R2E's scaffold resolves that Cargo/Subsecond conflict without duplicating the
+declaration: `src/app.rs` is one source file compiled by two targets. The lib
+copy is what `#[r2e::test(app = my_app::MyApp)]` boots. Under `dev-reload`, the
+binary compiles the same source directly, so controllers, services and
+`App::build` belong to the tip crate and are genuinely patched. With the
+feature off, `main.rs` imports the lib and no dev copy or Subsecond dependency
+is present in the production path.
 
-This is why `r2e::launch!` is a macro rather than `r2e::launch::<A>()`: it
-expands the hot-reload loop (and the concrete `__r2e_server` function Subsecond
-patches) *into the tip crate at the call site*. Keeping the app in the tip crate
-is still required for edits to those app files to take effect. Integration tests
-that boot the app through a library crate (`#[r2e::test(app = …)]`) are
-unaffected — they don't use hot-reload.
+Do not replace the conditional `include!("app.rs")` with an unconditional
+`use my_app::MyApp`: that recreates the stale-code layout.
+
+### Cold restart boundary
+
+Controller, service, bean, and route instances are rebuilt with the router on
+each patch. `App::Env` is different: the existing value deliberately survives.
+Define it and its setup helpers in `src/env.rs`. `r2e dev` watches `env.rs`,
+`src/env/**`, `Cargo.toml`, and `build.rs`; changing one stops and respawns `dx`
+so an old allocation never crosses an incompatible struct layout. Ordinary
+application files remain on the fast hot-patch path.
 
 ### What goes in `App::setup()` vs `App::build()`
 

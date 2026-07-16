@@ -12,15 +12,15 @@ R2E supports **Subsecond hot-patching** via Dioxus 0.7 for instant code reloadin
 dev-reload = ["r2e/dev-reload"]
 ```
 
-3. Structure your app with the **`App` trait** — `setup()` (cold, runs once,
-   survives hot-patches) vs `build()` (hot, re-run on every patch):
+3. Put the canonical **`App` trait** implementation in `src/app.rs`. Both the
+   library target (tests/prod) and binary tip crate (dev) compile that source:
 
 ```rust
-#[derive(Clone)]
-struct AppEnv {
-    pool: PgPool,
-    event_bus: LocalEventBus,
-}
+// src/app.rs
+pub mod controllers;
+pub mod env;
+
+use env::{setup_env, AppEnv};
 
 pub struct MyApp;
 
@@ -28,10 +28,7 @@ impl App for MyApp {
     type Env = AppEnv;
 
     async fn setup() -> AppEnv {
-        // runs ONCE, persists across hot-patches
-        let pool = PgPool::connect("...").await.unwrap();
-        let event_bus = LocalEventBus::new();
-        AppEnv { pool, event_bus }
+        setup_env().await
     }
 
     async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
@@ -50,7 +47,18 @@ impl App for MyApp {
 ```
 
 ```rust
-// main.rs — one entry point for prod serve AND dev hot-reload
+// src/lib.rs — integration tests and normal production builds
+include!("app.rs");
+```
+
+```rust
+// src/main.rs — the same source becomes tip-crate code in dev
+#[cfg(feature = "dev-reload")]
+include!("app.rs");
+
+#[cfg(not(feature = "dev-reload"))]
+use my_app::MyApp;
+
 #[r2e::main]
 async fn main() {
     r2e::launch!(MyApp).await.unwrap();
@@ -62,8 +70,15 @@ async fn main() {
 parameter and needs no hand-written hot-reload machinery. It is a macro (not
 `launch::<MyApp>()`) because Subsecond only patches functions in the *tip crate*
 that owns `main.rs`; the macro expands its hot-reload loop — including the
-concrete function Subsecond remaps — directly into your crate. Without
-`dev-reload` it just calls `r2e::launch::<MyApp>()`.
+concrete function Subsecond remaps — directly into your crate. The conditional
+`include!("app.rs")` also makes the app, controllers, and services tip-crate
+code in dev. Without `dev-reload`, the bin imports the library copy and
+`launch!` calls the normal `r2e::launch::<MyApp>()` path.
+
+Keep the persistent `AppEnv` and its setup helper in `src/env.rs`. Changes to
+that cold file, `src/env/**`, `Cargo.toml`, or `build.rs` make `r2e dev` perform
+a safe full process restart. Other application changes stay on the hot-patch
+path.
 
 ### What goes in `App::setup()` vs `App::build()`
 
@@ -93,7 +108,7 @@ r2e dev --features openapi scheduler
 ```
 Source code change
     → dx detects change
-    → recompiles ONLY App::build as a dynamic library
+    → recompiles the changed tip-crate application code as a dynamic library
     → patches it into the running process (setup state preserved)
     → ~200-500ms turnaround
 ```

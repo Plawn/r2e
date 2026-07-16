@@ -95,6 +95,9 @@ name = "{name}"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+dev-reload = ["r2e/dev-reload"]
+
 [dependencies]
 r2e = {{ git = "{R2E_GIT}"{features_str} }}
 tokio = {{ version = "1", features = ["full"] }}
@@ -109,10 +112,10 @@ r2e-test = {{ git = "{R2E_GIT}" }}
     )
 }
 
-/// The application declaration (`lib.rs`). The `App` impl lives here so
-/// integration tests can boot the exact same app via
-/// `#[r2e::test(app = <crate>::<App>)]`.
-pub fn lib_rs(opts: &ProjectOptions) -> String {
+/// The canonical application source (`app.rs`). Both `lib.rs` (tests/prod)
+/// and the binary tip crate (`dev-reload`) compile this exact source so there
+/// is one `App` declaration without hiding hot code behind a library boundary.
+pub fn app_rs(opts: &ProjectOptions) -> String {
     let mut imports = String::from("use r2e::prelude::*;\n");
 
     if opts.openapi {
@@ -130,8 +133,9 @@ pub fn lib_rs(opts: &ProjectOptions) -> String {
             .push_str("use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};\n");
     }
 
-    imports.push_str("\npub mod controllers;\n\n");
+    imports.push_str("\npub mod controllers;\npub mod env;\n\n");
     imports.push_str("use controllers::hello::HelloController;\n");
+    imports.push_str("use env::{setup_env, AppEnv};\n");
 
     // Producers — construct config-driven beans that feed the DI graph.
     // Each `#[producer] async fn foo(...)` generates a `Foo` bean type
@@ -219,17 +223,18 @@ async fn jwt_validator(
     format!(
         r#"// #![recursion_limit = "512"]  // uncomment if you register more than ~127 beans
 {imports}{producers}
-/// The application. `main.rs` launches this in production (and, with the
-/// `dev-reload` feature, hot-reloads it); integration tests boot the **same**
-/// unit via `#[r2e::test(app = ...)]` — never re-declare controllers in tests.
+/// The application. This one source file is compiled by `lib.rs` for tests
+/// and production, and directly by the binary tip crate during hot-reload.
 pub struct {app_name};
 
 impl App for {app_name} {{
-    /// Long-lived resources built once. In dev mode they survive hot-patches.
-    /// This app has nothing to persist, so `Env` is `()` and `setup` is empty.
-    type Env = ();
+    /// Long-lived resources built once. Keep their definitions and setup in
+    /// `env.rs`: `r2e dev` treats that file as a cold restart boundary.
+    type Env = AppEnv;
 
-    async fn setup() {{}}
+    async fn setup() -> AppEnv {{
+        setup_env().await
+    }}
 
     /// Re-run on every hot-patch: assemble the app on the given builder.
     async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {{
@@ -240,6 +245,29 @@ impl App for {app_name} {{
     )
 }
 
+/// Thin library target used by integration tests and normal production
+/// builds. `app.rs` stays the only textual declaration of the application.
+pub fn lib_rs() -> &'static str {
+    "include!(\"app.rs\");\n"
+}
+
+/// Cold, process-lifetime resources. Changes here must restart the process
+/// instead of being applied to an already allocated `App::Env` value.
+pub fn env_rs() -> &'static str {
+    r#"/// Resources that survive hot-patches.
+///
+/// Add pools, buses, clients, and shared channels here. `r2e dev` performs a
+/// full restart when this file changes so an old value is never passed across
+/// an incompatible struct layout.
+#[derive(Clone, Default)]
+pub struct AppEnv;
+
+pub async fn setup_env() -> AppEnv {
+    AppEnv
+}
+"#
+}
+
 /// Thin binary entry point — launches the app (prod serve, or hot-reload
 /// under the `dev-reload` feature). `launch` reads `server.host`/`server.port`
 /// from config and calls `serve_auto()` internally.
@@ -247,11 +275,18 @@ pub fn main_rs(opts: &ProjectOptions) -> String {
     let ident = crate_ident(&opts.name);
     let app_name = app_ident(&opts.name);
     format!(
-        r#"use r2e::prelude::*;
+        r#"// In dev, compile the canonical application source directly into the
+// binary tip crate so Subsecond can patch controllers, services, and build().
+#[cfg(feature = "dev-reload")]
+include!("app.rs");
+
+// In normal builds, use the library copy consumed by integration tests.
+#[cfg(not(feature = "dev-reload"))]
+use {ident}::{app_name};
 
 #[r2e::main]
 async fn main() {{
-    r2e::launch!({ident}::{app_name}).await.unwrap();
+    r2e::launch!({app_name}).await.unwrap();
 }}
 "#
     )
@@ -357,11 +392,12 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 
 ## Architecture rules
 
-- **App trait**: the whole app is assembled in `src/lib.rs` in
+- **App trait**: the whole app is assembled once in `src/app.rs` in
   `impl App for {app_name}` — `build(b, env)` returns `impl BootableApp`, and
-  long-lived resources go in `setup()` (they survive hot-patches). `src/main.rs`
-  only calls `r2e::launch!({app_name})`. Add new controllers/beans/plugins
-  inside `build` — never in `main.rs`, and never build a second `AppBuilder`.
+  long-lived resources and setup helpers go in `src/env.rs`. `lib.rs` includes
+  `app.rs` for tests/prod; under `dev-reload`, `main.rs` includes the same file
+  into the binary tip crate. Add controllers/beans/plugins inside `build` —
+  never in `main.rs`, and never build a second `AppBuilder`.
 - **State is inferred**: there is no state struct. `.provide(bean)` /
   `.register::<T>()` before `.build_state().await`; inject by type with
   `#[inject]` fields. A missing bean is a compile error at

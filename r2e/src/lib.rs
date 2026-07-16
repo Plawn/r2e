@@ -134,6 +134,11 @@ pub mod devtools {
 /// user's crate, so patches apply. Without `dev-reload` the macro simply calls
 /// [`launch::<A>()`](r2e_core::launch).
 ///
+/// The generated project also compiles its canonical `src/app.rs` source
+/// directly in `main.rs` under `dev-reload`. That keeps `App::build`,
+/// controllers, and services in the tip crate while `lib.rs` includes the
+/// same source for integration tests and normal production builds.
+///
 /// `App::setup` runs **once** (its `Env` survives hot-patches); `App::build`
 /// and serve re-run on every patch, and `build`'s `load_config` re-reads
 /// `application.yaml` per patch so config edits apply on the next patch.
@@ -183,16 +188,15 @@ pub mod types {
     ///     Ok(Json(self.service.list(pageable).await?))
     /// }
     /// ```
-    pub type PagedResult<T> =
-        Result<r2e_core::http::Json<r2e_core::Page<T>>, r2e_core::HttpError>;
+    pub type PagedResult<T> = Result<r2e_core::http::Json<r2e_core::Page<T>>, r2e_core::HttpError>;
 }
 
 /// Unified prelude — import everything with `use r2e::prelude::*`.
 ///
 /// Includes the core prelude plus types from all enabled feature crates.
 pub mod prelude {
-    pub use r2e_core::prelude::*;
     pub use crate::types::*;
+    pub use r2e_core::prelude::*;
 
     #[cfg(feature = "security")]
     pub use r2e_security::prelude::*;

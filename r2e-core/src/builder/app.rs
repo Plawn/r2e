@@ -9,7 +9,7 @@
 //! blueprint-fn / `#[r2e::main(setup)]` conventions.
 //!
 //! ```ignore
-//! // ── lib.rs ─────────────────────────────────────────────────────────
+//! // ── app.rs (included by lib.rs and by the dev binary) ───────────────
 //! use r2e::prelude::*;
 //!
 //! pub struct MyApp;
@@ -36,7 +36,15 @@
 //! //   type Env = ();
 //! //   async fn setup() {}
 //!
+//! // ── lib.rs ─────────────────────────────────────────────────────────
+//! include!("app.rs");
+//!
 //! // ── main.rs ────────────────────────────────────────────────────────
+//! #[cfg(feature = "dev-reload")]
+//! include!("app.rs");
+//! #[cfg(not(feature = "dev-reload"))]
+//! use my_app::MyApp;
+//!
 //! #[r2e::main]
 //! async fn main() {
 //!     r2e::launch!(MyApp).await.unwrap();
@@ -101,6 +109,10 @@ pub trait App {
 /// [`launch!`](crate::launch) macro therefore expands the hot-reload loop —
 /// including a concrete, named `__r2e_server` function — directly at the call
 /// site in the tip crate, which is what makes patches actually apply. Under
+/// the standard R2E layout, `main.rs` also includes the canonical `app.rs`
+/// source under `dev-reload`, while `lib.rs` includes it for tests/prod. This
+/// makes the code reached by the concrete dispatcher tip-crate code without
+/// duplicating the declaration. Under
 /// `dev-reload` that macro calls [`App::setup`] **once** (its environment
 /// survives patches) and re-runs [`App::build`] + serve per hot-patch;
 /// `build`'s `load_config` re-reads `application.yaml` per patch so config

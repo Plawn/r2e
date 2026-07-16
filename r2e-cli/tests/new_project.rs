@@ -59,6 +59,7 @@ fn new_creates_cargo_toml() {
     assert!(cargo.contains("name = \"myapp\""));
     assert!(cargo.contains("r2e"));
     assert!(cargo.contains("tokio"));
+    assert!(cargo.contains("dev-reload = [\"r2e/dev-reload\"]"));
 }
 
 #[test]
@@ -69,33 +70,42 @@ fn new_creates_thin_main_rs() {
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    // main.rs only launches the app — no assembly lives here.
+    // main.rs launches the app and includes the canonical source only in dev.
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
     assert!(main.contains("#[r2e::main]"));
-    assert!(main.contains("r2e::launch!(myapp::Myapp)"));
+    assert!(main.contains("include!(\"app.rs\")"));
+    assert!(main.contains("use myapp::Myapp"));
+    assert!(main.contains("r2e::launch!(Myapp)"));
     assert!(!main.contains(".build_state()"));
     assert!(!main.contains("register_controller"));
 }
 
 #[test]
 #[serial]
-fn new_creates_blueprint_lib_rs() {
+fn new_creates_shared_app_source_and_library_wrapper() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CwdGuard::new(tmp.path());
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("pub struct Myapp;"));
-    assert!(lib.contains("impl App for Myapp"));
-    assert!(lib.contains("async fn build(b: AppBuilder"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("pub struct Myapp;"));
+    assert!(app.contains("impl App for Myapp"));
+    assert!(app.contains("async fn build(b: AppBuilder"));
     // New DI model: state is inferred via `.build_state().await`, no typed state.
-    assert!(lib.contains(".build_state()"));
-    assert!(!lib.contains("build_state!"));
-    assert!(!lib.contains("AppState"));
-    assert!(lib.contains(".register_controller::<HelloController>()"));
+    assert!(app.contains(".build_state()"));
+    assert!(!app.contains("build_state!"));
+    assert!(!app.contains("AppState"));
+    assert!(app.contains(".register_controller::<HelloController>()"));
     // recursion_limit guidance is emitted as a commented crate-level attribute.
-    assert!(lib.contains("recursion_limit"));
+    assert!(app.contains("recursion_limit"));
+
+    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
+    assert_eq!(lib, "include!(\"app.rs\");\n");
+
+    let env = fs::read_to_string("myapp/src/env.rs").unwrap();
+    assert!(env.contains("pub struct AppEnv"));
+    assert!(env.contains("setup_env"));
 }
 
 #[test]
@@ -144,7 +154,8 @@ fn new_hyphenated_name_uses_crate_ident() {
 
     // Cargo maps `-` to `_` in target names; generated code must use the ident.
     let main = fs::read_to_string("my-app/src/main.rs").unwrap();
-    assert!(main.contains("r2e::launch!(my_app::MyApp)"));
+    assert!(main.contains("use my_app::MyApp"));
+    assert!(main.contains("r2e::launch!(MyApp)"));
     let test = fs::read_to_string("my-app/tests/app.rs").unwrap();
     assert!(test.contains("#[r2e::test(app = my_app::MyApp)]"));
 }
@@ -220,12 +231,12 @@ fn new_with_db_sqlite() {
     // migrations/ directory should be created
     assert!(Path::new("myapp/migrations").is_dir());
 
-    // Pool is produced from config in the blueprint (lib.rs).
+    // Pool is produced from config in the canonical app source.
     assert!(!Path::new("myapp/src/state.rs").exists());
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("SqlitePool"));
-    assert!(lib.contains("#[producer]"));
-    assert!(lib.contains(".register::<CreatePool>()"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("SqlitePool"));
+    assert!(app.contains("#[producer]"));
+    assert!(app.contains(".register::<CreatePool>()"));
 
     let yaml = fs::read_to_string("myapp/application.yaml").unwrap();
     assert!(yaml.contains("database:"));
@@ -246,8 +257,8 @@ fn new_with_db_postgres() {
     assert!(cargo.contains("sqlx"));
     assert!(cargo.contains("postgres"));
 
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("PgPool"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("PgPool"));
 }
 
 #[test]
@@ -260,8 +271,8 @@ fn new_with_db_postgres_alias() {
     opts.db = Some("pg".to_string());
     new_project::run("myapp", opts).unwrap();
 
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("PgPool"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("PgPool"));
 }
 
 // ── Feature flags ───────────────────────────────────────────────────
@@ -279,11 +290,11 @@ fn new_with_auth() {
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
     assert!(cargo.contains("security"));
 
-    // JWT validator is produced from config in the blueprint (lib.rs).
+    // JWT validator is produced from config in the canonical app source.
     assert!(!Path::new("myapp/src/state.rs").exists());
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("JwtClaimsValidator"));
-    assert!(lib.contains(".register::<JwtValidator>()"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("JwtClaimsValidator"));
+    assert!(app.contains(".register::<JwtValidator>()"));
 
     let yaml = fs::read_to_string("myapp/application.yaml").unwrap();
     assert!(yaml.contains("security:"));
@@ -302,10 +313,13 @@ fn new_with_openapi() {
 
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
     assert!(cargo.contains("openapi"));
-    assert!(cargo.contains("schemars"), "Expected schemars dependency when openapi is enabled");
+    assert!(
+        cargo.contains("schemars"),
+        "Expected schemars dependency when openapi is enabled"
+    );
 
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("OpenApiPlugin"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("OpenApiPlugin"));
 }
 
 #[test]
@@ -327,8 +341,8 @@ fn new_with_grpc() {
     assert!(Path::new("myapp/proto/greeter.proto").exists());
     assert!(Path::new("myapp/build.rs").exists());
 
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("GrpcServer"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("GrpcServer"));
 
     let yaml = fs::read_to_string("myapp/application.yaml").unwrap();
     assert!(yaml.contains("grpc:"));
@@ -358,15 +372,15 @@ fn new_full() {
     assert!(Path::new("myapp/proto/greeter.proto").exists());
     assert!(Path::new("myapp/build.rs").exists());
 
-    // No typed state — all wiring lives in the blueprint (lib.rs).
+    // No typed state — all wiring lives in the canonical app source.
     assert!(!Path::new("myapp/src/state.rs").exists());
-    let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert!(lib.contains("SqlitePool"));
-    assert!(lib.contains("LocalEventBus"));
-    assert!(lib.contains("JwtClaimsValidator"));
-    assert!(lib.contains("Scheduler"));
-    assert!(lib.contains("OpenApiPlugin"));
-    assert!(lib.contains("GrpcServer"));
+    let app = fs::read_to_string("myapp/src/app.rs").unwrap();
+    assert!(app.contains("SqlitePool"));
+    assert!(app.contains("LocalEventBus"));
+    assert!(app.contains("JwtClaimsValidator"));
+    assert!(app.contains("Scheduler"));
+    assert!(app.contains("OpenApiPlugin"));
+    assert!(app.contains("GrpcServer"));
 }
 
 #[test]

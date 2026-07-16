@@ -22,29 +22,38 @@ Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx
 
 ### Minimal Application — the `App` trait
 
-**Always declare an R2E app via the `App` trait** (in the prelude): the app lives
-in `lib.rs` as `impl App for MyApp`, so the exact same unit boots in production
-(`main.rs` → `r2e::launch!`), in dev (hot-reload, same `launch!`), and in tests
-(`#[r2e::test(app = MyApp)]`). `main.rs` is a thin shell.
+**Always declare an R2E app via the `App` trait** (in the prelude). Keep its
+single canonical source in `src/app.rs`: `lib.rs` includes it for integration
+tests and normal production builds, while `main.rs` includes that same file
+directly under `dev-reload` so Subsecond sees the application in the binary tip
+crate. There is one declaration of `MyApp`, used by production, tests, and real
+hot-reload. `lib.rs` and `main.rs` remain thin target adapters.
 
 - `App::setup() -> Self::Env` — long-lived resources built **once** (pools, buses).
-  Under the `dev-reload` feature the `Env` survives hot-patches. Nothing to
-  persist? `type Env = ();` + an empty `setup`.
+  Under the `dev-reload` feature the `Env` survives hot-patches. Put its type and
+  setup helpers in `src/env.rs`, a cold boundary that `r2e dev` fully restarts
+  when changed. Nothing to persist? Use an empty `AppEnv` as shown below.
 - `App::build(b, env) -> impl BootableApp` — assembles the app on the builder;
   **re-run on every hot-patch**. `load_config` is the sole config registration point.
 
 ```rust
-// src/lib.rs
+// src/app.rs — the one canonical application source
 use r2e::prelude::*;
 
 pub mod controllers;
+pub mod env;
+
 use controllers::hello::HelloController;
+use env::{setup_env, AppEnv};
 
 pub struct MyApp;
 
 impl App for MyApp {
-    type Env = ();                               // nothing to persist across hot-patches
-    async fn setup() {}
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        setup_env().await
+    }
 
     async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
         b.load_config::<()>()                    // application.yaml + env (sole config entry)
@@ -59,12 +68,31 @@ impl App for MyApp {
 ```
 
 ```rust
-// src/main.rs — prod serve AND dev hot-reload (both handled inside launch!)
-use r2e::prelude::*;
+// src/env.rs — cold, process-lifetime resources
+#[derive(Clone, Default)]
+pub struct AppEnv;
+
+pub async fn setup_env() -> AppEnv {
+    AppEnv
+}
+```
+
+```rust
+// src/lib.rs — integration tests and normal production builds
+include!("app.rs");
+```
+
+```rust
+// src/main.rs — prod serve AND dev hot-reload
+#[cfg(feature = "dev-reload")]
+include!("app.rs");
+
+#[cfg(not(feature = "dev-reload"))]
+use my_app::MyApp;
 
 #[r2e::main]
 async fn main() {
-    r2e::launch!(my_app::MyApp).await.unwrap();  // setup() → build() → serve_auto()
+    r2e::launch!(MyApp).await.unwrap();          // setup() → build() → serve_auto()
 }
 ```
 
@@ -1329,18 +1357,23 @@ next `load_config::<C>()` uses it instead of reading disk (see Configuration).
   including the concrete function Subsecond patches — into your crate. A generic
   dispatcher monomorphised from `r2e-core` would never be patched. Without
   `dev-reload` the macro just calls `r2e::launch::<MyApp>()`.
+  The generated target adapters solve the tip-crate constraint without
+  duplicating application code: `src/lib.rs` contains `include!("app.rs")`, and
+  `src/main.rs` conditionally contains that same include under `dev-reload`
+  (otherwise it imports `MyApp` from the library). Thus controller, service, and
+  `App::build` edits are compiled into the patchable binary in dev, while tests
+  boot the library copy of the exact same source.
   `App::setup()` runs **once** and its `Env` survives every
   hot-patch (put pools/buses/validators there); `App::build()` re-runs per
   patch. Keep `load_config` inside `build`: because `build()` re-runs per patch,
   its `load_config` re-reads `application.yaml` from disk each time, so YAML edits
   are picked up on the next hot-patch.
-  LIMITATION: Subsecond only patches the **tip crate** (the one with `main.rs`).
-  Edits to code in a *library* crate (e.g. `App`/controllers behind
-  `use my_app::…`) are ignored at runtime even though `build()` re-runs. For
-  hot-reload to apply your edits, the app code you edit must live in the binary
-  crate (`src/main.rs` + its modules), not a sibling `lib.rs`. Integration tests
-  (`#[r2e::test(app = …)]`) still boot the library-crate app normally — they
-  don't use hot-reload.
+  Keep `AppEnv` and `setup_env` in `src/env.rs`: values allocated before a patch
+  must not cross an incompatible Rust layout. `r2e dev` therefore treats
+  `Cargo.toml`, `build.rs`, `src/env.rs`, and `src/env/**` as **cold paths** and
+  performs a full child-process restart when they change. Do not replace the
+  conditional include with an unconditional `use my_app::MyApp`; that would put
+  hot code back behind the unpatchable library boundary.
 - `r2e new <name>` — scaffold a project (`App`-trait layout). `r2e dev` — hot
   reload. `r2e generate controller <Name>` — scaffold pieces. `r2e routes` —
   list routes. `r2e doctor` — diagnose setup.
@@ -1412,12 +1445,14 @@ Alongside `&self`:
 | `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
-Launching: write `r2e::launch!(MyApp)` in `main.rs`. It expands to an `async`
+Launching: write `r2e::launch!(MyApp)` in `main.rs`, using the conditional
+`include!("app.rs")` / library import layout shown in Quick Start. It expands to an `async`
 block yielding `Result<(), Box<dyn std::error::Error>>` (await it, then
 `.unwrap()`). Without `dev-reload` it calls
 `r2e::launch::<A: App>()`, which runs `A::setup()` →
 `A::build(AppBuilder::new(), env)` → `serve_auto()`. Under `dev-reload` the macro
 instead drives the Subsecond hot-patch loop from a concrete function it expands
 into your crate (a generic dispatcher from `r2e-core` would never be patched).
-This is the one entry point — `main.rs` is just
+This is the one entry point; apart from the two conditional target-adapter lines,
+`main.rs` is just
 `#[r2e::main] async fn main() { r2e::launch!(MyApp).await.unwrap() }`.
