@@ -270,6 +270,42 @@ When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventS
 
 Multiple buses of different types are supported — each `#[consumer]` references a different field by name.
 
+## `#[scheduled]` on beans
+
+Beans declare scheduled tasks with the same `#[scheduled]` attribute as controllers (`every`/`cron`, `initial_delay`, `name`, `overlap` — same parser, same compile-time cron validation):
+
+```rust
+#[derive(Clone)]
+pub struct CleanupService {
+    pool: SqlitePool,
+}
+
+#[bean]
+impl CleanupService {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    #[scheduled(every = "5m")]
+    async fn purge_stale(&self) {
+        // periodic work; sync methods and `-> Result<(), E>` also supported
+    }
+}
+```
+
+**Registration is automatic** (unlike `#[consumer]`'s explicit `register_subscriber`): `#[bean]` generates a `ScheduledSource` impl plus an `after_register` hook calling `BeanRegistry::register_scheduled_source::<Self>()`, so `.register::<CleanupService>()` alone is enough. `build_state()` runs the hooks against the resolved graph and hands the type-erased task defs to the scheduler's `TaskRegistryHandle` (same `ScheduledTaskMarker` pipeline as controller tasks — the `Executor` + `Scheduler` plugins must be installed before `build_state()`, otherwise a warning naming the bean is logged and the tasks are dropped).
+
+Semantics shared with controller `#[scheduled]`:
+- Default task name `<Type>_<method>`; ticks run as pool jobs, visible in `ScheduledJobInfo`.
+- Each task captures a clone of the bean; the hook reads the bean by type from the resolved graph, so a pinned test override is the instance the tasks run against (same rule as `#[post_construct]`).
+
+The generated impl references `r2e_scheduler` types, so the app needs the `scheduler` facade feature (same requirement as controller `#[scheduled]`); without it, the error is a raw "cannot find `r2e_scheduler`" pointing at the `#[bean]` impl.
+
+Divergences (W10 phase 1):
+- `#[intercept]` on a bean scheduled method is a **compile error** — interceptors on scheduled methods are controller-only until bean-level decorators land (W10 phase 2).
+- `#[bean(lazy)]` + `#[scheduled]` is a compile error (like `#[consumer]` and `#[post_construct]`).
+- `#[scheduled]` + `#[consumer]` on the same method is a compile error.
+
 ## `#[post_construct]`
 
 Lifecycle hooks called **after the entire bean graph is resolved**. All dependencies are available when hooks fire.
@@ -364,8 +400,9 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `scan_post_construct_methods` + `PostConstruct` generation)
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]` scanning + `EventSubscriber` generation, `#[scheduled]` scanning + `ScheduledSource` generation, `scan_post_construct_methods` + `PostConstruct` generation)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)
+- `r2e-core/src/scheduled_source.rs` — `ScheduledSource` trait (for beans with `#[scheduled]` methods; auto-collected at `build_state()` via `BeanRegistry::register_scheduled_source`)

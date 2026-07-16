@@ -535,6 +535,45 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         Ok(self)
     }
 
+    /// Run the bean scheduled-source hooks (queued by `#[bean]` via
+    /// `after_register` → `BeanRegistry::register_scheduled_source`) against
+    /// the resolved graph and hand the collected tasks to the scheduler's
+    /// task registry. Mirrors the controller path in
+    /// [`try_register_controller_unchecked_impl`](Self::try_register_controller_unchecked_impl)
+    /// (same marker tag, same missing-scheduler warning).
+    ///
+    /// Called by `build_state()` right after the typed builder exists — the
+    /// deferred plugin actions have run by then, so the `Scheduler` plugin's
+    /// `TaskRegistryHandle` is in the plugin data.
+    pub(crate) fn collect_bean_scheduled_tasks(
+        self,
+        sources: Vec<(
+            &'static str,
+            Box<dyn FnOnce(&crate::beans::BeanContext) -> Vec<Box<dyn Any + Send>> + Send>,
+        )>,
+    ) -> Self {
+        if sources.is_empty() {
+            return self;
+        }
+        match self.get_plugin_data::<TaskRegistryHandle>() {
+            Some(registry) => {
+                for (_, hook) in sources {
+                    registry.add_boxed_for::<ScheduledTaskMarker>(hook(&self.bean_context));
+                }
+            }
+            None => {
+                for (bean_name, _) in sources {
+                    tracing::warn!(
+                        bean = bean_name,
+                        "Scheduled tasks found but no scheduler installed. \
+                         Add `.plugin(Scheduler)` before build_state()."
+                    );
+                }
+            }
+        }
+        self
+    }
+
     /// Register a bean's event subscriptions.
     ///
     /// The bean is pulled from the retained bean graph by type and its

@@ -1,0 +1,5 @@
+error: #[scheduled] and #[consumer] cannot be combined on the same method
+  --> compile-fail/bean_scheduled_consumer_conflict.rs:19:5
+   |
+19 |     async fn handle(&self, event: std::sync::Arc<Ping>) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -689,7 +689,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 Arc<crate::beans::BeanContext>,
             );
 
-            let registry = std::mem::take(&mut self.shared.bean_registry);
+            let mut registry = std::mem::take(&mut self.shared.bean_registry);
+            let scheduled_sources = registry.take_scheduled_sources();
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
@@ -703,11 +704,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
-                    return Ok(Mods::register_controllers(AppBuilder::from_pre(
-                        self.shared,
-                        cached_state,
-                        cached_ctx,
-                    )));
+                    // Bean scheduled tasks are re-collected against the cached
+                    // graph: the task registry is fresh per build (plugins
+                    // re-install), even when the bean instances are reused.
+                    return Ok(Mods::register_controllers(
+                        AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
+                            .collect_bean_scheduled_tasks(scheduled_sources),
+                    ));
                 }
 
                 // Fingerprint changed — log only the beans that actually changed
@@ -742,25 +745,24 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
             crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
-            Ok(Mods::register_controllers(AppBuilder::from_pre(
-                self.shared,
-                state,
-                ctx,
-            )))
+            Ok(Mods::register_controllers(
+                AppBuilder::from_pre(self.shared, state, ctx)
+                    .collect_bean_scheduled_tasks(scheduled_sources),
+            ))
         }
 
         #[cfg(not(feature = "dev-reload"))]
         {
-            let registry = std::mem::take(&mut self.shared.bean_registry);
+            let mut registry = std::mem::take(&mut self.shared.bean_registry);
+            let scheduled_sources = registry.take_scheduled_sources();
             let mut ctx = registry.resolve().await?;
             self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
 
-            Ok(Mods::register_controllers(AppBuilder::from_pre(
-                self.shared,
-                state,
-                Arc::new(ctx),
-            )))
+            Ok(Mods::register_controllers(
+                AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
+                    .collect_bean_scheduled_tasks(scheduled_sources),
+            ))
         }
     }
 

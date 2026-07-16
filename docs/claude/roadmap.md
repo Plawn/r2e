@@ -155,7 +155,7 @@ Remaining:
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
   before relying on it.
 
-## W10 — Bean/controller feature unification (deferred — prepared 2026-07-16)
+## W10 — Bean/controller feature unification (in progress — phase 1 shipped 2026-07-16)
 
 Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
 controller-only by implementation accident, not by design — `#[scheduled]`,
@@ -176,12 +176,24 @@ because a controller is a bean.
 Phases (quality-review gate after each, same convention as the controller
 refactor):
 
-1. **`#[scheduled]` on `#[bean]`** — mirror the `#[consumer]` pattern
-   (bean macro generates a scheduled-source impl + a registration path
-   analogous to `register_subscriber`, feeding the same
-   `ScheduledTaskMarker`/`TaskRegistryHandle` pipeline). Design the collection
-   trait so phase 3 can reuse it from controllers. No `#[intercept]` on bean
-   scheduled methods yet — document the divergence explicitly.
+1. **`#[scheduled]` on `#[bean]` — DONE (2026-07-16).** `ScheduledSource`
+   trait in `r2e-core/src/scheduled_source.rs` (signature takes
+   `&BeanContext` so phase 3 can delegate the controller path to it);
+   `#[bean]` scans `#[scheduled]` methods (shared parser/codegen with
+   controllers: `extract/scheduled.rs`, `codegen/scheduled.rs`) and emits the
+   impl + an `after_register` hook. **Registration is auto-collection at
+   `build_state()`** (user-approved; NOT an explicit `register_scheduled`
+   call): `BeanRegistry::register_scheduled_source` queues a hook, drained by
+   `build_state()` on the typed builder (after deferred plugin actions, so
+   the Scheduler's `TaskRegistryHandle` exists) into the same
+   `ScheduledTaskMarker` pipeline. Hooks read the bean by type from the
+   resolved graph → pinned test overrides are honoured (post-construct
+   semantics). `#[intercept]` on bean scheduled methods is an explicit
+   compile error (divergence until phase 2), as are `lazy` + scheduled and
+   scheduled + consumer on one method. Tests:
+   `examples/example-app/tests/bean_scheduled_test.rs`, compile-pass/fail in
+   `r2e-compile-tests` (`bean_scheduled*`). Docs: beans-di.md, subsystems.md,
+   llm.txt.
 2. **Bean-level decorators** — a DecoSlot equivalent on bean cores;
    `#[intercept]` on bean scheduled/consumer methods through the existing
    `DecoratorSpec`/`build_decorator` machinery, deps compile-checked like
@@ -193,11 +205,13 @@ refactor):
 4. **Relocate `#[async_exec]`** (and evaluate `#[transactional]`) to the bean
    level; decide whether controller-only placement is kept or deprecated.
 
-Open decisions for phase-1 design review: exact registration ergonomics
-(explicit `register_*` call vs auto-collection at `build_state()`); whether a
-dedicated `#[service]` macro adds anything over `#[bean]` (current lean: no —
-unification beats a third shape; `#[derive(BackgroundService)]` stays the
-escape hatch for hand-written loops).
+Phase-1 design decisions (settled): registration is **auto-collection at
+`build_state()`** — user-approved 2026-07-16; matches controller
+auto-discovery and avoids the silent no-op of a forgotten explicit call
+(follow-up idea, not scheduled: align `#[consumer]` beans on the same
+auto-collection and retire `register_subscriber`). No dedicated `#[service]`
+macro — unification beats a third shape; `#[derive(BackgroundService)]` stays
+the escape hatch for hand-written loops.
 
 ## Tech debt (deferred, low priority)
 

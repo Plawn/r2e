@@ -1,0 +1,13 @@
+error: #[intercept] on a bean #[scheduled] method is not supported yet — interceptors on scheduled methods are controller-only for now
+  --> compile-fail/bean_scheduled_intercept.rs:15:5
+   |
+15 |     async fn purge(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::r2e_utils::Logged`
+ --> compile-fail/bean_scheduled_intercept.rs:2:5
+  |
+2 | use r2e::r2e_utils::Logged;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

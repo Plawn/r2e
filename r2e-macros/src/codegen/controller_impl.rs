@@ -1063,20 +1063,11 @@ fn generate_scheduled_tasks(
         .map(|(sm, deco_set)| {
             let fn_name = &sm.fn_item.sig.ident;
             let fn_name_str = fn_name.to_string();
-            let task_name = match &sm.config.name {
-                Some(n) => n.clone(),
-                None => format!("{}_{}", controller_name_str, fn_name_str),
-            };
+            let task_name =
+                super::scheduled::task_name(&sm.config, &controller_name_str, &fn_name_str);
 
-            let schedule_expr = generate_schedule_expr(sm, &sched_krate);
-            let overlap_expr = match sm.config.overlap {
-                crate::types::OverlapMode::Skip => {
-                    quote! { #sched_krate::OverlapPolicy::Skip }
-                }
-                crate::types::OverlapMode::Concurrent => {
-                    quote! { #sched_krate::OverlapPolicy::Concurrent }
-                }
-            };
+            let schedule_expr = super::scheduled::schedule_config_expr(&sm.config, &sched_krate);
+            let overlap_expr = super::scheduled::overlap_policy_expr(sm.config.overlap, &sched_krate);
 
             // Intercepted methods self-intercept in their dispatch wrapper
             // (slot lookup there; sync sources are promoted to `async fn`),
@@ -1504,30 +1495,3 @@ fn pre_auth_registration(
     }
 }
 
-/// Generate schedule configuration expression.
-fn generate_schedule_expr(
-    sm: &crate::types::ScheduledMethod,
-    sched_krate: &TokenStream,
-) -> TokenStream {
-    if let Some(every_ms) = sm.config.every_ms {
-        if let Some(delay_ms) = sm.config.initial_delay_ms {
-            quote! {
-                #sched_krate::ScheduleConfig::IntervalWithDelay {
-                    interval: std::time::Duration::from_millis(#every_ms),
-                    initial_delay: std::time::Duration::from_millis(#delay_ms),
-                }
-            }
-        } else {
-            quote! {
-                #sched_krate::ScheduleConfig::Interval(
-                    std::time::Duration::from_millis(#every_ms)
-                )
-            }
-        }
-    } else {
-        let cron_expr = sm.config.cron.as_ref().unwrap();
-        quote! {
-            #sched_krate::ScheduleConfig::Cron(#cron_expr.to_string())
-        }
-    }
-}

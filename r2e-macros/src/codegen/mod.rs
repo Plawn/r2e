@@ -10,6 +10,7 @@
 pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 mod handlers;
+pub(crate) mod scheduled;
 mod wrapping;
 
 use proc_macro2::TokenStream;

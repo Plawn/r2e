@@ -1,0 +1,5 @@
+error: #[bean(lazy)] does not yet support #[scheduled] methods — remove one or the other
+ --> compile-fail/bean_scheduled_lazy.rs:7:6
+  |
+7 | impl CleanupService {
+  |      ^^^^^^^^^^^^^^

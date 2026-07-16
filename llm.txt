@@ -1019,6 +1019,34 @@ on completion; a due-while-running tick is skipped, cadence preserved).
 `concurrent`: re-arm at fire time so a slow tick never holds back the next one
 (ticks may pile up). Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
 
+`#[scheduled]` also works on **beans** — same attribute, same options, and
+registration is automatic (`.register::<T>()` alone; no extra call, unlike
+`register_subscriber` for `#[consumer]` beans):
+
+```rust
+#[derive(Clone)]
+pub struct CleanupService { pool: SqlitePool }
+
+#[bean]
+impl CleanupService {
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
+
+    #[scheduled(every = "5m")]
+    async fn purge_stale(&self) { ... }   // sync and `-> Result<(), E>` also OK
+}
+
+b.plugin(Executor).plugin(Scheduler)
+ .register::<CleanupService>()            // #[scheduled] auto-collected
+ .build_state().await
+```
+
+Default task name is `<Type>_<method>` (`name = "..."` to override). Needs the
+`scheduler` feature (the generated impl references `r2e_scheduler` types — same
+requirement as controller `#[scheduled]`). Limits:
+`#[intercept]` on a bean scheduled method is a compile error (interceptors on
+scheduled methods are controller-only for now), as are `#[bean(lazy)]` +
+`#[scheduled]` and combining `#[scheduled]` with `#[consumer]` on one method.
+
 Dynamic (config-driven) tasks — post-`build_state()`:
 
 ```rust

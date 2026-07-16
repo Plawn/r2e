@@ -22,6 +22,7 @@ pub mod plugin;
 pub mod plugins;
 pub mod prelude;
 pub mod request_id;
+pub mod scheduled_source;
 pub mod service;
 pub mod sharded;
 pub mod secure_headers;
@@ -75,6 +76,7 @@ pub use plugin::{
     RawPreStatePlugin,
 };
 pub use event_subscriber::EventSubscriber;
+pub use scheduled_source::ScheduledSource;
 pub use managed::{
     record_managed_finalize_error, ManagedContext, ManagedErr, ManagedGuard, ManagedOutcome,
     ManagedOutcomeKind, ManagedResource,

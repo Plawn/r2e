@@ -3,8 +3,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ReturnType, Type};
 
-use crate::crate_path::{r2e_core_path, r2e_events_path};
+use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
 use crate::extract::consumer::{extract_consumer, extract_event_type_from_arc, strip_consumer_attrs};
+use crate::extract::scheduled::extract_scheduled;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 use crate::type_utils::{is_result_like, named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name};
@@ -45,6 +46,13 @@ struct BeanPostConstructMethod {
     fn_name: syn::Ident,
     is_async: bool,
     returns_result: bool,
+}
+
+/// Parsed scheduled method data from a `#[bean]` impl block.
+struct BeanScheduledMethod {
+    config: crate::types::ScheduledConfig,
+    fn_name: syn::Ident,
+    is_async: bool,
 }
 
 pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -189,6 +197,19 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
         }
     };
 
+    // Scan for #[scheduled] methods FIRST — its scheduled+consumer conflict
+    // check must fire before the consumer scan's signature validation, or a
+    // conflicting method without an event param would surface the wrong error.
+    let scheduled_methods = scan_scheduled_methods(item_impl)?;
+    if bean_args.lazy && !scheduled_methods.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "#[bean(lazy)] does not yet support #[scheduled] methods — \
+             remove one or the other",
+        ));
+    }
+    let scheduled_source_impl = generate_scheduled_source_impl(self_ty, &scheduled_methods);
+
     // Scan for #[consumer] methods
     let consumer_methods = scan_consumer_methods(item_impl)?;
     if bean_args.lazy && !consumer_methods.is_empty() {
@@ -210,10 +231,15 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
         ));
     }
     let post_construct_impl = generate_post_construct_impl(self_ty, &pc_methods);
-    let after_register_fn = if !pc_methods.is_empty() {
+    let after_register_fn = if !pc_methods.is_empty() || !scheduled_methods.is_empty() {
+        let pc_hook = (!pc_methods.is_empty())
+            .then(|| quote! { registry.register_post_construct::<Self>(); });
+        let sched_hook = (!scheduled_methods.is_empty())
+            .then(|| quote! { registry.register_scheduled_source::<Self>(); });
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
-                registry.register_post_construct::<Self>();
+                #pc_hook
+                #sched_hook
             }
         }
     } else {
@@ -296,6 +322,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<TokenStre
         #registrable_impl
         #post_construct_impl
         #subscriber_impl
+        #scheduled_source_impl
     })
 }
 
@@ -472,6 +499,149 @@ fn generate_event_subscriber_impl(
             }
         }
     })
+}
+
+/// Scan the impl block for `#[scheduled(...)]` methods.
+///
+/// Mirrors the controller-side validation (`routes_parsing`): a scheduled
+/// method takes `&self` only. Two bean-specific divergences are rejected
+/// explicitly: `#[intercept]` on a bean scheduled method (controller-only
+/// until bean-level decorators land — W10 phase 2) and combining
+/// `#[scheduled]` with `#[consumer]` on the same method.
+fn scan_scheduled_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanScheduledMethod>> {
+    let mut methods = Vec::new();
+
+    for item in &item_impl.items {
+        if let ImplItem::Fn(method) = item {
+            let Some(config) = extract_scheduled(&method.attrs)? else {
+                continue;
+            };
+
+            // Attribute conflicts first — a #[consumer] method necessarily
+            // has an event parameter, so the params check below would mask
+            // the real problem.
+            if method.attrs.iter().any(|a| a.path().is_ident("consumer")) {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "#[scheduled] and #[consumer] cannot be combined on the same method",
+                ));
+            }
+            if method.attrs.iter().any(|a| a.path().is_ident("intercept")) {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "#[intercept] on a bean #[scheduled] method is not supported yet — \
+                     interceptors on scheduled methods are controller-only for now",
+                ));
+            }
+
+            let has_self = method
+                .sig
+                .inputs
+                .iter()
+                .any(|arg| matches!(arg, FnArg::Receiver(_)));
+            if !has_self || method.sig.inputs.len() > 1 {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "#[scheduled] methods cannot have parameters other than &self",
+                ));
+            }
+
+            methods.push(BeanScheduledMethod {
+                config,
+                fn_name: method.sig.ident.clone(),
+                is_async: method.sig.asyncness.is_some(),
+            });
+        }
+    }
+
+    Ok(methods)
+}
+
+/// Generate the `ScheduledSource` impl if any `#[scheduled]` methods are found.
+///
+/// The bean-level counterpart of the controller's `scheduled_tasks_boxed`
+/// codegen (`codegen::controller_impl::generate_scheduled_tasks`), minus the
+/// decorator machinery: each task captures a clone of the bean itself.
+fn generate_scheduled_source_impl(
+    self_ty: &syn::Type,
+    methods: &[BeanScheduledMethod],
+) -> TokenStream2 {
+    if methods.is_empty() {
+        return quote! {};
+    }
+
+    let krate = r2e_core_path();
+    let sched_krate = r2e_scheduler_path();
+    let owner_name = type_ident_string(self_ty);
+
+    let task_defs: Vec<TokenStream2> = methods
+        .iter()
+        .map(|sm| {
+            let fn_name = &sm.fn_name;
+            let task_name = crate::codegen::scheduled::task_name(
+                &sm.config,
+                &owner_name,
+                &fn_name.to_string(),
+            );
+            let schedule_expr =
+                crate::codegen::scheduled::schedule_config_expr(&sm.config, &sched_krate);
+            let overlap_expr =
+                crate::codegen::scheduled::overlap_policy_expr(sm.config.overlap, &sched_krate);
+
+            let result_expr = if sm.is_async {
+                quote! { __bean.#fn_name().await }
+            } else {
+                quote! { __bean.#fn_name() }
+            };
+
+            quote! {
+                {
+                    let __task_bean = self.clone();
+                    let __task_def = #sched_krate::ScheduledTaskDef {
+                        name: #task_name.to_string(),
+                        schedule: #schedule_expr,
+                        overlap: #overlap_expr,
+                        // The bean is captured directly, so the scheduler
+                        // never clones the app state per tick.
+                        state: (),
+                        task: Box::new(move |(): ()| {
+                            let __bean = __task_bean.clone();
+                            Box::pin(async move {
+                                #sched_krate::ScheduledResult::log_if_err(
+                                    #result_expr,
+                                    #task_name,
+                                );
+                            })
+                        }),
+                    };
+                    // Double-box: first as trait object, then as Any for type erasure
+                    let __boxed_task: Box<dyn #sched_krate::ScheduledTask> = Box::new(__task_def);
+                    Box::new(__boxed_task) as Box<dyn std::any::Any + Send>
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        impl #krate::ScheduledSource for #self_ty {
+            fn scheduled_tasks_boxed(
+                &self,
+                _ctx: &#krate::beans::BeanContext,
+            ) -> Vec<Box<dyn std::any::Any + Send>> {
+                vec![#(#task_defs),*]
+            }
+        }
+    }
+}
+
+/// Last path-segment identifier of the impl type (for default task names).
+fn type_ident_string(self_ty: &syn::Type) -> String {
+    if let Type::Path(tp) = self_ty {
+        if let Some(seg) = tp.path.segments.last() {
+            return seg.ident.to_string();
+        }
+    }
+    quote!(#self_ty).to_string()
 }
 
 /// Scan all `&self` methods in the impl block for `#[post_construct]` attributes.
@@ -657,10 +827,12 @@ fn strip_attrs_from_impl(item_impl: &ItemImpl) -> TokenStream2 {
                     #vis #sig_asyncness fn #sig_ident(#(#clean_params),*) #sig_output #body
                 });
             } else {
-                // Strip #[consumer] and #[post_construct] attrs from methods
+                // Strip #[consumer], #[post_construct], and #[scheduled] attrs from methods
                 let cleaned_attrs: Vec<_> = strip_consumer_attrs(method.attrs.clone())
                     .into_iter()
-                    .filter(|a| !a.path().is_ident("post_construct"))
+                    .filter(|a| {
+                        !a.path().is_ident("post_construct") && !a.path().is_ident("scheduled")
+                    })
                     .collect();
                 let vis = &method.vis;
                 let sig = &method.sig;

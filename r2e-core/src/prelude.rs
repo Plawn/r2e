@@ -96,6 +96,7 @@ pub use crate::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::request_id::{RequestId, RequestIdPlugin};
 pub use crate::secure_headers::SecureHeaders;
 pub use crate::event_subscriber::EventSubscriber;
+pub use crate::scheduled_source::ScheduledSource;
 
 // ── Type aliases ──────────────────────────────────────────────────────────
 
