@@ -50,8 +50,8 @@ impl CliNewOpts {
 /// - `--no-interactive` or any explicit flag uses provided values.
 /// - Otherwise, prompts interactively with `dialoguer`.
 ///
-/// Creates the project directory and all scaffold files (Cargo.toml, main.rs,
-/// hello controller, application.yaml, etc.).
+/// Creates the project directory and all scaffold files (Cargo.toml, app.rs,
+/// env.rs, lib.rs, main.rs, hello controller, application.yaml, etc.).
 pub fn run(name: &str, cli_opts: CliNewOpts) -> Result<(), Box<dyn std::error::Error>> {
     let opts = if cli_opts.full {
         ProjectOptions {
@@ -156,8 +156,8 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         templates::project::cargo_toml(opts),
     )?;
 
-    // 2. One canonical app source, compiled by the lib for tests/prod and by
-    //    the binary tip crate for real Subsecond hot-patching in dev.
+    // 2. One canonical app source, included by the lib for tests and by
+    //    app_main! in the binary tip crate for production and hot-reload.
     fs::write(
         project_dir.join("src/app.rs"),
         templates::project::app_rs(opts),

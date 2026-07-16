@@ -112,8 +112,8 @@ r2e-test = {{ git = "{R2E_GIT}" }}
     )
 }
 
-/// The canonical application source (`app.rs`). Both `lib.rs` (tests/prod)
-/// and the binary tip crate (`dev-reload`) compile this exact source so there
+/// The canonical application source (`app.rs`). Both `lib.rs` (tests) and the
+/// binary tip crate (via `app_main!`) compile this exact source so there
 /// is one `App` declaration without hiding hot code behind a library boundary.
 pub fn app_rs(opts: &ProjectOptions) -> String {
     let mut imports = String::from("use r2e::prelude::*;\n");
@@ -221,10 +221,9 @@ async fn jwt_validator(
     let app_name = app_ident(&opts.name);
 
     format!(
-        r#"// #![recursion_limit = "512"]  // uncomment if you register more than ~127 beans
-{imports}{producers}
+        r#"{imports}{producers}
 /// The application. This one source file is compiled by `lib.rs` for tests
-/// and production, and directly by the binary tip crate during hot-reload.
+/// and directly by the binary tip crate through `app_main!`.
 pub struct {app_name};
 
 impl App for {app_name} {{
@@ -245,10 +244,10 @@ impl App for {app_name} {{
     )
 }
 
-/// Thin library target used by integration tests and normal production
-/// builds. `app.rs` stays the only textual declaration of the application.
+/// Thin library target used by integration tests. `app.rs` stays the only
+/// textual declaration of the application.
 pub fn lib_rs() -> &'static str {
-    "include!(\"app.rs\");\n"
+    "// #![recursion_limit = \"512\"]  // uncomment if you register more than ~127 beans\ninclude!(\"app.rs\");\n"
 }
 
 /// Cold, process-lifetime resources. Changes here must restart the process
@@ -268,27 +267,12 @@ pub async fn setup_env() -> AppEnv {
 "#
 }
 
-/// Thin binary entry point — launches the app (prod serve, or hot-reload
-/// under the `dev-reload` feature). `launch` reads `server.host`/`server.port`
-/// from config and calls `serve_auto()` internally.
+/// Thin binary entry point. `app_main!` includes the canonical `src/app.rs`
+/// source in the binary tip crate, generates `main`, and launches the app.
 pub fn main_rs(opts: &ProjectOptions) -> String {
-    let ident = crate_ident(&opts.name);
     let app_name = app_ident(&opts.name);
     format!(
-        r#"// In dev, compile the canonical application source directly into the
-// binary tip crate so Subsecond can patch controllers, services, and build().
-#[cfg(feature = "dev-reload")]
-include!("app.rs");
-
-// In normal builds, use the library copy consumed by integration tests.
-#[cfg(not(feature = "dev-reload"))]
-use {ident}::{app_name};
-
-#[r2e::main]
-async fn main() {{
-    r2e::launch!({app_name}).await.unwrap();
-}}
-"#
+        "// #![recursion_limit = \"512\"]  // uncomment if you register more than ~127 beans\nr2e::app_main!({app_name});\n"
     )
 }
 
@@ -395,8 +379,8 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 - **App trait**: the whole app is assembled once in `src/app.rs` in
   `impl App for {app_name}` — `build(b, env)` returns `impl BootableApp`, and
   long-lived resources and setup helpers go in `src/env.rs`. `lib.rs` includes
-  `app.rs` for tests/prod; under `dev-reload`, `main.rs` includes the same file
-  into the binary tip crate. Add controllers/beans/plugins inside `build` —
+  `app.rs` for tests; `r2e::app_main!({app_name})` includes the same file into
+  the binary tip crate and generates `main`. Add controllers/beans/plugins inside `build` —
   never in `main.rs`, and never build a second `AppBuilder`.
 - **State is inferred**: there is no state struct. `.provide(bean)` /
   `.register::<T>()` before `.build_state().await`; inject by type with

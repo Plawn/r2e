@@ -36,8 +36,8 @@ struct to maintain.
 ### App boot (recommended)
 
 Instead of hand-assembling a builder per test file, implement the `App` trait
-once in `lib.rs` (production and tests share the same unit) and boot the
-**real** application by type:
+once in `src/app.rs`, include it from `lib.rs`, and boot the **real** application
+by type. `r2e::app_main!` compiles the same source into the production binary:
 
 ```rust
 use r2e_test::TestApp;

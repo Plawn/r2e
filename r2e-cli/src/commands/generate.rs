@@ -65,6 +65,7 @@ impl {name} {{
     Ok(())
 }
 
+
 /// Generate a service skeleton.
 ///
 /// Creates `src/<snake_name>.rs` with a `#[derive(Clone)]` struct
@@ -218,13 +219,13 @@ pub fn crud(name: &str, raw_fields: &[String]) -> Result<(), Box<dyn std::error:
     );
     println!();
     println!("  Next steps:");
-    println!("  1. Register the controller in main.rs:");
+    println!("  1. Register the controller in src/app.rs, inside App::build:");
     println!(
         "     {}",
         format!(".register_controller::<{name}Controller>()").cyan()
     );
     println!(
-        "  2. Register the service as a bean in main.rs: {}",
+        "  2. Register the service as a bean in src/app.rs: {}",
         format!(".register::<{name}Service>()").cyan()
     );
     println!("  3. Provide its dependencies (e.g. a database pool) before `.build_state()`");
@@ -564,7 +565,7 @@ pub fn grpc_service(name: &str, package: &str) -> Result<(), Box<dyn std::error:
         format!("tonic_build::compile_protos(\"proto/{snake}.proto\")?;").cyan()
     );
     println!(
-        "  2. Register in main.rs: {}",
+        "  2. Register in src/app.rs, inside App::build: {}",
         format!(".register_grpc_service::<{name}Service>()").cyan()
     );
     println!("  3. Run `cargo build` to generate proto code");
@@ -684,4 +685,3 @@ pub fn middleware(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

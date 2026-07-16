@@ -109,7 +109,32 @@ pub mod devtools {
     pub use r2e_devtools::*;
 }
 
-/// Launch an [`App`](r2e_core::App) — the canonical `main.rs` entry point.
+/// Declare the standard binary entry point for an [`App`](r2e_core::App).
+///
+/// The macro includes the package's canonical `src/app.rs` directly in the
+/// binary tip crate, generates `main`, and delegates to [`launch!`]. The same
+/// `app.rs` can therefore be included by `lib.rs` for integration tests without
+/// making users maintain `cfg` or crate-name-dependent imports in `main.rs`.
+///
+/// ```ignore
+/// r2e::app_main!(MyApp);
+/// ```
+///
+/// This conventional form expects the application source at `src/app.rs`. Use
+/// `#[r2e::main]` with [`launch!`] directly when a custom entry point is needed.
+#[macro_export]
+macro_rules! app_main {
+    ($app:ty) => {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/app.rs"));
+
+        #[$crate::main]
+        async fn main() {
+            $crate::launch!($app).await.unwrap();
+        }
+    };
+}
+
+/// Launch an [`App`](r2e_core::App) from a custom `main`.
 ///
 /// ```ignore
 /// #[r2e::main]
@@ -134,10 +159,9 @@ pub mod devtools {
 /// user's crate, so patches apply. Without `dev-reload` the macro simply calls
 /// [`launch::<A>()`](r2e_core::launch).
 ///
-/// The generated project also compiles its canonical `src/app.rs` source
-/// directly in `main.rs` under `dev-reload`. That keeps `App::build`,
-/// controllers, and services in the tip crate while `lib.rs` includes the
-/// same source for integration tests and normal production builds.
+/// [`app_main!`] compiles the canonical `src/app.rs` source directly in the
+/// binary. That keeps `App::build`, controllers, and services in the tip crate
+/// while `lib.rs` includes the same source for integration tests.
 ///
 /// `App::setup` runs **once** (its `Env` survives hot-patches); `App::build`
 /// and serve re-run on every patch, and `build`'s `load_config` re-reads

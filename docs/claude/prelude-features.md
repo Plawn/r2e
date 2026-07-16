@@ -34,6 +34,6 @@ The `dev-reload` feature enables Subsecond hot-patching via Dioxus. It is **inte
 
 - **Facade:** `r2e = { features = ["dev-reload"] }` → enables `r2e-devtools` + `r2e-core/dev-reload`
 - **Re-export:** `r2e::devtools::*` (contains `serve_with_hotreload`, `serve_with_hotreload_env`)
-- **Macro support:** `#[r2e::main]` auto-generates `#[cfg(feature = "dev-reload")]` / `#[cfg(not(...))]` code paths when `main` has a parameter (auto-calls `setup()` by convention)
+- **Macro support:** `r2e::app_main!(MyApp)` includes `src/app.rs`, generates the Tokio entry point, and delegates to `launch!`; `launch!` selects the normal or Subsecond loop at compile time
 - **CLI:** `r2e dev` runs `dx serve --hot-patch` with `dev-reload` feature enabled
 - **`PreparedApp<T>`** is always available (not gated) — separates app building from serving

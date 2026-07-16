@@ -15,8 +15,8 @@ tokio = { version = "1", features = ["full"] }
 ## Recommended pattern: boot your `App`
 
 Implement the `App` trait once in `app.rs`. `lib.rs` compiles that source for
-tests and normal production builds; dev mode compiles the same source in the
-binary tip crate for real hot-reload:
+tests; `r2e::app_main!` compiles the same source in the binary tip crate for
+production and real hot-reload:
 
 ```rust
 // src/app.rs
@@ -39,16 +39,7 @@ impl App for MyApp {
 include!("app.rs");
 
 // src/main.rs
-#[cfg(feature = "dev-reload")]
-include!("app.rs");
-
-#[cfg(not(feature = "dev-reload"))]
-use my_app::MyApp;
-
-#[r2e::main]
-async fn main() {
-    r2e::launch!(MyApp).await.unwrap();
-}
+r2e::app_main!(MyApp);
 ```
 
 ```rust

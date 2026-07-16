@@ -355,7 +355,7 @@ The `--package` flag sets the protobuf package name (defaults to `myapp`).
 
 After generation, you need to:
 1. Add the proto to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `main.rs`: `.register_grpc_service::<UserService>()`
+2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
 3. Run `cargo build` to generate the proto code
 
 ## GrpcServer API Reference

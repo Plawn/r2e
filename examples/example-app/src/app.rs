@@ -1,8 +1,8 @@
 // Canonical example application source.
 //
-// `lib.rs` includes this file for integration tests and normal production
-// builds. With `dev-reload`, `main.rs` includes the same file directly in the
-// binary tip crate so Subsecond patches controllers and services for real.
+// `lib.rs` includes this file for integration tests. `app_main!` includes the
+// same file directly in the binary tip crate so Subsecond patches controllers
+// and services for real.
 
 use std::time::Duration;
 
@@ -57,7 +57,7 @@ use services::UserService;
 )]
 pub struct UserModule;
 
-/// The canonical application blueprint. Production (`r2e::launch!(ExampleApp)`),
+/// The canonical application blueprint. Production (`r2e::app_main!(ExampleApp)`),
 /// dev hot-reload, and tests (`#[r2e::test(app = example_app::ExampleApp)]` /
 /// `TestApp::boot::<ExampleApp>()`) all go through this single [`App`] impl.
 pub struct ExampleApp;

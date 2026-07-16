@@ -59,7 +59,10 @@ my-app/
   Cargo.toml                      r2e + tokio + serde + tracing
   application.yaml                app name + port
   src/
-    main.rs                       #[tokio::main], AppBuilder, .serve()
+    app.rs                        canonical App::setup/App::build
+    env.rs                        cold process-lifetime resources
+    lib.rs                        includes app.rs for integration tests
+    main.rs                       r2e::app_main!(MyApp);
     controllers/
       mod.rs                      pub mod hello;
       hello.rs                    HelloController at /
@@ -69,10 +72,10 @@ my-app/
 
 | Feature | Generated files / changes |
 |---------|--------------------------|
-| `--db sqlite` | `migrations/` dir, `sqlx` dep (sqlite), `SqlitePool` in state |
-| `--db postgres` | `migrations/` dir, `sqlx` dep (postgres), `PgPool` in state |
-| `--db mysql` | `migrations/` dir, `sqlx` dep (mysql), `MySqlPool` in state |
-| `--auth` | `r2e` security feature, `Arc<JwtClaimsValidator>` in state, JWT config in YAML |
+| `--db sqlite` | `migrations/` dir, `sqlx` dep (sqlite), pool producer in `app.rs` |
+| `--db postgres` | `migrations/` dir, `sqlx` dep (postgres), pool producer in `app.rs` |
+| `--db mysql` | `migrations/` dir, `sqlx` dep (mysql), pool producer in `app.rs` |
+| `--auth` | `r2e` security feature, JWT validator producer, JWT config in YAML |
 | `--openapi` | `r2e` openapi feature, `OpenApiPlugin` in builder, `/docs` UI |
 | `--grpc` | `tonic` + `prost` deps, `build.rs`, `proto/greeter.proto`, `GrpcServer` plugin |
 | `--full` | All of the above (SQLite + auth + openapi + scheduler + events + gRPC) |
@@ -80,36 +83,11 @@ my-app/
 ### Generated `main.rs` (with `--full`)
 
 ```rust
-use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
-use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-use r2e::r2e_scheduler::Scheduler;
-use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
-
-mod controllers;
-mod state;
-
-use controllers::hello::HelloController;
-use state::AppState;
-
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
-
-    AppBuilder::new()
-        .plugin(Scheduler)
-        .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-        .build_state()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .with(OpenApiPlugin::new(OpenApiConfig::new("API", "0.1.0").with_docs_ui(true)))
-        .register_controller::<HelloController>()
-        .serve("0.0.0.0:8080")
-        .await
-        .unwrap();
-}
+r2e::app_main!(MyApp);
 ```
+
+All assembly lives in canonical `src/app.rs`; `main.rs` never duplicates the
+builder graph or contains feature-specific `cfg` blocks.
 
 ### Generated `application.yaml` (with `--full`)
 
@@ -283,7 +261,7 @@ impl ArticleController {
 
 #### Next steps after CRUD generation
 
-1. Register the controller in `main.rs`: `.register_controller::<ArticleController>()`
+1. Register the controller in `src/app.rs`: `.register_controller::<ArticleController>()`
 2. Add `ArticleService` to your state struct (or use `#[bean]` DI)
 3. Run migrations if applicable
 4. Run `cargo check` to verify
@@ -380,7 +358,7 @@ message ListUserResponse {
 **Next steps after gRPC generation:**
 
 1. Add to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `main.rs`: `.register_grpc_service::<UserService>()`
+2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
 3. Run `cargo build` to generate proto code
 
 ---
@@ -417,15 +395,15 @@ cargo install dioxus-cli
 Your app implements the `App` trait (see [Dev Mode](../advanced/dev-mode.md)):
 - `App::setup()` runs once and returns the persistent `Env` (DB pools, buses) — it survives hot-patches
 - `App::build(b, env)` re-runs on each change; its `load_config` re-reads `application.yaml` from disk each patch, so YAML edits apply on the next hot-patch
-- `r2e::launch!(MyApp)` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload` (it must be the `launch!` macro, not `launch::<MyApp>()`, so the hot-patch loop expands into your tip crate)
-- The canonical app lives in `src/app.rs`: `lib.rs` includes it for tests/prod,
-  while `main.rs` includes it under `dev-reload` so editable code is tip-crate code
+- `r2e::app_main!(MyApp)` includes `src/app.rs` in the binary, generates `main`, and invokes `launch!`; no user-written `cfg` or crate import is needed
+- `r2e::launch!(MyApp)` runs the normal path in release and the Subsecond hot-patch loop under `dev-reload` (it must be a macro so the loop expands into the tip crate)
+- `lib.rs` includes the same canonical `src/app.rs` for integration tests
 
 ---
 
 ## `r2e doctor`
 
-Run 8 project health checks against the current directory.
+Run 9 project health checks against the current directory.
 
 ```bash
 r2e doctor
@@ -442,7 +420,8 @@ r2e doctor
 | 5 | Rust toolchain | Error | `rustc --version` succeeds |
 | 6 | Dioxus CLI (dx) | Warning | `dx --version` succeeds |
 | 7 | Migrations directory | Warning | If a managed database backend is present, checks `migrations/` |
-| 8 | Application entrypoint | Warning | `src/main.rs` contains `.serve(` |
+| 8 | Application entrypoint | Warning | `src/main.rs` contains `app_main!`, `launch!`, `serve()`, or `serve_auto()` |
+| 9 | Bean registration count | Warning | Large inferred DI graphs have a crate-root `recursion_limit` |
 
 **Output indicators:**
 - `✓` (green) — check passed
@@ -461,7 +440,7 @@ R2E Doctor — Checking project health
   ✓ Rust toolchain — rustc 1.82.0 (f6e511eec 2024-10-15)
   ! Dioxus CLI (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
-  ✓ Application entrypoint — serve() call found in main.rs
+  ✓ Application entrypoint — R2E entrypoint found in main.rs
 
 1 issue(s) found
 ```

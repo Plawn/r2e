@@ -64,8 +64,10 @@ my-app/
   proto/
     greeter.proto               # Sample gRPC service definition
   src/
-    lib.rs                      # `impl App for MyApp` (setup/build) + producers
-    main.rs                     # thin: #[r2e::main] async fn main() { r2e::launch!(MyApp).await.unwrap() }
+    app.rs                      # canonical `impl App for MyApp` + producers
+    env.rs                      # cold, process-lifetime resources
+    lib.rs                      # include app.rs for integration tests
+    main.rs                     # `r2e::app_main!(MyApp);`
     controllers/
       mod.rs
       hello.rs                  # Hello world controller
@@ -79,6 +81,9 @@ my-app/
   Cargo.toml
   application.yaml
   src/
+    app.rs
+    env.rs
+    lib.rs
     main.rs
     controllers/
       mod.rs
@@ -216,9 +221,8 @@ Options:
 ```
 
 Supervises `dx serve --hot-patch` with the `dev-reload` feature. Generated
-projects keep one canonical app in `src/app.rs`: the lib includes it for
-tests/prod and the binary includes it in dev so editable code belongs to the
-Subsecond tip crate.
+projects keep one canonical app in `src/app.rs`: `lib.rs` includes it for tests,
+and `app_main!` includes it in the binary tip crate for normal and dev builds.
 
 - Controllers, services, and `App::build` use fast hot-patching.
 - `src/env.rs`, `src/env/**`, `Cargo.toml`, and `build.rs` are cold boundaries;
@@ -241,7 +245,7 @@ Run project health diagnostics.
 r2e doctor
 ```
 
-Runs 8 checks against the current directory:
+Runs 9 checks against the current directory:
 
 | Check | Level | What it verifies |
 |-------|-------|------------------|
@@ -252,7 +256,8 @@ Runs 8 checks against the current directory:
 | Rust toolchain | Error | `rustc --version` succeeds |
 | Dioxus CLI | Warning | `dx --version` succeeds (needed for `r2e dev`) |
 | Migrations directory | Warning | If a managed database integration is enabled, `migrations/` exists |
-| Application entrypoint | Warning | `src/main.rs` contains a `.serve()` call |
+| Application entrypoint | Warning | `src/main.rs` contains `app_main!`, `launch!`, `serve()`, or `serve_auto()` |
+| Bean registration count | Warning | Large inferred DI graphs have a crate-root `recursion_limit` |
 
 Output uses colored indicators: `✓` (green) for OK, `!` (yellow) for warnings, `x` (red) for errors.
 
@@ -268,7 +273,7 @@ R2E Doctor — Checking project health
   ✓ Rust toolchain — rustc 1.82.0 (f6e511eec 2024-10-15)
   ! dioxus-cli (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
-  ✓ Application entrypoint — serve() call found in main.rs
+  ✓ Application entrypoint — R2E entrypoint found in main.rs
 
 1 issue(s) found
 ```

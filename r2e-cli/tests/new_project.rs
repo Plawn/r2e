@@ -70,12 +70,12 @@ fn new_creates_thin_main_rs() {
 
     new_project::run("myapp", default_opts()).unwrap();
 
-    // main.rs launches the app and includes the canonical source only in dev.
+    // app_main! owns the include, runtime entry point, and launch path.
     let main = fs::read_to_string("myapp/src/main.rs").unwrap();
-    assert!(main.contains("#[r2e::main]"));
-    assert!(main.contains("include!(\"app.rs\")"));
-    assert!(main.contains("use myapp::Myapp"));
-    assert!(main.contains("r2e::launch!(Myapp)"));
+    assert!(main.contains("r2e::app_main!(Myapp);"));
+    assert!(main.contains("recursion_limit"));
+    assert!(!main.contains("cfg"));
+    assert!(!main.contains("include!"));
     assert!(!main.contains(".build_state()"));
     assert!(!main.contains("register_controller"));
 }
@@ -97,11 +97,12 @@ fn new_creates_shared_app_source_and_library_wrapper() {
     assert!(!app.contains("build_state!"));
     assert!(!app.contains("AppState"));
     assert!(app.contains(".register_controller::<HelloController>()"));
-    // recursion_limit guidance is emitted as a commented crate-level attribute.
-    assert!(app.contains("recursion_limit"));
+    // recursion_limit belongs in the crate roots, not the included app source.
+    assert!(!app.contains("recursion_limit"));
 
     let lib = fs::read_to_string("myapp/src/lib.rs").unwrap();
-    assert_eq!(lib, "include!(\"app.rs\");\n");
+    assert!(lib.contains("include!(\"app.rs\")"));
+    assert!(lib.contains("recursion_limit"));
 
     let env = fs::read_to_string("myapp/src/env.rs").unwrap();
     assert!(env.contains("pub struct AppEnv"));
@@ -152,10 +153,9 @@ fn new_hyphenated_name_uses_crate_ident() {
 
     new_project::run("my-app", default_opts()).unwrap();
 
-    // Cargo maps `-` to `_` in target names; generated code must use the ident.
+    // main.rs no longer needs the crate ident; tests still do.
     let main = fs::read_to_string("my-app/src/main.rs").unwrap();
-    assert!(main.contains("use my_app::MyApp"));
-    assert!(main.contains("r2e::launch!(MyApp)"));
+    assert!(main.contains("r2e::app_main!(MyApp);"));
     let test = fs::read_to_string("my-app/tests/app.rs").unwrap();
     assert!(test.contains("#[r2e::test(app = my_app::MyApp)]"));
 }

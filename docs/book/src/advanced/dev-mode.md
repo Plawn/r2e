@@ -12,8 +12,8 @@ R2E supports **Subsecond hot-patching** via Dioxus 0.7 for instant code reloadin
 dev-reload = ["r2e/dev-reload"]
 ```
 
-3. Put the canonical **`App` trait** implementation in `src/app.rs`. Both the
-   library target (tests/prod) and binary tip crate (dev) compile that source:
+3. Put the canonical **`App` trait** implementation in `src/app.rs`. `lib.rs`
+   compiles it for tests and `app_main!` compiles it in the binary tip crate:
 
 ```rust
 // src/app.rs
@@ -47,33 +47,24 @@ impl App for MyApp {
 ```
 
 ```rust
-// src/lib.rs — integration tests and normal production builds
+// src/lib.rs — integration tests
 include!("app.rs");
 ```
 
 ```rust
-// src/main.rs — the same source becomes tip-crate code in dev
-#[cfg(feature = "dev-reload")]
-include!("app.rs");
-
-#[cfg(not(feature = "dev-reload"))]
-use my_app::MyApp;
-
-#[r2e::main]
-async fn main() {
-    r2e::launch!(MyApp).await.unwrap();
-}
+// src/main.rs — app.rs becomes binary tip-crate code
+r2e::app_main!(MyApp);
 ```
 
-`r2e::launch!` runs `setup()` once and re-runs `build()` per hot-patch. Under the
-`dev-reload` feature it drives the Subsecond hot-patch loop; `main.rs` takes no
-parameter and needs no hand-written hot-reload machinery. It is a macro (not
+`r2e::app_main!` includes `src/app.rs` in the binary, generates the Tokio
+`main`, and delegates to `r2e::launch!`. Under `dev-reload`, `launch!` runs
+`setup()` once and re-runs `build()` per hot-patch. It is a macro (not
 `launch::<MyApp>()`) because Subsecond only patches functions in the *tip crate*
-that owns `main.rs`; the macro expands its hot-reload loop — including the
-concrete function Subsecond remaps — directly into your crate. The conditional
-`include!("app.rs")` also makes the app, controllers, and services tip-crate
-code in dev. Without `dev-reload`, the bin imports the library copy and
-`launch!` calls the normal `r2e::launch::<MyApp>()` path.
+that owns `main.rs`; its hot-reload loop — including the concrete function
+Subsecond remaps — must expand directly into your crate. The unconditional
+include performed by `app_main!` makes the app, controllers, and services
+tip-crate code in both dev and production, with no user-written `cfg` or
+crate-name import. Tests use the library inclusion of the same source.
 
 Keep the persistent `AppEnv` and its setup helper in `src/env.rs`. Changes to
 that cold file, `src/env/**`, `Cargo.toml`, or `build.rs` make `r2e dev` perform

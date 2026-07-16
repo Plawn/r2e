@@ -38,6 +38,9 @@ my-app/
   Cargo.toml
   application.yaml
   src/
+    app.rs
+    env.rs
+    lib.rs
     main.rs
     controllers/
       mod.rs
@@ -45,41 +48,24 @@ my-app/
 ```
 
 With `--db sqlite`, you also get a `migrations/` directory and a `SqlitePool`
-provided as a bean in `main.rs`. With `--auth`, the builder provides an
-`Arc<JwtClaimsValidator>` bean. With `--openapi`, the builder includes
+producer registered in `app.rs`. With `--auth`, the builder registers an
+`Arc<JwtClaimsValidator>` producer. With `--openapi`, the builder includes
 `OpenApiPlugin` and your API docs are served at `/docs`. With `--grpc`, you get a
 `proto/greeter.proto` sample, a `build.rs`, and `GrpcServer` plugin in the
 builder.
 
 ### Generated `main.rs`
 
-The generated `main.rs` uses `AppBuilder` with all selected features wired in:
+The generated entry point contains one line:
 
 ```rust
-use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
-
-mod controllers;
-
-use controllers::hello::HelloController;
-
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
-
-    AppBuilder::new()
-        .build_state()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controller::<HelloController>()
-        .serve("0.0.0.0:8080")
-        .await
-        .unwrap();
-}
+r2e::app_main!(MyApp);
 ```
 
-With `--full`, additional plugins are added automatically: `Scheduler`, `GrpcServer`, `OpenApiPlugin`, and `SqlitePool`, `LocalEventBus`, and `JwtClaimsValidator` are provided as beans.
+`app_main!` includes canonical `src/app.rs` in the binary, generates the Tokio
+entry point, and selects normal serving or hot reload. `src/lib.rs` includes the
+same source for integration tests. All selected plugins, producers, beans, and
+controllers are assembled once in `App::build` inside `app.rs`.
 
 ### Generated `application.yaml`
 
@@ -192,8 +178,8 @@ An `id INTEGER PRIMARY KEY AUTOINCREMENT` column is always generated automatical
 
 **After generation, you need to:**
 
-1. Register the controller: `.register_controller::<ArticleController>()`
-2. Register the service as a bean: `.register::<ArticleService>()` (before `build_state()`)
+1. Register the controller in `src/app.rs`: `.register_controller::<ArticleController>()`
+2. Register the service in `App::build`: `.register::<ArticleService>()` (before `build_state()`)
 3. Run the SQL migration
 4. Run `cargo check`
 
@@ -272,7 +258,7 @@ impl UserService {
 **After generation:**
 
 1. Add to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register: `.register_grpc_service::<UserService>()`
+2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
 3. `cargo build` to generate proto code
 
 ---
@@ -283,9 +269,9 @@ impl UserService {
 r2e dev
 ```
 
-Wraps `cargo watch` with R2E defaults:
-- Watches `src/`, `application.yaml`, `migrations/`
-- Prints discovered routes before starting
+Supervises `dx serve --hot-patch` with the `dev-reload` feature enabled. Normal
+application edits are patched in place; changes to `src/env.rs`, `src/env/**`,
+`Cargo.toml`, or `build.rs` trigger a safe full restart.
 
 Use `--open` to auto-open the browser:
 
@@ -293,7 +279,7 @@ Use `--open` to auto-open the browser:
 r2e dev --open
 ```
 
-Requires `cargo-watch`: `cargo install cargo-watch`.
+Requires the Dioxus CLI: `cargo install dioxus-cli`.
 
 ---
 
@@ -303,7 +289,7 @@ Requires `cargo-watch`: `cargo install cargo-watch`.
 r2e doctor
 ```
 
-Runs 8 diagnostics against the current directory:
+Runs 9 diagnostics against the current directory:
 
 ```
 R2E Doctor — Checking project health
@@ -313,14 +299,17 @@ R2E Doctor — Checking project health
   ✓ Configuration file — application.yaml found
   ✓ Controllers directory — 3 controller files
   ✓ Rust toolchain — rustc 1.82.0
-  ! cargo-watch (for r2e dev) — Not installed. Run: cargo install cargo-watch
+  ! Dioxus CLI (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
-  ✓ Application entrypoint — serve() call found in main.rs
+  ✓ Application entrypoint — R2E entrypoint found in main.rs
 
 1 issue(s) found
 ```
 
-Checks include: Cargo.toml existence, R2E dependency, configuration file, controllers directory, Rust toolchain, cargo-watch, migrations directory (if data features used), and `.serve()` call in main.rs.
+Checks include: Cargo.toml existence, R2E dependency, configuration file,
+controllers directory, Rust toolchain, Dioxus CLI, migrations directory,
+`app_main!`/`launch!`/serve entrypoint detection, and the DI recursion-limit
+heuristic.
 
 ---
 

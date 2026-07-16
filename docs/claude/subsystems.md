@@ -466,7 +466,7 @@ Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"
 
 ## Testing (r2e-test)
 
-- **App boot (the `@QuarkusTest` path)** — apps declare `impl App for MyApp` once in `app.rs`; `lib.rs` includes it for tests/prod and `main.rs` includes it under `dev-reload` so the same source is tip-crate code. `setup()` owns long-lived resources and `build(b, env) -> impl BootableApp` assembles the app; tests boot the real app **by type** instead of re-declaring controllers:
+- **App boot (the `@QuarkusTest` path)** — apps declare `impl App for MyApp` once in `app.rs`; `lib.rs` includes it for tests and `r2e::app_main!(MyApp)` includes it in the binary tip crate while generating `main`. `setup()` owns long-lived resources and `build(b, env) -> impl BootableApp` assembles the app; tests boot the real app **by type** instead of re-declaring controllers:
   - `TestApp::boot::<MyApp>().await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
   - `TestApp::boot_with::<MyApp>(|b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`; or `b.override_config(cfg)` for a full in-memory config). Pinned overrides win over the app's later registrations (first-pin semantics: the harness pre-configures the builder *before* `build` runs, so test overrides must beat later registrations).
   - `TestApp::boot_plain::<MyApp>(|b| ...).await` — skips the TestJwt wiring.

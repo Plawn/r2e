@@ -139,7 +139,8 @@ regardless of graph size. There is **no runtime cost** to a large graph.
 The trade-off is **compile time**: the `HasBean` witness recursion grows roughly
 linearly with the bean count (a few seconds even at ~256 beans). Past the default
 `recursion_limit = 128` (around ~127 provisions) the `There` witness chain
-overflows with `E0275`; add this crate-level attribute at the top of `main.rs`:
+overflows with `E0275`; add this crate-level attribute at the top of both
+`main.rs` and `lib.rs` so the binary and integration-test library compile:
 
 ```rust
 #![recursion_limit = "512"]

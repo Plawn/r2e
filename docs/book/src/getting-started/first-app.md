@@ -59,40 +59,68 @@ impl HelloController {
 }
 ```
 
-## 4. Wire it up in main
+## 4. Define the application once
 
-Replace `src/main.rs`:
+Create `src/env.rs` for resources that must survive hot-patches:
 
 ```rust
-use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
+#[derive(Clone, Default)]
+pub struct AppEnv;
 
-mod controllers;
-
-use controllers::hello::HelloController;
-
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
-
-    AppBuilder::new()
-        .build_state()          // no type args; async — resolves the bean graph
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controller::<HelloController>()   // register controllers after build_state
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
+pub async fn setup_env() -> AppEnv {
+    AppEnv
 }
 ```
 
-`build_state()` takes no type arguments — the state type is inferred from the
-beans you registered. Controllers are registered **after** `build_state()`.
+Create the canonical `src/app.rs`:
+
+```rust
+use r2e::prelude::*;
+
+pub mod controllers;
+pub mod env;
+
+use controllers::hello::HelloController;
+use env::{setup_env, AppEnv};
+
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
+        b.load_config::<()>()
+            .build_state().await
+            .with(Health)
+            .with(Tracing)
+            .register_controller::<HelloController>()
+    }
+}
+```
+
+Expose the same app type to integration tests from `src/lib.rs`:
+
+```rust
+include!("app.rs");
+```
+
+Then replace `src/main.rs` with the standard entrypoint:
+
+```rust
+r2e::app_main!(MyApp);
+```
+
+`app_main!` includes the same `app.rs` in the binary, generates Tokio `main`,
+and handles normal serving or hot reload. `build_state()` takes no type
+arguments; controllers are registered after it.
 
 > **Large apps:** if your bean graph grows past ~127 registrations, add
-> `#![recursion_limit = "512"]` at the top of `main.rs`. `r2e doctor` warns as you
-> approach the threshold.
+> `#![recursion_limit = "512"]` at the top of both `main.rs` and `lib.rs`.
+> `r2e doctor` warns as you approach the threshold.
 
 ## 5. Run it
 
@@ -185,8 +213,8 @@ impl UserController {
 }
 ```
 
-No state struct to edit — registering `UserService` as a bean in `main.rs` (next
-step) is all it takes. The controller's `#[inject] user_service: UserService`
+No state struct to edit — registering `UserService` in `App::build` (next step)
+is all it takes. The controller's `#[inject] user_service: UserService`
 field is resolved from the graph by type.
 
 Update `src/controllers/mod.rs`:
@@ -195,32 +223,36 @@ pub mod hello;
 pub mod user;
 ```
 
-Update `src/main.rs`:
+Update `src/app.rs`:
 
 ```rust
 use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
 
-mod controllers;
-mod services;
+pub mod controllers;
+pub mod env;
+pub mod services;
 
 use controllers::hello::HelloController;
 use controllers::user::UserController;
+use env::{setup_env, AppEnv};
 
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
+pub struct MyApp;
 
-    AppBuilder::new()
-        .register::<services::UserService>()   // register the bean before build_state
-        .build_state()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controllers::<(HelloController, UserController)>()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
+        b.load_config::<()>()
+            .register::<services::UserService>()
+            .build_state().await
+            .with(Health)
+            .with(Tracing)
+            .register_controllers::<(HelloController, UserController)>()
+    }
 }
 ```
 

@@ -18,9 +18,9 @@ enum CheckResult {
 /// 5. Rust toolchain (`rustc --version`) (Error if missing)
 /// 6. `dx` (Dioxus CLI) installed (Warning if missing)
 /// 7. `migrations/` exists when data features are used (Warning if missing)
-/// 8. `src/main.rs` contains `.serve()` call (Warning if missing)
+/// 8. `src/main.rs` declares an R2E entrypoint (Warning if missing)
 /// 9. Bean registration count vs. recursion limit (Warning if over ~120
-///    registrations and the crate root lacks `#![recursion_limit]`)
+///    registrations and any existing crate root lacks `#![recursion_limit]`)
 ///
 /// Results are printed with colored indicators. Always returns `Ok(())`.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -154,15 +154,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         &mut issues,
     );
 
-    // 8. Check that src/main.rs has serve()
+    // 8. Check that src/main.rs has a framework entrypoint.
     check(
         "Application entrypoint",
         || {
             let content = std::fs::read_to_string("src/main.rs").unwrap_or_default();
-            if content.contains(".serve(") || content.contains("serve(") {
-                CheckResult::Ok("serve() call found in main.rs".into())
+            if has_application_entrypoint(&content) {
+                CheckResult::Ok("R2E entrypoint found in main.rs".into())
             } else {
-                CheckResult::Warning("No .serve() call found in main.rs".into())
+                CheckResult::Warning(
+                    "No app_main!, launch!, serve(), or serve_auto() entrypoint found in main.rs"
+                        .into(),
+                )
             }
         },
         &mut issues,
@@ -187,23 +190,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Look for an actual (uncommented) crate-level attribute — the
             // scaffold ships a commented-out hint that must not count.
-            let root_has_limit = ["src/main.rs", "src/lib.rs"].iter().any(|p| {
-                std::fs::read_to_string(p)
-                    .map(|c| {
-                        c.lines()
-                            .any(|line| line.trim_start().starts_with("#![recursion_limit"))
-                    })
-                    .unwrap_or(false)
-            });
+            let crate_roots: Vec<_> = ["src/main.rs", "src/lib.rs"]
+                .into_iter()
+                .filter(|p| Path::new(p).exists())
+                .collect();
+            let roots_have_limit = !crate_roots.is_empty()
+                && crate_roots.iter().all(|p| {
+                    std::fs::read_to_string(p)
+                        .map(|c| {
+                            c.lines()
+                                .any(|line| line.trim_start().starts_with("#![recursion_limit"))
+                        })
+                        .unwrap_or(false)
+                });
 
-            if root_has_limit {
+            if roots_have_limit {
                 CheckResult::Ok(format!(
                     "{count} registrations; recursion_limit already set"
                 ))
             } else {
                 CheckResult::Warning(format!(
                     "{count} bean registrations exceed the default recursion limit — \
-                     add #![recursion_limit = \"512\"] to src/main.rs (or src/lib.rs)"
+                     add #![recursion_limit = \"512\"] to each crate root \
+                     (src/main.rs and src/lib.rs when both exist)"
                 ))
             }
         },
@@ -221,6 +230,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Recognize both the canonical App-trait entrypoints and the lower-level
+/// builder terminals kept for custom applications.
+fn has_application_entrypoint(content: &str) -> bool {
+    content.contains("app_main!(")
+        || content.contains("launch!(")
+        || content.contains(".serve(")
+        || content.contains("serve_auto(")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_application_entrypoint;
+
+    #[test]
+    fn recognizes_supported_entrypoints() {
+        assert!(has_application_entrypoint("r2e::app_main!(MyApp);"));
+        assert!(has_application_entrypoint("r2e::launch!(MyApp).await?;"));
+        assert!(has_application_entrypoint("builder.serve(addr).await?;"));
+        assert!(has_application_entrypoint("builder.serve_auto().await?;"));
+        assert!(!has_application_entrypoint("fn main() {}"));
+    }
 }
 
 /// Count dependency-injection registration calls across all `.rs` files

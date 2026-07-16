@@ -7,10 +7,10 @@
 //!   browser script to detect when the server has restarted (the PID or
 //!   boot-time changes).
 //!
-//! Pair with `r2e-cli dev` (which wraps `cargo-watch`) for a full
-//! hot-reload development experience. When cargo-watch detects a file
-//! change, it kills the server and restarts it. Clients polling
-//! `/__r2e_dev/ping` detect the restart and refresh.
+//! Pair with `r2e dev`, which supervises `dx serve --hot-patch`. Ordinary app
+//! changes are patched into the running binary; cold changes to `env.rs`,
+//! `src/env/**`, `Cargo.toml`, or `build.rs` restart the child process. Clients
+//! polling `/__r2e_dev/ping` can detect those full restarts and refresh.
 
 use crate::http::header::{HeaderValue, CACHE_CONTROL};
 use crate::http::middleware::Next;

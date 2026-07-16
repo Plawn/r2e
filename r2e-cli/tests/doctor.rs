@@ -74,11 +74,7 @@ fn doctor_valid_project() {
     fs::write("application.yaml", "app:\n  name: test\n").unwrap();
     fs::create_dir_all("src/controllers").unwrap();
     fs::write("src/controllers/hello.rs", "").unwrap();
-    fs::write(
-        "src/main.rs",
-        "fn main() { builder.serve(\"0.0.0.0:3000\"); }",
-    )
-    .unwrap();
+    fs::write("src/main.rs", "r2e::app_main!(TestApp);").unwrap();
 
     assert!(doctor::run().is_ok());
 }
@@ -134,7 +130,7 @@ fn doctor_data_feature_without_migrations() {
 
 #[test]
 #[serial]
-fn doctor_missing_serve_call() {
+fn doctor_missing_entrypoint() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CwdGuard::new(tmp.path());
 
@@ -145,7 +141,7 @@ fn doctor_missing_serve_call() {
     .unwrap();
     fs::create_dir_all("src").unwrap();
     fs::write("src/main.rs", "fn main() { println!(\"hello\"); }").unwrap();
-    // main.rs without .serve() → warning
+    // main.rs without an R2E entrypoint → warning
 
     assert!(doctor::run().is_ok());
 }

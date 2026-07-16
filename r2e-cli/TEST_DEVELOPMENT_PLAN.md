@@ -104,7 +104,7 @@ Uses `tempdir` with minimal project structures.
 | `doctor_valid_project` | Full valid project → all checks pass |
 | `doctor_missing_config` | No application.yaml → Warning check |
 | `doctor_missing_controllers_dir` | No src/controllers/ → Warning check |
-| `doctor_missing_main_serve` | main.rs without `.serve()` → Warning check |
+| `doctor_missing_entrypoint` | main.rs without `app_main!`/`launch!`/serve terminal → Warning check |
 
 ---
 
@@ -137,7 +137,7 @@ Each test creates a temp directory and runs `r2e new` logic.
 |------|-------------|
 | `new_creates_project_dir` | Project directory created |
 | `new_creates_cargo_toml` | `Cargo.toml` with r2e dependency |
-| `new_creates_main_rs` | `src/main.rs` with AppBuilder and `.serve()` |
+| `new_creates_main_rs` | `src/main.rs` with `r2e::app_main!(App)` |
 | `new_creates_application_yaml` | `application.yaml` configuration file |
 | `new_with_db_sqlite` | `--db sqlite` → SQLx + SQLite deps, migrations/ dir |
 | `new_with_auth` | `--auth` → r2e-security dep, JwtClaimsValidator setup |

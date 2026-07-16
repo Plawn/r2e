@@ -17,9 +17,9 @@ pub mod dev;
 
 /// Project diagnostics — `r2e doctor`.
 ///
-/// Runs 8 health checks: Cargo.toml, R2E dependency, config file,
-/// controllers directory, Rust toolchain, cargo-watch, migrations,
-/// and application entrypoint.
+/// Runs 9 health checks: Cargo.toml, R2E dependency, config file,
+/// controllers directory, Rust toolchain, Dioxus CLI, migrations,
+/// application entrypoint, and bean-count recursion limits.
 pub mod doctor;
 
 /// Code generation — `r2e generate`.
@@ -30,8 +30,8 @@ pub mod generate;
 
 /// Project scaffolding — `r2e new <name>`.
 ///
-/// Creates a new R2E project directory with Cargo.toml, main.rs, state.rs,
-/// application.yaml, and optional database/auth/openapi/gRPC scaffolding.
+/// Creates a new R2E project directory with Cargo.toml, app.rs, env.rs, lib.rs,
+/// main.rs, application.yaml, and optional database/auth/openapi/gRPC scaffolding.
 pub mod new_project;
 
 /// Route listing — `r2e routes`.

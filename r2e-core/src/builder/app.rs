@@ -40,15 +40,7 @@
 //! include!("app.rs");
 //!
 //! // ── main.rs ────────────────────────────────────────────────────────
-//! #[cfg(feature = "dev-reload")]
-//! include!("app.rs");
-//! #[cfg(not(feature = "dev-reload"))]
-//! use my_app::MyApp;
-//!
-//! #[r2e::main]
-//! async fn main() {
-//!     r2e::launch!(MyApp).await.unwrap();
-//! }
+//! r2e::app_main!(MyApp);
 //!
 //! // ── a test ─────────────────────────────────────────────────────────
 //! #[r2e::test(app = MyApp)]
@@ -89,14 +81,11 @@ pub trait App {
 /// `server.host`/`server.port` from config, like
 /// [`serve_auto`](BootableApp::serve_auto)).
 ///
-/// This is the production entry point. It is invoked for you by the
-/// [`launch!`](crate::launch) macro, which is the canonical `main.rs` form:
+/// This is the production entry point. It is invoked for you by `launch!`; the
+/// canonical `main.rs` form is:
 ///
 /// ```ignore
-/// #[r2e::main]
-/// async fn main() {
-///     r2e::launch!(MyApp).await.unwrap();
-/// }
+/// r2e::app_main!(MyApp);
 /// ```
 ///
 /// # Why a macro wraps this in dev mode
@@ -106,13 +95,13 @@ pub trait App {
 /// generic dispatcher monomorphised from `r2e-core` (like an earlier
 /// `launch::<A>` that drove the loop itself) is *not* remapped: the jump-table
 /// lookup misses and hot-patches never reach the rebuilt `App::build`. The
-/// [`launch!`](crate::launch) macro therefore expands the hot-reload loop —
+/// `launch!` macro therefore expands the hot-reload loop —
 /// including a concrete, named `__r2e_server` function — directly at the call
 /// site in the tip crate, which is what makes patches actually apply. Under
-/// the standard R2E layout, `main.rs` also includes the canonical `app.rs`
-/// source under `dev-reload`, while `lib.rs` includes it for tests/prod. This
-/// makes the code reached by the concrete dispatcher tip-crate code without
-/// duplicating the declaration. Under
+/// the standard R2E layout, `app_main!` includes canonical `src/app.rs` in the
+/// binary while `lib.rs` includes it for tests. This makes the code reached by
+/// the concrete dispatcher tip-crate code without duplicating the declaration.
+/// Under
 /// `dev-reload` that macro calls [`App::setup`] **once** (its environment
 /// survives patches) and re-runs [`App::build`] + serve per hot-patch;
 /// `build`'s `load_config` re-reads `application.yaml` per patch so config

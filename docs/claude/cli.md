@@ -42,7 +42,7 @@ Subcommands:
 
 ## `r2e doctor` — Project health diagnostics
 
-Runs 8 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI, migrations, entrypoint). Reports `Ok`/`Warning`/`Error` with colored indicators.
+Runs 9 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI, migrations, R2E entrypoint, DI recursion limit). The entrypoint check recognizes `app_main!`, `launch!`, `serve()`, and `serve_auto()`. Reports `Ok`/`Warning`/`Error` with colored indicators.
 
 ## `r2e routes` — Route listing
 

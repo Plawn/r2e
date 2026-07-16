@@ -38,7 +38,7 @@ list into an **HList state** — the state type is *inferred* from the `.provide
 **after** `build_state()`, and final assembly happens when `serve()` is called.
 
 > **Note**: apps with more than ~127 registered beans need
-> `#![recursion_limit = "512"]` at the crate root (`main.rs`). `r2e doctor` warns
+> `#![recursion_limit = "512"]` in each crate root (`main.rs` and `lib.rs`). `r2e doctor` warns
 > as the bean count approaches the threshold.
 
 ### 1.2 Internal Construction (`build_inner`)

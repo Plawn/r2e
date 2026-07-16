@@ -195,7 +195,7 @@ AppBuilder::new()
     // ...
 ```
 
-> **Large apps:** each typed config section and every provided/registered value is a bean. Apps with more than ~127 beans need `#![recursion_limit = "512"]` at the crate root (`main.rs`); `r2e doctor` warns as the bean count approaches the threshold.
+> **Large apps:** each typed config section and every provided/registered value is a bean. Apps with more than ~127 beans need `#![recursion_limit = "512"]` in the binary and library crate roots (`main.rs` and `lib.rs`); `r2e doctor` warns as the bean count approaches the threshold.
 
 ## Secrets
 

@@ -24,7 +24,7 @@ let app = AppBuilder::new()
 let built = app.build_state().await;   // no turbofish, no state struct
 ```
 
-**recursion_limit** — the HList access machinery recurses once per provision. Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the crate root (top of `main.rs`); below that the default limit is fine. `r2e doctor` warns as the bean count approaches the threshold.
+**recursion_limit** — the HList access machinery recurses once per provision. Apps with more than ~127 provisions need `#![recursion_limit = "512"]` in each crate root (`main.rs` and `lib.rs` when both exist); below that the default limit is fine. `r2e doctor` warns as the bean count approaches the threshold.
 
 ## `#[bean]` attribute macro
 

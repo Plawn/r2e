@@ -9,7 +9,10 @@ my-app/
 ├── migrations/                   # SQL migrations (if using data features)
 │   └── 20250101000001_init.sql
 ├── src/
-│   ├── main.rs                   # Application entry point
+│   ├── app.rs                    # Canonical App implementation and DI graph
+│   ├── env.rs                    # Cold resources retained across hot-patches
+│   ├── lib.rs                    # Includes app.rs for integration tests
+│   ├── main.rs                   # r2e::app_main!(MyApp);
 │   ├── error.rs                  # Custom error type (optional)
 │   ├── models/
 │   │   ├── mod.rs
@@ -31,33 +34,63 @@ my-app/
 
 ### `main.rs` — Application entry point
 
-The main function assembles the application using `AppBuilder`:
+The conventional entry point is deliberately one line:
 
 ```rust
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
+r2e::app_main!(MyApp);
+```
 
-    AppBuilder::new()
-        .load_config::<()>()
-        .register::<UserService>()
-        .build_state()
-        .await
-        .with(Health)
-        .with(Cors::permissive())
-        .with(Tracing)
-        .with(ErrorHandling)
-        .register_controller::<UserController>()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
+The macro includes `src/app.rs` in the binary tip crate, generates the Tokio
+`main`, and invokes the normal or hot-reload launch path. A custom
+`#[r2e::main]` plus `r2e::launch!` remains available when needed.
+
+### `app.rs` — Canonical application assembly
+
+Production, dev, and tests share this one `App` implementation:
+
+```rust
+use r2e::prelude::*;
+
+pub mod controllers;
+pub mod env;
+
+use controllers::user::UserController;
+use env::{setup_env, AppEnv};
+
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
+        b.load_config::<()>()
+            .register::<UserService>()
+            .build_state().await
+            .with(Health)
+            .with(Tracing)
+            .register_controller::<UserController>()
+    }
 }
 ```
 
 `build_state()` takes no type arguments — the state type is inferred from the
 registered beans. If your bean graph grows past ~127 registrations, add
-`#![recursion_limit = "512"]` at the top of `main.rs` (`r2e doctor` warns as you
-approach the threshold).
+`#![recursion_limit = "512"]` to the crate roots in `main.rs` and `lib.rs`
+(`r2e doctor` warns as you approach the threshold).
+
+### `env.rs` and `lib.rs`
+
+`env.rs` owns process-lifetime pools, buses, and clients created by
+`App::setup`; `r2e dev` fully restarts when its layout changes. `lib.rs` is the
+thin test adapter:
+
+```rust
+include!("app.rs");
+```
 
 ### Application state — inferred, no struct to write
 

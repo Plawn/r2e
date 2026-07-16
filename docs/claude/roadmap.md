@@ -143,7 +143,7 @@ file:line evidence live in `docs/claude/eventbus-perf.md`.
 ## W9 — `App` trait canonicalization (Tasker #667) — follow-ups
 
 The single canonical app-declaration landed: `impl App for MyApp` (`setup`/`build`)
-launched via `r2e::launch::<A>()`, replacing the inline-main / blueprint-fn /
+launched by `r2e::app_main!(MyApp)` (and `launch!` for custom entrypoints), replacing the inline-main / blueprint-fn /
 `app_with_env` / `#[r2e::main]`-with-param zoo; `with_config` → `override_config`
 (test-harness in-memory stash — no longer dev-reload plumbing; `build` re-runs
 per patch and re-reads `application.yaml` from disk). Docs, `llm.txt`, and CLI

@@ -70,8 +70,8 @@ dev-reload = ["r2e/dev-reload"]
 ```
 
 3. Put the one canonical **`App` trait** implementation in `src/app.rs`.
-   `lib.rs` includes it for tests/prod and `main.rs` includes it in the binary
-   tip crate only under `dev-reload`:
+   `lib.rs` includes it for tests and `r2e::app_main!` includes it in the binary
+   tip crate while generating `main`:
 
 ```rust
 // src/app.rs
@@ -103,31 +103,20 @@ impl App for MyApp {
 ```
 
 ```rust
-// src/lib.rs — importable by tests and used by normal production builds
+// src/lib.rs — importable by integration tests
 include!("app.rs");
 ```
 
 ```rust
-// src/main.rs — compile app.rs in the tip crate only for dev hot-reload
-#[cfg(feature = "dev-reload")]
-include!("app.rs");
-
-#[cfg(not(feature = "dev-reload"))]
-use my_app::MyApp;
-
-#[r2e::main]
-async fn main() {
-    r2e::launch!(MyApp).await.unwrap();
-}
+// src/main.rs — include app.rs, generate main, and launch
+r2e::app_main!(MyApp);
 ```
 
-`r2e::launch!` runs `setup()` once and re-runs `build()` per hot-patch. Under the
-`dev-reload` feature it drives the Subsecond hot-patch loop; without it, it just
-serves normally (delegating to `r2e::launch::<MyApp>()`). There is no
-`#[r2e::main]` parameter and no user-written hot-reload machinery — keep
-`load_config` inside `build()`. Because `build()` re-runs per patch, its
-`load_config` re-reads `application.yaml` from disk each time, so YAML edits are
-picked up on the next hot-patch.
+`r2e::app_main!` owns the `app.rs` inclusion and Tokio `main`; it delegates to
+`r2e::launch!`, which runs `setup()` once and re-runs `build()` per hot-patch.
+Without `dev-reload`, `launch!` serves normally. There is no user-written `cfg`,
+crate import, or hot-reload machinery. Keep `load_config` inside `build()`:
+because `build()` re-runs per patch, YAML edits are picked up on the next patch.
 
 > **Why `launch!` is a macro, not `launch::<MyApp>()`.** Subsecond only remaps
 > function symbols it attributes to the **tip crate** (the crate that owns
@@ -135,7 +124,8 @@ picked up on the next hot-patch.
 > *not* remapped — the jump-table lookup misses and patches never reach the
 > rebuilt `build()`. `launch!` is a `macro_rules!` so its hot-reload loop —
 > including the concrete `__r2e_server` function Subsecond patches — expands
-> directly in your crate. Always write `r2e::launch!(MyApp)` in `main.rs`.
+> directly in your crate. `r2e::app_main!(MyApp)` emits this call for the
+> conventional layout; call `launch!` yourself only for a custom `main`.
 
 4. Run with: `r2e dev`
 
@@ -159,14 +149,11 @@ old code even though `dx` reports "Hot-patching …" and `App::build` re-runs.
 
 R2E's scaffold resolves that Cargo/Subsecond conflict without duplicating the
 declaration: `src/app.rs` is one source file compiled by two targets. The lib
-copy is what `#[r2e::test(app = my_app::MyApp)]` boots. Under `dev-reload`, the
-binary compiles the same source directly, so controllers, services and
-`App::build` belong to the tip crate and are genuinely patched. With the
-feature off, `main.rs` imports the lib and no dev copy or Subsecond dependency
-is present in the production path.
-
-Do not replace the conditional `include!("app.rs")` with an unconditional
-`use my_app::MyApp`: that recreates the stale-code layout.
+copy is what `#[r2e::test(app = my_app::MyApp)]` boots. `app_main!` includes the
+same source directly in the binary, so controllers, services, and `App::build`
+belong to the tip crate and are genuinely patched. It does this in normal and
+dev builds, avoiding feature `cfg` and crate-name-dependent imports in
+`main.rs`; the `dev-reload` dependency itself remains feature-gated.
 
 ### Cold restart boundary
 
@@ -274,7 +261,7 @@ and controllers resolve their `#[inject]` fields from it **by type** at
 `register_controller` time. A missing bean is a compile error naming the type.
 
 > **Note:** apps with more than ~127 beans need `#![recursion_limit = "512"]`
-> at the crate root (`main.rs`). `r2e doctor` warns as the bean count
+> in each crate root (`main.rs` and `lib.rs`). `r2e doctor` warns as the bean count
 > approaches the threshold.
 
 ### Method reference
