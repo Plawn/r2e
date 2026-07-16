@@ -155,6 +155,50 @@ Remaining:
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
   before relying on it.
 
+## W10 — Bean/controller feature unification (deferred — prepared 2026-07-16)
+
+Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
+controller-only by implementation accident, not by design — `#[scheduled]`,
+`#[async_exec]`, `#[transactional]`, and `#[intercept]` only exist because the
+machinery (DecoSlot, wrapping, registration-time collection) was built inside
+`#[routes]`; `#[consumer]` exists on both; `#[post_construct]` is bean-only.
+Symptom: beans-di.md's own "When to use" table recommends `#[scheduled]` for
+periodic tasks, which does not work on a bean. Absorbs the todo items
+"macro de service vs uniquement controller" and the scheduled/consumer half of
+"audit de responsabilities boundaries".
+
+**Target**: the controller core IS a bean. Transverse member attributes are
+implemented once at the bean level; `#[controller]`/`#[routes]` only add the
+transport layer (routes, request façade, guards/roles, OpenAPI). A controller
+may still carry `#[scheduled]`/`#[consumer]` — not as controller features but
+because a controller is a bean.
+
+Phases (quality-review gate after each, same convention as the controller
+refactor):
+
+1. **`#[scheduled]` on `#[bean]`** — mirror the `#[consumer]` pattern
+   (bean macro generates a scheduled-source impl + a registration path
+   analogous to `register_subscriber`, feeding the same
+   `ScheduledTaskMarker`/`TaskRegistryHandle` pipeline). Design the collection
+   trait so phase 3 can reuse it from controllers. No `#[intercept]` on bean
+   scheduled methods yet — document the divergence explicitly.
+2. **Bean-level decorators** — a DecoSlot equivalent on bean cores;
+   `#[intercept]` on bean scheduled/consumer methods through the existing
+   `DecoratorSpec`/`build_decorator` machinery, deps compile-checked like
+   controller decorators.
+3. **Controller core = bean** — `#[routes]`' transverse codegen
+   (scheduled/consumer collection, interceptor wiring) delegates to the
+   bean-level machinery; `#[post_construct]` becomes valid on controllers for
+   free; delete the duplicated controller-only paths.
+4. **Relocate `#[async_exec]`** (and evaluate `#[transactional]`) to the bean
+   level; decide whether controller-only placement is kept or deprecated.
+
+Open decisions for phase-1 design review: exact registration ergonomics
+(explicit `register_*` call vs auto-collection at `build_state()`); whether a
+dedicated `#[service]` macro adds anything over `#[bean]` (current lean: no —
+unification beats a third shape; `#[derive(BackgroundService)]` stays the
+escape hatch for hand-written loops).
+
 ## Tech debt (deferred, low priority)
 
 - **Event bus perf** (2026-03 audit): superseded by W8 — the two still-
