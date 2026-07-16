@@ -115,7 +115,7 @@ From the completed DI backlog (details in git history of `di-next-steps.md`):
 ## W6 — Testing DX follow-ups
 
 - Dev services for the remaining backends: Kafka, RabbitMQ, Pulsar, OpenFGA
-  (crate `r2e-devservices`, same shared-per-process container pattern).
+  (crate `r2e-devservices`, same workspace-session/Ryuk lifecycle).
 - Demo dev-services usage in `example-postgres`.
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).

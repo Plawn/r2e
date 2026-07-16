@@ -116,7 +116,7 @@ use r2e_devservices::DevPostgres;
 
 #[tokio::test]
 async fn users_are_persisted() {
-    let pg = DevPostgres::shared().await; // one container per test process
+    let pg = DevPostgres::shared().await; // one container for the test session
     let app = TestApp::boot_with::<my_app::MyApp>(|b| {
         b.override_config_value("app.database.url", pg.url())
     })
@@ -125,8 +125,16 @@ async fn users_are_persisted() {
 }
 ```
 
-`shared()` reuses one container for the whole test process (fast); `start()`
-gives an isolated one. Containers are cleaned up after the process exits.
+`shared()` reuses one stable container across all test processes in the
+workspace session. Each process keeps a TCP lease to a shared Ryuk reaper;
+after the final process exits, Ryuk removes the managed containers (10-second
+grace by default) and then removes itself. `start()` gives an isolated
+handle-scoped container, also labelled so Ryuk can clean it after a crash or
+`SIGKILL`.
+
+Ryuk requires a local Docker Unix socket. Override its host path with
+`R2E_DEVSERVICES_DOCKER_SOCKET`; use `R2E_DEVSERVICES_KEEP=1` only when the
+containers must survive for post-mortem inspection.
 
 ## Running tests
 

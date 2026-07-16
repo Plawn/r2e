@@ -66,7 +66,7 @@ r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external 
 r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → TestApp (HTTP client + App boot: TestApp::boot::<A>() / #[r2e::test(app = MyApp)], bean::<T>() access, .as_user() via auto-wired TestJwt), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
-r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, shared-per-process containers, URL injected via override_config_value. Features `postgres`, `redis`.
+r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, workspace-session shared containers reaped by Ryuk after the final test process exits, URL injected via override_config_value. Features `postgres`, `redis`.
 r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
 r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
 r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes.
