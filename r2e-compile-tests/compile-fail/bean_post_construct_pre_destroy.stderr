@@ -1,0 +1,5 @@
+error: #[pre_destroy] cannot be combined with #[post_construct], #[scheduled], #[consumer], #[async_exec], or #[intercept] on the same method — it is a plain disposal hook that runs once at shutdown
+  --> compile-fail/bean_post_construct_pre_destroy.rs:17:5
+   |
+17 |     async fn lifecycle(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
