@@ -1496,7 +1496,35 @@ async fn lists_users(app: TestApp) {
     .override_bean(MockMailer::new())
     .override_config_value("app.llm.api_key", "test-key"))]
 async fn with_mocks(app: TestApp, #[inject] service: UserService) { ... }
+
+// Ordered tests (@Order): `order = <u32>` runs tagged tests sequentially in
+// ascending order within the SAME test binary (one file under tests/).
+#[r2e::test(app = my_app::MyApp, order = 1)]
+async fn creates_user(app: TestApp) { /* … */ }
+
+#[r2e::test(app = my_app::MyApp, order = 2)]
+async fn lists_created_user(app: TestApp) { /* … */ }
+
+// Optional `group = "..."`: independent sequences in one binary; a test waits
+// only on lower orders of its OWN group (default = the unnamed group).
+#[r2e::test(app = my_app::MyApp, order = 10, group = "billing")]
+async fn billing_step(app: TestApp) { /* … */ }
 ```
+
+Ordered-test rules (copy literally):
+- Scope is the test binary — no cross-binary/cross-crate ordering. Orders need
+  not be contiguous (10, 20, 30 is fine). Works with or without `app` (with
+  `app`, the barrier covers the TestApp boot too).
+- Tests WITHOUT `order` are unaffected and stay parallel — no `--test-threads=1`.
+- Fail-fast: a panicking ordered test poisons its group; later tests of that
+  group fail immediately naming the failed predecessor (no deadlock).
+- Duplicate `order` in one group → runtime panic naming both tests.
+- Watchdog: a waiting test panics (not hangs) if its group makes no progress for
+  `R2E_TEST_ORDER_TIMEOUT_SECS` (default 60) — e.g. a lower order was filtered
+  out by `cargo test <filter>` or starved by `--test-threads`.
+- `group` without `order` is a compile error; `order`/`group` on `#[r2e::main]`
+  is a compile error. Using `order` requires the `r2e-test` dev-dependency
+  (already present when using `app = …`).
 
 Explicit form (turbofish TYPE args): `TestApp::boot::<my_app::MyApp>().await`,
 `TestApp::boot_with::<my_app::MyApp>(|b| ...).await`,
