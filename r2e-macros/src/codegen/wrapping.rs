@@ -97,11 +97,10 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .consumer_methods
         .iter()
         .map(|cm| {
-            let intercept_exprs: Vec<&syn::Expr> = def
-                .controller_intercepts
-                .iter()
-                .chain(cm.intercept_fns.iter())
-                .collect();
+            // METHOD-level interceptors only; controller-level (impl-level) ones
+            // are shared via the container's `__ctrl` field (see
+            // `generate_transverse_method`).
+            let intercept_exprs: Vec<&syn::Expr> = cm.intercept_fns.iter().collect();
             let event_param = cm.fn_item.sig.inputs.iter().find_map(|arg| match arg {
                 syn::FnArg::Typed(pt) => Some(pt.clone()),
                 _ => None,
@@ -121,11 +120,9 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .scheduled_methods
         .iter()
         .map(|sm| {
-            let intercept_exprs: Vec<&syn::Expr> = def
-                .controller_intercepts
-                .iter()
-                .chain(sm.intercept_fns.iter())
-                .collect();
+            // METHOD-level interceptors only; controller-level (impl-level) ones
+            // are shared via the container's `__ctrl` field.
+            let intercept_exprs: Vec<&syn::Expr> = sm.intercept_fns.iter().collect();
             generate_transverse_method(
                 &sm.fn_item,
                 &intercept_exprs,
@@ -209,9 +206,17 @@ fn generate_transverse_method(
     inner_name: syn::Ident,
     def: &RoutesImplDef,
 ) -> TokenStream {
-    if intercept_exprs.is_empty()
-        || !super::decorators::all_specs_inferable(intercept_exprs.iter().copied())
-    {
+    // Method-level interceptors that actually resolve to a spec type.
+    let method_ok = !intercept_exprs.is_empty()
+        && super::decorators::all_specs_inferable(intercept_exprs.iter().copied());
+    // Shared controller-level (impl-level) interceptors, built once and read
+    // from the container's `__ctrl` field so this method self-intercepts through
+    // the same instance every other transverse method / route observes.
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let ctrl_field_count = ctrl_set.as_ref().map(|s| s.fields.len()).unwrap_or(0);
+
+    // Nothing to wrap: no method-level and no controller-level interceptors.
+    if !method_ok && ctrl_field_count == 0 {
         return quote! { #fn_item };
     }
 
@@ -225,7 +230,8 @@ fn generate_transverse_method(
         owner_name_str: def.controller_name.to_string(),
         source_async,
         event_param,
-        intercept_count: intercept_exprs.len(),
+        intercept_count: if method_ok { intercept_exprs.len() } else { 0 },
+        ctrl_field_count,
         origin_macro: "#[routes]",
     };
     // Controller cores are built via `ContextConstruct`, not struct literals in

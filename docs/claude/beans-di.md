@@ -484,6 +484,51 @@ The `#[bean]` macro generates:
 | Database migrations | Periodic tasks (use `#[scheduled]`) |
 | Validation that needs other beans | Simple field init |
 
+## `#[pre_destroy]` — disposal hooks
+
+The `@PreDestroy` counterpart of `#[post_construct]`, on `#[bean]` impls **and**
+`#[routes]` controller impls. Identical signature rules (`&self` only, sync or
+async, `()` or `Result<(), Box<dyn Error + Send + Sync>>`) and the same rejection
+matrix (a route / `#[scheduled]` / `#[consumer]` / `#[async_exec]` /
+`#[post_construct]` / `#[intercept]` marker on the same method, or extra params,
+is a compile error).
+
+```rust
+#[bean]
+impl ConnectionPool {
+    pub fn new(cfg: PoolConfig) -> Self { /* ... */ }
+
+    #[pre_destroy]
+    async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.drain_and_close().await?;
+        Ok(())
+    }
+}
+```
+
+Semantics:
+
+- **When:** during graceful shutdown, in the async shutdown phase (mirrors where
+  `#[post_construct]` sits at startup, reversed). Controller hooks run first,
+  then bean hooks; within each group, **reverse registration order** (last
+  registered disposes first), so a controller/bean disposes before the beans it
+  injected.
+- **Err:** logged (`eprintln!("[r2e] #[pre_destroy] …")`) and **swallowed** —
+  disposal never aborts shutdown; later disposers still run.
+- **Override skip:** pinning the bean (`override_bean`) skips its registration,
+  so `register_pre_destroy` is never queued and the hook does not run — same rule
+  as a skipped `#[scheduled]`/`#[post_construct]`.
+- **Wiring:** `#[bean]` generates `impl PreDestroy for T` + an `after_register`
+  calling `BeanRegistry::register_pre_destroy::<Self>()` (the bean is read by
+  value from the resolved graph at `build_state()`, disposers reversed). A
+  controller core is not `Clone`, so it cannot impl `PreDestroy`; the generated
+  `Controller::pre_destroy(core)` runs the hooks directly from the core `Arc`,
+  queued at `register_controller` and awaited at shutdown.
+- **Test boot without serve:** `build_with_consumers` / `TestApp::boot` never
+  enter the shutdown phase, so `#[pre_destroy]` hooks do not fire there — drive
+  them with a serve + `StopHandle::stop()` test (see
+  `examples/example-app/tests/pre_destroy_test.rs`).
+
 ## Lifecycle for `.provide()`-d / plugin beans
 
 `#[post_construct]` above attaches to **factory** beans (`#[bean]`/`register`).
@@ -494,9 +539,14 @@ is no trait detection on stable):
 | | Post-construct | Pre-destroy (disposal) |
 |---|---|---|
 | Hook trait | `PostConstruct` | `PreDestroy` (`fn pre_destroy(&self) -> Pin<Box<dyn Future<Output=()> + Send>>`) |
+| Factory bean (`#[bean]`) / controller | `#[post_construct]` method | `#[pre_destroy]` method (see above) |
 | Plain `.provide()` | `AppBuilder::provide_with_post_construct(value)` | `AppBuilder::provide_with_pre_destroy(value)` |
 | Plugin `Provided` bean | `ctx.run_post_construct::<T>()` in `install` | `ctx.run_pre_destroy::<T>()` in `install` |
 | Registry primitive | `BeanRegistry::register_provided_post_construct::<T>()` | `BeanRegistry::register_pre_destroy::<T>()` |
+
+The `#[pre_destroy]` attribute (factory beans + controllers) generates the
+`PreDestroy` impl / controller override and the `register_pre_destroy` hook for
+you — the rows below are the imperative form for `.provide()`-d / plugin values.
 
 **Both surfaces exist because neither alone covers both audiences**: a plain
 `.provide()` user can't reach a plugin's framework-deposited `Provided` element,

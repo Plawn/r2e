@@ -83,11 +83,25 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         stmts
     };
 
+    // Controller-level (impl-level) `#[intercept]` products, built ONCE per
+    // controller and shared (via `Arc` clones) across every HTTP route — so a
+    // stateful impl-level interceptor keeps a single instance, not one per route.
+    // Emitted only when there are controller-level interceptors AND at least one
+    // HTTP route to capture them (SSE/WS run no interceptor chain).
+    let ctrl_deco_items = super::decorators::generate_ctrl_deco_items(def);
+    let ctrl_router_setup = super::decorators::ctrl_deco_set(def)
+        .filter(|_| !def.route_methods.is_empty())
+        .map(|set| {
+            let ctor = &set.ctor_ident;
+            quote! { let __r2e_ctrl_deco = ::std::sync::Arc::new(#ctor(__ctx)); }
+        });
+
     // Application-scoped router body. The controller Arc is captured once at
     // router build time and reused per request; route decorator sets are
     // built here from the resolved bean context, once per route.
     let application_router_body = quote! {
         |__ctrl: ::std::sync::Arc<#name>, __ctx: &#krate::beans::BeanContext| {
+            #ctrl_router_setup
             let mut __inner = #krate::http::Router::new()
                 #(#route_registrations)*
                 #(#sse_route_registrations)*
@@ -164,6 +178,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     }
 
     quote! {
+        // Shared controller-level interceptor set (module scope): one struct +
+        // constructor, one instance per surface.
+        #ctrl_deco_items
+
         // Transverse decorator sets + container/fill impl and the
         // ScheduledSource/EventSubscriber/PostConstruct impls (module scope:
         // the container type is downcast in the intercepted method bodies).
@@ -811,18 +829,22 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
     let owner_name = name.to_string();
 
     let mut module_items: Vec<TokenStream> = Vec::new();
-    // One container field per intercepted transverse method (scheduled OR
-    // consumer) — drives the container struct + fill impl.
+    // One container field per METHOD-level-intercepted transverse method
+    // (scheduled OR consumer) — drives the container struct + fill impl.
     let mut deco_fields: Vec<DecoFieldDef> = Vec::new();
 
-    // ── Scheduled decorator sets ──
+    // Shared controller-level (impl-level) interceptor set, applied to the
+    // transverse surface when the controller has such interceptors and at least
+    // one scheduled/consumer method. Built ONCE at fill (stored in the
+    // container's `__ctrl` field) so every transverse method shares one instance.
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let ctrl_for_transverse = ctrl_set.is_some()
+        && (!def.scheduled_methods.is_empty() || !def.consumer_methods.is_empty());
+
+    // ── Scheduled decorator sets (method-level interceptors only) ──
     let mut sched_sets: Vec<Option<super::decorators::DecoSet>> = Vec::new();
     for sm in &def.scheduled_methods {
-        let intercept_exprs: Vec<&syn::Expr> = def
-            .controller_intercepts
-            .iter()
-            .chain(sm.intercept_fns.iter())
-            .collect();
+        let intercept_exprs: Vec<&syn::Expr> = sm.intercept_fns.iter().collect();
         let (items, set) = super::decorators::generate_named_deco_items(
             name,
             "Sched",
@@ -842,13 +864,9 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         sched_sets.push(set);
     }
 
-    // ── Consumer decorator sets ──
+    // ── Consumer decorator sets (method-level interceptors only) ──
     for cm in &def.consumer_methods {
-        let intercept_exprs: Vec<&syn::Expr> = def
-            .controller_intercepts
-            .iter()
-            .chain(cm.intercept_fns.iter())
-            .collect();
+        let intercept_exprs: Vec<&syn::Expr> = cm.intercept_fns.iter().collect();
         let (items, set) = super::decorators::generate_named_deco_items(
             name,
             "Cons",
@@ -867,17 +885,27 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         }
     }
 
-    let has_decos = !deco_fields.is_empty();
+    // The container/fill is needed for method-level sets OR the shared
+    // controller-level set.
+    let has_decos = !deco_fields.is_empty() || ctrl_for_transverse;
 
     // ── Container + BeanDecoFill for the core (slot = the `DecoSlot` field) ──
     if has_decos {
         let container = super::decorators::sched_container_ident(name);
         let slot_access = quote! { self.__r2e_decos };
+        let ctrl_field = ctrl_for_transverse.then(|| {
+            let set = ctrl_set.as_ref().expect("ctrl_for_transverse implies ctrl_set");
+            transverse::CtrlContainerField {
+                set_ty: set.struct_ident.clone(),
+                ctor: set.ctor_ident.clone(),
+            }
+        });
         module_items.push(transverse::deco_container_and_fill(
             &container,
             &quote! { #name },
             &slot_access,
             &deco_fields,
+            ctrl_field.as_ref(),
         ));
     }
 
@@ -938,8 +966,11 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
                 config: sm.config.clone(),
                 // Intercepted methods self-intercept in their dispatch wrapper
                 // (sync sources promoted to `async fn`), so the emitted call is
-                // awaited when the source is async OR it is intercepted.
-                emitted_async: sm.fn_item.sig.asyncness.is_some() || set.is_some(),
+                // awaited when the source is async OR it runs method-level
+                // interceptors OR it runs the shared controller-level ones.
+                emitted_async: sm.fn_item.sig.asyncness.is_some()
+                    || set.is_some()
+                    || ctrl_for_transverse,
             })
             .collect();
         let task_defs = transverse::scheduled_task_defs(&quote! { __core }, &owner_name, &methods);
@@ -981,6 +1012,25 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> {
                 Box::pin(async move {
                     #krate::beans::PostConstruct::post_construct(&*__core).await
+                })
+            }
+        });
+    }
+
+    // `#[pre_destroy]` disposal hooks. Controller cores are not `Clone`, so they
+    // cannot impl the `PreDestroy` trait (its supertrait); the disposal calls are
+    // inlined here, run from the core `Arc` at shutdown. An `Err` is logged and
+    // swallowed (disposal never aborts shutdown).
+    if !def.pre_destroy_methods.is_empty() {
+        let calls =
+            transverse::pre_destroy_calls(&quote! { __self }, &owner_name, &def.pre_destroy_methods);
+        controller_fns.push(quote! {
+            fn pre_destroy(
+                __core: ::std::sync::Arc<Self>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                Box::pin(async move {
+                    let __self: &Self = &*__core;
+                    #(#calls)*
                 })
             }
         });

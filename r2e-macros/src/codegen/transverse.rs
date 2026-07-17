@@ -25,7 +25,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{FnArg, ImplItem, ItemImpl, ReturnType};
 
-use crate::codegen::decorators::{intercept_field_idents, wrap_with_deco_interceptors};
+use crate::codegen::decorators::{intercept_field_idents, wrap_with_interceptor_refs};
 use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name};
 use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
 use crate::extract::consumer::strip_consumer_attrs;
@@ -40,6 +40,7 @@ fn strip_transverse_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
         .into_iter()
         .filter(|a| {
             !a.path().is_ident("post_construct")
+                && !a.path().is_ident("pre_destroy")
                 && !a.path().is_ident("scheduled")
                 && !a.path().is_ident("intercept")
         })
@@ -339,6 +340,23 @@ pub(crate) struct DecoFieldDef {
     pub ctor: syn::Ident,
 }
 
+/// The shared controller-level interceptor set embedded in a transverse
+/// container: a single `Arc<CtrlSet>` field (`__ctrl`) built once at fill time,
+/// so every intercepted `#[scheduled]`/`#[consumer]` method of the controller
+/// shares one impl-level interceptor instance. `None` for beans (which chain
+/// their impl-level interceptors into each per-method set, unchanged).
+pub(crate) struct CtrlContainerField {
+    /// The set's struct type (`CtrlDecoSet::struct_ident`).
+    pub set_ty: syn::Ident,
+    /// The set's build function (`CtrlDecoSet::ctor_ident`).
+    pub ctor: syn::Ident,
+}
+
+/// The container field name holding the shared controller-level interceptor set.
+pub(crate) fn ctrl_container_field() -> syn::Ident {
+    syn::Ident::new("__ctrl", proc_macro2::Span::call_site())
+}
+
 /// Emit the per-type decorator container struct and its `BeanDecoFill` impl.
 ///
 /// `container` names the hidden struct; `target` is the fill impl's Self type
@@ -346,31 +364,34 @@ pub(crate) struct DecoFieldDef {
 /// expression the fill impl calls `.fill(..)` on (bean:
 /// `<Self as HasDecoSlot>::__r2e_deco_slot(self)`; controller core:
 /// `self.__r2e_decos`). One field per intercepted method, each built from the
-/// bean context at fill time.
+/// bean context at fill time. `ctrl` optionally adds the shared controller-level
+/// interceptor set (`__ctrl: Arc<CtrlSet>`), built once at fill.
 pub(crate) fn deco_container_and_fill(
     container: &syn::Ident,
     target: &TokenStream,
     slot_access: &TokenStream,
     fields: &[DecoFieldDef],
+    ctrl: Option<&CtrlContainerField>,
 ) -> TokenStream {
     let krate = r2e_core_path();
 
-    let container_fields: Vec<TokenStream> = fields
-        .iter()
-        .map(|f| {
-            let field = &f.field;
-            let ty = &f.set_ty;
-            quote! { #field: #ty }
-        })
-        .collect();
-    let field_inits: Vec<TokenStream> = fields
-        .iter()
-        .map(|f| {
-            let field = &f.field;
-            let ctor = &f.ctor;
-            quote! { #field: #ctor(__ctx) }
-        })
-        .collect();
+    let mut container_fields: Vec<TokenStream> = Vec::new();
+    let mut field_inits: Vec<TokenStream> = Vec::new();
+
+    if let Some(c) = ctrl {
+        let field = ctrl_container_field();
+        let ty = &c.set_ty;
+        let ctor = &c.ctor;
+        container_fields.push(quote! { #field: ::std::sync::Arc<#ty> });
+        field_inits.push(quote! { #field: ::std::sync::Arc::new(#ctor(__ctx)) });
+    }
+    for f in fields {
+        let field = &f.field;
+        let ty = &f.set_ty;
+        let ctor = &f.ctor;
+        container_fields.push(quote! { #field: #ty });
+        field_inits.push(quote! { #field: #ctor(__ctx) });
+    }
 
     quote! {
         #[allow(non_camel_case_types)]
@@ -412,8 +433,14 @@ pub(crate) struct DispatchWrapperParams {
     /// The event parameter to forward on the inner call (consumers) — `None`
     /// for scheduled methods.
     pub event_param: Option<syn::PatType>,
-    /// The number of `#[intercept]` sites on the method.
+    /// The number of METHOD-level `#[intercept]` sites on the method (the
+    /// per-method decorator set's fields). May be 0 when the method runs only
+    /// controller-level interceptors (see `ctrl_field_count`).
     pub intercept_count: usize,
+    /// The number of shared controller-level (impl-level) interceptor sites,
+    /// referenced through the container's `__ctrl` field (`&__decos.__ctrl.__ci*`).
+    /// 0 for beans (they chain impl-level interceptors into each per-method set).
+    pub ctrl_field_count: usize,
     /// The macro that promoted a sync source, named in the rustdoc note
     /// (bean: `#[bean]`; controller: `#[routes]`).
     pub origin_macro: &'static str,
@@ -436,7 +463,7 @@ pub(crate) fn intercepted_dispatch_wrapper(
     let krate = r2e_core_path();
     let fn_name = &method.sig.ident;
     let fn_name_str = fn_name.to_string();
-    let intercept_fields = intercept_field_idents(p.intercept_count);
+    let method_fields = intercept_field_idents(p.intercept_count);
     let inner_name = &p.inner_name;
 
     // Inner fn: source body verbatim (attrs stripped), renamed & private.
@@ -478,17 +505,33 @@ pub(crate) fn intercepted_dispatch_wrapper(
         quote! { self.#inner_name(#arg_forward) }
     };
 
-    let chain = wrap_with_deco_interceptors(
+    // Combined interceptor refs: shared controller-level (impl-level) ones
+    // outermost — read from the container's `__ctrl` field so every intercepted
+    // transverse method shares a single instance — then the per-method ones.
+    let ctrl_field = ctrl_container_field();
+    // Controller-level set fields are `__ci0..` (see `ctrl_deco_set`).
+    let mut interceptor_refs: Vec<TokenStream> = (0..p.ctrl_field_count)
+        .map(|i| {
+            let f = quote::format_ident!("__ci{}", i);
+            quote! { &__decos.#ctrl_field.#f }
+        })
+        .collect();
+    interceptor_refs.extend(method_fields.iter().map(|f| quote! { &__deco.#f }));
+
+    let chain = wrap_with_interceptor_refs(
         inner_call.clone(),
         &fn_name_str,
         &p.owner_name_str,
-        &intercept_fields,
+        &interceptor_refs,
         &krate,
     );
 
     let container = &p.container;
     let field = &p.field;
     let slot_access = &p.slot_access;
+    // Bind the per-method set only when there are method-level interceptors;
+    // a controller-level-only method reads just `__decos.__ctrl`.
+    let method_bind = (p.intercept_count > 0).then(|| quote! { let __deco = &__decos.#field; });
 
     quote! {
         #inner_fn
@@ -498,7 +541,7 @@ pub(crate) fn intercepted_dispatch_wrapper(
         #vis #sig {
             match #slot_access.get::<#container>() {
                 Some(__decos) => {
-                    let __deco = &__decos.#field;
+                    #method_bind
                     #chain
                 }
                 None => #inner_call,
@@ -595,19 +638,29 @@ pub(crate) fn async_exec_method(
     }
 }
 
-// ── PostConstruct ────────────────────────────────────────────────────────
+// ── PostConstruct / PreDestroy (shared lifecycle scan) ───────────────────
 
-/// One `#[post_construct]` method's dispatch shape.
-pub(crate) struct PostConstructMethod {
+/// One lifecycle (`#[post_construct]` / `#[pre_destroy]`) method's dispatch
+/// shape.
+pub(crate) struct LifecycleMethod {
     pub fn_name: syn::Ident,
     pub is_async: bool,
     pub returns_result: bool,
 }
 
-/// Scan all `&self` methods in an impl block for `#[post_construct]`.
-pub(crate) fn scan_post_construct_methods(
+/// Back-compat alias: `#[post_construct]` methods.
+pub(crate) type PostConstructMethod = LifecycleMethod;
+/// `#[pre_destroy]` methods (same shape/rules as post-construct).
+pub(crate) type PreDestroyMethod = LifecycleMethod;
+
+/// Scan all `&self` methods in an impl block for a lifecycle attribute
+/// (`attr` = `"post_construct"` or `"pre_destroy"`). Validates `&self`-only
+/// (no extra parameters). `human` names the attribute in the error message.
+fn scan_lifecycle_methods(
     item_impl: &ItemImpl,
-) -> syn::Result<Vec<PostConstructMethod>> {
+    attr: &str,
+    human: &str,
+) -> syn::Result<Vec<LifecycleMethod>> {
     let mut methods = Vec::new();
 
     for item in &item_impl.items {
@@ -621,10 +674,7 @@ pub(crate) fn scan_post_construct_methods(
                 continue;
             }
 
-            let has_attr = method
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("post_construct"));
+            let has_attr = method.attrs.iter().any(|a| a.path().is_ident(attr));
             if !has_attr {
                 continue;
             }
@@ -633,7 +683,7 @@ pub(crate) fn scan_post_construct_methods(
             if param_count > 1 {
                 return Err(syn::Error::new_spanned(
                     &method.sig,
-                    "#[post_construct] method must take only `&self` — no additional parameters",
+                    format!("{human} method must take only `&self` — no additional parameters"),
                 ));
             }
 
@@ -643,7 +693,7 @@ pub(crate) fn scan_post_construct_methods(
                 ReturnType::Type(_, ty) => is_result_like(ty),
             };
 
-            methods.push(PostConstructMethod {
+            methods.push(LifecycleMethod {
                 fn_name: method.sig.ident.clone(),
                 is_async,
                 returns_result,
@@ -652,6 +702,81 @@ pub(crate) fn scan_post_construct_methods(
     }
 
     Ok(methods)
+}
+
+/// Scan all `&self` methods in an impl block for `#[post_construct]`.
+pub(crate) fn scan_post_construct_methods(
+    item_impl: &ItemImpl,
+) -> syn::Result<Vec<PostConstructMethod>> {
+    scan_lifecycle_methods(item_impl, "post_construct", "#[post_construct]")
+}
+
+/// Scan all `&self` methods in an impl block for `#[pre_destroy]`.
+pub(crate) fn scan_pre_destroy_methods(
+    item_impl: &ItemImpl,
+) -> syn::Result<Vec<PreDestroyMethod>> {
+    scan_lifecycle_methods(item_impl, "pre_destroy", "#[pre_destroy]")
+}
+
+/// The per-method disposal call statements shared by the bean `PreDestroy`
+/// trait impl and the controller-core inline override. An `Err` is **logged
+/// and swallowed** (disposal must not abort shutdown), in declaration order.
+/// `receiver` is the `&self`-ish expression the methods are called on (`self`
+/// for the bean trait impl, `__self` for the controller override); `owner`
+/// names the type for the log line.
+pub(crate) fn pre_destroy_calls(
+    receiver: &TokenStream,
+    owner: &str,
+    methods: &[PreDestroyMethod],
+) -> Vec<TokenStream> {
+    methods
+        .iter()
+        .map(|m| {
+            let fn_name = &m.fn_name;
+            let fn_str = fn_name.to_string();
+            let call = if m.is_async {
+                quote! { #receiver.#fn_name().await }
+            } else {
+                quote! { #receiver.#fn_name() }
+            };
+            if m.returns_result {
+                quote! {
+                    if let ::core::result::Result::Err(__e) = #call {
+                        eprintln!("[r2e] #[pre_destroy] {}::{} failed: {:?}", #owner, #fn_str, __e);
+                    }
+                }
+            } else {
+                quote! { #call; }
+            }
+        })
+        .collect()
+}
+
+/// Emit `impl PreDestroy for <target>` from a list of `#[pre_destroy]` methods.
+/// `target` must be `Clone` (the bean path; the disposer reads the bean by
+/// value from the resolved graph). `owner` names the type for error logging.
+/// Returns empty when `methods` is empty.
+pub(crate) fn pre_destroy_impl(
+    target: &TokenStream,
+    owner: &str,
+    methods: &[PreDestroyMethod],
+) -> TokenStream {
+    if methods.is_empty() {
+        return quote! {};
+    }
+
+    let krate = r2e_core_path();
+    let calls = pre_destroy_calls(&quote! { self }, owner, methods);
+
+    quote! {
+        impl #krate::beans::PreDestroy for #target {
+            fn pre_destroy(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+                Box::pin(async move {
+                    #(#calls)*
+                })
+            }
+        }
+    }
 }
 
 /// Emit `impl PostConstruct for <target>` from a list of post-construct

@@ -1,4 +1,5 @@
 /target
 Dioxus.toml
 target
+.target-local
 .DS_Store

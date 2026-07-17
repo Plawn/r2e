@@ -553,11 +553,6 @@ fn generate_body_and_release(
     }
 }
 
-/// Check if a route method has interceptors (method-level or controller-level).
-fn has_interceptors(def: &RoutesImplDef, rm: &RouteMethod) -> bool {
-    !rm.decorators.intercept_fns.is_empty() || !def.controller_intercepts.is_empty()
-}
-
 // Interceptor-chain wrapping is shared with scheduled tasks and gRPC
 // methods — see `super::decorators::wrap_with_deco_interceptors`.
 
@@ -644,13 +639,13 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_str;
 
-    // Decorator set: one hidden struct per method holding the built
-    // guards/interceptors, plus its constructor (see codegen/decorators.rs).
-    let intercept_exprs: Vec<&syn::Expr> = def
-        .controller_intercepts
-        .iter()
-        .chain(rm.decorators.intercept_fns.iter())
-        .collect();
+    // Decorator set: one hidden struct per method holding the built guards +
+    // METHOD-level interceptors, plus its constructor (see codegen/decorators.rs).
+    // Controller-level (impl-level) interceptors live in a SEPARATE shared set
+    // (`__ctrl_deco`) built once per controller, so a stateful impl-level
+    // interceptor keeps one instance across every route.
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let intercept_exprs: Vec<&syn::Expr> = rm.decorators.intercept_fns.iter().collect();
     let deco_path_module = generate_path_param_module(&rm.path, &rm.fn_item.sig, &krate);
     let (deco_items, deco_set) = super::decorators::generate_deco_items(
         def,
@@ -664,8 +659,36 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 
     // On a failed spec extraction, `deco_items` carries the compile_error and
     // the handler falls back to the no-decorator shape.
+    // Mirror generate_route_closure's degradation: if any spec (guard,
+    // controller-level, or method-level interceptor) is not inferable, drop the
+    // controller-level shared set too so the closure/invocation arities match
+    // (the real spec-type compile_error is already emitted elsewhere).
+    let specs_ok = super::decorators::all_specs_inferable(
+        rm.decorators
+            .guard_fns
+            .iter()
+            .chain(def.controller_intercepts.iter())
+            .chain(rm.decorators.intercept_fns.iter()),
+    );
     let has_guards = !rm.decorators.guard_fns.is_empty() && deco_set.is_some();
-    let has_intercepts = has_interceptors(def, rm) && deco_set.is_some();
+    let has_ctrl = ctrl_set.is_some() && specs_ok;
+    // Combined interceptor refs, impl-level (shared) outermost then method-level.
+    let interceptor_refs = |set: &Option<super::decorators::DecoSet>| -> Vec<TokenStream> {
+        let mut refs: Vec<TokenStream> = Vec::new();
+        if has_ctrl {
+            if let Some(cs) = ctrl_set.as_ref() {
+                for f in &cs.fields {
+                    refs.push(quote! { &__ctrl_deco.#f });
+                }
+            }
+        }
+        for f in deco_intercept_fields(set) {
+            refs.push(quote! { &__deco.#f });
+        }
+        refs
+    };
+    let has_method_intercepts = !rm.decorators.intercept_fns.is_empty() && deco_set.is_some();
+    let has_intercepts = has_ctrl || has_method_intercepts;
     let needs_response = has_guards || has_managed;
     // The state is only threaded through for `#[managed]` params — guards
     // and interceptors are prebuilt decorator fields (no state access).
@@ -692,6 +715,12 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         invocation_prefix_params
             .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
     }
+    if has_ctrl {
+        if let Some(cs) = ctrl_set.as_ref() {
+            let ctrl_ty = &cs.struct_ident;
+            invocation_prefix_params.push(quote! { __ctrl_deco: &#ctrl_ty });
+        }
+    }
     if let Some(ref set) = deco_set {
         let deco_ty = set.ty();
         invocation_prefix_params.push(quote! { __deco: &#deco_ty });
@@ -714,11 +743,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         )
     } else if has_intercepts && !needs_response && !has_validation {
         // Case 2a: Interceptors only, no validation — returns method's own type
-        let interceptor_body = super::decorators::wrap_with_deco_interceptors(
+        let interceptor_body = super::decorators::wrap_with_interceptor_refs(
             call_expr,
             fn_name_str,
             controller_name_str,
-            deco_intercept_fields(&deco_set),
+            &interceptor_refs(&deco_set),
             &krate,
         );
 
@@ -727,11 +756,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         // Case 2b: Interceptors + validation — returns Response
         // Apply into_response AFTER the interceptor chain so interceptors
         // see the handler's raw return type (e.g. Json<T>), not Response.
-        let interceptor_body = super::decorators::wrap_with_deco_interceptors(
+        let interceptor_body = super::decorators::wrap_with_interceptor_refs(
             call_expr.clone(),
             fn_name_str,
             controller_name_str,
-            deco_intercept_fields(&deco_set),
+            &interceptor_refs(&deco_set),
             &krate,
         );
         let interceptor_body = quote! {
@@ -771,11 +800,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                     #(#managed_acquire_ref)*
                     #body_and_release
                 };
-                let wrapped = super::decorators::wrap_with_deco_interceptors(
+                let wrapped = super::decorators::wrap_with_interceptor_refs(
                     managed_body,
                     fn_name_str,
                     controller_name_str,
-                    deco_intercept_fields(&deco_set),
+                    &interceptor_refs(&deco_set),
                     &krate,
                 );
                 // `__state_ref` is `Copy`, so the nested interceptor closures
@@ -790,11 +819,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
                 // Apply into_response AFTER the interceptor chain so interceptors
                 // see the handler's raw return type (e.g. Json<T>), not Response.
                 // This fixes #[intercept(Cache)] + #[roles] (or any guard) combinations.
-                let interceptor_body = super::decorators::wrap_with_deco_interceptors(
+                let interceptor_body = super::decorators::wrap_with_interceptor_refs(
                     call_expr.clone(),
                     fn_name_str,
                     controller_name_str,
-                    deco_intercept_fields(&deco_set),
+                    &interceptor_refs(&deco_set),
                     &krate,
                 );
                 quote! {
@@ -1392,36 +1421,48 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     );
     let has_guards = !rm.decorators.guard_fns.is_empty() && specs_ok;
     let has_managed = !rm.managed_params.is_empty();
-    let has_intercepts = has_interceptors(def, rm) && specs_ok;
+    // Per-method decorator struct exists iff there are guards or METHOD-level
+    // interceptors; controller-level interceptors live in the separate shared
+    // set captured from the router body (`__r2e_ctrl_deco`).
+    let has_ctrl = super::decorators::ctrl_deco_set(def).is_some() && specs_ok;
+    let has_method_set = has_guards || (!rm.decorators.intercept_fns.is_empty() && specs_ok);
+
     let needs_state = has_managed;
-    let has_deco = has_guards || has_intercepts;
 
     let (closure_params, fwd_args) =
         route_axum_params_and_args(rm, needs_state, has_guards, &krate);
 
-    // Splice __deco/__ctrl into the inner-handler call after the
+    // Splice __ctrl_deco/__deco/__ctrl into the inner-handler call after the
     // axum-extracted prefix, matching the inner handler's signature:
-    // `(State?, [HeaderMap, Uri, RawPathParams]?, __deco?, __ctrl, extras...)`.
+    // `(State?, [HeaderMap, Uri, RawPathParams]?, __ctrl_deco?, __deco?, __ctrl, extras...)`.
     let prefix_len = usize::from(needs_state) + if has_guards { 3 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     // The method's decorator set is built once here — at wiring time, from
-    // the resolved graph — and captured by the closure as one `Arc`.
-    let deco_setup = has_deco.then(|| {
+    // the resolved graph — and captured by the closure as one `Arc`. The shared
+    // controller-level set (`__r2e_ctrl_deco`, built once in the router body) is
+    // captured by an `Arc` clone so every route shares one instance.
+    let ctrl_setup = has_ctrl.then(|| {
+        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
+    });
+    let ctrl_arg = has_ctrl.then(|| quote! { &__ctrl_deco_capture, });
+    let deco_setup = has_method_set.then(|| {
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
-    let deco_arg = has_deco.then(|| quote! { &__deco_capture, });
+    let deco_arg = has_method_set.then(|| quote! { &__deco_capture, });
     // #[anonymous]: no request-scoped extraction at all — the closure calls the
     // invocation on the captured core (`&Arc<Core>` deref-coerces to `&Core`).
     if rm.decorators.anonymous {
         return quote! {
             {
                 let __core_capture = __ctrl.clone();
+                #ctrl_setup
                 #deco_setup
                 move |#(#closure_params),*| {
                     async move {
                         #invocation(
                             #(#prefix,)*
+                            #ctrl_arg
                             #deco_arg
                             &__core_capture,
                             #(#suffix),*
@@ -1438,12 +1479,14 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #ctrl_setup
             #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
                         #(#prefix,)*
+                        #ctrl_arg
                         #deco_arg
                         &__facade,
                         #(#suffix),*

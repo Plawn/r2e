@@ -1,0 +1,5 @@
+error: #[pre_destroy] cannot be combined with a route, #[scheduled], #[consumer], #[sse], #[ws], or #[async_exec] on the same method — it is a plain disposal hook that runs once at shutdown
+  --> compile-fail/controller_pre_destroy_combined.rs:15:14
+   |
+15 |     async fn shutdown(&self) -> &'static str {
+   |              ^^^^^^^^

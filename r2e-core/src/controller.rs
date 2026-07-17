@@ -155,6 +155,22 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
         Box::pin(async { Ok(()) })
     }
 
+    /// Run this controller core's `#[pre_destroy]` disposal hooks.
+    ///
+    /// Queued at `register_controller()` and awaited during graceful shutdown —
+    /// the symmetric counterpart of [`post_construct`](Self::post_construct),
+    /// running in the async shutdown phase (before the bean `#[pre_destroy]`
+    /// disposers, so a controller disposes before the beans it injected). Controller
+    /// cores are not `Clone`, so they cannot impl the `PreDestroy` trait; the
+    /// generated override runs the hooks directly from the core `Arc`. An `Err`
+    /// is logged and swallowed — disposal never aborts shutdown. The default is
+    /// a no-op.
+    fn pre_destroy(
+        _core: std::sync::Arc<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+
     /// Validate all config requirements declared on the controller.
     ///
     /// This covers both `#[config("key")]` individual fields and

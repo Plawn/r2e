@@ -15,6 +15,9 @@ pub struct RoutesImplDef {
     /// `#[post_construct]` lifecycle methods (bodies stay on the core impl,
     /// recorded here to drive the `PostConstruct` impl codegen).
     pub post_construct_methods: Vec<crate::codegen::transverse::PostConstructMethod>,
+    /// `#[pre_destroy]` disposal methods (bodies stay on the core impl,
+    /// recorded here to drive the `Controller::pre_destroy` override codegen).
+    pub pre_destroy_methods: Vec<crate::codegen::transverse::PreDestroyMethod>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -233,6 +236,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // the `item.items` loop, whose `other_methods` catch-all would otherwise
     // swallow them silently.
     let post_construct_methods = crate::codegen::transverse::scan_post_construct_methods(&item)?;
+    let pre_destroy_methods = crate::codegen::transverse::scan_pre_destroy_methods(&item)?;
 
     // Classify methods
     let mut route_methods = Vec::new();
@@ -258,13 +262,15 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         || extract_sse_attr(&all_attrs)?.is_some()
                         || extract_ws_attr(&all_attrs)?.is_some()
                         || extract_async_exec(&all_attrs)?.is_some()
-                        || extract_route_kind(&all_attrs)?.is_some();
+                        || extract_route_kind(&all_attrs)?.is_some()
+                        || all_attrs.iter().any(|a| a.path().is_ident("pre_destroy"));
                     if combined {
                         return Err(syn::Error::new(
                             method.sig.ident.span(),
                             "#[post_construct] cannot be combined with a route, #[scheduled], \
-                             #[consumer], #[sse], #[ws], or #[async_exec] on the same method — \
-                             it is a plain lifecycle hook that runs once after the graph resolves",
+                             #[consumer], #[sse], #[ws], #[async_exec], or #[pre_destroy] on the \
+                             same method — it is a plain lifecycle hook that runs once after the \
+                             graph resolves",
                         ));
                     }
                     if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
@@ -278,6 +284,39 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     method.attrs = all_attrs
                         .into_iter()
                         .filter(|a| !a.path().is_ident("post_construct"))
+                        .collect();
+                    other_methods.push(method);
+                    continue;
+                }
+
+                // `#[pre_destroy]` — a plain disposal hook, symmetric to
+                // post_construct. Same combination/param rules; runs at shutdown.
+                if all_attrs.iter().any(|a| a.path().is_ident("pre_destroy")) {
+                    let combined = extract_consumer(&all_attrs)?.is_some()
+                        || extract_scheduled(&all_attrs)?.is_some()
+                        || extract_sse_attr(&all_attrs)?.is_some()
+                        || extract_ws_attr(&all_attrs)?.is_some()
+                        || extract_async_exec(&all_attrs)?.is_some()
+                        || extract_route_kind(&all_attrs)?.is_some();
+                    if combined {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[pre_destroy] cannot be combined with a route, #[scheduled], \
+                             #[consumer], #[sse], #[ws], or #[async_exec] on the same method — \
+                             it is a plain disposal hook that runs once at shutdown",
+                        ));
+                    }
+                    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[intercept] on a #[pre_destroy] method is not supported — a plain \
+                             lifecycle hook has no dispatch wrapper to run the interceptor chain",
+                        ));
+                    }
+                    // Strip the marker; the body is emitted on the core impl.
+                    method.attrs = all_attrs
+                        .into_iter()
+                        .filter(|a| !a.path().is_ident("pre_destroy"))
                         .collect();
                     other_methods.push(method);
                     continue;
@@ -544,6 +583,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         scheduled_methods,
         async_exec_methods,
         post_construct_methods,
+        pre_destroy_methods,
         other_methods,
     })
 }
