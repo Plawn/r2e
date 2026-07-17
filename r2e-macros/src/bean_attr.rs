@@ -433,7 +433,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             })
             .collect();
         let slot_access = quote! { <Self as #krate::HasDecoSlot>::__r2e_deco_slot(self) };
-        transverse::deco_container_and_fill(&container, &quote! { #self_ty }, &slot_access, &fields)
+        transverse::deco_container_and_fill(
+            &container,
+            &quote! { #self_ty },
+            &slot_access,
+            &fields,
+            None,
+        )
     } else {
         quote! {}
     };
@@ -1035,6 +1041,9 @@ fn emit_intercepted_method(
         source_async: im.source_async,
         event_param: im.event_param.clone(),
         intercept_count: im.intercept_fns.len(),
+        // Beans chain their impl-level interceptors into each per-method set
+        // (unchanged), so there is no separate shared controller-level set.
+        ctrl_field_count: 0,
         origin_macro: "#[bean]",
     };
     // The struct-literal injector only runs when the impl has intercept sites

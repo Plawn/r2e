@@ -334,7 +334,31 @@ pub(crate) fn wrap_with_deco_interceptors(
     intercept_fields: &[syn::Ident],
     krate: &TokenStream,
 ) -> TokenStream {
-    if intercept_fields.is_empty() {
+    let refs: Vec<TokenStream> = intercept_fields
+        .iter()
+        .map(|f| quote! { &__deco.#f })
+        .collect();
+    wrap_with_interceptor_refs(body, fn_name_str, controller_name_str, &refs, krate)
+}
+
+/// Like [`wrap_with_deco_interceptors`] but the interceptor references are
+/// supplied explicitly (outermost first), each already a `&`-reference
+/// expression yielding the built `Interceptor` product.
+///
+/// This is the split-source form used when controller-level (impl-level)
+/// interceptors are built **once per controller** and shared across routes /
+/// transverse methods: the controller-level refs point into a single shared
+/// set (`&__ctrl_deco.__ci0`), while the method-level refs point into the
+/// per-method set (`&__deco.__i0`). The full ordered list keeps impl-level
+/// interceptors outermost, then method-level ones — unchanged execution order.
+pub(crate) fn wrap_with_interceptor_refs(
+    body: TokenStream,
+    fn_name_str: &str,
+    controller_name_str: &str,
+    interceptor_refs: &[TokenStream],
+    krate: &TokenStream,
+) -> TokenStream {
+    if interceptor_refs.is_empty() {
         return body;
     }
 
@@ -351,11 +375,11 @@ pub(crate) fn wrap_with_deco_interceptors(
     };
 
     // Wrap from innermost interceptor to second interceptor (skip outermost)
-    for field in intercept_fields[1..].iter().rev() {
+    for r in interceptor_refs[1..].iter().rev() {
         wrapped = quote! {
             move || async move {
                 #krate::Interceptor::around(
-                    &__deco.#field,
+                    #r,
                     #intercept_ctx,
                     #wrapped
                 ).await
@@ -364,14 +388,100 @@ pub(crate) fn wrap_with_deco_interceptors(
     }
 
     // Apply the outermost interceptor directly (not wrapped in a closure)
-    let outermost = &intercept_fields[0];
+    let outermost = &interceptor_refs[0];
     quote! {
         {
             #krate::Interceptor::around(
-                &__deco.#outermost,
+                #outermost,
                 #intercept_ctx,
                 #wrapped
             ).await
+        }
+    }
+}
+
+/// A generated per-controller **shared** interceptor set: hidden struct + build
+/// function holding the controller-level (impl-level) `#[intercept]` products,
+/// built **once per controller** (not once per route/method) so a stateful
+/// impl-level interceptor keeps a single instance shared across every route it
+/// wraps. See [`ctrl_deco_set`] / [`generate_ctrl_deco_items`].
+pub(crate) struct CtrlDecoSet {
+    pub struct_ident: syn::Ident,
+    pub ctor_ident: syn::Ident,
+    /// Field idents for the controller-level interceptor sites (`__ci0..`),
+    /// outermost-first in declaration order.
+    pub fields: Vec<syn::Ident>,
+}
+
+/// Whether a controller has (inferable) controller-level `#[intercept]` sites
+/// that apply to at least one interceptable method (HTTP route, `#[scheduled]`,
+/// or `#[consumer]`). Returns the shared-set identifiers when so.
+///
+/// SSE/WS methods do not run interceptors, so they do not count as targets.
+/// Deterministic from `def` (name + `controller_intercepts`), so every codegen
+/// site can recompute it without threading the set through call signatures; the
+/// struct/ctor items themselves are emitted once via [`generate_ctrl_deco_items`].
+pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
+    if def.controller_intercepts.is_empty() {
+        return None;
+    }
+    let has_target = !def.route_methods.is_empty()
+        || !def.scheduled_methods.is_empty()
+        || !def.consumer_methods.is_empty();
+    if !has_target {
+        return None;
+    }
+    if !all_specs_inferable(def.controller_intercepts.iter()) {
+        return None;
+    }
+    let controller_name = &def.controller_name;
+    Some(CtrlDecoSet {
+        struct_ident: format_ident!("__R2eCtrlDeco_{}", controller_name),
+        ctor_ident: format_ident!("__r2e_ctrldeco_{}", controller_name),
+        fields: (0..def.controller_intercepts.len())
+            .map(|i| format_ident!("__ci{}", i))
+            .collect(),
+    })
+}
+
+/// Emit the shared controller-level interceptor struct + its constructor
+/// (built from the resolved bean context). Emitted **once** per controller at
+/// module scope; the router body and the transverse fill each build a single
+/// instance from it. Empty when there are no controller-level interceptors.
+pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
+    let Some(set) = ctrl_deco_set(def) else {
+        return quote! {};
+    };
+    let krate = r2e_core_path();
+    let mut field_decls: Vec<TokenStream> = Vec::new();
+    let mut field_inits: Vec<TokenStream> = Vec::new();
+    for (field, expr) in set.fields.iter().zip(def.controller_intercepts.iter()) {
+        let (spec_ty, value_expr) = match spec_type_of(expr) {
+            Ok(split) => split,
+            Err(err) => return err.to_compile_error(),
+        };
+        field_decls.push(quote! {
+            #field: <#spec_ty as #krate::DecoratorSpec>::Product
+        });
+        field_inits.push(quote! {
+            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
+        });
+    }
+    let struct_ident = &set.struct_ident;
+    let ctor_ident = &set.ctor_ident;
+    quote! {
+        #[allow(non_camel_case_types)]
+        #[doc(hidden)]
+        struct #struct_ident {
+            #(#field_decls,)*
+        }
+
+        #[allow(non_snake_case)]
+        #[doc(hidden)]
+        fn #ctor_ident(__ctx: &#krate::beans::BeanContext) -> #struct_ident {
+            #struct_ident {
+                #(#field_inits,)*
+            }
         }
     }
 }

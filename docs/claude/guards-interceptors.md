@@ -179,10 +179,24 @@ Method body level (trait-based, via `Interceptor::around`):
 3. Controller-level interceptors (declaration order)
 4. Method-level interceptors (declaration order)
 
-Instance lifetime: every site (including controller-level ones, which are
-instantiated **once per route method**) is built at registration and lives
-for the app's lifetime — a stateful interceptor keeps its state across
-requests, and controller-level state is per-method, not shared.
+Instance lifetime: every site is built at registration and lives for the app's
+lifetime — a stateful interceptor keeps its state across requests.
+**Controller-level (impl-level) interceptors are built once per controller and
+shared across every route** (and every `#[scheduled]`/`#[consumer]` method), so
+a stateful impl-level interceptor observes one instance for the whole
+controller. Method-level (route-level) `#[intercept]` stays **per route**.
+
+Sharing is per **dispatch surface**: the HTTP-route surface and the off-request
+transverse surface (`#[scheduled]`/`#[consumer]`) each build one shared
+instance. The route surface's instance is built once in `Controller::routes`
+(captured by every route handler as an `Arc` clone of a hidden
+`__R2eCtrlDeco_<Name>` set); the transverse surface's instance is built once at
+`fill_decos` and stored in the core's decorator-slot container (`__ctrl` field),
+read by every scheduled/consumer dispatch wrapper. A controller that uses the
+same stateful impl-level interceptor across both surfaces therefore sees one
+instance per surface (two total) — routes share with routes, transverse methods
+share with transverse. `#[bean]` impl-level interceptors are unchanged (still
+one per intercepted `#[scheduled]`/`#[consumer]` method).
 
 5. Original method body
 

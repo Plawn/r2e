@@ -25,7 +25,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{FnArg, ImplItem, ItemImpl, ReturnType};
 
-use crate::codegen::decorators::{intercept_field_idents, wrap_with_deco_interceptors};
+use crate::codegen::decorators::{intercept_field_idents, wrap_with_interceptor_refs};
 use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name};
 use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
 use crate::extract::consumer::strip_consumer_attrs;
@@ -339,6 +339,23 @@ pub(crate) struct DecoFieldDef {
     pub ctor: syn::Ident,
 }
 
+/// The shared controller-level interceptor set embedded in a transverse
+/// container: a single `Arc<CtrlSet>` field (`__ctrl`) built once at fill time,
+/// so every intercepted `#[scheduled]`/`#[consumer]` method of the controller
+/// shares one impl-level interceptor instance. `None` for beans (which chain
+/// their impl-level interceptors into each per-method set, unchanged).
+pub(crate) struct CtrlContainerField {
+    /// The set's struct type (`CtrlDecoSet::struct_ident`).
+    pub set_ty: syn::Ident,
+    /// The set's build function (`CtrlDecoSet::ctor_ident`).
+    pub ctor: syn::Ident,
+}
+
+/// The container field name holding the shared controller-level interceptor set.
+pub(crate) fn ctrl_container_field() -> syn::Ident {
+    syn::Ident::new("__ctrl", proc_macro2::Span::call_site())
+}
+
 /// Emit the per-type decorator container struct and its `BeanDecoFill` impl.
 ///
 /// `container` names the hidden struct; `target` is the fill impl's Self type
@@ -346,31 +363,34 @@ pub(crate) struct DecoFieldDef {
 /// expression the fill impl calls `.fill(..)` on (bean:
 /// `<Self as HasDecoSlot>::__r2e_deco_slot(self)`; controller core:
 /// `self.__r2e_decos`). One field per intercepted method, each built from the
-/// bean context at fill time.
+/// bean context at fill time. `ctrl` optionally adds the shared controller-level
+/// interceptor set (`__ctrl: Arc<CtrlSet>`), built once at fill.
 pub(crate) fn deco_container_and_fill(
     container: &syn::Ident,
     target: &TokenStream,
     slot_access: &TokenStream,
     fields: &[DecoFieldDef],
+    ctrl: Option<&CtrlContainerField>,
 ) -> TokenStream {
     let krate = r2e_core_path();
 
-    let container_fields: Vec<TokenStream> = fields
-        .iter()
-        .map(|f| {
-            let field = &f.field;
-            let ty = &f.set_ty;
-            quote! { #field: #ty }
-        })
-        .collect();
-    let field_inits: Vec<TokenStream> = fields
-        .iter()
-        .map(|f| {
-            let field = &f.field;
-            let ctor = &f.ctor;
-            quote! { #field: #ctor(__ctx) }
-        })
-        .collect();
+    let mut container_fields: Vec<TokenStream> = Vec::new();
+    let mut field_inits: Vec<TokenStream> = Vec::new();
+
+    if let Some(c) = ctrl {
+        let field = ctrl_container_field();
+        let ty = &c.set_ty;
+        let ctor = &c.ctor;
+        container_fields.push(quote! { #field: ::std::sync::Arc<#ty> });
+        field_inits.push(quote! { #field: ::std::sync::Arc::new(#ctor(__ctx)) });
+    }
+    for f in fields {
+        let field = &f.field;
+        let ty = &f.set_ty;
+        let ctor = &f.ctor;
+        container_fields.push(quote! { #field: #ty });
+        field_inits.push(quote! { #field: #ctor(__ctx) });
+    }
 
     quote! {
         #[allow(non_camel_case_types)]
@@ -412,8 +432,14 @@ pub(crate) struct DispatchWrapperParams {
     /// The event parameter to forward on the inner call (consumers) — `None`
     /// for scheduled methods.
     pub event_param: Option<syn::PatType>,
-    /// The number of `#[intercept]` sites on the method.
+    /// The number of METHOD-level `#[intercept]` sites on the method (the
+    /// per-method decorator set's fields). May be 0 when the method runs only
+    /// controller-level interceptors (see `ctrl_field_count`).
     pub intercept_count: usize,
+    /// The number of shared controller-level (impl-level) interceptor sites,
+    /// referenced through the container's `__ctrl` field (`&__decos.__ctrl.__ci*`).
+    /// 0 for beans (they chain impl-level interceptors into each per-method set).
+    pub ctrl_field_count: usize,
     /// The macro that promoted a sync source, named in the rustdoc note
     /// (bean: `#[bean]`; controller: `#[routes]`).
     pub origin_macro: &'static str,
@@ -436,7 +462,7 @@ pub(crate) fn intercepted_dispatch_wrapper(
     let krate = r2e_core_path();
     let fn_name = &method.sig.ident;
     let fn_name_str = fn_name.to_string();
-    let intercept_fields = intercept_field_idents(p.intercept_count);
+    let method_fields = intercept_field_idents(p.intercept_count);
     let inner_name = &p.inner_name;
 
     // Inner fn: source body verbatim (attrs stripped), renamed & private.
@@ -478,17 +504,33 @@ pub(crate) fn intercepted_dispatch_wrapper(
         quote! { self.#inner_name(#arg_forward) }
     };
 
-    let chain = wrap_with_deco_interceptors(
+    // Combined interceptor refs: shared controller-level (impl-level) ones
+    // outermost — read from the container's `__ctrl` field so every intercepted
+    // transverse method shares a single instance — then the per-method ones.
+    let ctrl_field = ctrl_container_field();
+    // Controller-level set fields are `__ci0..` (see `ctrl_deco_set`).
+    let mut interceptor_refs: Vec<TokenStream> = (0..p.ctrl_field_count)
+        .map(|i| {
+            let f = quote::format_ident!("__ci{}", i);
+            quote! { &__decos.#ctrl_field.#f }
+        })
+        .collect();
+    interceptor_refs.extend(method_fields.iter().map(|f| quote! { &__deco.#f }));
+
+    let chain = wrap_with_interceptor_refs(
         inner_call.clone(),
         &fn_name_str,
         &p.owner_name_str,
-        &intercept_fields,
+        &interceptor_refs,
         &krate,
     );
 
     let container = &p.container;
     let field = &p.field;
     let slot_access = &p.slot_access;
+    // Bind the per-method set only when there are method-level interceptors;
+    // a controller-level-only method reads just `__decos.__ctrl`.
+    let method_bind = (p.intercept_count > 0).then(|| quote! { let __deco = &__decos.#field; });
 
     quote! {
         #inner_fn
@@ -498,7 +540,7 @@ pub(crate) fn intercepted_dispatch_wrapper(
         #vis #sig {
             match #slot_access.get::<#container>() {
                 Some(__decos) => {
-                    let __deco = &__decos.#field;
+                    #method_bind
                     #chain
                 }
                 None => #inner_call,
