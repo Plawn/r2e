@@ -39,6 +39,28 @@ async fn step_three_sees_both(_app: TestApp) {
     seq.push(3);
 }
 
+// An expected panic is a PASS: it must not poison the group.
+#[r2e::test(app = ExampleApp, order = 4)]
+#[should_panic(expected = "expected panic in order 4")]
+async fn step_four_expected_panic(_app: TestApp) {
+    {
+        let mut seq = APP_SEQ.lock().unwrap();
+        assert_eq!(*seq, vec![1, 2, 3]);
+        seq.push(4);
+    }
+    panic!("expected panic in order 4");
+}
+
+// `Result` tests work ordered too (an `Err` would poison the group).
+#[r2e::test(app = ExampleApp, order = 5)]
+async fn step_five_runs_after_expected_panic(
+    _app: TestApp,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let seq = APP_SEQ.lock().unwrap();
+    assert_eq!(*seq, vec![1, 2, 3, 4]);
+    Ok(())
+}
+
 // ── Named group, plain path (no app), non-contiguous orders ─────────────
 
 #[r2e::test(order = 10, group = "plain")]
