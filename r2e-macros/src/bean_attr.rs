@@ -485,17 +485,24 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
 
     let post_construct_impl = transverse::post_construct_impl(&quote! { #self_ty }, &pc_methods);
 
-    let after_register_fn = if !pc_methods.is_empty() || !scheduled_methods.is_empty() || has_decos {
+    let after_register_fn = if !pc_methods.is_empty()
+        || !scheduled_methods.is_empty()
+        || !consumer_methods.is_empty()
+        || has_decos
+    {
         let pc_hook = (!pc_methods.is_empty())
             .then(|| quote! { registry.register_post_construct::<Self>(); });
         let sched_hook = (!scheduled_methods.is_empty())
             .then(|| quote! { registry.register_scheduled_source::<Self>(); });
+        let sub_hook = (!consumer_methods.is_empty())
+            .then(|| quote! { registry.register_event_subscriber::<Self>(); });
         let deco_hook =
             has_decos.then(|| quote! { registry.register_deco_fill::<Self>(); });
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
                 #pc_hook
                 #sched_hook
+                #sub_hook
                 #deco_hook
             }
         }

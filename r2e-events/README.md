@@ -64,9 +64,10 @@ impl NotificationController {
 
 Consumers are registered automatically during `register_controller()`. They run on the controller core, which always implements `ContextConstruct` (built from the resolved `BeanContext` by type), so they work regardless of any `#[inject(identity)]` fields.
 
-Standalone event subscribers (types that are not controllers) register **after**
-`build_state()` with `.register_subscriber::<S>()`; the subscriber type `S` must
-itself be registered/provided as a bean, since it is resolved from the graph.
+Standalone event subscribers (beans that are not controllers) are auto-collected:
+`#[bean]` emits an `after_register` hook, so `.register::<S>()` alone is enough —
+`build_state()` queues the subscription (resolved from the graph by type) and it
+runs at server startup, at the same point controller consumers subscribe.
 
 ## Key properties
 

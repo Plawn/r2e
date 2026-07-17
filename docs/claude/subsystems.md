@@ -38,7 +38,7 @@ AppBuilder::new()
     .register_controller::<AccountController>()
     .register_controller::<ScheduledJobs>() // auto-discovers #[scheduled] methods
     // or register several at once: .register_controllers::<(UserController, AccountController, ScheduledJobs)>()
-    .register_subscriber::<NotificationService>() // bean event subscribers
+    // bean #[consumer] subscribers are auto-collected at build_state() — no explicit call
     .build()                               // → Router
     // or .serve("0.0.0.0:3000").await     // build + listen + graceful shutdown
     // or .serve_auto().await              // reads server.host / server.port from config (defaults: 0.0.0.0:3000)
@@ -171,7 +171,7 @@ Distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) implement the `EventBus` tr
 
 **Controller `#[post_construct]` lifecycle hooks** (W10 phase 3) — a `#[routes]` impl may declare `#[post_construct]` methods (same signature rules as bean hooks: `&self` only, sync or async, `()` or `Result<(), Box<dyn Error + Send + Sync>>`). They are queued at `register_controller` and awaited at startup **before** consumer registrations begin — later than bean `#[post_construct]` (which runs inside `build_state()`), because cores are built after the graph resolves. An `Err` aborts startup. See `docs/claude/beans-di.md`.
 
-**Declarative consumers on beans** via `#[consumer(bus = "field_name")]` in a `#[bean]` impl block. The `#[bean]` macro generates an `EventSubscriber` impl. Register via `AppBuilder::register_subscriber::<T>()`.
+**Declarative consumers on beans** via `#[consumer(bus = "field_name")]` in a `#[bean]` impl block. The `#[bean]` macro generates an `EventSubscriber` impl plus an `after_register` hook (`BeanRegistry::register_event_subscriber`), so `.register::<T>()` alone is enough — `build_state()` queues the subscription and it runs at server startup (`serve` / `build_with_consumers`), same auto-collection as `#[scheduled]` (no explicit `register_subscriber` call; the method was removed). Provided (`.provide(...)`) instances do not auto-subscribe — register the type, or use `add_consumer_registration`.
 
 **Multiple buses** — both controllers and beans can use multiple bus fields of different types. Each `#[consumer(bus = "field")]` references a specific field.
 

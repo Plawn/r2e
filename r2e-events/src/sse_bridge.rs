@@ -75,9 +75,8 @@ where
 
 /// Builder extension wiring the EventBus↔SSE bridge.
 ///
-/// Available on the post-`build_state()` [`AppBuilder`](r2e_core::AppBuilder),
-/// like `register_subscriber`. Both the bus and the topic must have been
-/// provided before `build_state()`.
+/// Available on the post-`build_state()` [`AppBuilder`](r2e_core::AppBuilder).
+/// Both the bus and the topic must have been provided before `build_state()`.
 pub trait SseBridgeExt<T>: Sized
 where
     T: Clone + Send + Sync + 'static,

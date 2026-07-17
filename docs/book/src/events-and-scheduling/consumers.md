@@ -155,7 +155,7 @@ impl NotificationService {
 }
 ```
 
-The `#[bean]` macro generates an `EventSubscriber` impl when `#[consumer]` methods are present. Register it with `register_subscriber`:
+The `#[bean]` macro generates an `EventSubscriber` impl when `#[consumer]` methods are present, and registration is automatic — `.register::<S>()` alone is enough:
 
 ```rust
 AppBuilder::new()
@@ -163,11 +163,12 @@ AppBuilder::new()
     .register::<NotificationService>()
     .build_state()
     .await
-    .register_subscriber::<NotificationService>()
     // ...
 ```
 
-`register_subscriber::<S>()` resolves `S` from the bean graph by type, so the type must be registered (`.register::<S>()`) or provided (`.provide(..)`) as a bean. Bean consumers capture `self` directly, so no per-event construction happens.
+`build_state()` collects the subscription (resolving `S` from the bean graph by type) and it runs at server startup, at the same point controller `#[consumer]` methods subscribe. Bean consumers capture `self` directly, so no per-event construction happens.
+
+> **Note:** the auto-collection hook only runs for **registered** beans. An instance deposited via `.provide(..)` does not auto-subscribe — register the type instead, or wire it manually with `add_consumer_registration`.
 
 ## Multiple buses
 
@@ -198,7 +199,7 @@ The generated code calls `EventBus::subscribe()` via UFCS on each field — full
 
 | | Controller `#[consumer]` | Bean `#[consumer]` | `bus.subscribe()` |
 |-|-------------------------|--------------------|--------------------|
-| Wiring | `register_controller()` | `register_subscriber()` | Manual at startup |
+| Wiring | `register_controller()` | Automatic (`.register::<S>()`) | Manual at startup |
 | Access to services | Via `#[inject]` fields | Via struct fields | Must capture in closure |
 | Construction | Once at registration (from bean graph) | None (self captured) | N/A |
 | Discovery | Declarative | Declarative | Scattered across init code |

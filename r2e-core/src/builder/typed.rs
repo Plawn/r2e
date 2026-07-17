@@ -588,45 +588,38 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Register a bean's event subscriptions.
+    /// Queue the bean event-subscriber hooks (queued by `#[bean]` via
+    /// `after_register` → `BeanRegistry::register_event_subscriber`) as
+    /// consumer registrations, run at server startup (`serve` /
+    /// [`build_with_consumers`](Self::build_with_consumers)) — the same point
+    /// controller `#[consumer]` methods subscribe. Each hook reads its bean by
+    /// type from the retained graph, so pinned test overrides are honoured.
     ///
-    /// The bean is pulled from the retained bean graph by type and its
-    /// [`EventSubscriber::subscribe()`] method is called during server startup.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `S` was not provided/registered on the builder before
-    /// `build_state()`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// AppBuilder::new()
-    ///     .register::<NotificationService>()
-    ///     .build_state().await
-    ///     .register_subscriber::<NotificationService>()
-    ///     .serve("0.0.0.0:3000").await.unwrap();
-    /// ```
-    pub fn register_subscriber<S>(mut self) -> Self
-    where
-        S: crate::EventSubscriber + Clone + 'static,
-    {
-        let subscriber = self.bean_context.try_get::<S>().unwrap_or_else(|| {
-            panic!(
-                "register_subscriber::<{ty}>(): bean not found in the resolved graph — \
-                 add `.register::<{ty}>()` or `.provide(...)` before `build_state()`",
-                ty = std::any::type_name::<S>()
-            )
-        });
-        self.consumer_registrations.push(Box::new(move |_state| {
-            subscriber.subscribe()
-        }));
+    /// Called by `build_state()` right after the typed builder exists.
+    pub(crate) fn collect_bean_subscribers(
+        mut self,
+        subscribers: Vec<(
+            &'static str,
+            Box<
+                dyn FnOnce(
+                        &crate::beans::BeanContext,
+                    )
+                        -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    + Send,
+            >,
+        )>,
+    ) -> Self {
+        for (_, hook) in subscribers {
+            let ctx = Arc::clone(&self.bean_context);
+            self.consumer_registrations
+                .push(Box::new(move |_state| hook(&ctx)));
+        }
         self
     }
 
     /// Register a raw consumer-registration hook, run once during server
-    /// startup (at the same point `#[consumer]` methods and
-    /// [`register_subscriber`](Self::register_subscriber) beans subscribe).
+    /// startup (at the same point controller and bean `#[consumer]` methods
+    /// subscribe).
     ///
     /// This is the extension point downstream crates use to wire event
     /// subscriptions that aren't controller- or bean-shaped — e.g. the
@@ -679,8 +672,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     /// Like [`build`](Self::build), but also runs the consumer registrations
-    /// (`#[consumer]` methods, [`register_subscriber`](Self::register_subscriber)
-    /// beans, [`add_consumer_registration`](Self::add_consumer_registration)
+    /// (controller and bean `#[consumer]` methods,
+    /// [`add_consumer_registration`](Self::add_consumer_registration)
     /// hooks) that `serve()` would run at startup.
     ///
     /// This is the in-process test entry point: it gives event consumers

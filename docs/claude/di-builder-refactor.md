@@ -236,8 +236,10 @@ state is the single state model.
   `build_state!`/`try_build_state!`, `StatefulConstruct`,
   `#[controller(state = ...)]`, `#[service(state = ...)]` all removed
   (rejected with migration-hint compile errors where applicable).
-  `ServiceComponent`/`#[derive(BackgroundService)]`, `register_subscriber`,
-  and gRPC services construct from the context by type. All examples, tests,
+  `ServiceComponent`/`#[derive(BackgroundService)]`, `register_subscriber`
+  (since removed — bean `#[consumer]` subscribers auto-collect at
+  `build_state()`, see beans-di.md), and gRPC services construct from the
+  context by type. All examples, tests,
   CLI templates migrated; `r2e doctor` warns when the bean count approaches
   the `#![recursion_limit = "512"]` threshold (>~127 registrations).
 

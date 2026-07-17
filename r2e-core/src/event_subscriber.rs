@@ -26,14 +26,23 @@ use std::pin::Pin;
 /// The macro generates an `EventSubscriber` impl that calls
 /// `event_bus.subscribe(...)` for each `#[consumer]` method.
 ///
-/// Register with [`AppBuilder::register_subscriber`]:
+/// Registration is automatic: `#[bean]` emits an `after_register` hook that
+/// calls `BeanRegistry::register_event_subscriber`, so `.register::<T>()`
+/// alone is enough — `build_state()` queues the subscription, which runs at
+/// server startup (`serve` / `build_with_consumers`), the same point
+/// controller `#[consumer]` methods subscribe:
 ///
 /// ```ignore
 /// AppBuilder::new()
+///     .register::<NotificationService>()
 ///     .build_state().await
-///     .register_subscriber::<NotificationService>()
 ///     .serve("0.0.0.0:3000").await.unwrap();
 /// ```
+///
+/// Note: the hook only runs for **registered** beans — a `#[consumer]` bean
+/// deposited via `.provide(instance)` does not auto-subscribe (mirror of
+/// `#[scheduled]` sources); register the type instead, or wire it manually
+/// with `add_consumer_registration`.
 pub trait EventSubscriber: Clone + Send + Sync + 'static {
     /// Subscribe all consumer methods to their respective event buses.
     fn subscribe(self) -> Pin<Box<dyn Future<Output = ()> + Send>>;

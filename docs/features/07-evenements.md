@@ -201,19 +201,21 @@ pub struct UserController {
 }
 ```
 
-### 7. Register event subscribers
+### 7. Event subscribers are auto-collected
 
-`#[consumer]`-style subscribers are registered **after** `.build_state().await` with `.register_subscriber::<S>()`. The subscriber type `S` must itself be a bean (provided or registered), because it is resolved from the graph by type — never name-matched:
+Bean `#[consumer]` subscribers need no explicit registration call: `#[bean]` emits an `after_register` hook, so `.register::<UserEventConsumer>()` alone is enough. `build_state()` queues the subscription (resolved from the graph by type — never name-matched) and it runs at server startup, the same point controller `#[consumer]` methods subscribe:
 
 ```rust
-app.build_state()
+app.register::<UserEventConsumer>()
+    .build_state()
     .await
-    .register_subscriber::<UserEventConsumer>()
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
 ```
+
+Note: a subscriber deposited via `.provide(instance)` does **not** auto-subscribe (the hook only runs on `.register`); register the type instead, or wire it manually with `add_consumer_registration`.
 
 ## Isolation by type
 

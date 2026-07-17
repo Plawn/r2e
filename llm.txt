@@ -456,7 +456,7 @@ AppBuilder::new()
     .register_controller::<UserController>()
     .register_controllers::<(AccountController, ScheduledJobs)>()  // several at once
     .register_module::<UserModule>()
-    .register_subscriber::<NotificationService>()  // bean event subscribers
+    // bean #[consumer] subscribers auto-collected at build_state() — no explicit call
     .with(NormalizePath)                        // last plugin
     .serve_auto().await                         // server.host/server.port from config
     // or .serve("0.0.0.0:3000").await
@@ -992,7 +992,10 @@ impl NotificationService {
     #[consumer(bus = "event_bus")]
     async fn on_user_created(&self, event: Arc<UserCreatedEvent>) { ... }
 }
-// register with .register_subscriber::<NotificationService>()
+// registration is automatic: .register::<NotificationService>() alone is enough —
+// build_state() queues the subscription, run at server startup. NOTE: a bean
+// deposited via .provide(instance) does NOT auto-subscribe; register the type,
+// or wire manually with .add_consumer_registration(..).
 ```
 
 ### EventBus↔SSE bridge
@@ -1058,8 +1061,8 @@ on completion; a due-while-running tick is skipped, cadence preserved).
 (ticks may pile up). Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
 
 `#[scheduled]` also works on **beans** — same attribute, same options, and
-registration is automatic (`.register::<T>()` alone; no extra call, unlike
-`register_subscriber` for `#[consumer]` beans):
+registration is automatic (`.register::<T>()` alone; no extra call — same
+auto-collection as `#[consumer]` beans):
 
 ```rust
 #[derive(Clone)]
@@ -1543,6 +1546,16 @@ process-local static container: Rust statics are not dropped at process exit.
 - `r2e::app_main!(MyApp)` — canonical `main.rs`: includes `src/app.rs` in the
   binary tip crate, generates the Tokio `main`, and invokes `launch!`. Use a
   manual `#[r2e::main]` + `launch!` only when the entry point must be customized.
+- Hot reload setup: `r2e dev` passes `--features dev-reload` to **your package**,
+  not to the `r2e` crate. Your app's `Cargo.toml` must relay the feature:
+
+  ```toml
+  [features]
+  dev-reload = ["r2e/dev-reload"]
+  ```
+
+  Without this relay the build fails with
+  `error: the package 'my-app' does not contain this feature: dev-reload`.
 - Hot reload (`dev-reload` feature): `r2e::launch!` runs the Subsecond hot-patch
   loop. It is a **macro** (not `launch::<MyApp>()`) because Subsecond only remaps
   symbols in the *tip crate* that owns `main.rs`; the macro expands its loop —
@@ -1629,7 +1642,6 @@ Alongside `&self`:
 | `.register_controller::<C>()` | post-state | Register controller (+ consumers + scheduled) |
 | `.register_controllers::<(A, B)>()` | post-state | Several at once |
 | `.register_module::<M>()` | pre-state | Feature module (providers + controllers) |
-| `.register_subscriber::<B>()` | post-state | Bean with `#[consumer]` methods |
 | `.bridge_sse::<Bus, E>()` | post-state | EventBus → SSE topic bridge |
 | `.schedule_task(def)` | post-state | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |

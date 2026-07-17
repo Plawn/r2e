@@ -266,7 +266,7 @@ impl NotificationService {
 }
 ```
 
-When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventSubscriber` impl. Register via `register_subscriber::<NotificationService>()` on the builder.
+When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventSubscriber` impl plus an `after_register` hook calling `BeanRegistry::register_event_subscriber::<Self>()`, so `.register::<NotificationService>()` alone is enough — same auto-collection as `#[scheduled]`. `build_state()` queues the subscription as a consumer registration, run at server startup (`serve` / `build_with_consumers`), the same point controller `#[consumer]` methods subscribe. There is no explicit registration call (`register_subscriber` was removed). A bean deposited via `.provide(instance)` does NOT auto-subscribe (no `after_register` runs — mirror of `#[scheduled]`): register the type instead, or wire it manually with `add_consumer_registration`.
 
 Multiple buses of different types are supported — each `#[consumer]` references a different field by name.
 
@@ -297,7 +297,7 @@ impl CleanupService {
 }
 ```
 
-**Registration is automatic** (unlike `#[consumer]`'s explicit `register_subscriber`): `#[bean]` generates a `ScheduledSource` impl plus an `after_register` hook calling `BeanRegistry::register_scheduled_source::<Self>()`, so `.register::<CleanupService>()` alone is enough. `build_state()` runs the hooks against the resolved graph and hands the type-erased task defs to the scheduler's `TaskRegistryHandle` (same `ScheduledTaskMarker` pipeline as controller tasks — the `Executor` + `Scheduler` plugins must be installed before `build_state()`, otherwise a warning naming the bean is logged and the tasks are dropped).
+**Registration is automatic** (same auto-collection as `#[consumer]`): `#[bean]` generates a `ScheduledSource` impl plus an `after_register` hook calling `BeanRegistry::register_scheduled_source::<Self>()`, so `.register::<CleanupService>()` alone is enough. `build_state()` runs the hooks against the resolved graph and hands the type-erased task defs to the scheduler's `TaskRegistryHandle` (same `ScheduledTaskMarker` pipeline as controller tasks — the `Executor` + `Scheduler` plugins must be installed before `build_state()`, otherwise a warning naming the bean is logged and the tasks are dropped).
 
 Semantics shared with controller `#[scheduled]`:
 - Default task name `<Type>_<method>`; ticks run as pool jobs, visible in `ScheduledJobInfo`.

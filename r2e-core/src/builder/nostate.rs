@@ -720,6 +720,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
             let mut registry = std::mem::take(&mut self.shared.bean_registry);
             let scheduled_sources = registry.take_scheduled_sources();
+            let event_subscribers = registry.take_event_subscribers();
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
@@ -733,12 +734,14 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
-                    // Bean scheduled tasks are re-collected against the cached
-                    // graph: the task registry is fresh per build (plugins
-                    // re-install), even when the bean instances are reused.
+                    // Bean scheduled tasks and subscriptions are re-collected
+                    // against the cached graph: the task registry and consumer
+                    // registrations are fresh per build (plugins re-install),
+                    // even when the bean instances are reused.
                     return Ok(Mods::register_controllers(
                         AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
-                            .collect_bean_scheduled_tasks(scheduled_sources),
+                            .collect_bean_scheduled_tasks(scheduled_sources)
+                            .collect_bean_subscribers(event_subscribers),
                     ));
                 }
 
@@ -776,7 +779,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
             Ok(Mods::register_controllers(
                 AppBuilder::from_pre(self.shared, state, ctx)
-                    .collect_bean_scheduled_tasks(scheduled_sources),
+                    .collect_bean_scheduled_tasks(scheduled_sources)
+                    .collect_bean_subscribers(event_subscribers),
             ))
         }
 
@@ -784,13 +788,15 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         {
             let mut registry = std::mem::take(&mut self.shared.bean_registry);
             let scheduled_sources = registry.take_scheduled_sources();
+            let event_subscribers = registry.take_event_subscribers();
             let mut ctx = registry.resolve().await?;
             self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
 
             Ok(Mods::register_controllers(
                 AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
-                    .collect_bean_scheduled_tasks(scheduled_sources),
+                    .collect_bean_scheduled_tasks(scheduled_sources)
+                    .collect_bean_subscribers(event_subscribers),
             ))
         }
     }

@@ -288,11 +288,27 @@ refactor):
 
 Phase-1 design decisions (settled): registration is **auto-collection at
 `build_state()`** — user-approved 2026-07-16; matches controller
-auto-discovery and avoids the silent no-op of a forgotten explicit call
-(follow-up idea, not scheduled: align `#[consumer]` beans on the same
-auto-collection and retire `register_subscriber`). No dedicated `#[service]`
-macro — unification beats a third shape; `#[derive(BackgroundService)]` stays
-the escape hatch for hand-written loops.
+auto-discovery and avoids the silent no-op of a forgotten explicit call.
+No dedicated `#[service]` macro — unification beats a third shape;
+`#[derive(BackgroundService)]` stays the escape hatch for hand-written loops.
+
+**Follow-up DONE (2026-07-17): `#[consumer]` beans auto-collect,
+`register_subscriber` removed.** Mirror of the `#[scheduled]` pipeline:
+`#[bean]`'s `after_register` also calls the new
+`BeanRegistry::register_event_subscriber::<Self>()` (idempotent per TypeId —
+default/override subscribes once); `build_state()` drains the hooks
+(`take_event_subscribers`, all three exit paths incl. dev-reload cache hit)
+into `AppBuilder::collect_bean_subscribers`, which pushes them as consumer
+registrations resolving the bean from the retained `Arc<BeanContext>` — so
+subscriptions run at server startup (`serve`/`build_with_consumers`), same
+point as controller consumers, and pinned overrides are honoured (pinning the
+subscriber bean itself skips subscription, like scheduled). BREAKING:
+`AppBuilder::register_subscriber` removed; a `.provide(instance)`-only
+`#[consumer]` bean no longer subscribes (no `after_register`) — register the
+type or use `add_consumer_registration`. Tests:
+`examples/example-app/tests/bean_consumer_test.rs`. Docs: beans-di.md,
+subsystems.md, 07-evenements.md, book consumers.md, r2e-events/README.md,
+llm.txt.
 
 ## Tech debt (deferred, low priority)
 
