@@ -37,6 +37,13 @@ struct MainArgs {
     with_expr: Option<syn::Expr>,
     /// `#[r2e::test(app = ..., jwt = false)]`: skip the TestJwt auto-wiring.
     jwt: bool,
+    /// `#[r2e::test(order = <u32>)]`: run this test sequentially (ascending
+    /// `order`) via the r2e-test static barrier. Test-only. The literal is kept
+    /// for span-accurate error reporting; the value is parsed as `u32`.
+    order: Option<syn::LitInt>,
+    /// `#[r2e::test(order = ..., group = "<str>")]`: barrier group name. Only
+    /// meaningful together with `order`. Defaults to `""` when omitted.
+    group: Option<syn::LitStr>,
     max_blocking_threads: Option<usize>,
     thread_stack_size: Option<usize>,
     thread_name: Option<String>,
@@ -55,6 +62,8 @@ impl Default for MainArgs {
             app_fn: None,
             with_expr: None,
             jwt: true,
+            order: None,
+            group: None,
             max_blocking_threads: None,
             thread_stack_size: None,
             thread_name: None,
@@ -102,6 +111,8 @@ impl MainArgs {
                     "app" => this.app_fn = Some(meta.value()?.parse()?),
                     "with" => this.with_expr = Some(meta.value()?.parse()?),
                     "jwt" => this.jwt = parse_bool(&meta)?,
+                    "order" => this.order = Some(meta.value()?.parse()?),
+                    "group" => this.group = Some(meta.value()?.parse()?),
                     "worker_threads" => this.worker_threads = Some(parse_int(&meta)?),
                     "max_blocking_threads" => this.max_blocking_threads = Some(parse_int(&meta)?),
                     "thread_stack_size" => this.thread_stack_size = Some(parse_int(&meta)?),
@@ -231,6 +242,53 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         .to_compile_error();
     }
 
+    // ── `order` / `group` validation (test-only ordering barrier) ────────
+    // `order` and `group` are only accepted on `#[r2e::test]`.
+    if !is_test {
+        if let Some(order_lit) = &args.order {
+            return syn::Error::new_spanned(
+                order_lit,
+                "`order` is only supported on `#[r2e::test]`",
+            )
+            .to_compile_error();
+        }
+        if let Some(group_lit) = &args.group {
+            return syn::Error::new_spanned(
+                group_lit,
+                "`group` is only supported on `#[r2e::test]`",
+            )
+            .to_compile_error();
+        }
+    }
+    // `group` only groups tests that also declare an `order`.
+    if let Some(group_lit) = &args.group {
+        if args.order.is_none() {
+            return syn::Error::new_spanned(
+                group_lit,
+                "`group` requires `order` — `group` only names the barrier for tests that also declare an `order`",
+            )
+            .to_compile_error();
+        }
+    }
+
+    // Resolve the ordering hooks once (only when `order` is present). Parsing
+    // the literal as `u32` here surfaces negative / non-integer literals as an
+    // error spanned on the literal.
+    let ordering: Option<(u32, TokenStream2)> = match &args.order {
+        Some(order_lit) => {
+            let order_val: u32 = match order_lit.base10_parse() {
+                Ok(v) => v,
+                Err(e) => return e.to_compile_error(),
+            };
+            let group_lit = match &args.group {
+                Some(g) => quote! { #g },
+                None => quote! { "" },
+            };
+            Some((order_val, group_lit))
+        }
+        None => None,
+    };
+
     let tracing_init = if args.tracing {
         quote! { #krate::init_tracing(); }
     } else {
@@ -265,6 +323,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
             app_ty,
             args.with_expr.as_ref(),
             args.jwt,
+            ordering.as_ref(),
             &func,
             &tracing_init,
             &runtime_builder,
@@ -285,6 +344,29 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
     }
 
     // ── Standard path ─────────────────────────────────────────────────────
+    // Ordered tests (test-only) enroll in the r2e-test sequential barrier: an
+    // inventory entry at item level and a `turn` guard held for the whole async
+    // block. Unordered tests keep the byte-identical expansion of before (no
+    // reference to r2e-test).
+    if let Some((order_val, group_lit)) = &ordering {
+        let test_crate = crate::crate_path::r2e_test_path();
+        let (submit, turn) = ordering_tokens(&test_crate, fn_name, *order_val, group_lit);
+        let body_stmts = &body.stmts;
+        return quote! {
+            #submit
+            #(#attrs)*
+            #test_attr
+            #vis fn #fn_name() #ret {
+                #tracing_init
+                #runtime_builder
+                    .block_on(async {
+                        #turn
+                        #(#body_stmts)*
+                    })
+            }
+        };
+    }
+
     quote! {
         #(#attrs)*
         #test_attr
@@ -294,6 +376,37 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
                 .block_on(async #body)
         }
     }
+}
+
+/// Build the two token streams that wire a test into the r2e-test sequential
+/// barrier when `order` is set:
+/// - an item-level `inventory::submit!` registering the test's `OrderedTestEntry`,
+/// - the first statement of the async block: a `turn(...)` guard (`#[must_use]`,
+///   RAII) that must stay alive until the end of the block (covers app boot).
+fn ordering_tokens(
+    test_crate: &TokenStream2,
+    fn_name: &syn::Ident,
+    order_val: u32,
+    group_lit: &TokenStream2,
+) -> (TokenStream2, TokenStream2) {
+    let submit = quote! {
+        #test_crate::ordering::inventory::submit! {
+            #test_crate::ordering::OrderedTestEntry {
+                group: #group_lit,
+                order: #order_val,
+                test: concat!(module_path!(), "::", stringify!(#fn_name)),
+            }
+        }
+    };
+    let turn = quote! {
+        let __r2e_ordered_turn = #test_crate::ordering::turn(
+            #group_lit,
+            #order_val,
+            concat!(module_path!(), "::", stringify!(#fn_name)),
+        )
+        .await;
+    };
+    (submit, turn)
 }
 
 /// Returns `true` if `ty` is a path type whose last segment is `name`
@@ -321,6 +434,7 @@ fn expand_boot_test(
     app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
     jwt: bool,
+    ordering: Option<&(u32, TokenStream2)>,
     func: &ItemFn,
     tracing_init: &TokenStream2,
     runtime_builder: &TokenStream2,
@@ -386,13 +500,24 @@ fn expand_boot_test(
     }
     let app_binding = app_binding.into_iter();
 
+    // Ordering barrier hooks (test-only). Empty when `order` is absent, so the
+    // unordered expansion is unchanged. The `turn` guard must precede app boot.
+    let (submit, turn) = match ordering {
+        Some((order_val, group_lit)) => {
+            ordering_tokens(&test_crate, fn_name, *order_val, group_lit)
+        }
+        None => (quote! {}, quote! {}),
+    };
+
     quote! {
+        #submit
         #(#attrs)*
         #[::core::prelude::v1::test]
         #vis fn #fn_name() #ret {
             #tracing_init
             #runtime_builder
                 .block_on(async {
+                    #turn
                     let __r2e_test_app = #boot_call;
                     #(#bindings)*
                     #(#app_binding)*
