@@ -1,7 +1,6 @@
 use crate::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
 use crate::types::*;
-use syn::spanned::Spanned;
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
@@ -284,6 +283,29 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     continue;
                 }
 
+                // `#[async_exec]` rewrites the method into a pool-submission
+                // wrapper. It MUST be recognized before the consumer/scheduled/
+                // route branches below — those would otherwise classify (and
+                // silently drop the async_exec rewrite on) a method carrying
+                // both markers: a route would 404, a scheduled/consumer would
+                // keep async_exec as a retained no-op attr. All async_exec
+                // validation (conflict matrix, intercept, asyncness, receiver)
+                // lives in the shared validator so the bean and controller
+                // hosts stay in lockstep.
+                if let Some(cfg) = extract_async_exec(&all_attrs)? {
+                    crate::extract::async_exec::validate_async_exec_method(
+                        &all_attrs,
+                        &method.sig,
+                        crate::extract::async_exec::AsyncExecHost::Controller,
+                    )?;
+                    method.attrs = strip_async_exec_attrs(all_attrs);
+                    async_exec_methods.push(AsyncExecMethod {
+                        executor_field: cfg.executor_field,
+                        fn_item: method,
+                    });
+                    continue;
+                }
+
                 if let Some(config) = extract_consumer(&all_attrs)? {
                     if extract_scheduled(&all_attrs)?.is_some() {
                         return Err(syn::Error::new_spanned(
@@ -422,31 +444,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         ws_param,
                         fn_item: method,
                     });
-                } else if let Some(cfg) = extract_async_exec(&all_attrs)? {
-                    if method.sig.asyncness.is_none() {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[async_exec] requires an `async fn` — the body is submitted to a PoolExecutor",
-                        ));
-                    }
-                    let has_self = method
-                        .sig
-                        .inputs
-                        .iter()
-                        .any(|arg| matches!(arg, syn::FnArg::Receiver(_)));
-                    if !has_self {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[async_exec] methods must take `&self` as the first argument. \
-                             The controller also needs an `#[inject] PoolExecutor` field \
-                             (default name: `executor`; override with `#[async_exec(executor = \"name\")]`)",
-                        ));
-                    }
-                    method.attrs = strip_async_exec_attrs(all_attrs);
-                    async_exec_methods.push(AsyncExecMethod {
-                        executor_field: cfg.executor_field,
-                        fn_item: method,
-                    });
                 } else if let Some(route_kind) = extract_route_kind(&all_attrs)? {
                     let mut decorators = parse_decorators(&all_attrs)?;
                     // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
@@ -484,34 +481,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     for arg in method.sig.inputs.iter_mut() {
                         if let syn::FnArg::Typed(pat_type) = arg {
                             pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
-                        }
-                    }
-
-                    // Validate: #[managed] and #[transactional] are mutually exclusive
-                    if decorators.transactional.is_some() && !managed_params.is_empty() {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[managed] and #[transactional] cannot be used on the same handler\n\n\
-                             hint: prefer #[managed] which is more explicit:\n\
-                             \n  #[post(\"/\")]\n  async fn create(&self, #[managed] tx: &mut Tx<'_, Sqlite>) -> ... { }",
-                        ));
-                    }
-
-                    // Validate: #[transactional] requires a Result-returning handler.
-                    // The wrapper commits on Ok / rolls back on Err, so a non-Result
-                    // return type silently miscompiles (always commits).
-                    if decorators.transactional.is_some() {
-                        let ok = match &method.sig.output {
-                            syn::ReturnType::Default => false,
-                            syn::ReturnType::Type(_, ty) => crate::type_utils::is_result_like(ty),
-                        };
-                        if !ok {
-                            return Err(syn::Error::new(
-                                method.sig.output.span(),
-                                "#[transactional] handlers must return `Result<_, _>` (or an `ApiResult` / `JsonResult` alias)\n\n\
-                                 The wrapper commits the transaction on `Ok(_)` and rolls back on `Err(_)` —\n\
-                                 a non-Result return type would always commit, silently swallowing failures.",
-                            ));
                         }
                     }
 

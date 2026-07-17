@@ -122,6 +122,6 @@ cancelled request drops the managed guard and invokes the same abort fallback.
 SQLx drops its unfinished transaction; Diesel discards an r2d2 connection that
 still owns an open transaction.
 
-`#[managed]` and the legacy `#[transactional]` decorator are mutually
-exclusive. Prefer `#[managed]`: it makes the transaction used by each query
+`#[managed]` is the only transaction attribute (the legacy `#[transactional]`
+body wrapper was removed): it makes the transaction used by each query
 explicit and provides cancellation-safe cleanup.

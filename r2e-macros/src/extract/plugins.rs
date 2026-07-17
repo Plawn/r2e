@@ -8,7 +8,7 @@
 use crate::extract::route::{
     all_roles_guard_expr, extract_all_roles, extract_guard_fns, extract_intercept_fns,
     extract_layer_exprs, extract_middleware_fns, extract_pre_guard_fns, extract_returns,
-    extract_roles, extract_status, extract_transactional, is_fallback_attr, is_route_attr,
+    extract_roles, extract_status, is_fallback_attr, is_route_attr,
     is_sse_attr, is_ws_attr, roles_guard_expr,
 };
 use crate::types::MethodDecorators;
@@ -121,21 +121,6 @@ impl RoutePlugin for PreGuardPlugin {
     }
 }
 
-struct TransactionalPlugin;
-impl RoutePlugin for TransactionalPlugin {
-    fn attr_names(&self) -> &'static [&'static str] {
-        &["transactional"]
-    }
-    fn parse(
-        &self,
-        attrs: &[syn::Attribute],
-        decorators: &mut MethodDecorators,
-    ) -> syn::Result<()> {
-        decorators.transactional = extract_transactional(attrs)?;
-        Ok(())
-    }
-}
-
 struct InterceptPlugin;
 impl RoutePlugin for InterceptPlugin {
     fn attr_names(&self) -> &'static [&'static str] {
@@ -222,7 +207,6 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
     &AllRolesPlugin,
     &GuardPlugin,
     &PreGuardPlugin,
-    &TransactionalPlugin,
     &InterceptPlugin,
     &MiddlewarePlugin,
     &LayerPlugin,
@@ -239,7 +223,6 @@ const GRPC_DISALLOWED_ATTRS: &[&str] = &[
     "all_roles",
     "guard",
     "pre_guard",
-    "transactional",
     "middleware",
     "layer",
 ];

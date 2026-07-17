@@ -1,16 +1,23 @@
-//! Method wrapping for transactional behavior.
+//! Impl-block splitting: façade (request-scoped) vs core (off-request)
+//! methods, plus the off-request dispatch wrappers.
 //!
-//! Interceptor wrapping for routes lives in `handlers.rs`, and for scheduled
-//! tasks in `controller_impl.rs` (interceptors are prebuilt decorator-set
-//! fields in both cases).
+//! Interceptor wrapping for routes lives in `handlers.rs`; the shared
+//! off-request emitters (`#[scheduled]`/`#[consumer]` dispatch wrappers,
+//! `#[async_exec]`) live in `transverse.rs`.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::transverse;
-use crate::crate_path::{r2e_core_path, r2e_executor_path};
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::*;
+
+/// Emit an impl method verbatim (no wrapping). Shared by the route/SSE/WS
+/// façade sites and the anonymous-route core sites, which all just re-emit the
+/// stripped `fn_item` unchanged.
+fn emit_verbatim(f: &syn::ImplItemFn) -> TokenStream {
+    quote! { #f }
+}
 
 /// Generate the impl blocks with wrapped methods, split by execution scope.
 ///
@@ -38,27 +45,21 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .route_methods
         .iter()
         .filter(|rm| !rm.decorators.anonymous)
-        .map(generate_wrapped_method)
+        .map(|rm| emit_verbatim(&rm.fn_item))
         .collect();
 
     let sse_fns: Vec<TokenStream> = def
         .sse_methods
         .iter()
         .filter(|sm| !sm.decorators.anonymous)
-        .map(|sm| {
-            let f = &sm.fn_item;
-            quote! { #f }
-        })
+        .map(|sm| emit_verbatim(&sm.fn_item))
         .collect();
 
     let ws_fns: Vec<TokenStream> = def
         .ws_methods
         .iter()
         .filter(|wm| !wm.decorators.anonymous)
-        .map(|wm| {
-            let f = &wm.fn_item;
-            quote! { #f }
-        })
+        .map(|wm| emit_verbatim(&wm.fn_item))
         .collect();
 
     // ── Core (anonymous) route methods ──
@@ -66,7 +67,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .route_methods
         .iter()
         .filter(|rm| rm.decorators.anonymous)
-        .map(generate_wrapped_method)
+        .map(|rm| emit_verbatim(&rm.fn_item))
         .collect();
 
     let anon_sse_ws_fns: Vec<TokenStream> = def
@@ -80,7 +81,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 .filter(|wm| wm.decorators.anonymous)
                 .map(|wm| &wm.fn_item),
         )
-        .map(|f| quote! { #f })
+        .map(emit_verbatim)
         .collect();
 
     // ── Core (off-request) methods ──
@@ -234,105 +235,9 @@ fn generate_transverse_method(
 
 /// Generate the inner async fn (renamed) and a synchronous wrapper that
 /// submits the body to the executor and returns `Result<JobHandle<T>, RejectedError>`.
+/// Controller cores are built via `ContextConstruct`, not struct literals in
+/// this impl — no slot-field injection, so the inner-block transform is a no-op.
 fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
-    let exec_krate = r2e_executor_path();
-    let fn_item = &am.fn_item;
-    let original_sig = &fn_item.sig;
-    let original_name = &original_sig.ident;
-    let inner_name = format_ident!("__r2e_async_{}_inner", original_name);
-    let executor_field = &am.executor_field;
-
-    let mut inner_fn = fn_item.clone();
-    inner_fn.sig.ident = inner_name.clone();
-
-    let return_ty: TokenStream = match &original_sig.output {
-        syn::ReturnType::Default => quote! { () },
-        syn::ReturnType::Type(_, ty) => quote! { #ty },
-    };
-
-    let typed_inputs: Vec<&syn::PatType> = original_sig
-        .inputs
-        .iter()
-        .filter_map(|a| {
-            if let syn::FnArg::Typed(pt) = a {
-                Some(pt)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let arg_idents: Vec<syn::Ident> = typed_inputs
-        .iter()
-        .enumerate()
-        .map(|(i, pt)| match &*pt.pat {
-            syn::Pat::Ident(pi) => pi.ident.clone(),
-            _ => format_ident!("__arg_{}", i),
-        })
-        .collect();
-
-    let attrs = &fn_item.attrs;
-    let vis = &fn_item.vis;
-    let generics = &original_sig.generics;
-    let where_clause = &original_sig.generics.where_clause;
-
-    quote! {
-        #inner_fn
-
-        #(#attrs)*
-        #vis fn #original_name #generics (
-            &self,
-            #(#typed_inputs),*
-        ) -> ::core::result::Result<#exec_krate::JobHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
-            let __self = ::core::clone::Clone::clone(self);
-            self.#executor_field.submit(async move {
-                __self.#inner_name(#(#arg_idents),*).await
-            })
-        }
-    }
-}
-
-/// Wrap a route method with transactional behavior only.
-/// Interceptors are now handled at the handler level (handlers.rs).
-fn generate_wrapped_method(rm: &RouteMethod) -> TokenStream {
-    if rm.decorators.transactional.is_none() {
-        let f = &rm.fn_item;
-        return quote! { #f };
-    }
-
-    let krate = r2e_core_path();
-    let fn_item = &rm.fn_item;
-    let attrs = &fn_item.attrs;
-    let vis = &fn_item.vis;
-    let sig = &fn_item.sig;
-    let original_body = &fn_item.block;
-
-    let mut body: TokenStream = quote! { #original_body };
-
-    // Inline wrapper: transactional
-    if let Some(ref tx_config) = rm.decorators.transactional {
-        let pool_field = format_ident!("{}", tx_config.pool_field);
-        body = quote! {
-            {
-                let mut tx = self.#pool_field.begin().await
-                    .map_err(|__e| #krate::HttpError::Internal(__e.to_string().into()))?;
-                let __tx_result = #body;
-                match __tx_result {
-                    Ok(__val) => {
-                        tx.commit().await
-                            .map_err(|__e| #krate::HttpError::Internal(__e.to_string().into()))?;
-                        Ok(__val)
-                    }
-                    Err(__err) => Err(__err),
-                }
-            }
-        };
-    }
-
-    quote! {
-        #(#attrs)*
-        #vis #sig {
-            #body
-        }
-    }
+    transverse::async_exec_method(&am.fn_item, &am.executor_field, |_block| {})
 }
 

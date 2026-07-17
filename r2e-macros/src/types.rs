@@ -123,7 +123,6 @@ pub struct AsyncExecMethod {
 pub struct MethodDecorators {
     pub roles: Vec<String>,
     pub all_roles: Vec<String>,
-    pub transactional: Option<TransactionalConfig>,
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,
     pub pre_auth_guard_fns: Vec<syn::Expr>,
@@ -162,10 +161,6 @@ pub struct RouteMethod {
     /// `#[fallback]` route: registered via `Router::fallback` instead of
     /// `.route(path, ...)`. `method`/`path` are placeholders (`Any` / `""`).
     pub is_fallback: bool,
-}
-
-pub struct TransactionalConfig {
-    pub pool_field: String,
 }
 
 /// Keep-alive configuration for SSE endpoints.

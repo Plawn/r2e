@@ -223,7 +223,8 @@ The SQLx and Diesel backend crates provide transaction implementations. They
 resolve pool beans by type, commit responses below 400, roll back `4xx`/`5xx`,
 and use a drop-safe abort fallback.
 
-**Note:** `#[managed]` and `#[transactional]` are mutually exclusive. Prefer `#[managed]` for new code.
+**Note:** `#[managed]` is the only transaction attribute — the legacy
+`#[transactional]` body wrapper was removed (W10 phase 4).
 
 ### Error wrappers for `ManagedResource`
 

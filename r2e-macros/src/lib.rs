@@ -127,7 +127,6 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - **HTTP routes**: [`get`], [`post`], [`put`], [`delete`], [`patch`]
 /// - **Authorization**: [`roles`]
 /// - **Interceptors**: [`intercept`]
-/// - **Transactions**: [`transactional`]
 /// - **Events**: [`consumer`]
 /// - **Scheduling**: [`scheduled`]
 /// - **Guards**: [`guard`], [`pre_guard`]
@@ -153,8 +152,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # What is generated
 ///
-/// - The original `impl` block with method bodies wrapped by interceptors /
-///   transactional logic.
+/// - The original `impl` block with method bodies wrapped by interceptors.
 /// - Free-standing Axum handler functions (`__r2e_<Name>_<method>`).
 /// - `impl Controller<State> for Name` — route registration, metadata,
 ///   consumer registration, and scheduled task definitions.
@@ -417,35 +415,6 @@ pub fn all_roles(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Wrap a route method body in an automatic SQL transaction.
-///
-/// The macro injects a `tx` variable (of type `sqlx::Transaction`) into
-/// the method body. The transaction is committed on `Ok`, rolled back on
-/// `Err`. The return type **must** be `Result<T, HttpError>`.
-///
-/// ```ignore
-/// #[post("/users/db")]
-/// #[transactional]                       // uses self.pool
-/// async fn create_in_db(&self, Json(body): Json<CreateUser>)
-///     -> Result<Json<User>, HttpError>
-/// {
-///     sqlx::query("INSERT INTO users (name) VALUES (?)")
-///         .bind(&body.name)
-///         .execute(&mut *tx)
-///         .await?;
-///     Ok(Json(user))
-/// }
-///
-/// #[transactional(pool = "read_db")]     // custom pool field
-/// async fn read(&self) -> Result<Json<Data>, HttpError> { ... }
-/// ```
-///
-/// This attribute is consumed by [`routes`] — it is a no-op on its own.
-#[proc_macro_attribute]
-pub fn transactional(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
 /// Apply an interceptor (cross-cutting concern) to a method or an entire
 /// `impl` block.
 ///
@@ -576,28 +545,43 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Mark a method on a `#[routes]` controller as an **async executor job**.
+/// Mark a method on a `#[bean]` impl or a `#[routes]` controller as an
+/// **async executor job**.
 ///
-/// The body is moved off the request thread onto an injected
-/// [`PoolExecutor`](r2e_executor::PoolExecutor); calling the method returns
-/// `Result<JobHandle<T>, RejectedError>` instead of `T`. Useful for
-/// long-running side work (PDF generation, third-party calls, batch jobs)
-/// that should not block HTTP response.
+/// The body is moved off the calling thread onto a
+/// [`PoolExecutor`](r2e_executor::PoolExecutor) held in a field; calling the
+/// method returns `Result<JobHandle<T>, RejectedError>` instead of `T`.
+/// Useful for long-running side work (PDF generation, third-party calls,
+/// batch jobs) that should not block the caller.
 ///
 /// Requirements:
 /// - method is `async fn(&self, ...) -> T`
-/// - the controller has an `#[inject]` field of type `PoolExecutor`
+/// - the bean/controller has a field of type `PoolExecutor`
 ///   (default field name: `executor`; override with `executor = "name"`)
-/// - the controller is `Clone + Send + Sync + 'static`
-///   (add `#[derive(Clone)]` alongside `#[controller(...)]`).
+/// - the bean/controller is `Clone + Send + Sync + 'static`
+///   (beans already are; add `#[derive(Clone)]` alongside `#[controller(...)]`).
 ///
 /// ```ignore
-/// #[controller(state = Services)]
 /// #[derive(Clone)]
-/// pub struct ReportController {
-///     #[inject] executor: PoolExecutor,
+/// pub struct ReportService {
+///     executor: PoolExecutor,
 /// }
 ///
+/// #[bean]
+/// impl ReportService {
+///     pub fn new(executor: PoolExecutor) -> Self {
+///         Self { executor }
+///     }
+///
+///     #[async_exec]
+///     async fn generate_pdf(&self) -> PdfBytes { /* heavy work */ unimplemented!() }
+/// }
+/// ```
+///
+/// On a controller, the same attribute works inside the `#[routes]` impl —
+/// the controller core is a bean:
+///
+/// ```ignore
 /// #[routes]
 /// impl ReportController {
 ///     #[post("/reports")]
@@ -611,7 +595,7 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+/// This attribute is consumed by [`bean`] / [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn async_exec(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
@@ -790,9 +774,6 @@ pub fn raw(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `acquire()` begins a new transaction
 /// - responses below status 400 commit the transaction
 /// - `4xx`/`5xx` responses roll it back explicitly
-///
-/// **Note:** `#[managed]` and `#[transactional]` are mutually exclusive.
-/// Use `#[managed] tx: &mut Tx<...>` instead of `#[transactional]`.
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]

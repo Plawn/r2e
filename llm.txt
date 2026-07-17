@@ -161,7 +161,7 @@ use r2e::prelude::*;
 
 The prelude provides everything a controller needs — no direct `axum` imports.
 Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP verbs,
-`guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `intercept`, `transactional`,
+`guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `intercept`,
 `managed`, `consumer`, `scheduled`, `bean`, `producer`, `module`, derives `Bean`,
 `DecoratorBean`, `BackgroundService`, `Params`, `ConfigProperties`, `FromConfigValue`,
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
@@ -794,8 +794,7 @@ impl<R: Send> Interceptor<R> for AuditLog {
 Bean deps → `#[derive(DecoratorBean)]`, same as guards.
 
 Execution order: pre-auth guards → guards (declaration order) → validation →
-controller-level interceptors → method-level interceptors → `#[transactional]`
-→ body.
+controller-level interceptors → method-level interceptors → body.
 
 ---
 
@@ -883,7 +882,8 @@ async fn create_in_db(&self, Json(body): Json<CreateUser>,
 
 Custom resources implement `ManagedResource<S>` (bound `S: BeanLookup` to pull
 beans by type: `state.bean::<T>()`), error type `ManagedErr<HttpError>`.
-`#[managed]` and `#[transactional]` are mutually exclusive; prefer `#[managed]`.
+`#[managed]` is the only transaction attribute (the legacy `#[transactional]`
+body wrapper was removed).
 
 ---
 
@@ -1426,6 +1426,33 @@ pub struct JobController {
 // #[derive(BackgroundService)] for long-running service components
 ```
 
+`#[async_exec]` works on `#[bean]` impls and `#[routes]` controllers alike:
+the `async fn(&self, ...) -> T` body is submitted to the `PoolExecutor` held
+in a field (default name `executor`; override with
+`#[async_exec(executor = "field")]`) and the call returns
+`Result<JobHandle<T>, RejectedError>` synchronously. Cannot be combined with
+`#[scheduled]`/`#[consumer]`/`#[post_construct]`/`#[intercept]` on one method —
+and on a **controller** also not with a route verb (`#[get]`, `#[post]`, …),
+`#[fallback]`, `#[sse]`, or `#[ws]` (the pool-submission rewrite and a route
+registration are mutually exclusive). Note: an **impl-level** `#[intercept]`
+wraps only the `#[scheduled]`/`#[consumer]` methods in the block — it does NOT
+wrap `#[async_exec]` methods (their wrapper runs no interceptor chain); only a
+method-level `#[intercept]` on an `#[async_exec]` method is an error.
+
+```rust
+#[derive(Clone)]
+pub struct ReportService { executor: PoolExecutor }
+
+#[bean]
+impl ReportService {
+    pub fn new(executor: PoolExecutor) -> Self { Self { executor } }
+
+    #[async_exec]
+    async fn generate_pdf(&self, id: u64) -> Vec<u8> { /* heavy work */ }
+}
+// let job = report_service.generate_pdf(7)?;  let bytes = job.await?;
+```
+
 The `Scheduler` plugin runs every `#[scheduled]` tick on this pool, so scheduled
 work is drained, bounded, and metered alongside submitted jobs.
 
@@ -1580,11 +1607,11 @@ Alongside `&self`:
 | `#[pre_guard(Expr)]` | method | Pre-auth guard (before JWT) |
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
-| `#[transactional]` | method | Wrap body in SQL transaction (prefer `#[managed]`) |
 | `#[layer(expr)]` | method | Per-route Tower layer |
 | `#[middleware(fn)]` | method | Per-route middleware fn |
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
+| `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
 
 ## Builder Method Quick Reference

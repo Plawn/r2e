@@ -138,7 +138,7 @@ impl UserController {
 
 **Shared modules:**
 - `types.rs` — `InjectedField`, `IdentityField`, `RequestField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
-- `attr_extract.rs` — `extract_route_attr`, `extract_roles`, `extract_transactional`, `extract_intercept_fns`, etc.
+- `attr_extract.rs` — `extract_route_attr`, `extract_roles`, `extract_intercept_fns`, etc.
 - `route.rs` — `HttpMethod` enum and `RoutePath` parser
 
 **Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
@@ -163,7 +163,7 @@ impl UserController {
 | `Plugin`, `PreStatePlugin`, `.plugin()`, `.with()`, `Provided`/`PluginProvisions`, `Deps`/`LateDeps`, `configure`, plugin `Config`/`CONFIG_PREFIX`/`PluginConfig`, `PluginInstallContext`, `DeferredAction`/`DeferredContext`, `store_data`/plugin data, `should_be_last`, writing a new plugin | `docs/claude/plugins.md` |
 | `PoolExecutor`, `JobHandle`, `Executor` plugin, `ExecutorConfig`, `#[async_exec]`, `#[derive(BackgroundService)]`, `ServiceComponent`, `spawn_service`, managed task pool, background workers | `docs/claude/executor.md` |
 | `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, managed SQLx/Diesel transactions, `Pageable`, `Page`, `OpenAPI`, `ContextConstruct`, `AppBuilder`, `TestApp`, `TestJwt`, `TracingConfig`, `LogFormat`, `SpanEvents`, `ConfiguredTracing`, `init_tracing_with_config`, tracing subscriber formatting | `docs/claude/subsystems.md` |
-| `prelude`, `use r2e::prelude::*`, feature flags, `Params`, `#[transactional]`, re-exports, what's available by default | `docs/claude/prelude-features.md` |
+| `prelude`, `use r2e::prelude::*`, feature flags, `Params`, re-exports, what's available by default | `docs/claude/prelude-features.md` |
 | `r2e new`, `r2e dev`, `r2e generate`, `r2e add`, `r2e doctor`, `r2e routes`, CLI templates, scaffolding | `docs/claude/cli.md` |
 | `quic`, `quinn`, `h3`, HTTP/3, `serve_h3`, `QuicEndpoint`, `QuicConnection`, `Alt-Svc`, `build_server_config`, raw QUIC streams, `server.quic.*` | `docs/features/18-quic.md` |
 | `server.workers`, `per-core`, SO_REUSEPORT, sharded serving, thread-per-core, `parse_workers`, `MAX_WORKERS`, `ServeStrategy`, `rt::spawn`, `spawn_ctl`, `set_control_plane`, control plane / data plane, worker runtimes | `docs/features/19-sharded-serving.md` |

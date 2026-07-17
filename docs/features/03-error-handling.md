@@ -154,16 +154,15 @@ When the `validation` feature flag is active, `HttpError::Validation` provides a
 }
 ```
 
-### With `#[transactional]` (#4)
+### With `#[managed]` transactions (#4)
 
-Errors within a transactional block trigger an automatic rollback of the transaction:
+Error responses (`4xx`/`5xx`) roll the managed transaction back automatically:
 
 ```rust
 #[post("/users/db")]
-#[transactional]
-async fn create_in_db(&self, ...) -> Result<Json<User>, HttpError> {
-    // If an error occurs here, tx.rollback() is called automatically
-    sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
+async fn create_in_db(&self, #[managed] tx: &mut Tx<'_, Sqlite>) -> Result<Json<User>, HttpError> {
+    // If this returns an error response, the transaction is rolled back
+    sqlx::query("INSERT INTO users ...").execute(tx.as_mut()).await?;
     Ok(...)
 }
 ```

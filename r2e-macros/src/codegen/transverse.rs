@@ -27,7 +27,7 @@ use syn::{FnArg, ImplItem, ItemImpl, ReturnType};
 
 use crate::codegen::decorators::{intercept_field_idents, wrap_with_deco_interceptors};
 use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name};
-use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_scheduler_path};
+use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
 use crate::extract::consumer::strip_consumer_attrs;
 use crate::type_utils::is_result_like;
 use crate::types::{ConsumerKind, ScheduledConfig};
@@ -503,6 +503,94 @@ pub(crate) fn intercepted_dispatch_wrapper(
                 }
                 None => #inner_call,
             }
+        }
+    }
+}
+
+// ── #[async_exec] pool-submission wrapper ────────────────────────────────
+
+/// Emit an `#[async_exec]` method as a hidden renamed inner `async fn`
+/// (`__r2e_async_<name>_inner`, body verbatim) plus a synchronous wrapper
+/// that clones `self`, captures the named executor field, and submits the
+/// inner body to the pool, returning
+/// `Result<JobHandle<T>, RejectedError>` instead of `T`.
+///
+/// Shared by `#[routes]` (controller-core methods) and `#[bean]` (bean
+/// methods) — both targets are `Clone` values whose executor field holds a
+/// `PoolExecutor`-compatible bean. `method` must already have the
+/// `#[async_exec]` attribute stripped; the remaining attributes are kept on
+/// both the inner fn and the wrapper.
+///
+/// `transform_inner` runs on the cloned inner fn body — the bean path uses it
+/// to rewrite struct literals that initialize the hidden slot field; other
+/// callers pass a no-op.
+pub(crate) fn async_exec_method(
+    method: &syn::ImplItemFn,
+    executor_field: &syn::Ident,
+    mut transform_inner: impl FnMut(&mut syn::Block),
+) -> TokenStream {
+    let exec_krate = r2e_executor_path();
+    let original_sig = &method.sig;
+    let original_name = &original_sig.ident;
+    let inner_name = quote::format_ident!("__r2e_async_{}_inner", original_name);
+
+    let mut inner_fn = method.clone();
+    inner_fn.sig.ident = inner_name.clone();
+    transform_inner(&mut inner_fn.block);
+
+    let return_ty: TokenStream = match &original_sig.output {
+        ReturnType::Default => quote! { () },
+        ReturnType::Type(_, ty) => quote! { #ty },
+    };
+
+    // Wrapper params are re-bound as plain `ident: Type` (a destructuring
+    // pattern like `(a, b): (u32, u32)` stays on the inner fn, which receives
+    // the whole value); the wrapper forwards each ident to the inner call.
+    let typed_inputs: Vec<&syn::PatType> = original_sig
+        .inputs
+        .iter()
+        .filter_map(|a| {
+            if let FnArg::Typed(pt) = a {
+                Some(pt)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let arg_idents: Vec<syn::Ident> = typed_inputs
+        .iter()
+        .enumerate()
+        .map(|(i, pt)| match &*pt.pat {
+            syn::Pat::Ident(pi) => pi.ident.clone(),
+            _ => quote::format_ident!("__arg_{}", i),
+        })
+        .collect();
+    let wrapper_params: Vec<TokenStream> = typed_inputs
+        .iter()
+        .zip(&arg_idents)
+        .map(|(pt, ident)| {
+            let ty = &pt.ty;
+            quote! { #ident: #ty }
+        })
+        .collect();
+
+    let attrs = &method.attrs;
+    let vis = &method.vis;
+    let generics = &original_sig.generics;
+    let where_clause = &original_sig.generics.where_clause;
+
+    quote! {
+        #inner_fn
+
+        #(#attrs)*
+        #vis fn #original_name #generics (
+            &self,
+            #(#wrapper_params),*
+        ) -> ::core::result::Result<#exec_krate::JobHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
+            let __self = ::core::clone::Clone::clone(self);
+            self.#executor_field.submit(async move {
+                __self.#inner_name(#(#arg_idents),*).await
+            })
         }
     }
 }

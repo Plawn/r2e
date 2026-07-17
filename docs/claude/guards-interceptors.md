@@ -184,9 +184,7 @@ instantiated **once per route method**) is built at registration and lives
 for the app's lifetime — a stateful interceptor keeps its state across
 requests, and controller-level state is per-method, not shared.
 
-Inline codegen (no trait):
-5. `transactional` (wraps body in tx begin/commit)
-6. Original method body
+5. Original method body
 
 **Design invariant:** Interceptors always see the handler's **raw return
 type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The
@@ -249,7 +247,11 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 - **Bean-level decorators** (W10 phase 2): `#[intercept]` also works on
   `#[scheduled]`/`#[consumer]` methods inside a `#[bean]` impl, plus an
   impl-level `#[intercept]` on the `#[bean]` impl that wraps every such method
-  (running before method-level ones). Built once at registration from the
+  (running before method-level ones). Impl-level scope is exactly the
+  `#[scheduled]`/`#[consumer]` methods: it does **not** wrap `#[async_exec]`
+  methods in the same impl (their pool-submission wrapper runs no interceptor
+  chain), and a *method-level* `#[intercept]` directly on an `#[async_exec]`
+  method is a hard error. Built once at registration from the
   resolved graph (same `DecoratorSpec::build` path), and each intercept spec's
   `Deps` is folded into the bean's `Registrable::Deps` (missing bean = compile
   error at `.register::<T>()`; the runtime `dependencies()` vec stays
@@ -309,8 +311,6 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 ## Configurable syntax
 
 ```rust
-#[transactional]                             // uses self.pool
-#[transactional(pool = "read_db")]           // custom pool field
 #[pre_guard(PreRateLimit::global(5, 60))]    // global rate limit (pre-auth)
 #[pre_guard(PreRateLimit::per_ip(5, 60))]    // per-IP rate limit (pre-auth)
 #[guard(RateLimit::per_user(5, 60))]         // per-user rate limit (post-auth, requires identity)

@@ -59,8 +59,8 @@ impl UserController {
 - `#[guard(MyGuard)]` — custom post-auth guard
 - `#[pre_guard(MyGuard)]` — custom pre-auth guard
 - `#[intercept(Logged::info())]` — interceptors
-- `#[transactional]` — transaction wrapping
 - `#[managed]` — managed resource lifecycle (on parameters)
+- `#[async_exec]` — submit the method body to a `PoolExecutor`
 - `#[consumer(bus = "field")]` — event consumer
 - `#[scheduled(every = 30)]` — scheduled task
 - `#[middleware(fn)]` — Tower middleware

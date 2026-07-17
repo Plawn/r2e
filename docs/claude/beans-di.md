@@ -370,6 +370,48 @@ Rejected: `#[intercept]` on a plain bean method (neither `#[scheduled]` nor
 `#[consumer]`) is a compile error — there is no dispatch wrapper to run the
 chain.
 
+## `#[async_exec]` on beans (W10 phase 4)
+
+Beans submit heavy method bodies to the `PoolExecutor` with the same
+`#[async_exec]` attribute as controllers — the method is rewritten into a
+synchronous wrapper returning `Result<JobHandle<T>, RejectedError>`:
+
+```rust
+#[derive(Clone)]
+pub struct ReportService {
+    executor: PoolExecutor,   // default field name; override with executor = "name"
+}
+
+#[bean]
+impl ReportService {
+    pub fn new(executor: PoolExecutor) -> Self {
+        Self { executor }
+    }
+
+    #[async_exec]
+    async fn generate_pdf(&self, id: u64) -> Vec<u8> { /* heavy work */ }
+}
+```
+
+Pure per-method codegen (shared emitter with `#[routes]` in
+`codegen/transverse.rs`): no registration hook, so it needs nothing at
+`build_state()` and composes with `#[bean(lazy)]`. Constraints: `async fn`
+taking `&self`; cannot be combined with `#[scheduled]`, `#[consumer]`,
+`#[post_construct]`, or a method-level `#[intercept]` on the same method
+(compile errors). The full matrix (plus the controller-only route/`#[sse]`/
+`#[ws]`/`#[fallback]` conflicts) is enforced by one shared validator,
+`validate_async_exec_method` in `r2e-macros/src/extract/async_exec.rs`, called
+by both the bean and controller hosts.
+
+**Impl-level `#[intercept(...)]` does not wrap `#[async_exec]` methods.** An
+impl-level interceptor covers only the `#[scheduled]`/`#[consumer]` methods in
+the block (which have a dispatch wrapper); an `#[async_exec]` method in the same
+impl is left un-intercepted, because its pool-submission wrapper runs no
+interceptor chain. This is deliberately allowed (a mixed impl with consumers
+plus an async_exec helper compiles); only a *method-level* `#[intercept]` on an
+`#[async_exec]` method is a hard error. See `docs/claude/executor.md` for the
+full `PoolExecutor` story.
+
 ## `#[post_construct]`
 
 Lifecycle hooks called **after the entire bean graph is resolved**. All dependencies are available when hooks fire.
@@ -482,8 +524,8 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper codegen to the shared `codegen/transverse.rs`
-- `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper` (parameterized over impl-target type and decorator-slot access)
+- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`
+- `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper`, `async_exec_method` (parameterized over impl-target type and decorator-slot access)
 - `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
 - `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros

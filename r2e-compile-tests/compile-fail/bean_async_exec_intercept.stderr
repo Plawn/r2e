@@ -1,0 +1,13 @@
+error: #[intercept] on an #[async_exec] method is not supported — the pool-submission wrapper does not run an interceptor chain
+  --> compile-fail/bean_async_exec_intercept.rs:21:5
+   |
+21 |     async fn generate_pdf(&self) -> Vec<u8> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::r2e_utils::Logged`
+ --> compile-fail/bean_async_exec_intercept.rs:6:5
+  |
+6 | use r2e::r2e_utils::Logged;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -155,7 +155,7 @@ Remaining:
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
   before relying on it.
 
-## W10 — Bean/controller feature unification (in progress — phases 1–3 shipped 2026-07-16)
+## W10 — Bean/controller feature unification (DONE — phases 1–4 shipped 2026-07-16)
 
 Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
 controller-only by implementation accident, not by design — `#[scheduled]`,
@@ -251,8 +251,40 @@ refactor):
    `consumer_intercept_missing_dep`. Docs: CLAUDE.md, beans-di.md,
    guards-interceptors.md, subsystems.md, llm.txt. Review gate:
    pass-with-nits, all nits applied.
-4. **Relocate `#[async_exec]`** (and evaluate `#[transactional]`) to the bean
-   level; decide whether controller-only placement is kept or deprecated.
+4. **`#[async_exec]` relocated / `#[transactional]` removed — DONE
+   (2026-07-16).** `#[async_exec]` now works on `#[bean]` impl methods via a
+   shared emitter (`transverse::async_exec_method`, extracted from
+   `wrapping.rs`; `#[routes]` delegates to it — identical controller output).
+   Controller placement is KEPT (user-approved: a controller core is a bean),
+   implementation shared. Pure per-method codegen — no registration hook, so
+   it composes with `#[bean(lazy)]`. Compile errors (both hosts, shared
+   `validate_async_exec_receiver`): sync fn, missing/`&mut`/by-value receiver,
+   combined with `#[scheduled]`/`#[consumer]`/`#[post_construct]`/`#[intercept]`
+   (the `#[intercept]` rejection also fixed a pre-existing controller gap where
+   the interceptor was silently dropped). Wrapper params are re-bound
+   `ident: Type` so destructuring patterns work (pre-existing E0425 in the old
+   controller emitter). `#[transactional]` is REMOVED entirely (user-approved;
+   see decisions log). Tests: `r2e-executor/tests/async_exec.rs` (bean +
+   controller), compile pass/fail `bean_async_exec*`, `async_exec_intercept`.
+   Docs: executor.md, beans-di.md, error-handling.md, guards-interceptors.md,
+   prelude-features.md, docs/features 03/04/13, CLAUDE.md, llm.txt. Review
+   gate: pass-with-nits (controller intercept gap, receiver strictness,
+   destructured params), all nits applied.
+
+   **Post-review fixes (2026-07-17).** The controller conflict matrix was
+   completed: `#[async_exec]` + `#[scheduled]`/`#[consumer]` was silently
+   ignored (the transverse branches classified the method first and left
+   async_exec as a retained no-op attr), and `#[async_exec]` + a route
+   verb/`#[sse]`/`#[ws]`/`#[fallback]` silently dropped the route (→ 404) —
+   both are now compile errors via a pre-check hoisted above the classification
+   loop in `routes_parsing.rs`. All `#[async_exec]` validation (conflict matrix
+   parameterized by host, `#[intercept]` rejection, asyncness, receiver) is now
+   consolidated in one shared validator, `validate_async_exec_method` in
+   `extract/async_exec.rs`, called by both hosts; the two diagnostic strings
+   each live in exactly one place (module consts). Documented that impl-level
+   `#[intercept]` covers only `#[scheduled]`/`#[consumer]` and does NOT wrap
+   `#[async_exec]` methods (deliberately allowed, not an error). New compile-fail
+   fixtures: `async_exec_scheduled_conflict`, `async_exec_route_conflict`.
 
 Phase-1 design decisions (settled): registration is **auto-collection at
 `build_state()`** — user-approved 2026-07-16; matches controller
@@ -276,6 +308,11 @@ the escape hatch for hand-written loops.
 
 - **Qualifiers / named beans: REJECTED.** Newtypes are the chosen pattern for
   same-typed beans (runtime `DuplicateBean` backstop).
+- **`#[transactional]`: REMOVED (W10 phase 4, 2026-07-16, user-approved).**
+  `#[managed]` is the single transaction story. The body wrapper had zero
+  usage, relied on an unhygienic magic `tx` variable injected into the body
+  scope, and every doc already said "prefer `#[managed]`". Do not reintroduce
+  it — extend `ManagedResource` instead if a gap shows up.
 - **`Guard::startup_check`: permanently superseded** by compile-checked
   decorator deps.
 - **Scheduled-method interceptors run on DIRECT calls too** (user decision:

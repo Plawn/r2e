@@ -4,7 +4,6 @@ use quote::quote;
 
 use crate::crate_path::r2e_security_path;
 use crate::route::{HttpMethod, RoutePath};
-use crate::types::TransactionalConfig;
 
 pub fn is_route_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("get")
@@ -144,28 +143,6 @@ fn parse_required_roles(attr: &syn::Attribute, name: &str) -> syn::Result<Vec<St
             }
         })
         .collect()
-}
-
-pub fn extract_transactional(attrs: &[syn::Attribute]) -> syn::Result<Option<TransactionalConfig>> {
-    for attr in attrs {
-        if attr.path().is_ident("transactional") {
-            let mut pool_field = "pool".to_string();
-            if matches!(attr.meta, syn::Meta::List(_)) {
-                attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("pool") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        pool_field = lit.value();
-                        Ok(())
-                    } else {
-                        Err(meta.error("expected `pool`"))
-                    }
-                })?;
-            }
-            return Ok(Some(TransactionalConfig { pool_field }));
-        }
-    }
-    Ok(None)
 }
 
 pub fn roles_guard_expr(roles: &[String]) -> Option<syn::Expr> {

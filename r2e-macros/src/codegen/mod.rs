@@ -2,7 +2,7 @@
 //!
 //! This module is organized into six submodules:
 //!
-//! - `wrapping`: Method wrapping with interceptors and transactional behavior
+//! - `wrapping`: Impl-block splitting (façade vs core) and off-request wrappers
 //! - `handlers`: Axum handler function generation
 //! - `decorators`: Guard/interceptor decorator sets (built once from the graph)
 //! - `scheduled`: Shared `#[scheduled]` config/name/overlap emitters

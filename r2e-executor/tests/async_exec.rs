@@ -1,6 +1,6 @@
-//! Verifies `#[async_exec]` codegen on a `#[routes]` controller — the
-//! marked method must return a `JobHandle<T>` whose result matches what
-//! the original body would have produced inline.
+//! Verifies `#[async_exec]` codegen on a `#[routes]` controller and on a
+//! `#[bean]` impl — the marked method must return a `JobHandle<T>` whose
+//! result matches what the original body would have produced inline.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -24,6 +24,25 @@ impl Worker {
     }
 }
 
+#[derive(Clone)]
+struct ReportService {
+    io_pool: PoolExecutor,
+    counter: Arc<AtomicU32>,
+}
+
+#[bean]
+impl ReportService {
+    fn new(io_pool: PoolExecutor, counter: Arc<AtomicU32>) -> Self {
+        Self { io_pool, counter }
+    }
+
+    #[async_exec(executor = "io_pool")]
+    async fn generate(&self, base: u32) -> u32 {
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        base * 3
+    }
+}
+
 #[tokio::test]
 async fn async_exec_returns_join_handle() {
     let counter = Arc::new(AtomicU32::new(0));
@@ -35,6 +54,24 @@ async fn async_exec_returns_join_handle() {
 
     let worker = <Worker as r2e_core::ContextConstruct>::from_context(&ctx);
     let handle: Result<JobHandle<u32>, RejectedError> = worker.compute(21);
+    let result = handle.expect("submit ok").await.expect("job succeeds");
+
+    assert_eq!(result, 42);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn bean_async_exec_returns_join_handle() {
+    let counter = Arc::new(AtomicU32::new(0));
+
+    let mut registry = r2e_core::BeanRegistry::new();
+    registry.provide(PoolExecutor::new(ExecutorConfig::default()));
+    registry.provide(counter.clone());
+    registry.register::<ReportService>();
+    let ctx = registry.resolve().await.unwrap();
+
+    let service = ctx.get::<ReportService>();
+    let handle: Result<JobHandle<u32>, RejectedError> = service.generate(14);
     let result = handle.expect("submit ok").await.expect("job succeeds");
 
     assert_eq!(result, 42);

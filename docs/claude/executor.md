@@ -7,8 +7,9 @@ ergonomic primitives for off-request work — analogous to JEE's
 Three pieces:
 
 1. `PoolExecutor` — bounded, semaphore-gated Tokio task pool. Injectable bean.
-2. `#[async_exec]` — controller-method attribute that submits the body to the
-   pool and returns a `Result<JobHandle<T>, RejectedError>` instead of `T`.
+2. `#[async_exec]` — method attribute on a `#[bean]` impl or a `#[routes]`
+   controller that submits the body to the pool and returns a
+   `Result<JobHandle<T>, RejectedError>` instead of `T`.
 3. `#[derive(BackgroundService)]` — DI-friendly `ServiceComponent<S>` for
    long-running workers (consumers, watchers, periodic jobs).
 
@@ -83,12 +84,38 @@ The plugin registers an async `on_shutdown` hook that calls
 
 ## `#[async_exec]`
 
-Marks a method on a `#[routes]` controller as a pool-executed job. The
-generated wrapper:
+Marks a method on a `#[bean]` impl or a `#[routes]` controller as a
+pool-executed job (W10: transverse member attributes are bean-level; a
+controller may carry it because a controller core IS a bean). The generated
+wrapper:
 
 - Takes the same arguments as the original method.
 - Returns `Result<JobHandle<T>, RejectedError>` instead of `T`.
 - Is **not** `async` — the synchronous handle resolves to the result.
+
+On a bean — the idiomatic home for heavy service work:
+
+```rust
+#[derive(Clone)]
+pub struct ReportService {
+    executor: PoolExecutor,
+}
+
+#[bean]
+impl ReportService {
+    pub fn new(executor: PoolExecutor) -> Self {
+        Self { executor }
+    }
+
+    #[async_exec]                                     // default executor field: `executor`
+    async fn generate_pdf(&self, id: u64) -> Vec<u8> {
+        // ...heavy work...
+        format!("PDF #{id}").into_bytes()
+    }
+}
+```
+
+On a controller — same attribute, same codegen:
 
 ```rust
 #[controller(path = "/")]
@@ -113,9 +140,8 @@ impl ReportController {
         Json(bytes.len())
     }
 
-    #[async_exec]                                     // default executor field: `executor`
+    #[async_exec]
     async fn generate_pdf(&self, id: u64) -> Vec<u8> {
-        // ...heavy work...
         format!("PDF #{id}").into_bytes()
     }
 }
@@ -126,16 +152,33 @@ Override the executor field with `#[async_exec(executor = "io_pool")]`.
 **Constraints (compile-time):**
 
 - The annotated method must be `async fn(&self, ...) -> T`.
-- The controller must be `Clone + Send + Sync + 'static`
-  (`#[controller]` already implies this).
+- The bean/controller must be `Clone + Send + Sync + 'static`
+  (beans already are; `#[controller]` already implies this).
 - The named field must implement
   `r2e_executor::PoolExecutor`-compatible `submit(...)` — typically a
-  `PoolExecutor` `#[inject]`ed bean.
+  `PoolExecutor` bean (constructor param on a bean, `#[inject]` field on a
+  controller).
+- `#[async_exec]` cannot be combined with `#[scheduled]`, `#[consumer]`,
+  `#[post_construct]`, or `#[intercept]` on the same method. On a **controller**
+  it additionally cannot be combined with a route verb (`#[get]`, `#[post]`, …),
+  `#[fallback]`, `#[sse]`, or `#[ws]` — the pool-submission rewrite and a route
+  registration are mutually exclusive, so the combination is a compile error
+  (it would otherwise silently 404 or drop the rewrite). The whole matrix is
+  enforced by one shared validator, `validate_async_exec_method` in
+  `r2e-macros/src/extract/async_exec.rs`, called by both hosts.
+- **Impl-level `#[intercept(...)]` does not wrap `#[async_exec]` methods.** An
+  impl-level interceptor on a `#[bean]` / `#[routes]` block applies only to the
+  `#[scheduled]`/`#[consumer]` methods (which have a dispatch wrapper); it
+  silently skips any `#[async_exec]` method in the same block, because the
+  pool-submission wrapper runs no interceptor chain. This is allowed (so a mixed
+  impl with consumers + an async_exec helper compiles); only a *method-level*
+  `#[intercept]` on an `#[async_exec]` method is a hard error.
 
-**Codegen:** the original body is renamed
-`__r2e_async_<method>_inner` and a synchronous wrapper takes its place,
-cloning `self`, capturing the executor, and submitting an `async move`
-block.
+**Codegen** (shared emitter, `r2e-macros/src/codegen/transverse.rs`): the
+original body is renamed `__r2e_async_<method>_inner` and a synchronous
+wrapper takes its place, cloning `self`, capturing the executor, and
+submitting an `async move` block. No registration hook — pure per-method
+codegen, so it composes with `#[bean(lazy)]`.
 
 ## `#[derive(BackgroundService)]`
 
@@ -209,7 +252,8 @@ is a compile error naming the missing type.
   `try_submit_rejects_when_queue_full`, `graceful_shutdown_drains_running_jobs`,
   `shutdown_aborts_queued_submissions`.
 - `bg_service.rs` — `#[derive(BackgroundService)]` round-trip.
-- `async_exec.rs` — `#[async_exec]` codegen returning `Result<JobHandle<T>, RejectedError>`.
+- `async_exec.rs` — `#[async_exec]` codegen returning `Result<JobHandle<T>, RejectedError>`,
+  on both a `#[routes]` controller and a `#[bean]` impl.
 
 See `examples/example-executor` for a runnable demo combining all three
 primitives behind HTTP endpoints.

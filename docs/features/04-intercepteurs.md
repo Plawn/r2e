@@ -10,14 +10,13 @@ Interceptors are based on a generic `Interceptor<R>` trait with an `around` patt
 
 Exceptions to this architecture:
 - **`rate_limited`** — handled at the handler level (short-circuits before the controller, like `#[roles]`)
-- **`transactional`** — pure codegen (injection of the `tx` variable into the body)
 - **`cache_invalidate`** — pure codegen (call after the body)
 
 User-defined interceptors implement the same trait and are applied via `#[intercept(TypeName)]`.
 
 ### Why no-op attributes?
 
-All interceptor attributes (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[transactional]`, `#[cache_invalidate]`, `#[intercept]`) are declared in `r2e-macros/src/lib.rs` as no-op `#[proc_macro_attribute]` — they return their input without transformation. The actual logic is in the `#[routes]` attribute, which parses these attributes from the raw token stream of the `impl` block.
+All interceptor attributes (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[cache_invalidate]`, `#[intercept]`) are declared in `r2e-macros/src/lib.rs` as no-op `#[proc_macro_attribute]` — they return their input without transformation. The actual logic is in the `#[routes]` attribute, which parses these attributes from the raw token stream of the `impl` block.
 
 These no-op declarations exist for three reasons:
 
@@ -40,8 +39,6 @@ These no-op declarations exist for three reasons:
 | `#[rate_limited(max = N, window = S)]` | Global request limit | None |
 | `#[rate_limited(..., key = "user")]` | Per-user limit | `#[inject(identity)]` field |
 | `#[rate_limited(..., key = "ip")]` | Per-IP-address limit | `X-Forwarded-For` header |
-| `#[transactional]` | SQL transaction with auto-commit/rollback | Injected `pool` field |
-| `#[transactional(pool = "read_db")]` | Transaction on a specific pool | Corresponding injected field |
 | `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R>` (+ `SelfBuilt` or `DecoratorSpec`) |
 
 ### Application order
@@ -59,9 +56,6 @@ Handler level (after extraction, before body):
 Body level (Interceptor::around trait):
   → controller-level interceptors (declaration order)
   → method-level interceptors (declaration order)
-
-Pure codegen (inline wrapping):
-  → transactional (tx injection)
   → method body
 ```
 
@@ -273,28 +267,6 @@ The `RateLimiter<K>` uses a **token bucket** algorithm:
 - Each request consumes 1 token
 - If the bucket is empty → 429 rejection
 
-## `#[transactional]`
-
-Wraps the method body in a SQL transaction.
-
-```rust
-#[post("/users/db")]
-#[transactional]                             // default: self.pool
-async fn create_in_db(&self, ...) -> Result<axum::Json<User>, r2e_core::HttpError> {
-    sqlx::query("INSERT ...").execute(&mut *tx).await?;
-    Ok(axum::Json(user))
-}
-
-#[transactional(pool = "read_db")]           // specific pool
-async fn read_data(&self, ...) -> Result<...> { ... }
-```
-
-### Constraints
-
-- The controller must have an `#[inject]` field for the specified pool (default: `pool`)
-- The body can use `tx` (variable injected by the macro, of type `Transaction`)
-- The return type **must** be `Result<T, HttpError>`
-
 ## `#[intercept(Type)]` — User-defined interceptors
 
 Users can create their own interceptors by implementing the `Interceptor<R>` trait. A self-contained interceptor (no bean deps) stays generic over `R` and opts in with `impl SelfBuilt`:
@@ -458,16 +430,6 @@ impl UserController {
         -> axum::Json<User>
     {
         axum::Json(self.user_service.create(body.name, body.email).await)
-    }
-
-    // Transaction
-    #[post("/db")]
-    #[transactional]
-    async fn create_in_db(&self, axum::Json(body): axum::Json<CreateUserRequest>)
-        -> Result<axum::Json<User>, r2e_core::HttpError>
-    {
-        sqlx::query("INSERT INTO users ...").execute(&mut *tx).await?;
-        Ok(axum::Json(user))
     }
 
     // Custom interceptor

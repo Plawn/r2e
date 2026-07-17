@@ -171,9 +171,7 @@ Requete HTTP
     v
 [Corps du handler]
     |
-    +-- transactional (begin tx)
     +-- logique metier
-    +-- transactional (commit/rollback)
     |
     v
 [Post-traitement]

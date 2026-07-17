@@ -1,0 +1,5 @@
+error: #[async_exec] requires an `async fn` — the body is submitted to a PoolExecutor
+  --> compile-fail/bean_async_exec_sync.rs:19:8
+   |
+19 |     fn generate_pdf(&self) -> Vec<u8> {
+   |        ^^^^^^^^^^^^

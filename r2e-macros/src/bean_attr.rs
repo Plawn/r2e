@@ -9,6 +9,10 @@ use crate::codegen::transverse::{
     self, ConsumerMethodDef, DecoFieldDef, DispatchWrapperParams, ScheduledSourceMethod,
 };
 use crate::crate_path::r2e_core_path;
+use crate::extract::async_exec::{
+    extract_async_exec, strip_async_exec_attrs, validate_async_exec_method,
+    AsyncExecHost, ASYNC_EXEC_INTERCEPT_MSG,
+};
 use crate::extract::consumer::{
     classify_consumer_return, extract_consumer, extract_event_type_from_arc, strip_consumer_attrs,
 };
@@ -53,6 +57,13 @@ struct BeanConsumerMethod {
     fn_name: syn::Ident,
     /// Effective `#[intercept(...)]` sites (impl-level first, then method-level).
     intercept_fns: Vec<syn::Expr>,
+}
+
+/// Parsed `#[async_exec]` method data from a `#[bean]` impl block.
+struct BeanAsyncExecMethod {
+    fn_name: syn::Ident,
+    /// Name of the bean field holding the `PoolExecutor`. Default: `executor`.
+    executor_field: syn::Ident,
 }
 
 /// Parsed scheduled method data from a `#[bean]` impl block.
@@ -154,9 +165,9 @@ fn expand_struct(mut item_struct: ItemStruct) -> syn::Result<TokenStream2> {
 
 fn expand_impl(item_impl: ItemImpl, bean_args: &BeanArgs) -> TokenStream2 {
     match generate(&item_impl, bean_args) {
-        Ok((bean_impl, intercepted, impl_intercepts_present)) => {
-            let cleaned_impl =
-                emit_cleaned_impl(&item_impl, &intercepted, impl_intercepts_present);
+        Ok(generated) => {
+            let cleaned_impl = emit_cleaned_impl(&item_impl, &generated);
+            let bean_impl = &generated.bean_impl;
             quote! {
                 #cleaned_impl
                 #bean_impl
@@ -166,10 +177,20 @@ fn expand_impl(item_impl: ItemImpl, bean_args: &BeanArgs) -> TokenStream2 {
     }
 }
 
-fn generate(
-    item_impl: &ItemImpl,
-    bean_args: &BeanArgs,
-) -> syn::Result<(TokenStream2, Vec<BeanInterceptedMethod>, bool)> {
+/// Everything `generate` hands back to the cleaned-impl emission.
+struct GeneratedBean {
+    /// The hidden trait impls (Bean/Registrable/subscriber/scheduled/...).
+    bean_impl: TokenStream2,
+    /// Intercepted `#[scheduled]`/`#[consumer]` methods (split into inner +
+    /// dispatch wrapper by the cleaned-impl emission).
+    intercepted: Vec<BeanInterceptedMethod>,
+    /// `#[async_exec]` methods (split into inner + pool-submission wrapper).
+    async_exec: Vec<BeanAsyncExecMethod>,
+    /// Whether the impl block carries an impl-level `#[intercept]`.
+    impl_intercepts_present: bool,
+}
+
+fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<GeneratedBean> {
     // Extract the Self type from the impl block.
     let self_ty = &item_impl.self_ty;
     let type_ident = type_ident(self_ty);
@@ -307,6 +328,10 @@ fn generate(
             "#[bean(lazy)] does not yet support #[consumer] methods — remove one or the other",
         ));
     }
+
+    // `#[async_exec]` is pure per-method codegen (no registration hook), so it
+    // composes with `lazy` and needs nothing at `build_state()`.
+    let async_exec_methods = scan_async_exec_methods(item_impl)?;
 
     let pc_methods = transverse::scan_post_construct_methods(item_impl)?;
     if bean_args.lazy && !pc_methods.is_empty() {
@@ -546,7 +571,12 @@ fn generate(
         #scheduled_source_impl
     };
 
-    Ok((out, intercepted, !impl_intercepts.is_empty()))
+    Ok(GeneratedBean {
+        bean_impl: out,
+        intercepted,
+        async_exec: async_exec_methods,
+        impl_intercepts_present: !impl_intercepts.is_empty(),
+    })
 }
 
 /// The last path-segment identifier of the impl type, used to name hidden
@@ -597,6 +627,17 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
             let is_scheduled = method.attrs.iter().any(|a| a.path().is_ident("scheduled"));
             let is_consumer = method.attrs.iter().any(|a| a.path().is_ident("consumer"));
             if !is_scheduled && !is_consumer {
+                let is_async_exec =
+                    method.attrs.iter().any(|a| a.path().is_ident("async_exec"));
+                if is_async_exec {
+                    // Shared message with the controller path; spanned on the
+                    // whole signature here (this fires before the async_exec
+                    // scan).
+                    return Err(syn::Error::new_spanned(
+                        &method.sig,
+                        ASYNC_EXEC_INTERCEPT_MSG,
+                    ));
+                }
                 return Err(syn::Error::new_spanned(
                     &method.sig,
                     "#[intercept] on a bean method is only supported on #[scheduled]/#[consumer] \
@@ -606,6 +647,33 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Scan the impl block for `#[async_exec]` methods.
+fn scan_async_exec_methods(item_impl: &ItemImpl) -> syn::Result<Vec<BeanAsyncExecMethod>> {
+    let mut methods = Vec::new();
+
+    for item in &item_impl.items {
+        if let ImplItem::Fn(method) = item {
+            let Some(cfg) = extract_async_exec(&method.attrs)? else {
+                continue;
+            };
+
+            // All async_exec validation (conflict matrix, intercept, asyncness,
+            // receiver) lives in the shared validator so the bean and
+            // controller hosts stay in lockstep. The intercept case is already
+            // caught earlier by `reject_stray_intercepts` (whole-signature
+            // span); this re-check is a harmless backstop.
+            validate_async_exec_method(&method.attrs, &method.sig, AsyncExecHost::Bean)?;
+
+            methods.push(BeanAsyncExecMethod {
+                fn_name: method.sig.ident.clone(),
+                executor_field: cfg.executor_field,
+            });
+        }
+    }
+
+    Ok(methods)
 }
 
 /// Scan all `&self` methods in the impl block for `#[consumer(bus = "...")]`.
@@ -816,15 +884,13 @@ impl VisitMut for DecoLiteralInjector {
 /// Emit the original impl block with `#[config]`/`#[consumer]`/`#[scheduled]`/
 /// `#[post_construct]`/`#[intercept]` attributes stripped, intercepted
 /// `#[scheduled]`/`#[consumer]` methods split into inner + dispatch wrapper,
-/// and (when intercept sites exist) struct literals rewritten to initialize
-/// the hidden decorator slot.
-fn emit_cleaned_impl(
-    item_impl: &ItemImpl,
-    intercepted: &[BeanInterceptedMethod],
-    impl_intercepts_present: bool,
-) -> TokenStream2 {
+/// `#[async_exec]` methods split into inner + pool-submission wrapper, and
+/// (when intercept sites exist) struct literals rewritten to initialize the
+/// hidden decorator slot.
+fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenStream2 {
+    let intercepted = &generated.intercepted;
     let self_ty = &item_impl.self_ty;
-    let has_intercepts = !intercepted.is_empty() || impl_intercepts_present;
+    let has_intercepts = !intercepted.is_empty() || generated.impl_intercepts_present;
     let mut injector = DecoLiteralInjector {
         self_last_ident: match self_ty.as_ref() {
             Type::Path(tp) => tp.path.segments.last().map(|s| s.ident.clone()),
@@ -833,6 +899,8 @@ fn emit_cleaned_impl(
     };
 
     let intercepted_by_name = |name: &syn::Ident| intercepted.iter().find(|im| &im.fn_name == name);
+    let async_exec_by_name =
+        |name: &syn::Ident| generated.async_exec.iter().find(|am| &am.fn_name == name);
 
     let mut items: Vec<TokenStream2> = Vec::new();
 
@@ -876,6 +944,20 @@ fn emit_cleaned_impl(
                 });
             } else if let Some(im) = intercepted_by_name(&method.sig.ident) {
                 items.push(emit_intercepted_method(method, im, self_ty, &mut injector, has_intercepts));
+            } else if let Some(am) = async_exec_by_name(&method.sig.ident) {
+                // `#[async_exec]`: split into a renamed inner fn + a synchronous
+                // pool-submission wrapper (shared emitter with `#[routes]`).
+                let mut cleaned = method.clone();
+                cleaned.attrs = strip_async_exec_attrs(cleaned.attrs);
+                items.push(transverse::async_exec_method(
+                    &cleaned,
+                    &am.executor_field,
+                    |block| {
+                        if has_intercepts {
+                            injector.visit_block_mut(block);
+                        }
+                    },
+                ));
             } else {
                 // Ordinary method (possibly a non-intercepted scheduled/consumer,
                 // or a helper): strip wiring attrs and rewrite any literals.
