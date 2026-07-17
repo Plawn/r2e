@@ -17,6 +17,6 @@ pub mod scheduled;
 pub use async_exec::*;
 pub use consumer::*;
 pub use managed::*;
-pub use plugins::{parse_decorators, parse_grpc_decorators, strip_known_attrs};
+pub use plugins::{parse_decorators, parse_grpc_decorators, strip_known_attrs, validate_grpc_attrs};
 pub use route::*;
 pub use scheduled::*;

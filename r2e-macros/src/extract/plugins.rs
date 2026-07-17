@@ -225,6 +225,15 @@ const GRPC_DISALLOWED_ATTRS: &[&str] = &[
     "pre_guard",
     "middleware",
     "layer",
+    // Lifecycle / transverse markers are not wired for gRPC services. Left
+    // unrejected they either silently never run (sync shapes drop into
+    // `other_methods`) or die with a confusing E0407 "not a member of trait"
+    // (async shapes land in the tonic trait impl). Reject them up front.
+    "pre_destroy",
+    "post_construct",
+    "scheduled",
+    "consumer",
+    "async_exec",
 ];
 
 /// Parse all decorator attributes into a single `MethodDecorators`.
@@ -246,7 +255,13 @@ pub fn parse_grpc_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDeco
     Ok(decorators)
 }
 
-fn validate_grpc_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+/// Reject attributes that are not supported on `#[grpc_routes]` methods.
+///
+/// This runs for **every** method in a gRPC impl — both RPC methods (via
+/// [`parse_grpc_decorators`]) and pass-through helpers in `other_methods` —
+/// so a disallowed marker on a sync `&self` helper is caught too, rather than
+/// being silently dropped.
+pub fn validate_grpc_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     for attr in attrs {
         for name in GRPC_DISALLOWED_ATTRS {
             if attr.path().is_ident(name) {
