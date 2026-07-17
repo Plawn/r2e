@@ -179,6 +179,10 @@ pub fn parse(
                         fn_item: method,
                     });
                 } else {
+                    // Pass-through helpers still can't carry gRPC-disallowed
+                    // markers: a sync `#[pre_destroy] fn close(&self)` would
+                    // otherwise be re-emitted verbatim and silently never run.
+                    validate_grpc_attrs(&all_attrs)?;
                     method.attrs = all_attrs;
                     other_methods.push(method);
                 }
