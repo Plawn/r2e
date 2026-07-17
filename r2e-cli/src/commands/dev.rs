@@ -40,9 +40,11 @@ pub fn run(
     println!("{} Press {} to stop", "->".blue(), "Ctrl+C".yellow());
     println!();
 
-    let target_dir = resolve_target_dir(&project_root);
-
     loop {
+        // Re-resolved on every spawn: the cold restart below fires precisely
+        // on Cargo.toml edits, which can move the target directory (and a
+        // transient `cargo metadata` failure must not stick for the session).
+        let target_dir = resolve_target_dir(&project_root);
         for archive in purge_corrupt_fat_archives(&target_dir) {
             println!(
                 "{} removing corrupted fat-binary archive {}",
@@ -101,7 +103,26 @@ fn spawn_dx(port: Option<u16>, features: &str) -> Result<Child, Box<dyn std::err
 }
 
 /// Magic bytes opening a valid `ar` archive (regular and thin variants).
-const AR_MAGICS: [&[u8]; 2] = [b"!<arch>\n", b"!<thin>\n"];
+const AR_MAGIC: &[u8] = b"!<arch>\n";
+const AR_THIN_MAGIC: &[u8] = b"!<thin>\n";
+
+/// Cargo-internal subdirectories of a profile dir that never hold dx
+/// fat-binary archives; skipping them keeps the scan cheap on large shared
+/// target directories (`deps/` alone can hold tens of thousands of entries).
+const CARGO_INTERNAL_DIRS: &[&str] = &[
+    ".fingerprint",
+    "build",
+    "deps",
+    "doc",
+    "examples",
+    "incremental",
+];
+
+/// A corrupt archive younger than this is left alone: it may be mid-write by
+/// a concurrent dx session sharing the target dir (e.g. a global
+/// `~/.cargo/target`). A crashed writer's leftover stops aging, so it is
+/// purged on the next spawn once past this threshold.
+const MIN_PURGE_AGE: Duration = Duration::from_secs(2);
 
 /// Remove empty/truncated `libdeps-*.a` fat-binary archives from the dx
 /// profile directories under `target_dir`, returning the purged paths.
@@ -111,28 +132,46 @@ const AR_MAGICS: [&[u8]; 2] = [b"!<arch>\n", b"!<thin>\n"];
 /// above) leaves a zero-byte archive that fails every subsequent link with
 /// `ld: file is empty` until removed by hand.
 pub fn purge_corrupt_fat_archives(target_dir: &Path) -> Vec<PathBuf> {
+    purge_corrupt_fat_archives_with_min_age(target_dir, MIN_PURGE_AGE)
+}
+
+/// Test seam for [`purge_corrupt_fat_archives`] — `min_age` overrides the
+/// mid-write grace period.
+#[doc(hidden)]
+pub fn purge_corrupt_fat_archives_with_min_age(
+    target_dir: &Path,
+    min_age: Duration,
+) -> Vec<PathBuf> {
     // Archives live at `<target>/<triple>/<profile>/libdeps-<hash>.a`;
     // depth 2 also covers layouts without the triple component.
     let mut purged = Vec::new();
-    scan_for_corrupt_archives(target_dir, 2, &mut purged);
+    scan_for_corrupt_archives(target_dir, 2, min_age, &mut purged);
     purged
 }
 
-fn scan_for_corrupt_archives(dir: &Path, depth: usize, purged: &mut Vec<PathBuf>) {
+fn scan_for_corrupt_archives(
+    dir: &Path,
+    depth: usize,
+    min_age: Duration,
+    purged: &mut Vec<PathBuf>,
+) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+        // `fs::metadata` (not `DirEntry::file_type`) so symlinked triple or
+        // profile directories are scanned too.
+        let Ok(metadata) = fs::metadata(&path) else {
             continue;
         };
-        if file_type.is_dir() {
-            if depth > 0 {
-                scan_for_corrupt_archives(&path, depth - 1, purged);
+        if metadata.is_dir() {
+            if depth > 0 && !is_cargo_internal_dir(&path) {
+                scan_for_corrupt_archives(&path, depth - 1, min_age, purged);
             }
         } else if is_fat_archive_name(&path)
             && is_corrupt_archive(&path)
+            && is_older_than(&metadata, min_age)
             && fs::remove_file(&path).is_ok()
         {
             purged.push(path);
@@ -140,21 +179,76 @@ fn scan_for_corrupt_archives(dir: &Path, depth: usize, purged: &mut Vec<PathBuf>
     }
 }
 
+fn is_cargo_internal_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| CARGO_INTERNAL_DIRS.contains(&name))
+}
+
 fn is_fat_archive_name(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "a")
-        && path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("libdeps-"))
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("libdeps-") && name.ends_with(".a"))
+}
+
+fn is_older_than(metadata: &fs::Metadata, min_age: Duration) -> bool {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+        // No usable mtime → assume old, so the core fix still applies.
+        .is_none_or(|age| age >= min_age)
 }
 
 fn is_corrupt_archive(path: &Path) -> bool {
+    let Ok(mut file) = fs::File::open(path) else {
+        return true;
+    };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return true;
+    };
     let mut magic = [0u8; 8];
-    match fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)) {
-        Ok(()) => !AR_MAGICS.contains(&magic.as_slice()),
-        // Empty or shorter than the ar header.
-        Err(_) => true,
+    if file.read_exact(&mut magic).is_err() {
+        // Empty or shorter than the ar magic.
+        return true;
     }
+    if magic == AR_THIN_MAGIC {
+        // Thin archives reference member data externally; the size-field walk
+        // below does not apply.
+        return false;
+    }
+    if magic != AR_MAGIC {
+        return true;
+    }
+    !ar_members_reach_eof(&mut file, len)
+}
+
+/// Walk the ar member headers: 60 bytes each with an ASCII decimal size field
+/// at offset 48..58, members padded to 2-byte alignment. A file truncated
+/// after its magic (writer killed mid-member) fails the walk even though the
+/// magic itself is intact.
+fn ar_members_reach_eof(file: &mut fs::File, len: u64) -> bool {
+    use std::io::{Seek, SeekFrom};
+
+    let mut header = [0u8; 60];
+    let mut pos: u64 = 8;
+    while pos < len {
+        if len - pos < 60
+            || file.seek(SeekFrom::Start(pos)).is_err()
+            || file.read_exact(&mut header).is_err()
+        {
+            return false;
+        }
+        let Some(size) = std::str::from_utf8(&header[48..58])
+            .ok()
+            .and_then(|field| field.trim().parse::<u64>().ok())
+        else {
+            return false;
+        };
+        pos += 60 + size + (size & 1);
+    }
+    // Some writers omit the final odd-size padding byte, hence `len + 1`.
+    pos == len || pos == len + 1
 }
 
 /// Resolve the cargo target directory: `CARGO_TARGET_DIR` when set, else
@@ -162,12 +256,8 @@ fn is_corrupt_archive(path: &Path) -> bool {
 /// `.cargo/config.toml` overrides), else `<project_root>/target`.
 pub fn resolve_target_dir(project_root: &Path) -> PathBuf {
     if let Some(dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let dir = PathBuf::from(dir);
-        return if dir.is_absolute() {
-            dir
-        } else {
-            project_root.join(dir)
-        };
+        // `join` keeps an absolute `dir` as-is and anchors a relative one.
+        return project_root.join(dir);
     }
     cargo_metadata_target_dir(project_root).unwrap_or_else(|| project_root.join("target"))
 }
@@ -181,21 +271,8 @@ fn cargo_metadata_target_dir(project_root: &Path) -> Option<PathBuf> {
     if !output.status.success() {
         return None;
     }
-    let json = String::from_utf8(output.stdout).ok()?;
-    let key = "\"target_directory\":\"";
-    let start = json.find(key)? + key.len();
-    // Manual JSON string decode (no serde_json dependency): only `\"` and
-    // `\\` escapes matter — cargo emits non-ASCII path bytes unescaped.
-    let mut value = String::new();
-    let mut chars = json[start..].chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(PathBuf::from(value)),
-            '\\' => value.push(chars.next()?),
-            _ => value.push(c),
-        }
-    }
-    None
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    Some(PathBuf::from(metadata.get("target_directory")?.as_str()?))
 }
 
 fn stop_child(child: &mut Child) -> Result<(), Box<dyn std::error::Error>> {

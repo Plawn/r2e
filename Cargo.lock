@@ -5563,6 +5563,7 @@ dependencies = [
  "clap",
  "colored",
  "dialoguer",
+ "serde_json",
  "serial_test",
  "tempfile",
  "toml_edit",
