@@ -1,7 +1,7 @@
 use r2e::prelude::*;
 
-use crate::models::{CreateOrderRequest, Order};
-use crate::services::OrderService;
+use crate::order::models::{CreateOrderRequest, Order};
+use crate::order::services::OrderService;
 
 #[controller(path = "/orders")]
 pub struct OrderController {

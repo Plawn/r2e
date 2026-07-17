@@ -12,6 +12,9 @@ path = "src/product/main.rs"
 name = "order-service"
 path = "src/order/main.rs"
 
+[features]
+dev-reload = ["r2e/dev-reload"]
+
 [dependencies]
 r2e = {workspace = true, features = ["openapi"]}
 tokio = {workspace = true, features = ["full"]}

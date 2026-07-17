@@ -1,37 +1,11 @@
-use r2e::prelude::*;
-use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-
-#[path = "../shared/mod.rs"]
-mod shared;
-
-#[path = "controllers/mod.rs"]
-mod controllers;
-#[path = "models.rs"]
-mod models;
-#[path = "services/mod.rs"]
-mod services;
-
-use controllers::order_controller::OrderController;
+//! Order Service binary entry point.
+//!
+//! Two `[[bin]]` targets share one crate, so each uses `launch!` (rather than
+//! `app_main!`, which assumes a single `src/app.rs`) to run its own [`App`].
 
 #[r2e::main]
 async fn main() {
-    AppBuilder::new()
-        .load_config::<()>()
-        .register::<services::ProductClient>()
-        .register::<services::OrderService>()
-        .build_state()
-        .await
-        .with(Health)
-        .with(Cors::permissive())
-        .with(Tracing)
-        .with(ErrorHandling)
-        .with(OpenApiPlugin::new(
-            OpenApiConfig::new("Order Service", "1.0.0")
-                .with_description("Order management microservice")
-                .with_docs_ui(true),
-        ))
-        .register_controller::<OrderController>()
-        .serve("0.0.0.0:3002")
+    r2e::launch!(example_microservice::order::OrderApp)
         .await
         .unwrap();
 }
