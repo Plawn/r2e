@@ -181,10 +181,11 @@ Method body level (trait-based, via `Interceptor::around`):
 
 Instance lifetime: every site is built at registration and lives for the app's
 lifetime — a stateful interceptor keeps its state across requests.
-**Controller-level (impl-level) interceptors are built once per controller and
-shared across every route** (and every `#[scheduled]`/`#[consumer]` method), so
-a stateful impl-level interceptor observes one instance for the whole
-controller. Method-level (route-level) `#[intercept]` stays **per route**.
+**Controller-level (impl-level) interceptors are built once per controller per
+dispatch surface**: all HTTP routes share one instance, and all
+`#[scheduled]`/`#[consumer]` methods share another (see next paragraph — NOT
+one instance across both surfaces). Method-level (route-level) `#[intercept]`
+stays **per route**.
 
 Sharing is per **dispatch surface**: the HTTP-route surface and the off-request
 transverse surface (`#[scheduled]`/`#[consumer]`) each build one shared

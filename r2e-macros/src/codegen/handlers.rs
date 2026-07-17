@@ -661,8 +661,11 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     // the handler falls back to the no-decorator shape.
     // Mirror generate_route_closure's degradation: if any spec (guard,
     // controller-level, or method-level interceptor) is not inferable, drop the
-    // controller-level shared set too so the closure/invocation arities match
-    // (the real spec-type compile_error is already emitted elsewhere).
+    // controller-level shared set too so the closure/invocation arities match.
+    // The accompanying spec-type compile_error comes from this method's own
+    // deco/predeco items for method-level specs, and from
+    // `generate_ctrl_deco_items` (once per controller) for controller-level
+    // specs — degradation is never silent.
     let specs_ok = super::decorators::all_specs_inferable(
         rm.decorators
             .guard_fns

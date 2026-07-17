@@ -198,13 +198,30 @@ pub(crate) fn generate_named_deco_items(
         .zip(guard_exprs.iter())
         .chain(set.intercept_fields.iter().zip(intercept_exprs.iter().copied()));
 
+    match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, path_param_module) {
+        Ok(items) => (items, Some(set)),
+        Err(err) => (err, None),
+    }
+}
+
+/// Shared emitter for a hidden decorator-product struct + its `BeanContext`
+/// constructor: one field per (ident, spec expr) site, initialized via
+/// `build_decorator`. `path_param_module` is spliced into the ctor body (pass
+/// empty tokens when unused). `Err` carries the `spec_type_of` compile_error
+/// for the first non-inferable spec.
+fn emit_deco_struct<'a, 'b>(
+    struct_ident: &syn::Ident,
+    ctor_ident: &syn::Ident,
+    sites: impl Iterator<Item = (&'a syn::Ident, &'b syn::Expr)>,
+    path_param_module: TokenStream,
+) -> Result<TokenStream, TokenStream> {
     let mut field_decls: Vec<TokenStream> = Vec::new();
     let mut field_inits: Vec<TokenStream> = Vec::new();
     let krate = r2e_core_path();
     for (field, expr) in sites {
         let (spec_ty, value_expr) = match spec_type_of(expr) {
             Ok(split) => split,
-            Err(err) => return (err.to_compile_error(), None),
+            Err(err) => return Err(err.to_compile_error()),
         };
         field_decls.push(quote! {
             #field: <#spec_ty as #krate::DecoratorSpec>::Product
@@ -214,9 +231,7 @@ pub(crate) fn generate_named_deco_items(
         });
     }
 
-    let struct_ident = &set.struct_ident;
-    let ctor_ident = &set.ctor_ident;
-    let items = quote! {
+    Ok(quote! {
         #[allow(non_camel_case_types)]
         #[doc(hidden)]
         struct #struct_ident {
@@ -231,8 +246,7 @@ pub(crate) fn generate_named_deco_items(
                 #(#field_inits,)*
             }
         }
-    };
-    (items, Some(set))
+    })
 }
 
 /// Generate the pre-auth decorator struct + constructor for one method.
@@ -450,39 +464,25 @@ pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
 /// instance from it. Empty when there are no controller-level interceptors.
 pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
     let Some(set) = ctrl_deco_set(def) else {
-        return quote! {};
-    };
-    let krate = r2e_core_path();
-    let mut field_decls: Vec<TokenStream> = Vec::new();
-    let mut field_inits: Vec<TokenStream> = Vec::new();
-    for (field, expr) in set.fields.iter().zip(def.controller_intercepts.iter()) {
-        let (spec_ty, value_expr) = match spec_type_of(expr) {
-            Ok(split) => split,
-            Err(err) => return err.to_compile_error(),
-        };
-        field_decls.push(quote! {
-            #field: <#spec_ty as #krate::DecoratorSpec>::Product
-        });
-        field_inits.push(quote! {
-            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
-        });
-    }
-    let struct_ident = &set.struct_ident;
-    let ctor_ident = &set.ctor_ident;
-    quote! {
-        #[allow(non_camel_case_types)]
-        #[doc(hidden)]
-        struct #struct_ident {
-            #(#field_decls,)*
-        }
-
-        #[allow(non_snake_case)]
-        #[doc(hidden)]
-        fn #ctor_ident(__ctx: &#krate::beans::BeanContext) -> #struct_ident {
-            #struct_ident {
-                #(#field_inits,)*
+        // No shared set — either there is nothing to emit, or a non-inferable
+        // controller-level spec gated it away. The latter MUST error here:
+        // this is the only site that sees controller-level exprs (per-method
+        // deco sets only receive method-level fns), so staying silent would
+        // drop the whole controller-level chain — valid siblings included.
+        let mut errors = TokenStream::new();
+        for expr in def.controller_intercepts.iter() {
+            if let Err(err) = spec_type_of(expr) {
+                errors.extend(err.to_compile_error());
             }
         }
+        return errors;
+    };
+    let sites = set.fields.iter().zip(def.controller_intercepts.iter());
+    match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, quote! {}) {
+        Ok(items) => items,
+        // Unreachable: `ctrl_deco_set` returned `Some`, so every spec is
+        // inferable — kept as the error path for defense in depth.
+        Err(err) => err,
     }
 }
 
