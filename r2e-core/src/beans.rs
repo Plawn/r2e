@@ -34,11 +34,16 @@ pub trait Bean: Clone + Send + Sync + 'static {
     /// the conditional-bean pattern using `#[producer] -> Option<T>`.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
-    /// Returns the config keys required by this bean as `(key, type_name)` pairs.
+    /// Returns the config keys referenced by this bean as
+    /// `(key, type_name, required)` triples.
     ///
-    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
-    /// constructing any bean. The default implementation returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str)> {
+    /// Used by [`BeanRegistry::resolve`] to validate config presence and, under
+    /// `dev-reload`, to fingerprint the config values a bean depends on. Only
+    /// `required` keys (non-`Option<T>` fields) are presence-validated; **every**
+    /// key — required or optional — is fingerprinted, so editing an optional
+    /// value under `r2e dev` still rebuilds the bean. The default implementation
+    /// returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
         Vec::new()
     }
 
@@ -114,11 +119,11 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     /// in the context for this bean to resolve.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
-    /// Returns the config keys required by this bean as `(key, type_name)` pairs.
-    ///
-    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
-    /// constructing any bean. The default implementation returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str)> {
+    /// Returns the config keys referenced by this bean as
+    /// `(key, type_name, required)` triples. Only `required` keys are
+    /// presence-validated; every key is fingerprinted under `dev-reload`.
+    /// The default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
         Vec::new()
     }
 
@@ -174,11 +179,11 @@ pub trait Producer: Send + 'static {
     /// `Option<T>` parameters are **hard** dependencies on `Option<T>`.
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
-    /// Returns the config keys required by this producer as `(key, type_name)` pairs.
-    ///
-    /// Used by [`BeanRegistry::resolve`] to validate all config keys before
-    /// constructing any bean. The default implementation returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str)> {
+    /// Returns the config keys referenced by this producer as
+    /// `(key, type_name, required)` triples. Only `required` keys are
+    /// presence-validated; every key is fingerprinted under `dev-reload`.
+    /// The default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
         Vec::new()
     }
 
@@ -483,8 +488,10 @@ struct LazyBeanRegistration {
     type_name: &'static str,
     /// (TypeId, human-readable name) for each dependency — used for validation only.
     dependencies: Vec<(TypeId, &'static str)>,
-    /// (config_key, expected_type_name) for config validation.
-    config_keys: Vec<(&'static str, &'static str)>,
+    /// (config_key, expected_type_name, required) for config validation and
+    /// dev-reload fingerprinting. Optional (`required = false`) keys are
+    /// fingerprinted but not presence-validated.
+    config_keys: Vec<(&'static str, &'static str, bool)>,
     #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
     build_version: u64,
     /// Creates a `LazySlot<T>` (type-erased as `Arc<dyn LazyResolve>`) given a
@@ -501,7 +508,7 @@ struct FingerprintReg<'a> {
     type_id: TypeId,
     type_name: &'static str,
     dependencies: &'a Vec<(TypeId, &'static str)>,
-    config_keys: &'a Vec<(&'static str, &'static str)>,
+    config_keys: &'a Vec<(&'static str, &'static str, bool)>,
     build_version: u64,
 }
 
@@ -555,8 +562,10 @@ struct BeanRegistration {
     type_name: &'static str,
     /// (TypeId, human-readable name) for each dependency.
     dependencies: Vec<(TypeId, &'static str)>,
-    /// (config_key, expected_type_name) for config validation.
-    config_keys: Vec<(&'static str, &'static str)>,
+    /// (config_key, expected_type_name, required) for config validation and
+    /// dev-reload fingerprinting. Optional (`required = false`) keys are
+    /// fingerprinted but not presence-validated.
+    config_keys: Vec<(&'static str, &'static str, bool)>,
     /// Hash of the constructor/producer source tokens, computed at compile time.
     /// Changes when the bean's code is modified. Used by the dev-reload
     /// fingerprinting system.
@@ -1316,9 +1325,11 @@ impl BeanRegistry {
                 .lazy_beans
                 .iter()
                 .flat_map(|reg| {
+                    // Only `required` keys are presence-validated.
                     reg.config_keys
                         .iter()
-                        .map(move |(key, ty_name)| (reg.type_name, *key, *ty_name))
+                        .filter(|(_, _, required)| *required)
+                        .map(move |(key, ty_name, _)| (reg.type_name, *key, *ty_name))
                 })
                 .collect();
             Self::do_validate_config_keys(
@@ -1509,9 +1520,12 @@ impl BeanRegistry {
         let all_keys: Vec<_> = beans
             .iter()
             .flat_map(|reg| {
+                // Only `required` keys are presence-validated — optional
+                // `Option<T>` keys resolve to `None` when absent.
                 reg.config_keys
                     .iter()
-                    .map(move |(key, ty_name)| (reg.type_name, *key, *ty_name))
+                    .filter(|(_, _, required)| *required)
+                    .map(move |(key, ty_name, _)| (reg.type_name, *key, *ty_name))
             })
             .collect();
 
@@ -1674,7 +1688,9 @@ impl BeanRegistry {
         // 2. Config values this bean depends on
         if !reg.config_keys.is_empty() {
             if let Some(config) = config {
-                let keys: Vec<&str> = reg.config_keys.iter().map(|(k, _)| *k).collect();
+                // Fingerprint EVERY config key — required and optional alike —
+                // so editing an optional value under `r2e dev` rebuilds the bean.
+                let keys: Vec<&str> = reg.config_keys.iter().map(|(k, _, _)| *k).collect();
                 config.config_fingerprint(&keys).hash(&mut hasher);
             }
         }

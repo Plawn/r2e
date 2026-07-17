@@ -1,6 +1,23 @@
 use super::typed::ConfigProperties;
 use super::{ConfigError, R2eConfig};
 
+/// Derive the `R2E_`-style env-var hint for a config key — but only when the
+/// key is actually reachable through the env overlay.
+///
+/// `apply_env_overlay` maps `R2E_X_Y` → `x.y`
+/// (only `_`→`.`), so it can never produce a dashed key. A kebab-case key such
+/// as `database.min-idle` is therefore **not** addressable via any `R2E_` var
+/// (`R2E_DATABASE_MIN_IDLE` would insert `database.min.idle`), and this returns
+/// `None` so callers fall back to YAML-only wording. Dotted keys return their
+/// `SCREAMING_SNAKE` env var.
+pub(crate) fn derived_env_hint(key: &str) -> Option<String> {
+    if key.contains('-') {
+        None
+    } else {
+        Some(key.to_uppercase().replace('.', "_"))
+    }
+}
+
 /// A single missing config key.
 #[derive(Debug)]
 pub struct MissingKeyError {
@@ -10,8 +27,9 @@ pub struct MissingKeyError {
     pub key: String,
     /// The expected type name.
     pub expected_type: String,
-    /// Environment variable hint.
-    pub env_hint: String,
+    /// Environment variable hint. `Some` only when the key is reachable via an
+    /// `R2E_` env var; `None` for kebab-case keys (settable in YAML only).
+    pub env_hint: Option<String>,
     /// Optional description (from `ConfigProperties` metadata).
     pub description: Option<String>,
 }
@@ -20,9 +38,17 @@ impl std::fmt::Display for MissingKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "  - `{}`: key '{}' ({}) — set env var `{}`",
-            self.source, self.key, self.expected_type, self.env_hint
+            "  - `{}`: key '{}' ({})",
+            self.source, self.key, self.expected_type
         )?;
+        match &self.env_hint {
+            Some(hint) => write!(f, " — set env var `{}`", hint)?,
+            None => write!(
+                f,
+                " — set '{}' in application.yaml (kebab-case keys are not addressable via R2E_ env vars)",
+                self.key
+            )?,
+        }
         if let Some(desc) = &self.description {
             write!(f, " -- {}", desc)?;
         }
@@ -62,7 +88,7 @@ pub fn validate_keys(
             source: source.to_string(),
             key: key.to_string(),
             expected_type: type_name.to_string(),
-            env_hint: key.to_uppercase().replace('.', "_"),
+            env_hint: derived_env_hint(key),
             description: None,
         })
         .collect()
@@ -94,8 +120,8 @@ pub fn validate_section_keys<C: ConfigProperties>(
             key: prop.full_key.clone(),
             expected_type: prop.type_name.to_string(),
             env_hint: match &prop.env_var {
-                Some(env) => env.clone(),
-                None => prop.full_key.to_uppercase().replace('.', "_"),
+                Some(env) => Some(env.clone()),
+                None => derived_env_hint(&prop.full_key),
             },
             description: prop.description.clone(),
         })
@@ -142,7 +168,7 @@ pub fn validate_section<C: ConfigProperties>(
                         source: source.to_string(),
                         key: key.clone(),
                         expected_type: expected.to_string(),
-                        env_hint: key.to_uppercase().replace('.', "_"),
+                        env_hint: derived_env_hint(&key),
                         description: Some(format!("type mismatch: expected {expected}")),
                     });
                 }
@@ -152,7 +178,7 @@ pub fn validate_section<C: ConfigProperties>(
                             source: source.to_string(),
                             key: detail.key.clone(),
                             expected_type: "valid".to_string(),
-                            env_hint: detail.key.to_uppercase().replace('.', "_"),
+                            env_hint: derived_env_hint(&detail.key),
                             description: Some(detail.message),
                         });
                     }
@@ -162,7 +188,7 @@ pub fn validate_section<C: ConfigProperties>(
                         source: source.to_string(),
                         key: key.clone(),
                         expected_type: "unknown".to_string(),
-                        env_hint: key.to_uppercase().replace('.', "_"),
+                        env_hint: derived_env_hint(&key),
                         description: None,
                     });
                 }
@@ -171,7 +197,7 @@ pub fn validate_section<C: ConfigProperties>(
                         source: source.to_string(),
                         key: key.clone(),
                         expected_type: "deserializable".to_string(),
-                        env_hint: key.to_uppercase().replace('.', "_"),
+                        env_hint: derived_env_hint(&key),
                         description: Some(message),
                     });
                 }
@@ -180,7 +206,7 @@ pub fn validate_section<C: ConfigProperties>(
                         source: source.to_string(),
                         key: source.to_string(),
                         expected_type: "loadable".to_string(),
-                        env_hint: source.to_uppercase().replace('.', "_"),
+                        env_hint: derived_env_hint(source),
                         description: Some(msg),
                     });
                 }

@@ -139,16 +139,13 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 });
                 has_config = true;
             }
-            FieldKind::Config { key, env_hint, .. } => {
-                resolved_inits.push(quote! {
-                    #field_name: __cfg.get::<#field_type>(#key).unwrap_or_else(|_| {
-                        panic!(
-                            "Configuration error in decorator bean `{}`: key '{}' — Config key not found. \
-                             Add it to application.yaml or set env var `{}`.",
-                            #name_str, #key, #env_hint
-                        )
-                    })
-                });
+            FieldKind::Config { key, .. } => {
+                let is_option = crate::type_utils::is_option_type(field_type);
+                let owner = format!("decorator bean `{name_str}`");
+                let expr = crate::field_resolver::config_resolve_expr(
+                    &quote! { __cfg }, key, Some(field_type), &owner, is_option, &krate,
+                );
+                resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
             FieldKind::Default => unreachable!("allow_default is false"),

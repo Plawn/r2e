@@ -1,6 +1,31 @@
 // Tests for `validate_section` / `validate_keys` (src/config/validation.rs).
 
-use r2e_core::config::{validate_section, R2eConfig};
+use r2e_core::config::{validate_keys, validate_section, R2eConfig};
+
+// Regression: a kebab-case key like `database.min-idle` is NOT addressable via
+// an `R2E_` env var (the overlay maps only `_`→`.`), so the hint must be `None`
+// and the message must point at YAML only — not the misleading `R2E_DATABASE_MIN_IDLE`.
+#[test]
+fn test_validate_keys_dashed_key_has_no_env_hint() {
+    let config = R2eConfig::empty();
+    let errors = validate_keys(&config, &[("src", "database.min-idle", "u32")]);
+    assert_eq!(errors.len(), 1, "absent key must be reported: {errors:?}");
+    assert_eq!(errors[0].env_hint, None, "dashed key is not env-reachable");
+    let rendered = errors[0].to_string();
+    assert!(
+        rendered.contains("application.yaml") && !rendered.contains("set env var"),
+        "dashed-key message must be YAML-only: {rendered}"
+    );
+}
+
+// A dotted (env-reachable) key keeps its `R2E_`-style hint.
+#[test]
+fn test_validate_keys_dotted_key_has_env_hint() {
+    let config = R2eConfig::empty();
+    let errors = validate_keys(&config, &[("src", "database.max_idle", "u32")]);
+    assert_eq!(errors.len(), 1, "absent key must be reported: {errors:?}");
+    assert_eq!(errors[0].env_hint.as_deref(), Some("DATABASE_MAX_IDLE"));
+}
 
 #[allow(dead_code)]
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
@@ -37,7 +62,10 @@ fn test_validate_section_still_fails_without_key_or_env() {
     let errors = validate_section::<EnvUnsetConfig>(&config, Some("db"));
     assert_eq!(errors.len(), 1, "expected one missing key: {errors:?}");
     assert_eq!(errors[0].key, "db.url");
-    assert_eq!(errors[0].env_hint, "TEST_R2E_VALIDATION_ENV_UNSET");
+    assert_eq!(
+        errors[0].env_hint.as_deref(),
+        Some("TEST_R2E_VALIDATION_ENV_UNSET")
+    );
 }
 
 #[test]
@@ -154,7 +182,7 @@ fn test_validate_section_reports_all_nested_missing_keys_with_metadata() {
     let url = errors.iter().find(|e| e.key == "app.db.url").unwrap();
     assert_eq!(url.source, "app.db");
     assert_eq!(url.expected_type, "String");
-    assert_eq!(url.env_hint, "APP_DB_URL");
+    assert_eq!(url.env_hint.as_deref(), Some("APP_DB_URL"));
     assert_eq!(
         url.description.as_deref(),
         Some("Connection URL for the nested service.")

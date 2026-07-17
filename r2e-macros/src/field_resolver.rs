@@ -1,14 +1,15 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::type_utils::{parse_config_field, parse_config_section_prefix, parse_inject_name};
+use crate::type_utils::{
+    config_hint_sentence, parse_config_field, parse_config_section_prefix, parse_inject_name,
+};
 
 pub enum FieldKind {
     Inject,
     InjectNamed { name: String },
     Config {
         key: String,
-        env_hint: String,
         ty_name: String,
     },
     ConfigSection {
@@ -70,15 +71,11 @@ pub fn classify_fields<'a>(
                 kind: FieldKind::ConfigSection { prefix },
             });
         } else if let Some(attr) = config_attr {
-            let (key, env_hint, ty_name) = parse_config_field(attr, field_type)?;
+            let (key, ty_name) = parse_config_field(attr, field_type)?;
             result.push(ClassifiedField {
                 name: field_name,
                 ty: field_type,
-                kind: FieldKind::Config {
-                    key,
-                    env_hint,
-                    ty_name,
-                },
+                kind: FieldKind::Config { key, ty_name },
             });
         } else if is_default && opts.allow_default {
             result.push(ClassifiedField {
@@ -111,20 +108,70 @@ pub fn classify_fields<'a>(
     Ok(result)
 }
 
+/// Produce the config-resolution **expression** for a single `#[config]` field
+/// or param. This is the single shared source of `#[config]` init codegen, used
+/// by controllers, beans, producers, decorator beans, and background services.
+/// The caller binds the returned expression (as a `let` statement or a
+/// struct-literal field).
+///
+/// - `cfg`: the config receiver expression (e.g. `__cfg` or `__r2e_config`).
+/// - `key`: the config key.
+/// - `ty`: `Some(ty)` emits a turbofish `get::<ty>(...)`; `None` lets the
+///   binding site infer the type (struct-literal fields).
+/// - `owner`: human label for panics (e.g. `` bean `Foo` `` or `` `UserController` ``).
+/// - `is_option`: an `Option<T>` field resolves an absent key (or explicit
+///   `null`) to `None`; a type mismatch still panics — with the same actionable
+///   hint as a required key.
+pub fn config_resolve_expr(
+    cfg: &TokenStream2,
+    key: &str,
+    ty: Option<&syn::Type>,
+    owner: &str,
+    is_option: bool,
+    krate: &TokenStream2,
+) -> TokenStream2 {
+    let hint = config_hint_sentence(key);
+    let getter = match ty {
+        Some(ty) => quote! { #cfg.get::<#ty>(#key) },
+        None => quote! { #cfg.get(#key) },
+    };
+    if is_option {
+        // `Option<T>` config fields are optional: an absent key maps to `None`
+        // (explicit `null` too, via `FromConfigValue for Option<T>`). A
+        // present-but-mistyped value still panics — with the hint (Fix 5).
+        quote! {
+            match #getter {
+                Ok(__v) => __v,
+                Err(#krate::config::ConfigError::NotFound(_)) => None,
+                Err(__e) => panic!(
+                    "Configuration error in {}: key '{}' — {}. {}",
+                    #owner, #key, __e, #hint
+                ),
+            }
+        }
+    } else {
+        quote! {
+            #getter.unwrap_or_else(|__e| panic!(
+                "Configuration error in {}: key '{}' — {}. {}",
+                #owner, #key, __e, #hint
+            ))
+        }
+    }
+}
+
+/// Struct-literal `#[config]` field init (`#field_name: <expr>`), for owners
+/// that build the target via a struct literal with inferred field types
+/// (controllers, background services). Delegates to [`config_resolve_expr`].
 pub fn config_init_panic(
     field_name: &syn::Ident,
     key: &str,
-    env_hint: &str,
     owner_name: &str,
+    is_option: bool,
+    krate: &TokenStream2,
 ) -> TokenStream2 {
-    quote! {
-        #field_name: __cfg.get(#key).unwrap_or_else(|e| panic!(
-            "Configuration error in `{}`: key '{}' — {}. \
-             Add it to application.yaml / application-{{profile}}.yaml, \
-             or set env var `{}`.",
-            #owner_name, #key, e, #env_hint
-        ))
-    }
+    let owner = format!("`{owner_name}`");
+    let expr = config_resolve_expr(&quote! { __cfg }, key, None, &owner, is_option, krate);
+    quote! { #field_name: #expr }
 }
 
 pub fn config_section_init_panic(

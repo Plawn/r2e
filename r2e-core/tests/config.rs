@@ -21,6 +21,23 @@ fn test_get_or_default() {
 }
 
 #[test]
+fn test_get_opt() {
+    let mut config = R2eConfig::empty();
+    config.set("present", ConfigValue::Integer(7));
+    config.set("null_val", ConfigValue::Null);
+    config.set("wrong_type", ConfigValue::String("not-an-int".into()));
+
+    // Absent → Ok(None); explicit null → Ok(None); present → Ok(Some(v)).
+    assert_eq!(config.get_opt::<i64>("missing").unwrap(), None);
+    assert_eq!(config.get_opt::<i64>("null_val").unwrap(), None);
+    assert_eq!(config.get_opt::<i64>("present").unwrap(), Some(7));
+
+    // Unlike `try_get` (fail-open → None), a type mismatch is a loud error.
+    assert!(config.get_opt::<i64>("wrong_type").is_err());
+    assert_eq!(config.try_get::<i64>("wrong_type"), None);
+}
+
+#[test]
 fn test_type_conversions() {
     let mut config = R2eConfig::empty();
     config.set("int_val", ConfigValue::Integer(42));

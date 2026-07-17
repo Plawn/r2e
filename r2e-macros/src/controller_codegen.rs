@@ -139,6 +139,9 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     let config_key_entries: Vec<TokenStream> = def
         .config_fields
         .iter()
+        // `Option<T>` config fields are optional — an absent key is legal, so
+        // it must NOT be reported as a missing required key.
+        .filter(|f| !f.is_option)
         .map(|f| {
             let key = &f.key;
             let ty_name = &f.ty_name;
@@ -395,7 +398,7 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
     let config_inits: Vec<TokenStream> = def
         .config_fields
         .iter()
-        .map(|f| config_init_panic(&f.name, &f.key, &f.env_hint, &controller_name_str))
+        .map(|f| config_init_panic(&f.name, &f.key, &controller_name_str, f.is_option, &krate))
         .collect();
 
     let config_section_inits: Vec<TokenStream> = def

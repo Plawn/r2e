@@ -31,8 +31,12 @@ pub struct RequestField {
 pub struct ConfigField {
     pub name: syn::Ident,
     pub key: String,
-    pub env_hint: String,
     pub ty_name: String,
+    /// Whether the field was declared as `Option<T>`. Optional config fields
+    /// are not emitted into the controller's `validate_config` key list (an
+    /// absent key is legal → `None`) and initialize with a `NotFound → None`
+    /// fallback instead of panicking.
+    pub is_option: bool,
 }
 
 pub struct ConfigSectionField {

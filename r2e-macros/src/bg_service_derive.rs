@@ -95,8 +95,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 ));
                 has_any_config = true;
             }
-            FieldKind::Config { key, env_hint, .. } => {
-                field_inits.push(config_init_panic(cf.name, key, env_hint, &name_str));
+            FieldKind::Config { key, .. } => {
+                let is_option = crate::type_utils::is_option_type(cf.ty);
+                field_inits.push(config_init_panic(cf.name, key, &name_str, is_option, &krate));
                 has_any_config = true;
             }
             FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),

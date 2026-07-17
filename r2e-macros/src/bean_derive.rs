@@ -83,17 +83,18 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 });
                 has_config = true;
             }
-            FieldKind::Config { key, env_hint, ty_name } => {
-                config_key_entries.push(quote! { (#key, #ty_name) });
-                field_inits.push(quote! {
-                    #field_name: __cfg.get::<#field_type>(#key).unwrap_or_else(|_| {
-                        panic!(
-                            "Configuration error in bean `{}`: key '{}' — Config key not found. \
-                             Add it to application.yaml or set env var `{}`.",
-                            #name_str, #key, #env_hint
-                        )
-                    })
-                });
+            FieldKind::Config { key, ty_name } => {
+                let is_option = crate::type_utils::is_option_type(field_type);
+                // Emit a `config_keys()` entry for EVERY key (required and
+                // optional) so dev-reload fingerprints the value; `required`
+                // gates presence validation.
+                let required = !is_option;
+                config_key_entries.push(quote! { (#key, #ty_name, #required) });
+                let owner = format!("bean `{name_str}`");
+                let expr = crate::field_resolver::config_resolve_expr(
+                    &quote! { __cfg }, key, Some(field_type), &owner, is_option, &krate,
+                );
+                field_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
             FieldKind::Default => {
@@ -122,7 +123,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     } else {
         quote! {
-            fn config_keys() -> Vec<(&'static str, &'static str)> {
+            fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
                 vec![#(#config_key_entries),*]
             }
         }

@@ -326,6 +326,13 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 `#[config("key")]` works in `#[bean]` constructor params and `#[derive(Bean)]`
 fields. Constructor params are resolved from the bean graph **by type**.
 
+A `#[config("key")] x: Option<T>` param/field is **optional**: a missing key
+resolves to `None` (not a startup error), an explicit `null` also yields `None`,
+and a present value yields `Some(v)` (a type mismatch still fails loudly). This
+applies everywhere `#[config]` is accepted — `#[producer]`/`#[bean]` params,
+`#[derive(Bean)]`/`#[derive(DecoratorBean)]`/`#[derive(BackgroundService)]`
+fields, and `#[controller]` fields.
+
 ### Assembly — state is inferred
 
 ```rust
@@ -511,8 +518,12 @@ Tagged enum sections: `#[config(tag = "backend")]` on an enum selects the
 variant from a config key. Enums as scalar values: `#[derive(FromConfigValue)]`
 via serde.
 
-Missing `#[config]` keys fail at startup (controller registration validates
-them), with the env-var equivalent in the message.
+Missing **required** `#[config]` keys fail at startup (controller registration
+validates them). The message names the `R2E_…` env var for dotted keys, but a
+kebab-case key (`database.min-idle`) is not addressable via the `R2E_` overlay
+(which maps only `_`→`.`), so its message points at `application.yaml` only.
+`Option<T>` `#[config]` fields are optional — a missing key resolves to `None`
+and is never reported as missing.
 
 ### Well-known keys
 

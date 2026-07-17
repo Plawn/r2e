@@ -172,12 +172,13 @@ pub fn parse(
                 });
             }
         } else if let Some(attr) = config_attr {
-            let (key, env_hint, ty_name) = parse_config_field(attr, &field_type)?;
+            let (key, ty_name) = parse_config_field(attr, &field_type)?;
+            let is_option = crate::type_utils::is_option_type(&field_type);
             config_fields.push(ConfigField {
                 name: field_name,
                 key,
-                env_hint,
                 ty_name,
+                is_option,
             });
         } else if let Some(cs_attr) = config_section_attr {
             let prefix = parse_config_section_prefix(cs_attr)?;

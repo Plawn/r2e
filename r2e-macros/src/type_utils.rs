@@ -155,16 +155,28 @@ pub fn parse_inject_name(attrs: &[syn::Attribute]) -> syn::Result<Option<String>
 }
 
 /// Parse a `#[config("app.key")]` attribute against its declared type, producing
-/// the key, the matching `APP_KEY` env-var hint, and a stringified type name.
-pub fn parse_config_field(
-    attr: &syn::Attribute,
-    ty: &Type,
-) -> syn::Result<(String, String, String)> {
+/// the key and a stringified type name.
+pub fn parse_config_field(attr: &syn::Attribute, ty: &Type) -> syn::Result<(String, String)> {
     let key: syn::LitStr = attr.parse_args()?;
     let key = key.value();
-    let env_hint = key.replace('.', "_").to_uppercase();
     let ty_name = quote!(#ty).to_string();
-    Ok((key, env_hint, ty_name))
+    Ok((key, ty_name))
+}
+
+/// Build the actionable remediation sentence appended to a required-config
+/// panic message.
+///
+/// The `R2E_` env overlay maps only `_`→`.`, so a kebab-case key such as
+/// `database.min-idle` is **not** addressable via an env var (`R2E_DATABASE_MIN_IDLE`
+/// would insert `database.min.idle`). For those keys the sentence omits the
+/// env-var suggestion and points at YAML only. Dotted keys keep the env hint.
+pub fn config_hint_sentence(key: &str) -> String {
+    if key.contains('-') {
+        "Add it to application.yaml (kebab-case keys are not addressable via R2E_ env vars).".to_string()
+    } else {
+        let env = key.replace('.', "_").to_uppercase();
+        format!("Add it to application.yaml or set env var `{env}`.")
+    }
 }
 
 /// Parse `#[config_section(prefix = "...")]` and return the prefix string.

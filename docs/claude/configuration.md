@@ -424,9 +424,18 @@ Semantics and guards:
 ## Validation
 
 `AppBuilder::register_controller` calls `C::validate_config(config)`:
-- Checks all `#[config("key")]` fields exist
+- Checks all **required** `#[config("key")]` fields exist. An `Option<T>` field is
+  optional: a missing key resolves to `None` (no startup failure), an explicit
+  `null` also yields `None`, and a type mismatch on a present value still panics.
+  Optional keys are exempt from presence validation but still count for
+  `dev-reload` fingerprinting (editing one rebuilds the bean).
 - Calls `validate_section::<T>(config, Some(prefix))` for `#[config_section]` fields
-- Panics with formatted error listing missing keys, expected types, env var hints, descriptions
+- Panics with formatted error listing missing keys, expected types, remediation hints, descriptions
+
+Env-var hints are truthful: the `R2E_` overlay maps only `_`→`.`, so a
+**kebab-case** key (`database.min-idle`) is not addressable via an env var. Those
+messages point at `application.yaml` only; dotted keys keep the `R2E_…` hint.
+`MissingKeyError::env_hint` is `Option<String>` (`None` = YAML-only).
 
 Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKeyError>`.
 

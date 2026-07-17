@@ -136,17 +136,19 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     });
                     has_config = true;
                 } else if let Some(attr) = config_attr {
-                    let (key_str, env_hint, ty_name_str) = parse_config_field(attr, ty)?;
-                    config_key_entries.push(quote! { (#key_str, #ty_name_str) });
-                    build_args.push(quote! {
-                        let #arg_name: #ty = __r2e_config.get::<#ty>(#key_str).unwrap_or_else(|_| {
-                            panic!(
-                                "Configuration error in producer `{}`: key '{}' — Config key not found. \
-                                 Add it to application.yaml or set env var `{}`.",
-                                #struct_name, #key_str, #env_hint
-                            )
-                        });
-                    });
+                    let (key_str, ty_name_str) = parse_config_field(attr, ty)?;
+                    let krate = r2e_core_path();
+                    let is_option = crate::type_utils::is_option_type(ty);
+                    // Emit a `config_keys()` entry for EVERY key (required and
+                    // optional) so dev-reload fingerprints the value; `required`
+                    // gates presence validation.
+                    let required = !is_option;
+                    config_key_entries.push(quote! { (#key_str, #ty_name_str, #required) });
+                    let owner = format!("producer `{struct_name}`");
+                    let expr = crate::field_resolver::config_resolve_expr(
+                        &quote! { __r2e_config }, &key_str, Some(ty), &owner, is_option, &krate,
+                    );
+                    build_args.push(quote! { let #arg_name: #ty = #expr; });
                     has_config = true;
                 } else {
                     dep_type_ids
@@ -260,7 +262,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 vec![#(#dep_type_ids),*]
             }
 
-            fn config_keys() -> Vec<(&'static str, &'static str)> {
+            fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
                 vec![#(#config_key_entries),*]
             }
 

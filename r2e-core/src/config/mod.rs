@@ -317,6 +317,21 @@ impl R2eConfig {
         self.get(key).ok()
     }
 
+    /// Resolve an **optional** typed value: `Ok(None)` when the key is absent or
+    /// explicitly `null`, `Ok(Some(v))` when present, `Err` on a type mismatch.
+    ///
+    /// This is the primitive behind `#[config("key")] x: Option<T>`. Unlike
+    /// [`try_get`](Self::try_get) — which is fail-open and swallows a type
+    /// mismatch into `None` — `get_opt` reports a mistyped value as an error so
+    /// the caller can fail loudly. Absence is the only condition that maps to
+    /// `None`.
+    pub fn get_opt<V: FromConfigValue>(&self, key: &str) -> Result<Option<V>, ConfigError> {
+        match self.values.get(key) {
+            None | Some(ConfigValue::Null) => Ok(None),
+            Some(value) => V::from_config_value(value, key).map(Some),
+        }
+    }
+
     /// Get a typed value, returning a default if the key is missing.
     pub fn get_or<V: FromConfigValue>(&self, key: &str, default: V) -> V {
         self.get(key).unwrap_or(default)
