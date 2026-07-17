@@ -275,9 +275,10 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     /// Shutdown hooks from plugins (async, awaited during shutdown).
     plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
-    /// Controller-core `#[pre_destroy]` disposal hooks, awaited in the async
-    /// shutdown phase after plugin/controller hooks but before bean disposers.
-    /// Held in reverse registration order (front-inserted at register time).
+    /// Controller-core `#[pre_destroy]` disposal hooks, pushed in registration
+    /// order as controllers register and folded into the ordered async-shutdown
+    /// list at `build_inner` (reversed there so later-registered controllers
+    /// dispose first), after the plugin async hooks and before the bean disposers.
     controller_disposers: Vec<crate::plugin::AsyncShutdownHook>,
     /// Bean `#[pre_destroy]` disposers, drained from the resolved graph at
     /// `build_state()` (reverse registration order) and run at the end of the

@@ -25,13 +25,12 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) post_construct_registrations: Vec<PostConstructReg>,
     pub(super) serve_hooks: Vec<ServeHook>,
     pub(super) plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
-    pub(super) plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
-    /// Controller-core `#[pre_destroy]` disposers (reverse registration order),
-    /// run in the async shutdown phase before the bean disposers.
-    pub(super) controller_disposers: Vec<crate::plugin::AsyncShutdownHook>,
-    /// Bean `#[pre_destroy]` disposers (reverse registration order), run last in
-    /// the async shutdown phase.
-    pub(super) bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Single ordered async-shutdown list, assembled once at build time as
+    /// plugin async hooks ++ controller `#[pre_destroy]` hooks ++ bean
+    /// `#[pre_destroy]` disposers (each disposer group already in reverse
+    /// registration order). Drained in order during the async shutdown phase, so
+    /// a controller disposes before the beans it injected.
+    pub(super) async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     pub(super) plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     pub(super) shutdown_grace_period: Option<Duration>,
     pub(super) tcp_nodelay: bool,
@@ -295,19 +294,14 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         //    BEFORE the HTTP server starts draining — background tasks see the
         //    cancel signal while in-flight HTTP requests still get to finish;
         // 3. the shared token is cancelled and the listener stops accepting.
-        let (plugin_shutdown_hooks, plugin_async_shutdown_hooks) = if skip_lifecycle {
+        // `skip_lifecycle` (dev-reload re-run) skips both the sync plugin
+        // shutdown hooks and the whole async-shutdown list (plugin async hooks +
+        // controller/bean `#[pre_destroy]` disposers); user drain hooks always
+        // run.
+        let (plugin_shutdown_hooks, async_shutdown_hooks) = if skip_lifecycle {
             (Vec::new(), Vec::new())
         } else {
-            (self.plugin_shutdown_hooks, self.plugin_async_shutdown_hooks)
-        };
-        // Pre-destroy disposal (`#[pre_destroy]`) runs in the async shutdown
-        // phase: controller cores first (reverse registration), then bean
-        // disposers (reverse registration) — so a controller disposes before the
-        // beans it injected.
-        let (controller_disposers, bean_disposers) = if skip_lifecycle {
-            (Vec::new(), Vec::new())
-        } else {
-            (self.controller_disposers, self.bean_disposers)
+            (self.plugin_shutdown_hooks, self.async_shutdown_hooks)
         };
         let drain_hooks = self.drain_hooks;
         let state_for_drain = self.state.clone();
@@ -379,15 +373,10 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             for hook in plugin_shutdown_hooks {
                 hook();
             }
-            for hook in plugin_async_shutdown_hooks {
-                hook().await;
-            }
-            // Controller `#[pre_destroy]` hooks, then bean `#[pre_destroy]`
-            // disposers (both already in reverse registration order).
-            for hook in controller_disposers {
-                hook().await;
-            }
-            for hook in bean_disposers {
+            // Ordered async shutdown: plugin async hooks, then controller
+            // `#[pre_destroy]` hooks, then bean `#[pre_destroy]` disposers
+            // (assembled in that order at build time).
+            for hook in async_shutdown_hooks {
                 hook().await;
             }
             // `_cancel_guard` drops here and cancels the token.
