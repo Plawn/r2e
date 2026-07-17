@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 use r2e::prelude::*;
 
 use super::ProductClient;
-use crate::models::{CreateOrderRequest, Order};
+use crate::order::models::{CreateOrderRequest, Order};
 
 #[derive(Clone)]
 pub struct OrderService {

@@ -1,7 +1,7 @@
 use r2e::prelude::*;
 
-use crate::models::{AvailabilityResponse, ProductInfo};
-use crate::services::ProductService;
+use crate::product::models::{AvailabilityResponse, ProductInfo};
+use crate::product::services::ProductService;
 
 #[controller(path = "/products")]
 pub struct ProductController {
