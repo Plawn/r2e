@@ -2,61 +2,53 @@
 
 Common patterns for writing R2E integration tests.
 
-## Shared setup function
+## Boot the real app
 
-Create a reusable setup that mirrors your production app:
+Integration tests boot the **same `App` your `main` launches** — never
+re-declare controllers or routers in a test. `#[r2e::test(app = ...)]` runs
+`App::setup` + `App::build`, forces the `test` profile, and pins a local
+`TestJwt` so `.as_user(sub, roles)` mints a valid token with no identity
+provider:
 
 ```rust
-use r2e::prelude::*;
-use r2e_test::{TestApp, TestJwt};
-use std::sync::Arc;
+use r2e_test::TestApp;
 
-async fn setup() -> (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-    let event_bus = LocalEventBus::new();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(event_bus)
-            .register::<UserService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(ErrorHandling)
-            .register_controller::<UserController>()
-            .register_controller::<AccountController>(),
-    );
-
-    (app, jwt)
+#[r2e::test(app = my_app::MyApp)]
+async fn lists_users(app: TestApp) {
+    app.get("/users")
+        .as_user("user-1", &["user"])
+        .send()
+        .await
+        .assert_ok();
 }
 ```
+
+See [Test Setup](./test-setup.md) for declaring the `App` and for the `with`
+hook that pins mocks (`override_bean`) and patches config
+(`override_config_value`).
 
 ## Testing validation
 
 ```rust
-#[tokio::test]
-async fn test_validation_errors() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["admin"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn validation_errors(app: TestApp) {
     // Missing required field
     app.post("/users")
+        .as_user("user-1", &["admin"])
         .json(&serde_json::json!({
             "email": "alice@example.com"
         }))
-        .bearer(&token)
         .send()
         .await
         .assert_bad_request();
 
     // Invalid email
     app.post("/users")
+        .as_user("user-1", &["admin"])
         .json(&serde_json::json!({
             "name": "Alice",
             "email": "not-an-email"
         }))
-        .bearer(&token)
         .send()
         .await
         .assert_bad_request();
@@ -66,13 +58,10 @@ async fn test_validation_errors() {
 ## Testing error responses
 
 ```rust
-#[tokio::test]
-async fn test_not_found() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["user"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn not_found(app: TestApp) {
     let resp = app.get("/users/99999")
-        .bearer(&token)
+        .as_user("user-1", &["user"])
         .send()
         .await;
     resp.assert_not_found();
@@ -87,13 +76,10 @@ async fn test_not_found() {
 Use `assert_json_shape` to verify the structure without asserting exact values:
 
 ```rust
-#[tokio::test]
-async fn test_user_response_shape() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["user"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn user_response_shape(app: TestApp) {
     app.get("/users/1")
-        .bearer(&token)
+        .as_user("user-1", &["user"])
         .send()
         .await
         .assert_ok()
@@ -112,17 +98,14 @@ async fn test_user_response_shape() {
 Use `assert_json_contains` to check a subset of the response:
 
 ```rust
-#[tokio::test]
-async fn test_user_contains_expected_fields() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["admin"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn user_contains_expected_fields(app: TestApp) {
     app.post("/users")
+        .as_user("user-1", &["admin"])
         .json(&serde_json::json!({
             "name": "Alice",
             "email": "alice@example.com"
         }))
-        .bearer(&token)
         .send()
         .await
         .assert_ok()
@@ -134,54 +117,43 @@ async fn test_user_contains_expected_fields() {
 }
 ```
 
-## Testing with database
+## Testing with a database
 
-For tests with SQLite:
+Boot the real app and point it at a throwaway database in the `with` hook —
+patch the config key your producer reads, rather than re-wiring a pool by hand:
 
 ```rust
-async fn setup_with_db() -> (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-
-    // Run migrations or create tables
+#[r2e::test(app = my_app::MyApp, with = |b| {
+    b.override_config_value("database.url", "sqlite::memory:")
+})]
+async fn users_are_listed(app: TestApp, #[inject] pool: sqlx::SqlitePool) {
+    // The test shares the exact pool the app resolved.
     sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    // Seed test data
+        .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO users (name, email) VALUES ('Alice', 'alice@test.com')")
-        .execute(&pool)
+        .execute(&pool).await.unwrap();
+
+    app.get("/users")
+        .as_user("user-1", &["user"])
+        .send()
         .await
-        .unwrap();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(pool)
-            .register::<UserService>()
-            .build_state()
-            .await
-            .with(ErrorHandling)
-            .register_controller::<UserController>(),
-    );
-
-    (app, jwt)
+        .assert_ok();
 }
 ```
+
+For a real Postgres/Redis container instead of an in-memory database, use
+`r2e-devservices` (`DevPostgres::shared()`) via `TestApp::boot_with` — see
+[Test Setup](./test-setup.md#dev-services-containerized-infrastructure).
 
 ## Testing rate limiting
 
 ```rust
-#[tokio::test]
-async fn test_rate_limiting() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["user"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn rate_limiting(app: TestApp) {
     // Make requests up to the limit
     for _ in 0..5 {
         app.get("/api/data")
-            .bearer(&token)
+            .as_user("user-1", &["user"])
             .send()
             .await
             .assert_ok();
@@ -189,7 +161,7 @@ async fn test_rate_limiting() {
 
     // Next request should be rate limited
     app.get("/api/data")
-        .bearer(&token)
+        .as_user("user-1", &["user"])
         .send()
         .await
         .assert_too_many_requests();
@@ -201,9 +173,8 @@ async fn test_rate_limiting() {
 Use `TestSession` for cookie-based authentication flows:
 
 ```rust
-#[tokio::test]
-async fn test_session_login_flow() {
-    let (app, _) = setup().await;
+#[r2e::test(app = my_app::MyApp)]
+async fn session_login_flow(app: TestApp) {
     let session = app.session();
 
     // Login with form data
@@ -224,13 +195,10 @@ async fn test_session_login_flow() {
 ## Testing with query parameters
 
 ```rust
-#[tokio::test]
-async fn test_pagination() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["user"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn pagination(app: TestApp) {
     app.get("/users")
-        .bearer(&token)
+        .as_user("user-1", &["user"])
         .query("page", "2")
         .query("size", "10")
         .send()
@@ -243,10 +211,13 @@ async fn test_pagination() {
 
 ## Testing events
 
+Read the app's own `EventBus` instance from the resolved graph — an
+`#[inject]` test parameter (or `app.bean::<LocalEventBus>()`) returns the same
+bean your controllers publish to:
+
 ```rust
-#[tokio::test]
-async fn test_event_emission() {
-    let event_bus = LocalEventBus::new();
+#[r2e::test(app = my_app::MyApp)]
+async fn event_emission(app: TestApp, #[inject] event_bus: LocalEventBus) {
     let received = Arc::new(AtomicBool::new(false));
     let received_clone = received.clone();
 
@@ -257,25 +228,12 @@ async fn test_event_emission() {
         }
     }).await;
 
-    // Setup app with the event bus
-    let jwt = TestJwt::new();
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(event_bus)
-            .register::<UserService>()
-            .build_state()
-            .await
-            .register_controller::<UserController>(),
-    );
-
-    let token = jwt.token("admin-1", &["admin"]);
     app.post("/users")
+        .as_user("admin-1", &["admin"])
         .json(&serde_json::json!({
             "name": "Alice",
             "email": "alice@test.com"
         }))
-        .bearer(&token)
         .send()
         .await
         .assert_ok();
@@ -289,19 +247,16 @@ async fn test_event_emission() {
 ## Testing mixed controllers
 
 ```rust
-#[tokio::test]
-async fn test_public_and_protected() {
-    let (app, jwt) = setup().await;
-
+#[r2e::test(app = my_app::MyApp)]
+async fn public_and_protected(app: TestApp) {
     // Public endpoint works without auth
     app.get("/api/public").send().await.assert_ok();
 
     // Protected endpoint requires auth
     app.get("/api/me").send().await.assert_unauthorized();
 
-    let token = jwt.token("user-1", &["user"]);
     app.get("/api/me")
-        .bearer(&token)
+        .as_user("user-1", &["user"])
         .send()
         .await
         .assert_ok();

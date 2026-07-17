@@ -62,7 +62,7 @@ By default, `OidcServer` regenerates RSA keys and rebuilds internal state on eac
 use r2e::prelude::*;
 use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
 
-// setup() — called once, before the hot-reload loop
+// App::setup() — called once, before the hot-reload loop
 let users = InMemoryUserStore::new()
     .add_user("alice", "password123", OidcUser {
         sub: "user-1".into(),
@@ -74,7 +74,7 @@ let oidc = OidcServer::new()
     .with_user_store(users)
     .build(); // returns OidcRuntime
 
-// main(env) — called on each hot-patch
+// App::build(b, env) — called on each hot-patch
 AppBuilder::new()
     .plugin(oidc.clone()) // reuses the same keys and state
     .build_state().await

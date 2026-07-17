@@ -314,14 +314,11 @@ let users: Vec<User> = app
 ## Complete example
 
 ```rust
-#[tokio::test]
-async fn test_crud_flow() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &["admin"]);
-
+#[r2e::test(app = my_app::MyApp)]
+async fn crud_flow(app: TestApp) {
     // List users
     app.get("/users")
-        .bearer(&token)
+        .as_user("user-1", &["admin"])
         .send()
         .await
         .assert_ok()
@@ -329,11 +326,11 @@ async fn test_crud_flow() {
 
     // Create user
     app.post("/users")
+        .as_user("user-1", &["admin"])
         .json(&serde_json::json!({
             "name": "Charlie",
             "email": "charlie@example.com"
         }))
-        .bearer(&token)
         .send()
         .await
         .assert_ok()
@@ -341,7 +338,7 @@ async fn test_crud_flow() {
 
     // Verify creation
     app.get("/users")
-        .bearer(&token)
+        .as_user("user-1", &["admin"])
         .send()
         .await
         .assert_ok()

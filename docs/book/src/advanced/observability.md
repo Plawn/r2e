@@ -120,12 +120,20 @@ app.with(tracing)
 
 `Tracing::from_config()` reads the `tracing.*` keys from `R2eConfig`.
 
-### Using `#[r2e::main(tracing = false)]`
+### Tracing under the canonical entrypoint
 
-By default, `#[r2e::main]` calls `init_tracing()` before config is loaded — so there is no config available yet. If you want configurable tracing:
+The canonical entrypoint — `r2e::app_main!(MyApp)` / `r2e::launch!` — does **not**
+initialize tracing for you. Install the `Tracing` plugin inside `App::build`,
+after `build_state()`, with `.with(Tracing)` (or the config-driven
+`.with(Tracing::from_config(builder.r2e_config().unwrap()))` shown above, since
+`r2e_config()` is only available once the state is built). With no plugin, the
+app emits no tracing subscriber.
+
+Only the custom-entrypoint macro `#[r2e::main]` auto-initializes tracing before
+config is loaded. If you use that form and want configurable tracing instead:
 
 1. Disable the default tracing: `#[r2e::main(tracing = false)]`
-2. Load config first, then install the configured tracing plugin
+2. Load config first, then install the configured `Tracing` plugin
 
 ## RequestId plugin
 

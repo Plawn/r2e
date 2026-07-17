@@ -87,46 +87,62 @@ let validator = jwt.validator();
 let claims_validator = jwt.claims_validator();
 ```
 
-## Wiring into test state
+## Getting the app's `TestJwt`
+
+When you boot an `App` with `#[r2e::test(app = ...)]`, the harness pins a
+`TestJwt` over the app's own validator for you. Most tests never touch it
+directly — `.as_user(sub, roles)` mints and attaches a token in one call:
 
 ```rust
-use std::sync::Arc;
-
-async fn setup() -> (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            // ...
-            .build_state()
-            .await
-            .register_controller::<UserController>(),
-    );
-
-    (app, jwt)
+#[r2e::test(app = my_app::MyApp)]
+async fn admin_panel(app: TestApp) {
+    app.get("/admin/panel")
+        .as_user("admin-1", &["admin"])
+        .send()
+        .await
+        .assert_ok();
 }
 ```
+
+Bind an `app: TestApp` **and** a `jwt: TestJwt` parameter when you need the raw
+token API — expired tokens, custom claims, or reusing one token across
+requests. It is the same key the app validates against:
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn custom_claims(app: TestApp, jwt: TestJwt) {
+    let token = jwt.token_builder("user-1")
+        .roles(&["admin"])
+        .claim("tenant_id", "acme-corp")
+        .build();
+
+    app.get("/admin/panel")
+        .bearer(&token)
+        .send()
+        .await
+        .assert_ok();
+}
+```
+
+Hand-assembled apps (`TestApp::from_builder`) instead provide the validator
+explicitly with `.provide(Arc::new(jwt.claims_validator()))` — see
+[Test Setup](./test-setup.md#hand-assembled-apps-testappfrom_builder).
 
 ## Testing different roles
 
 ```rust
-#[tokio::test]
-async fn test_role_access() {
-    let (app, jwt) = setup().await;
-
+#[r2e::test(app = my_app::MyApp)]
+async fn role_access(app: TestApp) {
     // Regular user — forbidden
-    let user_token = jwt.token("user-1", &["user"]);
     app.get("/admin/panel")
-        .bearer(&user_token)
+        .as_user("user-1", &["user"])
         .send()
         .await
         .assert_forbidden();
 
     // Admin user — allowed
-    let admin_token = jwt.token("admin-1", &["admin"]);
     app.get("/admin/panel")
-        .bearer(&admin_token)
+        .as_user("admin-1", &["admin"])
         .send()
         .await
         .assert_ok();
@@ -136,10 +152,8 @@ async fn test_role_access() {
 ## Testing unauthenticated access
 
 ```rust
-#[tokio::test]
-async fn test_no_auth() {
-    let (app, _) = setup().await;
-
+#[r2e::test(app = my_app::MyApp)]
+async fn no_auth(app: TestApp) {
     // No token → 401
     app.get("/users").send().await.assert_unauthorized();
 }

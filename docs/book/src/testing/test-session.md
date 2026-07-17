@@ -14,9 +14,8 @@ let session = app.session();
 Cookies from `Set-Cookie` response headers are automatically captured and sent on subsequent requests:
 
 ```rust
-#[tokio::test]
-async fn test_login_flow() {
-    let app = build_app().await;
+#[r2e::test(app = my_app::MyApp)]
+async fn login_flow(app: TestApp) {
     let session = app.session();
 
     // Login — server sets a session cookie via Set-Cookie header
@@ -118,9 +117,8 @@ session.request(Method::OPTIONS, "/path").send().await;
 ## Example: CSRF token flow
 
 ```rust
-#[tokio::test]
-async fn test_csrf_protection() {
-    let app = build_app().await;
+#[r2e::test(app = my_app::MyApp)]
+async fn csrf_protection(app: TestApp) {
     let session = app.session();
 
     // GET the form — server sets a CSRF cookie

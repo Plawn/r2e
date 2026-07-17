@@ -484,9 +484,9 @@ use serde_json::json;
 // TODO: adapt imports to your project structure
 // use {lib_name}::models::{snake}::{entity_name};
 
-// These tests boot your application. Declare it in lib.rs:
-//   pub struct {app_name};
-//   impl App for {app_name} {{ ... }}
+// These tests boot your application, declared in src/app.rs (included by
+// lib.rs) as `impl App for {app_name}`. Register the controller in
+// App::build with `.register_controller::<{entity_name}Controller>()`.
 
 #[r2e::test(app = {lib_name}::{app_name})]
 async fn test_list_{plural}(app: TestApp) {{
