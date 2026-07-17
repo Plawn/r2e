@@ -179,6 +179,7 @@ dioxus-devtools = { version = "0.7", features = ["serve"] }
 
 # Misc
 openfga-rs = "0.1"
+inventory = "0.3"
 
 # QUIC / HTTP3
 quinn = "0.11"

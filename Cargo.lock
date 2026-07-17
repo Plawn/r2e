@@ -5932,6 +5932,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
+ "inventory",
  "jsonwebtoken",
  "r2e-core",
  "r2e-security",
