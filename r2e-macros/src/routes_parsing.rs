@@ -209,6 +209,52 @@ fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
     Ok(ws_param)
 }
 
+/// Shared classifier for the two plain lifecycle hooks on a controller impl
+/// (`#[post_construct]` and `#[pre_destroy]`). Both are `&self` bodies that stay
+/// on the core impl, reject `#[intercept]`, and cannot double as a route or any
+/// transverse marker — *including the other lifecycle hook*. Checking `other`
+/// here (rather than only in whichever arm happens to run first) keeps the two
+/// conflict sets symmetric by construction, independent of arm order.
+///
+/// Returns the marker-stripped attributes when the method carried `marker` (the
+/// caller installs them and moves the method to `other_methods`); `Ok(None)`
+/// when the method did not carry `marker` so the caller falls through to the
+/// next classification arm. `combined_msg`/`intercept_msg` stay per-marker so
+/// each diagnostic names its own hook.
+fn classify_lifecycle_hook(
+    sig: &syn::Signature,
+    all_attrs: &[syn::Attribute],
+    marker: &str,
+    other: &str,
+    combined_msg: &str,
+    intercept_msg: &str,
+) -> syn::Result<Option<Vec<syn::Attribute>>> {
+    if !all_attrs.iter().any(|a| a.path().is_ident(marker)) {
+        return Ok(None);
+    }
+    let combined = extract_consumer(all_attrs)?.is_some()
+        || extract_scheduled(all_attrs)?.is_some()
+        || extract_sse_attr(all_attrs)?.is_some()
+        || extract_ws_attr(all_attrs)?.is_some()
+        || extract_async_exec(all_attrs)?.is_some()
+        || extract_route_kind(all_attrs)?.is_some()
+        || all_attrs.iter().any(|a| a.path().is_ident(other));
+    if combined {
+        return Err(syn::Error::new(sig.ident.span(), combined_msg));
+    }
+    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
+        return Err(syn::Error::new(sig.ident.span(), intercept_msg));
+    }
+    // Strip the marker; the body is emitted on the core impl.
+    Ok(Some(
+        all_attrs
+            .iter()
+            .filter(|a| !a.path().is_ident(marker))
+            .cloned()
+            .collect(),
+    ))
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -254,70 +300,41 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                 // `#[post_construct]` — a plain lifecycle hook. Its body stays on
                 // the core impl (recorded in `post_construct_methods` above); it
-                // cannot be combined with a route/transverse marker, and being a
-                // plain method it takes no `#[intercept]`.
-                if all_attrs.iter().any(|a| a.path().is_ident("post_construct")) {
-                    let combined = extract_consumer(&all_attrs)?.is_some()
-                        || extract_scheduled(&all_attrs)?.is_some()
-                        || extract_sse_attr(&all_attrs)?.is_some()
-                        || extract_ws_attr(&all_attrs)?.is_some()
-                        || extract_async_exec(&all_attrs)?.is_some()
-                        || extract_route_kind(&all_attrs)?.is_some()
-                        || all_attrs.iter().any(|a| a.path().is_ident("pre_destroy"));
-                    if combined {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[post_construct] cannot be combined with a route, #[scheduled], \
-                             #[consumer], #[sse], #[ws], #[async_exec], or #[pre_destroy] on the \
-                             same method — it is a plain lifecycle hook that runs once after the \
-                             graph resolves",
-                        ));
-                    }
-                    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[intercept] on a #[post_construct] method is not supported — a plain \
-                             lifecycle hook has no dispatch wrapper to run the interceptor chain",
-                        ));
-                    }
-                    // Strip the marker; the body is emitted on the core impl.
-                    method.attrs = all_attrs
-                        .into_iter()
-                        .filter(|a| !a.path().is_ident("post_construct"))
-                        .collect();
+                // cannot be combined with a route/transverse marker (including
+                // `#[pre_destroy]`), and being a plain method it takes no
+                // `#[intercept]`. Shared with the `#[pre_destroy]` arm below via
+                // `classify_lifecycle_hook`.
+                if let Some(attrs) = classify_lifecycle_hook(
+                    &method.sig,
+                    &all_attrs,
+                    "post_construct",
+                    "pre_destroy",
+                    "#[post_construct] cannot be combined with a route, #[scheduled], \
+                     #[consumer], #[sse], #[ws], #[async_exec], or #[pre_destroy] on the \
+                     same method — it is a plain lifecycle hook that runs once after the \
+                     graph resolves",
+                    "#[intercept] on a #[post_construct] method is not supported — a plain \
+                     lifecycle hook has no dispatch wrapper to run the interceptor chain",
+                )? {
+                    method.attrs = attrs;
                     other_methods.push(method);
                     continue;
                 }
 
                 // `#[pre_destroy]` — a plain disposal hook, symmetric to
                 // post_construct. Same combination/param rules; runs at shutdown.
-                if all_attrs.iter().any(|a| a.path().is_ident("pre_destroy")) {
-                    let combined = extract_consumer(&all_attrs)?.is_some()
-                        || extract_scheduled(&all_attrs)?.is_some()
-                        || extract_sse_attr(&all_attrs)?.is_some()
-                        || extract_ws_attr(&all_attrs)?.is_some()
-                        || extract_async_exec(&all_attrs)?.is_some()
-                        || extract_route_kind(&all_attrs)?.is_some();
-                    if combined {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[pre_destroy] cannot be combined with a route, #[scheduled], \
-                             #[consumer], #[sse], #[ws], or #[async_exec] on the same method — \
-                             it is a plain disposal hook that runs once at shutdown",
-                        ));
-                    }
-                    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
-                        return Err(syn::Error::new(
-                            method.sig.ident.span(),
-                            "#[intercept] on a #[pre_destroy] method is not supported — a plain \
-                             lifecycle hook has no dispatch wrapper to run the interceptor chain",
-                        ));
-                    }
-                    // Strip the marker; the body is emitted on the core impl.
-                    method.attrs = all_attrs
-                        .into_iter()
-                        .filter(|a| !a.path().is_ident("pre_destroy"))
-                        .collect();
+                if let Some(attrs) = classify_lifecycle_hook(
+                    &method.sig,
+                    &all_attrs,
+                    "pre_destroy",
+                    "post_construct",
+                    "#[pre_destroy] cannot be combined with a route, #[scheduled], \
+                     #[consumer], #[sse], #[ws], #[async_exec], or #[post_construct] on the \
+                     same method — it is a plain disposal hook that runs once at shutdown",
+                    "#[intercept] on a #[pre_destroy] method is not supported — a plain \
+                     lifecycle hook has no dispatch wrapper to run the interceptor chain",
+                )? {
+                    method.attrs = attrs;
                     other_methods.push(method);
                     continue;
                 }

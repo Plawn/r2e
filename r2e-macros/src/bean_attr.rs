@@ -350,30 +350,10 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             "#[bean(lazy)] does not yet support #[pre_destroy] — remove one or the other",
         ));
     }
-    // A single method must not be BOTH a lifecycle hook and a transverse/route
-    // marker; enforce the pre_destroy side of the matrix (mirrors post_construct).
-    for item in &item_impl.items {
-        if let syn::ImplItem::Fn(m) = item {
-            if !m.attrs.iter().any(|a| a.path().is_ident("pre_destroy")) {
-                continue;
-            }
-            let clash = m.attrs.iter().any(|a| {
-                a.path().is_ident("post_construct")
-                    || a.path().is_ident("scheduled")
-                    || a.path().is_ident("consumer")
-                    || a.path().is_ident("async_exec")
-                    || a.path().is_ident("intercept")
-            });
-            if clash {
-                return Err(syn::Error::new_spanned(
-                    &m.sig,
-                    "#[pre_destroy] cannot be combined with #[post_construct], #[scheduled], \
-                     #[consumer], #[async_exec], or #[intercept] on the same method — it is a \
-                     plain disposal hook that runs once at shutdown",
-                ));
-            }
-        }
-    }
+    // A single method must not be BOTH a lifecycle hook and a transverse marker;
+    // enforce the pre_destroy side of the matrix (mirrors post_construct). The
+    // forbidden-marker list lives once, next to the pre_destroy scan.
+    transverse::reject_bean_pre_destroy_clash(item_impl)?;
 
     // An impl-level `#[intercept]` applies only to scheduled/consumer methods;
     // with none present it is a silent no-op (and would force the constructor

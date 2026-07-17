@@ -718,6 +718,38 @@ pub(crate) fn scan_pre_destroy_methods(
     scan_lifecycle_methods(item_impl, "pre_destroy", "#[pre_destroy]")
 }
 
+/// Enforce the `#[pre_destroy]` side of the lifecycle conflict matrix on a
+/// `#[bean]` impl: a single method must not be both a disposal hook and a
+/// transverse marker or the `#[post_construct]` lifecycle hook. Co-located with
+/// the pre_destroy scan so the bean host's forbidden-marker list lives in one
+/// place (the controller host uses `classify_lifecycle_hook`, which is
+/// route-aware). Behaviour matches the former hand-rolled loop in `bean_attr`.
+pub(crate) fn reject_bean_pre_destroy_clash(item_impl: &ItemImpl) -> syn::Result<()> {
+    for item in &item_impl.items {
+        if let ImplItem::Fn(m) = item {
+            if !m.attrs.iter().any(|a| a.path().is_ident("pre_destroy")) {
+                continue;
+            }
+            let clash = m.attrs.iter().any(|a| {
+                a.path().is_ident("post_construct")
+                    || a.path().is_ident("scheduled")
+                    || a.path().is_ident("consumer")
+                    || a.path().is_ident("async_exec")
+                    || a.path().is_ident("intercept")
+            });
+            if clash {
+                return Err(syn::Error::new_spanned(
+                    &m.sig,
+                    "#[pre_destroy] cannot be combined with #[post_construct], #[scheduled], \
+                     #[consumer], #[async_exec], or #[intercept] on the same method — it is a \
+                     plain disposal hook that runs once at shutdown",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The per-method disposal call statements shared by the bean `PreDestroy`
 /// trait impl and the controller-core inline override. An `Err` is **logged
 /// and swallowed** (disposal must not abort shutdown), in declaration order.
