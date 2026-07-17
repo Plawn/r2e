@@ -546,14 +546,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Queue this core's `#[pre_destroy]` disposal hooks — awaited during the
         // async shutdown phase, before the bean disposers (a controller disposes
-        // before the beans it injected). Inserted at the front so later-registered
-        // controllers dispose first (reverse registration order, mirroring the
-        // bean disposer ordering). No-op future for controllers without
-        // `#[pre_destroy]`.
-        {
+        // before the beans it injected). Pushed in registration order and
+        // reversed once when the ordered async-shutdown list is assembled in
+        // `build_inner`, so later-registered controllers dispose first. Skipped
+        // entirely for controllers without a `#[pre_destroy]` hook (their
+        // `pre_destroy` is the no-op default), avoiding a queued no-op per
+        // controller.
+        if C::HAS_PRE_DESTROY {
             let core_for_dispose = Arc::clone(&core);
-            self.controller_disposers.insert(
-                0,
+            self.controller_disposers.push(
                 Box::new(move || C::pre_destroy(core_for_dispose))
                     as crate::plugin::AsyncShutdownHook,
             );
@@ -765,6 +766,20 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = wrap(app);
         }
 
+        // Assemble the single ordered async-shutdown list, drained back-to-front
+        // of the shutdown sequence: plugin async hooks, then controller
+        // `#[pre_destroy]` hooks, then bean `#[pre_destroy]` disposers — so a
+        // controller disposes before the beans it injected. Controller disposers
+        // were pushed in registration order; reverse them here (the single
+        // assembly point) so later-registered controllers dispose first. Bean
+        // disposers already arrive in reverse registration order (applied during
+        // graph resolution).
+        let mut async_shutdown_hooks = self.plugin_async_shutdown_hooks;
+        let mut controller_disposers = self.controller_disposers;
+        controller_disposers.reverse();
+        async_shutdown_hooks.extend(controller_disposers);
+        async_shutdown_hooks.extend(self.bean_disposers);
+
         BuiltApp {
             router: app,
             startup_hooks: self.startup_hooks,
@@ -774,9 +789,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             post_construct_registrations: self.post_construct_registrations,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
-            plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
-            controller_disposers: self.controller_disposers,
-            bean_disposers: self.bean_disposers,
+            async_shutdown_hooks,
             plugin_data: self.shared.plugin_data,
             state,
             shutdown_grace_period: self.shared.shutdown_grace_period,
@@ -867,9 +880,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             post_construct_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
-            plugin_async_shutdown_hooks,
-            controller_disposers,
-            bean_disposers,
+            async_shutdown_hooks,
             plugin_data,
             state,
             shutdown_grace_period,
@@ -894,9 +905,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             post_construct_registrations,
             serve_hooks,
             plugin_shutdown_hooks,
-            plugin_async_shutdown_hooks,
-            controller_disposers,
-            bean_disposers,
+            async_shutdown_hooks,
             plugin_data,
             shutdown_grace_period,
             tcp_nodelay,
@@ -948,9 +957,10 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     post_construct_registrations: Vec<PostConstructReg>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
-    plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
-    controller_disposers: Vec<crate::plugin::AsyncShutdownHook>,
-    bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Single ordered async-shutdown list: plugin async hooks ++ controller
+    /// `#[pre_destroy]` hooks ++ bean `#[pre_destroy]` disposers. Assembled once
+    /// in `build_inner` and drained in order during the async shutdown phase.
+    async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     state: T,
     shutdown_grace_period: Option<Duration>,

@@ -1025,6 +1025,8 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         let calls =
             transverse::pre_destroy_calls(&quote! { __self }, &owner_name, &def.pre_destroy_methods);
         controller_fns.push(quote! {
+            const HAS_PRE_DESTROY: bool = true;
+
             fn pre_destroy(
                 __core: ::std::sync::Arc<Self>,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {

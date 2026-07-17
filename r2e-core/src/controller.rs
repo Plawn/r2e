@@ -155,6 +155,15 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
         Box::pin(async { Ok(()) })
     }
 
+    /// Whether this controller declares any `#[pre_destroy]` hook.
+    ///
+    /// `false` by default; the generated impl sets it to `true` only when the
+    /// controller has at least one `#[pre_destroy]` method (i.e. exactly when it
+    /// overrides [`pre_destroy`](Self::pre_destroy)). `register_controller()`
+    /// reads this to skip queuing a disposer for hook-less controllers, whose
+    /// [`pre_destroy`](Self::pre_destroy) is the no-op default.
+    const HAS_PRE_DESTROY: bool = false;
+
     /// Run this controller core's `#[pre_destroy]` disposal hooks.
     ///
     /// Queued at `register_controller()` and awaited during graceful shutdown —
