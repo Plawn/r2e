@@ -3,6 +3,7 @@ mod app;
 mod boot;
 mod jwt;
 mod multipart;
+pub mod ordering;
 mod server;
 mod session;
 mod sse;
