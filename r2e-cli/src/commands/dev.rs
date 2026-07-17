@@ -1,5 +1,6 @@
 use colored::Colorize;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::thread;
@@ -39,7 +40,17 @@ pub fn run(
     println!("{} Press {} to stop", "->".blue(), "Ctrl+C".yellow());
     println!();
 
+    let target_dir = resolve_target_dir(&project_root);
+
     loop {
+        for archive in purge_corrupt_fat_archives(&target_dir) {
+            println!(
+                "{} removing corrupted fat-binary archive {}",
+                "!".yellow(),
+                archive.display()
+            );
+        }
+
         let mut child = spawn_dx(port, &features)?;
 
         loop {
@@ -87,6 +98,104 @@ fn spawn_dx(port: Option<u16>, features: &str) -> Result<Child, Box<dyn std::err
     }
 
     Ok(cmd.spawn()?)
+}
+
+/// Magic bytes opening a valid `ar` archive (regular and thin variants).
+const AR_MAGICS: [&[u8]; 2] = [b"!<arch>\n", b"!<thin>\n"];
+
+/// Remove empty/truncated `libdeps-*.a` fat-binary archives from the dx
+/// profile directories under `target_dir`, returning the purged paths.
+///
+/// dx writes these archives in place and its cache accepts any existing file
+/// as a hit, so a process killed mid-write (e.g. by the cold-boundary restart
+/// above) leaves a zero-byte archive that fails every subsequent link with
+/// `ld: file is empty` until removed by hand.
+pub fn purge_corrupt_fat_archives(target_dir: &Path) -> Vec<PathBuf> {
+    // Archives live at `<target>/<triple>/<profile>/libdeps-<hash>.a`;
+    // depth 2 also covers layouts without the triple component.
+    let mut purged = Vec::new();
+    scan_for_corrupt_archives(target_dir, 2, &mut purged);
+    purged
+}
+
+fn scan_for_corrupt_archives(dir: &Path, depth: usize, purged: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if depth > 0 {
+                scan_for_corrupt_archives(&path, depth - 1, purged);
+            }
+        } else if is_fat_archive_name(&path)
+            && is_corrupt_archive(&path)
+            && fs::remove_file(&path).is_ok()
+        {
+            purged.push(path);
+        }
+    }
+}
+
+fn is_fat_archive_name(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "a")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("libdeps-"))
+}
+
+fn is_corrupt_archive(path: &Path) -> bool {
+    let mut magic = [0u8; 8];
+    match fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)) {
+        Ok(()) => !AR_MAGICS.contains(&magic.as_slice()),
+        // Empty or shorter than the ar header.
+        Err(_) => true,
+    }
+}
+
+/// Resolve the cargo target directory: `CARGO_TARGET_DIR` when set, else
+/// `cargo metadata`'s `target_directory` (the only source that sees
+/// `.cargo/config.toml` overrides), else `<project_root>/target`.
+pub fn resolve_target_dir(project_root: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let dir = PathBuf::from(dir);
+        return if dir.is_absolute() {
+            dir
+        } else {
+            project_root.join(dir)
+        };
+    }
+    cargo_metadata_target_dir(project_root).unwrap_or_else(|| project_root.join("target"))
+}
+
+fn cargo_metadata_target_dir(project_root: &Path) -> Option<PathBuf> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json = String::from_utf8(output.stdout).ok()?;
+    let key = "\"target_directory\":\"";
+    let start = json.find(key)? + key.len();
+    // Manual JSON string decode (no serde_json dependency): only `\"` and
+    // `\\` escapes matter — cargo emits non-ASCII path bytes unescaped.
+    let mut value = String::new();
+    let mut chars = json[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(PathBuf::from(value)),
+            '\\' => value.push(chars.next()?),
+            _ => value.push(c),
+        }
+    }
+    None
 }
 
 fn stop_child(child: &mut Child) -> Result<(), Box<dyn std::error::Error>> {
