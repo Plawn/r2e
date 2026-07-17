@@ -1527,12 +1527,16 @@ Ordered-test rules (copy literally):
   not be contiguous (10, 20, 30 is fine). Works with or without `app` (with
   `app`, the barrier covers the TestApp boot too).
 - Tests WITHOUT `order` are unaffected and stay parallel — no `--test-threads=1`.
-- Fail-fast: a panicking ordered test poisons its group; later tests of that
-  group fail immediately naming the failed predecessor (no deadlock).
+- Fail-fast: a FAILING ordered test — panic, or `Err` from a `Result` test —
+  poisons its group; later tests of that group fail immediately naming the
+  failed predecessor (no deadlock). A `#[should_panic]` ordered test that
+  panics as expected is a pass and does NOT poison its group.
 - Duplicate `order` in one group → runtime panic naming both tests.
-- Watchdog: a waiting test panics (not hangs) if its group makes no progress for
-  `R2E_TEST_ORDER_TIMEOUT_SECS` (default 60) — e.g. a lower order was filtered
-  out by `cargo test <filter>` or starved by `--test-threads`.
+- Watchdog: a waiting test panics (not hangs) if some lower order was NEVER
+  STARTED and the group stays idle for `R2E_TEST_ORDER_TIMEOUT_SECS` (default
+  60) — e.g. a lower order was filtered out by `cargo test <filter>` or starved
+  by `--test-threads`. A running (started) predecessor never trips the watchdog,
+  however slow.
 - `group` without `order` is a compile error; `order`/`group` on `#[r2e::main]`
   is a compile error. Using `order` requires the `r2e-test` dev-dependency
   (already present when using `app = …`).

@@ -274,7 +274,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
     // Resolve the ordering hooks once (only when `order` is present). Parsing
     // the literal as `u32` here surfaces negative / non-integer literals as an
     // error spanned on the literal.
-    let ordering: Option<(u32, TokenStream2)> = match &args.order {
+    let ordering: Option<OrderedHooks> = match &args.order {
         Some(order_lit) => {
             let order_val: u32 = match order_lit.base10_parse() {
                 Ok(v) => v,
@@ -284,7 +284,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
                 Some(g) => quote! { #g },
                 None => quote! { "" },
             };
-            Some((order_val, group_lit))
+            Some(OrderedHooks::new(fn_name, order_val, &group_lit, attrs))
         }
         None => None,
     };
@@ -345,68 +345,94 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
 
     // ── Standard path ─────────────────────────────────────────────────────
     // Ordered tests (test-only) enroll in the r2e-test sequential barrier: an
-    // inventory entry at item level and a `turn` guard held for the whole async
-    // block. Unordered tests keep the byte-identical expansion of before (no
+    // inventory entry at item level, the turn guard as first statement, and
+    // the body wrapped so its outcome reaches the guard (an `Err` from a
+    // `Result` test poisons the group like a panic). For unordered tests
+    // `#submit` renders to nothing and the body is emitted untouched (no
     // reference to r2e-test).
-    if let Some((order_val, group_lit)) = &ordering {
-        let test_crate = crate::crate_path::r2e_test_path();
-        let (submit, turn) = ordering_tokens(&test_crate, fn_name, *order_val, group_lit);
-        let body_stmts = &body.stmts;
-        return quote! {
-            #submit
-            #(#attrs)*
-            #test_attr
-            #vis fn #fn_name() #ret {
-                #tracing_init
-                #runtime_builder
-                    .block_on(async {
-                        #turn
-                        #(#body_stmts)*
-                    })
-            }
-        };
-    }
+    let body_stmts = &body.stmts;
+    let (submit, async_body) = match &ordering {
+        Some(hooks) => {
+            let turn = &hooks.turn;
+            let wrapped = hooks.wrap_body(&quote! { #(#body_stmts)* });
+            (hooks.submit.clone(), quote! { #turn #wrapped })
+        }
+        None => (quote! {}, quote! { #(#body_stmts)* }),
+    };
 
     quote! {
+        #submit
         #(#attrs)*
         #test_attr
         #vis fn #fn_name() #ret {
             #tracing_init
             #runtime_builder
-                .block_on(async #body)
+                .block_on(async { #async_body })
         }
     }
 }
 
-/// Build the two token streams that wire a test into the r2e-test sequential
-/// barrier when `order` is set:
-/// - an item-level `inventory::submit!` registering the test's `OrderedTestEntry`,
-/// - the first statement of the async block: a `turn(...)` guard (`#[must_use]`,
-///   RAII) that must stay alive until the end of the block (covers app boot).
-fn ordering_tokens(
-    test_crate: &TokenStream2,
-    fn_name: &syn::Ident,
-    order_val: u32,
-    group_lit: &TokenStream2,
-) -> (TokenStream2, TokenStream2) {
-    let submit = quote! {
-        #test_crate::ordering::inventory::submit! {
-            #test_crate::ordering::OrderedTestEntry {
-                group: #group_lit,
-                order: #order_val,
-                test: concat!(module_path!(), "::", stringify!(#fn_name)),
+/// Emission hooks for an ordered test (`order = …`):
+/// - `submit` — the item-level `inventory::submit!` registering the test's
+///   `OrderedTestEntry` in the binary-wide registry;
+/// - `turn` — the first statement(s) of the async block: acquire the barrier
+///   guard (synchronous, so it also covers app boot) and, for
+///   `#[should_panic]` tests, declare the panic expected so it does not
+///   poison the group;
+/// - [`Self::wrap_body`] — wraps the user body so its outcome reaches the
+///   guard (an `Err` from a `Result` test poisons the group).
+struct OrderedHooks {
+    submit: TokenStream2,
+    turn: TokenStream2,
+    test_crate: TokenStream2,
+}
+
+impl OrderedHooks {
+    fn new(
+        fn_name: &syn::Ident,
+        order_val: u32,
+        group_lit: &TokenStream2,
+        attrs: &[syn::Attribute],
+    ) -> Self {
+        let test_crate = crate::crate_path::r2e_test_path();
+        let submit = quote! {
+            #test_crate::ordering::inventory::submit! {
+                #test_crate::ordering::OrderedTestEntry {
+                    group: #group_lit,
+                    order: #order_val,
+                    test: concat!(module_path!(), "::", stringify!(#fn_name)),
+                }
             }
+        };
+        // `#[should_panic]`: the panic IS the test's success path — it must
+        // not poison the group.
+        let expect_panic = attrs
+            .iter()
+            .any(|a| a.path().is_ident("should_panic"))
+            .then(|| quote! { __r2e_ordered_turn.expect_panic(); });
+        let turn = quote! {
+            let mut __r2e_ordered_turn = #test_crate::ordering::turn(
+                #group_lit,
+                #order_val,
+                concat!(module_path!(), "::", stringify!(#fn_name)),
+            );
+            #expect_panic
+        };
+        Self { submit, turn, test_crate }
+    }
+
+    /// Wrap the user body so its outcome reaches the guard before it drops:
+    /// an `Err` from a `Result` test marks the order failed (group poison).
+    fn wrap_body(&self, stmts: &TokenStream2) -> TokenStream2 {
+        let test_crate = &self.test_crate;
+        quote! {
+            let __r2e_ordered_outcome = async { #stmts }.await;
+            if #test_crate::ordering::TestOutcome::is_failed(&__r2e_ordered_outcome) {
+                __r2e_ordered_turn.mark_failed();
+            }
+            __r2e_ordered_outcome
         }
-    };
-    let turn = quote! {
-        let __r2e_ordered_turn = #test_crate::ordering::turn(
-            #group_lit,
-            #order_val,
-            concat!(module_path!(), "::", stringify!(#fn_name)),
-        )
-        .await;
-    };
-    (submit, turn)
+    }
 }
 
 /// Returns `true` if `ty` is a path type whose last segment is `name`
@@ -434,7 +460,7 @@ fn expand_boot_test(
     app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
     jwt: bool,
-    ordering: Option<&(u32, TokenStream2)>,
+    ordering: Option<&OrderedHooks>,
     func: &ItemFn,
     tracing_init: &TokenStream2,
     runtime_builder: &TokenStream2,
@@ -501,12 +527,15 @@ fn expand_boot_test(
     let app_binding = app_binding.into_iter();
 
     // Ordering barrier hooks (test-only). Empty when `order` is absent, so the
-    // unordered expansion is unchanged. The `turn` guard must precede app boot.
-    let (submit, turn) = match ordering {
-        Some((order_val, group_lit)) => {
-            ordering_tokens(&test_crate, fn_name, *order_val, group_lit)
-        }
-        None => (quote! {}, quote! {}),
+    // unordered expansion is unchanged. The `turn` guard must precede app boot,
+    // and the body is wrapped so an `Err` outcome poisons the group.
+    let (submit, turn, wrapped_body) = match ordering {
+        Some(hooks) => (
+            hooks.submit.clone(),
+            hooks.turn.clone(),
+            hooks.wrap_body(&quote! { #(#body_stmts)* }),
+        ),
+        None => (quote! {}, quote! {}, quote! { #(#body_stmts)* }),
     };
 
     quote! {
@@ -521,7 +550,7 @@ fn expand_boot_test(
                     let __r2e_test_app = #boot_call;
                     #(#bindings)*
                     #(#app_binding)*
-                    #(#body_stmts)*
+                    #wrapped_body
                 })
         }
     }

@@ -115,15 +115,19 @@ async fn creates_invoice(app: TestApp) { /* … */ }
 async fn seeds_catalog(app: TestApp) { /* … */ } // runs independently of billing
 ```
 
-Failure semantics are **fail-fast**: if an ordered test panics, its group is
-poisoned and every later test in that group fails immediately with a message
-naming the failed predecessor — no deadlock, no cascade of timeouts. Declaring
-the same `order` twice in one group panics at runtime, naming both tests.
+Failure semantics are **fail-fast**: if an ordered test fails — by panicking,
+or by returning `Err` from a `Result` test — its group is poisoned and every
+later test in that group fails immediately with a message naming the failed
+predecessor — no deadlock, no cascade of timeouts. A `#[should_panic]` ordered
+test that panics as expected is a pass and does **not** poison its group.
+Declaring the same `order` twice in one group panics at runtime, naming both
+tests.
 
 If a lower order is filtered out (`cargo test <filter>`) or starved by
-`--test-threads`, a waiting test would otherwise hang. Instead it panics after a
-watchdog timeout, listing the pending orders. Tune the timeout with
-`R2E_TEST_ORDER_TIMEOUT_SECS` (default `60`).
+`--test-threads`, a waiting test would otherwise hang. Instead, once the group
+is idle, it panics after a watchdog timeout, listing the pending orders. A
+predecessor that is actually running never trips the watchdog, however slow.
+Tune the timeout with `R2E_TEST_ORDER_TIMEOUT_SECS` (default `60`).
 
 > `group` without `order` is a compile error, as is `order`/`group` on
 > `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
