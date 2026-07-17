@@ -76,6 +76,59 @@ async fn signup_does_not_send_mail(app: TestApp, #[inject] mailer: FakeMailer) {
 }
 ```
 
+## Ordered tests (`@Order`)
+
+Most tests should stay independent and parallel. When a scenario genuinely has
+to run in sequence — create a resource, then read it back — tag each test with
+`order = <u32>`. Tests carrying an `order` run sequentially in ascending order;
+tests without one are unaffected and keep running in parallel (no
+`--test-threads=1` needed):
+
+```rust
+#[r2e::test(app = my_app::MyApp, order = 1)]
+async fn creates_user(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_created();
+}
+
+#[r2e::test(app = my_app::MyApp, order = 2)]
+async fn lists_created_user(app: TestApp) {
+    app.get("/users").send().await
+        .assert_ok()
+        .assert_json_path("/0/name", "Alice");
+}
+```
+
+Ordering is scoped to the **test binary** (one file under `tests/`) — there is
+no cross-binary or cross-crate ordering. Orders need not be contiguous
+(`10, 20, 30` is fine). When `app = …` is present, the barrier also covers the
+`TestApp` boot, so ordered tests never race on shared dev services.
+
+Add `group = "<name>"` to run several independent sequences in one binary; an
+ordered test only waits on lower orders of its **own** group (the default is the
+unnamed group):
+
+```rust
+#[r2e::test(app = my_app::MyApp, order = 1, group = "billing")]
+async fn creates_invoice(app: TestApp) { /* … */ }
+
+#[r2e::test(app = my_app::MyApp, order = 1, group = "catalog")]
+async fn seeds_catalog(app: TestApp) { /* … */ } // runs independently of billing
+```
+
+Failure semantics are **fail-fast**: if an ordered test panics, its group is
+poisoned and every later test in that group fails immediately with a message
+naming the failed predecessor — no deadlock, no cascade of timeouts. Declaring
+the same `order` twice in one group panics at runtime, naming both tests.
+
+If a lower order is filtered out (`cargo test <filter>`) or starved by
+`--test-threads`, a waiting test would otherwise hang. Instead it panics after a
+watchdog timeout, listing the pending orders. Tune the timeout with
+`R2E_TEST_ORDER_TIMEOUT_SECS` (default `60`).
+
+> `group` without `order` is a compile error, as is `order`/`group` on
+> `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
+> present whenever you use `app = …`).
+
 ## Hand-assembled apps: `TestApp::from_builder`
 
 `TestApp` wraps your router with an in-process HTTP client (via `tower::ServiceExt::oneshot` — no TCP). This means:

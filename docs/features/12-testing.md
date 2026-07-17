@@ -58,6 +58,51 @@ Non-macro forms: `TestApp::boot::<my_app::MyApp>()`, `TestApp::boot_with`,
 `TestApp::boot_plain`. See `examples/example-app/tests/app_test.rs` for the
 full showcase.
 
+### Ordered tests (@Order)
+
+Keep tests independent and parallel by default. For the occasional scenario that
+must run in sequence — create a resource, then read it back — tag each test with
+`order = <u32>`. Ordered tests run one after another in ascending order; tests
+without an `order` are completely unaffected and stay parallel (no
+`--test-threads=1`):
+
+```rust
+#[r2e::test(app = my_app::MyApp, order = 1)]
+async fn creates_user(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_created();
+}
+
+#[r2e::test(app = my_app::MyApp, order = 2)]
+async fn lists_created_user(app: TestApp) {
+    app.get("/users").send().await
+        .assert_ok()
+        .assert_json_path("/0/name", "Alice");
+}
+```
+
+- **Scope is the test binary** (one file under `tests/`) — there is no
+  cross-binary or cross-crate ordering. Orders need not be contiguous
+  (`10, 20, 30` is fine). The registry is filled at binary load via `inventory`,
+  and each ordered test awaits (an async barrier in `r2e-test`) all lower
+  **registered** orders of its group.
+- **Works with or without `app = …`.** When `app` is present the barrier covers
+  the `TestApp` boot too, so ordered tests never race on shared dev services.
+- **Groups:** `group = "<name>"` gives several independent sequences in one
+  binary — a test waits only on lower orders of its *own* group. The default is
+  the unnamed group.
+- **Fail-fast:** if an ordered test panics, its group is poisoned and later
+  tests in that group fail immediately with a message naming the failed
+  predecessor — no deadlock.
+- **Duplicate `order` in a group** panics at runtime, naming both tests (the
+  macro can't see sibling items, so this can't be a compile error).
+- **Watchdog:** a waiting test panics instead of hanging if its group makes no
+  progress for `R2E_TEST_ORDER_TIMEOUT_SECS` (default `60`) — typically a lower
+  order filtered out by `cargo test <filter>` or starved by `--test-threads`.
+  The diagnostic lists the pending orders and whether they ever started.
+- **Compile errors:** `group` without `order`; `order`/`group` on
+  `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
+  present whenever you use `app = …`).
+
 ## Usage
 
 ### 1. Adding the Dependency
