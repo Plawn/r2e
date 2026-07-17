@@ -1017,6 +1017,25 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         });
     }
 
+    // `#[pre_destroy]` disposal hooks. Controller cores are not `Clone`, so they
+    // cannot impl the `PreDestroy` trait (its supertrait); the disposal calls are
+    // inlined here, run from the core `Arc` at shutdown. An `Err` is logged and
+    // swallowed (disposal never aborts shutdown).
+    if !def.pre_destroy_methods.is_empty() {
+        let calls =
+            transverse::pre_destroy_calls(&quote! { __self }, &owner_name, &def.pre_destroy_methods);
+        controller_fns.push(quote! {
+            fn pre_destroy(
+                __core: ::std::sync::Arc<Self>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+                Box::pin(async move {
+                    let __self: &Self = &*__core;
+                    #(#calls)*
+                })
+            }
+        });
+    }
+
     (quote! { #(#module_items)* }, quote! { #(#controller_fns)* })
 }
 

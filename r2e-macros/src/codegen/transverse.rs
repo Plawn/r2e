@@ -40,6 +40,7 @@ fn strip_transverse_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
         .into_iter()
         .filter(|a| {
             !a.path().is_ident("post_construct")
+                && !a.path().is_ident("pre_destroy")
                 && !a.path().is_ident("scheduled")
                 && !a.path().is_ident("intercept")
         })
@@ -637,19 +638,29 @@ pub(crate) fn async_exec_method(
     }
 }
 
-// ── PostConstruct ────────────────────────────────────────────────────────
+// ── PostConstruct / PreDestroy (shared lifecycle scan) ───────────────────
 
-/// One `#[post_construct]` method's dispatch shape.
-pub(crate) struct PostConstructMethod {
+/// One lifecycle (`#[post_construct]` / `#[pre_destroy]`) method's dispatch
+/// shape.
+pub(crate) struct LifecycleMethod {
     pub fn_name: syn::Ident,
     pub is_async: bool,
     pub returns_result: bool,
 }
 
-/// Scan all `&self` methods in an impl block for `#[post_construct]`.
-pub(crate) fn scan_post_construct_methods(
+/// Back-compat alias: `#[post_construct]` methods.
+pub(crate) type PostConstructMethod = LifecycleMethod;
+/// `#[pre_destroy]` methods (same shape/rules as post-construct).
+pub(crate) type PreDestroyMethod = LifecycleMethod;
+
+/// Scan all `&self` methods in an impl block for a lifecycle attribute
+/// (`attr` = `"post_construct"` or `"pre_destroy"`). Validates `&self`-only
+/// (no extra parameters). `human` names the attribute in the error message.
+fn scan_lifecycle_methods(
     item_impl: &ItemImpl,
-) -> syn::Result<Vec<PostConstructMethod>> {
+    attr: &str,
+    human: &str,
+) -> syn::Result<Vec<LifecycleMethod>> {
     let mut methods = Vec::new();
 
     for item in &item_impl.items {
@@ -663,10 +674,7 @@ pub(crate) fn scan_post_construct_methods(
                 continue;
             }
 
-            let has_attr = method
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("post_construct"));
+            let has_attr = method.attrs.iter().any(|a| a.path().is_ident(attr));
             if !has_attr {
                 continue;
             }
@@ -675,7 +683,7 @@ pub(crate) fn scan_post_construct_methods(
             if param_count > 1 {
                 return Err(syn::Error::new_spanned(
                     &method.sig,
-                    "#[post_construct] method must take only `&self` — no additional parameters",
+                    format!("{human} method must take only `&self` — no additional parameters"),
                 ));
             }
 
@@ -685,7 +693,7 @@ pub(crate) fn scan_post_construct_methods(
                 ReturnType::Type(_, ty) => is_result_like(ty),
             };
 
-            methods.push(PostConstructMethod {
+            methods.push(LifecycleMethod {
                 fn_name: method.sig.ident.clone(),
                 is_async,
                 returns_result,
@@ -694,6 +702,81 @@ pub(crate) fn scan_post_construct_methods(
     }
 
     Ok(methods)
+}
+
+/// Scan all `&self` methods in an impl block for `#[post_construct]`.
+pub(crate) fn scan_post_construct_methods(
+    item_impl: &ItemImpl,
+) -> syn::Result<Vec<PostConstructMethod>> {
+    scan_lifecycle_methods(item_impl, "post_construct", "#[post_construct]")
+}
+
+/// Scan all `&self` methods in an impl block for `#[pre_destroy]`.
+pub(crate) fn scan_pre_destroy_methods(
+    item_impl: &ItemImpl,
+) -> syn::Result<Vec<PreDestroyMethod>> {
+    scan_lifecycle_methods(item_impl, "pre_destroy", "#[pre_destroy]")
+}
+
+/// The per-method disposal call statements shared by the bean `PreDestroy`
+/// trait impl and the controller-core inline override. An `Err` is **logged
+/// and swallowed** (disposal must not abort shutdown), in declaration order.
+/// `receiver` is the `&self`-ish expression the methods are called on (`self`
+/// for the bean trait impl, `__self` for the controller override); `owner`
+/// names the type for the log line.
+pub(crate) fn pre_destroy_calls(
+    receiver: &TokenStream,
+    owner: &str,
+    methods: &[PreDestroyMethod],
+) -> Vec<TokenStream> {
+    methods
+        .iter()
+        .map(|m| {
+            let fn_name = &m.fn_name;
+            let fn_str = fn_name.to_string();
+            let call = if m.is_async {
+                quote! { #receiver.#fn_name().await }
+            } else {
+                quote! { #receiver.#fn_name() }
+            };
+            if m.returns_result {
+                quote! {
+                    if let ::core::result::Result::Err(__e) = #call {
+                        eprintln!("[r2e] #[pre_destroy] {}::{} failed: {:?}", #owner, #fn_str, __e);
+                    }
+                }
+            } else {
+                quote! { #call; }
+            }
+        })
+        .collect()
+}
+
+/// Emit `impl PreDestroy for <target>` from a list of `#[pre_destroy]` methods.
+/// `target` must be `Clone` (the bean path; the disposer reads the bean by
+/// value from the resolved graph). `owner` names the type for error logging.
+/// Returns empty when `methods` is empty.
+pub(crate) fn pre_destroy_impl(
+    target: &TokenStream,
+    owner: &str,
+    methods: &[PreDestroyMethod],
+) -> TokenStream {
+    if methods.is_empty() {
+        return quote! {};
+    }
+
+    let krate = r2e_core_path();
+    let calls = pre_destroy_calls(&quote! { self }, owner, methods);
+
+    quote! {
+        impl #krate::beans::PreDestroy for #target {
+            fn pre_destroy(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+                Box::pin(async move {
+                    #(#calls)*
+                })
+            }
+        }
+    }
 }
 
 /// Emit `impl PostConstruct for <target>` from a list of post-construct

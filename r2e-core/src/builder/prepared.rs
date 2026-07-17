@@ -26,6 +26,12 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) serve_hooks: Vec<ServeHook>,
     pub(super) plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     pub(super) plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Controller-core `#[pre_destroy]` disposers (reverse registration order),
+    /// run in the async shutdown phase before the bean disposers.
+    pub(super) controller_disposers: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Bean `#[pre_destroy]` disposers (reverse registration order), run last in
+    /// the async shutdown phase.
+    pub(super) bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
     pub(super) plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     pub(super) shutdown_grace_period: Option<Duration>,
     pub(super) tcp_nodelay: bool,
@@ -294,6 +300,15 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         } else {
             (self.plugin_shutdown_hooks, self.plugin_async_shutdown_hooks)
         };
+        // Pre-destroy disposal (`#[pre_destroy]`) runs in the async shutdown
+        // phase: controller cores first (reverse registration), then bean
+        // disposers (reverse registration) — so a controller disposes before the
+        // beans it injected.
+        let (controller_disposers, bean_disposers) = if skip_lifecycle {
+            (Vec::new(), Vec::new())
+        } else {
+            (self.controller_disposers, self.bean_disposers)
+        };
         let drain_hooks = self.drain_hooks;
         let state_for_drain = self.state.clone();
         let stop_handle = self.stop_handle.clone();
@@ -365,6 +380,14 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 hook();
             }
             for hook in plugin_async_shutdown_hooks {
+                hook().await;
+            }
+            // Controller `#[pre_destroy]` hooks, then bean `#[pre_destroy]`
+            // disposers (both already in reverse registration order).
+            for hook in controller_disposers {
+                hook().await;
+            }
+            for hook in bean_disposers {
                 hook().await;
             }
             // `_cancel_guard` drops here and cancels the token.

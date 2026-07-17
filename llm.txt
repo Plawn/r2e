@@ -409,6 +409,44 @@ impl LifecycleController {
 }
 ```
 
+### `#[pre_destroy]` — disposal hooks
+
+The `@PreDestroy` counterpart of `#[post_construct]`, on `#[bean]` impls AND
+`#[routes]` controller impls. Same signature rules (`&self` only, sync or async,
+returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`). Runs during
+**graceful shutdown**, in the async shutdown phase — controller hooks first, then
+bean hooks, each in **reverse registration order** (a controller/bean disposes
+before the beans it injected). An `Err` is **logged and swallowed** — disposal
+never aborts shutdown. A pinned `override_bean` **skips** the hook (same
+undecorated-pin rule as `#[scheduled]`/`#[post_construct]`). Same rejection
+matrix as `#[post_construct]`: it is a compile error to combine `#[pre_destroy]`
+with a route / `#[scheduled]` / `#[consumer]` / `#[async_exec]` /
+`#[post_construct]` / `#[intercept]` on one method, or to give it parameters.
+
+```rust
+#[bean]
+impl ConnectionPool {
+    pub fn new(cfg: PoolConfig) -> Self { /* ... */ }
+
+    #[pre_destroy]
+    async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.drain_and_close().await?;   // Err is logged, shutdown continues
+        Ok(())
+    }
+}
+
+#[routes]
+impl LifecycleController {
+    #[pre_destroy]
+    async fn flush(&self) { /* runs once at shutdown */ }
+}
+```
+
+For values entering the graph via `.provide(instance)` (or plugin `Provided`
+beans), use the imperative form `AppBuilder::provide_with_pre_destroy(value)`
+(the value implements the `PreDestroy` trait) or, in a plugin's `install`,
+`ctx.run_pre_destroy::<T>()`.
+
 ### Feature modules — `#[module]`
 
 Package a vertical slice (services + controllers) as one registration with a

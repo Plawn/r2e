@@ -343,6 +343,38 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         ));
     }
 
+    let pd_methods = transverse::scan_pre_destroy_methods(item_impl)?;
+    if bean_args.lazy && !pd_methods.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "#[bean(lazy)] does not yet support #[pre_destroy] — remove one or the other",
+        ));
+    }
+    // A single method must not be BOTH a lifecycle hook and a transverse/route
+    // marker; enforce the pre_destroy side of the matrix (mirrors post_construct).
+    for item in &item_impl.items {
+        if let syn::ImplItem::Fn(m) = item {
+            if !m.attrs.iter().any(|a| a.path().is_ident("pre_destroy")) {
+                continue;
+            }
+            let clash = m.attrs.iter().any(|a| {
+                a.path().is_ident("post_construct")
+                    || a.path().is_ident("scheduled")
+                    || a.path().is_ident("consumer")
+                    || a.path().is_ident("async_exec")
+                    || a.path().is_ident("intercept")
+            });
+            if clash {
+                return Err(syn::Error::new_spanned(
+                    &m.sig,
+                    "#[pre_destroy] cannot be combined with #[post_construct], #[scheduled], \
+                     #[consumer], #[async_exec], or #[intercept] on the same method — it is a \
+                     plain disposal hook that runs once at shutdown",
+                ));
+            }
+        }
+    }
+
     // An impl-level `#[intercept]` applies only to scheduled/consumer methods;
     // with none present it is a silent no-op (and would force the constructor
     // literal rewrite without a matching wrapper). Fail loud on the attribute.
@@ -492,14 +524,19 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         transverse::event_subscriber_impl(&quote! { #self_ty }, &consumer_defs);
 
     let post_construct_impl = transverse::post_construct_impl(&quote! { #self_ty }, &pc_methods);
+    let pre_destroy_impl =
+        transverse::pre_destroy_impl(&quote! { #self_ty }, &type_ident.to_string(), &pd_methods);
 
     let after_register_fn = if !pc_methods.is_empty()
+        || !pd_methods.is_empty()
         || !scheduled_methods.is_empty()
         || !consumer_methods.is_empty()
         || has_decos
     {
         let pc_hook = (!pc_methods.is_empty())
             .then(|| quote! { registry.register_post_construct::<Self>(); });
+        let pd_hook = (!pd_methods.is_empty())
+            .then(|| quote! { registry.register_pre_destroy::<Self>(); });
         let sched_hook = (!scheduled_methods.is_empty())
             .then(|| quote! { registry.register_scheduled_source::<Self>(); });
         let sub_hook = (!consumer_methods.is_empty())
@@ -509,6 +546,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
                 #pc_hook
+                #pd_hook
                 #sched_hook
                 #sub_hook
                 #deco_hook
@@ -582,6 +620,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         #bean_impl
         #registrable_impl
         #post_construct_impl
+        #pre_destroy_impl
         #subscriber_impl
         #scheduled_source_impl
     };
@@ -980,6 +1019,7 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                     .into_iter()
                     .filter(|a| {
                         !a.path().is_ident("post_construct")
+                            && !a.path().is_ident("pre_destroy")
                             && !a.path().is_ident("scheduled")
                             && !a.path().is_ident("intercept")
                     })

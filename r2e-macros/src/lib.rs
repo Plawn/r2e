@@ -855,6 +855,41 @@ pub fn post_construct(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Mark a method as a **pre-destroy (disposal) hook** — called during the
+/// server's graceful shutdown, the symmetric counterpart of
+/// [`post_construct`].
+///
+/// The annotated method must take `&self` and return either `()` or
+/// `Result<(), Box<dyn Error + Send + Sync>>`. It may be `async`. Multiple
+/// `#[pre_destroy]` methods are called in declaration order. An `Err` is
+/// **logged and swallowed** — disposal never aborts shutdown.
+///
+/// Works on `#[bean]` impls (via [`PreDestroy`](r2e_core::PreDestroy), read by
+/// value from the resolved graph — a pinned `override_bean` skips the hook) and
+/// on `#[routes]` controller impls (run from the core `Arc` at shutdown). It
+/// cannot be combined with a route / `#[scheduled]` / `#[consumer]` /
+/// `#[async_exec]` / `#[post_construct]` marker on the same method, and takes no
+/// parameters.
+///
+/// ```ignore
+/// #[bean]
+/// impl ConnectionPool {
+///     pub fn new(cfg: PoolConfig) -> Self { /* ... */ }
+///
+///     #[pre_destroy]
+///     async fn close(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         self.drain_and_close().await?;
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// This attribute is consumed by [`bean`] / [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn pre_destroy(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Attribute macro on an `impl` block — marks the type as a bean and
 /// generates a [`Bean`](r2e_core::beans::Bean) trait impl.
 ///
