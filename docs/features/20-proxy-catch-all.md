@@ -1,5 +1,10 @@
 # Feature 20 — Proxy & Catch-All Routes
 
+## TL;DR
+
+Express proxy / gateway / multiplexer traffic as first-class controller routes — with DI, guards, interceptors, config, and TestApp support — instead of a hand-written axum fallback. `#[any("/path/{*wildcard}")]` matches every HTTP method for prefix-scoped proxying; `#[fallback]` registers a controller-scoped, app-wide catch-all for requests no other route matched. Any handler can take `r2e::http::extract::Request` as its **last** param for raw method / URI / headers and the streaming body.
+
+
 ## Objective
 
 Make proxy-shaped traffic (registry proxies, API gateways, protocol multiplexers) expressible as **first-class controller routes** — with DI, guards, interceptors, config, and TestApp support — instead of a hand-written axum fallback mounted through `with_layer_fn` with a closure-captured state clone.

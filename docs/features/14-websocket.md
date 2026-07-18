@@ -1,5 +1,10 @@
 # Feature 14 — WebSocket
 
+## TL;DR
+
+Native WebSocket endpoints in controllers — no extra feature flag (in `r2e-core`). Annotate a method `#[ws("/path")]` and take a `WsStream` param; the HTTP upgrade is handled for you, with typed helpers for text/JSON/binary. Broadcast to all clients with an injected `WsBroadcaster` (`Clone + Send + Sync`), or use `WsRooms` for named on-demand rooms; `WsHandler` gives a structured `on_connect` / `on_message` / `on_close` lifecycle.
+
+
 ## Goal
 
 Provide native WebSocket support within R2E controllers. The `#[ws]` attribute transforms a controller method into a WebSocket endpoint with automatic HTTP upgrade handling. The `WsStream`, `WsBroadcaster`, and `WsRooms` types offer an ergonomic API for sending, receiving, and broadcasting messages.

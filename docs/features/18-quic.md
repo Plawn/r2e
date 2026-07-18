@@ -1,5 +1,10 @@
 # Feature 18 — QUIC / HTTP/3
 
+## TL;DR
+
+HTTP/3 over QUIC running alongside the TCP server, plus raw QUIC stream access. Enable the `quic` feature — deliberately **not** in `full` (heavy crypto deps: quinn, rustls, h3). Configured under `server.quic` in `application.yaml`; the server runs TCP and QUIC/UDP endpoints sharing the same axum `Router` (guards, interceptors, middleware, error handling identical), streams HTTP/3 bodies with backpressure, and auto-injects an `Alt-Svc` header advertising h3. `QuicEndpoint` / `QuicConnection` expose raw streams for custom protocols.
+
+
 ## Objective
 
 Provide HTTP/3 support (via QUIC) alongside the existing TCP/HTTP server, plus raw QUIC stream access for custom protocols.

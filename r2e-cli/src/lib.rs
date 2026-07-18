@@ -12,6 +12,7 @@
 //! | `r2e dev` | Start development server with hot-reload |
 //! | `r2e doctor` | Run project health diagnostics |
 //! | `r2e routes` | List all declared routes from source |
+//! | `r2e docs [<module>]` | Print bundled, version-matched per-module docs |
 //!
 //! ## Architecture
 //!
@@ -23,6 +24,7 @@
 //! - [`commands::dev`] — development server (`r2e dev`)
 //! - [`commands::doctor`] — project diagnostics (`r2e doctor`)
 //! - [`commands::routes`] — route listing (`r2e routes`)
+//! - [`commands::docs`] — bundled module documentation (`r2e docs`)
 //! - [`commands::templates`] — shared template helpers and code templates
 
 pub mod commands;

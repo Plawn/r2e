@@ -1,5 +1,10 @@
 # Feature 11 — JWT Security / Roles
 
+## TL;DR
+
+Complete JWT auth wired into controllers: token validation, identity extraction, and role-based access control. Provide an `Arc<JwtClaimsValidator>` bean (static HMAC key for tests, JWKS endpoint for prod via `SecurityConfig`), then extract the user with `#[inject(identity)] user: AuthenticatedUser` (struct field or handler param; `Option<_>` for adaptive auth) and gate routes with `#[roles("admin")]`. A struct-level identity authenticates every route fail-closed — opt public routes out explicitly with `#[anonymous]`.
+
+
 ## Goal
 
 Provide complete JWT authentication with token validation, automatic user identity extraction, and role-based access control — all integrated into the controller system via `#[inject(identity)]` and `#[roles]`.

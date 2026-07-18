@@ -1,5 +1,10 @@
 # Feature 12 — Testing
 
+## TL;DR
+
+In-process integration tests with no TCP server — requests dispatch via `tower::ServiceExt::oneshot`, so tests are fast and deterministic. Boot the **real** app by type: `#[r2e::test(app = my_app::MyApp)]` gives a `TestApp` client plus `#[inject]` bean params; it forces the `test` profile (`application-test.yaml`) and pins a local `TestJwt` validator so `.as_user("alice", &["user"])` needs no IdP. Fluent assertions (`assert_ok()`, `assert_json_path()`, `assert_json_contains()`, …), `TestSession` for cookie flows, mocks/config patches via the `with` hook.
+
+
 ## Goal
 
 Provide testing utilities for writing in-process integration tests without starting a TCP server: simulated HTTP client (`TestApp`), test JWT generation (`TestJwt`), session persistence (`TestSession`), and rich assertion helpers.

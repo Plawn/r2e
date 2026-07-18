@@ -1,5 +1,10 @@
 # Feature 9 — Development Mode
 
+## TL;DR
+
+Diagnostic endpoints for dev tooling and restart detection. `.with(DevReload)` after `build_state()` exposes `GET /__r2e_dev/status` (returns `"dev"` as plain text) and `GET /__r2e_dev/ping` (JSON with `boot_time` + `status`). A changed `boot_time` (ms since epoch, captured once at startup via `OnceLock`) means the server restarted — this is how `r2e dev` detects reloads.
+
+
 ## Objective
 
 Provide diagnostic endpoints and hot-reload infrastructure for development, allowing tools and scripts to detect server state and restarts.

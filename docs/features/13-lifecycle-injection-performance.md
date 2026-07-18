@@ -1,5 +1,10 @@
 # Feature 13 — Lifecycle, Dependency Injection, and Performance Implications
 
+## TL;DR
+
+How an R2E app lives from boot to shutdown, and why DI is zero-cost. `AppBuilder` accumulates `.load_config` / `.plugin` / `.provide` / `.register` calls; `build_state()` resolves the bean graph into an **inferred HList state** (you never write a state struct), controllers register after, and `serve()` does final assembly. Beans resolve by type at compile time (`state.get::<T>()` = fixed-offset field access) — no runtime reflection, one state clone at construction, one `Arc` clone + one extraction per request. Apps with >~127 registered beans need `#![recursion_limit = "512"]` in each crate root.
+
+
 ## Overview
 
 This document describes the complete lifecycle of an R2E application — from startup to shutdown — as well as the internals of dependency injection and its performance implications.

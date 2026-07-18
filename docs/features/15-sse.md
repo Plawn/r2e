@@ -1,5 +1,10 @@
 # Feature 15 — Server-Sent Events (SSE)
 
+## TL;DR
+
+Server-Sent Events with the Axum boilerplate handled. Annotate a method `#[sse("/path")]` returning `impl Stream<Item = Result<SseEvent, Infallible>>` — the macro wraps it in `Sse::new()` with a default keep-alive. Inject an `SseBroadcaster` (wraps a `tokio::sync::broadcast` channel, `Clone + Send + Sync`) and push to every subscriber with `send()` / `send_event()`. No feature flag needed (available via the prelude).
+
+
 ## Goal
 
 Provide native support for Server-Sent Events, allowing real-time updates to be pushed from the server to the client via a persistent HTTP connection in `text/event-stream` format. The `#[sse]` attribute and the `SseBroadcaster` abstraction handle all the Axum boilerplate.

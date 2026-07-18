@@ -1,5 +1,10 @@
 # Feature 5 — OpenAPI
 
+## TL;DR
+
+Generate an OpenAPI 3.1.0 spec from controller route metadata and serve a built-in docs UI. Enable the `openapi` feature (plus `schemars`), then after `build_state()` add `.with(OpenApiPlugin::new(OpenApiConfig::new("My API", "0.1.0").with_docs_ui(true)))`. The `#[routes]` macro emits a `RouteInfo` per route (path, method, params, roles, request/response schemas). Serves `GET /openapi.json` and `GET /docs`.
+
+
 ## Objective
 
 Automatically generate an OpenAPI 3.1.0 specification from controller route metadata, and serve a built-in API documentation interface (WTI).

@@ -1,5 +1,10 @@
 # Feature 21 — Dynamic (Config-Driven) Scheduled Tasks
 
+## TL;DR
+
+Register runtime-defined task sets (one task per configured source, tenant, or feed) through a public scheduler API instead of reaching into internals. On the post-`build_state()` builder, call `schedule_task(ScheduledTaskDef::new(name, schedule, state, |s| async { ... }))` or `schedule_tasks(...)` for a batch (`_with` variants hand you the `BeanContext` to pull state by type). Requires `.plugin(Scheduler)` + `.plugin(Executor)` before `build_state()`, and registration before `serve()` (the registry drains once at boot). `#[scheduled]` remains the right tool for statically-known tasks.
+
+
 ## Objective
 
 Make runtime-defined task sets — one task per configured source, tenant, or feed — registrable through a **public scheduler API**, instead of reaching into internals (`get_plugin_data::<TaskRegistryHandle>()` + `ScheduledTaskMarker` + hand-double-boxed `ScheduledTaskDef`s). `#[scheduled]` remains the right tool for statically-known tasks; this API covers the rest.

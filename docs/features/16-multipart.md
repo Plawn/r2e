@@ -1,5 +1,10 @@
 # Feature 16 — Multipart (File Upload)
 
+## TL;DR
+
+Typed `multipart/form-data` extraction into a struct. Derive `FromMultipart` on a struct whose field names match the form fields, then take `TypedMultipart<T>` as a handler param — scalar fields are parsed and files collected into `UploadedFile`, with a structured 400 returned before the handler runs if a required field is missing or unparseable. Enable the `multipart` feature (included in `full`); types are in the prelude.
+
+
 ## Goal
 
 Provide typed extraction of multipart forms, transforming `multipart/form-data` requests into Rust structs. Derive `FromMultipart` on a struct and use `TypedMultipart<T>` as a handler parameter — fields are parsed, files are collected, and errors are returned as structured 400 responses.
