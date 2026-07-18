@@ -33,10 +33,10 @@ GET /users?page=2&size=10&sort=created_at,desc
 #[derive(Serialize)]
 pub struct Page<T> {
     pub content: Vec<T>,
-    pub total_elements: i64,
-    pub total_pages: i64,
-    pub page: i64,
-    pub size: i64,
+    pub page: u64,
+    pub size: u64,
+    pub total_elements: u64,
+    pub total_pages: u64,
 }
 ```
 
@@ -60,19 +60,19 @@ async fn list(
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| HttpError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
     // Get page of results
     let users = sqlx::query_as::<_, User>(
         "SELECT id, name, email FROM users ORDER BY id LIMIT ? OFFSET ?"
     )
-    .bind(pageable.size)
-    .bind(offset)
+    .bind(pageable.size as i64)
+    .bind(offset as i64)
     .fetch_all(&self.pool)
     .await
-    .map_err(|e| HttpError::Internal(e.to_string()))?;
+    .map_err(|e| HttpError::internal(e.to_string()))?;
 
-    Ok(Json(Page::new(users, &pageable, total.0)))
+    Ok(Json(Page::new(users, &pageable, total.0 as u64)))
 }
 ```
 

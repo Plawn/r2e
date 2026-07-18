@@ -25,7 +25,22 @@ AppBuilder::new()
     .unwrap();
 ```
 
-Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` to the bean graph and **requires the `Executor` plugin**: it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`LateDeps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
+Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` and a `ScheduledJobRegistry` to the bean graph and **requires the `Executor` plugin**: it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`LateDeps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
+
+### Configuration (`scheduler.*`)
+
+The plugin reads an optional `scheduler.*` YAML section (`SchedulerConfig`, `CONFIG_PREFIX = "scheduler"`). All keys are optional:
+
+```yaml
+scheduler:
+  enabled: true            # standard <prefix>.enabled gate; when false, tasks don't start (beans still provided)
+  executor: dedicated      # "shared" (default) or "dedicated"
+  max-concurrent: 8        # dedicated pool only
+  queue-capacity: 256      # dedicated pool only
+  shutdown-timeout: 10s    # dedicated pool only
+```
+
+By default ticks run on the shared `PoolExecutor`. Set `executor: dedicated` to give scheduled work a private pool (sized by the keys above) so it never contends with other background jobs.
 
 ## Declaring scheduled tasks
 
@@ -76,6 +91,30 @@ impl ScheduledJobs {
 | `every = "dur"` | Run at a duration interval | `#[scheduled(every = "5m")]` |
 | `every = .., initial_delay = ..` | Interval with initial delay | `#[scheduled(every = "1m", initial_delay = "10s")]` |
 | `cron = "expr"` | Cron expression (6 fields, validated at compile time) | `#[scheduled(cron = "0 */5 * * * *")]` |
+| `name = ".."` | Override the task name (default `<Controller>_<method>`) | `#[scheduled(every = 30, name = "user_count")]` |
+| `overlap = ".."` | Self-overlap policy: `"skip"` (default) or `"concurrent"` | `#[scheduled(every = "50ms", overlap = "concurrent")]` |
+| `skip_if = ".."` | Names a `&self -> bool` predicate that suppresses a tick | `#[scheduled(every = "5m", skip_if = "maintenance_mode")]` |
+
+### Overlap policy and skip predicate
+
+By default a task uses `overlap = "skip"`: if a tick is still running when the next one is due, that tick is skipped. Use `overlap = "concurrent"` to let ticks run in parallel.
+
+`skip_if = "method"` names a plain `&self` method (sync or async) on the **same impl block** returning `bool`. It is evaluated before every tick; `true` suppresses the body and counts in `ScheduledJobInfo::skip_count` (Quarkus `skipExecutionIf`):
+
+```rust
+#[routes]
+impl ScheduledJobs {
+    fn maintenance_mode(&self) -> bool {
+        // gate on some shared state
+        false
+    }
+
+    #[scheduled(every = "5m", skip_if = "maintenance_mode")]
+    async fn sync(&self) {
+        // ...
+    }
+}
+```
 
 ### Cron expression format
 
@@ -90,7 +129,7 @@ Six fields: `second minute hour day_of_month month day_of_week`
 
 ## Requirements
 
-- Scheduled methods run on the controller core (built from the bean graph via `ContextConstruct`) and cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable. `ContextConstruct` is generated only when the controller declares **no** struct-level identity; if you need both scheduled tasks and authenticated endpoints, use param-level identity (the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity)). Scheduled methods use only core (`#[inject]` / `#[config]`) fields.
+- Scheduled methods run on the controller core (built from the bean graph via `ContextConstruct`) and cannot access request-scoped fields — reading `#[inject(identity)]` / `#[inject(request)]` inside a scheduled method is a compile error. `ContextConstruct` is generated for **every** controller core (identity and request-scoped fields are stripped onto the per-request façade), so a controller may freely combine struct-level identity for its authenticated endpoints with `#[scheduled]` tasks. Scheduled methods use only core (`#[inject]` / `#[config]`) fields.
 - The `Scheduler` **and `Executor`** plugins must be installed before `build_state()` (the Scheduler runs its ticks on the executor pool)
 - Scheduled methods take `&self` only (no additional parameters)
 
@@ -156,6 +195,9 @@ impl AdminController {
 | `is_cancelled()` | `bool` | Check if the scheduler has been cancelled |
 | `cancel()` | `()` | Cancel the scheduler and all running tasks |
 | `token()` | `CancellationToken` | Get the underlying `CancellationToken` |
+| `pause(name).await` | `bool` | Pause a job by name (keeps advancing its cadence but never fires). `false` if unknown |
+| `resume(name).await` | `bool` | Resume a paused job by name. `false` if unknown |
+| `trigger_now(name).await` | `bool` | Fire a job once, immediately and out of band (allowed even when paused). `false` if unknown or a `skip`-overlap tick is already in flight |
 
 > **Note:** `SchedulerHandle` requires the `Scheduler` plugin to be installed. If it is missing, extraction returns a `500 Internal Server Error` with a descriptive message.
 
@@ -186,16 +228,26 @@ impl JobAdminController {
 
 Each entry returned by `list_jobs()` is a `ScheduledJobInfo` with:
 
+The metadata (`name`, `schedule`) is fixed at registration; the remaining fields carry live runtime stats updated by the driver as the job runs.
+
 | Field | Type | Description | Example value |
 |-------|------|-------------|---------------|
 | `name` | `String` | The name of the scheduled task | `"count_users"` |
 | `schedule` | `String` | Human-readable schedule description | `"every 30s"`, `"every 60s (delay 10s)"`, `"cron: 0 */5 * * * *"` |
+| `last_run` | `Option<DateTime<Utc>>` | Wall-clock time the job most recently fired | `None` until first run |
+| `last_duration` | `Option<Duration>` | Wall duration of the most recent completed tick | |
+| `next_run` | `Option<DateTime<Utc>>` | Wall-clock time the job is next expected to fire (`None` for a spent cron) | |
+| `run_count` | `u64` | Number of ticks whose body actually ran | `42` |
+| `skip_count` | `u64` | Number of ticks suppressed by the job's `skip_if` predicate | `3` |
+| `panic_count` | `u64` | Number of ticks that panicked (contained by the pool) | `0` |
+| `paused` | `bool` | Whether the job is currently paused | `false` |
 
 ### ScheduledJobRegistry methods
 
 | Method | Return type | Description |
 |--------|-------------|-------------|
 | `list_jobs()` | `Vec<ScheduledJobInfo>` | Returns a snapshot of all registered jobs |
+| `job(name)` | `Option<ScheduledJobInfo>` | Snapshot of a single job by name |
 | `register(info)` | `()` | Register a job (used internally by the scheduler) |
 
 ### Combining SchedulerHandle and ScheduledJobRegistry
@@ -237,6 +289,41 @@ impl SchedulerAdminController {
     }
 }
 ```
+
+## Bean scheduled tasks
+
+`#[scheduled]` also works on `#[bean]` methods — no controller needed. The `#[bean]` macro generates the task source and an `after_register` hook, so `.register::<T>()` alone collects the tasks at `build_state()`:
+
+```rust
+#[derive(Clone)]
+pub struct CleanupBean {
+    store: Store,
+}
+
+#[bean]
+impl CleanupBean {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
+    #[scheduled(every = "1h", name = "cleanup")]
+    async fn tick(&self) {
+        self.store.purge_expired().await;
+    }
+}
+```
+
+```rust
+AppBuilder::new()
+    .plugin(Executor)
+    .plugin(Scheduler)
+    .register::<CleanupBean>()
+    .build_state()
+    .await
+    // ...
+```
+
+Bean scheduled methods take `&self` and support the same `every` / `cron` / `initial_delay` / `overlap` / `skip_if` attributes as controller methods.
 
 ## Mixed controllers
 

@@ -25,8 +25,8 @@ Thread-safe TTL cache:
 use r2e::r2e_cache::TtlCache;
 use std::time::Duration;
 
-let cache = TtlCache::new();
-cache.insert("key", "value", Duration::from_secs(60));
+let cache = TtlCache::new(Duration::from_secs(60)); // TTL is fixed per cache
+cache.insert("key", "value");
 
 if let Some(value) = cache.get(&"key") {
     println!("cached: {}", value);

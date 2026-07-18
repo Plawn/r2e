@@ -99,7 +99,7 @@ broadcaster.send("hello").ok();
 broadcaster.send_event("update", r#"{"count":42}"#).ok();
 ```
 
-Both methods return `Result<(), SendError>`. The error occurs only when there are zero active subscribers. It is safe to ignore with `.ok()`.
+Both methods return `Result<usize, SendError>` — the `Ok` value is the number of subscribers that received the message. The error occurs only when there are zero active subscribers. It is safe to ignore with `.ok()`.
 
 ### Subscribing
 
@@ -328,8 +328,8 @@ impl SseController {
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new` | `fn new(capacity: usize) -> Self` | Create a broadcaster with the given buffer capacity |
-| `send` | `fn send(&self, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a data-only event |
-| `send_event` | `fn send_event(&self, event: &str, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a named event with data |
+| `send` | `fn send(&self, data: impl Into<String>) -> Result<usize, SendError>` | Broadcast a data-only event (returns subscriber count) |
+| `send_event` | `fn send_event(&self, event: &str, data: impl Into<String>) -> Result<usize, SendError>` | Broadcast a named event with data (returns subscriber count) |
 | `subscribe` | `fn subscribe(&self) -> SseSubscription` | Create a new subscription stream |
 
 ### `SseMessage`

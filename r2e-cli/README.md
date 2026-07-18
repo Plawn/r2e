@@ -57,9 +57,11 @@ r2e new my-app --no-interactive             # Minimal, no prompts
 ```
 my-app/
   .gitignore
-  Cargo.toml                    # r2e + tokio + serde + sqlx + tonic + prost
+  Cargo.toml                    # r2e + tokio + serde + sqlx + tonic/prost
   application.yaml              # App config (database, security, gRPC)
-  build.rs                      # tonic-build for proto compilation
+  AGENTS.md                     # Agent instructions (idiomatic R2E)
+  CLAUDE.md                     # Imports AGENTS.md
+  build.rs                      # r2e-grpc-build: compiles proto/*.proto
   migrations/                   # SQLx migration directory
   proto/
     greeter.proto               # Sample gRPC service definition
@@ -71,6 +73,11 @@ my-app/
     controllers/
       mod.rs
       hello.rs                  # Hello world controller
+    grpc/
+      mod.rs                    # shared `proto` module (`include_protos!()`)
+      greeter.rs                # Greeter service (`#[grpc_routes]`)
+  tests/
+    app.rs                      # boots the app via `#[r2e::test]`
 ```
 
 **Minimal project** (no flags):
@@ -80,6 +87,8 @@ my-app/
   .gitignore
   Cargo.toml
   application.yaml
+  AGENTS.md
+  CLAUDE.md
   src/
     app.rs
     env.rs
@@ -88,6 +97,8 @@ my-app/
     controllers/
       mod.rs
       hello.rs
+  tests/
+    app.rs
 ```
 
 ---
@@ -171,11 +182,13 @@ r2e generate grpc-service User --package myapp
 | `proto/user.proto` | Service definition with `GetUser` and `ListUser` RPCs |
 | `src/grpc/user.rs` | Controller with `#[grpc_routes]`, placeholder RPC implementations |
 
-The `--package` flag sets the protobuf package name (default: `myapp`). After generation:
+The `--package` flag sets the protobuf package name (default: `myapp`). It also
+creates the shared `src/grpc/mod.rs` (the `proto` module, `include_protos!()`) if
+it does not already exist. After generation:
 
-1. Add `tonic_build::compile_protos("proto/user.proto")?;` to `build.rs`
-2. Register the service: `.register_grpc_service::<UserService>()`
-3. Run `cargo build` to generate proto code
+1. Register the service in `src/app.rs`, inside `App::build`: `.register_grpc_service::<UserService>()`
+2. Run `cargo build` — the `r2e-grpc-build` `build.rs` compiles the new `.proto`
+   automatically (no `build.rs` yet? run `r2e add grpc` first)
 
 ---
 
@@ -205,6 +218,14 @@ If the dependency is already present, prints a warning and does nothing.
 | `prometheus` | `r2e-prometheus` | Prometheus metrics |
 | `grpc` | `r2e-grpc` | gRPC server support |
 | `test` | `r2e-test` | Test helpers: TestApp, TestJwt |
+
+> `r2e add grpc` is a **full scaffold**, not just a dependency insert: it enables
+> the `grpc`/`grpc-reflection` features on the `r2e` dep (falling back to a direct
+> `r2e-grpc` dep), adds `tonic`/`tonic-prost`/`prost` + the `r2e-grpc-build`
+> build-dependency, writes a one-line `build.rs`, and (on a blank slate) drops
+> `proto/greeter.proto` + a `src/grpc/` skeleton.
+>
+> `r2e add openapi` also adds `schemars` (needed for `#[derive(JsonSchema)]`).
 
 ---
 
@@ -274,6 +295,7 @@ R2E Doctor — Checking project health
   ! dioxus-cli (for r2e dev) — Not installed. Run: cargo install dioxus-cli
   ✓ Migrations directory — 5 migration files
   ✓ Application entrypoint — R2E entrypoint found in main.rs
+  ✓ Bean registration count — bean count within default recursion limit
 
 1 issue(s) found
 ```
@@ -288,7 +310,7 @@ List all declared routes by parsing source files in `src/controllers/` (no compi
 r2e routes
 ```
 
-Extracts `#[controller(path = "...")]` base paths, `#[get]` / `#[post]` / `#[put]` / `#[delete]` / `#[patch]` method attributes, handler function names, and `#[roles("...")]` annotations.
+Extracts `#[controller(path = "...")]` base paths, route attributes (`#[get]` / `#[post]` / `#[put]` / `#[delete]` / `#[patch]` / `#[any]` / `#[sse]` / `#[ws]`, plus `#[fallback]`), handler function names, and `#[roles("...")]` annotations.
 
 **Example output:**
 

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Declarative attributes that wrap controller-method behavior via the `Interceptor<R>` around-pattern — built once at registration (graph-resolved, zero per-request cost, no `dyn`). Built-ins: `#[logged]`, `#[timed]`, `#[cached(ttl = N)]`, `#[cache_invalidate("group")]`, `#[rate_limited(max = N, window = S)]`. Custom ones apply with `#[intercept(Type)]` (impl `Interceptor<R>` + `SelfBuilt` or `DecoratorSpec`). Order: pre-auth guards → guards/`#[roles]` → controller-level then method-level interceptors → body. Interceptors always see the raw return type, never `Response`.
+A single `#[intercept(Spec)]` attribute wraps controller-method behavior via the `Interceptor<R>` around-pattern — built once at registration (graph-resolved, zero per-request cost, no `dyn`). Built-in specs (from `r2e-utils`): `Logged`, `Timed`, `Cache`, `CacheInvalidate`, `Counted`, `MetricTimed` — e.g. `#[intercept(Logged::info())]`, `#[intercept(Timed::threshold(100))]`, `#[intercept(Cache::ttl(30).group("users"))]`, `#[intercept(CacheInvalidate::group("users"))]`. Custom ones apply the same way (impl `Interceptor<R>` + `SelfBuilt` or `DecoratorSpec`). Rate limiting is a **guard**, not an interceptor: `#[guard(RateLimit::per_user(N, S))]` (post-auth) / `#[pre_guard(PreRateLimit::global(N, S))]` / `#[pre_guard(PreRateLimit::per_ip(N, S))]` (pre-auth). Order: pre-auth guards → guards/`#[roles]` → controller-level then method-level interceptors → body. Interceptors always see the raw return type, never `Response`.
 
 
 ## Goal
@@ -11,39 +11,40 @@ Provide declarative attributes to enrich controller method behavior: logging, pe
 
 ## Architecture
 
-Interceptors are based on a generic `Interceptor<R>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). `R` is the wrapped return type. Interceptors are **graph-resolved decorators** (Phase 6): they are built **once, at controller registration**, from the resolved `BeanContext` — never per request — and any beans they read are held as fields. Built-in interceptors (`Logged`, `Timed`, `Cache`) are structs that implement this trait; self-contained ones opt in with `impl SelfBuilt`, while bean-reading ones implement `DecoratorSpec`. All calls are monomorphized (no `dyn`) — zero-cost at runtime. There is **no state access at request time**.
+Interceptors are based on a generic `Interceptor<R>` trait with an `around` pattern (defined in `r2e-core/src/interceptors.rs`). `R` is the wrapped return type. Interceptors are **graph-resolved decorators**: they are built **once, at controller registration**, from the resolved `BeanContext` — never per request — and any beans they read are held as fields. Built-in interceptor specs (`Logged`, `Timed`, `Cache`, `CacheInvalidate`, `Counted`, `MetricTimed`) live in `r2e-utils` (`r2e-utils/src/interceptors.rs`); self-contained ones opt in with `impl SelfBuilt`, while bean-reading ones (`Cache`, `CacheInvalidate`) implement `DecoratorSpec`. All calls are monomorphized (no `dyn`) — zero-cost at runtime. There is **no state access at request time**.
 
-Exceptions to this architecture:
-- **`rate_limited`** — handled at the handler level (short-circuits before the controller, like `#[roles]`)
-- **`cache_invalidate`** — pure codegen (call after the body)
+Every interceptor — built-in or custom — is applied the **same way**, with `#[intercept(Spec)]`. There are no dedicated per-effect attributes.
 
-User-defined interceptors implement the same trait and are applied via `#[intercept(TypeName)]`.
+Rate limiting is **not** an interceptor: it is a **guard** (short-circuits before the body, like `#[roles]`), applied with `#[guard(RateLimit::...)]` (post-auth) or `#[pre_guard(PreRateLimit::...)]` (pre-auth, before JWT extraction). See the [Rate limiting](#rate-limiting) section.
 
 ### Why no-op attributes?
 
-All interceptor attributes (`#[logged]`, `#[timed]`, `#[cached]`, `#[rate_limited]`, `#[cache_invalidate]`, `#[intercept]`) are declared in `r2e-macros/src/lib.rs` as no-op `#[proc_macro_attribute]` — they return their input without transformation. The actual logic is in the `#[routes]` attribute, which parses these attributes from the raw token stream of the `impl` block.
+The attributes parsed by `#[routes]` (`#[intercept]`, `#[guard]`, `#[pre_guard]`, `#[roles]`, …) are declared in `r2e-macros/src/lib.rs` as no-op `#[proc_macro_attribute]` — they return their input without transformation. The actual logic is in the `#[routes]` attribute, which parses these attributes from the raw token stream of the `impl` block.
 
 These no-op declarations exist for three reasons:
 
-1. **Avoiding compiler errors** — without a declaration, using `#[logged]` outside of `#[routes]` (by mistake or during refactoring) would cause `cannot find attribute "logged"`.
+1. **Avoiding compiler errors** — without a declaration, using `#[intercept]` outside of `#[routes]` (by mistake or during refactoring) would cause `cannot find attribute "intercept"`.
 2. **Discoverability** — the attributes appear in `cargo doc` with their documentation, making the API explicit.
 3. **IDE support** — rust-analyzer and other tools provide autocompletion and hover documentation for registered attributes.
 
 ## Overview
 
+Every built-in effect is a spec type applied via `#[intercept(...)]` (or, for rate limiting, `#[guard(...)]`/`#[pre_guard(...)]`):
+
 | Attribute | Effect | Prerequisites |
 |-----------|--------|---------------|
-| `#[logged]` | Logs `entering`/`exiting` via `Interceptor` trait | None |
-| `#[logged(level = "debug")]` | Same, configurable level | None |
-| `#[timed]` | Logs execution time | None |
-| `#[timed(threshold = 100)]` | Logs only if > 100ms | None |
-| `#[cached(ttl = N)]` | Caches the result for N seconds | Return type `axum::Json<T>` or `T: Serialize + DeserializeOwned` |
-| `#[cached(ttl = N, group = "x")]` | Named cache (for invalidation) | Same |
-| `#[cached(ttl = N, key = "params")]` | Key based on parameters | Parameters impl `Debug` |
-| `#[cache_invalidate("x")]` | Invalidates a cache group after execution | None |
-| `#[rate_limited(max = N, window = S)]` | Global request limit | None |
-| `#[rate_limited(..., key = "user")]` | Per-user limit | `#[inject(identity)]` field |
-| `#[rate_limited(..., key = "ip")]` | Per-IP-address limit | `X-Forwarded-For` header |
+| `#[intercept(Logged::info())]` | Logs `entering`/`exiting` via `Interceptor` trait | None |
+| `#[intercept(Logged::debug())]` / `Logged::level(LogLevel::Debug)` | Same, configurable level | None |
+| `#[intercept(Timed::new())]` | Logs execution time | None |
+| `#[intercept(Timed::threshold(100))]` | Logs only if > 100ms | None |
+| `#[intercept(Cache::ttl(N))]` | Caches the result for N seconds | Return type impl `Cacheable` (e.g. `Json<T>`) + `CacheStore` bean |
+| `#[intercept(Cache::ttl(N).group("x"))]` | Named cache (for invalidation) | Same |
+| `#[intercept(Cache::with_key(N, key))]` | Explicit per-call key | Same |
+| `#[intercept(CacheInvalidate::group("x"))]` | Invalidates a cache group after execution | `CacheStore` bean |
+| `#[intercept(Counted::new("m"))]` / `MetricTimed::new("m")` | Named counter / duration metric | None |
+| `#[guard(RateLimit::per_user(N, S))]` | Per-user request limit | `RateLimitRegistry` bean + identity |
+| `#[pre_guard(PreRateLimit::global(N, S))]` | Global request limit | `RateLimitRegistry` bean |
+| `#[pre_guard(PreRateLimit::per_ip(N, S))]` | Per-IP-address limit | `RateLimitRegistry` bean + `X-Forwarded-For` header |
 | `#[intercept(Type)]` | User-defined custom interceptor | Type impl `Interceptor<R>` (+ `SelfBuilt` or `DecoratorSpec`) |
 
 ### Application order
@@ -115,21 +116,21 @@ the prelude (`TCons`/`TNil` live in `r2e::type_list`). `ctx.method_name` and
 `ctx.controller_name` are `Copy`, so they can be captured by each nested
 `async move` closure.
 
-## `#[logged]`
+## `Logged`
 
-Adds traces on entry and exit via the `Interceptor` trait.
+Adds traces on entry and exit via the `Interceptor` trait. Applied with `#[intercept(Logged::...)]` — `Logged` is `SelfBuilt` (no bean deps).
 
 ```rust
 #[get("/users")]
-#[logged]                        // default: Info
+#[intercept(Logged::info())]                   // default: Info
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 
 #[get("/users")]
-#[logged(level = "debug")]       // custom level
+#[intercept(Logged::debug())]                  // custom level
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 ```
 
-Available levels: `trace`, `debug`, `info`, `warn`, `error`.
+Level constructors: `Logged::trace()`, `Logged::debug()`, `Logged::info()`, `Logged::warn()`, `Logged::error()`, or `Logged::level(LogLevel::Debug)`.
 
 Generated logs (info level):
 
@@ -138,19 +139,21 @@ INFO method="list" "entering"
 INFO method="list" "exiting"
 ```
 
-## `#[timed]`
+## `Timed`
 
-Measures execution time. With an optional threshold, logs only if the time exceeds the threshold.
+Measures execution time. With an optional threshold, logs only if the time exceeds the threshold. `Timed` is `SelfBuilt`.
 
 ```rust
 #[get("/users")]
-#[timed]                                     // default: Info, no threshold
+#[intercept(Timed::new())]                     // default: Info, no threshold
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 
 #[get("/users")]
-#[timed(level = "warn", threshold = 100)]    // only if > 100ms
+#[intercept(Timed::threshold_warn(100))]       // Warn, only if > 100ms
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 ```
+
+Constructors: `Timed::new()` / `Timed::info()` / `Timed::debug()` / `Timed::warn()` (no threshold), `Timed::threshold(ms)` (Info, only if exceeded), `Timed::threshold_warn(ms)` (Warn, only if exceeded).
 
 Generated log (without threshold or threshold exceeded):
 
@@ -158,12 +161,12 @@ Generated log (without threshold or threshold exceeded):
 INFO method="list" "elapsed_ms=3"
 ```
 
-### Combining `#[logged]` + `#[timed]`
+### Combining `Logged` + `Timed`
 
 ```rust
 #[get("/users")]
-#[logged(level = "debug")]
-#[timed(threshold = 50)]
+#[intercept(Logged::debug())]
+#[intercept(Timed::threshold(50))]
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 ```
 
@@ -175,18 +178,26 @@ INFO  method="list" "elapsed_ms=73"
 DEBUG method="list" "exiting"
 ```
 
-## `#[cached]`
+## `Cache`
 
-Caches the method result. The cache uses the `Interceptor<axum::Json<T>>` trait where `T: Serialize + DeserializeOwned`.
+Caches the method result. `Cache` is a `DecoratorSpec`: it reads an `Arc<dyn CacheStore>` bean from the graph (a missing store is a compile error at `register_controller()`) and holds it in the built `CacheInterceptor`.
+
+### Provide a store
+
+```rust
+use r2e_cache::InMemoryStore;
+
+AppBuilder::new()
+    .provide(InMemoryStore::shared())   // Arc<dyn CacheStore>
+    // ...
+```
 
 ### Syntax
 
 ```rust
-#[cached(ttl = 30)]                          // anonymous cache, default key
-#[cached(ttl = 30, group = "users")]         // named cache (for invalidation)
-#[cached(ttl = 30, key = "params")]          // key based on parameters
-#[cached(ttl = 30, key = "user")]            // key per user (identity.sub)
-#[cached(ttl = 30, key = "user_params")]     // combination user + params
+#[intercept(Cache::ttl(30))]                                  // default key (controller_method:default)
+#[intercept(Cache::ttl(30).group("users"))]                  // named group (for invalidation)
+#[intercept(Cache::with_key(30, format!("user:{}", id)))]    // explicit per-call key
 ```
 
 ### Constraints
@@ -196,64 +207,49 @@ Caches the method result. The cache uses the `Interceptor<axum::Json<T>>` trait 
   - `Result<T, E>` where `T: Cacheable, E: Send` (only `Ok` values are cached)
   - Types with `#[derive(Cacheable)]`
 - The cache serializes/deserializes via JSON using `serde_json`
-- For `key = "params"`, the method parameters must implement `Debug`
-- For `key = "user"` or `key = "user_params"`, the controller must have an `#[inject(identity)]` field
+- A `CacheStore` bean must be provided (e.g. `InMemoryStore::shared()`)
+
+The cache key is `full_key(controller, method)`: with no `group`, it is `__{controller}_{method}:{key-or-"default"}`; with a `group`, the prefix becomes the group name (`{group}:{key-or-"default"}`), which is what `CacheInvalidate` targets.
 
 ### Cache groups and invalidation
 
+`CacheInvalidate` is also a `DecoratorSpec` (reads the same `CacheStore` bean). After the body runs, it removes every entry whose key starts with `{group}:`.
+
 ```rust
 #[get("/users")]
-#[cached(ttl = 30, group = "users")]
+#[intercept(Cache::ttl(30).group("users"))]
 async fn list(&self) -> axum::Json<Vec<User>> { ... }
 
 #[post("/users")]
-#[cache_invalidate("users")]
+#[intercept(CacheInvalidate::group("users"))]
 async fn create(&self, ...) -> axum::Json<User> { ... }
 ```
-
-The `CacheRegistry` (global static in `r2e-core/src/cache.rs`) maintains a registry of named caches:
-- `get_or_create(group, ttl)` — returns the cache for the group (creates it on first call)
-- `invalidate(group)` — clears the cache for the group
-
-**Note**: the TTL is determined by the first call to `get_or_create`. If two methods refer to the same group with different TTLs, the first one to execute sets the TTL.
 
 ### Internal mechanism
 
 ```
-Request → Interceptor::around(&cached, ctx, next)
-            ├── cache.get(key)
-            │     ├── Hit → deserialize → return Json<T>
-            │     └── Deserialization failed → cache.remove(key) → fallthrough
-            └── Miss → next().await → serialize → cache.insert(key) → return
+Request → Interceptor::around(&cache, ctx, next)
+            ├── store.get(key)
+            │     ├── Hit → R::from_cache → return value
+            │     └── Deserialization failed → store.remove(key) → fallthrough
+            └── Miss → next().await → R::to_cache → store.set(key, bytes, ttl) → return
 ```
 
-## `#[rate_limited]`
+## Rate limiting
 
-Limits the number of requests. Handled at the **handler level** (short-circuits before the controller).
+Rate limiting is a **guard**, not an interceptor — it short-circuits with a 429 before the body runs. The specs live in `r2e-rate-limit` and read a `RateLimitRegistry` bean (provide one, e.g. `.provide(RateLimitRegistry::default())`).
+
+- **Post-authentication, per user** — `#[guard(RateLimit::per_user(max, window_secs))]` (each authenticated subject gets its own bucket; runs after JWT validation).
+- **Pre-authentication, global** — `#[pre_guard(PreRateLimit::global(max, window_secs))]` (one shared bucket; runs before JWT extraction).
+- **Pre-authentication, per IP** — `#[pre_guard(PreRateLimit::per_ip(max, window_secs))]` (bucket per `X-Forwarded-For` client, first element trimmed, `"unknown"` fallback).
 
 ### Syntax
 
 ```rust
-#[rate_limited(max = 5, window = 60)]                   // global
-#[rate_limited(max = 5, window = 60, key = "user")]      // per user
-#[rate_limited(max = 5, window = 60, key = "ip")]        // per IP address
+#[pre_guard(PreRateLimit::global(5, 60))]        // 5 req / 60s, global
+#[pre_guard(PreRateLimit::per_ip(5, 60))]        // 5 req / 60s, per IP
+#[guard(RateLimit::per_user(5, 60))]             // 5 req / 60s, per user
 ```
-
-### Key strategies
-
-| Key | Generated code | Prerequisites |
-|-----|---------------|---------------|
-| `"global"` (default) | `format!("{}:global", fn_name)` | None |
-| `"user"` | `format!("{}:user:{}", fn_name, identity.sub)` | `#[inject(identity)]` field |
-| `"ip"` | `format!("{}:ip:{}", fn_name, ip)` | `X-Forwarded-For` header |
-
-For `key = "ip"`, the IP is extracted from the `X-Forwarded-For` header (first element, trimmed). Fallback: `"unknown"`.
-
-### Constraints
-
-- The generated handler returns `axum::response::Response` (like `#[roles]`) to allow the 429 short-circuit
-- The method return type **no longer needs** to be `Result<T, HttpError>` — any `IntoResponse` type works
-- The rate limiter is a `static OnceLock<RateLimiter<String>>` per handler
 
 ### Response on rate limit exceeded
 
@@ -266,7 +262,7 @@ Content-Type: application/json
 
 ### Internal mechanism
 
-The `RateLimiter<K>` uses a **token bucket** algorithm:
+The backing `RateLimiter<K>` uses a **token bucket** algorithm:
 - Each key has a bucket of `max` tokens
 - Tokens refill linearly over the `window`
 - Each request consumes 1 token
@@ -355,7 +351,7 @@ Usage:
 
 ```rust
 #[get("/users/audited")]
-#[logged]
+#[intercept(Logged::info())]
 #[intercept(AuditLog)]
 async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 ```
@@ -407,30 +403,30 @@ pub struct UserController {
 impl UserController {
     // Logged debug + timed with threshold
     #[get("/")]
-    #[logged(level = "debug")]
-    #[timed(threshold = 50)]
+    #[intercept(Logged::debug())]
+    #[intercept(Timed::threshold(50))]
     async fn list(&self) -> axum::Json<Vec<User>> {
         axum::Json(self.user_service.list().await)
     }
 
     // Cache group + invalidation
     #[get("/cached")]
-    #[cached(ttl = 30, group = "users")]
-    #[timed]
+    #[intercept(Cache::ttl(30).group("users"))]
+    #[intercept(Timed::new())]
     async fn cached_list(&self) -> axum::Json<serde_json::Value> {
         let users = self.user_service.list().await;
         axum::Json(serde_json::to_value(users).unwrap())
     }
 
     #[post("/")]
-    #[cache_invalidate("users")]
+    #[intercept(CacheInvalidate::group("users"))]
     async fn create(&self, axum::Json(body): axum::Json<CreateUserRequest>) -> axum::Json<User> {
         axum::Json(self.user_service.create(body.name, body.email).await)
     }
 
-    // Rate limit per user
+    // Rate limit per user (a guard, not an interceptor)
     #[post("/rate-limited")]
-    #[rate_limited(max = 5, window = 60, key = "user")]
+    #[guard(RateLimit::per_user(5, 60))]
     async fn create_rate_limited(&self, axum::Json(body): axum::Json<CreateUserRequest>)
         -> axum::Json<User>
     {
@@ -439,13 +435,16 @@ impl UserController {
 
     // Custom interceptor
     #[get("/audited")]
-    #[logged]
+    #[intercept(Logged::info())]
     #[intercept(AuditLog)]
     async fn audited_list(&self) -> axum::Json<Vec<User>> {
         axum::Json(self.user_service.list().await)
     }
 }
 ```
+
+This controller needs an `Arc<dyn CacheStore>` bean (for `Cache`/`CacheInvalidate`)
+and a `RateLimitRegistry` bean (for `RateLimit`) provided on the builder.
 
 ## Validation criteria
 

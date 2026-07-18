@@ -25,15 +25,19 @@ Tower layer that captures panics in handlers and converts them into 500 response
 
 ## HttpError variants
 
+The enum is `#[non_exhaustive]`; the message variants carry `Cow<'static, str>`
+(so both `String` and `&'static str` work with `.into()`).
+
 | Variant | HTTP Code | Usage |
 |---------|-----------|-------|
-| `NotFound(String)` | 404 | Resource not found |
-| `Unauthorized(String)` | 401 | Authentication required/invalid |
-| `Forbidden(String)` | 403 | Insufficient permissions |
-| `BadRequest(String)` | 400 | Malformed request |
-| `Internal(String)` | 500 | Server error |
+| `NotFound(Cow<'static, str>)` | 404 | Resource not found |
+| `Unauthorized(Cow<'static, str>)` | 401 | Authentication required/invalid |
+| `Forbidden(Cow<'static, str>)` | 403 | Insufficient permissions |
+| `BadRequest(Cow<'static, str>)` | 400 | Malformed request |
+| `Internal(Cow<'static, str>)` | 500 | Server error |
 | `Validation(ValidationErrorResponse)` | 400 | Validation failure (feature `validation`) |
 | `Custom { status, body }` | Custom | Arbitrary HTTP code and JSON body |
+| `WithSource { status, message, source }` | Custom | Preserves the source error chain (produced by `From` conversions); only `message` is sent to the client |
 
 ## Usage
 
@@ -89,15 +93,17 @@ Content-Type: application/json
 
 ### 3. Automatic conversions with `From`
 
-`HttpError` implements `From` for common error types, enabling the use of `?`:
+`HttpError` implements `From<std::io::Error>` out of the box, enabling `?`:
 
 ```rust
 // Included by default
 impl From<std::io::Error> for HttpError { ... }
-
-// Included with the "sqlx" feature flag
-impl From<sqlx::Error> for HttpError { ... }
 ```
+
+For other error types (including `sqlx::Error`), generate the conversion yourself
+with `map_error!` (see below) or convert at the call site with
+`.map_err(|e| HttpError::internal(e.to_string()))`. R2E core does not ship a
+built-in `From<sqlx::Error>` impl.
 
 ### 4. The `map_error!` macro
 

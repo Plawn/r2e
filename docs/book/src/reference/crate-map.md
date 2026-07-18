@@ -13,13 +13,16 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 | `r2e-core` | Core runtime for R2E web framework - AppBuilder, plugins, guards, and dependency injection |
 | `r2e-data-diesel` | Cancellation-safe managed Diesel transactions |
 | `r2e-data-sqlx` | Cancellation-safe managed SQLx transactions |
+| `r2e-devservices` | Dev services for R2E tests — containerized Postgres/Redis started on demand and wired into the test config |
 | `r2e-devtools` | Subsecond hot-reload integration for R2E |
 | `r2e-events-iggy` | Apache Iggy event bus backend for R2E — persistent distributed event streaming |
 | `r2e-events-kafka` | Apache Kafka event bus backend for R2E — distributed event streaming |
 | `r2e-events-pulsar` | Apache Pulsar event bus backend for R2E — distributed event streaming |
 | `r2e-events-rabbitmq` | RabbitMQ (AMQP 0-9-1) event bus backend for R2E — durable message queuing |
 | `r2e-events` | In-process typed event bus for R2E - publish/subscribe with async handlers |
+| `r2e-executor` | Managed task pool executor for R2E — injectable, bounded, with graceful shutdown |
 | `r2e-grpc` | gRPC server support for R2E framework |
+| `r2e-grpc-build` | Build-script helper for R2E gRPC — compiles every `.proto` under `proto/` and generates one aggregated, reflection-ready module |
 | `r2e-http` | HTTP abstraction layer for R2E - sole owner of the axum dependency |
 | `r2e-macros` | Procedural macros for R2E framework - Controller derive and routes attribute |
 | `r2e-observability` | OpenTelemetry observability plugin for R2E — distributed tracing and context propagation |
@@ -43,17 +46,21 @@ r2e-macros (proc-macro, no runtime deps)
     ^
 r2e-core (runtime foundation, re-exports r2e-http as `http` module)
     ^
-r2e-security / r2e-events / r2e-scheduler / r2e-grpc
+r2e-security / r2e-events / r2e-executor / r2e-scheduler / r2e-grpc
     ^
 r2e-data-sqlx / r2e-data-diesel / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
 r2e-prometheus / r2e-observability / r2e-oidc / r2e-openfga / r2e-static
 r2e-events-iggy / r2e-events-kafka / r2e-events-pulsar / r2e-events-rabbitmq
-r2e-devtools / r2e-test
+r2e-devtools / r2e-devservices / r2e-test
     ^
 r2e (facade)
     ^
 your application
 ```
+
+> `r2e-grpc-build` is a build-dependency (build-script helper), not part of the
+> runtime dependency graph. Event bus backends live under `r2e-events/backends/*`
+> and the data backends under `r2e-data/backends/*`.
 
 ## Feature flags
 
@@ -75,7 +82,8 @@ The `r2e` facade crate gates sub-crates behind features.
 | `events-kafka` | events, r2e-events-kafka |
 | `events-pulsar` | events, r2e-events-pulsar |
 | `events-rabbitmq` | events, r2e-events-rabbitmq |
-| `scheduler` | r2e-scheduler |
+| `executor` | r2e-executor |
+| `scheduler` | r2e-scheduler (pulls in `executor`) |
 | `cache` | r2e-cache |
 | `rate-limit` | r2e-rate-limit |
 | `oidc` | r2e-oidc |
@@ -84,11 +92,13 @@ The `r2e` facade crate gates sub-crates behind features.
 | `openfga` | r2e-openfga |
 | `observability` | r2e-observability |
 | `grpc` | r2e-grpc |
+| `grpc-reflection` | grpc, r2e-grpc/reflection |
 | `static` | r2e-static |
 | `ws` | r2e-core/ws |
 | `multipart` | r2e-core/multipart |
+| `quic` | r2e-core/quic (HTTP/3; not in `full`) |
 | `dev-reload` | r2e-devtools, r2e-core/dev-reload |
-| `full` | All of the above (except `dev-reload`) |
+| `full` | All of the above **except** `quic` and `dev-reload` |
 
 ## Using sub-crates directly
 

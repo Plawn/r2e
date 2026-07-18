@@ -220,6 +220,7 @@ Guards are **built once at registration** from the resolved `BeanContext` (via
 move |
     __headers: axum::http::HeaderMap,
     __uri: axum::http::Uri,
+    __raw_path_params: axum::extract::RawPathParams,
     __data: __R2eRequestData_UserController<()>,
     Path(id): Path<i64>,
 | {
@@ -230,13 +231,15 @@ move |
 
         // Guard check runs before method body; identity is read off the façade.
         let __identity_ref = __r2e_meta_UserController::guard_identity(&__ctrl);
-        let __guard_ctx = r2e::GuardContext::new(
-            "get_by_id",
-            "UserController",
-            &__headers,
-            &__uri,
-            __identity_ref,
-        );
+        let __path_params = r2e::PathParams::from_raw(&__raw_path_params);
+        let __guard_ctx = r2e::GuardContext {
+            method_name: "get_by_id",
+            controller_name: "UserController",
+            headers: &__headers,
+            uri: &__uri,
+            path_params: __path_params,
+            identity: __identity_ref,
+        };
         // The guard was built at registration; check() takes no state.
         r2e::Guard::check(&__deco.__g0, &__guard_ctx)
             .await

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-In-process typed pub/sub for decoupling components. `LocalEventBus` (the default `EventBus` impl, `Clone`) dispatches by Rust `TypeId` — a `UserCreatedEvent` subscriber never receives an `OrderPlacedEvent`, no magic strings or downcasting. Use `subscribe(|e: Arc<MyEvent>| async move { ... })` and `emit(event)`, or wire a controller method as a `#[consumer]`. Events need `Send + Sync + Serialize + DeserializeOwned + 'static` (serde bounds are for remote backends; `LocalEventBus` never serializes). Distributed backends (Kafka, Pulsar, Iggy, RabbitMQ) implement the same trait.
+In-process typed pub/sub for decoupling components. `LocalEventBus` (the default `EventBus` impl, `Clone`) dispatches by Rust `TypeId` — a `UserCreatedEvent` subscriber never receives an `OrderPlacedEvent`, no magic strings or downcasting. Use `subscribe(|e: EventEnvelope<MyEvent>| async move { ...; HandlerResult::Ack })` and `emit(event)`, or wire a controller method as a `#[consumer]`. Events need `Send + Sync + Serialize + DeserializeOwned + 'static` (serde bounds are for remote backends; `LocalEventBus` never serializes). Distributed backends (Kafka, Pulsar, Iggy, RabbitMQ) implement the same trait.
 
 
 ## Objective
@@ -46,25 +46,30 @@ The type must be `Send + Sync + Serialize + DeserializeOwned + 'static`. The ser
 ### 3. Create the bus and subscribe
 
 ```rust
-use std::sync::Arc;
-use r2e_events::{EventBus, LocalEventBus};
+use r2e_events::{EventBus, EventEnvelope, HandlerResult, LocalEventBus};
 
 let event_bus = LocalEventBus::new();
 
 // Subscribe to an event type
 event_bus
-    .subscribe(|event: Arc<UserCreatedEvent>| async move {
+    .subscribe(|envelope: EventEnvelope<UserCreatedEvent>| async move {
+        let event = &envelope.event;      // `envelope.event` is `Arc<UserCreatedEvent>`
         tracing::info!(
             user_id = event.user_id,
             name = %event.name,
             email = %event.email,
-            "Nouvel utilisateur cree"
+            "New user created"
         );
+        HandlerResult::Ack
     })
-    .await;
+    .await
+    .unwrap();
 ```
 
-**Note**: the handler receives `Arc<E>` (not `E` directly), because the event may be shared among multiple subscribers.
+**Note**: the handler receives an `EventEnvelope<E>` (its `.event` field is `Arc<E>`,
+since the event may be shared among multiple subscribers; `.metadata` carries the
+event id, timestamp, correlation id, and headers) and must return a `HandlerResult`
+(`Ack`/`Nack`). `subscribe` itself returns `Result<SubscriptionHandle, EventBusError>`.
 
 ### Multiple subscribers
 
@@ -72,19 +77,22 @@ Multiple handlers can listen to the same type:
 
 ```rust
 // Handler 1: log
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
-    tracing::info!("User created: {}", event.name);
-}).await;
+event_bus.subscribe(|e: EventEnvelope<UserCreatedEvent>| async move {
+    tracing::info!("User created: {}", e.event.name);
+    HandlerResult::Ack
+}).await.unwrap();
 
 // Handler 2: email notification
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
-    send_welcome_email(&event.email).await;
-}).await;
+event_bus.subscribe(|e: EventEnvelope<UserCreatedEvent>| async move {
+    send_welcome_email(&e.event.email).await;
+    HandlerResult::Ack
+}).await.unwrap();
 
 // Handler 3: analytics
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
-    track_signup(event.user_id).await;
-}).await;
+event_bus.subscribe(|e: EventEnvelope<UserCreatedEvent>| async move {
+    track_signup(e.event.user_id).await;
+    HandlerResult::Ack
+}).await.unwrap();
 ```
 
 ### 4. Emit an event
@@ -229,8 +237,8 @@ Events are completely isolated by `TypeId`. Emitting an `OtherEvent` does not tr
 ```rust
 struct OtherEvent;
 
-bus.subscribe(|_: Arc<UserCreatedEvent>| async { println!("user!"); }).await;
-bus.emit(OtherEvent).await;
+bus.subscribe(|_: EventEnvelope<UserCreatedEvent>| async { HandlerResult::Ack }).await.unwrap();
+bus.emit(OtherEvent).await.unwrap();
 // → nothing happens, the UserCreatedEvent handler is not called
 ```
 

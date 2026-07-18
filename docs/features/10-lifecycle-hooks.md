@@ -245,6 +245,43 @@ impl<S: BeanLookup + Clone + Send + Sync + 'static> LifecycleController<S> for M
 }
 ```
 
+## Bean & Controller Hooks: `#[post_construct]` / `#[pre_destroy]`
+
+Besides the app-level `on_start`/`on_stop` closures, R2E provides per-bean and
+per-controller lifecycle hooks as method attributes. Both work on `#[bean]` methods
+**and** on `#[routes]` controller impls. The method takes `&self` only (no params), may be
+`async`, and returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`.
+
+### `#[post_construct]`
+
+The `@PostConstruct` counterpart — runs after the instance is built.
+
+- **Bean hooks** run inside `build_state()`, after the graph resolves and before subscribers.
+- **Controller-core hooks** run at startup during `register_controller`, **before** consumer
+  registrations (later than bean hooks, since cores are built after the graph).
+- An `Err` **aborts startup**.
+
+```rust
+#[routes]
+impl UserController {
+    #[post_construct]
+    async fn warm_cache(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.cache.prime().await?;
+        Ok(())
+    }
+}
+```
+
+### `#[pre_destroy]`
+
+The `@PreDestroy` counterpart — runs at **graceful shutdown**, in the async shutdown phase:
+controller hooks first, then bean hooks, each in **reverse registration order**. An `Err` is
+**logged and swallowed** (it never aborts shutdown). It does **not** fire on
+`build_with_consumers`/`TestApp` (no shutdown occurs) — test it via `serve` + `StopHandle::stop()`.
+
+Combining `#[post_construct]` or `#[pre_destroy]` with a route / `#[scheduled]` / `#[consumer]`
+marker, with method params, or with `#[intercept]` is a compile error.
+
 ## Validation Criteria
 
 ```bash

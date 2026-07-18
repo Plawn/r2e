@@ -223,7 +223,7 @@ async fn notifications(&self, mut ws: WsStream) {
             msg = rx.recv() => {
                 match msg {
                     Some(msg) => {
-                        if ws.send(msg).await.is_err() { break; }
+                        if ws.send((*msg).clone()).await.is_err() { break; }
                     }
                     None => break,
                 }
@@ -242,7 +242,7 @@ async fn notifications(&self, mut ws: WsStream) {
 }
 ```
 
-`recv()` automatically skips messages sent by the same client (matched by `sender_id`). If the receiver falls behind (lagged), missed messages are silently dropped and the receiver catches up.
+`recv()` yields an `Option<Arc<Message>>` — the broadcaster keeps each payload in an `Arc`, so forwarding is a cheap pointer clone; call `(*msg).clone()` when you need an owned `Message` to hand to `ws.send()`. It automatically skips messages sent by the same client (matched by `sender_id`). If the receiver falls behind (lagged), missed messages are silently dropped and the receiver catches up.
 
 ## WsRooms
 
@@ -319,7 +319,7 @@ impl ChatController {
             .cloned()
             .unwrap_or_else(|| "Anonymous".into());
 
-        let broadcaster = self.ws_rooms.room(&room);
+        let broadcaster = self.ws_rooms.room(room.clone());
         let mut rx = broadcaster.subscribe();
         let client_id = rx.client_id();
 
@@ -334,7 +334,7 @@ impl ChatController {
                 msg = rx.recv() => {
                     match msg {
                         Some(msg) => {
-                            if ws.send(msg).await.is_err() { break; }
+                            if ws.send((*msg).clone()).await.is_err() { break; }
                         }
                         None => break,
                     }

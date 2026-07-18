@@ -172,11 +172,12 @@ async fn list(&self) -> Json<Vec<Item>> { /* ... */ }
 | `uri` | `&Uri` | Request URI |
 | `identity` | `Option<&I>` | Authenticated identity |
 | `identity_sub()` | `Option<&str>` | Subject from identity |
-| `identity_roles()` | `Option<&[String]>` | Roles from identity |
 | `identity_email()` | `Option<&str>` | Email from identity |
 | `identity_claims()` | `Option<&Value>` | Raw JWT claims |
 | `path()` | `&str` | Request path |
 | `query_string()` | `Option<&str>` | Query string |
+| `path_param(name)` | `Option<&str>` | Named route path parameter |
+| `parse_path_param(name)` | `Result<T, GuardError>` | Parsed route path parameter |
 
 ### Pre-auth `PreAuthGuardContext`
 

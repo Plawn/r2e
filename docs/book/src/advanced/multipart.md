@@ -87,7 +87,7 @@ pub struct UploadedFile {
 | `len()` | `usize` | Size of the file data in bytes |
 | `is_empty()` | `bool` | Whether the file data is empty |
 
-Access the raw bytes through the `data` field (`bytes::Bytes`). The file content is held in memory, so consider imposing size limits at the web server or reverse proxy level for large uploads.
+Access the raw bytes through the `data` field (`bytes::Bytes`). The file content is held in memory. `TypedMultipart` enforces built-in byte caps by default (`MultipartLimits::DEFAULT` — 10 MiB per field, 100 MiB per request); exceeding them returns a `413 Payload Too Large` before your handler runs. For different caps, collect manually via `MultipartFields::collect_from_with_limits` in a custom extractor.
 
 ## Field type mapping
 
@@ -209,14 +209,16 @@ When extraction fails, `TypedMultipart` returns a 400 Bad Request with a JSON bo
 }
 ```
 
-The four error variants are:
+The error variants are:
 
-| Variant | Cause |
-|---------|-------|
-| `MissingField` | A required field was not present |
-| `ParseError` | A text field could not be parsed to the expected type |
-| `AxumError` | The underlying Axum multipart extractor failed (e.g., content-type mismatch) |
-| `ReadError` | A field's data could not be read (e.g., UTF-8 decoding failure) |
+| Variant | Cause | Status |
+|---------|-------|--------|
+| `MissingField` | A required field was not present | 400 |
+| `ParseError` | A text field could not be parsed to the expected type | 400 |
+| `AxumError` | The underlying Axum multipart extractor failed (e.g., content-type mismatch) | 400 |
+| `ReadError` | A field's data could not be read (e.g., UTF-8 decoding failure) | 400 |
+| `FieldTooLarge` | A single field exceeded the per-field byte limit | 413 |
+| `PayloadTooLarge` | The aggregated request payload exceeded the total byte limit | 413 |
 
 ## Raw multipart access
 

@@ -65,6 +65,8 @@ AppBuilder::new()
 | `immutable_prefix(impl Into<Option<String>>)` | `Some("assets/")` | Files under this prefix receive immutable cache headers. Pass `None` to disable. |
 | `immutable_cache_control(impl Into<String>)` | `"public, max-age=31536000, immutable"` | The `Cache-Control` header value for files matching the immutable prefix. |
 | `default_cache_control(impl Into<String>)` | `"public, max-age=3600"` | The `Cache-Control` header value for all other files. |
+| `fallback_cache_control(impl Into<String>)` | `"no-cache"` | The `Cache-Control` header value for SPA fallback responses. The fallback file references hashed assets, so it should not be cached aggressively. |
+| `compression(bool)` | `true` | When enabled, serves pre-compressed `.br` (Brotli) / `.gz` (gzip) variants of a file when the client's `Accept-Encoding` allows. |
 | `base_path(impl Into<String>)` | None | Mount static files under a sub-path (e.g. `"/docs"`). The base path is stripped before looking up files. |
 
 ## How it works

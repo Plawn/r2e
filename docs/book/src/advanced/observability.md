@@ -28,7 +28,7 @@ Set the `RUST_LOG` environment variable:
 
 ```bash
 # Default (when RUST_LOG is not set)
-RUST_LOG="info,tower_http=debug"
+RUST_LOG="info"
 
 # Show all framework internals
 RUST_LOG="debug"
@@ -68,7 +68,7 @@ tracing:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `filter` | String | `"info,tower_http=debug"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
+| `filter` | String | `"info"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
 | `format` | `pretty` / `json` | `pretty` | Log output format |
 | `target` | bool | `true` | Print the module path in each log line |
 | `thread-ids` | bool | `false` | Print thread IDs |

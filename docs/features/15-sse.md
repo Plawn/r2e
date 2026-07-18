@@ -125,7 +125,7 @@ broadcaster.send("hello").ok();
 broadcaster.send_event("update", r#"{"count":42}"#).ok();
 ```
 
-Both methods return `Result<(), SendError>`. The error occurs only when there are no active subscribers. It can be ignored with `.ok()`.
+Both methods return `Result<usize, SendError>` — on success, the `usize` is the number of subscribers the event reached. The error occurs only when there are no active subscribers. It can be ignored with `.ok()`.
 
 ### 5. Global Broadcaster (single shared stream)
 
@@ -291,7 +291,7 @@ subscription registers at server startup, alongside `#[consumer]` methods
 Both beans must be provided before `build_state()`; `bridge_sse` panics at
 startup with a descriptive message otherwise. For manual wiring (e.g. outside
 the builder), use `r2e_events::sse_bridge::bridge_event_to_sse(&bus, topic)`,
-which returns the `SubscriptionHandle`.
+which is async and returns `Result<SubscriptionHandle, EventBusError>`.
 
 ## Complete Example
 
@@ -395,8 +395,8 @@ impl SseController {
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new` | `fn new(capacity: usize) -> Self` | Create a broadcaster with the given buffer capacity |
-| `send` | `fn send(&self, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a data-only event |
-| `send_event` | `fn send_event(&self, event: &str, data: impl Into<String>) -> Result<(), SendError>` | Broadcast a named event with data |
+| `send` | `fn send(&self, data: impl Into<String>) -> Result<usize, SendError>` | Broadcast a data-only event; `Ok` = subscriber count reached |
+| `send_event` | `fn send_event(&self, event: &str, data: impl Into<String>) -> Result<usize, SendError>` | Broadcast a named event with data |
 | `subscribe` | `fn subscribe(&self) -> SseSubscription` | Create a new subscription stream |
 
 ### SseTopic&lt;E&gt;

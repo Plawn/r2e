@@ -43,7 +43,7 @@ Under the hood, the `#[routes]` macro generates a `register_consumers()` method 
 ## Requirements
 
 - The controller must have a field implementing `EventBus` (named in the `bus = "..."` attribute)
-- Consumer methods run on the controller core (built from the bean graph via `ContextConstruct`) and so cannot access request-scoped fields — `#[inject(identity)]` / `#[inject(request)]` are unavailable inside a consumer. `ContextConstruct` is generated only when the controller declares **no** struct-level identity; a controller that needs both consumers and authenticated endpoints should use param-level identity (the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity)). Consumer methods use only core (`#[inject]` / `#[config]`) fields.
+- Consumer methods run on the controller core (built from the bean graph via `ContextConstruct`) and so cannot access request-scoped fields — reading `#[inject(identity)]` / `#[inject(request)]` inside a consumer is a compile error. `ContextConstruct` is generated for **every** controller core (identity and request-scoped fields are stripped onto the per-request façade), so a controller may freely combine struct-level identity for its authenticated HTTP routes with `#[consumer]` methods — the consumer simply doesn't see the identity. Consumer methods use only core (`#[inject]` / `#[config]`) fields.
 - The consumer method must take `&self` and `Arc<EventType>`
 - Consumer controllers don't need a `path` in `#[controller]`
 
@@ -211,4 +211,4 @@ Use `#[consumer]` on **beans** for services that primarily handle events. Use `#
 
 - **No unsubscribe** — once registered, a consumer listens for the lifetime of the application. There is no mechanism to remove a subscription.
 - **No ordering guarantees** — when multiple handlers are subscribed to the same event type, they run concurrently. Execution order is not guaranteed.
-- **No identity** — consumers run outside an HTTP context, so `#[inject(identity)]` is not available at the struct level. Use the [mixed controller pattern](../core-concepts/controllers.md#mixed-controllers-param-level-identity) if you need both consumers and authenticated endpoints on the same controller.
+- **No identity** — consumers run outside an HTTP context, so identity and request-scoped fields (`#[inject(identity)]` / `#[inject(request)]`) are unreachable from a consumer body (a compile error). The controller may still declare struct-level identity for its authenticated HTTP routes — the consumer just cannot read it.

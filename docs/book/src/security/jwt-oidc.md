@@ -26,15 +26,23 @@ let validator = JwtClaimsValidator::new_with_static_key(key, config);
 ### JWKS endpoint (production)
 
 ```rust
+use std::sync::Arc;
+use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};
+
 let config = SecurityConfig::new(
     "https://auth.example.com/.well-known/jwks.json",
     "https://auth.example.com",
     "my-app",
 );
-let validator = JwtClaimsValidator::new(config);
+let jwks = Arc::new(JwksCache::new(config.clone()).await.unwrap());
+let validator = JwtClaimsValidator::new(jwks, config);
 ```
 
 The JWKS keys are fetched and cached automatically. Cache misses trigger a background refresh.
+
+> Most apps build the validator inside a `#[producer]` and register it with
+> `.register::<JwtValidator>()` — the `r2e new --auth` scaffold generates exactly
+> this. The snippet above is the equivalent manual construction.
 
 ## Providing the validator as a bean
 

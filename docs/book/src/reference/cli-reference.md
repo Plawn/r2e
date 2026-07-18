@@ -77,7 +77,7 @@ my-app/
 | `--db mysql` | `migrations/` dir, `sqlx` dep (mysql), pool producer in `app.rs` |
 | `--auth` | `r2e` security feature, JWT validator producer, JWT config in YAML |
 | `--openapi` | `r2e` openapi feature, `OpenApiPlugin` in builder, `/docs` UI |
-| `--grpc` | `tonic` + `prost` deps, `build.rs`, `proto/greeter.proto`, `GrpcServer` plugin |
+| `--grpc` | `tonic`/`prost` deps + `r2e-grpc-build` build-dep, `build.rs`, `proto/greeter.proto`, `src/grpc/` module (`mod.rs` + `greeter.rs`), `GrpcServer` plugin |
 | `--full` | All of the above (SQLite + auth + openapi + scheduler + events + gRPC) |
 
 ### Generated `main.rs` (with `--full`)
@@ -320,6 +320,7 @@ r2e generate grpc-service User --package myapp
 |------|---------|
 | `proto/user.proto` | Service with `GetUser` and `ListUser` RPCs, request/response messages |
 | `src/grpc/user.rs` | Controller with `#[grpc_routes]` and placeholder RPC implementations |
+| `src/grpc/mod.rs` | Created if missing — declares the shared `proto` module (`r2e::r2e_grpc::include_protos!()`) and `pub mod user;` |
 
 The `--package` flag sets the protobuf package name (default: `myapp`).
 
@@ -357,9 +358,8 @@ message ListUserResponse {
 
 **Next steps after gRPC generation:**
 
-1. Add to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
-3. Run `cargo build` to generate proto code
+1. Register in `src/app.rs`, inside `App::build`: `.register_grpc_service::<UserService>()`
+2. Run `cargo build` — the build script (`r2e_grpc_build::compile()`) picks up the new proto automatically. If the project has no `build.rs` yet, run `r2e add grpc` first to scaffold it.
 
 ---
 
@@ -523,6 +523,11 @@ r2e add <extension>
 ```
 
 Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.1` to `[dependencies]`. Errors if the extension is unknown or `Cargo.toml` is missing. Prints a warning (no error) if already present.
+
+Two extensions do more than a plain dependency insert:
+
+- `openapi` also adds the `schemars` dependency (required for `#[derive(JsonSchema)]`).
+- `grpc` is a full scaffold: it enables the `grpc`/`grpc-reflection` features on the `r2e` dependency (or falls back to a direct `r2e-grpc` dep), adds the `tonic`/`tonic-prost`/`prost` dependencies, adds `r2e-grpc-build` as a **build-dependency**, and drops a one-line `build.rs` (`r2e_grpc_build::compile()`), a sample `proto/greeter.proto`, and a `src/grpc/` module (`mod.rs` + `greeter.rs`).
 
 **Available extensions:**
 

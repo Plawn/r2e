@@ -38,9 +38,14 @@ async fn main() {
         .await
         .register_controller::<HelloController>()
         .serve("0.0.0.0:3000")
-        .await;
+        .await
+        .unwrap();
 }
 ```
+
+For real apps, prefer the `App` trait (`impl App { setup / build }`) launched
+with `r2e::app_main!(MyApp)` — a single assembly path shared by production,
+dev-reload, and tests (`TestApp::boot::<MyApp>()` / `#[r2e::test(app = MyApp)]`).
 
 ## Feature flags
 
@@ -54,18 +59,25 @@ async fn main() {
 | `data-diesel`   | no      | Managed Diesel transactions          |
 | `sqlx-{sqlite,postgres,mysql}` | no | SQLx transaction + driver   |
 | `diesel-{sqlite,postgres,mysql}` | no | Diesel transaction + driver |
-| `scheduler`     | no      | `r2e-scheduler` — cron/interval      |
+| `scheduler`     | no      | `r2e-scheduler` — cron/interval (enables `executor`) |
+| `executor`      | no      | `r2e-executor` — managed task pool   |
 | `cache`         | no      | `r2e-cache` — TTL caching            |
 | `rate-limit`    | no      | `r2e-rate-limit` — token-bucket      |
-| `openapi`       | no      | `r2e-openapi` — OpenAPI 3.0 + UI    |
+| `openapi`       | no      | `r2e-openapi` — OpenAPI 3.1.0 + docs UI |
 | `prometheus`    | no      | `r2e-prometheus` — metrics endpoint  |
 | `openfga`       | no      | `r2e-openfga` — Zanzibar authz       |
 | `observability` | no      | `r2e-observability` — OpenTelemetry  |
+| `oidc`          | no      | `r2e-oidc` — embedded OIDC server    |
+| `grpc` / `grpc-reflection` | no | `r2e-grpc` — Tonic gRPC server |
+| `events-{iggy,kafka,pulsar,rabbitmq}` | no | distributed EventBus backends |
 | `static`        | no      | `r2e-static` — embedded static files + SPA |
-| `validation`    | no      | Input validation via `validator`     |
 | `ws`            | no      | WebSocket support                    |
 | `multipart`     | no      | File upload support                  |
-| `full`          | no      | All of the above                     |
+| `quic`          | no      | HTTP/3 + raw QUIC (not in `full` — heavy crypto deps) |
+| `dev-reload`    | no      | `r2e-devtools` — Subsecond hot-reload (never in production) |
+| `full`          | no      | All bundled framework modules (excludes `quic` and `dev-reload`) |
+
+> Validation (via the `garde` crate) is always available and needs no feature flag.
 
 ## Workspace crates
 
@@ -76,13 +88,16 @@ async fn main() {
 | [`r2e-security`](../r2e-security) | JWT validation, JWKS cache, `AuthenticatedUser` extractor |
 | [`r2e-events`](../r2e-events) | In-process typed pub/sub event bus |
 | [`r2e-scheduler`](../r2e-scheduler) | Background task scheduling (interval, cron) |
+| [`r2e-executor`](../r2e-executor) | Managed task pool + background services |
 | [`r2e-data-sqlx`](../r2e-data/backends/sqlx) | Managed SQLx transactions |
 | [`r2e-data-diesel`](../r2e-data/backends/diesel) | Managed Diesel transactions |
 | [`r2e-cache`](../r2e-cache) | TTL cache with pluggable backends |
 | [`r2e-rate-limit`](../r2e-rate-limit) | Token-bucket rate limiting |
-| [`r2e-openapi`](../r2e-openapi) | OpenAPI 3.0 spec generation + Swagger UI |
+| [`r2e-openapi`](../r2e-openapi) | OpenAPI 3.1.0 spec generation + docs UI |
 | [`r2e-prometheus`](../r2e-prometheus) | Prometheus metrics endpoint |
 | [`r2e-observability`](../r2e-observability) | OpenTelemetry distributed tracing |
+| [`r2e-oidc`](../r2e-oidc) | Embedded OIDC server (JWT issuance) |
+| [`r2e-grpc`](../r2e-grpc) | Tonic-based gRPC server, multiplexed with HTTP |
 | [`r2e-openfga`](../r2e-openfga) | OpenFGA fine-grained authorization |
 | [`r2e-utils`](../r2e-utils) | Built-in interceptors (Logged, Timed, Cache) |
 | [`r2e-static`](../r2e-static) | Embedded static file serving with SPA support |

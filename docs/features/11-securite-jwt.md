@@ -52,12 +52,18 @@ let validator = JwtClaimsValidator::new_with_static_key(
 #### Production mode (JWKS endpoint)
 
 ```rust
+use std::sync::Arc;
+use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};
+
 let config = SecurityConfig::new(
     "https://auth.example.com/.well-known/jwks.json",
     "https://auth.example.com",
     "mon-application",
 );
-let validator = JwtClaimsValidator::new(config).await?;
+// JwksCache::new is async and fallible (it performs an initial key fetch);
+// JwtClaimsValidator::new itself is synchronous.
+let jwks = JwksCache::new(config.clone()).await?;
+let validator = JwtClaimsValidator::new(Arc::new(jwks), config);
 ```
 
 The `JwksCache` downloads and caches public keys, with automatic refresh.
@@ -105,6 +111,29 @@ impl UserController {
 - If the `Authorization` header is missing or the token is invalid -> 401 response
 - If the token is valid -> the `user` field is populated
 
+#### Fail-closed auth with `#[anonymous]`
+
+A **struct-level** `#[inject(identity)]` authenticates **every** route on the controller by
+default (fail-closed, @PermitAll-style opt-out). Mark the public exceptions with `#[anonymous]`:
+
+```rust
+#[routes]
+impl UserController {
+    #[get("/me")]                      // protected (struct identity)
+    async fn me(&self) -> Json<AuthenticatedUser> { Json(self.user.clone()) }
+
+    #[get("/health")]
+    #[anonymous]                       // opt this route out — no JWT extracted
+    async fn health(&self) -> &'static str { "ok" }
+}
+```
+
+On an `#[anonymous]` route, identity extraction is skipped entirely (no JWT cost) and reading
+the struct identity in the body is a compile error. Rejected combinations (compile errors):
+`#[anonymous]` with `#[roles]`/`#[all_roles]`, with a **required** `#[inject(identity)]` param
+(an `Option<T>` identity param is allowed), or on a controller without a **required** struct
+identity. For mostly-public controllers, prefer param-level `#[inject(identity)]` instead.
+
 ### 4. AuthenticatedUser Structure
 
 ```rust
@@ -118,9 +147,9 @@ pub struct AuthenticatedUser {
 
 ### Role Extraction
 
-Roles are looked up in the following order:
-1. `roles` claim (array of strings)
-2. `realm_access.roles` claim (Keycloak format)
+The default extractor collects roles as the **union** (deduplicated) of both claim shapes:
+1. the top-level `roles` claim (array of strings)
+2. the `realm_access.roles` claim (Keycloak format)
 
 The `RoleExtractor` trait can be implemented to support other formats.
 

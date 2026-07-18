@@ -75,9 +75,12 @@ pub struct RouteInfo {
     pub description: Option<String>,
     pub request_body_type: Option<String>,
     pub request_body_schema: Option<Value>,
+    pub request_body_content_type: Option<String>,  // None ⇒ application/json
+    pub request_body_required: bool,
     pub response_type: Option<String>,
     pub response_schema: Option<Value>,
     pub response_status: u16,
+    pub response_unmapped: Option<String>,  // successful body type that could not be auto-mapped
     pub params: Vec<ParamInfo>,
     pub roles: Vec<String>,
     pub tag: Option<String>,

@@ -57,8 +57,12 @@ producer's decision. Consumers hard-depend on `Option<T>`.
 ### Controller injection scopes
 
 - `#[inject]` — app-scoped, resolved from the bean graph by type
-- `#[inject(identity)]` — request-scoped, extracted via `FromRequestPartsVia` (plain axum `FromRequestParts` extractors bridge automatically)
+- `#[inject(identity)]` — request-scoped auth identity, extracted via `FromRequestPartsVia` (plain axum `FromRequestParts` extractors bridge automatically); drives guards/roles
+- `#[inject(request)]` — request-scoped, any other `FromRequestParts` value (tenant id, correlation/trace context, …)
 - `#[config("key")]` — app-scoped, resolved from `R2eConfig`
+
+A struct-level required identity authenticates **every** route by default;
+mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 
 ### ContextConstruct
 
@@ -410,6 +414,15 @@ AppBuilder::new()
 ```
 
 `shutdown_grace_period` sets a maximum time for shutdown hooks to complete. If exceeded, the process force-exits. Without it, the process waits indefinitely (default).
+
+`on_drain` runs at the start of graceful shutdown (before draining in-flight
+requests) — use it to flip readiness / deregister from a load balancer.
+`serve_auto()` serves using `server.host`/`server.port` (and `server.workers`
+for sharded serving) from config instead of a hard-coded address. A
+`StopHandle` (from `PreparedApp::stop_handle`, or created with `StopHandle::new`
+and `provide()`d as a bean) triggers programmatic shutdown via
+`StopHandle::stop()`. `#[pre_destroy]` on beans and controller impls provides
+disposal hooks that run during the async shutdown phase.
 
 `LifecycleController<T>` trait provides per-controller startup/shutdown hooks.
 

@@ -40,9 +40,12 @@ impl UserController {
 
 `AuthenticatedUser` implements the `Identity` trait, providing:
 - `sub()` — unique subject identifier
-- `roles()` — role list
 - `email()` — email address (optional)
-- `claims()` — raw JWT claims
+- `claims()` — raw JWT claims (optional)
+
+Roles live on the separate `RoleBasedIdentity` trait (`roles() -> &[String]`),
+which `AuthenticatedUser` also implements. That trait is what `#[roles(...)]` /
+`#[all_roles(...)]` require of an identity type.
 
 The extractor validates the token with an `Arc<JwtClaimsValidator>` **resolved
 from the bean graph by type** — so you must provide one as a bean before

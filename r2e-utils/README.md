@@ -1,10 +1,10 @@
 # r2e-utils
 
-Built-in interceptors for R2E — Logged, Timed, Cache, and CacheInvalidate.
+Built-in interceptors for R2E — Logged, Timed, Cache, CacheInvalidate, Counted, and MetricTimed.
 
 ## Overview
 
-Provides ready-to-use interceptors that implement the `Interceptor<R, S>` trait (generic over the state `S`) from `r2e-core`. All calls are monomorphized at compile time for zero overhead.
+Provides ready-to-use interceptors that implement the `Interceptor<R>` trait (generic over the return type `R`) from `r2e-core`. All calls are monomorphized at compile time for zero overhead.
 
 ## Usage
 
@@ -39,13 +39,13 @@ Measures execution time, with an optional threshold (only logs if exceeded):
 async fn list(&self) -> Json<Vec<User>> { ... }
 
 #[get("/slow")]
-#[intercept(Timed::threshold_ms(100))]      // only logs if > 100ms
+#[intercept(Timed::threshold(100))]         // only logs if > 100ms
 async fn slow(&self) -> Json<Data> { ... }
 ```
 
 ### Cache
 
-Caches `Json<T>` responses via the global `CacheStore`. Supports TTL and named groups:
+Caches `Json<T>` responses via the `CacheStore` bean (`Arc<dyn CacheStore>`, resolved once at controller registration — a missing store is a compile error). Supports TTL and named groups:
 
 ```rust
 #[get("/")]
@@ -65,6 +65,26 @@ Clears a named cache group after method execution:
 #[post("/")]
 #[intercept(CacheInvalidate::group("users"))]
 async fn create(&self, body: Json<CreateUser>) -> Result<Json<User>, HttpError> { ... }
+```
+
+### Counted
+
+Increments a named counter on each invocation, logged via `tracing`:
+
+```rust
+#[get("/")]
+#[intercept(Counted::new("user_list_total"))]
+async fn list(&self) -> Json<Vec<User>> { ... }
+```
+
+### MetricTimed
+
+Records the execution duration as a named metric, logged via `tracing`:
+
+```rust
+#[get("/")]
+#[intercept(MetricTimed::new("user_list_duration"))]
+async fn list(&self) -> Json<Vec<User>> { ... }
 ```
 
 ## Combining interceptors

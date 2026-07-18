@@ -146,6 +146,36 @@ type — a missing bean is a **compile error naming the type**.
 Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the
 crate root; `r2e doctor` warns as the bean count approaches that threshold.
 
+### Canonical entry point: the `App` trait
+
+For real apps, prefer declaring the wiring once via the `App` trait
+(`setup` builds a long-lived environment, `build` assembles the `AppBuilder`)
+and launching it with `r2e::app_main!(MyApp)` (or `r2e::launch!(MyApp)` / the
+`r2e::launch::<MyApp>()` function). This single assembly path is shared by
+production, dev-reload, and tests — tests boot the same type via
+`TestApp::boot::<MyApp>()` or `#[r2e::test(app = MyApp)]`, with
+`override_bean` / `override_config` / `override_config_value` for test doubles.
+
+```rust
+use r2e::prelude::*;
+
+struct MyApp;
+
+impl App for MyApp {
+    type Env = ();
+    async fn setup() -> Self::Env {}
+    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
+        b.register::<UserService>()
+            .build_state()
+            .await
+            .with(Health)
+            .register_controller::<UserController>()
+    }
+}
+
+r2e::app_main!(MyApp);
+```
+
 ## Injection scopes
 
 All injection is resolved at compile time — no runtime reflection, no trait objects.
@@ -455,7 +485,7 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 | Plugin | Description |
 |--------|-------------|
 | `Health` | `GET /health` returning 200 "OK" |
-| `Cors::permissive()` | Permissive CORS headers (or `Cors::new(layer)` for custom) |
+| `Cors::permissive()` | Permissive CORS headers (or `Cors::custom(layer)` for a custom `CorsLayer`) |
 | `Tracing` | Request tracing via `tracing` + `tower-http` |
 | `ErrorHandling` | Catches panics, returns JSON 500 |
 | `NormalizePath` | Trailing-slash normalization (install last) |

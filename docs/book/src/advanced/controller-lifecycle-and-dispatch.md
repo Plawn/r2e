@@ -94,7 +94,9 @@ register_controller
        (Controller::Deps is checked against the state's provision list via
         AllSatisfied at this call site — a missing bean is a COMPILE error)
   -> wrap it in Arc<Core>
-  -> routes(&state, core.clone())        // state is the inferred HList
+  -> routes(&state, core.clone(), ctx)   // state is the inferred HList;
+                                         // ctx is the resolved bean graph
+                                         // (guards/interceptors are built from it)
        for each route, register a closure that:
          - captures an Arc clone of the core
          - extracts __R2eRequestData_<Name> via FromRequestParts (state-generic)
@@ -112,7 +114,7 @@ threads the inferred state `S`:
 
 ```rust,ignore
 let core = Arc::new(<AccountController as ContextConstruct>::from_context(&ctx));
-let router = <AccountController as Controller<S, _>>::routes(&state, core);
+let router = <AccountController as Controller<S, _>>::routes(&state, core, &ctx);
 ```
 
 There is no no-argument compatibility path. Controllers are never looked up

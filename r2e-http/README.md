@@ -10,24 +10,29 @@ This enforces a clean dependency boundary: if Axum's API changes, only this crat
 
 ## Re-exports
 
-Core Axum types, grouped by module:
+Core Axum types. Frequently used items are also flattened at the crate root, so both `r2e_http::Router` and `r2e_http::routing::get` resolve:
 
 | Module | Types |
 |--------|-------|
-| `extract` | `Path`, `Query`, `Form`, `State`, `Json`, `Request`, `FromRequestParts`, `ConnectInfo`, ... |
-| `header` | `HeaderMap`, `HeaderName`, `StatusCode`, `Method`, common header constants |
-| `response` | `Response`, `IntoResponse`, `Html`, `Redirect`, `Sse`, `SseEvent` |
-| `routing` | `Router`, `MethodRouter`, `get`, `post`, `put`, `delete`, ... |
-| `body` | `Body` |
-| `middleware` | Tower middleware helpers |
+| crate root | `Router`, `Json`, `Extension`, `Error`, `Uri`, `Bytes`, plus flattened `extract`/`header`/`response`/`body` items |
+| `extract` | `Path`, `Query`, `Form`, `State`, `Request`, `FromRequestParts`, `OptionalFromRequestParts`, `ConnectInfo`, `MatchedPath`, `DefaultBodyLimit`, ... |
+| `header` | `HeaderMap`, `HeaderName`, `HeaderValue`, `StatusCode`, `Method`, `Parts`, all `http::header` constants |
+| `response` | `Response`, `IntoResponse`, `Html`, `Redirect`, `Sse`, `SseEvent`, `SseKeepAlive` |
+| `routing` | `MethodRouter`, `Route`, `get`, `post`, `put`, `patch`, `delete`, `any` |
+| `body` | `Body`, `to_bytes` |
+| `middleware` | `from_fn`, `from_fn_with_state`, `Next` |
+
+The `labels` module (always compiled) provides bounded telemetry label helpers (`method_label`, `UNMATCHED_PATH_LABEL`, ...) shared by `r2e-prometheus` and `r2e-observability`.
 
 ## Feature flags
 
 | Feature | Description |
 |---------|-------------|
-| `ws` | WebSocket support |
-| `multipart` | Multipart form / file upload support |
-| `quic` | HTTP/3 via h3 + h3-quinn, plus raw QUIC streams |
+| `ws` | WebSocket support — `ws` module (`WebSocket`, `WebSocketUpgrade`, `Message`, `CloseFrame`) |
+| `multipart` | Multipart form / file upload support — `multipart` module (`Multipart`) |
+| `quic` | HTTP/3 via h3 + h3-quinn, plus raw QUIC streams (quinn) — `quic` module (`QuicEndpoint`, `QuicConnection`, `QuicError`, `build_server_config`, `apply_alt_svc`, re-exported `quinn`) |
+
+Default features: none.
 
 ## Usage
 

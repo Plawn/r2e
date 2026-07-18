@@ -75,6 +75,7 @@ supported by the embedded Ryuk integration.
 |---------|-------------|
 | `postgres` | `DevPostgres` — containerized PostgreSQL |
 | `redis` | `DevRedis` — containerized Redis |
+| `openfga` | `DevOpenFga` — containerized OpenFGA (exposes `grpc_endpoint()` / `http_endpoint()`) |
 
 ## License
 

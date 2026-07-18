@@ -404,31 +404,32 @@ let users = InMemoryUserStore::new()
 
 let oidc = OidcServer::new().with_user_store(users);
 
-let app = AppBuilder::new()
-    .plugin(oidc)
-    .build_state().await
-    .register_controller::<MyController>()
-    .build();
-
-let client = TestApp::new(app);
+let app = TestApp::from_builder(
+    AppBuilder::new()
+        .plugin(oidc)
+        .build_state().await
+        .register_controller::<MyController>(),
+);
 
 // 1. Obtain a token
-let token_resp = client.post("/oauth/token")
+let token_resp = app.post("/oauth/token")
     .form(&[
         ("grant_type", "password"),
         ("username", "test-user"),
         ("password", "test-pass"),
     ])
+    .send()
     .await;
-assert_eq!(token_resp.status(), 200);
-let token: serde_json::Value = token_resp.json().await;
+token_resp.assert_ok();
+let token: serde_json::Value = token_resp.json();
 let access_token = token["access_token"].as_str().unwrap();
 
 // 2. Use the token
-let resp = client.get("/api/me")
-    .header("Authorization", format!("Bearer {access_token}"))
-    .await;
-assert_eq!(resp.status(), 200);
+app.get("/api/me")
+    .bearer(access_token)
+    .send()
+    .await
+    .assert_ok();
 ```
 
 > **Tip:** For simple tests that don't need the full OAuth flow, `TestJwt` (see [TestJwt](../testing/test-jwt.md)) remains the fastest way to generate test tokens.

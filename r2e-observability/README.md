@@ -98,7 +98,7 @@ This reads all `observability.*` keys including `observability.tracing.*`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `filter` | String | `"info,tower_http=debug"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
+| `filter` | String | `"info"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
 | `format` | `pretty` / `json` | `pretty` | Log output format |
 | `target` | bool | `true` | Print the module path in each log line |
 | `thread-ids` | bool | `false` | Print thread IDs |

@@ -37,6 +37,8 @@ my-app/
   .gitignore
   Cargo.toml
   application.yaml
+  AGENTS.md          # agent-facing guidance (idiomatic R2E patterns)
+  CLAUDE.md          # imports AGENTS.md
   src/
     app.rs
     env.rs
@@ -45,6 +47,8 @@ my-app/
     controllers/
       mod.rs
       hello.rs
+  tests/
+    app.rs           # boots the same App via #[r2e::test]
 ```
 
 With `--db sqlite`, you also get a `migrations/` directory and a `SqlitePool`
@@ -72,7 +76,10 @@ controllers are assembled once in `App::build` inside `app.rs`.
 ```yaml
 app:
   name: "my-app"
-  port: 8080
+
+# Read by serve_auto()
+server:
+  port: 3000
 ```
 
 With `--db sqlite`:
@@ -240,10 +247,18 @@ service User {
 **`src/grpc/user.rs`** — Rust implementation with `#[grpc_routes]`:
 
 ```rust
-#[controller]
-pub struct UserService { ... }
+use r2e::prelude::*;
 
-#[grpc_routes(proto::user_server::User)]
+use super::proto;
+use proto::myapp::*;
+
+#[controller]
+pub struct UserService {
+    // #[inject]
+    // your_dependency: YourDependency,
+}
+
+#[grpc_routes(proto::myapp::user_server::User, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl UserService {
     async fn get_user(&self, request: tonic::Request<GetUserRequest>) -> Result<tonic::Response<GetUserResponse>, tonic::Status> {
         // ...
@@ -255,11 +270,14 @@ impl UserService {
 }
 ```
 
+The command also creates `src/grpc/mod.rs` (with the shared `proto` module) if it
+doesn't exist and appends `pub mod user;` to it.
+
 **After generation:**
 
-1. Add to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
-3. `cargo build` to generate proto code
+1. Register in `src/app.rs`, inside `App::build`: `.register_grpc_service::<UserService>()`
+2. `cargo build` — the `build.rs` helper (`r2e_grpc_build::compile()`) picks up the
+   new `.proto` automatically. If there is no `build.rs` yet, run `r2e add grpc` first.
 
 ---
 

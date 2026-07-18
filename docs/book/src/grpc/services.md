@@ -10,15 +10,16 @@ Enable the gRPC feature:
 r2e = { version = "0.1", features = ["grpc"] }
 ```
 
-Add `tonic-build` and `prost` for proto compilation:
+Add the runtime proto crates and the R2E build helper that compiles your protos:
 
 ```toml
 [dependencies]
-tonic = "0.12"
-prost = "0.13"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
 
 [build-dependencies]
-tonic-build = "0.12"
+r2e-grpc-build = "0.1"
 ```
 
 ## Defining a proto file
@@ -47,31 +48,30 @@ message HelloReply {
 
 ## Build script
 
-Create a `build.rs` at the project root to compile protos into Rust code:
+Create a one-line `build.rs` at the project root. `r2e_grpc_build::compile()` finds and compiles **every** `proto/**/*.proto` file (no per-file list), emitting an aggregated per-package module plus a combined `FileDescriptorSet` into `OUT_DIR`:
 
 ```rust
 // build.rs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("proto/greeter.proto")?;
-    Ok(())
+    r2e_grpc_build::compile()
 }
 ```
 
-The generated code produces a server trait (`greeter_server::Greeter`) and message types (`HelloRequest`, `HelloReply`).
+The generated code produces a server trait (`greeter::greeter_server::Greeter`) and message types (`HelloRequest`, `HelloReply`), grouped under one Rust module per protobuf package. The `proto/` directory is registered with `cargo:rerun-if-changed`, so dropping a new `.proto` file in is picked up on the next build without touching `build.rs`.
 
 ## Including generated code
 
-Use `tonic::include_proto!` to bring the generated types into scope:
+Use `include_protos!()` to bring the generated modules into scope. It expands to the aggregator written into `OUT_DIR`: one module per protobuf `package` (dotted packages nest) plus a `FILE_DESCRIPTOR_SET` constant:
 
 ```rust
 pub mod proto {
-    tonic::include_proto!("greeter");
+    r2e::r2e_grpc::include_protos!();
 }
 
-use proto::{HelloReply, HelloRequest};
+use proto::greeter::{HelloReply, HelloRequest};
 ```
 
-The string passed to `include_proto!` must match the `package` name in the `.proto` file.
+Types live under a module named after the `.proto` `package` — here `package greeter;` becomes `proto::greeter`.
 
 ## Implementing a gRPC service
 
@@ -89,7 +89,7 @@ pub struct GreeterService {
     #[inject] greeting_prefix: GreetingPrefix,
 }
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     async fn say_hello(
         &self,
@@ -148,7 +148,7 @@ The service core is constructed once from the resolved `BeanContext` via `Contex
 Apply interceptors at the impl level or method level, same as HTTP:
 
 ```rust
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 #[intercept(Logged::info())]
 impl GreeterService {
     #[intercept(Timed::default())]
@@ -251,32 +251,18 @@ HTTP controllers use `#[routes]`, gRPC services use `#[grpc_routes]`. Both const
 
 ## gRPC reflection
 
-Enable server reflection for introspection tools like `grpcurl` and gRPC UI. Reflection needs the encoded `FileDescriptorSet` of your protos, so three pieces cooperate:
+Enable server reflection for introspection tools like `grpcurl` and gRPC UI. Reflection needs the encoded `FileDescriptorSet` of your protos — and `r2e_grpc_build::compile()` already emits the **combined** set for every proto and exposes it as the `FILE_DESCRIPTOR_SET` constant in your `proto` module. So there is no extra build.rs step: just two pieces cooperate:
 
-1. **build.rs** — emit the descriptor set next to the generated code:
-
-```rust
-tonic_prost_build::configure()
-    .file_descriptor_set_path(out_dir.join("greeter_descriptor.bin"))
-    .compile_protos(&["proto/greeter.proto"], &["proto"])?;
-```
-
-2. **Proto module** — expose the bytes:
+1. **Service** — declare the set on the service via the `descriptor` argument:
 
 ```rust
-pub mod proto {
-    tonic::include_proto!("greeter");
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("greeter_descriptor");
-}
-```
-
-3. **Service + plugin** — declare the set on the service and enable reflection:
-
-```rust
-#[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl GreeterService { /* ... */ }
+```
 
+2. **Plugin** — enable reflection:
+
+```rust
 AppBuilder::new()
     .plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())
 ```
@@ -334,13 +320,15 @@ r2e generate grpc-service User --package myapp
 This creates:
 - `proto/user.proto` — proto file with CRUD RPC definitions
 - `src/grpc/user.rs` — Rust service implementation skeleton
+- `src/grpc/mod.rs` — declares the shared `proto` module (via `include_protos!()`) if it doesn't exist yet
 
 The `--package` flag sets the protobuf package name (defaults to `myapp`).
 
 After generating, you need to:
-1. Add the proto to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
-3. Run `cargo build` to generate proto code
+1. Register in `src/app.rs`, inside `App::build`: `.register_grpc_service::<UserService>()`
+2. Run `cargo build` — the one-line `build.rs` (`r2e_grpc_build::compile()`) picks up the new proto automatically, no per-file edit needed
+
+If the project has no `build.rs` yet, run `r2e add grpc` first — it scaffolds the one-line build script.
 
 See [CLI Reference](../reference/cli-reference.md) for full details.
 

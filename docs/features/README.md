@@ -2,7 +2,7 @@
 
 ## Overview
 
-R2E provides 20 main features, each documented in a dedicated file.
+R2E provides 22 main features, each documented in a dedicated file.
 
 | # | Feature | File | Crate |
 |---|---------|------|-------|

@@ -55,7 +55,10 @@ impl UserController {
 
 **Supported attributes on methods:**
 - `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` — HTTP routes
-- `#[roles("...")]` — role-based access control
+- `#[any("/...")]` — any-method route (proxy/catch-all with `{*wildcard}` paths)
+- `#[fallback]` — controller-scoped catch-all for unmatched requests
+- `#[roles("...")]`, `#[all_roles("...")]` — role-based access control (OR / AND)
+- `#[anonymous]` — opt a route out of struct-level identity (fail-closed auth)
 - `#[guard(MyGuard)]` — custom post-auth guard
 - `#[pre_guard(MyGuard)]` — custom pre-auth guard
 - `#[intercept(Logged::info())]` — interceptors

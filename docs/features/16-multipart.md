@@ -38,7 +38,7 @@ All multipart types are available via the prelude:
 
 ```rust
 use r2e::prelude::*;
-// Exporte : FromMultipart, Multipart, TypedMultipart, UploadedFile
+// Exporte : FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile
 ```
 
 Or import explicitly:
@@ -104,7 +104,7 @@ pub struct UploadedFile {
 | `len()` | `usize` | Size of the data in bytes |
 | `is_empty()` | `bool` | Whether the data is empty |
 
-The raw data is accessible via the `data` field (`bytes::Bytes`). File contents are kept in memory — it is recommended to enforce size limits at the web server or reverse proxy level for large uploads.
+The raw data is accessible via the `data` field (`bytes::Bytes`). File contents are kept in memory. Extraction enforces built-in `MultipartLimits` (default: 10 MiB per field, 100 MiB total) — exceeding them yields a 413 response (see error variants below). Use `collect_from_with_limits` for custom caps, and consider additional limits at the web server or reverse proxy level for large uploads.
 
 ### 5. Field Type Mapping
 
@@ -212,7 +212,7 @@ impl UploadController {
 
 ## Error Format
 
-When extraction fails, `TypedMultipart` returns a 400 Bad Request with a JSON body:
+When extraction fails, `TypedMultipart` returns an error with a JSON body — 400 Bad Request for missing/parse/read errors, 413 Payload Too Large for size-limit errors:
 
 ```json
 {
@@ -226,14 +226,16 @@ When extraction fails, `TypedMultipart` returns a 400 Bad Request with a JSON bo
 }
 ```
 
-The four error variants:
+The error variants:
 
-| Variant | Cause |
-|---------|-------|
-| `MissingField` | A required field was not present |
-| `ParseError` | A text field could not be parsed to the expected type |
-| `AxumError` | The underlying Axum multipart extractor failed (e.g., incorrect content-type) |
-| `ReadError` | A field's data could not be read (e.g., UTF-8 decoding failure) |
+| Variant | HTTP | Cause |
+|---------|------|-------|
+| `MissingField` | 400 | A required field was not present |
+| `ParseError` | 400 | A text field could not be parsed to the expected type |
+| `AxumError` | 400 | The underlying Axum multipart extractor failed (e.g., incorrect content-type) |
+| `ReadError` | 400 | A field's data could not be read (e.g., UTF-8 decoding failure) |
+| `FieldTooLarge` | 413 | A single field exceeded the per-field size limit |
+| `PayloadTooLarge` | 413 | The combined payload exceeded the total size limit |
 
 ## Raw Multipart Access
 

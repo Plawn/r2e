@@ -7,14 +7,14 @@ an RAII abort guard.
 pub trait ManagedResource<S>: Sized + Send {
     type Error: Into<Response>;
 
-    async fn acquire(
+    fn acquire(
         context: ManagedContext<'_, S>,
-    ) -> Result<Self, Self::Error>;
+    ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
-    async fn finalize(
+    fn finalize(
         &mut self,
         outcome: &ManagedOutcome,
-    ) -> Result<(), Self::Error>;
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn abort(&mut self);
 }

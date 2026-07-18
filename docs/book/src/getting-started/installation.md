@@ -39,7 +39,7 @@ r2e = { version = "0.1", features = ["security", "data", "openapi"] }
 | `openapi` | OpenAPI 3.1.0 spec generation (`r2e-openapi`) |
 | `utils` | Built-in interceptors: Logged, Timed, Cache (`r2e-utils`) |
 | `static` | Embedded static file serving with SPA support (`r2e-static`) |
-| `full` | Enables all features above |
+| `full` | Enables all non-database features above; add a `sqlx-*` or `diesel-*` feature separately for a database driver |
 
 ## Installing the CLI (optional)
 
@@ -71,4 +71,4 @@ cd hello-r2e
 cargo run
 ```
 
-You should see the server start on `http://localhost:8080`. Visit `http://localhost:8080/` to see "Hello, World!" and `http://localhost:8080/health` for the health check.
+You should see the server start on `http://localhost:3000` (the scaffolded `application.yaml` sets `server.port: 3000`, which is also the default when unset). Visit `http://localhost:3000/` to see "Hello, World!" and `http://localhost:3000/health` for the health check.

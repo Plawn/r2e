@@ -126,7 +126,7 @@ pub struct SyncConfig {
 
 ## Prelude
 
-`r2e_scheduler::prelude` (new) re-exports `AppBuilderSchedulerExt`, `ScheduleConfig`, `ScheduledTaskDef`, `Scheduler`, `SchedulerHandle`, `ScheduledJobRegistry`, `ScheduledJobInfo`; the `r2e` facade prelude includes it behind the `scheduler` feature — `use r2e::prelude::*` is enough.
+`r2e_scheduler::prelude` (new) re-exports `AppBuilderSchedulerExt`, `OverlapPolicy`, `ScheduleConfig`, `ScheduledTaskDef`, `Scheduler`, `SchedulerConfig`, `SchedulerHandle`, `ScheduledJobRegistry`, `ScheduledJobInfo`; the `r2e` facade prelude includes it behind the `scheduler` feature — `use r2e::prelude::*` is enough.
 
 ## Not covered (by design)
 

@@ -11,7 +11,8 @@ Creates a new R2E project with optional feature selection.
 - `--auth` — include JWT/OIDC security (adds `r2e-security`, `JwtClaimsValidator` in state)
 - `--openapi` — include OpenAPI documentation (adds `OpenApiPlugin` to builder)
 - `--metrics` — reserved for Prometheus metrics (not yet wired)
-- `--full` — enable all features (SQLite + auth + openapi + scheduler + events)
+- `--grpc` — include gRPC server support (proto automagic: one-line `build.rs` via `r2e-grpc-build`, `proto/greeter.proto`, `src/grpc/` skeleton with `include_protos!()`)
+- `--full` — enable all features (SQLite + auth + openapi + scheduler + events + gRPC)
 - `--no-interactive` — skip interactive prompts, use flags/defaults only
 
 **Interactive mode:** When no flags are provided, uses `dialoguer` to prompt for database and feature selection.
@@ -37,6 +38,7 @@ Subcommands:
   - `tests/<snake>_test.rs` — integration test skeleton
   - Updates `mod.rs` in each directory
 - **`middleware <Name>`** — generates `src/middleware/<snake_name>.rs` with an `Interceptor<R>` impl skeleton, updates `mod.rs`
+- **`grpc-service <Name> [--package <pkg>]`** — generates `proto/<snake>.proto` (with `Get<Name>`/`List<Name>` RPCs) + `src/grpc/<snake>.rs` (a `#[grpc_routes]` controller wired to `super::proto`), creating the shared `src/grpc/mod.rs` (`include_protos!()`) if missing and updating it. `--package` sets the protobuf package (default `myapp`).
 
 **Field parsing:** fields are `"name:Type"` pairs (e.g. `"title:String published:bool"`). `Field` struct has `name`, `rust_type`, `is_optional`. SQL type mapping: `String` → `TEXT`, `i64` → `INTEGER`, `f64` → `REAL`, `bool` → `BOOLEAN`.
 
@@ -77,7 +79,7 @@ Uses Dioxus Subsecond for instant hot-patching — recompiles only changed code 
 
 ## `r2e add <extension>` — Extension management
 
-Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data-sqlx`, `data-diesel`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `grpc`, `static`, `test`.
+Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data-sqlx`, `data-diesel`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `grpc`, `test`. (`r2e add openapi` also pulls in `schemars`.)
 
 **`r2e add grpc` is a full scaffold**, not just a dependency insert (`scaffold_grpc` in `commands/add.rs`): enables the `grpc`/`grpc-reflection` features on the `r2e` facade dep (converting a bare version string to an inline table if needed; falls back to a direct `r2e-grpc` dep when there is no `r2e` dep), adds `tonic`/`tonic-prost`/`prost` (~0.14) and the `r2e-grpc-build` build-dependency (mirroring the `r2e` dep's git source incl. branch/rev/tag), writes the one-line `build.rs` (never overwrites an existing one), and — only when the project has no `.proto` yet — drops `proto/greeter.proto` plus a `src/grpc/` module skeleton, then prints the `App::build` wiring snippet. All three scaffolding paths (`r2e new --grpc`, `r2e add grpc`, `r2e generate grpc-service`) share one layout: `src/grpc/mod.rs` owns the single `pub mod proto { include_protos!() }`, service files live next to it and use `super::proto`.
 

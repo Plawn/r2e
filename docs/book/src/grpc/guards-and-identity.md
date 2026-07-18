@@ -9,7 +9,7 @@ While `#[inject(identity)]` is not yet available as a macro decorator, you can e
 ```rust
 use r2e::r2e_grpc::{extract_bearer_token, GrpcIdentityExtractor};
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     async fn say_hello(
         &self,
@@ -47,8 +47,8 @@ The following types are exported by `r2e-grpc` and ready for use:
 
 | Field/Method | Type | Description |
 |---|---|---|
-| `service_name` | `&str` | Proto service name |
-| `method_name` | `&str` | RPC method name |
+| `service_name` | `&'static str` | Proto service name |
+| `method_name` | `&'static str` | RPC method name |
 | `metadata` | `&MetadataMap` | gRPC request metadata |
 | `identity` | `Option<&I>` | Authenticated identity (if extracted) |
 | `identity_sub()` | `Option<&str>` | Subject from identity |
@@ -66,7 +66,7 @@ The following sections document the **planned API** for when macro support is en
 `#[inject(identity)]` on method parameters will extract authenticated identity from gRPC metadata:
 
 ```rust
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     async fn say_hello(
         &self,
@@ -117,7 +117,7 @@ If validation fails, the method returns `Status::unauthenticated` before the han
 `#[roles("...")]` will restrict methods to specific roles:
 
 ```rust
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     #[roles("admin")]
     async fn say_hello_admin(

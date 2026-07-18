@@ -65,7 +65,7 @@ Precedence: overrides > route schemas > registry > built-in error schemas.
 
 ## How it works
 
-1. Route metadata is collected from `Controller::route_metadata()` during `register_controller()`
+1. Each controller registers its `RouteInfo` metadata into the shared `MetaRegistry` (via `Controller::register_meta`) during `register_controller()`; the plugin consumes it through `with_meta_consumer::<RouteInfo>`
 2. Request/response schemas are auto-generated via `schemars` at compile time
 3. Extra schemas from `SchemaRegistry` are merged (with `$defs` promotion and `$ref` rewriting)
 4. The spec is assembled and served as a JSON endpoint

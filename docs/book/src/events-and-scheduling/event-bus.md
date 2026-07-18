@@ -62,25 +62,31 @@ pub struct MyController {
 
 ## Subscribing to events
 
-Subscribers receive events wrapped in `Arc<E>` (shared across all handlers for the same emission):
+Handlers receive an `EventEnvelope<E>` (the event as `Arc<E>` plus its `EventMetadata`) and return a `HandlerResult` (`Ack` / `Nack`). `subscribe` returns a `SubscriptionHandle` you can later `unsubscribe()`:
 
 ```rust
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
+event_bus.subscribe(|envelope: EventEnvelope<UserCreatedEvent>| async move {
+    let event = &envelope.event;
     tracing::info!(user_id = event.user_id, "User created: {}", event.name);
+    HandlerResult::Ack
 }).await;
 ```
+
+> **Note:** the raw `subscribe` API works with `EventEnvelope<E>` / `HandlerResult`. Declarative [`#[consumer]`](./consumers.md) methods take a plain `Arc<E>` and may return `()` — the macro wraps them for you.
 
 Multiple subscribers can listen to the same event type. They all run concurrently:
 
 ```rust
 // Send welcome email
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
-    send_welcome_email(&event.email).await;
+event_bus.subscribe(|envelope: EventEnvelope<UserCreatedEvent>| async move {
+    send_welcome_email(&envelope.event.email).await;
+    HandlerResult::Ack
 }).await;
 
 // Update analytics
-event_bus.subscribe(|event: Arc<UserCreatedEvent>| async move {
-    analytics.track_signup(event.user_id).await;
+event_bus.subscribe(|envelope: EventEnvelope<UserCreatedEvent>| async move {
+    analytics.track_signup(envelope.event.user_id).await;
+    HandlerResult::Ack
 }).await;
 ```
 
@@ -243,7 +249,7 @@ Disables backpressure entirely. Every handler is spawned immediately regardless 
 Each event type has its own subscriber list, keyed by `TypeId`. Emitting an `OrderPlacedEvent` never triggers handlers subscribed to `UserCreatedEvent`:
 
 ```rust
-bus.subscribe(|_: Arc<UserCreatedEvent>| async { println!("user!"); }).await;
+bus.subscribe(|_: EventEnvelope<UserCreatedEvent>| async { HandlerResult::Ack }).await;
 bus.emit(OrderPlacedEvent { order_id: 1, total: 99.0 }).await;
 // Nothing happens — different type
 ```
@@ -302,8 +308,8 @@ impl UserService {
 - `emit`: `E: Serialize + Send + Sync + 'static`
 - `request`: `Req: Serialize + Send + Sync + 'static`, `Resp: DeserializeOwned + Send + 'static`
 - `respond`: `Req: DeserializeOwned + Send + Sync + 'static`, `Resp: Serialize + Send + 'static`; handler returns `Result<Resp, E>` with `E: Display + Send + 'static`
-- Handler `F`: `Fn(Arc<E>) -> Fut + Send + Sync + 'static`
-- Future `Fut`: `Future<Output = ()> + Send + 'static`
+- Handler `F`: `Fn(EventEnvelope<E>) -> Fut + Send + Sync + 'static`
+- Future `Fut`: `Future<Output = HandlerResult> + Send + 'static`
 
 ### `LocalEventBus` (default implementation)
 
@@ -323,11 +329,14 @@ Implement the `EventBus` trait for remote transport:
 pub struct KafkaEventBus { /* ... */ }
 
 impl EventBus for KafkaEventBus {
-    fn subscribe<E, F, Fut>(&self, handler: F) -> impl Future<Output = ()> + Send
+    fn subscribe<E, F, Fut>(
+        &self,
+        handler: F,
+    ) -> impl Future<Output = Result<SubscriptionHandle, EventBusError>> + Send
     where E: DeserializeOwned + Send + Sync + 'static, /* ... */
     { /* consume from Kafka topic, deserialize, dispatch */ }
 
-    fn emit<E>(&self, event: E) -> impl Future<Output = ()> + Send
+    fn emit<E>(&self, event: E) -> impl Future<Output = Result<(), EventBusError>> + Send
     where E: Serialize + Send + Sync + 'static
     { /* serialize and produce to Kafka topic */ }
 

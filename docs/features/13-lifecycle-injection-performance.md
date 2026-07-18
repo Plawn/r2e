@@ -49,10 +49,10 @@ list into an **HList state** — the state type is *inferred* from the `.provide
 
 ### 1.2 Internal Construction (`build_inner`)
 
-The `build_inner()` method produces a tuple `(Router, StartupHooks, ShutdownHooks, ConsumerRegs, State)`:
+The `build_inner()` method produces a `BuiltApp<T>` struct bundling the router, the collected hook lists (startup / drain / shutdown / async-shutdown / plugin-shutdown / serve), consumer and post-construct registrations, plugin data, the resolved state, and the shutdown grace period:
 
 1. **Axum Router creation** — an empty `Router<T>`
-2. **Route merging** — each controller receives its shared core via `Controller::routes(&state, core)`
+2. **Route merging** — each controller receives its shared core via `Controller::routes(&state, core, ctx)`
 3. **OpenAPI** (if enabled) — invocation of the OpenAPI builder with collected metadata, adding `/openapi.json` and `/docs` routes
 4. **System routes** — `/health` and `/__r2e_dev/*` if enabled
 5. **State application** — `router.with_state(state.clone())`: a single clone at construction time
@@ -511,9 +511,14 @@ impl MixedController {
 ### 5.1 Architecture
 
 ```rust
-// r2e-core
+// r2e-core — the minimal identity contract
 pub trait Identity: Send + Sync {
     fn sub(&self) -> &str;
+    // defaulted: fn email(&self) -> Option<&str>, fn claims(&self) -> &serde_json::Value
+}
+
+// r2e-security — role-aware identities add this
+pub trait RoleBasedIdentity: Identity {
     fn roles(&self) -> &[String];
 }
 
@@ -532,7 +537,7 @@ pub trait Guard<I: Identity>: Send + Sync {
 }
 ```
 
-The `Identity` trait decouples guards from the concrete `AuthenticatedUser` type. Built-in guards (`RolesGuard`, `RateLimitGuard`) are generic over `I: Identity`.
+The `Identity` trait decouples guards from the concrete `AuthenticatedUser` type. `RateLimitGuard` is generic over `I: Identity`; the role guards (`RolesGuard`, `AllRolesGuard`) require `I: RoleBasedIdentity` since they read `roles()`.
 
 Guards are **graph-resolved decorators** (Phase 6): they are built **once, at controller
 registration**, from the resolved `BeanContext` — never per request, and `check` takes
@@ -591,25 +596,30 @@ When there is no identity at all, `guard_identity` returns `None` and the type i
 
 ### 6.2 Critical Operations in Detail
 
-#### State Cloning (`#[inject]`)
+#### Bean resolution (`#[inject]`)
 
-Cloning happens on every request for each `#[inject]` field. This is the Axum mechanism: the `FromRequestParts` extractor receives an immutable reference to the state and must produce a local copy.
+`#[inject]` fields are **not** cloned per request. Each field is resolved **once**, at
+`register_controller`, from the resolved `BeanContext` (`ctx.get::<T>()`) into the shared
+`Arc<Core>`. The state HList itself is cloned exactly once, at construction
+(`router.with_state(state.clone())`). Per request the only clone is a single `Arc` increment
+of the core.
 
-**Recommendation**: use `Arc<T>` for expensive-to-clone services. The framework already does this for `SqlxPool`, `LocalEventBus`, and `RateLimitRegistry`.
+**Recommendation**: still wrap expensive-to-clone services in `Arc<T>` — beans are cloned into
+the HList state at that one construction-time clone, so `Arc` keeps it cheap. The framework
+already does this for `SqlxPool`, `LocalEventBus`, and `RateLimitRegistry`.
 
 ```rust
-// Bon : Arc<T> → clone O(1)
+// Arc<T> → clone O(1) when the bean is materialized into the state HList
 #[derive(Clone)]
-pub struct Services {
-    pub user_service: UserService,       // contient Arc<RwLock<Vec<User>>>
-    pub jwt_validator: Arc<JwtValidator>,
-    pub pool: SqlitePool,                // Arc interne
+pub struct UserService {
+    inner: Arc<RwLock<Vec<User>>>,   // clonage O(1)
 }
-
-// Mauvais : si UserService contenait Vec<User> directement → clone O(n) par requete
 ```
 
-**Anti-pattern**: storing `R2eConfig` as an `#[inject]` field instead of via `#[config]`. `R2eConfig` is a `HashMap<String, ConfigValue>` — its clone copies the entire map on every request. Prefer `#[config("key")]` which only clones the requested value, or store the config as `Arc<R2eConfig>`.
+**Note**: because `#[inject]`/`#[config]` are resolved once into the core, storing a large
+`R2eConfig` (`HashMap<String, ConfigValue>`) as an `#[inject]` field no longer costs a clone
+per request — but `#[config("key")]` is still preferable when you only need one value, since
+the core then holds just that value rather than the whole map.
 
 #### JWT Validation (`#[inject(identity)]`)
 
@@ -633,22 +643,14 @@ This is generally the most expensive extraction operation. It includes:
 
 #### Configuration Lookup (`#[config]`)
 
-Each `#[config("key")]` field performs:
+Each `#[config("key")]` field is resolved **once, at core construction** (registration):
 
-1. `FromRef` extraction of `R2eConfig` — clone of the `HashMap`, O(n) where n = number of keys
-2. `config.get(key)` — O(1) lookup + type conversion
+1. `ctx.get::<R2eConfig>()` — the config is a bean, read by type from the graph
+2. `config.get(key)` — O(1) lookup + type conversion, materialized into the core
 
-**The config clone is the point of concern**. If the config contains 100 keys, that is 100 allocations per `#[config]` field per request.
-
-**Recommendation**: for high-throughput controllers, prefer injecting config values into the state at startup rather than via `#[config]`:
-
-```rust
-// Plutot que :
-#[config("app.greeting")] greeting: String,
-
-// Considerer :
-#[inject] greeting: Arc<String>,  // pre-construit dans l'etat
-```
+There is **no per-request config work** and no per-request `HashMap` clone: the parsed value
+lives on the shared `Arc<Core>`. A missing key fails at **startup** (`register_controller`),
+not mid-request.
 
 ### 6.3 Interceptors: Zero-Cost Abstraction
 
@@ -704,10 +706,10 @@ resolution or config lookup occurs.
 
 ## 7. Summary of Golden Rules
 
-1. **Wrap services in `Arc<T>`** — per-request cloning becomes a simple atomic increment
+1. **Wrap services in `Arc<T>`** — the one construction-time state clone (and the per-request core `Arc` increment) stay O(1)
 2. **Prefer param-level `#[inject(identity)]`** for mixed controllers — avoids JWT validation on public endpoints
-3. **Limit the number of `#[config]` fields** — each field clones the entire `R2eConfig`
+3. **`#[inject]`/`#[config]` are resolved once at registration** — not per request, so they add no per-request cost
 4. **Pre-warm the JWKS cache** at startup if first-request latency matters
 5. **Interceptors are free** in terms of dispatch overhead — the cost is in their internal logic
 6. **Guards must remain synchronous and O(1)** — no I/O in a guard
-7. **One controller per responsibility** — avoids injecting unnecessary dependencies that are cloned on every request
+7. **One controller per responsibility** — avoids injecting unnecessary dependencies into the shared core (materialized once into the state HList)

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Native WebSocket endpoints in controllers — no extra feature flag (in `r2e-core`). Annotate a method `#[ws("/path")]` and take a `WsStream` param; the HTTP upgrade is handled for you, with typed helpers for text/JSON/binary. Broadcast to all clients with an injected `WsBroadcaster` (`Clone + Send + Sync`), or use `WsRooms` for named on-demand rooms; `WsHandler` gives a structured `on_connect` / `on_message` / `on_close` lifecycle.
+Native WebSocket endpoints in controllers — enable the `ws` feature (types live in `r2e-core`). Annotate a method `#[ws("/path")]` and take a `WsStream` param; the HTTP upgrade is handled for you, with typed helpers for text/JSON/binary. Broadcast to all clients with an injected `WsBroadcaster` (`Clone + Send + Sync`), or use `WsRooms` for named on-demand rooms; `WsHandler` gives a structured `on_connect` / `on_message` / `on_close` lifecycle.
 
 
 ## Goal
@@ -31,7 +31,12 @@ A lifecycle trait (`on_connect`, `on_message`, `on_close`) for structured WebSoc
 
 ### 1. Configuration
 
-WebSocket support is included in `r2e-core` — no additional feature flag is needed:
+WebSocket types live in `r2e-core` but are gated behind the `ws` feature. Enable it:
+
+```toml
+[dependencies]
+r2e = { version = "0.1", features = ["ws"] }
+```
 
 ```rust
 use r2e::prelude::*;
@@ -246,7 +251,7 @@ async fn notifications(&self, mut ws: WsStream) {
             msg = rx.recv() => {
                 match msg {
                     Some(msg) => {
-                        if ws.send(msg).await.is_err() { break; }
+                        if ws.send((*msg).clone()).await.is_err() { break; }
                     }
                     None => break,
                 }
@@ -264,7 +269,7 @@ async fn notifications(&self, mut ws: WsStream) {
 }
 ```
 
-`recv()` automatically skips messages sent by the same client (matching by `sender_id`). If the receiver falls behind, missed messages are silently dropped.
+`recv()` returns `Option<Arc<Message>>` (a cheap `Arc` clone shared across subscribers), hence `(*msg).clone()` to forward it over `ws.send`. It automatically skips messages sent by the same client (matching by `sender_id`). If the receiver falls behind, missed messages are silently dropped.
 
 ### 6. WsRooms — Room Management
 
@@ -353,7 +358,7 @@ impl ChatController {
                 msg = rx.recv() => {
                     match msg {
                         Some(msg) => {
-                            if ws.send(msg).await.is_err() { break; }
+                            if ws.send((*msg).clone()).await.is_err() { break; }
                         }
                         None => break,
                     }

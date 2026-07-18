@@ -4,7 +4,7 @@ Background task scheduler for R2E — interval, cron, and delayed task execution
 
 ## Overview
 
-Provides a scheduler plugin that auto-discovers `#[scheduled]` methods in controllers and runs them from a single driver task backed by a min-heap of next-fire times (not one Tokio task per schedule). Each tick body is submitted to the shared `PoolExecutor` (from the `Executor` plugin); a job is re-armed only when its tick completes, so a task never overlaps with itself while different jobs still run concurrently. Tasks are lifecycle-managed via `CancellationToken` for clean shutdown, and in-flight ticks drain through the pool.
+Provides a scheduler plugin that auto-discovers `#[scheduled]` methods on controllers and beans and runs them from a single driver task backed by a min-heap of next-fire times (not one Tokio task per schedule). Each tick body is submitted to the shared `PoolExecutor` (from the `Executor` plugin); a job is re-armed only when its tick completes, so a task never overlaps with itself while different jobs still run concurrently. Tasks are lifecycle-managed via `CancellationToken` for clean shutdown, and in-flight ticks drain through the pool.
 
 **Requires the `Executor` plugin.** `Scheduler` declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. The `scheduler` facade feature pulls in `executor`.
 
@@ -51,7 +51,7 @@ impl ScheduledJobs {
         self.service.cleanup_expired().await;
     }
 
-    #[scheduled(every = 60, delay = 10)]         // first run after 10s, then every 60s
+    #[scheduled(every = 60, initial_delay = 10)] // first run after 10s, then every 60s
     async fn sync(&self) {
         self.service.sync_external().await;
     }
@@ -59,6 +59,16 @@ impl ScheduledJobs {
     #[scheduled(cron = "0 */5 * * * *")]         // cron: every 5 minutes
     async fn report(&self) {
         self.service.generate_report().await;
+    }
+
+    #[scheduled(every = 300, skip_if = "in_maintenance")] // skip while a predicate holds
+    async fn purge(&self) {
+        self.service.purge().await;
+    }
+
+    // `skip_if` names a `&self`-only method returning `bool` on the same impl.
+    fn in_maintenance(&self) -> bool {
+        self.service.maintenance_mode()
     }
 }
 ```
@@ -68,9 +78,14 @@ impl ScheduledJobs {
 | Config | Syntax | Description |
 |--------|--------|-------------|
 | Interval | `every = 30` | Fixed interval in seconds |
-| Interval + delay | `every = 60, delay = 10` | Initial delay before first run |
+| Interval + delay | `every = 60, initial_delay = 10` | Initial delay before first run |
 | Cron | `cron = "0 */5 * * * *"` | Standard cron expression |
 | Overlap | `overlap = "skip" \| "concurrent"` | Self-overlap policy (default `skip`) |
+| Skip predicate | `skip_if = "method"` | Skip a tick when a `&self`-only method returning `bool` yields `true` (Quarkus `skipExecutionIf`) |
+
+Durations accept a bare integer (seconds — `every = 30`) or a duration string
+(`every = "5m"`, `initial_delay = "10s"`). `initial_delay` only pairs with
+`every`, not `cron`.
 
 ## Overlap policy
 
@@ -79,6 +94,15 @@ with itself: the next tick is armed at fire time so a slow tick never holds back
 the following one. The default `skip` re-arms on completion, so a job never runs
 concurrently with itself (a due-while-running tick is skipped, cadence preserved).
 Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
+
+## Skip predicate
+
+`#[scheduled(skip_if = "method")]` (Quarkus `skipExecutionIf`) names a predicate
+on the same impl block — `fn method(&self) -> bool`, sync or async, `&self` only.
+It runs at the start of every tick (scheduled and `trigger_now` alike); returning
+`true` suppresses that tick's body. The schedule keeps advancing and the skip is
+counted in `ScheduledJobInfo::skip_count` (not `run_count`). Dynamic tasks:
+`ScheduledTaskDef::new(..).with_skip_if(|state| async move { .. })`.
 
 ## Configuration (`scheduler.*`)
 
@@ -96,8 +120,8 @@ Extract a `SchedulerHandle` (or `SchedulerHandle::channel(token)` for a manual
 `trigger_now(name).await` (each `-> bool`). A paused job advances its cadence but
 never fires; `trigger_now` fires once out of band (even when paused). Live per-job
 stats live on `ScheduledJobInfo` via `ScheduledJobRegistry::list_jobs()` /
-`job(name)`: `last_run`, `next_run`, `last_duration`, `run_count`, `panic_count`,
-`paused`.
+`job(name)`: `last_run`, `next_run`, `last_duration`, `run_count`, `skip_count`,
+`panic_count`, `paused`.
 
 ## Lifecycle
 

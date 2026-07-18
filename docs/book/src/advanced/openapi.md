@@ -72,7 +72,7 @@ AppBuilder::new()
 
 ## What gets documented
 
-Route metadata is automatically collected from `Controller::route_metadata()` during `register_controller()`:
+Route metadata is automatically collected via `Controller::register_meta()` during `register_controller()`:
 
 | Feature | Source |
 |---------|--------|

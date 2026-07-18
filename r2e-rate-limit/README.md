@@ -53,9 +53,10 @@ Generic token-bucket rate limiter keyed by arbitrary type:
 
 ```rust
 use r2e::r2e_rate_limit::RateLimiter;
+use std::time::Duration;
 
-let limiter = RateLimiter::new(10, 60); // 10 tokens per 60 seconds
-if limiter.check("user-123") {
+let limiter = RateLimiter::new(10, Duration::from_secs(60)); // 10 tokens per 60 seconds
+if limiter.try_acquire(&"user-123") {
     // request allowed
 }
 ```

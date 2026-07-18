@@ -1,10 +1,12 @@
 # r2e-events
 
-In-process typed event bus for R2E — publish/subscribe with async handlers and backpressure support.
+Typed event bus for R2E — fan-out publish/subscribe and point-to-point request-reply with async handlers and backpressure support.
 
 ## Overview
 
-Provides a lightweight, typed event bus where events are dispatched by `TypeId`. Subscribers receive `Arc<E>` and handlers run as concurrent Tokio tasks. A semaphore-based backpressure mechanism limits concurrent handlers (default: 1024).
+`EventBus` is a trait; `LocalEventBus` is the built-in in-process implementation where events are dispatched by `TypeId`. Subscribers receive an `EventEnvelope<E>` (the event payload plus metadata) and handlers run as concurrent Tokio tasks. A semaphore-based backpressure mechanism limits concurrent handlers (default: 1024).
+
+Distributed backends (Iggy, Kafka, Pulsar, RabbitMQ) live under `backends/` and share the utilities in the `backend` module.
 
 ## Usage
 
@@ -18,28 +20,44 @@ r2e = "0.1"  # events is a default feature
 ## API
 
 ```rust
-use r2e::r2e_events::EventBus;
-use std::sync::Arc;
+use r2e::r2e_events::prelude::*;
 
 // Default concurrency limit (1024)
-let bus = EventBus::new();
+let bus = LocalEventBus::new();
 
 // Custom concurrency limit
-let bus = EventBus::with_concurrency(50);
+let bus = LocalEventBus::with_concurrency(50);
 
 // No limit (legacy behavior)
-let bus = EventBus::unbounded();
+let bus = LocalEventBus::unbounded();
 
-// Subscribe to an event type
-bus.subscribe(|event: Arc<UserCreated>| async move {
-    println!("User created: {}", event.name);
-}).await;
+// Subscribe to an event type — the handler receives an EventEnvelope<E>
+// and returns a HandlerResult (a `()` return converts to HandlerResult::Ack).
+bus.subscribe(|env: EventEnvelope<UserCreated>| async move {
+    println!("User created: {}", env.event.name);
+    HandlerResult::Ack
+}).await?;
 
-// Fire-and-forget — handlers spawned as concurrent tasks
-bus.emit(UserCreated { name: "Alice".into() }).await;
+// Fan-out publish — handlers spawned as concurrent tasks
+bus.emit(UserCreated { name: "Alice".into() }).await?;
 
-// Wait for all handlers to complete
-bus.emit_and_wait(UserCreated { name: "Bob".into() }).await;
+// Drain all in-flight handlers (LocalEventBus only; useful in tests)
+bus.wait_idle().await;
+```
+
+### Request-reply
+
+Point-to-point request-reply (Vert.x `request` semantics): exactly one
+responder replies and the requester awaits it with a timeout.
+
+```rust
+// Register the single responder for a request type
+bus.respond(|env: EventEnvelope<GetUser>| async move {
+    Ok::<_, String>(User { id: env.event.id, name: "Alice".into() })
+}).await?;
+
+// Send a request and await the reply
+let user: User = bus.request(GetUser { id: 1 }).await?;
 ```
 
 ## Declarative consumers
@@ -49,7 +67,7 @@ Use `#[consumer]` in a `#[routes]` impl block for automatic event subscription:
 ```rust
 #[controller(path = "/notifications")]
 pub struct NotificationController {
-    #[inject] bus: EventBus,
+    #[inject] bus: LocalEventBus,
     #[inject] mailer: MailService,
 }
 

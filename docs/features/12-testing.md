@@ -372,10 +372,14 @@ async fn test_response_structure() {
 | Method | Description |
 |--------|-------------|
 | `.bearer(token)` | Add Bearer token header |
+| `.as_user(sub, roles)` | Mint a `TestJwt` token for `sub`/`roles` and add it as the Bearer header |
 | `.header(name, value)` | Add a custom header |
 | `.json(body)` | Set JSON body (auto-sets Content-Type) |
 | `.body(bytes)` | Set raw body |
 | `.form(fields)` | Set URL-encoded form body |
+| `.file(field, filename, content_type, data)` | Add a multipart file part |
+| `.field(name, value)` | Add a multipart text field |
+| `.multipart()` | Finalize the collected file/field parts into a `multipart/form-data` body |
 | `.cookie(name, value)` | Add a cookie |
 | `.query(key, value)` | Add a query parameter |
 | `.queries(pairs)` | Add multiple query parameters |
@@ -459,6 +463,15 @@ Tokens are signed with HMAC-SHA256 and contain:
     "exp": 1706130000
 }
 ```
+
+## Additional Helpers
+
+Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
+
+- **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects; the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
+- **`FiniteStream` / `ParsedSseEvent`** — consume and parse SSE responses; `TestResponse` also has `sse_events`, `assert_sse_event`, and `assert_sse_data`.
+- **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch.
+- **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.
 
 ## Running Tests
 

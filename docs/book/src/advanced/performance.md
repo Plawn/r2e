@@ -93,18 +93,21 @@ impl ApiController {
 
 Each `#[config]` field is resolved into the controller core when the router is built, not per request — so they are effectively free at request time. There is no need to cache them in a service field.
 
-### 4. Pre-warm JWKS cache
+### 4. JWKS cache is fetched lazily
 
-The first JWT validation with a JWKS endpoint incurs a ~50-200 ms HTTP roundtrip. Pre-warm in an `on_start` hook. The hook receives the built state (the inferred bean HList), so pull the validator out by type with `bean::<T>()` (from `BeanLookup`, in the prelude):
+The `JwksCache` fetches signing keys lazily on the **first** JWT validation, so the
+first authenticated request after startup absorbs a ~50-200 ms HTTP roundtrip to the
+JWKS endpoint. Subsequent validations reuse the cached keys until they go stale.
+There is no dedicated pre-warm method on `JwtClaimsValidator`; the validator bean is
+resolvable by type if you need it in an `on_start` hook (via `bean::<T>()` from
+`BeanLookup`, in the prelude):
 
 ```rust
 .on_start(|state| async move {
-    // Trigger a JWKS cache refresh
-    state
+    let _validator = state
         .bean::<Arc<JwtClaimsValidator>>()
-        .expect("JwtClaimsValidator bean")
-        .refresh_jwks()
-        .await?;
+        .expect("JwtClaimsValidator bean");
+    // Keys are populated on the first validate() call.
     Ok(())
 })
 ```

@@ -186,7 +186,7 @@ Types without `#[derive(Validate)]` work normally — no validation is performed
 ```toml
 [dependencies]
 r2e = "0.1"
-garde = { version = "0.22", features = ["derive", "email"] }
+garde = { version = "0.23", features = ["derive", "email"] }
 ```
 
 Validation is always available — no feature flag needed.
