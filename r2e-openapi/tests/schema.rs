@@ -173,12 +173,12 @@ fn register_for_json_schema_type() {
 
 #[derive(schemars::JsonSchema)]
 struct Parent {
-    _child: Child,
+    child: Child,
 }
 
 #[derive(schemars::JsonSchema)]
 struct Child {
-    _value: String,
+    value: String,
 }
 
 #[test]
