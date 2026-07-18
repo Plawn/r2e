@@ -323,7 +323,7 @@ impl Default for ScheduledJobRegistry {
 /// AppBuilder::new()
 ///     .plugin(Scheduler)  // Before build_state()!
 ///     .plugin(Executor)   // Required: scheduled ticks run on the shared pool
-///     .build_state::<Services, _>()
+///     .build_state()
 ///     .await
 ///     .register_controller::<ScheduledJobs>()
 ///     .serve("0.0.0.0:3000")

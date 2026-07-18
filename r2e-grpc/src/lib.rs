@@ -15,7 +15,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-//!     .build_state::<Services, _>()
+//!     .build_state()
 //!     .await
 //!     .register_grpc_service::<UserGrpcService>()
 //!     .serve("0.0.0.0:3000")
