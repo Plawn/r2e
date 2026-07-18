@@ -181,6 +181,11 @@ struct Child {
     value: String,
 }
 
+#[derive(schemars::JsonSchema)]
+struct Child2 {
+    value: String,
+}
+
 #[test]
 fn register_for_nested_type_includes_defs() {
     let mut registry = SchemaRegistry::new();
