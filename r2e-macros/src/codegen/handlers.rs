@@ -233,7 +233,7 @@ struct PathParamSymbol {
 }
 
 /// Extract `{name}` parameters from an Axum-style route path.
-fn extract_route_path_param_names(path: &str) -> Vec<String> {
+pub(super) fn extract_route_path_param_names(path: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = path;
 
