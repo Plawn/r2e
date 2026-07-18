@@ -11,7 +11,7 @@ pub use driver::{start_jobs, SchedulerCommands};
 pub use duration::parse_duration;
 pub use types::{
     extract_tasks, OverlapPolicy, ScheduleConfig, ScheduleParseError, ScheduledJob,
-    ScheduledResult, ScheduledTask, ScheduledTaskDef,
+    ScheduledResult, ScheduledTask, ScheduledTaskDef, SkipFn,
 };
 
 use std::any::Any;
@@ -189,8 +189,12 @@ pub struct ScheduledJobInfo {
     /// Wall-clock time the job is next expected to fire, or `None` when the
     /// schedule is exhausted (a spent cron).
     pub next_run: Option<chrono::DateTime<chrono::Utc>>,
-    /// Number of ticks submitted so far (scheduled and trigger-now).
+    /// Number of ticks whose body actually ran (scheduled and trigger-now).
+    /// Ticks suppressed by a skip predicate count in [`skip_count`](Self::skip_count) instead.
     pub run_count: u64,
+    /// Number of ticks suppressed by the job's skip predicate
+    /// (`#[scheduled(skip_if = "...")]` / [`ScheduledTaskDef::with_skip_if`]).
+    pub skip_count: u64,
     /// Number of ticks that panicked (contained by the pool).
     pub panic_count: u64,
     /// Whether the job is currently paused.
@@ -207,6 +211,7 @@ impl ScheduledJobInfo {
             last_duration: None,
             next_run: None,
             run_count: 0,
+            skip_count: 0,
             panic_count: 0,
             paused: false,
         }

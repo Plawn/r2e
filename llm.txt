@@ -1203,6 +1203,13 @@ impl ScheduledJobs {
 
     #[scheduled(every = "50ms", overlap = "concurrent")] // may overlap with itself
     async fn poll(&self) { ... }
+
+    // Skip predicate (Quarkus skipExecutionIf): a plain `&self -> bool` method
+    // (sync or async) in the SAME impl block, checked before every tick.
+    fn maintenance_mode(&self) -> bool { ... }
+
+    #[scheduled(every = "5m", skip_if = "maintenance_mode")]
+    async fn refresh(&self) { ... }
 }
 ```
 
@@ -1211,6 +1218,16 @@ also valid with `cron`). `skip`: never run a job concurrently with itself (re-ar
 on completion; a due-while-running tick is skipped, cadence preserved).
 `concurrent`: re-arm at fire time so a slow tick never holds back the next one
 (ticks may pile up). Dynamic tasks: `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
+
+Skip predicate — `#[scheduled(skip_if = "method")]`. `method` names a plain
+`&self` method returning `bool` (sync or async), defined in the same impl block
+(pointing anywhere else, or at a marked method, is a compile error). `true`
+skips that tick's body — evaluated on every fire, scheduled and `trigger_now`
+alike; the schedule keeps advancing. Skips are counted in
+`ScheduledJobInfo::skip_count`; `run_count`/`last_run`/`last_duration` only
+reflect ticks that actually ran. For a shared/injected condition, `#[inject]`
+the predicate bean and delegate. Dynamic tasks:
+`ScheduledTaskDef::new(..).with_skip_if(|state| async move { ... })`.
 
 `#[scheduled]` also works on **beans** — same attribute, same options, and
 registration is automatic (`.register::<T>()` alone; no extra call — same
@@ -1311,7 +1328,8 @@ dedicated mode. An unknown `executor` value panics at boot.
 Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()` /
 `jobs.job(name)`. `ScheduledJobInfo` carries live stats: `last_run` /
 `next_run` (`chrono::DateTime<Utc>`), `last_duration`, `run_count`,
-`panic_count`, `paused`.
+`skip_count` (ticks suppressed by a `skip_if` predicate), `panic_count`,
+`paused`.
 
 Runtime control — `SchedulerHandle` (extract as a handler param, or
 `SchedulerHandle::channel(token)` when driving `start_jobs` manually):

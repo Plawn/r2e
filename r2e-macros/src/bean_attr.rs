@@ -466,21 +466,46 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         deps_fold_from_base(base_deps_type.clone(), all_intercept_exprs.iter())
     };
 
-    let sched_defs: Vec<ScheduledSourceMethod> = scheduled_methods
+    // `skip_if` predicates resolve against the impl block's plain methods —
+    // anything carrying a transverse marker has a dispatch wrapper or a
+    // different signature and is not a valid predicate.
+    let plain_fns: Vec<&syn::ImplItemFn> = item_impl
+        .items
         .iter()
-        .map(|sm| ScheduledSourceMethod {
-            fn_name: sm.fn_name.clone(),
-            config: sm.config.clone(),
-            // Intercepted methods self-intercept in their dispatch wrapper
-            // (sync sources are promoted to `async fn`), so the emitted call is
-            // awaited whenever the source is async OR it has an inferable
-            // interceptor set (a non-inferable set already emits a
-            // compile_error and skips the wrapper — don't stack an
-            // await-on-sync error on top).
-            emitted_async: sm.is_async
-                || intercepted.iter().any(|im| im.fn_name == sm.fn_name),
+        .filter_map(|it| match it {
+            ImplItem::Fn(m)
+                if !m.attrs.iter().any(|a| {
+                    ["scheduled", "consumer", "async_exec", "post_construct", "pre_destroy", "intercept"]
+                        .iter()
+                        .any(|k| a.path().is_ident(k))
+                }) =>
+            {
+                Some(m)
+            }
+            _ => None,
         })
         .collect();
+    let sched_defs: Vec<ScheduledSourceMethod> = scheduled_methods
+        .iter()
+        .map(|sm| {
+            Ok(ScheduledSourceMethod {
+                fn_name: sm.fn_name.clone(),
+                config: sm.config.clone(),
+                // Intercepted methods self-intercept in their dispatch wrapper
+                // (sync sources are promoted to `async fn`), so the emitted call is
+                // awaited whenever the source is async OR it has an inferable
+                // interceptor set (a non-inferable set already emits a
+                // compile_error and skips the wrapper — don't stack an
+                // await-on-sync error on top).
+                emitted_async: sm.is_async
+                    || intercepted.iter().any(|im| im.fn_name == sm.fn_name),
+                skip: crate::codegen::scheduled::resolve_skip_if(
+                    &sm.config,
+                    plain_fns.iter().copied(),
+                )?,
+            })
+        })
+        .collect::<syn::Result<_>>()?;
     let scheduled_source_impl =
         transverse::scheduled_source_impl(&quote! { #self_ty }, &type_ident.to_string(), &sched_defs);
 

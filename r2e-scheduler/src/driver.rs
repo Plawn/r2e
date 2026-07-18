@@ -23,6 +23,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -35,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use r2e_core::rt::JoinError;
 use r2e_executor::PoolExecutor;
 
-use crate::types::{OverlapPolicy, ScheduleConfig, ScheduledJob};
+use crate::types::{OverlapPolicy, ScheduleConfig, ScheduledJob, SkipFn};
 use crate::ScheduledJobRegistry;
 
 /// A runtime control command delivered to the driver via [`SchedulerHandle`].
@@ -127,6 +129,8 @@ enum Rearm {
 struct JobRuntime {
     name: String,
     run: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+    /// Optional skip predicate evaluated at the start of every tick.
+    skip: Option<SkipFn>,
     rearm: Rearm,
     overlap: OverlapPolicy,
     /// Paused jobs advance their cadence but never submit a scheduled tick.
@@ -135,9 +139,11 @@ struct JobRuntime {
     in_flight: usize,
 }
 
-/// In-flight tick result: `(job index, re-arm on completion, wall duration, join result)`.
-type InFlight =
-    FuturesUnordered<Pin<Box<dyn Future<Output = (usize, bool, Duration, Result<(), JoinError>)> + Send>>>;
+/// In-flight tick result: `(job index, re-arm on completion, wall duration,
+/// skipped by predicate, join result)`.
+type InFlight = FuturesUnordered<
+    Pin<Box<dyn Future<Output = (usize, bool, Duration, bool, Result<(), JoinError>)> + Send>>,
+>;
 
 /// The next upcoming cron fire time as a tokio [`Instant`], or `None` if the
 /// schedule has no further executions.
@@ -200,6 +206,11 @@ async fn next_command(rx: &mut Option<mpsc::Receiver<Command>>) -> Option<Comman
 /// Submit one tick of job `idx` to the pool. `rearm` records whether the tick's
 /// completion should re-arm the job (true only for `Skip` scheduled ticks).
 /// Returns `false` when the pool has shut down (nothing can run anymore).
+///
+/// A job with a skip predicate evaluates it inside the pool job, before the
+/// body: a `true` verdict suppresses the body and is recorded as a skip
+/// (`skip_count`) instead of a run — `last_run`/`run_count` then move inside
+/// the tick so they only reflect ticks whose body actually started.
 fn submit_tick(
     idx: usize,
     rearm: bool,
@@ -208,18 +219,48 @@ fn submit_tick(
     in_flight: &mut InFlight,
     registry: &ScheduledJobRegistry,
 ) -> bool {
-    let fut = (runtimes[idx].run)();
+    let run_fut = (runtimes[idx].run)();
+    let start = Instant::now();
+    let (fut, skipped_flag): (Pin<Box<dyn Future<Output = ()> + Send>>, Option<Arc<AtomicBool>>) =
+        match &runtimes[idx].skip {
+            None => (run_fut, None),
+            Some(skip) => {
+                let skip_fut = skip();
+                let flag = Arc::new(AtomicBool::new(false));
+                let flag_in_tick = Arc::clone(&flag);
+                let registry = registry.clone();
+                let name = runtimes[idx].name.clone();
+                let fut = Box::pin(async move {
+                    if skip_fut.await {
+                        flag_in_tick.store(true, Ordering::Relaxed);
+                        tracing::debug!(task = %name, "Scheduled tick skipped by skip predicate");
+                        registry.update_job(&name, |i| i.skip_count += 1);
+                    } else {
+                        registry.update_job(&name, |i| {
+                            i.last_run = Some(Utc::now());
+                            i.run_count += 1;
+                        });
+                        run_fut.await;
+                    }
+                });
+                (fut as Pin<Box<dyn Future<Output = ()> + Send>>, Some(flag))
+            }
+        };
     match executor.submit(fut) {
         Ok(handle) => {
             runtimes[idx].in_flight += 1;
-            let start = Instant::now();
-            registry.update_job(&runtimes[idx].name, |i| {
-                i.last_run = Some(instant_to_datetime(start));
-                i.run_count += 1;
-            });
+            // Skip-predicated jobs record last_run/run_count inside the tick
+            // (only when the body actually runs); plain jobs record at submit.
+            if skipped_flag.is_none() {
+                registry.update_job(&runtimes[idx].name, |i| {
+                    i.last_run = Some(instant_to_datetime(start));
+                    i.run_count += 1;
+                });
+            }
             in_flight.push(Box::pin(async move {
                 let res = handle.await;
-                (idx, rearm, start.elapsed(), res)
+                let skipped = skipped_flag.is_some_and(|f| f.load(Ordering::Relaxed));
+                (idx, rearm, start.elapsed(), skipped, res)
             }));
             true
         }
@@ -310,6 +351,7 @@ async fn run_driver(
         runtimes.push(JobRuntime {
             name: job.name,
             run: job.run,
+            skip: job.skip,
             rearm,
             overlap: job.overlap,
             paused: false,
@@ -364,14 +406,18 @@ async fn run_driver(
                 }
             }
             // 2. A tick finished: update stats and (for Skip scheduled ticks) re-arm.
-            Some((idx, rearm, elapsed, res)) = in_flight.next(), if !in_flight.is_empty() => {
+            Some((idx, rearm, elapsed, skipped, res)) = in_flight.next(), if !in_flight.is_empty() => {
                 let panicked = res.as_ref().err().is_some_and(JoinError::is_panic);
                 if panicked {
                     tracing::error!(task = %runtimes[idx].name, "Scheduled tick panicked");
                 }
                 runtimes[idx].in_flight = runtimes[idx].in_flight.saturating_sub(1);
                 registry.update_job(&runtimes[idx].name, |i| {
-                    i.last_duration = Some(elapsed);
+                    // A predicate-skipped tick never ran its body: keep the
+                    // previous body duration instead of the predicate's.
+                    if !skipped {
+                        i.last_duration = Some(elapsed);
+                    }
                     if panicked {
                         i.panic_count += 1;
                     }
