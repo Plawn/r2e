@@ -790,6 +790,104 @@ use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 #[guard(RateLimit::per_user(5, 60))]          // per user (post-auth, needs identity)
 ```
 
+### OpenFGA — fine-grained authorization (ReBAC)
+
+Requires feature `openfga` (crate `r2e-openfga`). Zanzibar-style
+relationship checks: "does `user:<sub>` have `<relation>` on `<type>:<id>`?".
+The `FgaCheck` guard runs post-auth, so the route needs an identity
+(struct-level `#[inject(identity)]` or an identity handler param); the subject
+is `user:{identity.sub()}`.
+
+**Setup** — two beans, no plugin. Provide the `OpenFgaRegistry` (the guard's
+only dep; a missing one is a compile error at `register_controller`). Back it
+with `GrpcBackend` in production, or the in-memory `MockBackend` for demos/tests.
+
+```rust
+use r2e::r2e_openfga::{GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+
+let config = OpenFgaConfig::new("http://localhost:8080", "store-id")
+    .with_model_id("01H…")   // optional; latest model if omitted
+    .with_api_token("secret") // optional Bearer token
+    .with_cache(true, 60);    // decision cache TTL (seconds)
+let backend = GrpcBackend::connect(&config).await?;
+
+AppBuilder::new()
+    .provide(OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs))
+    .provide(backend)          // optional: raw client for tuple writes/list
+    .build_state().await
+    .register_controller::<DocumentController>()
+```
+
+`OpenFgaConfig` derives `Deserialize` (load from an `application.yaml`
+`openfga:` section: `endpoint`, `store_id`, `model_id?`, `api_token?`,
+`cache_enabled`, `cache_ttl_secs`). Builder-only fields also exist
+(`with_connect_timeout`, `with_request_timeout`, `without_cache`).
+
+**Guard idiom** — `FgaCheck::relation(rel).on(type).<resolver>`; the resolver
+supplies the object id:
+
+```rust
+use r2e::r2e_openfga::FgaCheck;
+
+#[controller(path = "/documents")]
+pub struct DocumentController {
+    #[inject] documents: DocumentService,
+    #[inject(identity)] user: AuthenticatedUser,   // subject = user:{sub}
+}
+
+#[routes]
+impl DocumentController {
+    // `path::doc_id` is compile-checked against the route's `{doc_id}`
+    // placeholder — a typo or missing param fails to build. A raw string
+    // (`from_path("doc_id")`) also works but is unchecked.
+    #[get("/{doc_id}")]
+    #[guard(FgaCheck::relation("viewer").on("document").from_path(path::doc_id))]
+    async fn get(&self, Path(doc_id): Path<String>) -> Result<Json<Document>, HttpError> { ... }
+
+    #[put("/{doc_id}")]
+    #[guard(FgaCheck::relation("editor").on("document").from_path(path::doc_id))]
+    async fn update(&self, Path(doc_id): Path<String>, Json(b): Json<Update>) -> ... { ... }
+}
+```
+
+Resolvers: `.from_path(path::id | "id")` (route param), `.from_query("id")`
+(query string), `.from_header("X-Document-Id")`, `.fixed("system:global")`
+(pre-formatted `type:id` literal). Denied → 403, no identity → 401, missing/
+unresolvable id → 400. **Security:** dynamic resolvers reject ids containing
+`:` (object-type injection guard); only `.fixed(...)` accepts a `type:id`
+string.
+
+**Writing tuples** — the registry only caches `check`. Use the raw client via
+`GrpcBackend`, then invalidate the cache:
+
+```rust
+use r2e::r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
+let mut client = backend.client().clone();
+client.write(tonic::Request::new(WriteRequest {
+    store_id: backend.store_id().into(),
+    writes: Some(WriteRequestWrites { tuple_keys: vec![TupleKey {
+        user: "user:alice".into(), relation: "viewer".into(),
+        object: "document:1".into(), condition: None,
+    }] }),
+    ..Default::default()
+})).await?;
+registry.invalidate_object("document:1"); // or invalidate_user / clear_cache
+```
+
+**Testing / no live server** — back the registry with `MockBackend` (direct
+tuple lookup, no transitive eval) and seed tuples:
+
+```rust
+use r2e::r2e_openfga::{MockBackend, OpenFgaRegistry};
+let mock = MockBackend::new();
+mock.add_tuple("user:alice", "viewer", "document:readme");
+// provide during app boot / test override:
+builder.provide(OpenFgaRegistry::new(mock))
+```
+
+Custom backends: implement the `OpenFgaBackend` trait (single `check` method)
+and wrap it in `OpenFgaRegistry::new(..)` / `::with_cache(.., ttl)`.
+
 ---
 
 ## Interceptors
