@@ -39,7 +39,7 @@
 //! use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 //!
 //! AppBuilder::new()
-//!     .build_state::<AppState, _>().await
+//!     .build_state().await
 //!     .with(OpenApiPlugin::new(
 //!         OpenApiConfig::new("My API", "1.0.0")
 //!             .with_docs_ui(true)

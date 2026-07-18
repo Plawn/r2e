@@ -11,7 +11,7 @@
 //!
 //! AppBuilder::new()
 //!     .plugin(Prometheus::new("/metrics"))
-//!     .build_state::<MyState, _>()
+//!     .build_state()
 //!     .await
 //!     .serve("0.0.0.0:3000")
 //!     .await;
@@ -30,7 +30,7 @@
 //!         .namespace("myapp")
 //!         .register(Box::new(my_counter.clone()))
 //!         .build())
-//!     .build_state::<MyState, _>()
+//!     .build_state()
 //!     .await
 //!     .serve("0.0.0.0:3000")
 //!     .await;

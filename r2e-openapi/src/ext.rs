@@ -10,7 +10,7 @@ use r2e_core::Plugin;
 /// use r2e_openapi::{OpenApiPlugin, OpenApiConfig};
 ///
 /// AppBuilder::new()
-///     .build_state::<Services>()
+///     .build_state()
 ///     .await
 ///     .with(OpenApiPlugin::new(
 ///         OpenApiConfig::new("My API", "1.0.0")

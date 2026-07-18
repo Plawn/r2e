@@ -1567,11 +1567,23 @@ gRPC guards: `#[guard(GrpcRolesGuard::new(&["admin"]))]` etc.
 
 ## Static Files / SPA
 
-Requires feature: `static`. Serves `rust_embed` assets with SPA fallback:
+Requires feature: `static`. Serves `rust_embed` assets with SPA fallback,
+ETag/304 conditional requests, range requests, and pre-compressed (`.br`/`.gz`)
+variant negotiation — all on by default:
 
 ```rust
 .with(EmbeddedFrontend::new::<Assets>())          // SPA on, api/ excluded, assets/ immutable
-// custom: EmbeddedFrontend::builder::<Assets>().spa_fallback(true).exclude_prefix("api/").build()
+// custom:
+EmbeddedFrontend::builder::<Assets>()
+    .spa_fallback(true)                            // serve index.html for unmatched routes
+    .exclude_prefix("api/")                        // paths that should 404, not fall back
+    .compression(true)                             // negotiate .br/.gz precompressed files
+    .base_path("/docs")                            // mount under a sub-path (stripped on lookup)
+    .immutable_prefix("assets/")                   // long-lived immutable cache for hashed assets
+    .immutable_cache_control("public, max-age=31536000, immutable")
+    .fallback_cache_control("no-cache")            // cache-control for the SPA fallback file
+    .build()
+// escape hatch: EmbeddedFrontend::...build().into_router() -> r2e_core::http::Router
 ```
 
 ---
