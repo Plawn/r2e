@@ -246,6 +246,23 @@ pub trait DecoratorSpec: Sized {
     /// from the context.
     type Deps;
 
+    /// Whether the built decorator can only ever succeed with an authenticated
+    /// identity present (its `Product` reads `ctx.identity` and rejects when it
+    /// is `None`). Defaults to `false`.
+    ///
+    /// A guard that sets this to `true` (e.g. `FgaCheck`, which checks
+    /// `user:{identity.sub()}`) declares a **static contract**: `#[routes]`
+    /// rejects at compile time any placement where the guard's `identity` is
+    /// statically always `None` — an identity-less controller, or an
+    /// `#[anonymous]` route with no optional identity parameter — so the
+    /// otherwise-unavoidable runtime 401 becomes a build error instead. The
+    /// runtime `None` check stays as the backstop for `Option<..>` identities
+    /// (which may be `Some`).
+    ///
+    /// Interceptors never see an identity, so this only meaningfully applies to
+    /// guard specs.
+    const REQUIRES_IDENTITY: bool = false;
+
     /// Build the decorator from the resolved graph. Called once per
     /// attribute site, at registration time.
     fn build(self, ctx: &BeanContext) -> Self::Product;

@@ -36,9 +36,45 @@ keep the dep fold exact.
 pub trait DecoratorSpec: Sized {
     type Product: Send + Sync + 'static;  // the guard/interceptor built
     type Deps;                            // TCons list of beans build() pulls
+    const REQUIRES_IDENTITY: bool = false; // declares a compile-time identity contract
     fn build(self, ctx: &BeanContext) -> Self::Product;
 }
 ```
+
+### `REQUIRES_IDENTITY` — compile-time identity contract
+
+A guard spec that can only ever succeed with an authenticated identity present
+(its product reads `ctx.identity` and rejects `None`) sets
+`const REQUIRES_IDENTITY: bool = true`. `#[routes]` then emits a **spanned
+const-assert per guard site** rejecting any placement where the guard's
+identity is *statically always `None`* — turning an otherwise-unavoidable
+runtime 401 into a build error. The default is `false`; custom guards are
+unaffected (additive). `FgaCheck` (r2e-openfga) sets it, since it checks
+`user:{identity.sub()}`.
+
+The macro combines the type-level `REQUIRES_IDENTITY` const with the route's
+identity source (see `handlers::generate_guard_context`) and the
+`#[controller]`-side `HAS_STRUCT_IDENTITY` const:
+
+| Guard placement | Identity source | Identity-requiring guard |
+|---|---|---|
+| Controller with a **required** struct identity | `Some(&user)` | ✅ allowed |
+| Controller with an `Option<..>` struct identity | may be `Some` | ✅ allowed (runtime 401 backstop) |
+| Route with a param-level identity (required or `Option<..>`) | may be `Some` | ✅ allowed |
+| Controller with **no** identity (`NoIdentity`) | always `None` | ❌ **compile error** |
+| `#[anonymous]` route, no identity param | always `None` (Case C) | ❌ **compile error** |
+| `#[anonymous]` route **with** an `Option<..>` identity param | may be `Some` (Case A) | ✅ allowed (adaptive route) |
+
+Non-inferable guard expressions (escape-hatch forms where `spec_type_of` can't
+determine the spec) are skipped by the identity assert — their spec-type error
+already fails the build, so a second diagnostic would only cascade (same
+degrade-to-avoid-cascade stance as the rest of the decorator codegen).
+
+`#[roles]`/`#[all_roles]` do **not** use this mechanism: their `RolesGuard`/
+`AllRolesGuard` `Guard` impls are bounded on `RoleBasedIdentity`, which
+`NoIdentity` does not implement, so a role guard on an identity-less controller
+is already a compile error at the `Guard::check` call (independent of
+`REQUIRES_IDENTITY`, which stays `false` for them).
 
 Three ways to satisfy it:
 
@@ -124,7 +160,11 @@ concrete `AuthenticatedUser` type: `sub()` (required), `email()` /
   The app must `.provide(RateLimitRegistry::default())` — checked at compile
   time for app-level controllers.
 - `FgaGuard` (r2e-openfga) — the spec is the `FgaCheck` builder value; the
-  guard holds the `OpenFgaRegistry` bean.
+  guard holds the `OpenFgaRegistry` bean. `FgaCheck` sets
+  `REQUIRES_IDENTITY = true`, so applying it where the identity is statically
+  always `None` (an identity-less controller, or an `#[anonymous]` route
+  without an optional identity param) is a **compile error** — see the matrix
+  above.
 
 ### Pre-authentication guards
 

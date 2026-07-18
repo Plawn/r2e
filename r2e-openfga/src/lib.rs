@@ -109,6 +109,16 @@
 //! }
 //! ```
 //!
+//! An FGA check resolves `user:{identity.sub()}`, so it **requires an
+//! authenticated identity**. `FgaCheck` sets
+//! [`DecoratorSpec::REQUIRES_IDENTITY`](r2e_core::DecoratorSpec::REQUIRES_IDENTITY)
+//! `= true`, so applying it where the identity is statically always `None` — a
+//! controller with no `#[inject(identity)]`, or an `#[anonymous]` route without
+//! an `Option<..>` identity parameter — is a **compile error** rather than a
+//! guaranteed runtime 401. A required or `Option<..>` struct/parameter identity
+//! is accepted (the runtime `None` → 401 in [`FgaGuard`] remains the backstop
+//! for the optional case).
+//!
 //! # Object ID Resolution
 //!
 //! The guard extracts object IDs from the request. You must specify the source:

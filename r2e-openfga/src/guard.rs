@@ -156,6 +156,13 @@ impl DecoratorSpec for FgaCheck {
     type Product = FgaGuard;
     type Deps = TCons<OpenFgaRegistry, TNil>;
 
+    // The check is `user:{identity.sub()}` — with no identity it can only ever
+    // return 401. Declaring the requirement makes `#[routes]` reject an
+    // identity-less placement at compile time (see the const-assert emitted per
+    // guard site); the runtime `None` → 401 in `FgaGuard::check` stays as the
+    // backstop for `Option<..>` identities.
+    const REQUIRES_IDENTITY: bool = true;
+
     fn build(self, ctx: &BeanContext) -> FgaGuard {
         FgaGuard {
             registry: ctx.get::<OpenFgaRegistry>(),

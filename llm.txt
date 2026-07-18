@@ -794,9 +794,14 @@ use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 
 Requires feature `openfga` (crate `r2e-openfga`). Zanzibar-style
 relationship checks: "does `user:<sub>` have `<relation>` on `<type>:<id>`?".
-The `FgaCheck` guard runs post-auth, so the route needs an identity
+The `FgaCheck` guard runs post-auth, so the route **requires an identity**
 (struct-level `#[inject(identity)]` or an identity handler param); the subject
-is `user:{identity.sub()}`.
+is `user:{identity.sub()}`. Applying it where the identity is statically
+always `None` — a controller with no `#[inject(identity)]`, or an
+`#[anonymous]` route without an `Option<..>` identity param — is a **compile
+error** (`FgaCheck` declares `DecoratorSpec::REQUIRES_IDENTITY = true`).
+A required or `Option<..>` struct/param identity is allowed (runtime `None`
+→ 401 stays as the backstop for the optional case).
 
 **Setup** — two beans, no plugin. Provide the `OpenFgaRegistry` (the guard's
 only dep; a missing one is a compile error at `register_controller`). Back it
