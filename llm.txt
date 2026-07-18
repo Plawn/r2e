@@ -1712,13 +1712,25 @@ next `load_config::<C>()` uses it instead of reading disk (see Configuration).
 
 ### Dev services (containers)
 
-`r2e-devservices` (features `postgres`, `redis`): `DevPostgres::shared().await`
-= one stable container shared by every test process in the workspace session;
-wire via `b.override_config_value("app.database.url", pg.url())` in the boot
-hook. A workspace-scoped `testcontainers/ryuk:0.14.0` reaper holds one TCP
-lease per test process and removes Postgres/Redis after the final process exits
+`r2e-devservices` (features `postgres`, `redis`, `openfga`):
+`DevPostgres::shared().await` = one stable container shared by every test
+process in the workspace session; wire via
+`b.override_config_value("app.database.url", pg.url())` in the boot hook. A
+workspace-scoped `testcontainers/ryuk:0.14.0` reaper holds one TCP lease per
+test process and removes the containers after the final process exits
 (10-second reconnection grace by default). `start()` / `start_with_tag(tag)`
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
+
+`DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
+datastore. `grpc_endpoint()` → `openfga.endpoint` config (the gRPC port the
+`GrpcBackend` connects to); `http_endpoint()` backs the bootstrap helpers.
+Because OpenFGA store/model IDs are server-generated and are construction-time
+config, the dev service owns bootstrap: `create_store(name) -> store_id`,
+`write_model(store_id, &json_model) -> model_id`, and
+`write_tuples(store_id, model_id, &[(user, relation, object)])`. A test creates
+the store + model + seed tuples, then boots the app with those IDs injected via
+`override_config_value` (`openfga.endpoint`/`store_id`/`model_id`). See
+`examples/example-openfga`.
 
 Ryuk requires a local Docker Unix socket. Configuration:
 `R2E_DEVSERVICES_DOCKER_SOCKET` overrides its host path,

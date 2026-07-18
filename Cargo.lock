@@ -2516,6 +2516,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-openfga"
+version = "0.1.0"
+dependencies = [
+ "jsonwebtoken",
+ "r2e",
+ "r2e-devservices",
+ "r2e-test",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "example-postgres"
 version = "0.1.0"
 dependencies = [
@@ -5637,6 +5651,8 @@ dependencies = [
 name = "r2e-devservices"
 version = "0.1.0"
 dependencies = [
+ "reqwest 0.13.4",
+ "serde_json",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
@@ -7613,6 +7629,7 @@ dependencies = [
  "memchr",
  "parse-display",
  "pin-project-lite",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "serde_with",

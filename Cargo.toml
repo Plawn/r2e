@@ -35,6 +35,7 @@ members = [
     "examples/example-grpc",
     "examples/example-microservice",
     "examples/example-oidc",
+    "examples/example-openfga",
     "examples/example-executor",
     "examples/example-sharded-bench",
     "r2e-compile-tests",

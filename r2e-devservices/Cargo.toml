@@ -14,11 +14,14 @@ description = "Dev services for R2E tests - containerized Postgres/Redis started
 default = []
 postgres = ["testcontainers-modules/postgres"]
 redis = ["testcontainers-modules/redis"]
+openfga = ["testcontainers/http_wait", "dep:reqwest", "dep:serde_json"]
 
 [dependencies]
 testcontainers = { workspace = true, features = ["reusable-containers"] }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
+reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,9 @@
+services:
+  openfga:
+    image: openfga/openfga:v1.8.4
+    command: run
+    ports:
+      - "8080:8080" # HTTP API (store/model/tuple management)
+      - "8081:8081" # gRPC API (the app's GrpcBackend connects here)
+    # Default in-memory datastore — data is lost on restart, which is fine for
+    # a demo. Use `--datastore-engine postgres` for persistence.
