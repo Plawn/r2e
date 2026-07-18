@@ -1,0 +1,13 @@
+app:
+  name: "example-openfga"
+
+# OpenFGA connection. `endpoint` is the gRPC port (8081); the HTTP port (8080)
+# is only used for out-of-band store/model/tuple bootstrap.
+#
+# OpenFGA store and model IDs are server-generated, so they cannot be known
+# ahead of time. Before `cargo run`, start OpenFGA (see docker-compose.yml),
+# create a store + write the model (see README.md), and paste the IDs here.
+openfga:
+  endpoint: "http://localhost:8081"
+  store_id: "REPLACE_WITH_STORE_ID"
+  model_id: "REPLACE_WITH_MODEL_ID"

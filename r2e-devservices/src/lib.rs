@@ -25,11 +25,11 @@
 //! [`start()`](DevPostgres::start) gives an isolated container whose normal
 //! lifetime follows the returned handle, with Ryuk as a crash-safe fallback.
 //!
-//! Feature flags: `postgres`, `redis`.
+//! Feature flags: `postgres`, `redis`, `openfga`.
 
-#[cfg(any(feature = "postgres", feature = "redis"))]
+#[cfg(any(feature = "postgres", feature = "redis", feature = "openfga"))]
 mod common;
-#[cfg(any(feature = "postgres", feature = "redis"))]
+#[cfg(any(feature = "postgres", feature = "redis", feature = "openfga"))]
 mod ryuk;
 
 #[cfg(feature = "postgres")]
@@ -41,3 +41,8 @@ pub use postgres::DevPostgres;
 mod redis;
 #[cfg(feature = "redis")]
 pub use redis::DevRedis;
+
+#[cfg(feature = "openfga")]
+mod openfga;
+#[cfg(feature = "openfga")]
+pub use openfga::DevOpenFga;
