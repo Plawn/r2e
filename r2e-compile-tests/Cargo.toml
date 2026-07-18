@@ -5,6 +5,14 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+# Real tonic-build output for the gRPC fixtures (see src/lib.rs): the
+# generated code references `::tonic`, `::tonic_prost`, and `::prost`.
+tonic = {workspace = true, default-features = true}
+tonic-prost = {workspace = true}
+prost = {workspace = true}
+
+[build-dependencies]
+r2e-grpc-build = {workspace = true}
 
 [dev-dependencies]
 r2e = {workspace = true, features = ["full"]}

@@ -19,6 +19,7 @@ members = [
     "r2e-observability",
     "r2e-openfga",
     "r2e-grpc",
+    "r2e-grpc/build",
     "r2e-oidc",
     "r2e-devtools",
     "r2e-static",
@@ -78,6 +79,7 @@ r2e-prometheus = { path = "r2e-prometheus", version = "0.1.0" }
 r2e-observability = { path = "r2e-observability", version = "0.1.0" }
 r2e-openfga = { path = "r2e-openfga", version = "0.1.0" }
 r2e-grpc = { path = "r2e-grpc", version = "0.1.0" }
+r2e-grpc-build = { path = "r2e-grpc/build", version = "0.1.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.1.0" }
 r2e-devtools = { path = "r2e-devtools", version = "0.1.0" }
 r2e-static = { path = "r2e-static", version = "0.1.0" }
@@ -143,6 +145,7 @@ cron = "0.17"
 tonic = { version = "~0.14", default-features = false }
 tonic-prost = "~0.14"
 prost = "~0.14"
+prost-types = "~0.14"
 tonic-reflection = "~0.14"
 tonic-build = "~0.14"
 tonic-prost-build = "~0.14"

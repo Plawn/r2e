@@ -15,18 +15,15 @@ use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
 use tonic_reflection::pb::v1::ServerReflectionRequest;
 
 pub mod proto {
-    tonic::include_proto!("greeter");
-
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("greeter_descriptor");
+    r2e::r2e_grpc::include_protos!();
 }
 
-use proto::{HelloReply, HelloRequest};
+use proto::greeter::{HelloReply, HelloRequest};
 
 #[controller]
 pub struct TestGreeter {}
 
-#[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl TestGreeter {
     async fn say_hello(
         &self,

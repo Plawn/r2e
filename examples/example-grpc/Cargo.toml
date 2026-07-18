@@ -21,5 +21,4 @@ tokio-stream = {workspace = true, features = ["net"]}
 tonic-reflection = {workspace = true}
 
 [build-dependencies]
-tonic-build = {workspace = true}
-tonic-prost-build = {workspace = true}
+r2e-grpc-build = {workspace = true}

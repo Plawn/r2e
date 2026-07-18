@@ -196,9 +196,18 @@ Still open:
   `tracing::warn!` per gap (route, type, opt-out hint) — also covers
   schema-less `Json<T>` request/response bodies. Testable seam:
   `r2e_openapi::spec_warnings()`. Docs: llm.txt + subsystems.md.
-- **gRPC/proto automagic setup** — auto build.rs / proto compilation
-  scaffolding (`r2e add grpc`-grade DX: drop a `.proto`, get a compiled
-  service). Related tech-debt note below (trybuild fixture hand-fakes tonic).
+- **gRPC/proto automagic setup — DONE (2026-07-18).** New `r2e-grpc-build`
+  crate (`r2e-grpc/build/`): one-line build.rs (`r2e_grpc_build::compile()`)
+  compiles every `proto/**/*.proto`, emits an aggregated per-package module +
+  combined `FILE_DESCRIPTOR_SET` into OUT_DIR (rerun-if-changed — drop a
+  `.proto`, get a compiled service); `r2e_grpc::include_protos!()` includes
+  it. `r2e add grpc` is now a full scaffold (features + deps + build.rs +
+  sample proto + `src/grpc.rs` skeleton); `r2e new --grpc` pre-wires a
+  reflection-enabled service; `r2e generate grpc-service` updated.
+  example-grpc migrated (dogfood). Also resolved the gRPC-trybuild tech-debt
+  note: `r2e-compile-tests` now compiles `proto/ping.proto` via the helper
+  and the 5 gRPC fixtures typecheck against real tonic output. Docs:
+  17-grpc.md, cli.md, transport-adapters.md, llm.txt.
 - **Zero-copy exploration (xitca-web)** — exploratory only: evaluate whether
   a zero-copy HTTP layer brings measurable wins over the current axum stack.
   No commitment.
@@ -211,8 +220,9 @@ Still open:
 - **Event bus perf** (2026-03 audit): superseded by W8 — the two still-
   deferred items (`Arc<EventMetadata>`, lazy `EventMetadata::new()`) are
   carried in `eventbus-perf.md` § Explicitly deferred.
-- **gRPC trybuild fixture** hand-fakes the tonic server surface (no
-  proto/build.rs) — drift risk on tonic bumps.
+- **gRPC trybuild fixture** — RESOLVED 2026-07-18 with the gRPC/proto
+  automagic work (W11): fixtures now use real generated code from
+  `r2e-compile-tests/proto/ping.proto`.
 
 ---
 

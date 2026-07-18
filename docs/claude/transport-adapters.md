@@ -75,8 +75,10 @@ the three existing adapters — use them as references.
 
 7. **Tests** — a trybuild compile-fail for a missing bean at the
    registration call site (model: `grpc_intercept_missing_dep.rs`, which
-   fakes the generated server surface by hand — no proto/build.rs) and a
-   runtime test proving interceptor sets are graph-built once (model:
+   typechecks against real generated code — `r2e-compile-tests` compiles
+   `proto/ping.proto` via `r2e-grpc-build` in its build.rs and exposes it
+   as `r2e_compile_tests::proto`) and a runtime test proving interceptor
+   sets are graph-built once (model:
    `examples/example-grpc/tests/grpc_intercept.rs`).
 
 ## Invariants (do not break)
