@@ -276,7 +276,7 @@ Both consumer kinds are supported, classified by return type (same rule as contr
 
 ## `#[scheduled]` on beans
 
-Beans declare scheduled tasks with the same `#[scheduled]` attribute as controllers (`every`/`cron`, `initial_delay`, `name`, `overlap` — same parser, same compile-time cron validation):
+Beans declare scheduled tasks with the same `#[scheduled]` attribute as controllers (`every`/`cron`, `initial_delay`, `name`, `overlap`, `skip_if` — same parser, same compile-time cron validation; a `skip_if` predicate is a plain `&self -> bool` method, sync or async, in the same impl block):
 
 ```rust
 #[derive(Clone)]

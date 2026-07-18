@@ -26,6 +26,7 @@ fn counting_task(
 ) -> ScheduledTaskDef<Arc<AtomicUsize>> {
     ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: name.to_string(),
         schedule,
         state: counter,
@@ -171,6 +172,7 @@ async fn interval_task_state_accessible() {
 
     let task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "logger".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
         state: log.clone(),
@@ -202,6 +204,7 @@ async fn interval_task_panic_isolation() {
     let a = attempts.clone();
     let panic_task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "panicker".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
         state: a,
@@ -314,6 +317,7 @@ async fn cron_multiple_executions() {
 fn extract_tasks_from_boxed() {
     let task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "boxed".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
         state: (),
@@ -364,6 +368,7 @@ async fn multiple_tasks_all_start() {
 fn task_name_via_trait() {
     let task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "trait_name".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
         state: (),
@@ -377,6 +382,7 @@ fn task_name_via_trait() {
 fn task_schedule_via_trait() {
     let task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "trait_schedule".to_string(),
         schedule: ScheduleConfig::Cron("0 0 * * * *".to_string()),
         state: (),
@@ -461,6 +467,7 @@ async fn state_mutations_visible_via_arc_mutex() {
 
     let task = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: "mutator".to_string(),
         schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
         state: log.clone(),

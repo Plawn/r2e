@@ -1,0 +1,5 @@
+error: a skip_if predicate must take only `&self` (no parameters) and return `bool`
+  --> compile-fail/bean_scheduled_skip_if_params.rs:15:5
+   |
+15 |     fn paused(&self, _region: &str) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

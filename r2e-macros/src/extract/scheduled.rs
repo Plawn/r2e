@@ -40,6 +40,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
             let mut initial_delay_ms: Option<u64> = None;
             let mut name: Option<String> = None;
             let mut overlap: OverlapMode = OverlapMode::Skip;
+            let mut skip_if: Option<syn::LitStr> = None;
 
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("every") {
@@ -85,13 +86,25 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                         }
                     };
                     Ok(())
+                } else if meta.path.is_ident("skip_if") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    if lit.value().is_empty() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "`skip_if` must name a method on the same impl block, e.g. skip_if = \"maintenance_mode\"",
+                        ));
+                    }
+                    skip_if = Some(lit);
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, `name`, or `overlap`\n\n\
+                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, `name`, `overlap`, or `skip_if`\n\n\
                          examples:\n  #[scheduled(every = 30)]\n  #[scheduled(every = \"5m\")]\n  \
                          #[scheduled(cron = \"0 */5 * * * *\")]\n  \
                          #[scheduled(every = \"1h\", initial_delay = \"10s\")]\n  \
-                         #[scheduled(every = \"50ms\", overlap = \"concurrent\")]"
+                         #[scheduled(every = \"50ms\", overlap = \"concurrent\")]\n  \
+                         #[scheduled(every = \"5m\", skip_if = \"maintenance_mode\")]"
                     ))
                 }
             })?;
@@ -125,6 +138,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                 initial_delay_ms,
                 name,
                 overlap,
+                skip_if,
             }));
         }
     }

@@ -54,3 +54,55 @@ pub(crate) fn task_name(config: &ScheduledConfig, owner: &str, fn_name: &str) ->
         None => format!("{}_{}", owner, fn_name),
     }
 }
+
+/// A resolved `skip_if = "..."` predicate: the method's ident plus whether the
+/// emitted call must be awaited.
+pub(crate) struct SkipCall {
+    pub fn_name: syn::Ident,
+    pub is_async: bool,
+}
+
+/// Resolve a `#[scheduled(skip_if = "...")]` value against the host impl
+/// block's *plain* methods (no route/transverse marker — each host filters
+/// before calling). The predicate must be a `&self`-only method, sync or
+/// async; its `bool` return is enforced by an ascription at the call site.
+pub(crate) fn resolve_skip_if<'a>(
+    config: &ScheduledConfig,
+    mut plain_methods: impl Iterator<Item = &'a syn::ImplItemFn>,
+) -> syn::Result<Option<SkipCall>> {
+    let Some(lit) = &config.skip_if else {
+        return Ok(None);
+    };
+    let target = lit.value();
+    let Some(method) = plain_methods.find(|m| m.sig.ident == target) else {
+        return Err(syn::Error::new(
+            lit.span(),
+            format!(
+                "skip_if = \"{target}\" does not name a plain method in this impl block\n\n\
+                 The predicate must be a plain `&self` method (sync or async) returning `bool`, \
+                 defined in the same impl block as the #[scheduled] method — it cannot carry a \
+                 route, #[scheduled], #[consumer], #[async_exec], or lifecycle marker.\n\n\
+                 example:\n  fn maintenance_mode(&self) -> bool {{ /* ... */ }}\n\n  \
+                 #[scheduled(every = \"5m\", skip_if = \"maintenance_mode\")]\n  \
+                 async fn sync(&self) {{ /* ... */ }}\n\n\
+                 To skip on a shared condition (Quarkus skipExecutionIf-style predicate bean), \
+                 #[inject] the predicate bean and delegate to it from the method."
+            ),
+        ));
+    };
+    let has_self = method
+        .sig
+        .inputs
+        .iter()
+        .any(|arg| matches!(arg, syn::FnArg::Receiver(_)));
+    if !has_self || method.sig.inputs.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "a skip_if predicate must take only `&self` (no parameters) and return `bool`",
+        ));
+    }
+    Ok(Some(SkipCall {
+        fn_name: method.sig.ident.clone(),
+        is_async: method.sig.asyncness.is_some(),
+    }))
+}

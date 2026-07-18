@@ -89,6 +89,16 @@ ScheduledTaskDef::from_fn("heartbeat", "30s".parse()?, || async {
 
 Closures may return `()` or `Result<(), E: Display>` — the error branch is logged exactly like a failing `#[scheduled]` method (`ScheduledResult` contract).
 
+Builder options mirror the `#[scheduled]` attribute keys:
+
+```rust
+ScheduledTaskDef::new("sync", "5m".parse()?, svc, |svc| async move { svc.sync().await })
+    .with_overlap(OverlapPolicy::Concurrent)                       // overlap = "concurrent"
+    .with_skip_if(|svc| async move { svc.maintenance_mode().await }) // skip_if = "..."
+```
+
+`with_skip_if` (Quarkus `skipExecutionIf`) receives a clone of the state at every fire, before the body; returning `true` skips the tick — the schedule keeps advancing and the skip counts in `ScheduledJobInfo::skip_count` instead of `run_count`.
+
 For advanced flows that manage the registry by hand, `ScheduledTaskDef::into_boxed_any()` produces the type-erased shape `TaskRegistryHandle` stores (the counterpart of `extract_tasks`), so the double-box never appears in user code.
 
 ## Config-driven schedules

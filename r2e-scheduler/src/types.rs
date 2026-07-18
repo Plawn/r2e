@@ -125,6 +125,12 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
     }
 }
 
+/// A skip predicate evaluated at the start of each tick — the counterpart of
+/// Quarkus' `skipExecutionIf`. Returning `true` suppresses the tick body: the
+/// schedule keeps advancing, the skip is recorded in
+/// [`ScheduledJobInfo::skip_count`](crate::ScheduledJobInfo), and nothing runs.
+pub type SkipFn = Box<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
 /// A runnable schedule handed to the driver.
 ///
 /// Produced by [`ScheduledTask::into_job`]. The task's state is already
@@ -140,6 +146,9 @@ pub struct ScheduledJob {
     pub overlap: OverlapPolicy,
     /// Produces one tick future each time the job fires.
     pub run: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+    /// Optional skip predicate, checked at the start of every tick (scheduled
+    /// and trigger-now alike). `true` = skip this tick's body.
+    pub skip: Option<SkipFn>,
 }
 
 /// A scheduled task that can be converted into a driver [`ScheduledJob`].
@@ -196,6 +205,11 @@ pub struct ScheduledTaskDef<T: Clone + Send + Sync + 'static> {
     pub overlap: OverlapPolicy,
     pub state: T,
     pub task: Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+    /// Optional skip predicate (Quarkus `skipExecutionIf`), receiving a clone
+    /// of the state on every fire. `None` (via [`new`](Self::new) /
+    /// [`from_fn`](Self::from_fn)) means never skip; set it with
+    /// [`with_skip_if`](Self::with_skip_if).
+    pub skip: Option<Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
@@ -238,6 +252,7 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
                 let task_name = task_name.clone();
                 Box::pin(async move { fut.await.log_if_err(&task_name) })
             }),
+            skip: None,
         }
     }
 
@@ -249,6 +264,28 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
     /// ```
     pub fn with_overlap(mut self, overlap: OverlapPolicy) -> Self {
         self.overlap = overlap;
+        self
+    }
+
+    /// Set this task's skip predicate — the dynamic-task counterpart of
+    /// `#[scheduled(skip_if = "...")]` (Quarkus `skipExecutionIf`).
+    ///
+    /// The predicate receives a clone of the state at every fire (scheduled
+    /// and `trigger_now` alike) and runs before the task body; returning
+    /// `true` skips the tick. Skips are counted in
+    /// [`ScheduledJobInfo::skip_count`](crate::ScheduledJobInfo) and the
+    /// schedule keeps advancing.
+    ///
+    /// ```ignore
+    /// ScheduledTaskDef::new("sync", "5m".parse()?, svc, |svc| async move { svc.sync().await })
+    ///     .with_skip_if(|svc| async move { svc.maintenance_mode().await });
+    /// ```
+    pub fn with_skip_if<F, Fut>(mut self, pred: F) -> Self
+    where
+        F: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        self.skip = Some(Box::new(move |state| Box::pin(pred(state))));
         self
     }
 
@@ -301,11 +338,16 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTask for ScheduledTaskDef<T> {
         // documented contract.
         let state = self.state;
         let task = self.task;
+        let skip = self.skip.map(|skip| {
+            let state = state.clone();
+            Box::new(move || skip(state.clone())) as SkipFn
+        });
         ScheduledJob {
             name: self.name,
             schedule: self.schedule,
             overlap: self.overlap,
             run: Box::new(move || task(state.clone())),
+            skip,
         }
     }
 }

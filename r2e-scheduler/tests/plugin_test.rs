@@ -20,6 +20,7 @@ fn counting_task(
 ) -> ScheduledTaskDef<Arc<AtomicUsize>> {
     ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: name.to_string(),
         schedule,
         state: counter,

@@ -58,6 +58,7 @@ fn counting_task(
 ) -> Box<dyn std::any::Any + Send> {
     let def = ScheduledTaskDef {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
         name: name.to_string(),
         schedule,
         state: counter,

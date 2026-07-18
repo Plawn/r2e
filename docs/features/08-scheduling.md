@@ -199,6 +199,38 @@ async fn poll(&self) { /* may overlap under sustained load */ }
 Dynamic tasks use the builder form:
 `ScheduledTaskDef::new(..).with_overlap(OverlapPolicy::Concurrent)`.
 
+## Skip predicate (`skip_if`)
+
+The Quarkus `skipExecutionIf` counterpart: gate a task on a runtime condition
+without touching its schedule. `skip_if = "method"` names a plain `&self`
+method returning `bool` — sync or async — defined in the **same** impl block:
+
+```rust
+#[routes]
+impl SyncJobs {
+    fn maintenance_mode(&self) -> bool {
+        self.flags.maintenance.load(Ordering::SeqCst)
+    }
+
+    #[scheduled(every = "5m", skip_if = "maintenance_mode")]
+    async fn sync(&self) { /* skipped while maintenance_mode() is true */ }
+}
+```
+
+- Evaluated at the start of **every** tick — scheduled fires and
+  `SchedulerHandle::trigger_now` alike; `true` suppresses the body.
+- The schedule keeps advancing; nothing is rescheduled or retried.
+- Skips are counted in `ScheduledJobInfo::skip_count`; `run_count`,
+  `last_run`, and `last_duration` only reflect ticks whose body actually ran.
+- An unknown method name, a method carrying a route/transverse marker, or a
+  non-`&self`-only signature is a targeted compile error. The `bool` return is
+  enforced at compile time too.
+- For a shared condition (predicate-bean style), `#[inject]` the bean and
+  delegate: `fn paused(&self) -> bool { self.flags.is_paused() }`.
+
+Works identically on `#[bean]` scheduled methods. Dynamic tasks use the builder
+form: `ScheduledTaskDef::new(..).with_skip_if(|state| async move { ... })`.
+
 ## Dedicated pool (config)
 
 By default scheduled ticks share the app-wide `PoolExecutor`. The `scheduler.*`

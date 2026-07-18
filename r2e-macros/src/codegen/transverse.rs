@@ -26,7 +26,7 @@ use quote::quote;
 use syn::{FnArg, ImplItem, ItemImpl, ReturnType};
 
 use crate::codegen::decorators::{intercept_field_idents, wrap_with_interceptor_refs};
-use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name};
+use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name, SkipCall};
 use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
 use crate::extract::consumer::strip_consumer_attrs;
 use crate::type_utils::is_result_like;
@@ -56,6 +56,9 @@ pub(crate) struct ScheduledSourceMethod {
     /// Whether the emitted call must be awaited: the source is `async` OR the
     /// method is intercepted (its dispatch wrapper is promoted to `async fn`).
     pub emitted_async: bool,
+    /// Resolved `skip_if = "..."` predicate (a plain `&self -> bool` method on
+    /// the same impl block), checked before every tick.
+    pub skip: Option<SkipCall>,
 }
 
 /// The per-method type-erased `ScheduledTaskDef` blocks (one per scheduled
@@ -90,6 +93,33 @@ pub(crate) fn scheduled_task_defs(
                 quote! { __bean.#fn_name() }
             };
 
+            // `skip_if` predicate: a second per-tick closure over the same
+            // instance. The `bool` ascription pins the predicate's return type
+            // so a mistyped method fails with a readable error.
+            let skip_expr = match &sm.skip {
+                None => quote! { None },
+                Some(sk) => {
+                    let skip_fn = &sk.fn_name;
+                    let skip_call = if sk.is_async {
+                        quote! { __bean.#skip_fn().await }
+                    } else {
+                        quote! { __bean.#skip_fn() }
+                    };
+                    quote! {
+                        Some(Box::new({
+                            let __skip_bean = #instance.clone();
+                            move |(): ()| {
+                                let __bean = __skip_bean.clone();
+                                Box::pin(async move {
+                                    let __skip: ::core::primitive::bool = #skip_call;
+                                    __skip
+                                }) as ::std::pin::Pin<Box<dyn ::std::future::Future<Output = bool> + Send>>
+                            }
+                        }))
+                    }
+                }
+            };
+
             quote! {
                 {
                     let __task_bean = #instance.clone();
@@ -107,6 +137,7 @@ pub(crate) fn scheduled_task_defs(
                                 );
                             })
                         }),
+                        skip: #skip_expr,
                     };
                     let __boxed_task: Box<dyn #sched_krate::ScheduledTask> = Box::new(__task_def);
                     Box::new(__boxed_task) as Box<dyn std::any::Any + Send>

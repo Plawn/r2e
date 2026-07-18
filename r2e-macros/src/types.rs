@@ -93,6 +93,11 @@ pub struct ScheduledConfig {
     pub name: Option<String>,
     /// Self-overlap policy from `#[scheduled(overlap = "...")]` (default `Skip`).
     pub overlap: OverlapMode,
+    /// Skip predicate from `#[scheduled(skip_if = "method")]` — names a plain
+    /// `&self -> bool` method (sync or async) on the same impl block, checked
+    /// before every tick (Quarkus `skipExecutionIf`). Kept as the literal for
+    /// error spans; resolved against the impl block by each host macro.
+    pub skip_if: Option<syn::LitStr>,
 }
 
 /// Parsed `overlap = "..."` value for `#[scheduled]` — mirrors

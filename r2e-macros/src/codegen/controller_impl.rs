@@ -1026,44 +1026,61 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
     }
 
     if !def.scheduled_methods.is_empty() {
-        let methods: Vec<ScheduledSourceMethod> = def
+        let methods: syn::Result<Vec<ScheduledSourceMethod>> = def
             .scheduled_methods
             .iter()
             .zip(sched_sets.iter())
-            .map(|(sm, set)| ScheduledSourceMethod {
-                fn_name: sm.fn_item.sig.ident.clone(),
-                config: sm.config.clone(),
-                // Intercepted methods self-intercept in their dispatch wrapper
-                // (sync sources promoted to `async fn`), so the emitted call is
-                // awaited when the source is async OR it runs method-level
-                // interceptors OR it runs the shared controller-level ones.
-                emitted_async: sm.fn_item.sig.asyncness.is_some()
-                    || set.is_some()
-                    || ctrl_for_transverse,
+            .map(|(sm, set)| {
+                Ok(ScheduledSourceMethod {
+                    fn_name: sm.fn_item.sig.ident.clone(),
+                    config: sm.config.clone(),
+                    // Intercepted methods self-intercept in their dispatch wrapper
+                    // (sync sources promoted to `async fn`), so the emitted call is
+                    // awaited when the source is async OR it runs method-level
+                    // interceptors OR it runs the shared controller-level ones.
+                    emitted_async: sm.fn_item.sig.asyncness.is_some()
+                        || set.is_some()
+                        || ctrl_for_transverse,
+                    // `skip_if` predicates live among the impl block's plain
+                    // methods (routes/consumers/scheduled are classified away
+                    // from `other_methods` during parsing).
+                    skip: crate::codegen::scheduled::resolve_skip_if(
+                        &sm.config,
+                        def.other_methods.iter(),
+                    )?,
+                })
             })
             .collect();
-        let task_defs = transverse::scheduled_task_defs(&quote! { __core }, &owner_name, &methods);
-        // On the manual (test) path `scheduled_tasks_boxed` is called without a
-        // prior `register_controller`, so fill the slot here too before building
-        // tasks. Registration already filled it via `fill_decos`; the slot's
-        // `OnceLock` makes the repeat a no-op. Emitted only when a slot exists.
-        let slot_fill = if has_decos {
-            quote! {
-                #krate::BeanDecoFill::__r2e_fill_decos(&*__core, __ctx);
+        match methods {
+            // An unresolvable `skip_if` surfaces as a compile_error at module
+            // scope (this generator is infallible; the trait default applies).
+            Err(e) => module_items.push(e.to_compile_error()),
+            Ok(methods) => {
+                let task_defs =
+                    transverse::scheduled_task_defs(&quote! { __core }, &owner_name, &methods);
+                // On the manual (test) path `scheduled_tasks_boxed` is called without a
+                // prior `register_controller`, so fill the slot here too before building
+                // tasks. Registration already filled it via `fill_decos`; the slot's
+                // `OnceLock` makes the repeat a no-op. Emitted only when a slot exists.
+                let slot_fill = if has_decos {
+                    quote! {
+                        #krate::BeanDecoFill::__r2e_fill_decos(&*__core, __ctx);
+                    }
+                } else {
+                    quote! {}
+                };
+                controller_fns.push(quote! {
+                    fn scheduled_tasks_boxed(
+                        _state: &#state_ident,
+                        __core: ::std::sync::Arc<Self>,
+                        __ctx: &#krate::beans::BeanContext,
+                    ) -> Vec<Box<dyn std::any::Any + Send>> {
+                        #slot_fill
+                        vec![#(#task_defs),*]
+                    }
+                });
             }
-        } else {
-            quote! {}
-        };
-        controller_fns.push(quote! {
-            fn scheduled_tasks_boxed(
-                _state: &#state_ident,
-                __core: ::std::sync::Arc<Self>,
-                __ctx: &#krate::beans::BeanContext,
-            ) -> Vec<Box<dyn std::any::Any + Send>> {
-                #slot_fill
-                vec![#(#task_defs),*]
-            }
-        });
+        }
     }
 
     if has_decos {
