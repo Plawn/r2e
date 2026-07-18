@@ -6,12 +6,18 @@
 //!      false-positive on prefix params).
 
 use r2e::prelude::*;
+use r2e::r2e_security::AuthenticatedUser;
 
 // `FgaCheck` comes from `r2e_openfga::prelude`, re-exported by `r2e::prelude`
 // under the `openfga` feature (included in `full`).
+// Both controllers carry an identity: FGA guards require one (`REQUIRES_IDENTITY`),
+// and this fixture only exercises the `from_path` placeholder check.
 
 #[controller(path = "/documents")]
-pub struct DocController;
+pub struct DocController {
+    #[inject(identity)]
+    _user: AuthenticatedUser,
+}
 
 #[routes]
 impl DocController {
@@ -24,7 +30,10 @@ impl DocController {
 }
 
 #[controller(path = "/orgs/{org_id}")]
-pub struct OrgController;
+pub struct OrgController {
+    #[inject(identity)]
+    _user: AuthenticatedUser,
+}
 
 #[routes]
 impl OrgController {

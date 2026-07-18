@@ -4,9 +4,15 @@
 //! `ObjectResolutionFailed` ("path param not found").
 
 use r2e::prelude::*;
+use r2e::r2e_security::AuthenticatedUser;
 
+// The identity satisfies the guard's `REQUIRES_IDENTITY` so this fixture
+// exercises ONLY the `from_path` placeholder mismatch.
 #[controller(path = "/documents")]
-pub struct DocController;
+pub struct DocController {
+    #[inject(identity)]
+    _user: AuthenticatedUser,
+}
 
 #[routes]
 impl DocController {
