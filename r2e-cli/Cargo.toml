@@ -21,6 +21,7 @@ toml_edit = {workspace = true}
 colored = {workspace = true}
 dialoguer = {workspace = true}
 chrono = {workspace = true}
+termimad = {workspace = true}
 
 [dev-dependencies]
 tempfile = {workspace = true}

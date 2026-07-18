@@ -15,6 +15,13 @@ pub mod add;
 /// route listing before start).
 pub mod dev;
 
+/// Module documentation — `r2e docs [<module>]`.
+///
+/// Prints bundled, version-matched per-module docs (the `docs/features/*.md`
+/// set, embedded at compile time). Defaults to the curated `## TL;DR` section;
+/// `--full` prints the whole document, `--pretty` renders markdown for a terminal.
+pub mod docs;
+
 /// Project diagnostics — `r2e doctor`.
 ///
 /// Runs 9 health checks: Cargo.toml, R2E dependency, config file,

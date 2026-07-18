@@ -1,5 +1,10 @@
 # Feature 4 — Interceptors
 
+## TL;DR
+
+Declarative attributes that wrap controller-method behavior via the `Interceptor<R>` around-pattern — built once at registration (graph-resolved, zero per-request cost, no `dyn`). Built-ins: `#[logged]`, `#[timed]`, `#[cached(ttl = N)]`, `#[cache_invalidate("group")]`, `#[rate_limited(max = N, window = S)]`. Custom ones apply with `#[intercept(Type)]` (impl `Interceptor<R>` + `SelfBuilt` or `DecoratorSpec`). Order: pre-auth guards → guards/`#[roles]` → controller-level then method-level interceptors → body. Interceptors always see the raw return type, never `Response`.
+
+
 ## Goal
 
 Provide declarative attributes to enrich controller method behavior: logging, performance measurement, caching, rate limiting, transactions, and user-defined custom interceptors.

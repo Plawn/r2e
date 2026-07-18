@@ -1,5 +1,10 @@
 # Feature 8 — Scheduling
 
+## TL;DR
+
+Run background tasks on a fixed interval or cron expression, with graceful shutdown via `CancellationToken`. Mark a controller method `#[scheduled(every = 30)]` (or a cron string); `#[inject]` fields are available inside (no request scope). Install `.plugin(Scheduler)` before `build_state()` — it **requires** the Executor plugin (`type LateDeps = (PoolExecutor,)`; the `scheduler` feature pulls in `executor`), and every tick runs as a bounded pool job. Runtime control via `SchedulerHandle::{pause, resume, trigger_now}`.
+
+
 ## Objective
 
 Execute background tasks periodically (fixed interval or cron expression), with graceful shutdown via `CancellationToken`.

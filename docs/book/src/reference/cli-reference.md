@@ -363,6 +363,36 @@ message ListUserResponse {
 
 ---
 
+## `r2e docs`
+
+Print bundled, version-matched per-module documentation. The docs are embedded
+in the binary at compile time, so they always match the installed `r2e`.
+
+```
+r2e docs [<module>] [options]
+
+Options:
+  --full          Print the whole document instead of just the TL;DR
+  --pretty, -p    Render markdown for the terminal instead of raw output
+```
+
+- **No argument** lists every module as `slug — Title (crate)`.
+- `<module>` is a slug (`events`, `security`, `configuration`, …) or a crate
+  name (`r2e-events`). A crate that owns several modules (e.g. `r2e-core`) lists
+  them instead of printing one.
+- By default it prints the curated **TL;DR** of a module; `--full` prints the
+  full guide. Raw markdown goes to stdout (easy to pipe into an AI agent);
+  `--pretty` renders it for a human reader.
+
+```bash
+r2e docs                 # list all modules
+r2e docs events          # TL;DR for the events module
+r2e docs events --full   # the full Events guide
+r2e docs r2e-security    # resolve by crate name
+```
+
+---
+
 ## `r2e dev`
 
 Start development server with Subsecond hot-reload.

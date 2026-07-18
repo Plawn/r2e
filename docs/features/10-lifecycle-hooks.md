@@ -1,5 +1,10 @@
 # Feature 10 — Lifecycle Hooks
 
+## TL;DR
+
+Run code at server startup and shutdown. `.on_start(|state| async move { ... })` fires before the server accepts connections and may return `Err` to abort boot; `.on_stop(|state| async move { ... })` fires after graceful shutdown and cannot fail. Both are registered after `build_state()` and receive the inferred bean HList — read beans by type with `state.bean::<T>()` (`BeanLookup`). For drain-time hooks and programmatic stop, see Feature 22 (`on_drain`, `StopHandle`).
+
+
 ## Goal
 
 Allow executing code at server startup and shutdown, to initialize resources or perform cleanup.

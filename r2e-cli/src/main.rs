@@ -1,7 +1,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{add, dev, doctor, generate, new_project, routes};
+use commands::{add, dev, docs, doctor, generate, new_project, routes};
 
 #[derive(Parser)]
 #[command(name = "r2e", version, about = "R2E CLI — scaffold and manage R2E projects")]
@@ -61,6 +61,17 @@ enum Commands {
     Doctor,
     /// List all declared routes
     Routes,
+    /// Print module documentation (bundled, version-matched)
+    Docs {
+        /// Module slug or crate name (omit to list all)
+        module: Option<String>,
+        /// Print the full doc instead of just the TL;DR
+        #[arg(long)]
+        full: bool,
+        /// Render markdown for a terminal instead of raw output
+        #[arg(long, short)]
+        pretty: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -134,6 +145,11 @@ fn main() {
         Commands::Dev { port, features } => dev::run(port, features),
         Commands::Doctor => doctor::run(),
         Commands::Routes => routes::run(),
+        Commands::Docs {
+            module,
+            full,
+            pretty,
+        } => docs::run(module.as_deref(), full, pretty),
     };
 
     if let Err(e) = result {

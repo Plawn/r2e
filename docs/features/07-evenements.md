@@ -1,5 +1,10 @@
 # Feature 7 — Events
 
+## TL;DR
+
+In-process typed pub/sub for decoupling components. `LocalEventBus` (the default `EventBus` impl, `Clone`) dispatches by Rust `TypeId` — a `UserCreatedEvent` subscriber never receives an `OrderPlacedEvent`, no magic strings or downcasting. Use `subscribe(|e: Arc<MyEvent>| async move { ... })` and `emit(event)`, or wire a controller method as a `#[consumer]`. Events need `Send + Sync + Serialize + DeserializeOwned + 'static` (serde bounds are for remote backends; `LocalEventBus` never serializes). Distributed backends (Kafka, Pulsar, Iggy, RabbitMQ) implement the same trait.
+
+
 ## Objective
 
 Provide an in-process event bus with typed pub/sub. Allows decoupling application components by emitting events that other parts can listen to.

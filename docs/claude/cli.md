@@ -48,6 +48,23 @@ Runs 9 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI,
 
 Static source parsing of `src/controllers/*.rs` (no compilation). Extracts controller paths, HTTP methods, handler names, roles. Colored table output.
 
+## `r2e docs [<module>]` — Bundled module documentation
+
+Prints per-module documentation embedded in the binary at compile time (the `docs/features/*.md` set, via `include_str!`), so it is always version-matched to the installed `r2e`. Aimed at both agents (raw markdown on stdout, injectable into context) and humans (`--pretty`).
+
+- **No argument** — lists every module: `slug — Title (crate[, crate])`.
+- **`r2e docs <slug>`** — prints the curated `## TL;DR` section of that module (e.g. `events`, `security`, `configuration`).
+- **Crate-name alias** — `r2e docs r2e-events` resolves to the module owned by that crate. A crate owning several modules (e.g. `r2e-core`) **lists** them instead of printing one.
+- **Unknown name** — errors with the list of available slugs (exit 1).
+
+**Flags:**
+- `--full` — print the whole document instead of just the TL;DR.
+- `--pretty` / `-p` — render markdown for the terminal (via `termimad`) instead of raw output.
+
+**Source of truth:** the `## TL;DR` block lives once in each `docs/features/NN-*.md` file — it renders in the docs/mdBook *and* is extracted by this command (slice from `## TL;DR` to the next `## ` heading). Slugs are clean English, decoupled from the (sometimes French) file names. Implementation: `commands/docs.rs` (`DOCS` manifest + `tldr()` extractor).
+
+> **Packaging note:** `include_str!` reads `../../../docs/features/*.md`, outside the `r2e-cli` crate dir. This works for in-workspace builds; publishing `r2e-cli` to crates.io will need the docs mirrored under the crate (or a `build.rs`) first.
+
 ## `r2e dev` — Development server with hot-reload
 
 Uses Dioxus Subsecond for instant hot-patching — recompiles only changed code as a dynamic library and patches it into the running process (~200-500ms). Requires `dx` CLI (`cargo install dioxus-cli`). Generates a `Dioxus.toml` config if missing, then runs `dx serve --hot-patch` with the `dev-reload` feature enabled.

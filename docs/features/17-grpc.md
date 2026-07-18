@@ -1,5 +1,10 @@
 # Feature 17 — gRPC
 
+## TL;DR
+
+Native gRPC with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors, all wired at compile time. Enable the `grpc` feature (plus `tonic` / `prost` / `tonic-build`), define a `.proto`, then annotate a service impl with `#[grpc_routes]` (analogous to `#[routes]`) — construction goes through `ContextConstruct` from the bean graph. Install the `GrpcServer` plugin before `build_state()`; transport is either a dedicated port or multiplexed on the HTTP port.
+
+
 ## Goal
 
 Provide native gRPC support with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors — all wired at compile time.

@@ -1787,7 +1787,10 @@ process-local static container: Rust statics are not dropped at process exit.
   back behind the unpatchable library boundary.
 - `r2e new <name>` — scaffold a project (`App`-trait layout). `r2e dev` — hot
   reload. `r2e generate controller <Name>` — scaffold pieces. `r2e routes` —
-  list routes. `r2e doctor` — diagnose setup.
+  list routes. `r2e doctor` — diagnose setup. `r2e docs [<module>]` — print
+  bundled, version-matched per-module docs (curated `TL;DR` by default; `--full`
+  for the whole doc, `--pretty` to render markdown). No arg lists modules;
+  accepts a slug (`events`) or a crate name (`r2e-events`).
 - `cargo expand -p <crate>` — inspect macro output when debugging.
 
 ---

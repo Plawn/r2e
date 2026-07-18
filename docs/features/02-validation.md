@@ -1,5 +1,10 @@
 # Feature 2 — Validation
 
+## TL;DR
+
+Automatic request-body validation with declarative rules, returning structured 400s on failure. Derive `garde::Validate` on your DTO and take it as `Json<T>` — the generated handler validates transparently before your body runs. Rules are `garde` attributes: `#[garde(length(min=1, max=100))]`, `#[garde(email)]`, `#[garde(range(...))]`, `#[garde(custom(my_fn))]`, etc. No manual checks; enabled by the `validation` feature.
+
+
 ## Goal
 
 Automatically validate JSON request bodies with declarative rules, and return structured 400 responses on failure.

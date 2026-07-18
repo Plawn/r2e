@@ -1,5 +1,10 @@
 # Sharded Serving (SO_REUSEPORT)
 
+## TL;DR
+
+Serve HTTP with N worker threads, each a `current_thread` Tokio runtime with its own `SO_REUSEPORT` listener bound to the same address — the kernel spreads connections across them, with no accept-path work-stealing (thread-per-core option A; Axum and the ecosystem stay unchanged). Set `server.workers` in config: absent = single listener (default, unchanged); a positive integer = that many workers (even `1`); `"per-core"` = `available_parallelism()`. Invalid values (`0`, negative, `> 1024`, other strings) hard-error at `run()` — never a silent fallback.
+
+
 R2E can serve HTTP with **N worker threads**, each running its own
 `current_thread` Tokio runtime with its own `SO_REUSEPORT` listener bound to the
 same address. The kernel distributes incoming connections across the per-worker

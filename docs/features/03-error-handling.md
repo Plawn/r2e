@@ -1,5 +1,10 @@
 # Feature 3 — Error Handling
 
+## TL;DR
+
+Structured errors that convert automatically to consistent JSON HTTP responses. Return `Result<T, HttpError>` from handlers; each `HttpError` variant maps to a status (`NotFound`→404, `Unauthorized`→401, `Forbidden`→403, `BadRequest`→400, `Internal`→500, `Custom { status, body }`→anything). Generate `From<E> for HttpError` conversions in one line with `map_error!`. A Tower layer captures handler panics and turns them into 500s.
+
+
 ## Goal
 
 Provide a structured error system that automatically converts errors into consistent JSON HTTP responses, with support for custom errors and panic capture.

@@ -164,6 +164,7 @@ clap = { version = "4", features = ["derive"] }
 toml_edit = "0.25"
 colored = "3"
 dialoguer = "0.12"
+termimad = "0.31"
 
 # Proc-macro
 syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }

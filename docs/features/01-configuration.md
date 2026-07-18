@@ -1,5 +1,10 @@
 # Feature 1 — Configuration
 
+## TL;DR
+
+Typed configuration from YAML + environment, with `${...}` secret resolution and strongly-typed sections. `R2eConfig` stores dot-separated keys (`app.database.url`); resolution order is `application.yaml` → `.env` → secret placeholders → env vars (`APP_DATABASE_URL` overrides `app.database.url`). Load with `R2eConfig::load()` (never fails — env is always overlaid) or drive it from the builder via `.load_config::<RootConfig>()`. Inject values into controllers with `#[config("app.greeting")]`. Custom base file via `.with_config_file("patina.yaml")` (profile overlay: `patina-test.yaml`).
+
+
 ## Goal
 
 Provide a typed configuration system loaded from YAML files and environment variables, with secret resolution and strongly-typed config sections.

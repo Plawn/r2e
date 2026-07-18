@@ -1,5 +1,10 @@
 # Feature 22 — Serve Lifecycle: Programmatic Stop & Awaited Graceful Drain
 
+## TL;DR
+
+A real shutdown contract without hand-rolled drain plumbing. `StopHandle::stop()` triggers the same graceful shutdown as Ctrl-C / SIGTERM — provide it as a bean for an admin/stop endpoint, or get it from `prepared.stop_handle()`. `on_drain` hooks are awaited *before* the listener stops accepting (flip readiness, wait for load-balancer deregistration); `ServeContext::track()` lets serve hooks have spawned tasks (gRPC, QUIC) drained rather than cancelled, bounded by `shutdown_grace_period`. Sequence: on_drain → plugin shutdown → stop accepting (in-flight finish) → await tracked tasks → on_stop.
+
+
 ## Goal
 
 Give the server a real shutdown contract, without hand-rolled drain plumbing:
