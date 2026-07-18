@@ -20,7 +20,9 @@ mod wrapping;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 
+use crate::crate_path::r2e_core_path;
 use crate::routes_parsing::RoutesImplDef;
 use crate::types::MethodDecorators;
 
@@ -30,13 +32,111 @@ pub fn generate(def: &RoutesImplDef) -> TokenStream {
     let handlers = handlers::generate_handlers(def);
     let controller_impl = controller_impl::generate_controller_impl(def);
     let anonymous_asserts = generate_anonymous_asserts(def);
+    let identity_req_asserts = generate_identity_requirement_asserts(def);
 
     quote! {
         #impl_block
         #handlers
         #controller_impl
         #(#anonymous_asserts)*
+        #(#identity_req_asserts)*
     }
+}
+
+/// For every `#[guard(...)]` site whose spec declares
+/// `DecoratorSpec::REQUIRES_IDENTITY = true`, assert at compile time that the
+/// route can actually supply an identity — rejecting statically-always-`None`
+/// placements where the guard could only ever 401 (see `FgaCheck`).
+///
+/// The requirement is a **type-level** const (`REQUIRES_IDENTITY`) known only
+/// at type-check time, while "can this route ever hold an identity" is a mix of
+/// macro-known facts (a param-level identity, or `#[anonymous]`) and the
+/// `#[controller]`-side `HAS_STRUCT_IDENTITY` const. So the check is a
+/// cross-macro const-assert combining both, one per identity-requiring guard
+/// site (spanned to the guard expression):
+///
+/// ```ignore
+/// const _: () = assert!(!<Spec>::REQUIRES_IDENTITY || <route can hold identity>);
+/// ```
+///
+/// "Can hold an identity" per the guard's `GuardContext` source (see
+/// `handlers::generate_guard_context`):
+/// - param-level identity (required or `Option<..>`) → `true` (may be `Some`);
+/// - `#[anonymous]` with no identity param → `false` (Case C: always `None`);
+/// - otherwise the struct identity drives it → `HAS_STRUCT_IDENTITY`
+///   (a required OR `Option<..>` struct identity may be `Some`; no field = always
+///   `None`).
+///
+/// Non-inferable guard expressions (the spec type can't be determined) are
+/// skipped here — the per-method deco set already emits the `spec_type_of`
+/// compile error for them, so emitting a second error would only cascade
+/// (same degrade-to-avoid-cascade stance as the rest of `decorators.rs`).
+///
+/// `#[roles]`/`#[all_roles]` desugar into `RolesGuard`/`AllRolesGuard` guard
+/// sites whose `REQUIRES_IDENTITY` is the default `false`, so this assert is a
+/// no-op for them: they are already compile-checked through the stronger
+/// `RoleBasedIdentity` bound on their `Guard` impl (which `NoIdentity` fails).
+fn generate_identity_requirement_asserts(def: &RoutesImplDef) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
+
+    // The const-bool token for "this route's guards can see a `Some` identity".
+    let can_hold_identity = |has_identity_param: bool, anonymous: bool| -> TokenStream {
+        if has_identity_param {
+            quote! { true }
+        } else if anonymous {
+            quote! { false }
+        } else {
+            quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+        }
+    };
+
+    let mut asserts = Vec::new();
+
+    let mut emit = |guard_exprs: &[syn::Expr], has_identity_param: bool, anonymous: bool| {
+        let cond = can_hold_identity(has_identity_param, anonymous);
+        for expr in guard_exprs {
+            // Skip non-inferable specs — their spec-type error already fails the
+            // build; a second diagnostic here would just cascade.
+            let Ok((spec_ty, _)) = decorators::spec_type_of(expr) else {
+                continue;
+            };
+            let span = expr.span();
+            asserts.push(quote_spanned! { span =>
+                const _: () = ::core::assert!(
+                    !<#spec_ty as #krate::DecoratorSpec>::REQUIRES_IDENTITY || #cond,
+                    "this #[guard] requires an authenticated identity, but the route can never \
+                     provide one: add a struct-level `#[inject(identity)]` field or an identity \
+                     parameter on the route. An `#[anonymous]` route needs an `Option<..>` \
+                     identity parameter to opt back in."
+                );
+            });
+        }
+    };
+
+    for rm in &def.route_methods {
+        emit(
+            &rm.decorators.guard_fns,
+            rm.identity_param.is_some(),
+            rm.decorators.anonymous,
+        );
+    }
+    for sm in &def.sse_methods {
+        emit(
+            &sm.decorators.guard_fns,
+            sm.identity_param.is_some(),
+            sm.decorators.anonymous,
+        );
+    }
+    for wm in &def.ws_methods {
+        emit(
+            &wm.decorators.guard_fns,
+            wm.identity_param.is_some(),
+            wm.decorators.anonymous,
+        );
+    }
+
+    asserts
 }
 
 /// If any method carries `#[anonymous]`, assert at compile time that the

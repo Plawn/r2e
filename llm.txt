@@ -790,6 +790,25 @@ use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 #[guard(RateLimit::per_user(5, 60))]          // per user (post-auth, needs identity)
 ```
 
+### Fine-grained authorization (OpenFGA)
+
+Requires feature: `openfga`. Provide the registry: `.provide(OpenFgaRegistry::...)`.
+
+```rust
+use r2e::r2e_openfga::FgaCheck;
+
+#[guard(FgaCheck::relation("viewer").on("document").from_path("id"))]
+#[guard(FgaCheck::relation("admin").on("system").fixed("system:global"))]
+```
+
+FGA guards check `user:{identity.sub()}`, so they **require an authenticated
+identity**. Applying one where the identity is statically always `None` — a
+controller with no `#[inject(identity)]`, or an `#[anonymous]` route without an
+`Option<..>` identity param — is a **compile error** (`FgaCheck` declares
+`DecoratorSpec::REQUIRES_IDENTITY = true`). Allowed: a required or `Option<..>`
+struct/param identity, or an `#[anonymous]` route with an `Option<..>` identity
+param.
+
 ---
 
 ## Interceptors
