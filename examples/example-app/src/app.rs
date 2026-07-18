@@ -11,6 +11,7 @@ use r2e::r2e_observability::{Observability, ObservabilityConfig};
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 use r2e::r2e_prometheus::Prometheus;
 use r2e::r2e_executor::Executor;
+use r2e::r2e_openfga::{MockBackend, OpenFgaRegistry};
 use r2e::r2e_scheduler::Scheduler;
 
 pub mod controllers;
@@ -24,6 +25,7 @@ use controllers::account_controller::AccountController;
 use controllers::config_controller::ConfigController;
 use controllers::data_controller::DataController;
 use controllers::db_identity_controller::IdentityController;
+use controllers::document_controller::{DocumentController, DocumentService};
 use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::notification_controller::NotificationController;
@@ -77,6 +79,23 @@ impl App for ExampleApp {
     }
 
     async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+        // Fine-grained authorization (OpenFGA). To keep `cargo run` working
+        // without a live OpenFGA server, we back the registry with an in-memory
+        // MockBackend and seed a few relationship tuples. In production, swap
+        // this for `GrpcBackend::connect(&OpenFgaConfig::...).await?`.
+        let fga = {
+            let mock = MockBackend::new();
+            // The demo token (printed on startup, sub "user-123") can read and
+            // edit document:readme.
+            mock.add_tuple("user:user-123", "viewer", "document:readme");
+            mock.add_tuple("user:user-123", "editor", "document:readme");
+            // "alice" is a viewer+editor of readme, but only a viewer of roadmap.
+            mock.add_tuple("user:alice", "viewer", "document:readme");
+            mock.add_tuple("user:alice", "editor", "document:readme");
+            mock.add_tuple("user:alice", "viewer", "document:roadmap");
+            OpenFgaRegistry::new(mock)
+        };
+
         b.plugin(Scheduler)
             .plugin(Executor)
             .plugin(
@@ -96,6 +115,8 @@ impl App for ExampleApp {
             .provide(env.sse_broadcaster)
             .provide(SseTopic::<models::UserCreatedEvent>::new(64).with_event_name("user_created"))
             .provide(env.notification_service)
+            .provide(fga)
+            .provide(DocumentService::seeded())
             .register_module::<UserModule>()
             .build_state()
             .await
@@ -149,6 +170,7 @@ impl App for ExampleApp {
                 ReportController,
                 UploadController,
                 ProxyController,
+                DocumentController,
             )>()
             .with(NormalizePath)
     }
