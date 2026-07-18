@@ -106,10 +106,11 @@ static, scheduler, health. One e2e test per plugin, in the spirit of
   `r2e-devservices/src/openfga.rs`: shared container + Ryuk, HTTP bootstrap
   helpers `create_store`/`write_model`/`write_tuples`, IDs injected via
   `override_config_value`) + dedicated `examples/example-openfga` (canonical
-  `impl App` shape, `FgaCheck` guards, DevOpenFga-backed tests). Compile-
-  verified only so far: the local Docker daemon was hung — once Docker is
-  back, run `cargo test -p r2e-devservices --features openfga -- --ignored`
-  and `cargo test -p example-openfga -- --ignored`.
+  `impl App` shape, `FgaCheck` guards, DevOpenFga-backed tests). Runtime-
+  verified against the live container (2026-07-18): dev-service smoke test
+  + all 4 example-openfga integration tests green. Note: `-- --ignored`
+  also makes rustdoc RUN `ignore`d doctests — target the integration file
+  (`--test openfga_test -- --ignored`) when re-running.
 - Demo dev-services usage in `example-postgres`.
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
