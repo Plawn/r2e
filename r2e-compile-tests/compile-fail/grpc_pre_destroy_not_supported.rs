@@ -1,17 +1,23 @@
 use r2e::prelude::*;
 
+// Real tonic-build output, compiled from `proto/ping.proto` by
+// `r2e-grpc-build` in this crate's build.rs. (allow: the macro rejects the
+// impl before emitting the code that would use the import.)
+#[allow(unused_imports)]
+use r2e_compile_tests::proto::ping;
+
 #[derive(Clone)]
 pub struct AppState;
 
 #[controller]
 pub struct TestGrpc;
 
-#[grpc_routes(proto::test_service_server::TestService)]
+#[grpc_routes(ping::ping_server::Ping)]
 impl TestGrpc {
     async fn ping(
         &self,
-        _request: r2e::r2e_grpc::tonic::Request<()>,
-    ) -> Result<r2e::r2e_grpc::tonic::Response<()>, r2e::r2e_grpc::tonic::Status> {
+        _request: r2e::r2e_grpc::tonic::Request<ping::PingRequest>,
+    ) -> Result<r2e::r2e_grpc::tonic::Response<ping::PingReply>, r2e::r2e_grpc::tonic::Status> {
         unimplemented!()
     }
 
@@ -19,12 +25,6 @@ impl TestGrpc {
     // verbatim into `other_methods` and silently never run.
     #[pre_destroy]
     fn close(&self) {}
-}
-
-mod proto {
-    pub mod test_service_server {
-        pub trait TestService {}
-    }
 }
 
 fn main() {}

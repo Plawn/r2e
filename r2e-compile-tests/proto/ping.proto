@@ -1,0 +1,19 @@
+// Real proto for the gRPC compile-fail fixtures: compiled by `r2e-grpc-build`
+// in build.rs and exposed as `r2e_compile_tests::proto`, so the fixtures
+// typecheck against genuine tonic-build output instead of a hand-written
+// stand-in.
+syntax = "proto3";
+
+package ping;
+
+service Ping {
+  rpc Ping (PingRequest) returns (PingReply);
+}
+
+message PingRequest {
+  string msg = 1;
+}
+
+message PingReply {
+  string msg = 1;
+}

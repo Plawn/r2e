@@ -213,6 +213,15 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
             templates::project::greeter_proto(&opts.name),
         )?;
         fs::write(project_dir.join("build.rs"), templates::project::build_rs())?;
+        fs::create_dir_all(project_dir.join("src/grpc"))?;
+        fs::write(
+            project_dir.join("src/grpc/mod.rs"),
+            templates::project::grpc_mod_rs(),
+        )?;
+        fs::write(
+            project_dir.join("src/grpc/greeter.rs"),
+            templates::project::grpc_greeter_rs(&opts.name),
+        )?;
     }
 
     // 8. .gitignore

@@ -1,5 +1,5 @@
 error: #[post_construct] is not supported on #[grpc_routes] methods
-  --> compile-fail/grpc_post_construct_not_supported.rs:13:5
+  --> compile-fail/grpc_post_construct_not_supported.rs:19:5
    |
-13 |     #[post_construct]
+19 |     #[post_construct]
    |     ^^^^^^^^^^^^^^^^^

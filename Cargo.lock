@@ -2536,12 +2536,11 @@ version = "0.1.0"
 dependencies = [
  "prost 0.14.4",
  "r2e",
+ "r2e-grpc-build",
  "tokio",
  "tokio-stream",
  "tonic",
- "tonic-build",
  "tonic-prost",
- "tonic-prost-build",
  "tonic-reflection",
  "tracing",
 ]
@@ -5701,11 +5700,15 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "prost 0.14.4",
  "r2e",
+ "r2e-grpc-build",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "trybuild",
 ]
 
@@ -5883,6 +5886,15 @@ dependencies = [
  "tonic-reflection",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "r2e-grpc-build"
+version = "0.1.0"
+dependencies = [
+ "prost 0.14.4",
+ "prost-types 0.14.4",
+ "tonic-prost-build",
 ]
 
 [[package]]

@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -1555,12 +1555,32 @@ Endpoints: `POST /oauth/token`, `/.well-known/openid-configuration`,
 ## gRPC
 
 Requires feature: `grpc`. Same DX as HTTP controllers: `#[inject]`, `#[config]`,
-guards, interceptors.
+interceptors.
+
+Proto setup is one line: the `r2e-grpc-build` build-dependency compiles every
+`.proto` under `proto/` (rerun-if-changed — dropping a new file is enough) and
+generates an aggregated module (one Rust module per proto package, nested for
+dotted packages) plus a combined `FILE_DESCRIPTOR_SET` for server reflection.
+The generated code references `::tonic`, `::tonic_prost`, `::prost` — add them
+as dependencies (`r2e add grpc` scaffolds all of this).
+
+```rust
+// build.rs
+fn main() -> Result<(), Box<dyn std::error::Error>> { r2e_grpc_build::compile() }
+
+// src: include the generated modules
+pub mod proto {
+    r2e::r2e_grpc::include_protos!();               // expands OUT_DIR/r2e_protos.rs
+}
+use proto::greeter::{HelloReply, HelloRequest};     // package `greeter` → module `greeter`
+```
+
+Customization: `r2e_grpc_build::ProtoCompiler::new().proto_dir("api/proto").configure(|b| /* tonic_prost_build::Builder */ b).compile()`.
 
 ```rust
 use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
-b.plugin(GrpcServer::on_port("0.0.0.0:50051"))   // separate port (or multiplexed)
+b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())  // separate port (or multiplexed)
  .build_state().await
  .register_grpc_service::<GreeterService>()       // deps compile-checked here
 ```
@@ -1571,7 +1591,7 @@ pub struct GreeterService {
     #[inject] user_service: UserService,
 }
 
-#[grpc_routes(proto::greeter_server::Greeter)]    // tonic-generated trait
+#[grpc_routes(proto::greeter::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl GreeterService {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloReply>, Status> {
         Ok(Response::new(HelloReply { message: format!("Hello, {}!", request.into_inner().name) }))
@@ -1579,7 +1599,13 @@ impl GreeterService {
 }
 ```
 
-gRPC guards: `#[guard(GrpcRolesGuard::new(&["admin"]))]` etc.
+(`descriptor = …` is optional — only needed for reflection.)
+
+NOT supported on `#[grpc_routes]` methods (compile errors): `#[guard(...)]`,
+`#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`.
+The guard/identity infrastructure (`GrpcGuard`, `GrpcRolesGuard`,
+`GrpcIdentityExtractor`) exists in `r2e-grpc` for manual wiring but is not yet
+macro-wired.
 
 ---
 

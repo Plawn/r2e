@@ -9,11 +9,11 @@ use r2e::prelude::*;
 use r2e::r2e_grpc::GrpcService;
 
 pub mod proto {
-    tonic::include_proto!("greeter");
+    r2e::r2e_grpc::include_protos!();
 }
 
-use proto::greeter_client::GreeterClient;
-use proto::{HelloReply, HelloRequest};
+use proto::greeter::greeter_client::GreeterClient;
+use proto::greeter::{HelloReply, HelloRequest};
 
 // ── Bean + graph-built interceptor ──────────────────────────────────────
 
@@ -54,7 +54,7 @@ impl<R: Send> Interceptor<R> for LogCalls {
 #[controller]
 pub struct TestGreeter {}
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl TestGreeter {
     #[intercept(LogCalls::spec("grpc"))]
     async fn say_hello(

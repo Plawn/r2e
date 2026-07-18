@@ -1,0 +1,16 @@
+[package]
+name = "r2e-grpc-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["grpc", "tonic", "protobuf", "build", "codegen"]
+categories = ["development-tools::build-utils"]
+description = "Build-script helper for R2E gRPC — compiles every .proto under proto/ and generates one aggregated, reflection-ready module"
+
+[dependencies]
+tonic-prost-build = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }

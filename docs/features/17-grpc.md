@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Native gRPC with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors, all wired at compile time. Enable the `grpc` feature (plus `tonic` / `prost` / `tonic-build`), define a `.proto`, then annotate a service impl with `#[grpc_routes]` (analogous to `#[routes]`) — construction goes through `ContextConstruct` from the bean graph. Install the `GrpcServer` plugin before `build_state()`; transport is either a dedicated port or multiplexed on the HTTP port.
+Native gRPC with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors, all wired at compile time. Proto setup is automagic: a one-line `build.rs` (`r2e_grpc_build::compile()`) compiles every `.proto` under `proto/` and `r2e::r2e_grpc::include_protos!()` includes the generated modules (plus a combined `FILE_DESCRIPTOR_SET` for reflection) — `r2e add grpc` scaffolds the whole thing. Annotate a service impl with `#[grpc_routes]` (analogous to `#[routes]`) — construction goes through `ContextConstruct` from the bean graph. Install the `GrpcServer` plugin before `build_state()`; transport is either a dedicated port or multiplexed on the HTTP port.
 
 
 ## Goal
@@ -27,21 +27,27 @@ gRPC services support the same injection as HTTP controllers: `#[inject]` for ap
 
 ### 1. Configuration
 
-Enable the gRPC feature:
+> `r2e add grpc` scaffolds everything in this section (plus `build.rs`, a
+> sample `proto/greeter.proto`, and a `src/grpc.rs` service skeleton).
+
+Enable the gRPC feature (`grpc-reflection` too if you want `grpcurl list`
+to work out of the box):
 
 ```toml
-r2e = { version = "0.1", features = ["grpc"] }
+r2e = { version = "0.1", features = ["grpc", "grpc-reflection"] }
 ```
 
-Add `tonic-build` and `prost` for proto compilation:
+Add the runtime dependencies the generated proto code references, and the
+`r2e-grpc-build` build helper:
 
 ```toml
 [dependencies]
-tonic = "0.12"
-prost = "0.13"
+tonic = "~0.14"
+tonic-prost = "~0.14"
+prost = "~0.14"
 
 [build-dependencies]
-tonic-build = "0.12"
+r2e-grpc-build = "0.1"
 ```
 
 ### 2. Defining a Proto File
@@ -70,31 +76,46 @@ message HelloReply {
 
 ### 3. Build Script
 
-Create a `build.rs` at the project root to compile the protos into Rust code:
+One line — `r2e_grpc_build::compile()` finds every `.proto` under `proto/`
+(recursively), compiles them, and emits an aggregated module plus the
+combined encoded `FileDescriptorSet` for server reflection. The directory is
+registered with `cargo:rerun-if-changed`, so dropping a new `.proto` file is
+all it takes — `build.rs` never changes again:
 
 ```rust
 // build.rs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("proto/greeter.proto")?;
-    Ok(())
+    r2e_grpc_build::compile()
 }
 ```
 
 The generated code produces a server trait (`greeter_server::Greeter`) and message types (`HelloRequest`, `HelloReply`).
 
+For custom setups, `ProtoCompiler` exposes the knobs:
+
+```rust
+// build.rs
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    r2e_grpc_build::ProtoCompiler::new()
+        .proto_dir("api/proto")                                        // default: proto/
+        .configure(|b| b.type_attribute(".", "#[derive(serde::Serialize)]"))  // tonic_prost_build::Builder
+        .compile()
+}
+```
+
 ### 4. Including the Generated Code
 
-Use `tonic::include_proto!` to bring the generated types into scope:
+`include_protos!()` brings in everything the build script generated: one Rust
+module per proto package (dotted packages become nested modules) and a
+`FILE_DESCRIPTOR_SET` constant for reflection:
 
 ```rust
 pub mod proto {
-    tonic::include_proto!("greeter");
+    r2e::r2e_grpc::include_protos!();
 }
 
-use proto::{HelloReply, HelloRequest};
+use proto::greeter::{HelloReply, HelloRequest};   // package `greeter` → module `greeter`
 ```
-
-The string passed to `include_proto!` must match the `package` name in the `.proto` file.
 
 ### 5. Implementing a gRPC Service
 
@@ -112,7 +133,7 @@ pub struct GreeterService {
     #[inject] greeting_prefix: GreetingPrefix,
 }
 
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     async fn say_hello(
         &self,
@@ -171,7 +192,7 @@ The service core is constructed once from the bean context via `ContextConstruct
 Apply interceptors at the impl or method level, just like for HTTP:
 
 ```rust
-#[grpc_routes(proto::greeter_server::Greeter)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
 #[intercept(Logged::info())]
 impl GreeterService {
     #[intercept(Timed::default())]
@@ -272,30 +293,10 @@ HTTP controllers use `#[routes]`, gRPC services use `#[grpc_routes]`. Both draw 
 
 ## gRPC Reflection
 
-Enable server reflection for introspection tools like `grpcurl` and gRPC UI. Reflection needs the encoded `FileDescriptorSet` of your protos, so three pieces cooperate:
-
-1. **build.rs** — emit the descriptor set next to the generated code:
+Enable server reflection for introspection tools like `grpcurl` and gRPC UI. Reflection needs the encoded `FileDescriptorSet` of your protos — `r2e_grpc_build::compile()` already emits it, and `include_protos!()` already exposes it as `proto::FILE_DESCRIPTOR_SET`. Two pieces remain — declare the set on the service and enable reflection on the plugin:
 
 ```rust
-tonic_prost_build::configure()
-    .file_descriptor_set_path(out_dir.join("greeter_descriptor.bin"))
-    .compile_protos(&["proto/greeter.proto"], &["proto"])?;
-```
-
-2. **Proto module** — expose the bytes:
-
-```rust
-pub mod proto {
-    tonic::include_proto!("greeter");
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("greeter_descriptor");
-}
-```
-
-3. **Service + plugin** — declare the set on the service and enable reflection:
-
-```rust
-#[grpc_routes(proto::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+#[grpc_routes(proto::greeter::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
 impl GreeterService { /* ... */ }
 
 AppBuilder::new()
@@ -346,7 +347,16 @@ AppBuilder::new()
 
 ## CLI Scaffolding
 
-The R2E CLI can generate gRPC service skeletons:
+`r2e add grpc` sets up gRPC in an existing project: enables the
+`grpc`/`grpc-reflection` features on the `r2e` dependency, adds the
+`tonic`/`tonic-prost`/`prost` dependencies and the `r2e-grpc-build`
+build-dependency, and drops the one-line `build.rs`, a sample
+`proto/greeter.proto`, and a `src/grpc/` module (`mod.rs` holds the single
+shared `proto` module; one file per service reaches it via `super::proto`)
+— the samples only if the project has no protos yet. `r2e new --grpc`
+scaffolds the same, pre-wired into `App::build`.
+
+For additional services:
 
 ```bash
 r2e generate grpc-service User --package myapp
@@ -359,9 +369,8 @@ This creates:
 The `--package` flag sets the protobuf package name (defaults to `myapp`).
 
 After generation, you need to:
-1. Add the proto to `build.rs`: `tonic_build::compile_protos("proto/user.proto")?;`
-2. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
-3. Run `cargo build` to generate the proto code
+1. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
+2. Run `cargo build` — build.rs picks up the new proto automatically
 
 ## GrpcServer API Reference
 
