@@ -1,0 +1,6 @@
+error[E0080]: evaluation panicked: FGA guard references path parameter `document_id`, but no `{document_id}` placeholder appears in the route path `/{doc_id}` (this method's params: `{doc_id}`) or the controller's `path = "..."` prefix.
+              help: check the spelling of `from_path("document_id")` against the route's `{...}` placeholders
+  --> compile-fail/openfga_from_path_mismatch.rs:15:67
+   |
+15 |     #[guard(FgaCheck::relation("viewer").on("document").from_path("document_id"))]
+   |                                                                   ^^^^^^^^^^^^^ evaluation of `_` failed here
