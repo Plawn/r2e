@@ -55,6 +55,116 @@ fn insert_schema(
     }
 }
 
+/// A gap between a route and its generated OpenAPI schema, surfaced as a
+/// once-at-boot warning so silently-undocumented bodies become visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaGap {
+    /// A successful response carries a body whose Rust return type could not be
+    /// mapped to a schema (an `impl Trait` return, or a concrete non-`Json`
+    /// type). The response is documented **without a body**.
+    MissingResponseBody { type_name: String },
+    /// The named response type is documented, but it has no
+    /// `schemars::JsonSchema`, so its body renders as a generic `object`.
+    SchemalessResponseBody { type_name: String },
+    /// The named request type is documented, but it has no
+    /// `schemars::JsonSchema`, so its body renders as a generic `object`.
+    SchemalessRequestBody { type_name: String },
+}
+
+/// A single OpenAPI spec-generation warning: a [`SchemaGap`] tied to the route
+/// that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecWarning {
+    pub method: String,
+    pub path: String,
+    pub gap: SchemaGap,
+}
+
+impl SpecWarning {
+    /// A human-readable, actionable warning message naming the route, the
+    /// offending type, and how to fix it.
+    pub fn message(&self) -> String {
+        match &self.gap {
+            SchemaGap::MissingResponseBody { type_name } => format!(
+                "OpenAPI: {} {} — response body (return type `{}`) could not be mapped to a schema; \
+                 the response is documented without a body. Return `Json<T>` (with \
+                 `T: schemars::JsonSchema`) or annotate the handler with `#[returns(T)]`.",
+                self.method, self.path, type_name
+            ),
+            SchemaGap::SchemalessResponseBody { type_name } => format!(
+                "OpenAPI: {} {} — response type `{}` does not implement `schemars::JsonSchema`; \
+                 it is documented as a generic `object`. Derive `schemars::JsonSchema` on `{}`.",
+                self.method, self.path, type_name, type_name
+            ),
+            SchemaGap::SchemalessRequestBody { type_name } => format!(
+                "OpenAPI: {} {} — request type `{}` does not implement `schemars::JsonSchema`; \
+                 it is documented as a generic `object`. Derive `schemars::JsonSchema` on `{}`.",
+                self.method, self.path, type_name, type_name
+            ),
+        }
+    }
+}
+
+/// Collect every schema gap across the given routes, without generating the
+/// spec or emitting any log. This is the testable seam behind the boot-time
+/// warnings emitted by [`build_spec`].
+///
+/// A route is flagged when:
+/// - a successful (non-204) response has an unmappable body type
+///   ([`SchemaGap::MissingResponseBody`]); the `#[routes]` macro records the
+///   offending return type in `RouteInfo.response_unmapped`;
+/// - a named response type has no `JsonSchema`
+///   ([`SchemaGap::SchemalessResponseBody`]);
+/// - a named request type has no `JsonSchema`
+///   ([`SchemaGap::SchemalessRequestBody`]).
+pub fn spec_warnings(routes: &[RouteInfo]) -> Vec<SpecWarning> {
+    let mut warnings = Vec::new();
+    for route in routes {
+        // Missing response body: no mappable type, and not an intentional
+        // no-body 204.
+        if route.response_status != 204 && route.response_type.is_none() {
+            if let Some(type_name) = &route.response_unmapped {
+                warnings.push(SpecWarning {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    gap: SchemaGap::MissingResponseBody {
+                        type_name: type_name.clone(),
+                    },
+                });
+            }
+        }
+
+        // Named response type present but no schema → generic object.
+        if let Some(type_name) = &route.response_type {
+            if route.response_schema.is_none() {
+                warnings.push(SpecWarning {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    gap: SchemaGap::SchemalessResponseBody {
+                        type_name: type_name.clone(),
+                    },
+                });
+            }
+        }
+
+        // Named request type present but no schema → generic object. Raw
+        // multipart bodies carry a content type but no named type, so they are
+        // not flagged.
+        if let Some(type_name) = &route.request_body_type {
+            if route.request_body_schema.is_none() {
+                warnings.push(SpecWarning {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    gap: SchemaGap::SchemalessRequestBody {
+                        type_name: type_name.clone(),
+                    },
+                });
+            }
+        }
+    }
+    warnings
+}
+
 /// Configuration for the generated OpenAPI specification.
 pub struct OpenApiConfig {
     pub title: String,
@@ -121,6 +231,17 @@ impl OpenApiConfig {
 
 /// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
 pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
+    // Surface schema gaps once, at boot (build_spec runs during plugin install),
+    // so silently-undocumented bodies become visible instead of vanishing.
+    for warning in spec_warnings(routes) {
+        tracing::warn!(
+            method = %warning.method,
+            path = %warning.path,
+            "{}",
+            warning.message()
+        );
+    }
+
     let mut paths: Map<String, Value> = Map::new();
 
     for route in routes {

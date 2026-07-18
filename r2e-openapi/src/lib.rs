@@ -56,7 +56,7 @@ mod ext;
 mod handlers;
 pub mod schema;
 
-pub use builder::{build_spec, OpenApiConfig};
+pub use builder::{build_spec, spec_warnings, OpenApiConfig, SchemaGap, SpecWarning};
 pub use ext::OpenApiPlugin;
 pub use handlers::openapi_routes;
 pub use schemars;

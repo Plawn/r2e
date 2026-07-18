@@ -1349,6 +1349,17 @@ Spec at `/openapi.json`. Request/response schemas auto-detected from `Json<T>`
 params and return types; `#[status(N)]` / `#[returns(T)]` override; doc
 comments become summary/description; 401/403 only emitted on authed routes.
 
+When a route's successful response body can't be mapped to a schema (an
+`impl Trait` return, or a concrete non-`Json` type), the spec still generates
+but the response is documented **without a body**. Instead of dropping this
+silently, spec generation logs a `tracing::warn!` **once at boot** naming the
+method, path, and offending return type, and suggesting `#[returns(T)]` /
+`Json<T>`. Named bodies (request or response) whose type lacks
+`schemars::JsonSchema` — rendered as a generic `object` — are warned about too.
+The gaps are also available programmatically via
+`r2e::r2e_openapi::spec_warnings(&routes) -> Vec<SpecWarning>` (each carries
+`method`, `path`, a `SchemaGap`, and a `.message()`).
+
 ---
 
 ## Prometheus Metrics

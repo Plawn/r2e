@@ -22,6 +22,7 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         response_type: None,
         response_schema: None,
         response_status: 200,
+        response_unmapped: None,
         params: vec![],
         roles: vec![],
         tag: None,
@@ -578,6 +579,7 @@ fn response_schema_in_spec() {
 fn response_204_has_no_content_block() {
     let routes = vec![RouteInfo {
         response_status: 204,
+        response_unmapped: None,
         ..route("DELETE", "/users/{id}", "delete_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -591,6 +593,7 @@ fn response_204_has_no_content_block() {
 fn post_defaults_to_201() {
     let routes = vec![RouteInfo {
         response_status: 201,
+        response_unmapped: None,
         response_type: Some("User".to_string()),
         response_schema: Some(json!({"type": "object"})),
         ..route("POST", "/users", "create_user")
@@ -606,6 +609,7 @@ fn post_defaults_to_201() {
 fn status_override() {
     let routes = vec![RouteInfo {
         response_status: 202,
+        response_unmapped: None,
         ..route("POST", "/jobs", "create_job")
     }];
     let spec = build_spec(&default_config(), &routes);

@@ -23,6 +23,7 @@ fn simple_route(method: &str, path: &str, op: &str) -> RouteInfo {
         response_type: None,
         response_schema: None,
         response_status: 200,
+        response_unmapped: None,
         params: vec![],
         roles: vec![],
         tag: None,

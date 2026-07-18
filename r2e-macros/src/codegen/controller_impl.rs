@@ -267,6 +267,7 @@ fn generate_route_metadata(
             let (body_type_token, body_schema_token, body_content_type_token) =
                 extract_body_info(rm);
             let (response_type_token, response_schema_token) = extract_response_info(rm);
+            let response_unmapped_token = response_unmapped_token(rm);
 
             // Extract doc comments for summary + description
             let (doc_summary, doc_description) =
@@ -330,6 +331,7 @@ fn generate_route_metadata(
                     response_type: #response_type_token,
                     response_schema: #response_schema_token,
                     response_status: #status_code,
+                    response_unmapped: #response_unmapped_token,
                     params: {
                         let mut __p: Vec<#krate::meta::ParamInfo> = vec![#(#path_params),*];
                         #(#probe_blocks)*
@@ -705,6 +707,73 @@ fn extract_response_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenS
         }
         None => (quote! { None }, quote! { None }),
     }
+}
+
+/// Render a `syn::Type` as a readable Rust type name for warning messages,
+/// collapsing the spaces `quote!` inserts around `<`, `>`, `,`, and `::`.
+fn readable_type(ty: &syn::Type) -> String {
+    quote!(#ty)
+        .to_string()
+        .replace(" <", "<")
+        .replace("< ", "<")
+        .replace(" >", ">")
+        .replace("> ", ">")
+        .replace(" ,", ",")
+        .replace(" ::", "::")
+        .replace(":: ", "::")
+}
+
+/// The `RouteInfo.response_unmapped` token for a route.
+///
+/// Emits `Some("<type>".to_string())` when a **successful** response body
+/// cannot be auto-mapped to an OpenAPI schema yet clearly carries a body
+/// (an `impl Trait` return, or a concrete non-`Json` type), so spec generation
+/// can warn about it. Emits `None` for mapped bodies (`Json<T>`, `#[returns]`)
+/// and intentional no-body returns (`()`, `StatusCode`, `StatusResult`,
+/// `String`, or no return type).
+fn response_unmapped_token(rm: &crate::types::RouteMethod) -> TokenStream {
+    match response_unmapped_name(rm) {
+        Some(name) => quote! { Some(#name.to_string()) },
+        None => quote! { None },
+    }
+}
+
+fn response_unmapped_name(rm: &crate::types::RouteMethod) -> Option<String> {
+    // A resolvable response type (`Json<T>` or `#[returns(T)]`) is mappable.
+    if resolve_response_type(rm).is_some() {
+        return None;
+    }
+
+    let ret_ty = match &rm.fn_item.sig.output {
+        // No return type → no body; nothing to document.
+        syn::ReturnType::Default => return None,
+        syn::ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+
+    // `impl Trait` (e.g. `impl IntoResponse`) is opaque but usually carries a
+    // body the spec cannot see.
+    if matches!(ret_ty, syn::Type::ImplTrait(_)) {
+        return Some(readable_type(ret_ty));
+    }
+
+    let unwrapped = unwrap_result_type(ret_ty);
+
+    // Intentional no-body returns.
+    if is_no_body_type(unwrapped) {
+        return None;
+    }
+
+    // `String` → `text/plain`; there is no named schema to attach.
+    if let syn::Type::Path(type_path) = unwrapped {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "String" {
+                return None;
+            }
+        }
+    }
+
+    // A concrete type we could not map (not `Json<T>`).
+    Some(readable_type(unwrapped))
 }
 
 /// A handler parameter recognized as the request body extractor.
@@ -1135,6 +1204,7 @@ fn emit_streaming_route_info(
             response_type: None,
             response_schema: None,
             response_status: 200,
+            response_unmapped: None,
             params: vec![],
             roles: vec![#(#roles_tokens),*],
             tag: Some(#tag.to_string()),

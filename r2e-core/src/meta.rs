@@ -82,6 +82,16 @@ pub struct RouteInfo {
     pub response_type: Option<String>,
     pub response_schema: Option<Value>,
     pub response_status: u16,
+    /// The Rust return-type name of a **successful** response body that could
+    /// not be auto-mapped to an OpenAPI schema (an `impl Trait` return, or a
+    /// concrete type that is not `Json<T>`), when that body is non-trivial
+    /// (i.e. not an intentional no-body return such as `()`, `StatusCode`, or
+    /// `String`). `None` for mapped or intentionally body-less routes.
+    ///
+    /// Set by the `#[routes]` macro; consumed by OpenAPI spec generation to
+    /// emit a once-at-boot warning naming the route and offending type instead
+    /// of silently documenting the response without a body.
+    pub response_unmapped: Option<String>,
     pub params: Vec<ParamInfo>,
     pub roles: Vec<String>,
     pub tag: Option<String>,
