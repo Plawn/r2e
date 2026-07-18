@@ -1,29 +1,6 @@
 
-## Critical
-
-- unique façon propre de definir une app -> WIP
-- DX du sse broadcaster -> cf example
-
-## Nice to have
-
-- macro de service vs uniquement controller
-- audit de responsabilities boundaries 
-- gestion d'un inject generique dans le body pour faire transactionnal plus clean
-- gestion de la secu plus flexible
-- faire en sorte de pouvoir expandre les erreurs du framework facilement avec un impl from et une response -> ExceptionMapper
-- xicta web ? -> zero copy ?
-- audit double boxing and how Scheduler is implemented in core
-- how is pub/sub implemented and how it works with a custom pub/sub ?
-- make sure path param fga compile check 
-- managed vs transactionnel ? -> ça existe toujours ?
-- avoir la gestion de la config required / optional + auto -> eviter les pattern de verif manuelle dans le main.rs
-- improve testing facilities
-- validation error tests ? -> clean strucutred ?
-- add warning when return body could not automatticaaly be added top openapi
+## Remaining (mirrored in docs/claude/roadmap.md § W11, triage 2026-07-17)
 
 - better grpc/proto automagic setup, auto compile, auto build.rs + etc
-- tracing subscriber en json ? -> OK
-- ensure only r2e-http has ref to axum + improve openapi (auto detection + doc) -> OK
-
-
--> Review by codex from last commits for DI upgrades
+- xitca web ? -> zero copy ?
+- audit de responsibilities boundaries (reste — la moitié scheduled/consumer est faite via W10)

@@ -23,14 +23,12 @@
 //! let backend = GrpcBackend::connect(&config).await?;
 //! let registry = OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs);
 //!
-//! // Add both to application state
-//! AppBuilder::new()
-//!     .provide(registry)   // for guards (cached check)
-//!     .provide(backend)    // for direct gRPC access
-//!     .build_state::<Services, _>()
+//! // In your `App::build` (the app state is inferred from the provision list):
+//! b.provide(registry)   // for guards (cached check; bean dep of `FgaCheck`)
+//!     .provide(backend) // for direct gRPC access (writes, model management)
+//!     .build_state()
 //!     .await
-//!     .register_controller::<DocumentController>()
-//!     .serve("0.0.0.0:3000").await
+//!     .register_controllers::<(DocumentController,)>()
 //! ```
 //!
 //! # Architecture
@@ -83,9 +81,11 @@
 //! ```ignore
 //! use r2e_openfga::FgaCheck;
 //!
-//! #[controller(path = "/documents", state = Services)]
+//! #[controller(path = "/documents")]
 //! pub struct DocumentController {
-//!     #[inject] fga: OpenFgaRegistry,
+//!     // The FGA guard checks `user:{identity.sub()}`; it pulls the
+//!     // `OpenFgaRegistry` bean itself (a compile-checked decorator dep) —
+//!     // no `#[inject]` field is needed for the guard to work.
 //!     #[inject(identity)] user: AuthenticatedUser,
 //! }
 //!

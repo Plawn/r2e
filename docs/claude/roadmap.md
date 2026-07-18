@@ -36,13 +36,6 @@ framework at the same seams — those seams are the Tasker #635 gap tasks (W2).
 
 ---
 
-## W1 — Migrate threaty to R2E master → owned elsewhere
-
-Handled by the maintainer in a separate work stream (Tasker task, target
-`threaty`) — NOT part of this backlog; do not pick it up from here. Migration
-frictions it surfaces still land as r2e sub-tasks under Tasker #635, and the
-post-migration build serves as the compile-time-scalability data point (W5).
-
 ## W2 — Framework gaps found in real apps → tracked in Tasker #635
 
 Moved to Tasker: umbrella task **#635 "R2E framework gaps from real-app audit
@@ -52,30 +45,13 @@ multipart, config-derive expressiveness, serve lifecycle / awaited drain,
 auth-required without a phantom identity field, AI-facing DX. Full evidence
 per gap in the Tasker sub-tasks and in this file's git history (`6d880f6`).
 
-## W3 — Migrate patina (escape-hatch hardening)
-
-Small API surface (2 controllers, 6 injects) but it exercises exactly the
-seams of the Tasker #635 gaps (proxy/streaming, dynamic scheduled tasks,
-config derive) plus `TestApp::from_builder` → blueprint boot, and
-testcontainers-Postgres-by-hand → `DevPostgres`. Do after (or interleaved
-with) the corresponding gap tasks so the migration lands on supported API
-instead of re-pinning to internals.
-
 ## Plugin DX/DI overhaul (PR #29) — SHIPPED (phases 1–6)
 
-The plugin system rework landed in six phases (authoritative reference:
-`docs/claude/plugins.md`). Shipped:
-
-- **1–2** — `PreStatePlugin` simplified surface (typed `Provided`/`Deps`, no
-  builder generics), tuple `Provided` for multi-bean plugins.
-- **3** — `LateDeps` + post-state `configure` (resolves factory-built and
-  other-plugin beans after `build_state()`).
-- **4** — typed `Config` / `CONFIG_PREFIX`, boot-time section validation,
-  builder > file > default precedence (Prometheus reference).
-- **5** — provided-bean lifecycle hooks (`run_post_construct` / `run_pre_destroy`).
-- **6** — conditional plugins (`<prefix>.enabled`, config-driven, beans always
-  survive) + module-declared required plugins (`#[module(requires_plugins(..))]`
-  / `FeatureModule::RequiredPlugins`, plugin-named compile diagnostic).
+Landed in six phases: typed `Provided`/`Deps`, `LateDeps` + post-state
+`configure`, typed plugin `Config`/`CONFIG_PREFIX` with boot validation,
+provided-bean lifecycle hooks, conditional plugins + module-declared required
+plugins. Authoritative reference: `docs/claude/plugins.md`; phase detail in
+this file's git history.
 
 **Leftovers folded back into this backlog:**
 
@@ -97,48 +73,68 @@ verify every plugin's serve-time promise through the real
 static, scheduler, health. One e2e test per plugin, in the spirit of
 `example-grpc/tests/grpc_serve.rs`.
 
-## W5 — Carried-over DI items (opportunistic)
+## W5 — Carried-over DI items — DONE (2026-07-17)
 
-From the completed DI backlog (details in git history of `di-next-steps.md`):
-
-- **Controller-level interceptor instance sharing** — controller-level
-  `#[intercept]` builds one instance per route; could share one per
-  controller. Only worth it for stateful interceptors.
-- **Compile-time scalability watch** — the HList machinery is O(n²)-ish in
-  registrations; measure on a real app (threaty post-migration = the perfect
-  data point — the Tasker threaty-migration task feeds this). Dep lists are
-  not bean-deduped (revisit only if
-  build times hurt). `recursion_limit = "512"` needed past ~127 registrations.
-- **Bean disposal hooks** — `@PreDestroy` equivalent; becomes concrete once a
-  real DB app runs on master (threaty again).
+- **Controller-level interceptor instance sharing — SHIPPED.** Impl-level
+  `#[intercept]` now builds one instance per controller per dispatch surface
+  (one shared across all HTTP routes via a hidden per-controller deco set;
+  one shared across scheduled/consumer via the core's deco slot) instead of
+  one per route/method. Route-level stays per-route; gRPC and `#[bean]`
+  impl-level stay per-method (deliberate). Reference:
+  guards-interceptors.md; sharing proven by
+  `examples/example-app/tests/controller_intercept_sharing_test.rs`.
+- **Compile-time scalability — MEASURED, no action needed.** threaty
+  (20 controllers, 136 injections, `recursion_limit = 256`): full
+  registration-crate recompile ~10 s, incremental ~2.4 s. HList cost shows
+  in typeck (~1.4 s) + part of the monomorphization walk; the dominant cost
+  is ordinary codegen/LLVM of handler code. Quadratic only becomes the
+  bottleneck at much larger registration counts — revisit then. Dep lists
+  still not bean-deduped (same trigger).
+- **Bean disposal hooks — SHIPPED.** `#[pre_destroy]` on `#[bean]` methods
+  and `#[routes]` controller impls, mirroring `#[post_construct]` (same
+  signature/rejection matrix + `lazy` conflict). Runs in the async graceful-
+  shutdown phase: controller hooks first, then bean hooks, reverse
+  registration order; `Err` logged and swallowed; pinned `override_bean`
+  skips it. Does NOT fire on `build_with_consumers`/`TestApp` (no shutdown).
+  Docs: beans-di.md, subsystems.md, CLAUDE.md, llm.txt.
 
 ## W6 — Testing DX follow-ups
 
-- Dev services for the remaining backends: Kafka, RabbitMQ, Pulsar, OpenFGA
+- Dev services for the remaining backends: Kafka, RabbitMQ, Pulsar
   (crate `r2e-devservices`, same workspace-session/Ryuk lifecycle).
+  **OpenFGA: DONE (2026-07-18)** — `DevOpenFga` (feature `openfga`,
+  `r2e-devservices/src/openfga.rs`: shared container + Ryuk, HTTP bootstrap
+  helpers `create_store`/`write_model`/`write_tuples`, IDs injected via
+  `override_config_value`) + dedicated `examples/example-openfga` (canonical
+  `impl App` shape, `FgaCheck` guards, DevOpenFga-backed tests). Compile-
+  verified only so far: the local Docker daemon was hung — once Docker is
+  back, run `cargo test -p r2e-devservices --features openfga -- --ignored`
+  and `cargo test -p example-openfga -- --ignored`.
 - Demo dev-services usage in `example-postgres`.
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
 - **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
   without an explicit user go.
 
-## W7 — Docs / CLI alignment pass
+## W7 — Docs / CLI alignment pass — DONE (2026-07-17)
 
-CLI templates (`r2e new`, `r2e add`, `r2e generate`) and the book still
-reflect pre-refactor idioms in places; align them with blueprint boot, HList
-state, `.register()`, `DecoratorSpec` guards, and pinned test overrides.
-This is also the main lever for the AI-facing-DX gap (Tasker #635).
+CLI templates turned out already current (every canonical idiom present, no
+stale APIs). The book was the real gap: `testing/integration-patterns.md`
+taught the shared-`setup()`/`from_builder` anti-pattern (rewritten to
+`#[r2e::test(app = ...)]` + `.as_user()`), test-jwt/test-app/test-session
+pages moved to app-boot idioms, observability page's false "auto tracing
+init" claim corrected, embedded-oidc comments modernized. `#[r2e::main]`
+still exists (runtime-builder options only — the `main(env)`-param form is
+gone); reference-level docs of current low-level APIs (`from_builder`, raw
+`jwt.token()`) were deliberately kept. The AI-facing-DX lever (Tasker #635)
+remains open as its own sub-task.
 
-## W8 — EventBus perf & reliability (hub: `eventbus-perf.md`) — SHIPPED (PR #30)
+## W8 — EventBus perf & reliability — SHIPPED (PR #30)
 
-Full 2026-07-12 audit of LocalEventBus + the four distributed backends
-(iggy/kafka/pulsar/rabbitmq) found: local bus and shared `BackendState`
-sound; distributed backends not production-grade (per-emit round-trip with no
-batching, ack/commit before handler = silent at-most-once, RabbitMQ reconnect
-broken, Pulsar global producer lock, cross-process event_id dedup collision).
-Fixed across P1–P5 (P1 semantics → P2 bugs → P3/P4 throughput → P5 micro-opts);
-only P4.4 deferred. Note the breaking `request`/`respond` API change. Plan and
-file:line evidence live in `docs/claude/eventbus-perf.md`.
+P1–P5 fixed across the local bus + the four distributed backends (delivery
+semantics, reconnect bugs, batching/pipelining, micro-opts); only P4.4
+deferred. Breaking `request`/`respond` API change. Full audit, plan and
+file:line evidence: `docs/claude/eventbus-perf.md`.
 
 ## W9 — `App` trait canonicalization (Tasker #667) — follow-ups
 
@@ -148,167 +144,66 @@ launched by `r2e::app_main!(MyApp)` (and `launch!` for custom entrypoints), repl
 (test-harness in-memory stash — no longer dev-reload plumbing; `build` re-runs
 per patch and re-reads `application.yaml` from disk). Docs, `llm.txt`, and CLI
 scaffolding are aligned.
+**Examples canonicalization — DONE (2026-07-17):** all eight remaining
+examples migrated to the `app.rs` (`impl App`) + `lib.rs` + thin
+`app_main!`/`launch!` main.rs shape (executor, postgres, multi-tenant,
+websocket-chat, grpc, sharded-bench, oidc restructured; microservice
+converted from two `#[path]`-include bins to a real lib with
+`ProductApp`/`OrderApp` + explicit `with_config_file` per service). All
+examples gained the `dev-reload` passthrough feature. example-grpc's
+transport-level tests deliberately stay on their dedicated harness
+(`TestApp::boot` doesn't cover the separate gRPC port).
+
 Remaining:
-- Canonicalize the remaining examples (microservice, postgres, …) to the `App`
-  trait (example-app already migrated).
 - Phase 2: pin previous `BeanContext` instances across hot-patches so **all**
   bean state survives (not just `Env`) — validate Subsecond vtable semantics
-  before relying on it.
+  before relying on it (needs live hot-reload validation; not agent-friendly).
 
-## W10 — Bean/controller feature unification (DONE — phases 1–4 shipped 2026-07-16)
+## W10 — Bean/controller feature unification — DONE (phases 1–4 + follow-up, 2026-07-16/17)
 
-Evidence: feature-matrix audit (2026-07-16). Transverse concerns are
-controller-only by implementation accident, not by design — `#[scheduled]`,
-`#[async_exec]`, `#[transactional]`, and `#[intercept]` only exist because the
-machinery (DecoSlot, wrapping, registration-time collection) was built inside
-`#[routes]`; `#[consumer]` exists on both; `#[post_construct]` is bean-only.
-Symptom: beans-di.md's own "When to use" table recommends `#[scheduled]` for
-periodic tasks, which does not work on a bean. Absorbs the todo items
-"macro de service vs uniquement controller" and the scheduled/consumer half of
-"audit de responsabilities boundaries".
-
-**Target**: the controller core IS a bean. Transverse member attributes are
-implemented once at the bean level; `#[controller]`/`#[routes]` only add the
-transport layer (routes, request façade, guards/roles, OpenAPI). A controller
-may still carry `#[scheduled]`/`#[consumer]` — not as controller features but
-because a controller is a bean.
-
-Phases (quality-review gate after each, same convention as the controller
-refactor):
-
-1. **`#[scheduled]` on `#[bean]` — DONE (2026-07-16).** `ScheduledSource`
-   trait in `r2e-core/src/scheduled_source.rs` (signature takes
-   `&BeanContext` so phase 3 can delegate the controller path to it);
-   `#[bean]` scans `#[scheduled]` methods (shared parser/codegen with
-   controllers: `extract/scheduled.rs`, `codegen/scheduled.rs`) and emits the
-   impl + an `after_register` hook. **Registration is auto-collection at
-   `build_state()`** (user-approved; NOT an explicit `register_scheduled`
-   call): `BeanRegistry::register_scheduled_source` queues a hook, drained by
-   `build_state()` on the typed builder (after deferred plugin actions, so
-   the Scheduler's `TaskRegistryHandle` exists) into the same
-   `ScheduledTaskMarker` pipeline. Hooks read the bean by type from the
-   resolved graph → pinned test overrides are honoured (post-construct
-   semantics). `#[intercept]` on bean scheduled methods is an explicit
-   compile error (divergence until phase 2), as are `lazy` + scheduled and
-   scheduled + consumer on one method. Tests:
-   `examples/example-app/tests/bean_scheduled_test.rs`, compile-pass/fail in
-   `r2e-compile-tests` (`bean_scheduled*`). Docs: beans-di.md, subsystems.md,
-   llm.txt.
-2. **Bean-level decorators — DONE (2026-07-16).** `#[intercept]` on bean
-   `#[scheduled]`/`#[consumer]` methods + impl-level `#[intercept]` on the
-   `#[bean]` impl, via the existing `DecoratorSpec`/`build_decorator` +
-   `generate_named_deco_items`/`wrap_with_deco_interceptors` machinery; spec
-   `Deps` folded into `Registrable::Deps` (`deps_fold_from_base`), so a missing
-   bean is a compile error at `.register` (runtime `dependencies()` stays
-   constructor-only). Per-instance storage via a new `SharedDecoSlot`
-   (Arc-shared across clones, unlike controller `DecoSlot` which clones empty —
-   beans are cloned by value before the fill) + `HasDecoSlot` trait
-   (`on_unimplemented` names the fix). `#[bean]` now also works **on the
-   struct** (injects the hidden `pub #[doc(hidden)] __r2e_decos` field + slot
-   impl); the impl macro rewrites in-block struct literals to init it (skips
-   `..rest`). Single fill at `build_state()` before `#[post_construct]`
-   (`BeanRegistry::register_deco_fill` + `BeanDecoFill`). Direct calls
-   self-intercept; sync scheduled sources promoted to `async fn`; consumer
-   interception covers subscribers AND responders (bean `#[consumer]` gained
-   responder support). Rejected: `#[intercept]` on a plain bean method.
-   Tests: `examples/example-app/tests/bean_intercept_test.rs`, compile
-   pass/fail `bean_intercept*` in `r2e-compile-tests`. Docs: beans-di.md,
-   guards-interceptors.md, llm.txt.
-3. **Controller core = bean — DONE (2026-07-16).** `#[routes]`' transverse
-   codegen delegates to the shared emitters in
-   `r2e-macros/src/codegen/transverse.rs` (extracted from `bean_attr.rs` in a
-   first byte-identical-output step, verified via `cargo expand` diff).
-   Deleted: `controller_impl.rs::generate_scheduled_tasks`,
-   `generate_consumer_registrations`, `wrapping.rs::generate_scheduled_method`
-   (~380 lines of duplication). The generated
-   `Controller::scheduled_tasks_boxed`/`register_consumers` overrides embed
-   the shared bodies cloning the `Arc<core>` — a direct
-   `impl ScheduledSource/EventSubscriber for Arc<Name>` in the user crate is
-   an orphan-rule violation (E0117), so the emitters expose the bodies
-   parameterized by an instance expression; beans still get the trait impls.
-   Deco container + `impl BeanDecoFill for Name` fills the existing `DecoSlot`
-   (slot types stay distinct per the phase-2 decision; fill is now an explicit
-   registration step via the new default-no-op `Controller::fill_decos`,
-   called once right after `construct` — required because
-   intercepted-consumers-only controllers need the fill too; the extra fill
-   inside `scheduled_tasks_boxed` is OnceLock-idempotent, kept for the manual
-   test path). **New:** `#[intercept]` on controller `#[consumer]` methods
-   (method + impl level, impl outermost, responders included, direct calls
-   intercepted; spec deps folded into `controller_deps_fold` → missing bean is
-   a compile error at `.register_controller`); `#[post_construct]` on
-   controllers (queued at registration via the new `Controller::post_construct`
-   hook + `post_construct_registrations` builder vec, runs at startup BEFORE
-   consumer registrations at both boot paths — `prepared.rs` serve propagates
-   Err, `build_with_consumers` panics; plain `build()` drops both, documented).
-   `BeanDecoFill`/`PostConstruct` lost their `Clone` supertrait (Clone moved
-   to the bean-registration call sites) so non-Clone controller cores can
-   implement them. New compile errors on controllers (previously silent):
-   `#[scheduled]`+`#[consumer]` on one method, stray `#[intercept]` on a plain
-   method, invalid `#[post_construct]` placements. Tests:
-   `examples/example-app/tests/controller_transverse_test.rs`, compile
-   pass/fail `controller_transverse*`, `controller_scheduled_consumer_conflict`,
-   `controller_post_construct_*`, `controller_stray_intercept`,
-   `consumer_intercept_missing_dep`. Docs: CLAUDE.md, beans-di.md,
-   guards-interceptors.md, subsystems.md, llm.txt. Review gate:
-   pass-with-nits, all nits applied.
-4. **`#[async_exec]` relocated / `#[transactional]` removed — DONE
-   (2026-07-16).** `#[async_exec]` now works on `#[bean]` impl methods via a
-   shared emitter (`transverse::async_exec_method`, extracted from
-   `wrapping.rs`; `#[routes]` delegates to it — identical controller output).
-   Controller placement is KEPT (user-approved: a controller core is a bean),
-   implementation shared. Pure per-method codegen — no registration hook, so
-   it composes with `#[bean(lazy)]`. Compile errors (both hosts, shared
-   `validate_async_exec_receiver`): sync fn, missing/`&mut`/by-value receiver,
-   combined with `#[scheduled]`/`#[consumer]`/`#[post_construct]`/`#[intercept]`
-   (the `#[intercept]` rejection also fixed a pre-existing controller gap where
-   the interceptor was silently dropped). Wrapper params are re-bound
-   `ident: Type` so destructuring patterns work (pre-existing E0425 in the old
-   controller emitter). `#[transactional]` is REMOVED entirely (user-approved;
-   see decisions log). Tests: `r2e-executor/tests/async_exec.rs` (bean +
-   controller), compile pass/fail `bean_async_exec*`, `async_exec_intercept`.
-   Docs: executor.md, beans-di.md, error-handling.md, guards-interceptors.md,
-   prelude-features.md, docs/features 03/04/13, CLAUDE.md, llm.txt. Review
-   gate: pass-with-nits (controller intercept gap, receiver strictness,
-   destructured params), all nits applied.
-
-   **Post-review fixes (2026-07-17).** The controller conflict matrix was
-   completed: `#[async_exec]` + `#[scheduled]`/`#[consumer]` was silently
-   ignored (the transverse branches classified the method first and left
-   async_exec as a retained no-op attr), and `#[async_exec]` + a route
-   verb/`#[sse]`/`#[ws]`/`#[fallback]` silently dropped the route (→ 404) —
-   both are now compile errors via a pre-check hoisted above the classification
-   loop in `routes_parsing.rs`. All `#[async_exec]` validation (conflict matrix
-   parameterized by host, `#[intercept]` rejection, asyncness, receiver) is now
-   consolidated in one shared validator, `validate_async_exec_method` in
-   `extract/async_exec.rs`, called by both hosts; the two diagnostic strings
-   each live in exactly one place (module consts). Documented that impl-level
-   `#[intercept]` covers only `#[scheduled]`/`#[consumer]` and does NOT wrap
-   `#[async_exec]` methods (deliberately allowed, not an error). New compile-fail
-   fixtures: `async_exec_scheduled_conflict`, `async_exec_route_conflict`.
-
-Phase-1 design decisions (settled): registration is **auto-collection at
-`build_state()`** — user-approved 2026-07-16; matches controller
-auto-discovery and avoids the silent no-op of a forgotten explicit call.
-No dedicated `#[service]` macro — unification beats a third shape;
-`#[derive(BackgroundService)]` stays the escape hatch for hand-written loops.
-
-**Follow-up DONE (2026-07-17): `#[consumer]` beans auto-collect,
-`register_subscriber` removed.** Mirror of the `#[scheduled]` pipeline:
-`#[bean]`'s `after_register` also calls the new
-`BeanRegistry::register_event_subscriber::<Self>()` (idempotent per TypeId —
-default/override subscribes once); `build_state()` drains the hooks
-(`take_event_subscribers`, all three exit paths incl. dev-reload cache hit)
-into `AppBuilder::collect_bean_subscribers`, which pushes them as consumer
-registrations resolving the bean from the retained `Arc<BeanContext>` — so
-subscriptions run at server startup (`serve`/`build_with_consumers`), same
-point as controller consumers, and pinned overrides are honoured (pinning the
-subscriber bean itself skips subscription, like scheduled). BREAKING:
-`AppBuilder::register_subscriber` removed; a `.provide(instance)`-only
-`#[consumer]` bean no longer subscribes (no `after_register`) — register the
-type or use `add_consumer_registration`. Tests:
-`examples/example-app/tests/bean_consumer_test.rs`. Docs: beans-di.md,
-subsystems.md, 07-evenements.md, book consumers.md, r2e-events/README.md,
+The controller core IS a bean: transverse member attributes (`#[scheduled]`,
+`#[consumer]`, `#[intercept]`, `#[async_exec]`, `#[post_construct]`) are
+implemented once at the bean level (`r2e-macros/src/codegen/transverse.rs`)
+and shared by `#[controller]`/`#[routes]`, which only add the transport layer.
+`#[scheduled]`/`#[consumer]` beans auto-collect at `build_state()`;
+`#[transactional]` and `AppBuilder::register_subscriber` are REMOVED
+(BREAKING; see decisions log). No dedicated `#[service]` macro — unification
+beats a third shape; `#[derive(BackgroundService)]` stays the escape hatch.
+Full phase-by-phase record (design decisions, test/fixture lists, post-review
+fixes) in this file's git history (pre-2026-07-17 versions); authoritative
+docs: beans-di.md, guards-interceptors.md, executor.md, subsystems.md,
 llm.txt.
+
+## W11 — Items carried from the root `todo` file (triage 2026-07-17)
+
+Triage of the root scratch `todo`: everything else in it had already shipped
+(App trait, SSE broadcaster, ExceptionMapper → `#[derive(ApiError)]`,
+structured validation errors, config validation, testing DX, EventBus
+backends, scheduler rework, W10 unification, JSON tracing, axum confinement).
+Still open:
+
+- **OpenFGA path-param compile check — DONE (2026-07-18).** Literal
+  `FgaCheck...from_path("name")` references in `#[guard]` exprs are now
+  compile-checked against the route's `{param}` placeholders (method path +
+  controller `path = "..."` prefix, via a spanned `const _` assertion —
+  `r2e-macros/src/codegen/mod.rs`). Dynamic/non-literal forms fall through to
+  the runtime backstop (kept). Trybuild pass+fail fixtures added
+  (`r2e-compile-tests/compile-{pass,fail}/openfga_from_path_*`).
+- **OpenAPI: warn on unmappable response body — DONE (2026-07-18).** The
+  macro records the unmappable return type (`RouteInfo.response_unmapped`,
+  BREAKING field addition) and `build_spec` emits one boot-time
+  `tracing::warn!` per gap (route, type, opt-out hint) — also covers
+  schema-less `Json<T>` request/response bodies. Testable seam:
+  `r2e_openapi::spec_warnings()`. Docs: llm.txt + subsystems.md.
+- **gRPC/proto automagic setup** — auto build.rs / proto compilation
+  scaffolding (`r2e add grpc`-grade DX: drop a `.proto`, get a compiled
+  service). Related tech-debt note below (trybuild fixture hand-fakes tonic).
+- **Zero-copy exploration (xitca-web)** — exploratory only: evaluate whether
+  a zero-copy HTTP layer brings measurable wins over the current axum stack.
+  No commitment.
+- **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
+  half was absorbed by W10; what remains is a pass over which concern lives
+  in which crate/macro (core vs http vs macros vs integrations).
 
 ## Tech debt (deferred, low priority)
 
