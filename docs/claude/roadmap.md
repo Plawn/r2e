@@ -236,6 +236,89 @@ Still open:
   half was absorbed by W10; what remains is a pass over which concern lives
   in which crate/macro (core vs http vs macros vs integrations).
 
+## W12 — OpenFGA DX: schema-first, compile-time checked (proposed 2026-07-19)
+
+**Goal:** the `.fga` authorization model becomes the single source of truth;
+relations/types used in code are compile-checked against it, and the live
+store is verified against it at boot. Closes the current gap where
+`FgaCheck::relation("viewer").on("document")` is fully stringly-typed — a typo
+or a relation absent from the model compiles fine and manifests as a permanent
+(silent, fail-closed) 403 in prod.
+
+**Current state (evidence):** only the path-param name is compile-checked
+(`from_path(path::doc_id)`, W11 2026-07-18). The model itself is hand-written
+JSON in the app (`examples/example-openfga/src/app.rs::document_model()`);
+writes go through the raw tonic client + manual `registry.invalidate_object`;
+nothing verifies that the compiled-in model matches what the store serves.
+
+### Phase 1 — `model!` macro + generated typed API (the core)
+
+- New pure crate `r2e-openfga-model`: parser for the OpenFGA DSL 1.1
+  (`.fga` → AST → schema-1.1 JSON). No proc-macro deps; testable standalone.
+  Grammar surface: types, relations, `[user, group#member]` direct types,
+  `or`/`and`/`but not`, `X from Y` (tuple-to-userset), conditions as CEL
+  passthrough (embedded verbatim in JSON, no typed API in v1). ~600–900
+  lines. **This is the main risk — derisk first.** Validation: vendor the
+  openfga/language DSL↔JSON test corpus and snapshot round-trips (there is no
+  official Rust parser — ours is a differentiator).
+- New `r2e-openfga-macros`: `r2e_openfga::model!(pub mod authz = "fga/model.fga")`
+  generates a typed module from the checked-in model file (emit an
+  `include_str!` in the output for rebuild tracking):
+  - `authz::MODEL` — the serialized JSON model, for boot-time apply/verify.
+  - Per type: `authz::document::id(x) -> FgaObject<Ty>` (formats `type:id`,
+    rejects `:` — same injection guard as today's resolver).
+  - Per relation: `authz::document::viewer: FgaRel<Ty, Viewer>` — lowercase
+    consts + `allow(non_upper_case_globals)`, same convention as `path::doc_id`.
+  - `directly_related_user_types` encoded as `impl DirectlyAssignable<user::Ty>
+    for Viewer` — typed writes check the subject type at compile time.
+- Guard API: `FgaCheck::has(authz::document::viewer)` — one argument carries
+  both relation and object type; a nonexistent relation is a compile error
+  with a real span. The stringly `FgaCheck::relation("x").on("y")` form stays
+  as the documented-unchecked escape hatch (dynamic models).
+- Trybuild pass+fail fixtures in `r2e-compile-tests` (typo'd relation,
+  relation on wrong type, disallowed subject type on grant).
+
+### Phase 2 — Typed client + write-through invalidation
+
+`FgaClient` bean façade over `GrpcBackend` + `OpenFgaRegistry` (replaces
+"grab the raw tonic client" as the idiomatic write path):
+
+- `fga.grant(user, authz::document::viewer, obj)` / `revoke(...)` — compile
+  only if the model allows that subject type on that relation
+  (`DirectlyAssignable`); auto-invalidate the registry cache for the object.
+- `fga.check(user, rel, obj)` — typed handler-level check (object id known
+  only after a DB lookup).
+- `fga.list_objects(user, rel) -> Vec<FgaObject<Ty>>` — typed, for
+  list-endpoint filtering (the most painful ReBAC pattern).
+
+### Phase 3 — `OpenFga` plugin + store lifecycle
+
+Replace the two hand-rolled `#[producer]`s with `.with(OpenFga::model(authz::MODEL))`:
+
+- **Dev/test:** ensure-store + apply model at boot when it differs from the
+  store's latest (FGA models are append-only — structural compare before
+  writing). `DevOpenFga` auto-applies the model → `#[r2e::test]` boots with
+  store+model ready, zero ceremony; delete `document_model()` JSON from
+  example-openfga.
+- **Prod** (`openfga.apply-model: false`): *verify* mode — fetch the live
+  model, structurally compare with `authz::MODEL`, mismatch = startup error
+  (fail-fast instead of mystery 403s). Pin the resolved `model_id` for all
+  checks (consistency across a deploy).
+- Full chain: compile-time = code ↔ checked-in schema; boot-time = schema ↔
+  live store.
+
+### Phase 4 — CLI (later, lowest priority)
+
+`r2e fga diff` / `push` / `pull` (diff local model vs store, pull an existing
+store's model into a local `.fga`), tuple seed fixtures for dev/tests.
+
+**Decisions taken with the proposal (2026-07-19):** DSL (`.fga`) is the
+compile input, not JSON — requiring a `fga model transform` pre-step breaks
+the promise (JSON may be accepted *additionally*). Conditions (schema 1.2):
+parser-tolerant passthrough only in v1. Phase order: 1 first — it carries
+both DX axes (compile-time + IDE completion on `authz::…`) and fronts the
+only real risk (the parser); 2–3 consume the same generated markers.
+
 ## Tech debt (deferred, low priority)
 
 - **Event bus perf** (2026-03 audit): superseded by W8 — the two still-
