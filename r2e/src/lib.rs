@@ -106,8 +106,8 @@ pub use r2e_observability;
 
 #[cfg(feature = "dev-reload")]
 pub mod devtools {
-    pub use r2e_devtools::*;
     pub use r2e_core::dev::mark_hot_reload_loop;
+    pub use r2e_devtools::*;
 }
 
 /// Declare the standard binary entry point for an [`App`](r2e_core::App).

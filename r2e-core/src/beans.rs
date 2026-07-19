@@ -371,11 +371,7 @@ impl BeanContext {
     /// If the base `Arc` has no other references, the new entry is merged
     /// into the base directly (zero overhead). Otherwise the entry goes
     /// into the overlay (which is checked first by `get()`).
-    fn with_new_entry(
-        mut self,
-        type_id: TypeId,
-        value: Box<dyn Any + Send + Sync>,
-    ) -> Self {
+    fn with_new_entry(mut self, type_id: TypeId, value: Box<dyn Any + Send + Sync>) -> Self {
         // Fast path: if we're the sole owner of the base, merge everything
         // into a single HashMap for the next iteration.
         if let Some(base) = Arc::get_mut(&mut self.base) {
@@ -401,12 +397,8 @@ impl BeanContext {
     ///
     /// Panics if the requested type was not registered or provided.
     pub fn get<T: Clone + 'static>(&self) -> T {
-        self.try_get::<T>().unwrap_or_else(|| {
-            panic!(
-                "Bean of type `{}` not found in context",
-                type_name::<T>()
-            )
-        })
+        self.try_get::<T>()
+            .unwrap_or_else(|| panic!("Bean of type `{}` not found in context", type_name::<T>()))
     }
 
     /// Try to retrieve an **eagerly constructed** bean by type, without
@@ -463,9 +455,9 @@ impl BeanContext {
 type Factory = Box<
     dyn FnOnce(
             BeanContext,
-        ) -> Pin<
-            Box<dyn Future<Output = (BeanContext, Box<dyn Any + Send + Sync>)> + Send>,
-        > + Send,
+        )
+            -> Pin<Box<dyn Future<Output = (BeanContext, Box<dyn Any + Send + Sync>)> + Send>>
+        + Send,
 >;
 
 /// A post-construct callback that runs after all beans are resolved.
@@ -475,7 +467,10 @@ type PostConstructFn = Box<
     dyn FnOnce(
             BeanContext,
         ) -> Pin<
-            Box<dyn Future<Output = Result<BeanContext, Box<dyn std::error::Error + Send + Sync>>> + Send>,
+            Box<
+                dyn Future<Output = Result<BeanContext, Box<dyn std::error::Error + Send + Sync>>>
+                    + Send,
+            >,
         > + Send,
 >;
 
@@ -534,6 +529,7 @@ struct FingerprintReg<'a> {
     dependencies: &'a Vec<(TypeId, &'static str)>,
     config_keys: &'a Vec<(&'static str, &'static str, bool)>,
     build_version: u64,
+    is_lazy: bool,
 }
 
 /// Builder that collects bean registrations and provided instances,
@@ -722,11 +718,7 @@ impl fmt::Display for BeanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BeanError::CyclicDependency { cycle } => {
-                write!(
-                    f,
-                    "Circular dependency detected: {}",
-                    cycle.join(" -> ")
-                )
+                write!(f, "Circular dependency detected: {}", cycle.join(" -> "))
             }
             BeanError::MissingDependency { bean, dependency } => {
                 write!(
@@ -820,6 +812,18 @@ impl BeanRegistry {
     pub fn is_bean_registered(&self, tid: TypeId) -> bool {
         self.beans.iter().any(|r| r.type_id == tid)
             || self.lazy_beans.iter().any(|r| r.type_id == tid)
+    }
+
+    /// Whether a same-fingerprint dev-reload cycle must still resolve the
+    /// graph instead of returning the monolithic cached state directly.
+    ///
+    /// Decorator slots are one-shot and must be rebuilt/refilled every cycle.
+    /// Pre-destroy hooks are materialized from the fresh registry during
+    /// resolution; the cached context no longer owns them after the previous
+    /// builder drained them into its shutdown sequence.
+    #[cfg(feature = "dev-reload")]
+    pub(crate) fn requires_resolution_on_cache_hit(&self) -> bool {
+        !self.deco_fills.is_empty() || !self.disposers.is_empty()
     }
 
     /// Register a (sync) bean type for automatic construction.
@@ -1082,7 +1086,10 @@ impl BeanRegistry {
     #[doc(hidden)]
     pub fn take_scheduled_sources(
         &mut self,
-    ) -> Vec<(&'static str, Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>)> {
+    ) -> Vec<(
+        &'static str,
+        Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>,
+    )> {
         std::mem::take(&mut self.scheduled_sources)
             .into_iter()
             .map(|(_, name, hook)| (name, hook))
@@ -1151,10 +1158,7 @@ impl BeanRegistry {
         self.beans.push(BeanRegistration {
             type_id: TypeId::of::<T>(),
             type_name: type_name::<T>(),
-            dependencies: vec![(
-                TypeId::of::<crate::config::R2eConfig>(),
-                "R2eConfig",
-            )],
+            dependencies: vec![(TypeId::of::<crate::config::R2eConfig>(), "R2eConfig")],
             config_keys: vec![],
             build_version,
             factory: Box::new(move |ctx| {
@@ -1227,7 +1231,10 @@ impl BeanRegistry {
         let alt_remove = Self::overridable_indices_to_remove(&self.beans);
         let lazy_alt_remove = Self::overridable_indices_to_remove(&self.lazy_beans);
 
-        let mut beans: Vec<FingerprintReg<'_>> = self.beans.iter().enumerate()
+        let mut beans: Vec<FingerprintReg<'_>> = self
+            .beans
+            .iter()
+            .enumerate()
             .filter(|(i, _)| !alt_remove.contains(i))
             .map(|(_, reg)| FingerprintReg {
                 type_id: reg.type_id,
@@ -1235,11 +1242,13 @@ impl BeanRegistry {
                 dependencies: &reg.dependencies,
                 config_keys: &reg.config_keys,
                 build_version: reg.build_version,
+                is_lazy: false,
             })
             .collect();
 
         // Include lazy beans in the fingerprint graph.
-        let lazy_regs: Vec<FingerprintReg<'_>> = self.lazy_beans
+        let lazy_regs: Vec<FingerprintReg<'_>> = self
+            .lazy_beans
             .iter()
             .enumerate()
             .filter(|(i, _)| !lazy_alt_remove.contains(i))
@@ -1249,6 +1258,7 @@ impl BeanRegistry {
                 dependencies: &reg.dependencies,
                 config_keys: &reg.config_keys,
                 build_version: reg.build_version,
+                is_lazy: true,
             })
             .collect();
 
@@ -1256,7 +1266,8 @@ impl BeanRegistry {
 
         // The config is needed both for per-bean fingerprints and for the
         // whole-config component of the graph fingerprint.
-        let config = self.provided
+        let config = self
+            .provided
             .get(&TypeId::of::<crate::config::R2eConfig>())
             .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
 
@@ -1319,16 +1330,42 @@ impl BeanRegistry {
         // `DecoSlot` is a `OnceLock` already set on the old instance, so a
         // refill against the new graph would silently no-op and leave stale
         // interceptor sets. They rebuild (fresh slot, fresh fill) instead.
-        let deco_targets: HashSet<TypeId> =
-            self.deco_fills.iter().map(|(t, _)| *t).collect();
-        let mut reused_instances: HashMap<TypeId, Box<dyn Any + Send + Sync>> =
-            HashMap::new();
+        let deco_targets: HashSet<TypeId> = self.deco_fills.iter().map(|(t, _)| *t).collect();
+        // A decorator target cannot keep its old OnceLock-backed slot. Any
+        // bean that captured that target (directly or transitively) must also
+        // rebuild, otherwise the new context would expose a fresh target while
+        // a reused dependent still held a clone of the previous instance.
+        let mut forced_rebuild = deco_targets.clone();
+        loop {
+            let mut grew = false;
+            for (type_id, dependencies) in self
+                .beans
+                .iter()
+                .map(|reg| (reg.type_id, &reg.dependencies))
+                .chain(
+                    self.lazy_beans
+                        .iter()
+                        .map(|reg| (reg.type_id, &reg.dependencies)),
+                )
+            {
+                if !forced_rebuild.contains(&type_id)
+                    && dependencies
+                        .iter()
+                        .any(|(dep_id, _)| forced_rebuild.contains(dep_id))
+                {
+                    forced_rebuild.insert(type_id);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        let mut reused_instances: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
         let mut pinned_provided: HashSet<TypeId> = HashSet::new();
         if let Some(plan) = &reuse {
             for reg in &self.beans {
-                if plan.unchanged.contains(&reg.type_id)
-                    && !deco_targets.contains(&reg.type_id)
-                {
+                if plan.unchanged.contains(&reg.type_id) && !forced_rebuild.contains(&reg.type_id) {
                     if let Some(inst) = (reg.reuse_clone)(&plan.old_ctx) {
                         reused_instances.insert(reg.type_id, inst);
                     }
@@ -1340,7 +1377,7 @@ impl BeanRegistry {
             // deliberate — config edits must apply on the next patch.
             let config_tid = TypeId::of::<crate::config::R2eConfig>();
             for (tid, value) in self.provided.iter_mut() {
-                if *tid == config_tid {
+                if *tid == config_tid || forced_rebuild.contains(tid) {
                     continue;
                 }
                 if let Some(clone_fn) = self.provided_reuse_clones.get(tid) {
@@ -1375,8 +1412,7 @@ impl BeanRegistry {
         Self::resolve_alternatives(&mut self.lazy_beans);
 
         let bean_count = self.beans.len();
-        let lazy_type_ids: HashSet<TypeId> =
-            self.lazy_beans.iter().map(|lr| lr.type_id).collect();
+        let lazy_type_ids: HashSet<TypeId> = self.lazy_beans.iter().map(|lr| lr.type_id).collect();
 
         // Check for duplicates before any construction.
         Self::check_for_duplicates(&self.beans, &entries)?;
@@ -1393,12 +1429,7 @@ impl BeanRegistry {
             let id_to_idx = Self::build_type_index(&self.beans);
 
             // Include lazy beans in the known-types set for dependency validation
-            Self::check_missing_dependencies(
-                &self.beans,
-                &entries,
-                &id_to_idx,
-                &lazy_type_ids,
-            )?;
+            Self::check_missing_dependencies(&self.beans, &entries, &id_to_idx, &lazy_type_ids)?;
 
             // Validate config keys before construction
             Self::validate_config_keys(&self.beans, &entries)?;
@@ -1460,12 +1491,8 @@ impl BeanRegistry {
         if !self.lazy_beans.is_empty() {
             // Validate lazy bean dependencies: all deps must exist in the
             // eagerly-resolved set, provided instances, or other lazy beans.
-            let eager_ids: HashSet<TypeId> = ctx
-                .base
-                .keys()
-                .chain(ctx.overlay.keys())
-                .copied()
-                .collect();
+            let eager_ids: HashSet<TypeId> =
+                ctx.base.keys().chain(ctx.overlay.keys()).copied().collect();
 
             for lazy_reg in &self.lazy_beans {
                 for (dep_id, dep_name) in &lazy_reg.dependencies {
@@ -1506,7 +1533,7 @@ impl BeanRegistry {
                 // value inside it — instead of getting a fresh slot.
                 if let Some(plan) = &reuse {
                     if plan.unchanged.contains(&lazy_reg.type_id)
-                        && !deco_targets.contains(&lazy_reg.type_id)
+                        && !forced_rebuild.contains(&lazy_reg.type_id)
                     {
                         if let Some(slot) = plan.old_ctx.lazy_slot(lazy_reg.type_id) {
                             lazy_slots
@@ -1800,7 +1827,9 @@ impl BeanRegistry {
             color[i] = ON_PATH;
             path.push(i);
             for (dep_id, _) in nodes[i].reg_dependencies() {
-                let Some(&j) = id_to_idx.get(dep_id) else { continue };
+                let Some(&j) = id_to_idx.get(dep_id) else {
+                    continue;
+                };
                 if in_degree[j] == 0 {
                     continue; // sorted node — cannot be part of a cycle
                 }
@@ -1858,6 +1887,10 @@ impl BeanRegistry {
 
         // 1. Build version (hash of constructor source tokens)
         reg.build_version.hash(&mut hasher);
+
+        // 1b. Registration mode. Switching `#[bean]` to `#[bean(lazy)]`
+        // changes graph semantics even when the constructor is unchanged.
+        reg.is_lazy.hash(&mut hasher);
 
         // 2. Config values this bean depends on
         if !reg.config_keys.is_empty() {
@@ -1919,5 +1952,33 @@ impl BeanRegistry {
 impl Default for BeanRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(all(test, feature = "dev-reload"))]
+mod fingerprint_tests {
+    use super::*;
+
+    #[test]
+    fn eager_and_lazy_registration_modes_have_distinct_fingerprints() {
+        let dependencies = Vec::new();
+        let config_keys = Vec::new();
+        let eager = FingerprintReg {
+            type_id: TypeId::of::<u32>(),
+            type_name: "u32",
+            dependencies: &dependencies,
+            config_keys: &config_keys,
+            build_version: 7,
+            is_lazy: false,
+        };
+        let lazy = FingerprintReg {
+            is_lazy: true,
+            ..eager
+        };
+
+        assert_ne!(
+            BeanRegistry::compute_reg_fingerprint(&eager, None, &HashMap::new()),
+            BeanRegistry::compute_reg_fingerprint(&lazy, None, &HashMap::new()),
+        );
     }
 }

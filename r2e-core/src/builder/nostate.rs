@@ -113,7 +113,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// The instance will be available in the [`BeanContext`](crate::beans::BeanContext)
     /// for beans that depend on type `B`, and will be pulled into the state
     /// struct when [`build_state`](Self::build_state) is called.
-    pub fn provide<B: Clone + Send + Sync + 'static>(mut self, bean: B) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
+    pub fn provide<B: Clone + Send + Sync + 'static>(
+        mut self,
+        bean: B,
+    ) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
         self.shared.bean_registry.provide(bean);
         self.with_updated_types()
     }
@@ -133,7 +136,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         bean: B,
     ) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
         self.shared.bean_registry.provide(bean);
-        self.shared.bean_registry.register_provided_post_construct::<B>();
+        self.shared
+            .bean_registry
+            .register_provided_post_construct::<B>();
         self.with_updated_types()
     }
 
@@ -254,7 +259,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Register a default producer that can be overridden by alternatives.
     ///
     /// The producer's output IS added to the provision list (guaranteed to be present).
-    pub fn with_default_producer<Pr: Producer>(mut self) -> Registered<Pr::Output, Pr::Deps, P, R, Mods>
+    pub fn with_default_producer<Pr: Producer>(
+        mut self,
+    ) -> Registered<Pr::Output, Pr::Deps, P, R, Mods>
     where
         R: TAppend<Pr::Deps>,
     {
@@ -480,7 +487,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 self.shared.bean_registry.provide(config.clone());
             }
             None => {
-                self.shared.config_overrides.push((key.into(), value.into()));
+                self.shared
+                    .config_overrides
+                    .push((key.into(), value.into()));
             }
         }
         self
@@ -726,18 +735,18 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // each other's cached graphs.
         #[cfg(feature = "dev-reload")]
         if crate::dev::hot_reload_loop_active() {
-            type Cached<P> = (
-                <P as BuildHList>::Output,
-                Arc<crate::beans::BeanContext>,
-            );
+            type Cached<P> = (<P as BuildHList>::Output, Arc<crate::beans::BeanContext>);
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
             let cached_fp = crate::dev::get_cached_graph_fingerprint();
+            let requires_resolution = registry.requires_resolution_on_cache_hit();
 
             // If the fingerprint matches and the typed state cache holds →
-            // reuse the whole state, no resolution at all.
-            if cached_fp == Some(new_fp) {
+            // reuse the whole state when no per-cycle hook needs a freshly
+            // resolved context. Decorator fills and pre-destroy disposers must
+            // pass through `resolve_reusing` even when every bean is reusable.
+            if cached_fp == Some(new_fp) && !requires_resolution {
                 if let Some((cached_state, cached_ctx)) =
                     crate::dev::get_cached_state::<Cached<P>>()
                 {
@@ -786,12 +795,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                             }
                         }
                     }
-                    let unchanged: std::collections::HashSet<std::any::TypeId> =
-                        per_bean_fps
-                            .iter()
-                            .filter(|(tid, _, fp)| old_per_bean.get(tid) == Some(fp))
-                            .map(|(tid, _, _)| *tid)
-                            .collect();
+                    let unchanged: std::collections::HashSet<std::any::TypeId> = per_bean_fps
+                        .iter()
+                        .filter(|(tid, _, fp)| old_per_bean.get(tid) == Some(fp))
+                        .map(|(tid, _, _)| *tid)
+                        .collect();
                     Some(crate::beans::ReusePlan { old_ctx, unchanged })
                 }
                 // First cycle (or explicitly invalidated): full resolution.
@@ -825,7 +833,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 .collect_bean_subscribers(event_subscribers),
         ))
     }
-
 }
 
 // `with_state` bypasses the bean graph entirely, so it cannot support pending

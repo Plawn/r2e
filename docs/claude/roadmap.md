@@ -162,8 +162,10 @@ is unchanged keep their instance across hot-patches — in-memory state
 survives; changed beans and their transitive dependents rebuild (their
 `#[post_construct]` re-runs, reused ones skip it). `.provide()`-ed values
 are pinned from the previous cycle (except `R2eConfig` — YAML re-read per
-patch stays deliberate); unchanged lazy slots carry over; deco-fill targets
-always rebuild (`DecoSlot` is a `OnceLock`, no in-place refill). Two
+patch stays deliberate); unchanged lazy slots carry over; eager/lazy mode is
+part of the fingerprint; deco-fill targets and their transitive dependents
+always rebuild (`DecoSlot` is a `OnceLock`, no in-place refill). Active-cycle
+`#[pre_destroy]` hooks survive hot-patch future replacement. Two
 pre-existing bugs fixed en route: the graph fingerprint now folds in the
 **whole** config (`R2eConfig::full_fingerprint`) so an edit no bean declares
 still refreshes the graph's `R2eConfig`; and the dev-reload caches +

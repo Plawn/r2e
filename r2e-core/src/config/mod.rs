@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use registry::{register_section, registered_sections, RegisteredSection};
+pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{
-    validate_keys, validate_section, validate_section_keys, ConfigValidationError,
-    MissingKeyError,
+    validate_keys, validate_section, validate_section_keys, ConfigValidationError, MissingKeyError,
 };
-pub use value::{ConfigValue, FromConfigValue, deserialize_value};
+pub use value::{deserialize_value, ConfigValue, FromConfigValue};
 
 /// A single validation error detail from typed config validation (e.g., garde).
 #[derive(Debug, Clone)]
@@ -125,9 +124,7 @@ impl R2eConfig {
     /// [`load_profiled_with_resolver`](Self::load_profiled_with_resolver)),
     /// resolves `${...}` placeholders in string values, then overlays
     /// environment variables.
-    pub fn load_with_resolver(
-        resolver: &dyn SecretResolver,
-    ) -> Result<Self, ConfigError> {
+    pub fn load_with_resolver(resolver: &dyn SecretResolver) -> Result<Self, ConfigError> {
         Self::load_profiled_with_resolver(None, resolver)
     }
 
@@ -381,10 +378,6 @@ impl R2eConfig {
         segments
     }
 
-    /// Compute a fingerprint (hash) over a set of config keys.
-    ///
-    /// Returns a `u64` hash of the values at the given keys. Used by the
-    /// dev-reload bean cache to detect config changes.
     /// Fingerprint of the **entire** config — every key and value,
     /// order-independent.
     ///
@@ -404,6 +397,10 @@ impl R2eConfig {
         hasher.finish()
     }
 
+    /// Compute a fingerprint (hash) over a set of config keys.
+    ///
+    /// Returns a `u64` hash of the values at the given keys. Used by the
+    /// dev-reload bean cache to detect config changes.
     pub fn config_fingerprint(&self, keys: &[&str]) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -421,7 +418,6 @@ impl R2eConfig {
         }
         hasher.finish()
     }
-
 }
 
 // ── LoadableConfig trait ─────────────────────────────────────────────────
@@ -438,13 +434,19 @@ pub trait LoadableConfig: Clone + Send + Sync + 'static {
     type Children;
 
     /// Optionally register additional beans derived from the config.
-    fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError>;
+    fn register(
+        config: &R2eConfig,
+        registry: &mut crate::beans::BeanRegistry,
+    ) -> Result<(), ConfigError>;
 }
 
 impl LoadableConfig for () {
     type Children = crate::type_list::TNil;
 
-    fn register(_config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+    fn register(
+        _config: &R2eConfig,
+        registry: &mut crate::beans::BeanRegistry,
+    ) -> Result<(), ConfigError> {
         // `load_config::<C>()` unconditionally pushes `C` onto the
         // compile-time provision list, so the unit slot must exist in the
         // registry or `build_state()` fails with "Bean of type `()` not found".
@@ -456,7 +458,10 @@ impl LoadableConfig for () {
 impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
     type Children = T::Children;
 
-    fn register(config: &R2eConfig, registry: &mut crate::beans::BeanRegistry) -> Result<(), ConfigError> {
+    fn register(
+        config: &R2eConfig,
+        registry: &mut crate::beans::BeanRegistry,
+    ) -> Result<(), ConfigError> {
         let typed = T::from_config(config, None)?;
         typed.register_children(registry);
         registry.provide(typed);

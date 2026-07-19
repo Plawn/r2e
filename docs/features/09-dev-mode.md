@@ -187,8 +187,9 @@ application files remain on the fast hot-patch path.
 ### State caching and partial rebuilds
 
 Under the hot-patch loop, every bean carries a fingerprint: a hash of its
-constructor source tokens, the config values it declares, and — transitively —
-the fingerprints of its dependencies. On each patch:
+constructor source tokens, its registration mode (eager or lazy), the config
+values it declares, and — transitively — the fingerprints of its dependencies.
+On each patch:
 
 - **Nothing changed** → the whole cached state is reused; no bean is rebuilt.
 - **Some beans changed** (constructor edited, or a config value they read
@@ -202,7 +203,10 @@ rebuilt beans keep sharing one instance. `R2eConfig` is the exception: the
 YAML is re-read on every patch, and any config edit — even one no bean
 declares — invalidates the cached state so the fresh config lands in the
 graph. Beans whose `#[scheduled]`/`#[consumer]` methods carry `#[intercept]`
-always rebuild (their decorator slot cannot be refilled in place).
+always rebuild (their decorator slot cannot be refilled in place), together
+with every transitive dependent so the graph never mixes old and new clones.
+`#[pre_destroy]` hooks are rematerialized for the active server cycle and still
+run on final graceful shutdown after one or more hot patches.
 
 These caches engage **only** under the real hot-patch loop (`r2e::launch!`
 marks the process). Test binaries or examples that merely compile the

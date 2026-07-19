@@ -12,8 +12,9 @@
 //! process-global, so parallel test functions would clobber each other.
 #![cfg(feature = "dev-reload")]
 
-use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, Registrable};
+use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
 use r2e_core::config::{ConfigValue, R2eConfig};
+use r2e_core::decorator::{BeanDecoFill, SharedDecoSlot};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, TCons, TNil};
 use std::any::TypeId;
@@ -26,6 +27,9 @@ static CONF_BUILDS: AtomicU32 = AtomicU32::new(0);
 static CONF_PCS: AtomicU32 = AtomicU32::new(0);
 static USES_STABLE_BUILDS: AtomicU32 = AtomicU32::new(0);
 static USES_CONF_BUILDS: AtomicU32 = AtomicU32::new(0);
+static DECORATED_BUILDS: AtomicU32 = AtomicU32::new(0);
+static USES_DECORATED_BUILDS: AtomicU32 = AtomicU32::new(0);
+static DISPOSES: AtomicU32 = AtomicU32::new(0);
 
 /// Config-independent bean carrying mutable in-memory state (the counter):
 /// the state must survive a partial rebuild triggered by *another* bean.
@@ -163,6 +167,70 @@ impl Registrable for UsesConf {
     }
 }
 
+/// A decorator-fill target must rebuild every cycle because its shared slot is
+/// backed by a OnceLock. Its dependents must rebuild with it, or they retain a
+/// clone of the old target while the context exposes the new one.
+#[derive(Clone)]
+struct Decorated {
+    identity: Arc<()>,
+    slot: SharedDecoSlot,
+}
+
+impl Bean for Decorated {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> Self {
+        DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            identity: Arc::new(()),
+            slot: SharedDecoSlot::new(),
+        }
+    }
+    fn after_register(registry: &mut BeanRegistry) {
+        registry.register_deco_fill::<Self>();
+    }
+}
+
+impl BeanDecoFill for Decorated {
+    fn __r2e_fill_decos(&self, _ctx: &BeanContext) {
+        self.slot.fill(());
+    }
+}
+
+impl Registrable for Decorated {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
+#[derive(Clone)]
+struct UsesDecorated {
+    inner: Decorated,
+}
+
+impl Bean for UsesDecorated {
+    type Deps = TCons<Decorated, TNil>;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<Decorated>(), "Decorated")]
+    }
+    fn build(ctx: &BeanContext) -> Self {
+        USES_DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+        Self { inner: ctx.get() }
+    }
+}
+
+impl Registrable for UsesDecorated {
+    type Provided = Self;
+    type Deps = TCons<Decorated, TNil>;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
 /// Provided value (the `.provide()` path — e.g. an `Env`-built pool or a
 /// shared store): a partial rebuild must pin the previous cycle's instance
 /// so reused and rebuilt beans keep sharing it.
@@ -175,25 +243,60 @@ impl Store {
     }
 }
 
-fn flip_config(value: &str) -> R2eConfig {
+fn flip_config(value: &str, unrelated: &str) -> R2eConfig {
     let mut config = R2eConfig::empty();
     config.set("dev.flip", ConfigValue::String(value.into()));
+    config.set("dev.unrelated", ConfigValue::String(unrelated.into()));
     config
 }
 
 macro_rules! cycle {
-    ($flip:expr, $store:expr) => {
+    ($flip:expr, $unrelated:expr, $store:expr) => {
         AppBuilder::new()
-            .override_config(flip_config($flip))
+            .override_config(flip_config($flip, $unrelated))
             .load_config::<()>()
             .provide($store)
             .register::<Stable>()
             .register::<ConfDep>()
             .register::<UsesStable>()
             .register::<UsesConf>()
+            .register::<Decorated>()
+            .register::<UsesDecorated>()
             .build_state()
             .await
     };
+}
+
+#[derive(Clone)]
+struct Disposable;
+
+impl Bean for Disposable {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> Self {
+        Self
+    }
+    fn after_register(registry: &mut BeanRegistry) {
+        registry.register_pre_destroy::<Self>();
+    }
+}
+
+impl PreDestroy for Disposable {
+    fn pre_destroy(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {
+            DISPOSES.fetch_add(1, Ordering::SeqCst);
+        })
+    }
+}
+
+impl Registrable for Disposable {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
 }
 
 #[r2e_core::test]
@@ -203,7 +306,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     r2e_core::dev::mark_hot_reload_loop();
 
     // ── Cycle 1: cold start — everything builds once ────────────────────
-    let app1 = cycle!("a", Store::default());
+    let app1 = cycle!("a", "x", Store::default());
     let state1 = app1.state().clone();
 
     assert_eq!(STABLE_BUILDS.load(Ordering::SeqCst), 1);
@@ -212,6 +315,8 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     assert_eq!(USES_CONF_BUILDS.load(Ordering::SeqCst), 1);
     assert_eq!(STABLE_PCS.load(Ordering::SeqCst), 1);
     assert_eq!(CONF_PCS.load(Ordering::SeqCst), 1);
+    assert_eq!(DECORATED_BUILDS.load(Ordering::SeqCst), 1);
+    assert_eq!(USES_DECORATED_BUILDS.load(Ordering::SeqCst), 1);
     assert_eq!(state1.get::<ConfDep>().val, "a");
 
     // Mutate in-memory state that must survive the next (partial) rebuild.
@@ -224,7 +329,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .push("persisted".into());
 
     // ── Cycle 2: `dev.flip` edited → only ConfDep's cone rebuilds ───────
-    let app2 = cycle!("b", Store::default());
+    let app2 = cycle!("b", "x", Store::default());
     let state2 = app2.state().clone();
 
     assert_eq!(STABLE_BUILDS.load(Ordering::SeqCst), 1, "Stable reused");
@@ -255,12 +360,20 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     // The rebuilt cone observed the fresh config.
     assert_eq!(state2.get::<ConfDep>().val, "b");
     assert_eq!(state2.get::<UsesConf>().inner.val, "b");
+    assert_eq!(DECORATED_BUILDS.load(Ordering::SeqCst), 2);
+    assert_eq!(USES_DECORATED_BUILDS.load(Ordering::SeqCst), 2);
+    assert!(Arc::ptr_eq(
+        &state2.get::<Decorated>().identity,
+        &state2.get::<UsesDecorated>().inner.identity,
+    ));
     // The provided value was pinned from cycle 1; the fresh (empty) Store
     // handed to cycle 2 was discarded.
     assert_eq!(state2.get::<Store>().contents(), vec!["persisted"]);
 
-    // ── Cycle 3: nothing changed → full-reuse fast path, zero factories ─
-    let app3 = cycle!("b", Store::default());
+    // ── Cycle 3: only an undeclared config key changed ───────────────────
+    // The graph-level fingerprint must refresh R2eConfig without rebuilding
+    // ordinary beans. Decorator targets and their dependents still rebuild.
+    let app3 = cycle!("b", "y", Store::default());
     let state3 = app3.state().clone();
 
     assert_eq!(STABLE_BUILDS.load(Ordering::SeqCst), 1);
@@ -269,19 +382,92 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     assert_eq!(CONF_PCS.load(Ordering::SeqCst), 2);
     assert_eq!(state3.get::<Stable>().counter.load(Ordering::SeqCst), 7);
     assert_eq!(state3.get::<Store>().contents(), vec!["persisted"]);
+    assert_eq!(
+        state3
+            .get::<R2eConfig>()
+            .get::<String>("dev.unrelated")
+            .unwrap(),
+        "y"
+    );
+    assert_eq!(DECORATED_BUILDS.load(Ordering::SeqCst), 3);
+    assert_eq!(USES_DECORATED_BUILDS.load(Ordering::SeqCst), 3);
+    assert!(Arc::ptr_eq(
+        &state3.get::<Decorated>().identity,
+        &state3.get::<UsesDecorated>().inner.identity,
+    ));
+
+    // ── Cycle 4: same fingerprint ───────────────────────────────────────
+    // Ordinary factories remain skipped, but decorator targets cannot take
+    // the monolithic full-cache fast path because their slots need refilling.
+    let app4 = cycle!("b", "y", Store::default());
+    let state4 = app4.state().clone();
+
+    assert_eq!(STABLE_BUILDS.load(Ordering::SeqCst), 1);
+    assert_eq!(CONF_BUILDS.load(Ordering::SeqCst), 2);
+    assert_eq!(USES_CONF_BUILDS.load(Ordering::SeqCst), 2);
+    assert_eq!(DECORATED_BUILDS.load(Ordering::SeqCst), 4);
+    assert_eq!(USES_DECORATED_BUILDS.load(Ordering::SeqCst), 4);
+    assert!(Arc::ptr_eq(
+        &state4.get::<Decorated>().identity,
+        &state4.get::<UsesDecorated>().inner.identity,
+    ));
 
     // ── Explicit invalidation: the escape hatch forces a cold rebuild ───
     r2e_core::invalidate_state_cache();
-    let app4 = cycle!("b", Store::default());
-    let state4 = app4.state().clone();
+    let app5 = cycle!("b", "y", Store::default());
+    let state5 = app5.state().clone();
 
     assert_eq!(STABLE_BUILDS.load(Ordering::SeqCst), 2);
     assert_eq!(CONF_BUILDS.load(Ordering::SeqCst), 3);
     assert_eq!(STABLE_PCS.load(Ordering::SeqCst), 2);
     assert_eq!(
-        state4.get::<Stable>().counter.load(Ordering::SeqCst),
+        state5.get::<Stable>().counter.load(Ordering::SeqCst),
         0,
         "invalidation drops carried state"
     );
-    assert!(state4.get::<Store>().contents().is_empty());
+    assert!(state5.get::<Store>().contents().is_empty());
+
+    // ── Pre-destroy survives a same-fingerprint hot patch ───────────────
+    // The first server future is dropped the same way Subsecond drops it on a
+    // patch. The active replacement must rematerialize the disposer and keep
+    // shutdown hooks even though startup lifecycle is already initialized.
+    r2e_core::invalidate_state_cache();
+    DISPOSES.store(0, Ordering::SeqCst);
+
+    let first = AppBuilder::new()
+        .register::<Disposable>()
+        .build_state()
+        .await
+        .prepare("127.0.0.1:0");
+    let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let first_server = tokio::spawn(async move {
+        first
+            .run_with_listener(first_listener)
+            .await
+            .map_err(|e| e.to_string())
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    first_server.abort();
+    let _ = first_server.await;
+
+    let second = AppBuilder::new()
+        .register::<Disposable>()
+        .build_state()
+        .await
+        .prepare("127.0.0.1:0");
+    let stop = second.stop_handle();
+    let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_server = tokio::spawn(async move {
+        second
+            .run_with_listener(second_listener)
+            .await
+            .map_err(|e| e.to_string())
+    });
+    stop.stop();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), second_server)
+        .await
+        .expect("replacement server did not stop")
+        .expect("replacement server task panicked");
+    assert!(result.is_ok(), "replacement server failed: {result:?}");
+    assert_eq!(DISPOSES.load(Ordering::SeqCst), 1);
 }

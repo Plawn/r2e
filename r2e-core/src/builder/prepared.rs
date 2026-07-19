@@ -259,7 +259,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // share the registry: scheduler calls `take_all()` or
             // `take_of::<ScheduledTaskMarker>()`, other subsystems pick their
             // own tagged subset, and absent subsystems observe no tasks.
-            let task_registry = self.plugin_data
+            let task_registry = self
+                .plugin_data
                 .get(&TypeId::of::<TaskRegistryHandle>())
                 .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
                 .cloned()
@@ -294,15 +295,13 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         //    BEFORE the HTTP server starts draining — background tasks see the
         //    cancel signal while in-flight HTTP requests still get to finish;
         // 3. the shared token is cancelled and the listener stops accepting.
-        // `skip_lifecycle` (dev-reload re-run) skips both the sync plugin
-        // shutdown hooks and the whole async-shutdown list (plugin async hooks +
-        // controller/bean `#[pre_destroy]` disposers); user drain hooks always
-        // run.
-        let (plugin_shutdown_hooks, async_shutdown_hooks) = if skip_lifecycle {
-            (Vec::new(), Vec::new())
-        } else {
-            (self.plugin_shutdown_hooks, self.async_shutdown_hooks)
-        };
+        // Hot-patch replaces the previous server future by dropping it, so
+        // that future never reaches graceful shutdown. The currently active
+        // cycle must therefore retain its shutdown hooks even when startup
+        // lifecycle was skipped; otherwise the first no-op patch permanently
+        // loses every `#[pre_destroy]` disposer.
+        let plugin_shutdown_hooks = self.plugin_shutdown_hooks;
+        let async_shutdown_hooks = self.async_shutdown_hooks;
         let drain_hooks = self.drain_hooks;
         let state_for_drain = self.state.clone();
         let stop_handle = self.stop_handle.clone();
@@ -313,43 +312,50 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // joins the tracked set (like gRPC / spawn_service), so the QUIC drain
         // is awaited in the shutdown phase, bounded by `shutdown_grace_period`.
         #[cfg(feature = "quic")]
-        if let Some(quic_handle) = self.quic_server_config.take().and_then(|(addr, server_config)| {
-            let router = self.router.clone();
-            let token = cancel_token.clone();
+        if let Some(quic_handle) =
+            self.quic_server_config
+                .take()
+                .and_then(|(addr, server_config)| {
+                    let router = self.router.clone();
+                    let token = cancel_token.clone();
 
-            #[cfg(feature = "dev-reload")]
-            let endpoint_result = crate::dev::get_or_bind_quic_endpoint(addr, server_config);
-            #[cfg(not(feature = "dev-reload"))]
-            let endpoint_result = crate::http::quic::quinn::Endpoint::server(server_config, addr)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) });
-
-            match endpoint_result {
-                Ok(endpoint) => {
+                    #[cfg(feature = "dev-reload")]
+                    let endpoint_result =
+                        crate::dev::get_or_bind_quic_endpoint(addr, server_config);
                     #[cfg(not(feature = "dev-reload"))]
-                    let ep_for_close = endpoint.clone();
-                    Some(crate::rt::spawn(async move {
-                        if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
-                            router,
-                            endpoint,
-                            token.cancelled(),
-                        )
-                        .await
-                        {
-                            tracing::error!(error = %e, "QUIC/HTTP3 server error");
+                    let endpoint_result =
+                        crate::http::quic::quinn::Endpoint::server(server_config, addr).map_err(
+                            |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) },
+                        );
+
+                    match endpoint_result {
+                        Ok(endpoint) => {
+                            #[cfg(not(feature = "dev-reload"))]
+                            let ep_for_close = endpoint.clone();
+                            Some(crate::rt::spawn(async move {
+                                if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
+                                    router,
+                                    endpoint,
+                                    token.cancelled(),
+                                )
+                                .await
+                                {
+                                    tracing::error!(error = %e, "QUIC/HTTP3 server error");
+                                }
+                                #[cfg(not(feature = "dev-reload"))]
+                                {
+                                    ep_for_close.close(0u32.into(), b"shutdown");
+                                    ep_for_close.wait_idle().await;
+                                }
+                            }))
                         }
-                        #[cfg(not(feature = "dev-reload"))]
-                        {
-                            ep_for_close.close(0u32.into(), b"shutdown");
-                            ep_for_close.wait_idle().await;
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to bind QUIC endpoint");
+                            None
                         }
-                    }))
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to bind QUIC endpoint");
-                    None
-                }
-            }
-        }) {
+                    }
+                })
+        {
             service_handles.push(quic_handle);
         }
 
@@ -388,7 +394,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         let serve_result: Result<(), Box<dyn std::error::Error>> = match strategy {
             ServeStrategy::Single(listener) => {
                 info!(addr = %self.addr, "R2E server listening");
-                let svc = self.router
+                let svc = self
+                    .router
                     .into_make_service_with_connect_info::<std::net::SocketAddr>();
                 if self.tcp_nodelay {
                     use crate::http::ListenerExt as _;
@@ -429,9 +436,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 // initiated from request handlers (and lazy-bean first-touch)
                 // runs here, not on the workers' current_thread runtimes.
                 let control_plane = crate::rt::current_handle();
-                if control_plane.runtime_flavor()
-                    != tokio::runtime::RuntimeFlavor::MultiThread
-                {
+                if control_plane.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
                     // A current_thread control plane mostly works, but a
                     // worker-side lazy first-touch would block the worker on a
                     // runtime that may itself be busy — sharding is designed
@@ -471,9 +476,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 unix,
                 not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
             )))]
-            ServeStrategy::Sharded { .. } => {
-                Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into())
-            }
+            ServeStrategy::Sharded { .. } => Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into()),
         };
         serve_result?;
 
@@ -487,10 +490,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         let shutdown_phase = async move {
             let handles = service_handles.drain();
             if !handles.is_empty() {
-                tracing::info!(
-                    count = handles.len(),
-                    "Awaiting background tasks to finish"
-                );
+                tracing::info!(count = handles.len(), "Awaiting background tasks to finish");
                 for h in handles {
                     if let Err(e) = h.await {
                         if e.is_panic() {

@@ -12,14 +12,14 @@
 //! `src/env/**`, `Cargo.toml`, or `build.rs` restart the child process. Clients
 //! polling `/__r2e_dev/ping` can detect those full restarts and refresh.
 
+use crate::http::header::CONNECTION;
 use crate::http::header::{HeaderValue, CACHE_CONTROL};
 use crate::http::middleware::Next;
 use crate::http::response::IntoResponse;
 use crate::http::routing::get;
-use crate::http::Router;
 use crate::http::Request;
-use crate::http::header::CONNECTION;
 use crate::http::Response;
+use crate::http::Router;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
@@ -28,9 +28,9 @@ use std::any::Any;
 #[cfg(feature = "dev-reload")]
 use std::collections::HashMap;
 #[cfg(feature = "dev-reload")]
-use std::sync::Mutex;
-#[cfg(feature = "dev-reload")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "dev-reload")]
+use std::sync::Mutex;
 
 #[cfg(feature = "dev-reload")]
 static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
@@ -114,9 +114,8 @@ pub(crate) fn get_or_bind_listener(
 // ── QUIC endpoint cache for dev-reload ─────────────────────────────────────
 
 #[cfg(all(feature = "dev-reload", feature = "quic"))]
-static QUIC_ENDPOINT_STORE: OnceLock<
-    Mutex<HashMap<String, crate::http::quic::quinn::Endpoint>>,
-> = OnceLock::new();
+static QUIC_ENDPOINT_STORE: OnceLock<Mutex<HashMap<String, crate::http::quic::quinn::Endpoint>>> =
+    OnceLock::new();
 
 /// Retrieve a cached QUIC endpoint for the given address, or bind a new one.
 ///
@@ -272,7 +271,9 @@ pub(crate) fn cache_graph_fingerprint(fp: u64, per_bean: crate::beans::BeanFinge
     *guard = Some(fp);
 
     let bean_store = PER_BEAN_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut bean_guard = bean_store.lock().expect("per-bean fingerprint cache poisoned");
+    let mut bean_guard = bean_store
+        .lock()
+        .expect("per-bean fingerprint cache poisoned");
     bean_guard.clear();
     for (tid, _name, bean_fp) in per_bean {
         bean_guard.insert(tid, bean_fp);
