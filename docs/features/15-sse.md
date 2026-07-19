@@ -25,8 +25,8 @@ Internal type sent through the broadcast channel:
 
 ```rust
 pub struct SseMessage {
-    pub event: Option<String>,  // nom du type d'evenement (champ SSE `event:`)
-    pub data: String,           // donnees (champ SSE `data:`)
+    pub event: Option<String>,  // event type name (SSE `event:` field)
+    pub data: String,           // data (SSE `data:` field)
 }
 ```
 
@@ -75,12 +75,12 @@ This registers a `GET /sse/events` endpoint that returns `Content-Type: text/eve
 By default, `#[sse]` enables Axum's keep-alive (periodic comment frames to prevent proxies from closing idle connections). You can customize or disable it:
 
 ```rust
-#[sse("/events", keep_alive = 15)]    // keep-alive toutes les 15 secondes
+#[sse("/events", keep_alive = 15)]    // keep-alive every 15 seconds
 async fn events(&self) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
     self.broadcaster.subscribe()
 }
 
-#[sse("/events", keep_alive = false)]  // desactiver le keep-alive
+#[sse("/events", keep_alive = false)]  // disable keep-alive
 async fn events_no_ka(&self) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
     self.broadcaster.subscribe()
 }
@@ -105,7 +105,7 @@ async fn user_stream(
 ```rust
 use r2e::sse::SseBroadcaster;
 
-// Creer avec une capacite de 128 messages
+// Create with a capacity of 128 messages
 let broadcaster = SseBroadcaster::new(128);
 ```
 
@@ -116,12 +116,12 @@ The capacity determines the number of messages buffered for slow consumers. If a
 Two broadcasting methods are available:
 
 ```rust
-// Evenement de donnees seul (sans type)
-// Le client recoit : "data: hello\n\n"
+// Data-only event (no type)
+// The client receives: "data: hello\n\n"
 broadcaster.send("hello").ok();
 
-// Evenement type avec un nom
-// Le client recoit : "event: update\ndata: {\"count\":42}\n\n"
+// Typed event with a name
+// The client receives: "event: update\ndata: {\"count\":42}\n\n"
 broadcaster.send_event("update", r#"{"count":42}"#).ok();
 ```
 
@@ -164,7 +164,7 @@ impl NotificationService {
         }
     }
 
-    /// Obtenir ou creer un broadcaster pour un utilisateur specifique.
+    /// Get or create a broadcaster for a specific user.
     pub fn sse_broadcaster(&self, user_id: &str) -> SseBroadcaster {
         self.users
             .entry(user_id.to_string())
@@ -172,7 +172,7 @@ impl NotificationService {
             .clone()
     }
 
-    /// Envoyer une notification sur le stream SSE d'un utilisateur.
+    /// Send a notification on a user's SSE stream.
     pub fn notify(&self, user_id: &str, message: &str) {
         if let Some(broadcaster) = self.users.get(user_id) {
             let _ = broadcaster.value().send_event("notification", message);
@@ -303,7 +303,7 @@ use r2e::prelude::*;
 use r2e::http::response::SseEvent;
 use r2e::sse::SseBroadcaster;
 
-// -- Controleur --
+// -- Controller --
 
 #[controller(path = "/sse")]
 pub struct LiveController {
@@ -313,13 +313,13 @@ pub struct LiveController {
 
 #[routes]
 impl LiveController {
-    /// Les clients se connectent ici pour recevoir des evenements en temps reel.
+    /// Clients connect here to receive real-time events.
     #[sse("/events")]
     async fn events(&self) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
         self.broadcaster.subscribe()
     }
 
-    /// POST un message a diffuser a tous les clients connectes.
+    /// POST a message to broadcast to all connected clients.
     #[post("/broadcast")]
     async fn broadcast(&self, Json(body): Json<BroadcastRequest>) -> StatusCode {
         let _ = self.broadcaster.send_event("message", &body.text);
@@ -356,15 +356,15 @@ async fn main() {
 const source = new EventSource("/sse/events");
 
 source.addEventListener("message", (e) => {
-    console.log("evenement type:", e.data);
+    console.log("typed event:", e.data);
 });
 
 source.onmessage = (e) => {
-    console.log("donnees:", e.data);
+    console.log("data:", e.data);
 };
 
 source.onerror = () => {
-    console.log("connexion perdue, le navigateur se reconnecte automatiquement");
+    console.log("connection lost, the browser reconnects automatically");
 };
 ```
 
@@ -424,15 +424,15 @@ impl SseController {
 Launch the application and test the SSE stream:
 
 ```bash
-# Terminal 1 : ecouter les evenements
+# Terminal 1: listen for events
 curl -N http://localhost:3000/sse/events
 
-# Terminal 2 : envoyer un message
+# Terminal 2: send a message
 curl -X POST http://localhost:3000/sse/broadcast \
   -H "Content-Type: application/json" \
-  -d '{"text":"Bonjour le monde!"}'
+  -d '{"text":"Hello, world!"}'
 
-# Terminal 1 affiche :
+# Terminal 1 displays:
 # event: message
-# data: Bonjour le monde!
+# data: Hello, world!
 ```

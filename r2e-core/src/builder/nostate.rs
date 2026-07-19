@@ -715,26 +715,32 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
              variant) to the app assembly"
         );
 
+        let mut registry = std::mem::take(&mut self.shared.bean_registry);
+        let scheduled_sources = registry.take_scheduled_sources();
+        let event_subscribers = registry.take_event_subscribers();
+
+        // Only inside the actual Subsecond hot-patch loop (`r2e::launch!`
+        // marks it) do the process-global dev-reload caches engage. Merely
+        // compiling with the feature — tests, examples' passthrough — keeps
+        // every build cold, so unrelated builds in one process never serve
+        // each other's cached graphs.
         #[cfg(feature = "dev-reload")]
-        {
+        if crate::dev::hot_reload_loop_active() {
             type Cached<P> = (
                 <P as BuildHList>::Output,
                 Arc<crate::beans::BeanContext>,
             );
 
-            let mut registry = std::mem::take(&mut self.shared.bean_registry);
-            let scheduled_sources = registry.take_scheduled_sources();
-            let event_subscribers = registry.take_event_subscribers();
-
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
             let cached_fp = crate::dev::get_cached_graph_fingerprint();
 
-            // If fingerprint matches and we have a cached state → reuse it
-            if let (Some(old_fp), Some((cached_state, cached_ctx))) =
-                (cached_fp, crate::dev::get_cached_state::<Cached<P>>())
-            {
-                if old_fp == new_fp {
+            // If the fingerprint matches and the typed state cache holds →
+            // reuse the whole state, no resolution at all.
+            if cached_fp == Some(new_fp) {
+                if let Some((cached_state, cached_ctx)) =
+                    crate::dev::get_cached_state::<Cached<P>>()
+                {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
@@ -748,61 +754,76 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                             .collect_bean_subscribers(event_subscribers),
                     ));
                 }
-
-                // Fingerprint changed — log only the beans that actually changed
-                tracing::info!(
-                    "dev-reload: graph fingerprint changed ({:#018x} → {:#018x}), rebuilding all beans",
-                    old_fp,
-                    new_fp
-                );
-                let old_per_bean = crate::dev::get_cached_per_bean_fingerprints();
-                for (type_id, name, bean_fp) in &per_bean_fps {
-                    let changed = old_per_bean
-                        .get(type_id)
-                        .map(|&old| old != *bean_fp)
-                        .unwrap_or(true); // new bean = changed
-                    if changed {
-                        tracing::info!(
-                            bean = name,
-                            "dev-reload: bean changed — triggering rebuild"
-                        );
-                    }
-                }
-
-                crate::dev::clear_state_cache();
+                // Same graph but the provision list changed shape (e.g. a
+                // `.provide()` was added, so `Cached<P>` no longer downcasts):
+                // fall through to a rebuild that reuses every bean instance.
             }
 
-            // Phase 2: full resolution (construct all beans)
-            let mut ctx = registry.resolve().await?;
+            // Phase 2: partial rebuild. Beans whose per-bean fingerprint is
+            // unchanged since the previous cycle keep their instance (and
+            // in-memory state); changed beans and their transitive
+            // dependents — whose fingerprints change by propagation — are
+            // reconstructed against the fresh config.
+            let reuse_plan = match (cached_fp, crate::dev::get_cached_ctx()) {
+                (Some(old_fp), Some(old_ctx)) => {
+                    let old_per_bean = crate::dev::get_cached_per_bean_fingerprints();
+                    if old_fp != new_fp {
+                        tracing::info!(
+                            "dev-reload: graph fingerprint changed ({:#018x} → {:#018x}), rebuilding changed beans",
+                            old_fp,
+                            new_fp
+                        );
+                        for (type_id, name, bean_fp) in &per_bean_fps {
+                            let changed = old_per_bean
+                                .get(type_id)
+                                .map(|&old| old != *bean_fp)
+                                .unwrap_or(true); // new bean = changed
+                            if changed {
+                                tracing::info!(
+                                    bean = name,
+                                    "dev-reload: bean changed — rebuilding"
+                                );
+                            }
+                        }
+                    }
+                    let unchanged: std::collections::HashSet<std::any::TypeId> =
+                        per_bean_fps
+                            .iter()
+                            .filter(|(tid, _, fp)| old_per_bean.get(tid) == Some(fp))
+                            .map(|(tid, _, _)| *tid)
+                            .collect();
+                    Some(crate::beans::ReusePlan { old_ctx, unchanged })
+                }
+                // First cycle (or explicitly invalidated): full resolution.
+                _ => None,
+            };
+
+            let mut ctx = registry.resolve_reusing(reuse_plan).await?;
             self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
             let ctx = Arc::new(ctx);
 
             crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
+            crate::dev::cache_ctx(&ctx);
             crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
-            Ok(Mods::register_controllers(
+            return Ok(Mods::register_controllers(
                 AppBuilder::from_pre(self.shared, state, ctx)
                     .collect_bean_scheduled_tasks(scheduled_sources)
                     .collect_bean_subscribers(event_subscribers),
-            ))
+            ));
         }
 
-        #[cfg(not(feature = "dev-reload"))]
-        {
-            let mut registry = std::mem::take(&mut self.shared.bean_registry);
-            let scheduled_sources = registry.take_scheduled_sources();
-            let event_subscribers = registry.take_event_subscribers();
-            let mut ctx = registry.resolve().await?;
-            self.shared.bean_disposers = ctx.take_disposers();
-            let state = <P as BuildHList>::build_hlist(&ctx);
+        // Cold path: prod, tests, and dev-reload builds outside the loop.
+        let mut ctx = registry.resolve().await?;
+        self.shared.bean_disposers = ctx.take_disposers();
+        let state = <P as BuildHList>::build_hlist(&ctx);
 
-            Ok(Mods::register_controllers(
-                AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
-                    .collect_bean_scheduled_tasks(scheduled_sources)
-                    .collect_bean_subscribers(event_subscribers),
-            ))
-        }
+        Ok(Mods::register_controllers(
+            AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
+                .collect_bean_scheduled_tasks(scheduled_sources)
+                .collect_bean_subscribers(event_subscribers),
+        ))
     }
 
 }

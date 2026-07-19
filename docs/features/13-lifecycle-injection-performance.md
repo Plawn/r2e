@@ -19,21 +19,21 @@ Everything starts with the fluent construction via `AppBuilder`:
 
 ```rust
 AppBuilder::new()
-    .load_config::<RootConfig>()          // 1. Configuration (typee)
-    .plugin(Executor)                     // 2. Plugins pre-build (pool requis par Scheduler)
-    .plugin(Scheduler)                    // 2. Plugins pre-build (taches planifiees)
-    .provide(pool)                        // 3. Beans pre-construits (par type)
+    .load_config::<RootConfig>()          // 1. Configuration (typed)
+    .plugin(Executor)                     // 2. Pre-build plugins (pool required by Scheduler)
+    .plugin(Scheduler)                    // 2. Pre-build plugins (scheduled tasks)
+    .provide(pool)                        // 3. Pre-built beans (by type)
     .provide(event_bus)
-    .register::<UserService>()            // 4. Beans #[bean] / #[producer]
-    .build_state()                        // 5. Resolution du graphe → etat HList infere
+    .register::<UserService>()            // 4. #[bean] / #[producer] beans
+    .build_state()                        // 5. Graph resolution → inferred HList state
     .await
-    .with(Health)                         // 6. Plugins HTTP
+    .with(Health)                         // 6. HTTP plugins
     .with(Cors::permissive())
     .with(ErrorHandling)
     .on_start(|_state| async move { Ok(()) })  // 7. Hooks
     .on_stop(|_| async {})
     .register_controllers::<(UserController, ScheduledJobs)>()  // 8. Controllers
-    .serve("0.0.0.0:3000")                // 9. Lancement
+    .serve("0.0.0.0:3000")                // 9. Launch
     .await?;
 ```
 
@@ -63,15 +63,15 @@ The `build_inner()` method produces a `BuiltApp<T>` struct bundling the router, 
 Layers stack from inside to outside. At runtime, the request traverses them in reverse order:
 
 ```
-Requete HTTP entrante
+Incoming HTTP request
         |
         v
- [TraceLayer]          -- log de la requete/reponse (le plus externe)
- [CatchPanicLayer]     -- capture les panics → JSON 500
- [CorsLayer]           -- validation CORS (le plus proche du handler)
+ [TraceLayer]          -- request/response logging (outermost)
+ [CatchPanicLayer]     -- catches panics → JSON 500
+ [CorsLayer]           -- CORS validation (closest to the handler)
         |
         v
-   Handler Axum
+   Axum Handler
 ```
 
 **Implication**: `TraceLayer` sees all requests, including those rejected by CORS. Panics in the handler are caught by `CatchPanicLayer` and converted into a clean JSON 500 response.
@@ -83,28 +83,28 @@ serve(addr)
     |
     |-- 1. build_inner() → Router + Hooks + ConsumerRegs + State
     |
-    |-- 2. Enregistrement des consumers d'evenements
-    |       Pour chaque controller avec #[consumer] :
+    |-- 2. Event consumer registration
+    |       For each controller with #[consumer]:
     |         → Controller::register_consumers(state.clone())
-    |         → Subscribe les handlers sur le bus d'evenements
+    |         → Subscribe the handlers on the event bus
     |
-    |-- 3. Execution des hooks on_start (dans l'ordre d'enregistrement)
-    |       Chaque hook recoit state.clone()
-    |       Un hook qui echoue arrete le demarrage
+    |-- 3. Run on_start hooks (in registration order)
+    |       Each hook receives state.clone()
+    |       A failing hook aborts startup
     |
-    |-- 4. Binding TCP sur l'adresse
+    |-- 4. TCP binding on the address
     |
-    |-- 5. axum::serve() avec graceful shutdown
-    |       Le serveur accepte des connexions
-    |       En arriere-plan : taches planifiees actives
+    |-- 5. axum::serve() with graceful shutdown
+    |       The server accepts connections
+    |       In the background: scheduled tasks active
     |
-    |-- 6. Signal d'arret (Ctrl-C / SIGTERM)
-    |       → Arret des nouvelles connexions
-    |       → Attente de la fin des requetes en cours
+    |-- 6. Shutdown signal (Ctrl-C / SIGTERM)
+    |       → Stop accepting new connections
+    |       → Wait for in-flight requests to finish
     |
-    |-- 7. Execution des hooks on_stop (dans l'ordre d'enregistrement)
+    |-- 7. Run on_stop hooks (in registration order)
     |
-    └-- 8. Arret
+    └-- 8. Shutdown
 ```
 
 ### 1.5 Graceful Shutdown
@@ -134,60 +134,60 @@ If the hooks (plugin + user) do not finish within the delay, the process forces 
 ### 2.1 Overview
 
 ```
-Requete HTTP
+HTTP request
     |
     v
-[Layers Tower]  ← TraceLayer → CatchPanicLayer → CorsLayer
+[Tower Layers]  ← TraceLayer → CatchPanicLayer → CorsLayer
     |
     v
-[Routage Axum]  ← correspondance path + method
+[Axum Routing]  ← path + method matching
     |
     v
-[Extraction]    ← pipeline d'extracteurs Axum
+[Extraction]    ← Axum extractor pipeline
     |
-    +-- State (si handler guarde)
-    +-- HeaderMap (si handler guarde)
-    +-- Arc<Core>            ← clone de l'Arc du core (construit une fois a l'enregistrement)
-    +-- __R2eRequestData_<Name>  ← FromRequestParts : valeurs request-scoped uniquement
-    |       +-- #[inject(identity)] : FromRequestParts (async)
-    |       +-- #[inject(request)]  : FromRequestParts (async)
-    |   (les #[inject] / #[config] vivent sur le core, deja construits)
-    +-- bind_request → façade __R2eRequest_<Name> (Deref vers le core)
-    +-- Params handler (Json, Path, Query, etc.)
-    +-- #[inject(identity)] param (si param-level)
+    +-- State (if guarded handler)
+    +-- HeaderMap (if guarded handler)
+    +-- Arc<Core>            ← core Arc clone (built once at registration)
+    +-- __R2eRequestData_<Name>  ← FromRequestParts: request-scoped values only
+    |       +-- #[inject(identity)]: FromRequestParts (async)
+    |       +-- #[inject(request)] : FromRequestParts (async)
+    |   (the #[inject] / #[config] live on the core, already built)
+    +-- bind_request → façade __R2eRequest_<Name> (Deref to the core)
+    +-- handler params (Json, Path, Query, etc.)
+    +-- #[inject(identity)] param (if param-level)
     |
     v
-[Guards]        ← execution sequentielle, short-circuit sur erreur
+[Guards]        ← sequential execution, short-circuit on error
     |
     +-- RateLimitGuard → 429 Too Many Requests
     +-- RolesGuard     → 403 Forbidden
-    +-- Custom Guards  → reponse custom
+    +-- Custom Guards  → custom response
     |
     v
-[Intercepteurs] ← chain around() monomorphisee
+[Interceptors]  ← monomorphized around() chain
     |
     +-- Logged (entering)
     +-- Timed (start)
     +-- User interceptors
     +-- Cache (lookup)
-    |       +-- Hit  → retour immediat
+    |       +-- Hit  → immediate return
     |       +-- Miss → continue
     |
     v
-[Corps du handler]
+[Handler body]
     |
-    +-- logique metier
+    +-- business logic
     |
     v
-[Post-traitement]
+[Post-processing]
     |
-    +-- Cache (store si miss)
+    +-- Cache (store if miss)
     +-- CacheInvalidate (clear group)
     +-- Timed (log elapsed)
     +-- Logged (exiting)
     |
     v
-Reponse HTTP
+HTTP response
 ```
 
 ### 2.2 Controller Core and Request Façade
@@ -258,10 +258,10 @@ the route method on the façade.
 **Simple mode** (without guards) — the closure directly returns the method's return type:
 
 ```rust
-// core: Arc<UserController> est capture une fois a l'enregistrement.
+// core: Arc<UserController> is captured once at registration.
 let core = core.clone();
 move |data: __R2eRequestData_UserController, /* ... params */| {
-    let core = core.clone(); // un clone d'Arc par requete
+    let core = core.clone(); // one Arc clone per request
     async move {
         let ctrl = __r2e_meta_UserController::bind_request(core, data);
         ctrl.list(/* params */).await
@@ -289,7 +289,7 @@ move |headers: HeaderMap,
             headers: &headers,
             uri: &uri,
             path_params: PathParams::EMPTY,
-            identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, lu sur la façade
+            identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, read from the façade
         };
 
         // Guard built at registration (deco.g0); check() takes no state, and is async.
@@ -401,29 +401,29 @@ panics; `try_register_controller` returns a `Result` instead) — never mid-requ
 
 ```
                     ┌─────────────────────────────────────────────┐
-                    │   Etat applicatif = HList infere (forme=P)   │
-                    │   (aucune struct ecrite par l'utilisateur)   │
+                    │   App state = inferred HList (shape=P)        │
+                    │   (no struct written by the user)            │
                     │                                             │
-                    │  [ UserService ]            ←── Arc interne │
-                    │  [ SqlitePool ]             ←── Arc interne │
+                    │  [ UserService ]            ←── internal Arc│
+                    │  [ SqlitePool ]             ←── internal Arc│
                     │  [ Arc<JwtClaimsValidator> ]                 │
-                    │  [ LocalEventBus ]          ←── Arc interne │
+                    │  [ LocalEventBus ]          ←── internal Arc│
                     │  [ R2eConfig ]              ←── HashMap     │
                     │  [ RateLimitRegistry ]                       │
                     └──────────────┬──────────────────────────────┘
                                    │
                     ┌──────────────┴──────────────────────────────┐
-                    │         Requete HTTP entrante                │
+                    │         Incoming HTTP request                │
                     └──────────────┬──────────────────────────────┘
                                    │
             ┌──────────────────────┼──────────────────────────┐
             │                      │                          │
     #[inject]              #[inject(identity)]         #[config("key")]
     ctx.get::<T>()         FromRequestPartsVia         ctx.get::<R2eConfig>()
-    (1x, enregistrement)   (async, par requete)        .get(key) (1x, enreg.)
+    (1x, registration)     (async, per request)        .get(key) (1x, reg.)
     ↓                      ↓                           ↓
-    O(1) si Arc            Validation JWT              O(1) HashMap
-    Sync, infaillible      Async, faillible (401)      Sync, echec au demarrage
+    O(1) if Arc            JWT validation              O(1) HashMap
+    Sync, infallible       Async, fallible (401)       Sync, fails at startup
 ```
 
 ---
@@ -437,11 +437,11 @@ The `ContextConstruct` trait constructs a controller **core** from the resolved 
 Consumers capture the shared core `Arc` at registration; each event delivery is one `Arc` clone:
 
 ```rust
-// Code genere par #[routes] pour #[consumer(bus = "event_bus")]
-// __core: Arc<Self> — le core partage, construit une fois via from_context
+// Code generated by #[routes] for #[consumer(bus = "event_bus")]
+// __core: Arc<Self> — the shared core, built once via from_context
 let __consumer_core = __core.clone();
 event_bus.subscribe(move |__envelope: EventEnvelope<UserCreatedEvent>| {
-    let __ctrl = __consumer_core.clone();  // un clone d'Arc par evenement
+    let __ctrl = __consumer_core.clone();  // one Arc clone per event
     async move {
         __ctrl.on_user_created(__envelope.event).await.into()
     }
@@ -455,14 +455,14 @@ The generated `ScheduledTaskDef` no longer clones the app state on every tick �
 carries `state: ()`, and the tick body is submitted to the shared `PoolExecutor`:
 
 ```rust
-// Code genere par #[routes] pour #[scheduled(every = 30)]
+// Code generated by #[routes] for #[scheduled(every = 30)]
 let __task_core = __core.clone();
 ScheduledTaskDef {
     name: "MyController_cleanup".to_string(),
     schedule: Schedule::Every(Duration::from_secs(30)),
-    state: (),                             // plus de clone d'etat par tick
+    state: (),                             // no more per-tick state clone
     task: Box::new(move |_state| {
-        let __ctrl = __task_core.clone();  // un clone d'Arc par execution
+        let __ctrl = __task_core.clone();  // one Arc clone per execution
         Box::pin(async move {
             ScheduledResult::log_if_err(__ctrl.cleanup().await, "MyController_cleanup");
         })
@@ -486,7 +486,7 @@ authenticate.)
 #[controller(path = "/api")]
 pub struct MixedController {
     #[inject] user_service: UserService,
-    // Identity au niveau parametre → request scope explicite par endpoint
+    // Parameter-level identity → request scope explicit per endpoint
 }
 
 #[routes]
@@ -500,7 +500,7 @@ impl MixedController {
     }
 
     #[scheduled(every = 60)]
-    async fn cleanup(&self) { ... }  // Fonctionne car ContextConstruct existe
+    async fn cleanup(&self) { ... }  // Works because ContextConstruct exists
 }
 ```
 
@@ -553,9 +553,9 @@ Two cases in generated code:
 **Case A** — Identity on a handler parameter:
 
 ```rust
-// Le param est deja extrait par Axum
+// The param is already extracted by Axum
 let guard_ctx = GuardContext {
-    identity: Some(&__arg_0),  // reference directe au param
+    identity: Some(&__arg_0),  // direct reference to the param
     ...
 };
 ```
@@ -563,7 +563,7 @@ let guard_ctx = GuardContext {
 **Case B** — Identity on the struct (or absent):
 
 ```rust
-// Appel a la fonction du meta-module sur la façade (ctrl)
+// Call the meta-module function on the façade (ctrl)
 let guard_ctx = GuardContext {
     identity: __r2e_meta_Name::guard_identity(&ctrl),
     ...
@@ -612,7 +612,7 @@ already does this for `SqlxPool`, `LocalEventBus`, and `RateLimitRegistry`.
 // Arc<T> → clone O(1) when the bean is materialized into the state HList
 #[derive(Clone)]
 pub struct UserService {
-    inner: Arc<RwLock<Vec<User>>>,   // clonage O(1)
+    inner: Arc<RwLock<Vec<User>>>,   // O(1) cloning
 }
 ```
 

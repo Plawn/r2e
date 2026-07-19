@@ -336,7 +336,7 @@ fn new_with_grpc() {
     assert!(cargo.contains("tonic"));
     assert!(cargo.contains("prost"));
     assert!(cargo.contains("[build-dependencies]"));
-    assert!(cargo.contains("tonic-build"));
+    assert!(cargo.contains("r2e-grpc-build"));
 
     assert!(Path::new("myapp/proto/greeter.proto").exists());
     assert!(Path::new("myapp/build.rs").exists());

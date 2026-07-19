@@ -35,6 +35,11 @@ crate-name-dependent import.
   when changed. Nothing to persist? Use an empty `AppEnv` as shown below.
 - `App::build(b, env) -> impl BootableApp` — assembles the app on the builder;
   **re-run on every hot-patch**. `load_config` is the sole config registration point.
+- Under the hot-patch loop, bean instances also survive patches: only beans whose
+  constructor code or declared config values changed (plus their transitive
+  dependents) are reconstructed; everything else — including `.provide()`-ed
+  values — carries its in-memory state over. `r2e::invalidate_state_cache()`
+  forces a cold rebuild.
 
 ```rust
 // src/app.rs — the one canonical application source

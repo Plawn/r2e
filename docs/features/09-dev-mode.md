@@ -162,8 +162,10 @@ dev builds, avoiding feature `cfg` and crate-name-dependent imports in
 
 ### Cold restart boundary
 
-Controller, service, bean, and route instances are rebuilt with the router on
-each patch. `App::Env` is different: the existing value deliberately survives.
+Controller and route instances are rebuilt with the router on each patch;
+bean instances are carried over unless their code or config changed (see
+*State caching* below). `App::Env` always survives: the existing value is
+deliberately reused.
 Define it and its setup helpers in `src/env.rs`. `r2e dev` watches `env.rs`,
 `src/env/**`, `Cargo.toml`, and `build.rs`; changing one stops and respawns `dx`
 so an old allocation never crosses an incompatible struct layout. Ordinary
@@ -182,11 +184,31 @@ application files remain on the fast hot-patch path.
 
 **Rule of thumb:** If it holds a connection, spawns a background task, or takes more than a few ms to initialize, put it in `setup()` and thread it through `Env`.
 
-### State caching
+### State caching and partial rebuilds
 
-With `dev-reload`, the bean graph is cached between hot-patches. If the graph fingerprint hasn't changed, the cached state is reused for faster reloads.
+Under the hot-patch loop, every bean carries a fingerprint: a hash of its
+constructor source tokens, the config values it declares, and — transitively —
+the fingerprints of its dependencies. On each patch:
 
-Force a full rebuild with:
+- **Nothing changed** → the whole cached state is reused; no bean is rebuilt.
+- **Some beans changed** (constructor edited, or a config value they read
+  edited) → a **partial rebuild**: only the changed beans and their transitive
+  dependents are reconstructed (and their `#[post_construct]` re-runs). Every
+  other bean instance — with its in-memory state (counters, caches, session
+  maps) — carries over from the previous cycle.
+
+`.provide()`-ed values are pinned from the previous cycle too, so reused and
+rebuilt beans keep sharing one instance. `R2eConfig` is the exception: the
+YAML is re-read on every patch, and any config edit — even one no bean
+declares — invalidates the cached state so the fresh config lands in the
+graph. Beans whose `#[scheduled]`/`#[consumer]` methods carry `#[intercept]`
+always rebuild (their decorator slot cannot be refilled in place).
+
+These caches engage **only** under the real hot-patch loop (`r2e::launch!`
+marks the process). Test binaries or examples that merely compile the
+`dev-reload` feature always build cold.
+
+Force a full rebuild (dropping all carried state) with:
 
 ```rust
 r2e::invalidate_state_cache();

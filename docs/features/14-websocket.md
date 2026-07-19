@@ -109,17 +109,17 @@ ws.send_binary(vec![0x01, 0x02]).await?;
 | `next_json::<T>()` | Receive and deserialize the next text message into `T` |
 
 ```rust
-// Boucle de messages bruts
+// Raw message loop
 while let Some(Ok(msg)) = ws.next().await {
     match msg {
-        Message::Text(t) => println!("recu: {t}"),
-        Message::Binary(b) => println!("binaire: {} octets", b.len()),
+        Message::Text(t) => println!("received: {t}"),
+        Message::Binary(b) => println!("binary: {} bytes", b.len()),
         Message::Close(_) => break,
         _ => {}
     }
 }
 
-// Reception JSON typee
+// Typed JSON reception
 while let Some(Ok(command)) = ws.next_json::<ClientCommand>().await {
     handle_command(command).await;
 }
@@ -160,7 +160,7 @@ struct ChatHandler {
 
 impl WsHandler for ChatHandler {
     async fn on_connect(&mut self, ws: &mut WsStream) {
-        ws.send_text(format!("{} connecte", self.username)).await.ok();
+        ws.send_text(format!("{} connected", self.username)).await.ok();
     }
 
     async fn on_message(&mut self, ws: &mut WsStream, msg: Message) {
@@ -171,7 +171,7 @@ impl WsHandler for ChatHandler {
     }
 
     async fn on_close(&mut self) {
-        tracing::info!("{} deconnecte", self.username);
+        tracing::info!("{} disconnected", self.username);
     }
 }
 ```
@@ -210,7 +210,7 @@ impl ChatController {
 ```rust
 use r2e::ws::WsBroadcaster;
 
-let broadcaster = WsBroadcaster::new(128); // capacite du canal
+let broadcaster = WsBroadcaster::new(128); // channel capacity
 ```
 
 Provide it to the builder so it becomes an injectable bean — there is no hand-written state struct; the state is an inferred HList and controllers inject beans by type:
@@ -278,7 +278,7 @@ async fn notifications(&self, mut ws: WsStream) {
 ```rust
 use r2e::ws::WsRooms;
 
-let rooms = WsRooms::new(128); // capacite par salle
+let rooms = WsRooms::new(128); // capacity per room
 ```
 
 Provide it to the builder so controllers can inject it by type:
@@ -347,7 +347,7 @@ impl ChatController {
         let mut rx = broadcaster.subscribe();
         let client_id = rx.client_id();
 
-        // Annoncer l'arrivee
+        // Announce the arrival
         let _ = broadcaster.send_json(&WsOutgoing::Join {
             username: username.clone(),
             room: room.clone(),
@@ -381,7 +381,7 @@ impl ChatController {
             }
         }
 
-        // Annoncer le depart
+        // Announce the departure
         let _ = broadcaster.send_json(&WsOutgoing::Leave {
             username,
             room,
@@ -411,7 +411,7 @@ WebSocket endpoints support the same `#[guard]` attribute as HTTP handlers. Guar
 #[ws("/admin")]
 #[guard(AdminGuard)]
 async fn admin_ws(&self, mut ws: WsStream) {
-    // Accessible uniquement si AdminGuard passe
+    // Accessible only if AdminGuard passes
 }
 ```
 
@@ -432,7 +432,7 @@ async fn admin_ws(&self, mut ws: WsStream) {
 Launch the application and connect via WebSocket:
 
 ```bash
-# Avec websocat ou un client WebSocket
+# With websocat or a WebSocket client
 websocat ws://localhost:3000/ws/echo
-# → Envoyer un message, recevoir l'echo
+# → Send a message, receive the echo
 ```

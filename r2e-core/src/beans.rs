@@ -409,6 +409,30 @@ impl BeanContext {
         })
     }
 
+    /// Try to retrieve an **eagerly constructed** bean by type, without
+    /// touching the lazy slots. Used by the dev-reload partial rebuild to
+    /// clone unchanged instances out of the previous cycle's context —
+    /// a lazy bean must never be force-resolved just to be carried over
+    /// (its slot `Arc` is reused instead).
+    fn try_get_eager<T: Clone + 'static>(&self) -> Option<T> {
+        let tid = TypeId::of::<T>();
+        self.overlay
+            .get(&tid)
+            .or_else(|| self.base.get(&tid))
+            .and_then(|v| v.downcast_ref::<T>())
+            .cloned()
+    }
+
+    /// Look up a lazy slot by `TypeId`. Used by the dev-reload partial
+    /// rebuild to carry an unchanged lazy bean's slot (and any
+    /// already-resolved value inside it) into the next cycle's context.
+    fn lazy_slot(&self, tid: TypeId) -> Option<Arc<dyn crate::lazy::LazyResolve>> {
+        self.lazy_slots
+            .read()
+            .ok()
+            .and_then(|slots| slots.get(&tid).map(Arc::clone))
+    }
+
     /// Try to retrieve a bean by type, returning `None` if absent.
     pub fn try_get<T: Clone + 'static>(&self) -> Option<T> {
         let tid = TypeId::of::<T>();
@@ -529,7 +553,10 @@ pub struct BeanRegistry {
     /// Each reads its target bean by type from the resolved context (so a
     /// pinned override is honoured) and awaits `PostConstruct::post_construct`.
     /// Run in registration order, **after** all factory-bean post-constructs.
-    provided_post_constructs: Vec<PostConstructFn>,
+    /// Keyed by the target's `TypeId` so the dev-reload partial rebuild can
+    /// skip hooks for provided values pinned from the previous cycle (their
+    /// post-construct already ran on that same instance).
+    provided_post_constructs: Vec<(TypeId, PostConstructFn)>,
     /// Pre-destroy disposer builders for provided/plugin beans. Materialized
     /// against the resolved graph at the end of `resolve` and carried on the
     /// [`BeanContext`] for the builder to drain into the shutdown sequence.
@@ -555,6 +582,11 @@ pub struct BeanRegistry {
     /// post-construct hooks. Keyed by the bean `TypeId` (one hook per type —
     /// the default/override pattern registers twice but must fill once).
     deco_fills: Vec<(TypeId, DecoFillHook)>,
+    /// Eager-clone hooks for **provided** values, keyed by `TypeId`. The
+    /// dev-reload partial rebuild pins provided instances from the previous
+    /// cycle's context (except `R2eConfig`, which is deliberately re-read
+    /// per patch) so reused and rebuilt beans keep sharing one instance.
+    provided_reuse_clones: HashMap<TypeId, ReuseCloneFn>,
 }
 
 struct BeanRegistration {
@@ -577,6 +609,38 @@ struct BeanRegistration {
     /// When `true`, this registration can be replaced by a later registration
     /// of the same `TypeId` (used by the default/alternative bean pattern).
     overridable: bool,
+    /// Clones this bean's instance out of a previously resolved context.
+    /// The dev-reload partial rebuild uses it to carry unchanged instances
+    /// across hot-patch cycles instead of re-running the factory.
+    reuse_clone: ReuseCloneFn,
+}
+
+/// Monomorphized eager-clone hook stored per registration (a plain fn
+/// pointer — zero-sized, no runtime cost outside dev-reload rebuilds).
+type ReuseCloneFn = fn(&BeanContext) -> Option<Box<dyn Any + Send + Sync>>;
+
+fn reuse_clone_of<T: Clone + Send + Sync + 'static>(
+    ctx: &BeanContext,
+) -> Option<Box<dyn Any + Send + Sync>> {
+    ctx.try_get_eager::<T>()
+        .map(|b| Box::new(b) as Box<dyn Any + Send + Sync>)
+}
+
+/// Instructions for a dev-reload partial rebuild: which beans of the
+/// previous cycle's resolved graph may be reused instead of reconstructed.
+///
+/// Built by `build_state()` when the graph fingerprint changed: a bean whose
+/// **per-bean** fingerprint is unchanged (constructor tokens, config values,
+/// and every transitive dependency's fingerprint) keeps its instance from
+/// `old_ctx`; everything else — and every transitive dependent of a changed
+/// bean, whose fingerprint changes by propagation — is rebuilt.
+#[doc(hidden)]
+pub struct ReusePlan {
+    /// The fully resolved context of the previous dev-reload cycle.
+    pub old_ctx: Arc<BeanContext>,
+    /// `TypeId`s whose per-bean fingerprint is identical to the previous
+    /// cycle's. Only these are candidates for instance reuse.
+    pub unchanged: HashSet<TypeId>,
 }
 
 /// Read-only view shared by eager ([`BeanRegistration`]) and lazy
@@ -707,6 +771,7 @@ impl BeanRegistry {
             scheduled_sources: Vec::new(),
             event_subscribers: Vec::new(),
             deco_fills: Vec::new(),
+            provided_reuse_clones: HashMap::new(),
         }
     }
 
@@ -718,6 +783,8 @@ impl BeanRegistry {
             return self;
         }
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
+        self.provided_reuse_clones
+            .insert(TypeId::of::<T>(), reuse_clone_of::<T>);
         self
     }
 
@@ -731,6 +798,8 @@ impl BeanRegistry {
     pub fn pin_provide<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> &mut Self {
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
         self.pinned.insert(TypeId::of::<T>());
+        self.provided_reuse_clones
+            .insert(TypeId::of::<T>(), reuse_clone_of::<T>);
         self
     }
 
@@ -804,6 +873,7 @@ impl BeanRegistry {
                 }),
                 post_construct: None,
                 overridable,
+                reuse_clone: reuse_clone_of::<T>,
             });
         }
         T::after_register(self);
@@ -856,6 +926,7 @@ impl BeanRegistry {
                 }),
                 post_construct: None,
                 overridable,
+                reuse_clone: reuse_clone_of::<T>,
             });
         }
         T::after_register(self);
@@ -889,13 +960,16 @@ impl BeanRegistry {
     /// [`resolve`](Self::resolve), **after** every factory-bean post-construct,
     /// through the same `BeanError::PostConstruct` error path.
     pub fn register_provided_post_construct<T: PostConstruct + Clone>(&mut self) {
-        self.provided_post_constructs.push(Box::new(|ctx: BeanContext| {
-            Box::pin(async move {
-                let bean: T = ctx.get();
-                bean.post_construct().await?;
-                Ok(ctx)
-            })
-        }));
+        self.provided_post_constructs.push((
+            TypeId::of::<T>(),
+            Box::new(|ctx: BeanContext| {
+                Box::pin(async move {
+                    let bean: T = ctx.get();
+                    bean.post_construct().await?;
+                    Ok(ctx)
+                })
+            }),
+        ));
     }
 
     /// Register a bean as a scheduled-task source.
@@ -1093,6 +1167,7 @@ impl BeanRegistry {
             }),
             post_construct: None,
             overridable: false,
+            reuse_clone: reuse_clone_of::<T>,
         });
     }
 
@@ -1128,6 +1203,7 @@ impl BeanRegistry {
             }),
             post_construct: None,
             overridable,
+            reuse_clone: reuse_clone_of::<P::Output>,
         });
         self
     }
@@ -1178,23 +1254,34 @@ impl BeanRegistry {
 
         beans.extend(lazy_regs);
 
+        // The config is needed both for per-bean fingerprints and for the
+        // whole-config component of the graph fingerprint.
+        let config = self.provided
+            .get(&TypeId::of::<crate::config::R2eConfig>())
+            .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
+
+        // Seed the graph fingerprint with the ENTIRE config: an edit that no
+        // bean declares in `config_keys()` must still invalidate the cached
+        // state, or the `R2eConfig` instance inside the cached graph would be
+        // served stale. Per-bean fingerprints stay key-scoped, so such an
+        // edit rebuilds nothing — the partial-rebuild path just re-provides
+        // the fresh config.
+        let mut graph_hasher = std::collections::hash_map::DefaultHasher::new();
+        match config {
+            Some(config) => config.full_fingerprint().hash(&mut graph_hasher),
+            None => 0u64.hash(&mut graph_hasher),
+        }
+
         let bean_count = beans.len();
         if bean_count == 0 {
-            return Ok((0, Vec::new()));
+            return Ok((graph_hasher.finish(), Vec::new()));
         }
 
         // Topological sort (shared generic with resolve(); detects cycles).
         let sorted_order = Self::topological_sort(&beans)?;
 
-        // Compute fingerprints — we need config for this
-        let config = self.provided
-            .get(&TypeId::of::<crate::config::R2eConfig>())
-            .and_then(|v| v.downcast_ref::<crate::config::R2eConfig>());
-
         let mut dep_fingerprints: HashMap<TypeId, u64> = HashMap::new();
         let mut per_bean: BeanFingerprints = Vec::new();
-        let mut graph_hasher = std::collections::hash_map::DefaultHasher::new();
-
 
         for &idx in &sorted_order {
             let reg = &beans[idx];
@@ -1212,7 +1299,64 @@ impl BeanRegistry {
     /// Uses Kahn's algorithm for topological sorting. Returns a
     /// [`BeanContext`] with all instances, or a [`BeanError`] if the graph
     /// is invalid (cycles, missing deps, or duplicates).
-    pub async fn resolve(mut self) -> Result<BeanContext, BeanError> {
+    pub async fn resolve(self) -> Result<BeanContext, BeanError> {
+        self.resolve_reusing(None).await
+    }
+
+    /// Resolve the graph, optionally reusing unchanged instances from a
+    /// previous dev-reload cycle. [`resolve`](Self::resolve) is the `None`
+    /// case; `build_state()` passes `Some` when a hot-patch changed the
+    /// graph fingerprint, so only changed beans (and their transitive
+    /// dependents) are reconstructed and every other instance — with its
+    /// in-memory state — carries over.
+    #[doc(hidden)]
+    pub async fn resolve_reusing(
+        mut self,
+        reuse: Option<ReusePlan>,
+    ) -> Result<BeanContext, BeanError> {
+        // ── Dev-reload partial rebuild: harvest reusable material ───────
+        // Beans targeted by a decorator fill are excluded from reuse: their
+        // `DecoSlot` is a `OnceLock` already set on the old instance, so a
+        // refill against the new graph would silently no-op and leave stale
+        // interceptor sets. They rebuild (fresh slot, fresh fill) instead.
+        let deco_targets: HashSet<TypeId> =
+            self.deco_fills.iter().map(|(t, _)| *t).collect();
+        let mut reused_instances: HashMap<TypeId, Box<dyn Any + Send + Sync>> =
+            HashMap::new();
+        let mut pinned_provided: HashSet<TypeId> = HashSet::new();
+        if let Some(plan) = &reuse {
+            for reg in &self.beans {
+                if plan.unchanged.contains(&reg.type_id)
+                    && !deco_targets.contains(&reg.type_id)
+                {
+                    if let Some(inst) = (reg.reuse_clone)(&plan.old_ctx) {
+                        reused_instances.insert(reg.type_id, inst);
+                    }
+                }
+            }
+            // Pin provided values from the previous cycle so reused and
+            // rebuilt beans keep sharing one instance (no split-brain).
+            // `R2eConfig` stays fresh: the per-patch YAML re-read is
+            // deliberate — config edits must apply on the next patch.
+            let config_tid = TypeId::of::<crate::config::R2eConfig>();
+            for (tid, value) in self.provided.iter_mut() {
+                if *tid == config_tid {
+                    continue;
+                }
+                if let Some(clone_fn) = self.provided_reuse_clones.get(tid) {
+                    if let Some(old) = clone_fn(&plan.old_ctx) {
+                        *value = old;
+                        pinned_provided.insert(*tid);
+                    }
+                }
+            }
+            tracing::debug!(
+                reused_beans = reused_instances.len(),
+                pinned_provided = pinned_provided.len(),
+                "dev-reload: partial rebuild — carrying unchanged instances over"
+            );
+        }
+
         let mut entries: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
 
         // Move provided instances into the resolved set.
@@ -1262,14 +1406,23 @@ impl BeanRegistry {
             // Topological sort (shared generic; builds its own type index).
             let sorted_order = Self::topological_sort(&self.beans)?;
 
-            // Extract post-construct fns before consuming beans
+            // Extract post-construct fns before consuming beans. Reused
+            // instances skip theirs: the hook already ran on that same
+            // instance in the cycle that built it.
             factory_pc_fns = sorted_order
                 .iter()
-                .filter_map(|&idx| self.beans[idx].post_construct.take())
+                .filter_map(|&idx| {
+                    if reused_instances.contains_key(&self.beans[idx].type_id) {
+                        None
+                    } else {
+                        self.beans[idx].post_construct.take()
+                    }
+                })
                 .collect();
 
             // Construct beans in order (async)
-            Self::construct_beans_in_order(self.beans, sorted_order, entries).await
+            Self::construct_beans_in_order(self.beans, sorted_order, entries, reused_instances)
+                .await
         };
 
         // Fill bean decorator slots from the fully-resolved graph, BEFORE any
@@ -1291,8 +1444,13 @@ impl BeanRegistry {
 
         // Run post-construct hooks for provided/plugin beans, after every
         // factory-bean post-construct. Reads each target by type from the
-        // resolved context (pinned overrides honoured).
-        for pc_fn in provided_post_constructs {
+        // resolved context (pinned overrides honoured). Values pinned from
+        // the previous dev-reload cycle skip theirs — same instance, the
+        // hook already ran.
+        for (tid, pc_fn) in provided_post_constructs {
+            if pinned_provided.contains(&tid) {
+                continue;
+            }
             ctx = pc_fn(ctx)
                 .await
                 .map_err(|e| BeanError::PostConstruct(e.to_string()))?;
@@ -1343,6 +1501,22 @@ impl BeanRegistry {
                 Arc::new(RwLock::new(HashMap::new()));
             ctx = ctx.with_lazy_slots(Arc::clone(&lazy_slots));
             for lazy_reg in self.lazy_beans {
+                // Dev-reload partial rebuild: an unchanged lazy bean keeps
+                // its previous slot `Arc` — including any already-resolved
+                // value inside it — instead of getting a fresh slot.
+                if let Some(plan) = &reuse {
+                    if plan.unchanged.contains(&lazy_reg.type_id)
+                        && !deco_targets.contains(&lazy_reg.type_id)
+                    {
+                        if let Some(slot) = plan.old_ctx.lazy_slot(lazy_reg.type_id) {
+                            lazy_slots
+                                .write()
+                                .expect("Lazy slots lock poisoned")
+                                .insert(lazy_reg.type_id, slot);
+                            continue;
+                        }
+                    }
+                }
                 let snapshot = ctx.clone();
                 let slot = (lazy_reg.slot_factory)(snapshot);
                 lazy_slots
@@ -1716,6 +1890,7 @@ impl BeanRegistry {
         beans: Vec<BeanRegistration>,
         sorted_order: Vec<usize>,
         entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+        mut reused_instances: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     ) -> BeanContext {
         let mut bean_data: Vec<Option<(TypeId, Factory)>> = beans
             .into_iter()
@@ -1726,6 +1901,13 @@ impl BeanRegistry {
 
         for idx in sorted_order {
             let (type_id, factory) = bean_data[idx].take().unwrap();
+            // Dev-reload partial rebuild: an unchanged bean's instance is
+            // inserted at its topological position (dependents constructed
+            // later read it from the context) — its factory never runs.
+            if let Some(inst) = reused_instances.remove(&type_id) {
+                ctx = ctx.with_new_entry(type_id, inst);
+                continue;
+            }
             let (returned_ctx, bean_value) = factory(ctx).await;
             ctx = returned_ctx.with_new_entry(type_id, bean_value);
         }

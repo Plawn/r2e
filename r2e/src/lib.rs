@@ -107,6 +107,7 @@ pub use r2e_observability;
 #[cfg(feature = "dev-reload")]
 pub mod devtools {
     pub use r2e_devtools::*;
+    pub use r2e_core::dev::mark_hot_reload_loop;
 }
 
 /// Declare the standard binary entry point for an [`App`](r2e_core::App).
@@ -193,6 +194,11 @@ macro_rules! launch {
                 }
 
                 let __env = <$app as $crate::App>::setup().await;
+                // Enable the process-global dev-reload caches (bean-graph
+                // fingerprinting, instance reuse, lifecycle skip): they must
+                // engage only under the actual hot-patch loop, never in a
+                // process that merely compiled the feature.
+                $crate::devtools::mark_hot_reload_loop();
                 $crate::devtools::serve_with_hotreload_env(__env, |__e| __r2e_server(__e)).await;
                 ::core::result::Result::<(), ::std::boxed::Box<dyn ::std::error::Error>>::Ok(())
             }

@@ -35,13 +35,13 @@ AppBuilder::new()
     .build_state()
     .await
     .on_start(|state| async move {
-        // Verifier la connexion a la base de donnees
+        // Check the database connection
         let pool = state.bean::<sqlx::SqlitePool>().expect("pool bean");
         sqlx::query("SELECT 1").execute(&pool).await?;
-        tracing::info!("Connexion DB verifiee");
+        tracing::info!("DB connection verified");
 
-        // Initialiser des donnees
-        tracing::info!("Application demarree");
+        // Initialize data
+        tracing::info!("Application started");
         Ok(())
     })
     .serve("0.0.0.0:3000")
@@ -70,16 +70,16 @@ AppBuilder::new()
     .build_state()
     .await
     .on_start(|state| async move {
-        // R2eConfig mappe ADMIN_EMAIL → admin.email automatiquement
+        // R2eConfig maps ADMIN_EMAIL → admin.email automatically
         let config = state.bean::<R2eConfig>().expect("config bean");
         let email: String = config.get("admin.email").unwrap_or_default();
         let password: String = config.get("admin.password").unwrap_or_default();
 
         if email.is_empty() || password.is_empty() {
-            return Ok(()); // pas de seed demande
+            return Ok(()); // no seed requested
         }
 
-        // UserRepo est deja dans le graphe via DI
+        // UserRepo is already in the graph via DI
         let user_repo = state.bean::<UserRepo>().expect("user repo bean");
         if user_repo.find_by_email(&email).await?.is_some() {
             tracing::debug!("Admin seed skipped — {} already exists", email);
@@ -114,9 +114,9 @@ AppBuilder::new()
     .build_state()
     .await
     .on_stop(|_state| async {
-        tracing::info!("Arret en cours...");
-        // Nettoyage, flush des logs, fermeture de connexions...
-        tracing::info!("Nettoyage termine");
+        tracing::info!("Shutting down...");
+        // Cleanup, log flush, closing connections...
+        tracing::info!("Cleanup complete");
     })
     .serve("0.0.0.0:3000")
     .await
@@ -142,20 +142,20 @@ AppBuilder::new()
     .build_state()
     .await
     .on_start(|state| async move {
-        tracing::info!("Hook 1 : verification DB");
+        tracing::info!("Hook 1: DB check");
         let pool = state.bean::<sqlx::SqlitePool>().expect("pool bean");
         sqlx::query("SELECT 1").execute(&pool).await?;
         Ok(())
     })
     .on_start(|_state| async move {
-        tracing::info!("Hook 2 : chargement cache");
+        tracing::info!("Hook 2: cache loading");
         Ok(())
     })
     .on_stop(|_state| async {
-        tracing::info!("Hook arret 1");
+        tracing::info!("Shutdown hook 1");
     })
     .on_stop(|_state| async {
-        tracing::info!("Hook arret 2");
+        tracing::info!("Shutdown hook 2");
     })
     .serve("0.0.0.0:3000")
     .await
@@ -174,7 +174,7 @@ AppBuilder::new()
     .await
     .shutdown_grace_period(Duration::from_secs(5))
     .on_stop(|_state| async {
-        tracing::info!("Nettoyage...");
+        tracing::info!("Cleanup...");
     })
     .serve("0.0.0.0:3000")
     .await

@@ -155,10 +155,29 @@ examples gained the `dev-reload` passthrough feature. example-grpc's
 transport-level tests deliberately stay on their dedicated harness
 (`TestApp::boot` doesn't cover the separate gRPC port).
 
-Remaining:
-- Phase 2: pin previous `BeanContext` instances across hot-patches so **all**
-  bean state survives (not just `Env`) — validate Subsecond vtable semantics
-  before relying on it (needs live hot-reload validation; not agent-friendly).
+**Phase 2 (bean pinning) — DONE (2026-07-19).** Dev-reload now does a
+**partial rebuild** on fingerprint change: beans whose per-bean fingerprint
+(constructor tokens + declared config values + transitive dep fingerprints)
+is unchanged keep their instance across hot-patches — in-memory state
+survives; changed beans and their transitive dependents rebuild (their
+`#[post_construct]` re-runs, reused ones skip it). `.provide()`-ed values
+are pinned from the previous cycle (except `R2eConfig` — YAML re-read per
+patch stays deliberate); unchanged lazy slots carry over; deco-fill targets
+always rebuild (`DecoSlot` is a `OnceLock`, no in-place refill). Two
+pre-existing bugs fixed en route: the graph fingerprint now folds in the
+**whole** config (`R2eConfig::full_fingerprint`) so an edit no bean declares
+still refreshes the graph's `R2eConfig`; and the dev-reload caches +
+lifecycle skip engage **only** under the real hot-patch loop
+(`r2e::launch!` calls `mark_hot_reload_loop()`) — `cargo test
+--features dev-reload` builds stay cold (the process-global caches used to
+cross-contaminate builds in one test process). Core: `BeanRegistry::
+resolve_reusing`/`ReusePlan` (beans.rs), CTX_CACHE (dev.rs), try_build_state
+(builder/nostate.rs). Tests: `r2e-core/tests/dev_reload_partial.rs`
+(4 cycles in-process). **Subsecond semantics validated live** (dx 0.7.3,
+bin-only probe app, 2026-07-19): sibling-bean edit hot-patched with counter
+state surviving, closures built by pre-patch code callable two patches deep,
+inverse direction (stateful bean edited → rebuilt, sibling reused) OK.
+Docs: 09-dev-mode.md, llm.txt.
 
 ## W10 — Bean/controller feature unification — DONE (phases 1–4 + follow-up, 2026-07-16/17)
 

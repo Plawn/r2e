@@ -38,7 +38,7 @@ All multipart types are available via the prelude:
 
 ```rust
 use r2e::prelude::*;
-// Exporte : FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile
+// Exports: FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile
 ```
 
 Or import explicitly:
@@ -74,7 +74,7 @@ impl ProfileController {
         TypedMultipart(form): TypedMultipart<ProfileUpload>,
     ) -> Json<String> {
         Json(format!(
-            "Bonjour {}, {} octets recus",
+            "Hello {}, {} bytes received",
             form.name,
             form.avatar.len()
         ))
@@ -86,13 +86,13 @@ impl ProfileController {
 
 ```rust
 pub struct UploadedFile {
-    /// Le nom du champ dans le formulaire.
+    /// The field name in the form.
     pub name: String,
-    /// Le nom de fichier original fourni par le client, si present.
+    /// The original file name provided by the client, if present.
     pub file_name: Option<String>,
-    /// Le type de contenu (type MIME), si fourni.
+    /// The content type (MIME type), if provided.
     pub content_type: Option<String>,
-    /// Les donnees brutes du fichier.
+    /// The raw file data.
     pub data: Bytes,
 }
 ```
@@ -248,12 +248,12 @@ use r2e::multipart::Multipart;
 async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
     let mut fields = Vec::new();
     while let Some(field) = multipart.next_field().await.map_err(|e| {
-        HttpError::BadRequest(format!("erreur multipart: {e}"))
+        HttpError::BadRequest(format!("multipart error: {e}"))
     })? {
         let name = field.name().unwrap_or("unknown").to_string();
         let file_name = field.file_name().map(|s| s.to_string());
         let data = field.bytes().await.map_err(|e| {
-            HttpError::Internal(format!("echec de lecture du champ: {e}"))
+            HttpError::Internal(format!("failed to read field: {e}"))
         })?;
         fields.push(serde_json::json!({
             "name": name,
@@ -300,9 +300,9 @@ Multipart endpoints are modeled automatically in the generated spec — no schem
 ```bash
 curl -X POST http://localhost:3000/uploads/profile \
   -F "name=Alice" \
-  -F "bio=Developpeur Rust" \
+  -F "bio=Rust developer" \
   -F "avatar=@photo.jpg" \
   -F "attachments=@doc1.pdf" \
   -F "attachments=@doc2.pdf"
-# → {"name":"Alice","bio":"Developpeur Rust","avatar_size":12345,...}
+# → {"name":"Alice","bio":"Rust developer","avatar_size":12345,...}
 ```

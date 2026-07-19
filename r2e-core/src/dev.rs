@@ -35,6 +35,31 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "dev-reload")]
 static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
 
+/// Whether this process is actually running inside the Subsecond hot-patch
+/// loop (set by `r2e::launch!` before entering it).
+///
+/// The dev-reload state caches are process-global; they must engage ONLY
+/// under the loop. Merely compiling with the `dev-reload` feature — e.g.
+/// `cargo test --features dev-reload`, or an example's feature passthrough —
+/// must keep every `build_state()` cold, or unrelated builds in one test
+/// process would serve each other's cached graphs.
+#[cfg(feature = "dev-reload")]
+static HOT_RELOAD_LOOP: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process as running the Subsecond hot-patch loop, enabling the
+/// dev-reload state caches (bean-graph fingerprinting, instance reuse,
+/// lifecycle skip). Called by `r2e::launch!` before entering the loop.
+#[cfg(feature = "dev-reload")]
+pub fn mark_hot_reload_loop() {
+    HOT_RELOAD_LOOP.store(true, Ordering::Release);
+}
+
+/// Whether [`mark_hot_reload_loop`] has been called in this process.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn hot_reload_loop_active() -> bool {
+    HOT_RELOAD_LOOP.load(Ordering::Acquire)
+}
+
 /// Retrieve a cached listener for the given address, or bind a new one.
 ///
 /// On first call for a given address, binds a `TcpListener`, stores it, and
@@ -155,30 +180,44 @@ pub(crate) fn cache_state<T: Clone + Send + Sync + 'static>(state: &T) {
     *guard = Some(Box::new(state.clone()));
 }
 
+/// The previous cycle's resolved [`BeanContext`](crate::beans::BeanContext),
+/// cached independently of the provision-list type `P` (unlike
+/// [`STATE_CACHE`], which is keyed by the monomorphized state tuple). This
+/// lets the partial rebuild reuse unchanged bean instances even when the
+/// provision list itself changed shape (e.g. a `.provide()` was added).
+#[cfg(feature = "dev-reload")]
+static CTX_CACHE: OnceLock<Mutex<Option<std::sync::Arc<crate::beans::BeanContext>>>> =
+    OnceLock::new();
+
+/// Retrieve the previous cycle's resolved bean context, if any.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn get_cached_ctx() -> Option<std::sync::Arc<crate::beans::BeanContext>> {
+    let store = CTX_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    guard.clone()
+}
+
+/// Cache the resolved bean context for the next dev-reload cycle.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn cache_ctx(ctx: &std::sync::Arc<crate::beans::BeanContext>) {
+    let store = CTX_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().expect("ctx cache poisoned");
+    *guard = Some(std::sync::Arc::clone(ctx));
+}
+
 /// Returns `true` if lifecycle hooks (consumers, serve hooks, startup hooks)
-/// have already been executed in a previous dev-reload cycle.
+/// have already been executed in a previous dev-reload cycle. Always `false`
+/// outside the hot-patch loop: a test process building several apps must run
+/// every app's lifecycle, not skip all but the first.
 #[cfg(feature = "dev-reload")]
 pub(crate) fn is_lifecycle_initialized() -> bool {
-    LIFECYCLE_INITIALIZED.load(Ordering::Acquire)
+    hot_reload_loop_active() && LIFECYCLE_INITIALIZED.load(Ordering::Acquire)
 }
 
 /// Mark lifecycle hooks as having been executed.
 #[cfg(feature = "dev-reload")]
 pub(crate) fn mark_lifecycle_initialized() {
     LIFECYCLE_INITIALIZED.store(true, Ordering::Release);
-}
-
-/// Clear only the monolithic state cache, without resetting lifecycle hooks.
-///
-/// Used internally when the graph fingerprint changes: beans need rebuilding
-/// but consumers, startup hooks, etc. should NOT be re-executed.
-#[cfg(feature = "dev-reload")]
-pub(crate) fn clear_state_cache() {
-    if let Some(store) = STATE_CACHE.get() {
-        if let Ok(mut guard) = store.lock() {
-            *guard = None;
-        }
-    }
 }
 
 /// Force the next dev-reload cycle to rebuild the application state from
@@ -189,6 +228,11 @@ pub(crate) fn clear_state_cache() {
 #[cfg(feature = "dev-reload")]
 pub fn invalidate_state_cache() {
     if let Some(store) = STATE_CACHE.get() {
+        if let Ok(mut guard) = store.lock() {
+            *guard = None;
+        }
+    }
+    if let Some(store) = CTX_CACHE.get() {
         if let Ok(mut guard) = store.lock() {
             *guard = None;
         }

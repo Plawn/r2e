@@ -41,8 +41,8 @@ Method attribute that restricts access to users having at least one of the speci
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 use jsonwebtoken::DecodingKey;
 
-let secret = b"mon-secret-change-en-production";
-let config = SecurityConfig::new("unused", "mon-issuer", "mon-audience");
+let secret = b"my-secret-change-in-production";
+let config = SecurityConfig::new("unused", "my-issuer", "my-audience");
 let validator = JwtClaimsValidator::new_with_static_key(
     DecodingKey::from_secret(secret),
     config,
@@ -58,7 +58,7 @@ use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};
 let config = SecurityConfig::new(
     "https://auth.example.com/.well-known/jwks.json",
     "https://auth.example.com",
-    "mon-application",
+    "my-application",
 );
 // JwksCache::new is async and fallible (it performs an initial key fetch);
 // JwtClaimsValidator::new itself is synchronous.
@@ -138,10 +138,10 @@ identity. For mostly-public controllers, prefer param-level `#[inject(identity)]
 
 ```rust
 pub struct AuthenticatedUser {
-    pub sub: String,              // Subject (ID utilisateur)
-    pub email: Option<String>,    // Email (si present dans les claims)
-    pub roles: Vec<String>,       // Roles extraits des claims
-    pub claims: serde_json::Value, // Claims bruts pour acces avance
+    pub sub: String,              // Subject (user ID)
+    pub email: Option<String>,    // Email (if present in the claims)
+    pub roles: Vec<String>,       // Roles extracted from the claims
+    pub claims: serde_json::Value, // Raw claims for advanced access
 }
 ```
 
@@ -270,25 +270,25 @@ The user must have **at least one** of the specified roles (OR, not AND).
 ### 6. Utility Methods
 
 ```rust
-// Verifier un role
+// Check a role
 user.has_role("admin");  // → bool
 
-// Verifier si au moins un role est present
+// Check whether at least one role is present
 user.has_any_role(&["admin", "manager"]);  // → bool
 ```
 
 ## Authentication Flow
 
 ```
-1. Client envoie: Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
-2. Extracteur AuthenticatedUser:
-   a. Extraire le header Authorization
-   b. Verifier le schema "Bearer"
-   c. Extraire le token
-   d. Valider via JwtClaimsValidator (signature, exp, iss, aud)
-   e. Mapper les claims vers AuthenticatedUser
-3. Si valide → handler execute avec self.user peuple
-4. Si invalide → 401 retourne, handler jamais execute
+1. Client sends: Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
+2. AuthenticatedUser extractor:
+   a. Extract the Authorization header
+   b. Check the "Bearer" scheme
+   c. Extract the token
+   d. Validate via JwtClaimsValidator (signature, exp, iss, aud)
+   e. Map the claims to AuthenticatedUser
+3. If valid → handler runs with self.user populated
+4. If invalid → 401 returned, handler never runs
 ```
 
 ### Possible Errors
@@ -316,18 +316,18 @@ the core `Arc`, extracts the request data, and `bind_request` binds the stack fa
 invoking the method on it:
 
 ```rust
-// Genere (simplifie)
-// Construit une seule fois a l'enregistrement, depuis le graphe de beans :
+// Generated (simplified)
+// Built once at registration, from the bean graph:
 let core: Arc<UserController> = Arc::new(UserController::from_context(&ctx));
 
 get({
     let core = core.clone();
     move |data: __R2eRequestData_UserController| {
-        let core = core.clone(); // un clone d'Arc par requete
+        let core = core.clone(); // one Arc clone per request
         async move {
-            // Lie les valeurs request-scoped (identity) dans la façade.
+            // Binds the request-scoped values (identity) into the façade.
             let ctrl = __r2e_meta_UserController::bind_request(core, data);
-            // self.user est un champ de la façade ; self.<inject/config> passe par Deref vers le core.
+            // self.user is a façade field; self.<inject/config> resolves through Deref to the core.
             ctrl.me().await
         }
     }
@@ -337,24 +337,24 @@ get({
 ## Validation Criteria
 
 ```bash
-# Sans token → 401
+# Without a token → 401
 curl http://localhost:3000/users
 # → 401
 
-# Avec token valide → 200
+# With a valid token → 200
 curl -H "Authorization: Bearer <token>" http://localhost:3000/users
 # → [...users...]
 
-# Endpoint /me → identite de l'utilisateur
+# /me endpoint → the user's identity
 curl -H "Authorization: Bearer <token>" http://localhost:3000/me
 # → {"sub":"user-123","email":"demo@r2e.dev","roles":["user","admin"],...}
 
-# Admin sans role admin → 403
+# Admin without the admin role → 403
 TOKEN_USER=$(generate_token_with_roles "user")
 curl -H "Authorization: Bearer $TOKEN_USER" http://localhost:3000/admin/users
 # → 403
 
-# Admin avec role admin → 200
+# Admin with the admin role → 200
 TOKEN_ADMIN=$(generate_token_with_roles "admin")
 curl -H "Authorization: Bearer $TOKEN_ADMIN" http://localhost:3000/admin/users
 # → [...users...]

@@ -385,6 +385,25 @@ impl R2eConfig {
     ///
     /// Returns a `u64` hash of the values at the given keys. Used by the
     /// dev-reload bean cache to detect config changes.
+    /// Fingerprint of the **entire** config — every key and value,
+    /// order-independent.
+    ///
+    /// Folded into the dev-reload graph fingerprint so that any config edit
+    /// invalidates the cached state: without it, an edit no bean declares in
+    /// `config_keys()` would hit the full-reuse fast path and serve a stale
+    /// `R2eConfig` instance out of the cached bean graph.
+    pub fn full_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut keys: Vec<&str> = self.values.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for key in keys {
+            key.hash(&mut hasher);
+            self.values[key].hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub fn config_fingerprint(&self, keys: &[&str]) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
