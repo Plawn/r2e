@@ -19,7 +19,7 @@ impl AccountController {
     #[get("/greeting")]
     async fn greeting(&self) -> Json<serde_json::Value> {
         println!("he3");
-        Json(serde_json::json!({ "greeting": self.greeting }))
+        Json(serde_json::json!({ "greeting": self.greeting.to_ascii_lowercase() }))
     }
 
     #[get("/error/custom")]
