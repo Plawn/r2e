@@ -1,10 +1,12 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use rand::rngs::OsRng;
-use rsa::pkcs8::EncodePrivateKey;
+use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::Serialize;
+
+use crate::error::OidcError;
 
 /// RSA key pair for JWT signing and JWKS publication.
 pub struct OidcKeyPair {
@@ -20,32 +22,54 @@ pub struct OidcKeyPair {
 
 impl OidcKeyPair {
     /// Generate a new RSA-2048 key pair.
-    pub fn generate(kid: &str) -> Self {
-        let private_key =
-            RsaPrivateKey::new(&mut OsRng, 2048).expect("failed to generate RSA-2048 key");
+    pub fn generate(kid: Option<&str>) -> Result<Self, OidcError> {
+        let private_key = RsaPrivateKey::new(&mut OsRng, 2048)
+            .map_err(|e| OidcError::Internal(format!("failed to generate RSA-2048 key: {e}")))?;
+        Self::from_private_key(private_key, kid)
+    }
+
+    /// Load an RSA key pair from a PKCS#8 PEM private key.
+    pub fn from_pkcs8_pem(pem: &str, kid: Option<&str>) -> Result<Self, OidcError> {
+        let private_key = RsaPrivateKey::from_pkcs8_pem(pem).map_err(|e| {
+            OidcError::Configuration(format!("invalid RSA PKCS#8 private key: {e}"))
+        })?;
+        Self::from_private_key(private_key, kid)
+    }
+
+    fn from_private_key(private_key: RsaPrivateKey, kid: Option<&str>) -> Result<Self, OidcError> {
         let public_key = RsaPublicKey::from(&private_key);
 
         // Export private key as PKCS8 PEM for jsonwebtoken EncodingKey.
         let pkcs8_pem = private_key
             .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-            .expect("failed to export RSA key as PKCS8 PEM");
-        let encoding_key = EncodingKey::from_rsa_pem(pkcs8_pem.as_bytes())
-            .expect("failed to create EncodingKey from RSA PEM");
+            .map_err(|e| {
+                OidcError::Internal(format!("failed to export RSA key as PKCS8 PEM: {e}"))
+            })?;
+        let encoding_key = EncodingKey::from_rsa_pem(pkcs8_pem.as_bytes()).map_err(|e| {
+            OidcError::Internal(format!("failed to create EncodingKey from RSA PEM: {e}"))
+        })?;
 
         // Extract public key components (n, e) as base64url for JWKS and DecodingKey.
         let n = URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
         let e = URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
 
-        let decoding_key = DecodingKey::from_rsa_components(&n, &e)
-            .expect("failed to create DecodingKey from RSA components");
+        let decoding_key = DecodingKey::from_rsa_components(&n, &e).map_err(|e| {
+            OidcError::Internal(format!(
+                "failed to create DecodingKey from RSA components: {e}"
+            ))
+        })?;
+        let kid = kid
+            .filter(|kid| !kid.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| derive_kid(&n, &e));
 
-        Self {
+        Ok(Self {
             encoding_key,
             decoding_key,
             n,
             e,
-            kid: kid.to_string(),
-        }
+            kid,
+        })
     }
 
     /// Returns the encoding key for signing JWTs.
@@ -56,6 +80,11 @@ impl OidcKeyPair {
     /// Returns the decoding key for validating JWTs.
     pub fn decoding_key(&self) -> DecodingKey {
         self.decoding_key.clone()
+    }
+
+    /// Returns the active key ID.
+    pub fn kid(&self) -> &str {
+        &self.kid
     }
 
     /// Returns the JWKS JSON representation of the public key.
@@ -71,6 +100,11 @@ impl OidcKeyPair {
             }],
         }
     }
+}
+
+fn derive_kid(n: &str, e: &str) -> String {
+    let prefix_len = n.len().min(22);
+    format!("rsa-{}-{e}", &n[..prefix_len])
 }
 
 /// JWKS response body.

@@ -18,6 +18,7 @@ fn build_app() -> Router {
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
         .audience("test-app")
+        .enable_password_grant_for_development()
         .with_user_store(users);
 
     r2e_core::AppBuilder::new()
@@ -27,9 +28,7 @@ fn build_app() -> Router {
 }
 
 async fn body_json(resp: Response) -> serde_json::Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -90,4 +89,33 @@ async fn userinfo_invalid_token() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(resp.headers().contains_key("www-authenticate"));
+}
+
+#[r2e_core::test]
+async fn userinfo_accepts_case_insensitive_bearer_scheme() {
+    let app = build_app();
+    let token = get_token(&app).await;
+
+    let req = Request::get("/userinfo")
+        .header("authorization", format!("bearer   {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[r2e_core::test]
+async fn userinfo_supports_post() {
+    let app = build_app();
+    let token = get_token(&app).await;
+
+    let req = Request::post("/userinfo")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }

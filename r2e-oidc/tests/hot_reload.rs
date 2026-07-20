@@ -4,9 +4,7 @@ use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
 async fn body_json(resp: Response) -> serde_json::Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -30,6 +28,7 @@ async fn token_survives_hot_reload() {
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
         .audience("test-app")
+        .enable_password_grant_for_development()
         .with_user_store(users)
         .build();
 

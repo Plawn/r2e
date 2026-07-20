@@ -1,7 +1,10 @@
-//! Embedded OIDC server plugin for R2E.
+//! Embedded OAuth/JWT issuer plugin for R2E.
 //!
-//! Provides JWT token issuance without an external identity provider.
+//! Provides local RS256 access-token issuance without an external identity provider.
 //! Install as a `PreStatePlugin` and `AuthenticatedUser` works out-of-the-box.
+//!
+//! This crate is not a full browser-facing OpenID Connect Provider: it does not
+//! implement an authorization endpoint, Authorization Code + PKCE, or ID tokens.
 //!
 //! # Quick start
 //!
@@ -18,6 +21,7 @@
 //!     });
 //!
 //! let oidc = OidcServer::new()
+//!     .enable_password_grant_for_development()
 //!     .with_user_store(users);
 //!
 //! AppBuilder::new()
@@ -38,7 +42,10 @@
 //!
 //! ```ignore
 //! // setup() — called once
-//! let oidc = OidcServer::new().with_user_store(users).build();
+//! let oidc = OidcServer::new()
+//!     .enable_password_grant_for_development()
+//!     .with_user_store(users)
+//!     .build();
 //!
 //! // main(env) — called on each hot-patch
 //! AppBuilder::new()
@@ -65,20 +72,22 @@ use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
 pub use config::OidcServerConfig;
-pub use store::{InMemoryUserStore, OidcUser, UserStore};
+pub use error::OidcError;
+pub use store::{InMemoryUserStore, OidcUser, StoreResult, UserStore, UserStoreError};
 
-/// Embedded OIDC server plugin.
+/// Embedded OAuth/JWT issuer plugin.
 ///
 /// Generates RSA keys, provides `Arc<JwtClaimsValidator>` to the bean graph,
-/// and exposes OAuth 2.0 / OIDC endpoints.
+/// and exposes token, metadata, JWKS, and userinfo endpoints.
 pub struct OidcServer {
     config: OidcServerConfig,
     user_store: Option<Box<dyn store::UserStoreErased>>,
     client_registry: ClientRegistry,
+    signing_key_pem: Option<String>,
 }
 
 impl OidcServer {
-    /// Create a new OIDC server with default configuration.
+    /// Create a new local token issuer with default configuration.
     ///
     /// Defaults: issuer = `http://localhost:3000`, audience = `r2e-app`, TTL = 3600s.
     pub fn new() -> Self {
@@ -86,6 +95,7 @@ impl OidcServer {
             config: OidcServerConfig::default(),
             user_store: None,
             client_registry: ClientRegistry::new(),
+            signing_key_pem: None,
         }
     }
 
@@ -113,6 +123,36 @@ impl OidcServer {
         self
     }
 
+    /// Set the key ID (`kid`) included in JWT headers and JWKS.
+    pub fn key_id(mut self, kid: impl Into<String>) -> Self {
+        self.config.kid = kid.into();
+        self
+    }
+
+    /// Load the signing key from a PKCS#8 PEM private key.
+    ///
+    /// Persisting the key avoids invalidating every issued token on process
+    /// restart. If no explicit `kid` is configured, one is derived from the
+    /// public key.
+    pub fn with_signing_key_pem(mut self, pem: impl Into<String>) -> Self {
+        self.signing_key_pem = Some(pem.into());
+        self
+    }
+
+    /// Explicitly enable the resource owner password credentials grant.
+    ///
+    /// This grant is intended for local development fixtures only.
+    pub fn enable_password_grant_for_development(mut self) -> Self {
+        self.config.password_grant_enabled = true;
+        self
+    }
+
+    /// Limit concurrent Argon2 password/client-secret verifications.
+    pub fn max_credential_verifications(mut self, max: usize) -> Self {
+        self.config.max_credential_verifications = max;
+        self
+    }
+
     /// Set the user store (required).
     pub fn with_user_store(mut self, store: impl UserStore) -> Self {
         self.user_store = Some(Box::new(store));
@@ -137,15 +177,28 @@ impl OidcServer {
     /// state construction). The returned `OidcRuntime` is `Clone` and can be
     /// reused across hot-reload cycles.
     pub fn build(self) -> OidcRuntime {
+        self.try_build()
+            .expect("invalid local token issuer configuration")
+    }
+
+    /// Build the runtime, returning configuration/key errors instead of panicking.
+    pub fn try_build(self) -> Result<OidcRuntime, OidcError> {
+        self.config.validate()?;
+        let issuer = self.config.canonical_issuer();
+
         // 1. Generate RSA-2048 key pair.
-        let key_pair = Arc::new(keys::OidcKeyPair::generate(&self.config.kid));
+        let key_pair = Arc::new(match &self.signing_key_pem {
+            Some(pem) => keys::OidcKeyPair::from_pkcs8_pem(
+                pem,
+                (!self.config.kid.is_empty()).then_some(self.config.kid.as_str()),
+            )?,
+            None => keys::OidcKeyPair::generate(
+                (!self.config.kid.is_empty()).then_some(self.config.kid.as_str()),
+            )?,
+        });
 
         // 2. Create JwtClaimsValidator with the public key.
-        let security_config = SecurityConfig::new(
-            "local",
-            &self.config.issuer,
-            &self.config.audience,
-        );
+        let security_config = SecurityConfig::new("local", &issuer, &self.config.audience);
         let decoding_key = key_pair.decoding_key();
         let claims_validator = Arc::new(JwtClaimsValidator::new_with_static_key(
             decoding_key,
@@ -153,24 +206,30 @@ impl OidcServer {
         ));
 
         // 3. Build internal OIDC state.
-        let oidc_state = Arc::new(state::OidcState {
-            key_pair: key_pair.clone(),
-            token_service: token::TokenService::new(key_pair, self.config.clone()),
-            user_store: self
-                .user_store
-                .expect("OidcServer: user store is required — call .with_user_store()"),
-            client_registry: self.client_registry,
-            config: self.config,
-            claims_validator: claims_validator.clone(),
-        });
+        let user_store = self.user_store.ok_or_else(|| {
+            OidcError::Configuration(
+                "OidcServer: user store is required; call .with_user_store()".into(),
+            )
+        })?;
+        let token_service =
+            token::TokenService::new(key_pair.clone(), self.config.clone(), issuer.clone());
+        let oidc_state = Arc::new(state::OidcState::new(
+            key_pair,
+            token_service,
+            user_store,
+            self.client_registry,
+            self.config,
+            issuer,
+            claims_validator.clone(),
+        )?);
 
         let base_path = oidc_state.config.base_path.clone();
 
-        OidcRuntime {
+        Ok(OidcRuntime {
             state: oidc_state,
             claims_validator,
             base_path,
-        }
+        })
     }
 }
 
@@ -181,7 +240,10 @@ impl OidcServer {
 ///
 /// ```ignore
 /// // setup() — once
-/// let oidc = OidcServer::new().with_user_store(users).build();
+/// let oidc = OidcServer::new()
+///     .enable_password_grant_for_development()
+///     .with_user_store(users)
+///     .build();
 ///
 /// // main(env) — hot-patched, called multiple times
 /// AppBuilder::new()
@@ -201,11 +263,15 @@ impl PreStatePlugin for OidcRuntime {
     type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
+    fn install(
+        &mut self,
+        (): (),
+        ctx: &mut PluginInstallContext<'_>,
+    ) -> (Arc<JwtClaimsValidator>,) {
         // `install` takes `&mut self`; the layer closure needs owned values, so
-        // clone the (cheap `Arc`) state and take the base path out.
+        // clone cheap runtime state for each install cycle.
         let oidc_state = self.state.clone();
-        let base_path = std::mem::take(&mut self.base_path);
+        let base_path = self.base_path.clone();
         ctx.add_layer(move |router| router.merge(oidc_routes(oidc_state, &base_path)));
 
         (self.claims_validator.clone(),)
@@ -218,7 +284,11 @@ impl PreStatePlugin for OidcServer {
     type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
+    fn install(
+        &mut self,
+        (): (),
+        ctx: &mut PluginInstallContext<'_>,
+    ) -> (Arc<JwtClaimsValidator>,) {
         // Take ownership out of `&mut self` (OidcServer: Default) to build the
         // runtime, then delegate to its `install`.
         let mut runtime = std::mem::take(self).build();
@@ -235,7 +305,10 @@ fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Router {
             get(handlers::discovery_handler),
         )
         .route("/.well-known/jwks.json", get(handlers::jwks_handler))
-        .route("/userinfo", get(handlers::userinfo_handler))
+        .route(
+            "/userinfo",
+            get(handlers::userinfo_handler).post(handlers::userinfo_handler),
+        )
         .with_state(state);
 
     if base_path.is_empty() {

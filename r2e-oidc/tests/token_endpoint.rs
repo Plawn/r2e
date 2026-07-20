@@ -28,6 +28,7 @@ fn build_app() -> Router {
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
         .audience("test-app")
+        .enable_password_grant_for_development()
         .with_user_store(users);
 
     r2e_core::AppBuilder::new()
@@ -46,9 +47,7 @@ fn token_request(body: &str) -> Request<Body> {
 }
 
 async fn body_json(resp: Response) -> serde_json::Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -103,15 +102,26 @@ async fn password_grant_unknown_user() {
 async fn unsupported_grant_type() {
     let app = build_app();
     let resp = app
-        .oneshot(token_request(
-            "grant_type=authorization_code&code=abc",
-        ))
+        .oneshot(token_request("grant_type=authorization_code&code=abc"))
         .await
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
     assert_eq!(json["error"], "unsupported_grant_type");
+}
+
+#[r2e_core::test]
+async fn missing_grant_type() {
+    let app = build_app();
+    let resp = app
+        .oneshot(token_request("username=alice&password=password123"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_request");
 }
 
 #[r2e_core::test]
@@ -138,4 +148,32 @@ async fn missing_password() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
     assert_eq!(json["error"], "invalid_request");
+}
+
+#[r2e_core::test]
+async fn password_grant_disabled_by_default() {
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "password123",
+        OidcUser {
+            sub: "user-1".into(),
+            ..Default::default()
+        },
+    );
+
+    let app = r2e_core::AppBuilder::new()
+        .plugin(OidcServer::new().with_user_store(users))
+        .with_state(())
+        .build();
+
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "unsupported_grant_type");
 }

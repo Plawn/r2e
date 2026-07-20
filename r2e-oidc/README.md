@@ -1,12 +1,14 @@
 # r2e-oidc
 
-Embedded OIDC server plugin for R2E — issue JWT tokens without an external identity provider.
+Embedded OAuth/JWT issuer plugin for R2E — issue local RS256 access tokens without an external identity provider.
 
 ## Overview
 
-Provides an OAuth 2.0 / OpenID Connect server that runs inside your application. It generates RSA-2048 keys, exposes standard OIDC endpoints, and automatically provides `Arc<JwtClaimsValidator>` to the bean graph so `AuthenticatedUser` works out-of-the-box.
+Provides a local OAuth-style token issuer that runs inside your application. It generates or loads RSA-2048 keys, exposes token/JWKS/userinfo metadata endpoints, and automatically provides `Arc<JwtClaimsValidator>` to the bean graph so `AuthenticatedUser` works out-of-the-box.
 
 Ideal for development, testing, prototyping, and monolithic applications that don't need an external IdP.
+
+This crate is not a full OpenID Connect Provider: it does not implement the browser authorization endpoint, Authorization Code + PKCE, redirects, nonces, or ID tokens. Use an external IdP for SSO or multi-application login.
 
 ## Usage
 
@@ -34,6 +36,7 @@ let users = InMemoryUserStore::new()
     });
 
 let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
     .with_user_store(users);
 
 AppBuilder::new()
@@ -64,6 +67,7 @@ let users = InMemoryUserStore::new()
     });
 
 let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
     .with_user_store(users)
     .build(); // returns OidcRuntime
 
@@ -75,16 +79,16 @@ AppBuilder::new()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
 
-**Backward compatibility:** Using `OidcServer` directly as a plugin (without `.build()`) still works exactly as before. The only difference is that tokens won't survive hot-reload cycles.
+Using `OidcServer` directly as a plugin (without `.build()`) still works. Persist a signing key with `.with_signing_key_pem(...)`, or build one `OidcRuntime` in setup, if tokens must survive reloads/restarts.
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/oauth/token` | Token issuance (password / client_credentials grant) |
-| `GET` | `/.well-known/openid-configuration` | OpenID Connect discovery document |
+| `POST` | `/oauth/token` | Token issuance (`client_credentials`; optional development `password` grant) |
+| `GET` | `/.well-known/openid-configuration` | Local issuer metadata |
 | `GET` | `/.well-known/jwks.json` | Public key in JWKS format |
-| `GET` | `/userinfo` | User info (requires Bearer token) |
+| `GET` / `POST` | `/userinfo` | User info (requires a user Bearer token with `openid` scope) |
 
 ## Configuration
 
@@ -94,10 +98,20 @@ OidcServer::new()
     .audience("my-app")                     // JWT `aud` claim (default: "r2e-app")
     .token_ttl(7200)                        // Token TTL in seconds (default: 3600)
     .base_path("/auth")                     // Endpoint prefix (default: "")
+    .with_signing_key_pem(private_key_pem)   // Persist keys across process restarts
+    .max_credential_verifications(16)        // Bound concurrent Argon2 work
     .with_user_store(users)
 ```
 
-With `base_path("/auth")`, endpoints become `/auth/oauth/token`, `/auth/.well-known/openid-configuration`, etc.
+With `base_path("/auth")`, endpoints become `/auth/oauth/token`, `/auth/.well-known/openid-configuration`, etc., and the canonical JWT issuer becomes `https://myapp.example.com/auth`.
+
+The resource owner password grant is disabled by default. Enable it explicitly only for local fixtures:
+
+```rust
+let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
+    .with_user_store(users);
+```
 
 ## User store
 
@@ -120,14 +134,17 @@ let users = InMemoryUserStore::new()
 Implement the `UserStore` trait for your own backend (SQLx, Redis, LDAP, etc.):
 
 ```rust
-use r2e::r2e_oidc::{UserStore, OidcUser};
+use r2e::r2e_oidc::{OidcUser, StoreResult, UserStore};
 
 struct SqlxUserStore { pool: SqlitePool }
 
 impl UserStore for SqlxUserStore {
-    async fn find_by_username(&self, username: &str) -> Option<OidcUser> { /* ... */ }
-    async fn verify_password(&self, username: &str, password: &str) -> bool { /* ... */ }
-    async fn find_by_sub(&self, sub: &str) -> Option<OidcUser> { /* ... */ }
+    async fn find_by_username(&self, username: &str) -> StoreResult<Option<OidcUser>> { /* ... */ }
+    async fn verify_password(&self, username: &str, password: &str) -> StoreResult<bool> { /* ... */ }
+    async fn find_by_sub(&self, sub: &str) -> StoreResult<Option<OidcUser>> { /* ... */ }
+    async fn authenticate(&self, username: &str, password: &str) -> StoreResult<Option<OidcUser>> {
+        /* verify and return the user in one backend operation */
+    }
 }
 ```
 
@@ -148,6 +165,14 @@ let oidc = OidcServer::new()
 
 ```bash
 curl -X POST http://localhost:3000/oauth/token \
+  -u "my-service:service-secret" \
+  -d "grant_type=client_credentials"
+```
+
+`client_secret_post` is still accepted for compatibility:
+
+```bash
+curl -X POST http://localhost:3000/oauth/token \
   -d "grant_type=client_credentials" \
   -d "client_id=my-service" \
   -d "client_secret=service-secret"
@@ -159,15 +184,19 @@ Tokens are signed with RS256 and include:
 
 | Claim | Source |
 |-------|--------|
-| `sub` | `OidcUser.sub` or `client_id` |
-| `iss` | Configuration |
+| `sub` | `OidcUser.sub` or `client:<client_id>` |
+| `iss` | Canonical issuer |
 | `aud` | Configuration |
 | `iat` / `exp` | Automatic |
+| `token_use` | `access` |
+| `principal_type` | `user` or `client` |
+| `client_id` | Client identifier for machine tokens |
+| `scope` | Granted scopes |
 | `roles` | `OidcUser.roles` |
 | `email` | `OidcUser.email` (if set) |
 | *custom* | `OidcUser.extra_claims` |
 
-Reserved claims (`sub`, `iss`, `aud`, `iat`, `exp`, `roles`, `email`) in `extra_claims` are ignored.
+Reserved claims (`sub`, `iss`, `aud`, `iat`, `exp`, `nbf`, `jti`, `roles`, `email`, `scope`, `token_use`, `principal_type`, `client_id`) in `extra_claims` are ignored.
 
 ## Error responses
 

@@ -22,9 +22,7 @@ fn build_app() -> Router {
 }
 
 async fn body_json(resp: Response) -> serde_json::Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -46,7 +44,7 @@ async fn jwks_endpoint() {
     assert_eq!(key["kty"], "RSA");
     assert_eq!(key["alg"], "RS256");
     assert_eq!(key["use"], "sig");
-    assert_eq!(key["kid"], "r2e-oidc-key-1");
+    assert!(key["kid"].as_str().unwrap().starts_with("rsa-"));
     assert!(key["n"].as_str().unwrap().len() > 100); // RSA-2048 modulus
-    assert!(key["e"].as_str().unwrap().len() > 0);
+    assert!(!key["e"].as_str().unwrap().is_empty());
 }

@@ -1,6 +1,8 @@
-# Embedded OIDC Server
+# Embedded OAuth/JWT Issuer
 
-`r2e-oidc` provides an OIDC server embedded directly in your application. It issues JWT tokens without requiring an external identity provider (Keycloak, Auth0, etc.). Ideal for development, prototyping, and monolithic applications.
+`r2e-oidc` provides a local OAuth-style JWT issuer embedded directly in your application. It issues RS256 access tokens without requiring an external identity provider (Keycloak, Auth0, etc.). Ideal for development, prototyping, and monolithic applications.
+
+It is not a full browser-facing OpenID Connect Provider: it does not implement an authorization endpoint, Authorization Code + PKCE, redirects, nonces, or ID tokens. Use an external provider for SSO, federation, or multi-application login.
 
 ## Installation
 
@@ -31,6 +33,7 @@ let users = InMemoryUserStore::new()
     });
 
 let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
     .with_user_store(users);
 
 AppBuilder::new()
@@ -48,7 +51,7 @@ That's it. `AuthenticatedUser` works immediately — no need to manually configu
 
 1. **Generates an RSA-2048 key pair** for signing tokens
 2. **Creates a `JwtClaimsValidator`** with the public key and injects it into the bean graph
-3. **Registers OIDC endpoints** via a deferred action (after state construction)
+3. **Registers token, metadata, JWKS, and userinfo endpoints** via a deferred action (after state construction)
 
 Issued tokens are validated locally — no network requests, no JWKS cache.
 
@@ -71,6 +74,7 @@ let users = InMemoryUserStore::new()
     });
 
 let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
     .with_user_store(users)
     .build(); // returns OidcRuntime
 
@@ -82,18 +86,20 @@ AppBuilder::new()
     .serve("0.0.0.0:3000").await.unwrap();
 ```
 
-**Backward compatibility:** using `OidcServer` directly as a plugin (without `.build()`) works exactly as before. The only difference is that tokens won't survive hot-reload cycles.
+Using `OidcServer` directly as a plugin (without `.build()`) works. Persist a signing key with `.with_signing_key_pem(...)`, or build one `OidcRuntime` in setup, if tokens must survive reloads/restarts.
 
 ## Exposed endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/oauth/token` | Token issuance (password / client_credentials) |
-| `GET` | `/.well-known/openid-configuration` | OpenID Connect discovery document |
+| `POST` | `/oauth/token` | Token issuance (`client_credentials`; optional development `password`) |
+| `GET` | `/.well-known/openid-configuration` | Local issuer metadata |
 | `GET` | `/.well-known/jwks.json` | Public key in JWKS format |
-| `GET` | `/userinfo` | User information (requires Bearer token) |
+| `GET` / `POST` | `/userinfo` | User information (requires a user Bearer token with `openid` scope) |
 
-### Obtaining a token (password grant)
+### Obtaining a token (development password grant)
+
+The password grant is disabled by default. Enable it explicitly only for local fixtures:
 
 ```bash
 curl -X POST http://localhost:3000/oauth/token \
@@ -146,6 +152,8 @@ let oidc = OidcServer::new()
     .audience("my-app")                     // `aud` claim (default: "r2e-app")
     .token_ttl(7200)                        // lifetime in seconds (default: 3600)
     .base_path("/auth")                     // endpoint prefix (default: "")
+    .with_signing_key_pem(private_key_pem)   // persist keys across process restarts
+    .max_credential_verifications(16)        // bound concurrent Argon2 work
     .with_user_store(users);
 ```
 
@@ -155,6 +163,8 @@ With `base_path("/auth")`, the endpoints become:
 - `GET /auth/.well-known/openid-configuration`
 - `GET /auth/.well-known/jwks.json`
 - `GET /auth/userinfo`
+
+The canonical JWT issuer also includes the base path. For example, issuer `https://myapp.example.com` plus `base_path("/auth")` yields `iss = "https://myapp.example.com/auth"`.
 
 ## User store
 
@@ -187,68 +197,92 @@ pub struct OidcUser {
 }
 ```
 
-`extra_claims` are merged into the JWT. Reserved claims (`sub`, `iss`, `aud`, `iat`, `exp`, `roles`, `email`) are ignored to avoid conflicts.
+`extra_claims` are merged into the JWT. Reserved claims (`sub`, `iss`, `aud`, `iat`, `exp`, `nbf`, `jti`, `roles`, `email`, `scope`, `token_use`, `principal_type`, `client_id`) are ignored to avoid conflicts.
 
 ### Custom user store
 
 Implement the `UserStore` trait to use your own backend (SQLx, Redis, LDAP, etc.):
 
 ```rust
-use r2e::r2e_oidc::{UserStore, OidcUser};
+use r2e::r2e_oidc::{OidcUser, StoreResult, UserStore, UserStoreError};
 
 struct SqlxUserStore {
     pool: sqlx::SqlitePool,
 }
 
 impl UserStore for SqlxUserStore {
-    async fn find_by_username(&self, username: &str) -> Option<OidcUser> {
+    async fn find_by_username(&self, username: &str) -> StoreResult<Option<OidcUser>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT sub, email, roles FROM users WHERE username = ?"
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await
-        .ok()??;
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
 
-        Some(OidcUser {
+        Ok(row.map(|row| OidcUser {
             sub: row.sub,
             email: Some(row.email),
             roles: serde_json::from_str(&row.roles).unwrap_or_default(),
             ..Default::default()
-        })
+        }))
     }
 
-    async fn verify_password(&self, username: &str, password: &str) -> bool {
+    async fn verify_password(&self, username: &str, password: &str) -> StoreResult<bool> {
         let hash = sqlx::query_scalar::<_, String>(
             "SELECT password_hash FROM users WHERE username = ?"
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await
-        .ok()
-        .flatten();
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
 
-        match hash {
+        Ok(match hash {
             Some(h) => verify_argon2(&h, password),
             None => false,
-        }
+        })
     }
 
-    async fn find_by_sub(&self, sub: &str) -> Option<OidcUser> {
+    async fn find_by_sub(&self, sub: &str) -> StoreResult<Option<OidcUser>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT sub, email, roles FROM users WHERE sub = ?"
         )
         .bind(sub)
         .fetch_optional(&self.pool)
         .await
-        .ok()??;
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
 
-        Some(OidcUser {
+        Ok(row.map(|row| OidcUser {
             sub: row.sub,
             email: Some(row.email),
             roles: serde_json::from_str(&row.roles).unwrap_or_default(),
             ..Default::default()
-        })
+        }))
+    }
+
+    async fn authenticate(&self, username: &str, password: &str) -> StoreResult<Option<OidcUser>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT sub, email, roles, password_hash FROM users WHERE username = ?"
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        if !verify_argon2(&row.password_hash, password) {
+            return Ok(None);
+        }
+
+        Ok(Some(OidcUser {
+            sub: row.sub,
+            email: Some(row.email),
+            roles: serde_json::from_str(&row.roles).unwrap_or_default(),
+            ..Default::default()
+        }))
     }
 }
 ```
@@ -282,12 +316,20 @@ Client secrets are also hashed with Argon2.
 
 ```bash
 curl -X POST http://localhost:3000/oauth/token \
+  -u "my-service:service-secret-key" \
+  -d "grant_type=client_credentials"
+```
+
+`client_secret_post` is still accepted for compatibility:
+
+```bash
+curl -X POST http://localhost:3000/oauth/token \
   -d "grant_type=client_credentials" \
   -d "client_id=my-service" \
   -d "client_secret=service-secret-key"
 ```
 
-The issued token has the `client_id` as `sub` and an empty `roles` array.
+The issued token has `sub = "client:<client_id>"`, `principal_type = "client"`, and is rejected by `/userinfo`.
 
 ## JWT claims
 
@@ -295,11 +337,15 @@ Issued tokens contain the following claims:
 
 | Claim | Source | Description |
 |-------|--------|-------------|
-| `sub` | `OidcUser.sub` / `client_id` | Unique subject identifier |
-| `iss` | Configuration | Token issuer |
+| `sub` | `OidcUser.sub` / `client:<client_id>` | Unique subject identifier |
+| `iss` | Canonical issuer | Token issuer |
 | `aud` | Configuration | Target audience |
 | `iat` | Automatic | Issued-at timestamp |
 | `exp` | Configuration | Expiration timestamp |
+| `scope` | Request/default | Granted scopes |
+| `token_use` | Automatic | `access` |
+| `principal_type` | Automatic | `user` or `client` |
+| `client_id` | Client registry | Present on machine tokens |
 | `roles` | `OidcUser.roles` | User roles |
 | `email` | `OidcUser.email` | Email (if set) |
 | *custom* | `OidcUser.extra_claims` | Additional claims |
@@ -323,7 +369,8 @@ Error responses follow RFC 6749 (OAuth 2.0):
 | `invalid_grant` | 400 | Invalid credentials (password grant) |
 | `unsupported_grant_type` | 400 | Unsupported grant type |
 | `invalid_client` | 401 | Invalid client credentials |
-| `unauthorized` | 401 | Missing or invalid token (userinfo) |
+| `invalid_token` | 401 | Missing or invalid token (userinfo) |
+| `insufficient_scope` | 403 | Valid token without required scope |
 | `server_error` | 500 | Internal error |
 
 ## Full example
@@ -373,6 +420,7 @@ async fn main() {
 
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
+        .enable_password_grant_for_development()
         .with_user_store(users)
         .with_client_registry(clients);
 
@@ -402,7 +450,9 @@ let users = InMemoryUserStore::new()
         ..Default::default()
     });
 
-let oidc = OidcServer::new().with_user_store(users);
+let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
+    .with_user_store(users);
 
 let app = TestApp::from_builder(
     AppBuilder::new()

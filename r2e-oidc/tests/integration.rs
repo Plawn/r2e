@@ -4,9 +4,7 @@ use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
 async fn body_json(resp: Response) -> serde_json::Value {
-    let bytes = to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -28,6 +26,7 @@ async fn token_validates_with_claims_validator() {
         .issuer("http://localhost:3000")
         .audience("test-app")
         .token_ttl(7200)
+        .enable_password_grant_for_development()
         .with_user_store(users);
 
     let app = r2e_core::AppBuilder::new()
@@ -105,6 +104,87 @@ async fn client_credentials_grant() {
     let json = body_json(resp).await;
     assert_eq!(json["token_type"], "Bearer");
     assert!(json["access_token"].as_str().unwrap().len() > 50);
+}
+
+/// Client credentials support HTTP Basic authentication.
+#[r2e_core::test]
+async fn client_credentials_grant_with_basic_auth() {
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "pass",
+        OidcUser {
+            sub: "u1".into(),
+            ..Default::default()
+        },
+    );
+
+    let clients = ClientRegistry::new().add_client("my-service", "secret123");
+
+    let oidc = OidcServer::new()
+        .with_user_store(users)
+        .with_client_registry(clients);
+
+    let app = r2e_core::AppBuilder::new()
+        .plugin(oidc)
+        .with_state(())
+        .build();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/oauth/token")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("authorization", "Basic bXktc2VydmljZTpzZWNyZXQxMjM=")
+        .body(Body::from("grant_type=client_credentials"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["token_type"], "Bearer");
+}
+
+/// Machine tokens must not be accepted by /userinfo, even if client_id collides with a user sub.
+#[r2e_core::test]
+async fn userinfo_rejects_client_credentials_token() {
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "pass",
+        OidcUser {
+            sub: "my-service".into(),
+            email: Some("alice@example.com".into()),
+            ..Default::default()
+        },
+    );
+
+    let clients = ClientRegistry::new().add_client("my-service", "secret123");
+    let oidc = OidcServer::new()
+        .with_user_store(users)
+        .with_client_registry(clients);
+    let app = r2e_core::AppBuilder::new()
+        .plugin(oidc)
+        .with_state(())
+        .build();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/oauth/token")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "grant_type=client_credentials&client_id=my-service&client_secret=secret123",
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let token = json["access_token"].as_str().unwrap();
+
+    let req = Request::get("/userinfo")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// Client credentials with wrong secret.
@@ -195,6 +275,7 @@ async fn base_path_routing() {
 
     let oidc = OidcServer::new()
         .base_path("/auth")
+        .enable_password_grant_for_development()
         .with_user_store(users);
 
     let app = r2e_core::AppBuilder::new()

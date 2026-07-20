@@ -118,6 +118,7 @@ impl App for OidcApp {
         let oidc = OidcServer::new()
             .issuer("http://localhost:3000")
             .audience("r2e-app")
+            .enable_password_grant_for_development()
             .with_user_store(users)
             .with_client_registry(clients)
             .build();
@@ -128,7 +129,7 @@ impl App for OidcApp {
         println!("  curl -s localhost:3000/public | jq");
         println!("  curl -s localhost:3000/me -H 'Authorization: Bearer <token>' | jq");
         println!("  curl -s localhost:3000/admin -H 'Authorization: Bearer <token>' | jq");
-        println!("  curl -s -X POST localhost:3000/oauth/token -d 'grant_type=client_credentials&client_id=my-service&client_secret=service-secret' | jq");
+        println!("  curl -s -X POST localhost:3000/oauth/token -u 'my-service:service-secret' -d 'grant_type=client_credentials' | jq");
 
         AppEnv { oidc }
     }
@@ -144,7 +145,7 @@ impl App for OidcApp {
             .with(ErrorHandling)
             .with(OpenApiPlugin::new(
                 OpenApiConfig::new("Example OIDC API", "0.1.0")
-                    .with_description("Embedded OIDC server")
+                    .with_description("Embedded OAuth/JWT issuer")
                     .with_docs_ui(true),
             ))
             .register_controller::<GreetingController>()
