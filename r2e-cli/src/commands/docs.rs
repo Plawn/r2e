@@ -164,7 +164,7 @@ pub fn tldr(body: &str) -> Option<&str> {
     // Skip past the heading line itself before looking for the next `## `.
     let heading_end = after
         .find('\n')
-        .map(|i| start + i + 1)
+        .map(|i| start + 1 +i)
         .unwrap_or(body.len());
     let end = match find_heading(&body[heading_end..], "## ") {
         Some(rel) => heading_end + rel,
