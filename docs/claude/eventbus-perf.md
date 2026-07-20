@@ -326,12 +326,21 @@ LocalEventBus:
       workers in sharded mode. Responder unregister (line 421) stays on
       `spawn_ctl` (control-plane routing for map writes).
 
-## Explicitly deferred (from the 2026-03 audit, still deferred)
+## Explicitly deferred (from the 2026-03 audit)
 
-- `Arc<EventMetadata>` to avoid N metadata clones per dispatch — revisit if
-  headers/correlation_id get heavily populated with high fan-out.
-- Lazy `EventMetadata::new()` — revisit only if a zero-alloc local dispatch
-  path becomes a goal.
+- [x] **`Arc<EventMetadata>`** (2026-07-20) — `EventEnvelope.metadata` is now
+  `Arc<EventMetadata>` (BREAKING). `LocalEventBus::dispatch` shares one Arc
+  across the fan-out (pointer bump per handler, no deep clone); all handlers of
+  one emit observe the same `event_id`. Local `Handler`/`LocalResponder` aliases
+  take `Arc<EventMetadata>`; public emit APIs still take owned `EventMetadata`
+  and wrap internally. Distributed backends wrap owned metadata in `Arc` at the
+  single per-message envelope build (no fan-out clone there).
+- [x] **Lazy `EventMetadata::new()`** (2026-07-20) — `dispatch` takes the
+  metadata as a `FnOnce() -> EventMetadata` thunk and calls it only after
+  confirming at least one handler is registered for the `TypeId`, so a
+  zero-subscriber local emit allocates nothing. `event_id`/`timestamp` are now
+  minted at dispatch-decision time instead of emit-call time (same async
+  instant in practice).
 
 ## Verification plan
 

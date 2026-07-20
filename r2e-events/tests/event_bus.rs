@@ -821,7 +821,7 @@ async fn test_metadata_propagated_to_handler() {
     bus.subscribe(move |envelope: EventEnvelope<TestEvent>| {
         let rm = rm.clone();
         async move {
-            *rm.lock().await = Some(envelope.metadata);
+            *rm.lock().await = Some((*envelope.metadata).clone());
             HandlerResult::Ack
         }
     })
@@ -942,7 +942,7 @@ async fn test_emit_with_metadata_drain() {
     bus.subscribe(move |envelope: EventEnvelope<TestEvent>| {
         let rk = rk.clone();
         async move {
-            *rk.lock().await = envelope.metadata.partition_key;
+            *rk.lock().await = envelope.metadata.partition_key.clone();
             HandlerResult::Ack
         }
     })
@@ -1075,4 +1075,101 @@ async fn test_unregister_responder_allows_reregistration() {
 
     let reply: Sum = bus.request(Add { a: 6, b: 7 }).await.unwrap();
     assert_eq!(reply, Sum { total: 42 });
+}
+
+// ── Metadata Arc-sharing + lazy-dispatch optimizations ─────────────────
+
+#[r2e_core::test]
+async fn test_zero_subscriber_emit_is_ok_noop() {
+    let bus = LocalEventBus::new();
+    // No subscribers: metadata is never constructed and no handler runs, but
+    // the emit still resolves to Ok(()).
+    let result = bus.emit(TestEvent { value: 7 }).await;
+    assert!(result.is_ok());
+    // Draining is a no-op and there is nothing in flight.
+    bus.wait_idle().await;
+}
+
+#[r2e_core::test]
+async fn test_fanout_handlers_share_one_event_id() {
+    let bus = LocalEventBus::new();
+    let ids = Arc::new(tokio::sync::Mutex::new(Vec::<u128>::new()));
+
+    // Register several handlers for the same event type.
+    for _ in 0..4 {
+        let ids = ids.clone();
+        bus.subscribe(move |envelope: EventEnvelope<TestEvent>| {
+            let ids = ids.clone();
+            async move {
+                ids.lock().await.push(envelope.metadata.event_id);
+                HandlerResult::Ack
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    // A single emit fans out to all handlers; they share one metadata Arc,
+    // so every handler must observe the same event_id.
+    emit_and_drain(&bus, TestEvent { value: 1 }).await;
+
+    let collected = ids.lock().await;
+    assert_eq!(collected.len(), 4, "all four handlers should have fired");
+    let first = collected[0];
+    assert!(
+        collected.iter().all(|id| *id == first),
+        "all fan-out handlers must observe the same event_id (shared Arc), got {collected:?}"
+    );
+}
+
+/// Throughput data point (recorded, not a CI gate — run with
+/// `cargo test -p r2e-events --release -- --ignored throughput`).
+///
+/// Emits ~100k events to 4 no-op subscribers and ~100k events to zero
+/// subscribers, printing wall-clock for each. The zero-subscriber path
+/// exercises the lazy-metadata optimization (no `EventMetadata::new()` alloc).
+#[r2e_core::test]
+#[ignore]
+async fn throughput_data_point() {
+    const N: usize = 100_000;
+
+    // Zero-subscriber path (lazy metadata: no allocation per emit).
+    let empty = LocalEventBus::unbounded();
+    let start = std::time::Instant::now();
+    for i in 0..N {
+        empty.emit(TestEvent { value: i }).await.unwrap();
+    }
+    let zero_elapsed = start.elapsed();
+
+    // Fan-out to 4 no-op subscribers (metadata Arc shared across the fan-out).
+    let fanned = LocalEventBus::unbounded();
+    let counter = Arc::new(AtomicUsize::new(0));
+    for _ in 0..4 {
+        let c = counter.clone();
+        fanned
+            .subscribe(move |_: EventEnvelope<TestEvent>| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::Relaxed);
+                    HandlerResult::Ack
+                }
+            })
+            .await
+            .unwrap();
+    }
+    let start = std::time::Instant::now();
+    for i in 0..N {
+        fanned.emit(TestEvent { value: i }).await.unwrap();
+    }
+    fanned.wait_idle().await;
+    let fanout_elapsed = start.elapsed();
+
+    println!(
+        "throughput: zero-subscriber {N} emits in {zero_elapsed:?} \
+         ({:.0} emits/s); 4-subscriber fan-out {N} emits ({} handler runs) \
+         in {fanout_elapsed:?} ({:.0} emits/s)",
+        N as f64 / zero_elapsed.as_secs_f64(),
+        counter.load(Ordering::Relaxed),
+        N as f64 / fanout_elapsed.as_secs_f64(),
+    );
 }

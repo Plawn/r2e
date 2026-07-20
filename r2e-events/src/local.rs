@@ -18,7 +18,7 @@ use crate::EventFilter;
 type Handler = Arc<
     dyn Fn(
             Arc<dyn Any + Send + Sync>,
-            EventMetadata,
+            Arc<EventMetadata>,
         ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
         + Send
         + Sync,
@@ -30,7 +30,7 @@ type Handler = Arc<
 type LocalResponder = Arc<
     dyn Fn(
             Arc<dyn Any + Send + Sync>,
-            EventMetadata,
+            Arc<EventMetadata>,
         ) -> Pin<Box<dyn Future<Output = Result<Box<dyn Any + Send>, String>> + Send>>
         + Send
         + Sync,
@@ -163,26 +163,39 @@ impl LocalEventBus {
     /// `in_flight` is incremented for each before this returns, so a subsequent
     /// [`wait_idle`](Self::wait_idle) drains exactly the handlers this emit
     /// spawned.
+    ///
+    /// `make_metadata` is a thunk so that a zero-subscriber emit allocates
+    /// nothing: [`EventMetadata::new`] runs only once we know at least one
+    /// handler is registered for `type_id`. The metadata is `Arc`-shared across
+    /// the fan-out, so each handler costs a pointer bump rather than a deep
+    /// clone (and all handlers of one emit observe the same `event_id`).
     async fn dispatch(
         &self,
         type_id: TypeId,
         event: Arc<dyn Any + Send + Sync>,
-        metadata: EventMetadata,
+        make_metadata: impl FnOnce() -> EventMetadata,
     ) -> Result<(), EventBusError> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(EventBusError::Shutdown);
         }
 
-        // Load a lock-free snapshot of the handler map.
-        let handler_snapshot: Vec<Handler> = {
+        // Load a lock-free snapshot of the handler map. Build the metadata (via
+        // the thunk) only after confirming there is at least one handler for
+        // this type, so a zero-subscriber emit is a true no-op that allocates
+        // nothing. The metadata `Arc` is shared across the fan-out below.
+        let (metadata, handler_snapshot): (Arc<EventMetadata>, Vec<Handler>) = {
             let map = self.handlers.load();
             match map.get(&type_id) {
-                Some(entries) => entries
-                    .iter()
-                    .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
-                    .map(|entry| entry.handler.clone())
-                    .collect(),
-                None => return Ok(()),
+                Some(entries) if !entries.is_empty() => {
+                    let metadata = Arc::new(make_metadata());
+                    let handlers = entries
+                        .iter()
+                        .filter(|entry| !entry.filter.as_ref().is_some_and(|f| !f(&metadata)))
+                        .map(|entry| entry.handler.clone())
+                        .collect();
+                    (metadata, handlers)
+                }
+                _ => return Ok(()),
             }
         };
 
@@ -275,8 +288,8 @@ impl EventBus for LocalEventBus {
     {
         let type_id = TypeId::of::<E>();
         let event = Arc::new(event) as Arc<dyn Any + Send + Sync>;
-        let metadata = EventMetadata::new();
-        self.dispatch(type_id, event, metadata)
+        // Lazy: `EventMetadata::new()` only runs if `dispatch` finds a handler.
+        self.dispatch(type_id, event, EventMetadata::new)
     }
 
     fn emit_with<E>(
@@ -289,7 +302,9 @@ impl EventBus for LocalEventBus {
     {
         let type_id = TypeId::of::<E>();
         let event = Arc::new(event) as Arc<dyn Any + Send + Sync>;
-        self.dispatch(type_id, event, metadata)
+        // Caller supplied the metadata; hand it over as a ready thunk. (If there
+        // are no subscribers it is simply dropped, as before.)
+        self.dispatch(type_id, event, move || metadata)
     }
 
     fn emit_nowait<E>(
@@ -346,7 +361,7 @@ impl EventBus for LocalEventBus {
             }
             .ok_or(EventBusError::NoResponder)?;
 
-            let metadata = options.metadata.unwrap_or_default();
+            let metadata = Arc::new(options.metadata.unwrap_or_default());
             let req_any = Arc::new(req) as Arc<dyn Any + Send + Sync>;
 
             // Invoke on the control plane with in-flight tracking, mirroring the

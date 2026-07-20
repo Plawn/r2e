@@ -337,12 +337,19 @@ impl Default for EventMetadata {
 // ── EventEnvelope ──────────────────────────────────────────────────────
 
 /// Wraps an event with its metadata.
+///
+/// `metadata` is an [`Arc`] so a single emit can fan out to many handlers with
+/// only a pointer bump per handler instead of a deep clone of the metadata
+/// (id, timestamp, correlation id, partition key, headers). All handlers of one
+/// emit therefore observe the *same* `event_id`. Reads deref transparently
+/// (`envelope.metadata.event_id`); to take ownership of a field, clone it
+/// (`(*envelope.metadata).clone()` or `envelope.metadata.headers.clone()`).
 #[derive(Debug, Clone)]
 pub struct EventEnvelope<E> {
     /// The event payload.
     pub event: Arc<E>,
-    /// Associated metadata.
-    pub metadata: EventMetadata,
+    /// Associated metadata (shared across all handlers of one emit).
+    pub metadata: Arc<EventMetadata>,
 }
 
 // ── HandlerResult ──────────────────────────────────────────────────────

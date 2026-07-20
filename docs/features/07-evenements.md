@@ -67,8 +67,9 @@ event_bus
 ```
 
 **Note**: the handler receives an `EventEnvelope<E>` (its `.event` field is `Arc<E>`,
-since the event may be shared among multiple subscribers; `.metadata` carries the
-event id, timestamp, correlation id, and headers) and must return a `HandlerResult`
+since the event may be shared among multiple subscribers; `.metadata` is an
+`Arc<EventMetadata>` — also shared across subscribers — carrying the event id,
+timestamp, correlation id, and headers) and must return a `HandlerResult`
 (`Ack`/`Nack`). `subscribe` itself returns `Result<SubscriptionHandle, EventBusError>`.
 
 ### Multiple subscribers
