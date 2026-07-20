@@ -1105,6 +1105,14 @@ in-process default; distributed backends (Kafka, Pulsar, RabbitMQ, Iggy) are
 drop-in. Events derive `Serialize + Deserialize` (LocalEventBus never actually
 serializes).
 
+A subscriber/responder handler receives an `EventEnvelope<E>` with
+`event: Arc<E>` and `metadata: Arc<EventMetadata>` (both shared across a
+fan-out, so all handlers of one emit see the same `event_id`). Fields deref
+transparently for reads (`envelope.metadata.event_id`); to own a metadata field,
+clone it (`(*envelope.metadata).clone()`). Emit APIs (`emit_with`,
+`request_with` options) still take an owned `EventMetadata` — it is wrapped in an
+`Arc` internally.
+
 ```rust
 b.provide(LocalEventBus::new())
 ```

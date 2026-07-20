@@ -135,7 +135,7 @@ Key types: `InMemoryUserStore`, `OidcUser`, `UserStore` trait, `ClientRegistry`,
 `EventBus` — pluggable event bus **trait**. `LocalEventBus` — default in-process implementation. Events are dispatched by `TypeId`. Subscribers receive `EventEnvelope<E>` containing `Arc<E>` + `EventMetadata`.
 
 **Core types:**
-- `EventEnvelope<E>` — wraps `event: Arc<E>` + `metadata: EventMetadata`.
+- `EventEnvelope<E>` — wraps `event: Arc<E>` + `metadata: Arc<EventMetadata>` (the metadata `Arc` is shared across all handlers of one emit — pointer bump per handler, same `event_id` seen by all; deref for reads, clone a field to own it).
 - `EventMetadata` — auto-generated per emit: `event_id`, `timestamp`, optional `correlation_id`, `partition_key`, `headers: HashMap<String, String>`.
 - `HandlerResult` — `Ack` or `Nack(String)`. Implements `From<()>` and `From<Result<(), E>>`.
 - `SubscriptionHandle` — returned by `subscribe()`, supports `unsubscribe()`.

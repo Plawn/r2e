@@ -347,9 +347,10 @@ only real risk (the parser); 2–3 consume the same generated markers.
 
 ## Tech debt (deferred, low priority)
 
-- **Event bus perf** (2026-03 audit): superseded by W8 — the two still-
-  deferred items (`Arc<EventMetadata>`, lazy `EventMetadata::new()`) are
-  carried in `eventbus-perf.md` § Explicitly deferred.
+- **Event bus perf** (2026-03 audit): superseded by W8 — the two remaining
+  micro-opts (`Arc<EventMetadata>` fan-out sharing + lazy `EventMetadata::new()`
+  on zero-subscriber emit) SHIPPED 2026-07-20 (breaking: `EventEnvelope.metadata`
+  is now `Arc<EventMetadata>`). See `eventbus-perf.md` § Explicitly deferred.
 - **gRPC trybuild fixture** — RESOLVED 2026-07-18 with the gRPC/proto
   automagic work (W11): fixtures now use real generated code from
   `r2e-compile-tests/proto/ping.proto`.

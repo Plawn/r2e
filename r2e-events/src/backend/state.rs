@@ -427,7 +427,7 @@ impl BackendState {
                 Ok(req) => {
                     let envelope = EventEnvelope {
                         event: Arc::new(req),
-                        metadata,
+                        metadata: Arc::new(metadata),
                     };
                     let fut = handler(envelope);
                     Box::pin(async move {

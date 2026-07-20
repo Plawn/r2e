@@ -62,7 +62,7 @@ pub struct MyController {
 
 ## Subscribing to events
 
-Handlers receive an `EventEnvelope<E>` (the event as `Arc<E>` plus its `EventMetadata`) and return a `HandlerResult` (`Ack` / `Nack`). `subscribe` returns a `SubscriptionHandle` you can later `unsubscribe()`:
+Handlers receive an `EventEnvelope<E>` (the event as `Arc<E>` plus its metadata as `Arc<EventMetadata>` — both shared across subscribers) and return a `HandlerResult` (`Ack` / `Nack`). `subscribe` returns a `SubscriptionHandle` you can later `unsubscribe()`:
 
 ```rust
 event_bus.subscribe(|envelope: EventEnvelope<UserCreatedEvent>| async move {
