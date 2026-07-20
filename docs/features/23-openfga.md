@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. `authz::MODEL` carries the schema 1.1 JSON for store bootstrap. In handlers, `FgaClient` is the typed client: `grant`/`revoke` compile only for subject types the model allows (`DirectlyAssignable`) and invalidate the decision cache write-through; `check` covers handler-level checks. (No `list_objects` — OpenFGA cannot signal truncation, see below.) Requires feature `openfga`; setup is three beans (`GrpcBackend` + `OpenFgaRegistry` + `FgaClient`), no plugin yet. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
+Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. In handlers, `FgaClient` is the typed client: `grant`/`revoke` compile only for subject types the model allows (`DirectlyAssignable`) and invalidate the decision cache write-through; `check` covers handler-level checks. (No `list_objects` — OpenFGA cannot signal truncation, see below.) Setup is one line: `.plugin(OpenFga::model(authz::MODEL))` owns the store lifecycle at boot — ensure/create the store, apply the model when it differs (dev/test), or *verify* the live store matches and fail startup otherwise (prod, `openfga.apply_model: false`), pinning the resolved `model_id` for all checks. Requires feature `openfga`. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
 
 ## Objective
 
@@ -56,7 +56,7 @@ For tests and tiny models, the DSL can be inlined: `model!(pub mod authz = inlin
 
 | Item | Meaning |
 |---|---|
-| `authz::MODEL: &str` | The model as schema 1.1 JSON — the `WriteAuthorizationModel` payload for store bootstrap / boot-time verify |
+| `authz::MODEL: &str` | The model as schema 1.1 JSON — what `OpenFga::model(...)` applies/verifies at boot (the `WriteAuthorizationModel` payload) |
 | `authz::DSL: &str` | The embedded `.fga` source |
 | `authz::document::Ty` | Type marker (implements `FgaType`; `NAME = "document"`) |
 | `authz::document::id("readme")` | `FgaObject<Ty>` formatting `document:readme` — panics on `:`/`#`/`*`; `try_id` is the fallible form for request-supplied input |
@@ -135,55 +135,66 @@ FGA metacharacters are rejected on both sides of a check, fail-closed:
 - **Object ids** from dynamic resolvers and `id()`/`try_id()` must not contain `:` (type injection: `secret:admin`), `#` (userset reference), or `*` (wildcard). Only `.fixed(...)` accepts a pre-formatted `type:id` literal.
 - **The identity subject**: if `identity.sub()` contains `:`/`#`/`*` the check is rejected with 403 before `user:{sub}` is formed — a forged `sub = "*"` must never collapse onto public-wildcard grants.
 
-## Setup
+## Setup — the `OpenFga` plugin
 
-Three beans, no plugin (a boot-time apply/verify plugin is planned — see Roadmap below):
+One line; the plugin provides the beans (`OpenFgaRegistry`, `FgaClient`, `OpenFgaHandle`) and owns the store lifecycle:
 
 ```rust
-use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e::r2e_openfga::OpenFga;
 
-#[producer]
-async fn openfga_backend(
-    #[config("openfga.endpoint")] endpoint: String,
-    #[config("openfga.store_id")] store_id: String,
-    #[config("openfga.model_id")] model_id: Option<String>,
-) -> GrpcBackend {
-    let mut config = OpenFgaConfig::new(endpoint, store_id);
-    if let Some(model_id) = model_id { config = config.with_model_id(model_id); }
-    GrpcBackend::connect(&config).await.expect("OpenFGA unreachable")
-}
+r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
-#[producer]
-async fn openfga_registry(backend: GrpcBackend) -> OpenFgaRegistry {
-    OpenFgaRegistry::with_cache(backend, 60)   // decision cache, 60s TTL
-}
-
-#[producer]
-async fn openfga_client(registry: OpenFgaRegistry) -> FgaClient {
-    FgaClient::new(registry)                   // typed writes/checks/lists
-}
+b.load_config::<()>()                       // config must be loaded first
+    .plugin(OpenFga::model(authz::MODEL))
+    .build_state().await
+    .register_controller::<DocumentController>()
 ```
 
-The `FgaCheck` guard pulls the `OpenFgaRegistry` bean itself (compile-checked decorator dep) — controllers need no `#[inject]` field for it. `#[inject] fga: FgaClient` is only for handlers doing writes/checks/lists. Keep `GrpcBackend` provided for the raw-client escape hatch (batch/conditional writes, model management).
+```yaml
+openfga:
+  endpoint: "http://localhost:8081"   # gRPC endpoint (required)
+  store: "documents"                  # store name — looked up, created if missing
+  # store_id: "01H…"                  # or an explicit id (wins over `store`)
+  # apply_model: false                # prod: verify instead of apply
+  # model_id: "01H…"                  # verify mode only: pin + verify this version
+  # api_token, connect_timeout_secs (10), request_timeout_secs (5),
+  # cache_enabled (true), cache_ttl_secs (60)
+```
+
+The boot sequence runs inside `build_state()`, before the app serves; **any failure aborts startup**:
+
+1. Connect to the gRPC endpoint.
+2. Resolve the store — explicit `store_id`, or `store` name via `ListStores`. Apply mode creates a missing store; verify mode errors. (Store names are not unique in OpenFGA: apply mode uses the oldest duplicate with a warning; verify mode refuses to guess — set `store_id`.)
+3. Apply or verify the model:
+   - **Apply mode** (`apply_model: true`, default — dev/test): the compiled-in `authz::MODEL` is structurally compared with the store's latest model; a new version is written **only when they differ** (models are append-only — identical re-boots reuse the latest version).
+   - **Verify mode** (`apply_model: false` — prod): the live model (latest, or the configured `model_id`) must structurally match, otherwise startup fails with a diff summary — fail-fast instead of mystery 403s.
+4. Pin the resolved `model_id`: every check runs against one model version for the lifetime of the deploy.
+
+This closes the schema-first chain: compile time checks code ↔ checked-in `.fga`; boot checks checked-in `.fga` ↔ live store. Structural comparison ignores server-side noise (model id, `module`/`source_info` annotations, empty-vs-absent metadata) — the machinery is public in `r2e_openfga::model_convert` (`compile_model`, `models_equal`, `diff_summary`).
+
+The `FgaCheck` guard pulls the `OpenFgaRegistry` bean itself (compile-checked decorator dep) — controllers need no `#[inject]` field for it. `#[inject] fga: FgaClient` is for handlers doing writes/checks. `OpenFgaHandle` exposes the resolved `store_id()` / `model_id()` and `backend()` — the connected `GrpcBackend` for the raw-client escape hatch (batch/conditional writes, model management). Install the plugin **after** `load_config()`/`with_config()` (it panics with guidance otherwise); `openfga.enabled: false` skips the boot sequence entirely (checks then fail closed with `OpenFgaError::NotReady`).
+
+**Manual wiring (escape hatch)** — for dynamic models or custom backends, provide the beans yourself exactly as before: `GrpcBackend::connect(&OpenFgaConfig::new(endpoint, store_id)).await` → `OpenFgaRegistry::with_cache(backend, ttl)` → `FgaClient::new(registry)`. The store/model must then already exist (nothing applies or verifies them).
 
 ## Testing
 
 - **Unit / no server** — back the registry with `MockBackend` (direct tuple lookup) and pin it: `builder.override_bean(OpenFgaRegistry::new(mock))`.
-- **Integration** — `DevOpenFga` (r2e-devservices, feature `openfga`) runs a real server via testcontainers and owns the store/model bootstrap; write `authz::MODEL` so tests exercise the exact model the guards were compile-checked against:
+- **Integration** — `DevOpenFga` (r2e-devservices, feature `openfga`) runs a real server via testcontainers; the plugin does the store/model bootstrap, so a test only injects the endpoint (plus a unique store name for isolation on the session-shared container) and seeds tuples through the typed client:
 
 ```rust
 let fga = DevOpenFga::shared().await;
-let store_id = fga.create_store("documents").await;
-let model_id = fga.write_model(&store_id, &serde_json::from_str(authz::MODEL)?).await;
-fga.write_tuples(&store_id, &model_id, &[("user:alice", "viewer", "document:readme")]).await;
-TestApp::boot_with::<App>(move |b| {
-    b.override_config_value("openfga.endpoint", fga.grpc_endpoint().to_string())
-        .override_config_value("openfga.store_id", store_id)
-        .override_config_value("openfga.model_id", model_id)
-}).await
+let grpc = fga.grpc_endpoint().to_string();
+let app = TestApp::boot_with::<App>(move |b| {
+    b.override_config_value("openfga.endpoint", grpc)
+        .override_config_value("openfga.store", format!("documents-{}", test_id))
+}).await;
+let client = app.bean::<FgaClient>();
+client.grant(&authz::user::id("alice"), authz::document::viewer, &authz::document::id("readme")).await?;
 ```
 
-See `examples/example-openfga` for the complete wiring, and `r2e-compile-tests/compile-{pass,fail}/fga_*.rs` for what is (and is not) accepted at compile time.
+(For non-plugin wiring, `DevOpenFga` keeps the HTTP bootstrap helpers: `create_store`, `write_model`, `write_tuples`.)
+
+See `examples/example-openfga` for the complete wiring, `r2e-openfga/tests/plugin.rs` for the lifecycle behaviors (apply/reuse/append/verify), and `r2e-compile-tests/compile-{pass,fail}/fga_*.rs` for what is (and is not) accepted at compile time.
 
 ## Standalone parser
 
@@ -191,5 +202,4 @@ See `examples/example-openfga` for the complete wiring, and `r2e-compile-tests/c
 
 ## Roadmap (not yet shipped)
 
-- **Plugin (Phase 3)** — `.with(OpenFga::model(authz::MODEL))`: apply the model at boot in dev/test, *verify* against the live store in prod (mismatch = startup error), pin the resolved `model_id`.
 - **CLI (Phase 4)** — `r2e fga diff | push | pull`, tuple seed fixtures.

@@ -64,7 +64,7 @@ r2e-openapi     → OpenAPI 3.1.0 spec generation, Swagger UI at /docs.
 r2e-prometheus   → Prometheus metrics plugin: HTTP request tracking, /metrics endpoint.
 r2e-observability → OpenTelemetry plugin: distributed tracing and context propagation via OTLP.
 r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external IdP.
-r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control. Schema-first typed API via `model!` (guards: `FgaCheck::has(authz::document::viewer)`).
+r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control. Schema-first typed API via `model!` (guards: `FgaCheck::has(authz::document::viewer)`). `OpenFga` plugin owns the store lifecycle at boot: ensure/create store, apply model when changed (dev) or verify + fail-fast (prod, `openfga.apply_model: false`), pinned `model_id`.
   model/            → r2e-openfga-model: pure `.fga` DSL parser (schema 1.1) → typed model → JSON. Syntax (`parse`) and semantic (`validate`) layers; validated against the vendored openfga/language corpus. No proc-macro deps.
   macros/           → r2e-openfga-macros: `model!(pub mod authz = "fga/model.fga")` — compile-time parse+validate, generates typed markers (`FgaType`/`FgaRel` consts/`DirectlyAssignable` impls) + `authz::MODEL` JSON.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.

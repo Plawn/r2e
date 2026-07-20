@@ -5991,6 +5991,7 @@ dependencies = [
  "dashmap",
  "openfga-rs",
  "r2e-core",
+ "r2e-devservices",
  "r2e-openfga-macros",
  "r2e-openfga-model",
  "serde",

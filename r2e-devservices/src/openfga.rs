@@ -24,11 +24,15 @@ const GRPC_PORT: u16 = 8081;
 /// ([`http_endpoint`](Self::http_endpoint)) backs the store/model/tuple
 /// bootstrap helpers.
 ///
-/// OpenFGA store IDs are server-generated, so a store and authorization model
-/// must be created **before** the app boots (the `store_id`/`model_id` are
-/// construction-time config). That bootstrap lives here — [`create_store`],
-/// [`write_model`], and [`write_tuples`] drive OpenFGA's HTTP API so a test
-/// can set up authorization data and inject the resulting IDs via
+/// With the `r2e-openfga` `OpenFga` plugin, a test only injects
+/// `openfga.endpoint` (plus a unique `openfga.store` name for isolation on the
+/// shared container) — the plugin creates the store and applies the model at
+/// boot, and tuples are seeded through the typed `FgaClient` bean.
+///
+/// For non-plugin wiring (explicit `store_id`/`model_id` config), the HTTP
+/// bootstrap helpers remain: [`create_store`], [`write_model`], and
+/// [`write_tuples`] drive OpenFGA's HTTP API so a test can set up
+/// authorization data and inject the resulting IDs via
 /// `override_config_value` in a few lines.
 ///
 /// [`create_store`]: Self::create_store

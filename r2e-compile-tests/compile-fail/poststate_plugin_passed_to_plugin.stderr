@@ -15,6 +15,7 @@ help: the trait `PreStatePlugin` is not implemented for `MyPostStatePlugin`
              GrpcServer
              OidcRuntime
              OidcServer
+             OpenFga
              Prometheus
              Scheduler
    = note: required for `MyPostStatePlugin` to implement `r2e::RawPreStatePlugin`

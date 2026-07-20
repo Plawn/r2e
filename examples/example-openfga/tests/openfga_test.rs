@@ -1,9 +1,10 @@
 //! Integration tests for the OpenFGA example.
 //!
-//! A real OpenFGA server is provided by `DevOpenFga` (testcontainers). The test
-//! creates a store, writes the document model + seed tuples, then boots the
-//! real app against that server and exercises the `FgaCheck` guards through
-//! actual HTTP requests — one allowed, one denied.
+//! A real OpenFGA server is provided by `DevOpenFga` (testcontainers). The
+//! `OpenFga` plugin owns the store lifecycle: pointed at the dev server, it
+//! creates the (per-test) store and applies `authz::MODEL` at boot — the test
+//! only seeds tuples through the typed `FgaClient` bean, then exercises the
+//! `FgaCheck` guards through actual HTTP requests — one allowed, one denied.
 //!
 //! Requires Docker; `#[ignore]`d by default:
 //!
@@ -11,34 +12,47 @@
 //! cargo test -p example-openfga --test openfga_test -- --ignored
 //! ```
 
-use example_openfga::{document_model, OpenFgaApp};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use example_openfga::{authz, OpenFgaApp};
+use r2e::r2e_openfga::FgaClient;
 use r2e_devservices::DevOpenFga;
 use r2e_test::TestApp;
 
-/// Boot the app against a freshly bootstrapped OpenFGA store with these tuples:
-/// - `user:alice` is a `viewer` and `editor` of `document:readme`
-/// - `user:bob` has no relations
+/// Boot the app against the shared dev OpenFGA server. The plugin creates a
+/// unique store per test (isolation on the session-shared container) and
+/// applies the model; the seed tuples make:
+/// - `user:alice` a `viewer` and `editor` of `document:readme`
+/// - `user:bob` nothing
 async fn boot() -> TestApp {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
     let fga = DevOpenFga::shared().await;
-    let store_id = fga.create_store("documents").await;
-    let model_id = fga.write_model(&store_id, &document_model()).await;
-    fga.write_tuples(
-        &store_id,
-        &model_id,
-        &[
-            ("user:alice", "viewer", "document:readme"),
-            ("user:alice", "editor", "document:readme"),
-        ],
-    )
+    let grpc = fga.grpc_endpoint().to_string();
+    let store = format!(
+        "documents-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+
+    let app = TestApp::boot_with::<OpenFgaApp>(move |b| {
+        b.override_config_value("openfga.endpoint", grpc)
+            .override_config_value("openfga.store", store)
+    })
     .await;
 
-    let grpc = fga.grpc_endpoint().to_string();
-    TestApp::boot_with::<OpenFgaApp>(move |b| {
-        b.override_config_value("openfga.endpoint", grpc)
-            .override_config_value("openfga.store_id", store_id)
-            .override_config_value("openfga.model_id", model_id)
-    })
-    .await
+    let client = app.bean::<FgaClient>();
+    let alice = authz::user::id("alice");
+    let readme = authz::document::id("readme");
+    client
+        .grant(&alice, authz::document::viewer, &readme)
+        .await
+        .expect("seed viewer");
+    client
+        .grant(&alice, authz::document::editor, &readme)
+        .await
+        .expect("seed editor");
+
+    app
 }
 
 #[tokio::test]

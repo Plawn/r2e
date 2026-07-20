@@ -16,57 +16,35 @@ relationship-based access control wired into R2E controllers via `#[guard]`.
     resolved from the `{doc_id}` path parameter (`path::doc_id`, also
     compile-checked) and checked as `document:{doc_id}`; the caller is
     `user:{sub}` from the JWT identity.
-- **Config-driven OpenFGA client**: two `#[producer]`s build the `GrpcBackend`
-  and cached `OpenFgaRegistry` from `openfga.endpoint` / `openfga.store_id` /
-  `openfga.model_id`.
+- **Plugin-owned store lifecycle**: `.plugin(OpenFga::model(authz::MODEL))`
+  connects to `openfga.endpoint`, looks up the `openfga.store` store by name
+  (creating it when missing), applies the compiled-in model when it differs
+  from the store's latest, pins the resolved model id for every check, and
+  provides the `OpenFgaRegistry` / `FgaClient` / `OpenFgaHandle` beans. In
+  production, `openfga.apply_model: false` switches to verify mode: a model
+  mismatch fails startup instead of surfacing as mystery 403s.
 
 ## Running the tests (recommended)
 
 The integration tests spin up a real OpenFGA server with `DevOpenFga`
-(testcontainers), create a store, write the model + seed tuples, boot the app,
-and exercise allowed/denied requests. They need Docker and are `#[ignore]`d by
-default:
+(testcontainers) and point the app at it — the plugin creates a per-test store
+and applies the model at boot; the tests seed tuples through the typed
+`FgaClient` bean and exercise allowed/denied requests. They need Docker and
+are `#[ignore]`d by default:
 
 ```bash
 cargo test -p example-openfga --test openfga_test -- --ignored
 ```
 
-No manual setup — the dev service owns the store/model/tuple bootstrap.
+No manual setup — the plugin owns the store/model bootstrap.
 
 ## Running the app standalone
 
-Store and model IDs are server-generated, so they must be created before the
-app boots. Start OpenFGA and bootstrap once:
+Start OpenFGA and run — the plugin creates the `documents` store and applies
+the model at boot:
 
 ```bash
 docker compose up -d          # OpenFGA on :8080 (HTTP) and :8081 (gRPC)
-
-# Create a store
-STORE=$(curl -s -X POST http://localhost:8080/stores \
-  -d '{"name":"documents"}' | jq -r .id)
-
-# Write the model (the JSON below is authz::MODEL, generated from fga/model.fga)
-MODEL=$(curl -s -X POST http://localhost:8080/stores/$STORE/authorization-models \
-  -d '{"schema_version":"1.1","type_definitions":[
-        {"type":"user"},
-        {"type":"document","relations":{"viewer":{"this":{}},"editor":{"this":{}}},
-         "metadata":{"relations":{
-           "viewer":{"directly_related_user_types":[{"type":"user"}]},
-           "editor":{"directly_related_user_types":[{"type":"user"}]}}}}]}' \
-  | jq -r .authorization_model_id)
-
-# Grant alice viewer + editor on document:readme
-curl -s -X POST http://localhost:8080/stores/$STORE/write \
-  -d "{\"authorization_model_id\":\"$MODEL\",\"writes\":{\"tuple_keys\":[
-        {\"user\":\"user:alice\",\"relation\":\"viewer\",\"object\":\"document:readme\"},
-        {\"user\":\"user:alice\",\"relation\":\"editor\",\"object\":\"document:readme\"}]}}"
-
-echo "store_id=$STORE model_id=$MODEL"
-```
-
-Paste `store_id` / `model_id` into `application.yaml`, then run:
-
-```bash
 cargo run -p example-openfga
 ```
 

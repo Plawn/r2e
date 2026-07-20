@@ -24,3 +24,4 @@ url = {workspace = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
+r2e-devservices = {workspace = true, features = ["openfga"]}

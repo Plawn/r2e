@@ -1,13 +1,14 @@
 app:
   name: "example-openfga"
 
-# OpenFGA connection. `endpoint` is the gRPC port (8081); the HTTP port (8080)
-# is only used for out-of-band store/model/tuple bootstrap.
+# OpenFGA connection (`endpoint` is the gRPC port, 8081). The `OpenFga` plugin
+# owns the store lifecycle at boot: it looks up the store by name (creating it
+# when missing), applies `authz::MODEL` when it differs from the store's
+# latest, and pins the resolved model id for all checks. No server-generated
+# IDs to paste — just start OpenFGA (see docker-compose.yml) and `cargo run`.
 #
-# OpenFGA store and model IDs are server-generated, so they cannot be known
-# ahead of time. Before `cargo run`, start OpenFGA (see docker-compose.yml),
-# create a store + write the model (see README.md), and paste the IDs here.
+# Production: set `apply_model: false` to fail startup on a model mismatch
+# instead of writing (verify mode), and optionally pin an exact `model_id`.
 openfga:
   endpoint: "http://localhost:8081"
-  store_id: "REPLACE_WITH_STORE_ID"
-  model_id: "REPLACE_WITH_MODEL_ID"
+  store: "documents"

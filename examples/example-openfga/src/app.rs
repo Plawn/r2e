@@ -9,7 +9,7 @@ use std::sync::Arc;
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use r2e::prelude::*;
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e::r2e_openfga::OpenFga;
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub mod controllers;
@@ -27,14 +27,6 @@ r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
 const DEMO_SECRET: &[u8] = b"r2e-openfga-demo-secret-change-in-production";
 const DEMO_ISSUER: &str = "r2e-openfga-demo";
 const DEMO_AUDIENCE: &str = "r2e-openfga-app";
-
-/// The document authorization model, straight from `fga/model.fga` via the
-/// `model!`-generated `authz::MODEL` — code and store share one source of
-/// truth. Exposed so integration tests write the exact model the guards are
-/// compile-checked against.
-pub fn document_model() -> serde_json::Value {
-    serde_json::from_str(authz::MODEL).expect("model! output is valid JSON")
-}
 
 /// Mint a demo HS256 JWT accepted by the app's own validator, for `curl` usage
 /// against a `cargo run` instance (subject `alice`).
@@ -67,38 +59,6 @@ fn demo_validator() -> Arc<JwtClaimsValidator> {
     ))
 }
 
-/// The gRPC OpenFGA client bean. Connects at build time using the
-/// `openfga.endpoint` / `openfga.store_id` / `openfga.model_id` config keys.
-#[producer]
-async fn openfga_backend(
-    #[config("openfga.endpoint")] endpoint: String,
-    #[config("openfga.store_id")] store_id: String,
-    #[config("openfga.model_id")] model_id: Option<String>,
-) -> GrpcBackend {
-    let mut config = OpenFgaConfig::new(endpoint, store_id);
-    if let Some(model_id) = model_id {
-        config = config.with_model_id(model_id);
-    }
-    GrpcBackend::connect(&config)
-        .await
-        .expect("failed to connect to OpenFGA — is the server reachable and the store created?")
-}
-
-/// The cached authorization registry the `FgaCheck` guards resolve from the
-/// bean graph at controller registration.
-#[producer]
-async fn openfga_registry(backend: GrpcBackend) -> OpenFgaRegistry {
-    OpenFgaRegistry::with_cache(backend, 60)
-}
-
-/// The typed client for handler-level FGA operations: `grant`/`revoke`
-/// (compile-checked subjects + write-through cache invalidation) and
-/// `check`.
-#[producer]
-async fn openfga_client(registry: OpenFgaRegistry) -> FgaClient {
-    FgaClient::new(registry)
-}
-
 /// The canonical application blueprint.
 pub struct OpenFgaApp;
 
@@ -110,9 +70,10 @@ impl App for OpenFgaApp {
     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
         b.load_config::<()>()
             .provide(demo_validator())
-            .register::<OpenfgaBackend>()
-            .register::<OpenfgaRegistry>()
-            .register::<OpenfgaClient>()
+            // Store lifecycle owned by the plugin: connects, ensures the
+            // `openfga.store` store, applies/verifies `authz::MODEL`, pins the
+            // model id, and provides the registry + typed client beans.
+            .plugin(OpenFga::model(authz::MODEL))
             .build_state()
             .await
             .with(Health)

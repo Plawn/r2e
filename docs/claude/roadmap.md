@@ -347,21 +347,47 @@ Landed as specified. Notes for later phases:
   three producers in example-openfga are what `.with(OpenFga::model(...))`
   should collapse.
 
-### Phase 3 — `OpenFga` plugin + store lifecycle
+### Phase 3 — `OpenFga` plugin + store lifecycle — SHIPPED 2026-07-20
 
-Replace the two hand-rolled `#[producer]`s with `.with(OpenFga::model(authz::MODEL))`:
+Landed as specified (spelling: `.plugin(OpenFga::model(authz::MODEL))` — it
+provides beans, so it is a `PreStatePlugin`, not a post-state `.with()`).
+Implementation notes:
 
-- **Dev/test:** ensure-store + apply model at boot when it differs from the
-  store's latest (FGA models are append-only — structural compare before
-  writing). `DevOpenFga` auto-applies the model → `#[r2e::test]` boots with
-  store+model ready, zero ceremony; delete `document_model()` JSON from
-  example-openfga.
-- **Prod** (`openfga.apply-model: false`): *verify* mode — fetch the live
-  model, structurally compare with `authz::MODEL`, mismatch = startup error
-  (fail-fast instead of mystery 403s). Pin the resolved `model_id` for all
-  checks (consistency across a deploy).
-- Full chain: compile-time = code ↔ checked-in schema; boot-time = schema ↔
-  live store.
+- **Shape:** `Provided = (OpenFgaRegistry, FgaClient, OpenFgaHandle)`. The
+  registry is built at install over an internal `LazyBackend`
+  (`Arc<OnceLock<GrpcBackend>>`); the async boot runs as `OpenFgaHandle`'s
+  `PostConstruct` (via `ctx.run_post_construct`) inside `build_state()` —
+  connect → resolve store → apply/verify model → pin `model_id` → fill the
+  slot. Failure aborts startup; pre-boot backend use returns the new
+  `OpenFgaError::NotReady` (unreachable in a normal boot).
+- **Config** (`OpenFgaPluginConfig`, prefix `openfga`, all fields `Option` +
+  install-time validation): `endpoint` (required), `store` (name) or
+  `store_id`, `apply_model` (default true), `model_id` (verify-mode pin only
+  — rejected in apply mode), `api_token`, timeouts, cache knobs. Read at
+  **install** (typed `Config` at `configure` is too late — it runs after
+  post-construct), so `.plugin()` must follow `load_config()` (panics with
+  guidance otherwise). `openfga.enabled: false` skips the boot (fail-closed
+  checks).
+- **Store-name duplicates** (FGA names are not unique): apply mode picks the
+  oldest (min id = oldest ULID) with a warning; verify mode errors → set
+  `store_id`.
+- **Model compare** lives in `r2e_openfga::model_convert`: `compile_model`
+  (schema-1.1 JSON → prost via the `r2e-openfga-model` AST — the prost serde
+  derives can't parse the official JSON, oneof tagging differs),
+  `models_equal`/`diff_summary` on canonicalized forms (strip model id,
+  `module`/`source_info`, empty-vs-absent metadata; sort type defs).
+  Identical latest model → reuse (no append); different → write new version.
+- Boot-time store/model RPCs go through the raw client with
+  `request_with_token` (Bearer metadata is NOT auto-injected on raw calls);
+  `GrpcBackend::from_parts` assembles the final backend from the connected
+  channel + resolved ids.
+- example-openfga migrated: producers + `document_model()` deleted; yaml is
+  `endpoint` + `store: "documents"`. Tests: plugin does the bootstrap —
+  unique store name per test (session-shared `DevOpenFga` container), seed
+  tuples via the typed `FgaClient` bean. `DevOpenFga`'s HTTP bootstrap
+  helpers remain for non-plugin flows. Lifecycle tests:
+  `r2e-openfga/tests/plugin.rs` (apply/reuse/append/verify-ok/mismatch/
+  missing-store + typed grant/check through the plugin beans).
 
 ### Phase 4 — CLI (later, lowest priority)
 

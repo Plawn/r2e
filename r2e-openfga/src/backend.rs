@@ -115,19 +115,37 @@ impl GrpcBackend {
     pub async fn connect(config: &OpenFgaConfig) -> Result<Self, OpenFgaError> {
         config.validate()?;
 
-        let endpoint = tonic::transport::Endpoint::from_shared(config.endpoint.clone())
-            .map_err(|e| OpenFgaError::ConnectionFailed(e.to_string()))?
-            .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
-            .timeout(std::time::Duration::from_secs(config.request_timeout_secs));
-
-        let channel = endpoint.connect().await?;
+        let client = connect_client(
+            &config.endpoint,
+            config.connect_timeout_secs,
+            config.request_timeout_secs,
+        )
+        .await?;
 
         Ok(Self {
-            client: OpenFgaServiceClient::new(channel),
+            client,
             store_id: config.store_id.clone(),
             model_id: config.model_id.clone(),
             api_token: config.api_token.clone(),
         })
+    }
+
+    /// Assemble a backend from an already-connected client and resolved ids —
+    /// the [`OpenFga`](crate::plugin::OpenFga) plugin path, where the store id
+    /// (and pinned model id) are only known after the boot-time store/model
+    /// resolution.
+    pub(crate) fn from_parts(
+        client: OpenFgaServiceClient<Channel>,
+        store_id: String,
+        model_id: Option<String>,
+        api_token: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            store_id,
+            model_id,
+            api_token,
+        }
     }
 
     /// Returns a reference to the raw gRPC client.
@@ -149,19 +167,44 @@ impl GrpcBackend {
 
     /// Build a `tonic::Request`, injecting the Bearer token if configured.
     fn make_request<T>(&self, msg: T) -> Result<tonic::Request<T>, OpenFgaError> {
-        let mut request = tonic::Request::new(msg);
-        if let Some(token) = &self.api_token {
-            request.metadata_mut().insert(
-                "authorization",
-                format!("Bearer {}", token).parse().map_err(
-                    |e: tonic::metadata::errors::InvalidMetadataValue| {
-                        OpenFgaError::InvalidConfig(format!("invalid api_token for header: {}", e))
-                    },
-                )?,
-            );
-        }
-        Ok(request)
+        request_with_token(self.api_token.as_deref(), msg)
     }
+}
+
+/// Connect a raw OpenFGA gRPC client to `endpoint` with the given timeouts.
+pub(crate) async fn connect_client(
+    endpoint: &str,
+    connect_timeout_secs: u64,
+    request_timeout_secs: u64,
+) -> Result<OpenFgaServiceClient<Channel>, OpenFgaError> {
+    let endpoint = tonic::transport::Endpoint::from_shared(endpoint.to_string())
+        .map_err(|e| OpenFgaError::ConnectionFailed(e.to_string()))?
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
+        .timeout(std::time::Duration::from_secs(request_timeout_secs));
+
+    let channel = endpoint.connect().await?;
+    Ok(OpenFgaServiceClient::new(channel))
+}
+
+/// Build a `tonic::Request`, injecting a Bearer token if given. Shared by
+/// [`GrpcBackend`] and the plugin's boot-time store/model RPCs (which go
+/// through the raw client, where tonic does not auto-inject metadata).
+pub(crate) fn request_with_token<T>(
+    api_token: Option<&str>,
+    msg: T,
+) -> Result<tonic::Request<T>, OpenFgaError> {
+    let mut request = tonic::Request::new(msg);
+    if let Some(token) = api_token {
+        request.metadata_mut().insert(
+            "authorization",
+            format!("Bearer {}", token).parse().map_err(
+                |e: tonic::metadata::errors::InvalidMetadataValue| {
+                    OpenFgaError::InvalidConfig(format!("invalid api_token for header: {}", e))
+                },
+            )?,
+        );
+    }
+    Ok(request)
 }
 
 impl OpenFgaBackend for GrpcBackend {

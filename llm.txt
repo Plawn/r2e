@@ -808,11 +808,58 @@ error** (`FgaCheck` declares `DecoratorSpec::REQUIRES_IDENTITY = true`).
 A required or `Option<..>` struct/param identity is allowed (runtime `None`
 → 401 stays as the backstop for the optional case).
 
-**Setup** — three beans, no plugin. Provide the `OpenFgaRegistry` (the
-guard's only dep; a missing one is a compile error at `register_controller`)
-and `FgaClient` (the typed client for handler-level writes/checks/lists).
-Back them with `GrpcBackend` in production, or the in-memory `MockBackend`
-for demos/tests.
+**Setup — the `OpenFga` plugin (recommended).** One line owns the whole store
+lifecycle and provides the beans (`OpenFgaRegistry` — the guard's only dep;
+`FgaClient` — the typed client; `OpenFgaHandle` — resolved ids + raw backend):
+
+```rust
+use r2e::r2e_openfga::OpenFga;
+
+r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+
+b.load_config::<()>()                       // config MUST be loaded first
+    .plugin(OpenFga::model(authz::MODEL))   // pre-state, before build_state()
+    .build_state().await
+    .register_controller::<DocumentController>()
+```
+
+```yaml
+openfga:
+  endpoint: "http://localhost:8081"   # gRPC endpoint (required)
+  store: "documents"                  # store name (looked up / created)
+  # store_id: "01H…"                  # or an explicit id (wins over `store`)
+  # apply_model: false                # prod: verify instead of apply
+  # model_id: "01H…"                  # verify mode only: pin + verify this version
+  # api_token, connect_timeout_secs (10), request_timeout_secs (5),
+  # cache_enabled (true), cache_ttl_secs (60)
+```
+
+Boot sequence (inside `build_state()`, **before the app serves; any failure
+aborts startup**): connect → resolve the store (`store_id`, or `store` name
+via `ListStores`; created when missing in apply mode) → apply or verify the
+model → pin the resolved `model_id` on every subsequent check.
+
+- **Apply mode** (`apply_model: true`, the default — dev/test): the
+  compiled-in `authz::MODEL` is structurally compared with the store's latest
+  model; a new version is written **only when they differ** (FGA models are
+  append-only; identical re-boots reuse the latest). Store names are not
+  unique in OpenFGA — on duplicates the oldest is used (with a warning).
+- **Verify mode** (`apply_model: false` — prod): the live model (latest, or
+  the pinned `model_id`) must structurally match `authz::MODEL`, otherwise
+  startup fails with a diff summary — no mystery 403s. Missing store /
+  missing model are startup errors; duplicates by name are an error (set
+  `store_id`).
+
+This closes the schema-first chain: compile time checks code ↔ checked-in
+`.fga` (via `model!`); the plugin checks checked-in `.fga` ↔ live store at
+boot. `OpenFgaHandle` (bean) exposes `store_id()`, `model_id()`, and
+`backend()` (the connected `GrpcBackend`, raw-client escape hatch).
+Install AFTER `load_config()`/`with_config()` (panics with guidance
+otherwise). `openfga.enabled: false` skips the boot sequence (checks then
+fail closed).
+
+**Manual setup (escape hatch — dynamic models / custom wiring).** Provide the
+beans yourself; the store/model must already exist:
 
 ```rust
 use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
@@ -825,17 +872,18 @@ let backend = GrpcBackend::connect(&config).await?;
 let registry = OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs);
 
 AppBuilder::new()
-    .provide(FgaClient::new(registry.clone()))  // typed writes/checks/lists
+    .provide(FgaClient::new(registry.clone()))  // typed writes/checks
     .provide(registry)         // guard dep (cached check)
     .provide(backend)          // optional: raw client escape hatch
     .build_state().await
     .register_controller::<DocumentController>()
 ```
 
-`OpenFgaConfig` derives `Deserialize` (load from an `application.yaml`
-`openfga:` section: `endpoint`, `store_id`, `model_id?`, `api_token?`,
-`cache_enabled`, `cache_ttl_secs`). Builder-only fields also exist
-(`with_connect_timeout`, `with_request_timeout`, `without_cache`).
+`OpenFgaConfig` derives `Deserialize` (`endpoint`, `store_id`, `model_id?`,
+`api_token?`, `cache_enabled`, `cache_ttl_secs`; builder-only:
+`with_connect_timeout`, `with_request_timeout`, `without_cache`). Note the
+plugin reads its own `OpenFgaPluginConfig` section (same `openfga:` prefix,
+`store`/`apply_model` keys) — `OpenFgaConfig` is the manual-wiring type.
 
 **Schema-first typed API (recommended)** — check the `.fga` model into the
 repo and generate a typed module from it with `model!`. Relations and object
@@ -1897,15 +1945,25 @@ test process and removes the containers after the final process exits
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
-datastore. `grpc_endpoint()` → `openfga.endpoint` config (the gRPC port the
-`GrpcBackend` connects to); `http_endpoint()` backs the bootstrap helpers.
-Because OpenFGA store/model IDs are server-generated and are construction-time
-config, the dev service owns bootstrap: `create_store(name) -> store_id`,
-`write_model(store_id, &json_model) -> model_id`, and
-`write_tuples(store_id, model_id, &[(user, relation, object)])`. A test creates
-the store + model + seed tuples, then boots the app with those IDs injected via
-`override_config_value` (`openfga.endpoint`/`store_id`/`model_id`). See
-`examples/example-openfga`.
+datastore. With the `OpenFga` plugin, a test only points the app at the
+container — the plugin creates the store and applies the model at boot; seed
+tuples through the typed `FgaClient` bean afterwards. Use a unique
+`openfga.store` name per test for isolation on the session-shared container:
+
+```rust
+let fga = DevOpenFga::shared().await;
+let grpc = fga.grpc_endpoint().to_string();
+let app = TestApp::boot_with::<MyApp>(move |b| {
+    b.override_config_value("openfga.endpoint", grpc)
+        .override_config_value("openfga.store", unique_store_name())
+}).await;
+app.bean::<FgaClient>().grant(&alice, authz::document::viewer, &doc).await?;
+```
+
+For non-plugin wiring, the HTTP bootstrap helpers remain:
+`create_store(name) -> store_id`, `write_model(store_id, &json) -> model_id`,
+`write_tuples(store_id, model_id, &[(user, relation, object)])`
+(`http_endpoint()` backs them). See `examples/example-openfga`.
 
 Ryuk requires a local Docker Unix socket. Configuration:
 `R2E_DEVSERVICES_DOCKER_SOCKET` overrides its host path,

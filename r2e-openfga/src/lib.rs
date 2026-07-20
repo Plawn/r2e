@@ -177,6 +177,8 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod guard;
+pub mod model_convert;
+pub mod plugin;
 pub mod registry;
 pub mod typed;
 
@@ -198,6 +200,7 @@ pub use error::OpenFgaError;
 pub use guard::{
     FgaCheck, FgaCheckBuilder, FgaGuard, FgaObjectBuilder, ObjectResolver, PathParamName,
 };
+pub use plugin::{OpenFga, OpenFgaHandle, OpenFgaPluginConfig};
 pub use registry::OpenFgaRegistry;
 pub use typed::{
     DirectlyAssignable, FgaObject, FgaRel, FgaSubject, FgaType, FgaUserset, FgaWildcard,
@@ -211,5 +214,6 @@ pub mod prelude {
     pub use crate::error::OpenFgaError;
     pub use crate::guard::FgaCheck;
     pub use crate::model;
+    pub use crate::plugin::{OpenFga, OpenFgaHandle};
     pub use crate::registry::OpenFgaRegistry;
 }
