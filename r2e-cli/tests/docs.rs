@@ -50,7 +50,7 @@ fn every_module_has_a_tldr() {
 #[test]
 fn corpus_covers_all_features() {
     // One entry per docs/features/NN-*.md file.
-    assert_eq!(slugs().len(), 22);
+    assert_eq!(slugs().len(), 23);
 }
 
 // ── slug lookup + known content ─────────────────────────────────────

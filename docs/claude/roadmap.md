@@ -304,18 +304,48 @@ Landed as specified below. Notes for later phases:
 - Trybuild pass+fail fixtures in `r2e-compile-tests` (typo'd relation,
   relation on wrong type, disallowed subject type on grant).
 
-### Phase 2 — Typed client + write-through invalidation
+### Phase 2 — Typed client + write-through invalidation — SHIPPED 2026-07-20
 
-`FgaClient` bean façade over `GrpcBackend` + `OpenFgaRegistry` (replaces
-"grab the raw tonic client" as the idiomatic write path):
-
-- `fga.grant(user, authz::document::viewer, obj)` / `revoke(...)` — compile
-  only if the model allows that subject type on that relation
-  (`DirectlyAssignable`); auto-invalidate the registry cache for the object.
-- `fga.check(user, rel, obj)` — typed handler-level check (object id known
-  only after a DB lookup).
-- `fga.list_objects(user, rel) -> Vec<FgaObject<Ty>>` — typed, for
-  list-endpoint filtering (the most painful ReBAC pattern).
+Landed as specified. Notes for later phases:
+- Shape adjustment vs the sketch: `FgaClient` wraps **`OpenFgaRegistry`
+  alone** (not `GrpcBackend` + registry). The tuple writes were added to the
+  `OpenFgaBackend` trait itself (`write_tuple`/`delete_tuple`, **default
+  impls returning `OpenFgaError::Unsupported`** so check-only custom
+  backends keep compiling); `GrpcBackend` and `MockBackend` implement both,
+  and the registry exposes its backend `pub(crate)`. Consequence:
+  `FgaClient` is fully testable offline against `MockBackend` (now `Clone`,
+  shared tuple set).
+- `grant`/`revoke` bound `R: DirectlyAssignable<S::Marker>`; `check`
+  deliberately does NOT (checks target computed relations).
+- **`list_objects` DROPPED from the surface (user decision 2026-07-20).**
+  It was implemented, reviewed and green, then removed: OpenFGA's
+  `ListObjectsResponse` is a bare `repeated string objects` — the
+  server-side bounds (`OPENFGA_LIST_OBJECTS_MAX_RESULTS`, deadline)
+  silently return a *partial* list with no truncation flag or cursor
+  (unlike SpiceDB's cursored `LookupResources`), so a typed
+  `Vec<FgaObject<T>>` would read as exhaustive without being it. Revisit
+  only on a real need, in this order: paginate-app-objects + `BatchCheck`
+  helper (best candidate), `StreamedListObjects` (escapes the max-results
+  cap, not the deadline), `Read`-paginated helper (direct tuples only).
+  The dropped implementation (incl. `FgaObject::from_wire`, the
+  `MalformedObject` error variant, tests and the example `list` endpoint)
+  is recoverable from this session's diff history if upstream ever adds a
+  truncation signal.
+- Write-through invalidation is exact-object only (`invalidate_object`);
+  transitive fan-out (userset grants) still needs `clear_cache()`/TTL —
+  documented, unchanged from the registry's cache contract. The
+  invalidate-after-write TOCTOU (a racing check can re-cache a stale
+  decision until TTL) is documented on the registry, not fixed with cache
+  versioning.
+- OpenFGA `Write` semantics kept verbatim: duplicate grant / missing revoke
+  = server error, not a no-op (no error-message parsing for idempotency).
+- example-openfga exercises the client end-to-end (share/unshare endpoints,
+  editor-gated; integration tests cover cached-deny → grant → allow).
+  Fixtures: `compile-pass/fga_client_typed.rs`,
+  `compile-fail/fga_client_grant_wrong_subject.rs`.
+- Phase 3 can hand `FgaClient`/registry construction to the plugin — the
+  three producers in example-openfga are what `.with(OpenFga::model(...))`
+  should collapse.
 
 ### Phase 3 — `OpenFga` plugin + store lifecycle
 

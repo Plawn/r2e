@@ -808,22 +808,26 @@ error** (`FgaCheck` declares `DecoratorSpec::REQUIRES_IDENTITY = true`).
 A required or `Option<..>` struct/param identity is allowed (runtime `None`
 → 401 stays as the backstop for the optional case).
 
-**Setup** — two beans, no plugin. Provide the `OpenFgaRegistry` (the guard's
-only dep; a missing one is a compile error at `register_controller`). Back it
-with `GrpcBackend` in production, or the in-memory `MockBackend` for demos/tests.
+**Setup** — three beans, no plugin. Provide the `OpenFgaRegistry` (the
+guard's only dep; a missing one is a compile error at `register_controller`)
+and `FgaClient` (the typed client for handler-level writes/checks/lists).
+Back them with `GrpcBackend` in production, or the in-memory `MockBackend`
+for demos/tests.
 
 ```rust
-use r2e::r2e_openfga::{GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
 
 let config = OpenFgaConfig::new("http://localhost:8080", "store-id")
     .with_model_id("01H…")   // optional; latest model if omitted
     .with_api_token("secret") // optional Bearer token
     .with_cache(true, 60);    // decision cache TTL (seconds)
 let backend = GrpcBackend::connect(&config).await?;
+let registry = OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs);
 
 AppBuilder::new()
-    .provide(OpenFgaRegistry::with_cache(backend.clone(), config.cache_ttl_secs))
-    .provide(backend)          // optional: raw client for tuple writes/list
+    .provide(FgaClient::new(registry.clone()))  // typed writes/checks/lists
+    .provide(registry)         // guard dep (cached check)
+    .provide(backend)          // optional: raw client escape hatch
     .build_state().await
     .register_controller::<DocumentController>()
 ```
@@ -872,8 +876,8 @@ relation/type/condition in the model = build error at the invocation, with the
   userset subject;
 - `DirectlyAssignable<SubjectMarker>` impls mirroring the model's
   `directly_related_user_types` (subject markers: `user::Ty`,
-  `(team::Ty, team::Member)`, `WildcardOf<user::Ty>`) — the typed write API
-  bounds grants on it.
+  `(team::Ty, team::Member)`, `WildcardOf<user::Ty>`) —
+  `FgaClient::grant`/`revoke` bound on them.
 
 Grammar surface: full DSL 1.1 — `or`/`and`/`but not` (+ parentheses),
 `X from Y`, `[user, user:*, team#member]`, `with <condition>` + `condition`
@@ -921,8 +925,46 @@ unresolvable id → 400. **Security:** dynamic resolvers reject ids containing
 side is guarded too: an `identity.sub()` containing a reserved character is
 rejected with 403 (fail closed) rather than interpolated into `user:{sub}`.
 
-**Writing tuples** — the registry only caches `check`. Use the raw client via
-`GrpcBackend`, then invalidate the cache:
+**Typed client (`FgaClient`) — the idiomatic write path.** A clonable bean
+(`FgaClient::new(registry)`) for everything handler-level. `grant`/`revoke`
+compile only if the model's `directly_related_user_types` allows that subject
+type on that relation (`DirectlyAssignable` bound), and invalidate the
+decision cache for the touched object (write-through — the grantee's next
+request sees the change). `check` goes through the registry (cached) and has
+no assignability bound (checks may target computed relations):
+
+```rust
+#[controller(path = "/documents")]
+pub struct DocumentController {
+    #[inject] fga: FgaClient,
+    #[inject(identity)] user: AuthenticatedUser,
+}
+
+let grantee = authz::user::try_id(&user_id)?;   // rejects `:`/`#`/`*` → 400
+let doc = authz::document::try_id(&doc_id)?;
+self.fga.grant(&grantee, authz::document::viewer, &doc).await?;
+self.fga.revoke(&grantee, authz::document::viewer, &doc).await?;
+// userset / wildcard subjects, when the model allows them:
+self.fga.grant(&authz::team::member.of(authz::team::id("eng")), authz::document::viewer, &doc).await?;
+self.fga.grant(&authz::user::wildcard(), authz::document::viewer, &doc).await?;
+// handler-level check (cached):
+let allowed = self.fga.check(&grantee, authz::document::viewer, &doc).await?;
+```
+
+OpenFGA `Write` semantics apply: granting an existing tuple / revoking a
+missing one is a server error, not a no-op. Only the exact object's cached
+decisions are invalidated — after grants with transitive fan-out (e.g. into a
+`team#member` used by many objects), use `registry.clear_cache()`.
+
+There is **no `FgaClient::list_objects`** (deliberate): OpenFGA's
+`ListObjects` response carries no truncation signal — the server-side bounds
+(`OPENFGA_LIST_OBJECTS_MAX_RESULTS`, deadline) silently return a partial
+list, so a typed wrapper would look exhaustive without being it. For
+list-endpoint filtering, paginate your own objects and `check` each, or use
+the raw client (`backend.client().list_objects(...)`) knowingly.
+
+**Raw tuple writes (escape hatch)** — batch or conditional writes go through
+the raw client; invalidate the cache manually:
 
 ```rust
 use r2e::r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
@@ -949,8 +991,13 @@ mock.add_tuple("user:alice", "viewer", "document:readme");
 builder.provide(OpenFgaRegistry::new(mock))
 ```
 
-Custom backends: implement the `OpenFgaBackend` trait (single `check` method)
-and wrap it in `OpenFgaRegistry::new(..)` / `::with_cache(.., ttl)`.
+`MockBackend` implements the full backend surface (check + tuple writes), so
+`FgaClient` works against it in tests — clones share the tuple set
+(`mock.clone()` keeps a seeding/asserting handle).
+
+Custom backends: implement the `OpenFgaBackend` trait (`check` is required;
+`write_tuple`/`delete_tuple` default to `OpenFgaError::Unsupported`) and wrap
+it in `OpenFgaRegistry::new(..)` / `::with_cache(.., ttl)`.
 
 ---
 

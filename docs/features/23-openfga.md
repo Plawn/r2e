@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. `authz::MODEL` carries the schema 1.1 JSON for store bootstrap. Requires feature `openfga`; setup is two beans (`GrpcBackend` + `OpenFgaRegistry`), no plugin yet. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
+Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. `authz::MODEL` carries the schema 1.1 JSON for store bootstrap. In handlers, `FgaClient` is the typed client: `grant`/`revoke` compile only for subject types the model allows (`DirectlyAssignable`) and invalidate the decision cache write-through; `check` covers handler-level checks. (No `list_objects` — OpenFGA cannot signal truncation, see below.) Requires feature `openfga`; setup is three beans (`GrpcBackend` + `OpenFgaRegistry` + `FgaClient`), no plugin yet. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
 
 ## Objective
 
@@ -63,7 +63,7 @@ For tests and tiny models, the DSL can be inlined: `model!(pub mod authz = inlin
 | `authz::document::viewer` | `FgaRel<Ty, Viewer>` const (lowercase, same convention as `path::doc_id`) carrying relation + object type |
 | `authz::team::member.of(authz::team::id("eng"))` | The `team:eng#member` userset subject |
 | `authz::user::wildcard()` | The `user:*` public subject |
-| `impl DirectlyAssignable<…> for Viewer` | One impl per entry in the relation's `directly_related_user_types` — the typed write API (Phase 2) bounds grants on it |
+| `impl DirectlyAssignable<…> for Viewer` | One impl per entry in the relation's `directly_related_user_types` — `FgaClient::grant`/`revoke` bound on it |
 
 ### Guards
 
@@ -91,6 +91,41 @@ Resolvers supply the object id: `.from_path(path::name | "name")`, `.from_query(
 
 `FgaCheck::relation("viewer").on("document")` remains as the **unchecked escape hatch** for dynamic models — nothing verifies the strings; prefer `has` whenever the model is checked in.
 
+### The typed client (`FgaClient`)
+
+Guards cover route-level checks; `FgaClient` covers everything handler-level — writes, and checks on objects known only after a DB lookup:
+
+```rust
+#[controller(path = "/documents")]
+pub struct DocumentController {
+    #[inject] fga: FgaClient,
+    #[inject(identity)] user: AuthenticatedUser,
+}
+
+// Typed grant: compiles only because the model lists `user` in viewer's
+// directly-related types; invalidates the decision cache for the document.
+let grantee = authz::user::try_id(&user_id)?;          // 400 on `:`/`#`/`*`
+let doc = authz::document::try_id(&doc_id)?;
+self.fga.grant(&grantee, authz::document::viewer, &doc).await?;
+
+// Userset / wildcard subjects, when the model allows them:
+self.fga.grant(&authz::team::member.of(authz::team::id("eng")), authz::document::viewer, &doc).await?;
+self.fga.grant(&authz::user::wildcard(), authz::document::viewer, &doc).await?;
+
+// Handler-level check (cached via the registry). No DirectlyAssignable
+// bound — checks may target computed relations (`viewer` implied by `editor`).
+let allowed = self.fga.check(&grantee, authz::document::viewer, &doc).await?;
+```
+
+Semantics to know:
+
+- **Write-through invalidation** — `grant`/`revoke` invalidate cached decisions for the touched object, so the grantee's next request sees the change immediately. Only the *exact object* is invalidated; grants with transitive fan-out (e.g. into a `team#member` used by many objects) still need `registry.clear_cache()` or TTL expiry. A concurrent check racing the write can re-cache the pre-write decision until TTL (invalidate-after-write is not versioned) — the cache TTL is the staleness bound either way.
+- **OpenFGA `Write` semantics** — granting an existing tuple / revoking a missing one is a server error, not a no-op.
+- **Wrong subject type = compile error** — `grant(&team_member_userset, authz::document::editor, …)` fails to build when `editor` only allows `[user]`.
+- **Escape hatch** — batch or conditional writes go through `GrpcBackend::client()` (raw tonic client) + manual `registry.invalidate_object(...)`.
+- `OpenFgaBackend` gained default-erroring `write_tuple`/`delete_tuple` — custom check-only backends still compile and surface `OpenFgaError::Unsupported` if used with `FgaClient`; `MockBackend` implements both, so `FgaClient` is fully testable offline.
+- **No `list_objects` (deliberate)** — OpenFGA's `ListObjects` response is a bare `repeated string objects`: the server-side bounds (`OPENFGA_LIST_OBJECTS_MAX_RESULTS`, deadline) silently return a *partial* list with no truncation flag or cursor, so a typed wrapper would look exhaustive without being it. For list-endpoint filtering, paginate your own objects and `check` them (a future `BatchCheck`-based helper is the candidate), or call `backend.client().list_objects(...)` knowingly.
+
 An FGA check requires an authenticated identity (`REQUIRES_IDENTITY = true`): placing one where the identity is statically always `None` (no `#[inject(identity)]`, or an `#[anonymous]` route without an optional identity param) is a **compile error**.
 
 ### Injection guards (security)
@@ -102,10 +137,10 @@ FGA metacharacters are rejected on both sides of a check, fail-closed:
 
 ## Setup
 
-Two beans, no plugin (a boot-time apply/verify plugin is planned — see Roadmap below):
+Three beans, no plugin (a boot-time apply/verify plugin is planned — see Roadmap below):
 
 ```rust
-use r2e::r2e_openfga::{GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
 
 #[producer]
 async fn openfga_backend(
@@ -122,9 +157,14 @@ async fn openfga_backend(
 async fn openfga_registry(backend: GrpcBackend) -> OpenFgaRegistry {
     OpenFgaRegistry::with_cache(backend, 60)   // decision cache, 60s TTL
 }
+
+#[producer]
+async fn openfga_client(registry: OpenFgaRegistry) -> FgaClient {
+    FgaClient::new(registry)                   // typed writes/checks/lists
+}
 ```
 
-The `FgaCheck` guard pulls the `OpenFgaRegistry` bean itself (compile-checked decorator dep) — controllers need no `#[inject]` field for it. Keep `GrpcBackend` provided too if you write tuples (raw client access; remember `registry.invalidate_object(...)` after writes).
+The `FgaCheck` guard pulls the `OpenFgaRegistry` bean itself (compile-checked decorator dep) — controllers need no `#[inject]` field for it. `#[inject] fga: FgaClient` is only for handlers doing writes/checks/lists. Keep `GrpcBackend` provided for the raw-client escape hatch (batch/conditional writes, model management).
 
 ## Testing
 
@@ -151,6 +191,5 @@ See `examples/example-openfga` for the complete wiring, and `r2e-compile-tests/c
 
 ## Roadmap (not yet shipped)
 
-- **Typed client (Phase 2)** — `fga.grant(user, authz::document::viewer, obj)` / `revoke` / `list_objects`, compile-bounded by `DirectlyAssignable`, with write-through cache invalidation.
 - **Plugin (Phase 3)** — `.with(OpenFga::model(authz::MODEL))`: apply the model at boot in dev/test, *verify* against the live store in prod (mismatch = startup error), pin the resolved `model_id`.
 - **CLI (Phase 4)** — `r2e fga diff | push | pull`, tuple seed fixtures.

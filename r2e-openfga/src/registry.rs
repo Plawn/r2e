@@ -46,7 +46,11 @@ use crate::backend::GrpcBackend;
 ///
 /// After writing or deleting tuples, you must manually invalidate affected
 /// cache entries. Only the **exact object** is invalidated — transitive
-/// relationships are not tracked. Consider:
+/// relationships are not tracked. Additionally, invalidation happens *after*
+/// the write: a concurrent check that read the pre-write decision can
+/// re-populate a stale entry just after the invalidation, which then lives
+/// until TTL expiry (inherent to invalidate-after-write; the TTL bounds the
+/// staleness). Consider:
 /// - Using short cache TTLs
 /// - Calling `invalidate_object()` on downstream objects
 /// - Calling `clear_cache()` after bulk permission changes
@@ -71,6 +75,12 @@ impl OpenFgaRegistry {
             backend: Arc::new(backend),
             cache: Some(Arc::new(DecisionCache::new(cache_ttl_secs))),
         }
+    }
+
+    /// The wrapped backend — used by [`FgaClient`](crate::client::FgaClient)
+    /// for the uncached tuple operations (writes, list objects).
+    pub(crate) fn backend(&self) -> &Arc<dyn OpenFgaBackend> {
+        &self.backend
     }
 
     // ── Check ──────────────────────────────────────────────────────────

@@ -11,17 +11,25 @@ use crate::config::OpenFgaConfig;
 use crate::error::OpenFgaError;
 use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
 use openfga_rs::tonic;
-use openfga_rs::{CheckRequest, CheckRequestTupleKey};
+use openfga_rs::{
+    CheckRequest, CheckRequestTupleKey, TupleKey, TupleKeyWithoutCondition, WriteRequest,
+    WriteRequestDeletes, WriteRequestWrites,
+};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tonic::transport::Channel;
 
-/// Backend trait for OpenFGA authorization checks.
+/// Backend trait for OpenFGA authorization checks and tuple management.
 ///
 /// Only `check` is required — that's the operation the registry caches
-/// and the guard delegates to. For writes, deletes, list objects, model
-/// management, etc., use the concrete backend directly (e.g.,
+/// and the guard delegates to. The tuple writes (`write_tuple`,
+/// `delete_tuple`) default to [`OpenFgaError::Unsupported`] so check-only
+/// backends stay valid; the provided [`GrpcBackend`] and [`MockBackend`]
+/// implement both, which is what the typed
+/// [`FgaClient`](crate::client::FgaClient) consumes. For anything beyond
+/// single tuples (batch writes, conditional tuples, list objects, model
+/// management), use the concrete backend directly (e.g.,
 /// [`GrpcBackend::client()`] for the raw gRPC client).
 pub trait OpenFgaBackend: Send + Sync + 'static {
     /// Check if `user` has `relation` to `object`.
@@ -31,6 +39,34 @@ pub trait OpenFgaBackend: Send + Sync + 'static {
         relation: &str,
         object: &str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>>;
+
+    /// Write the relationship tuple `(user, relation, object)`.
+    ///
+    /// Mirrors OpenFGA `Write` semantics: writing a tuple that already
+    /// exists is a server error, not a no-op.
+    fn write_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        let _ = (user, relation, object);
+        Box::pin(async { Err(OpenFgaError::Unsupported("write_tuple")) })
+    }
+
+    /// Delete the relationship tuple `(user, relation, object)`.
+    ///
+    /// Mirrors OpenFGA `Write` semantics: deleting a tuple that does not
+    /// exist is a server error, not a no-op.
+    fn delete_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        let _ = (user, relation, object);
+        Box::pin(async { Err(OpenFgaError::Unsupported("delete_tuple")) })
+    }
 }
 
 // ── GrpcBackend ────────────────────────────────────────────────────────
@@ -157,6 +193,68 @@ impl OpenFgaBackend for GrpcBackend {
             Ok(resp.into_inner().allowed)
         })
     }
+
+    fn write_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        let req = WriteRequest {
+            store_id: self.store_id.clone(),
+            authorization_model_id: self.model_id.clone().unwrap_or_default(),
+            writes: Some(WriteRequestWrites {
+                tuple_keys: vec![TupleKey {
+                    user: user.to_string(),
+                    relation: relation.to_string(),
+                    object: object.to_string(),
+                    condition: None,
+                }],
+            }),
+            deletes: None,
+        };
+
+        Box::pin(async move {
+            let request = self.make_request(req)?;
+            self.client
+                .clone()
+                .write(request)
+                .await
+                .map_err(OpenFgaError::from)?;
+            Ok(())
+        })
+    }
+
+    fn delete_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        let req = WriteRequest {
+            store_id: self.store_id.clone(),
+            authorization_model_id: self.model_id.clone().unwrap_or_default(),
+            writes: None,
+            deletes: Some(WriteRequestDeletes {
+                tuple_keys: vec![TupleKeyWithoutCondition {
+                    user: user.to_string(),
+                    relation: relation.to_string(),
+                    object: object.to_string(),
+                }],
+            }),
+        };
+
+        Box::pin(async move {
+            let request = self.make_request(req)?;
+            self.client
+                .clone()
+                .write(request)
+                .await
+                .map_err(OpenFgaError::from)?;
+            Ok(())
+        })
+    }
+
 }
 
 // ── MockBackend ────────────────────────────────────────────────────────
@@ -178,6 +276,9 @@ impl OpenFgaBackend for GrpcBackend {
 /// assert!(registry.check("user:alice", "viewer", "document:1").await.unwrap());
 /// assert!(!registry.check("user:bob", "viewer", "document:1").await.unwrap());
 /// ```
+/// Clones share the same tuple set, so a test can keep a handle to mutate
+/// tuples after handing the backend to a registry.
+#[derive(Clone)]
 pub struct MockBackend {
     tuples: Arc<dashmap::DashSet<(String, String, String)>>,
 }
@@ -234,5 +335,25 @@ impl OpenFgaBackend for MockBackend {
     ) -> Pin<Box<dyn Future<Output = Result<bool, OpenFgaError>> + Send + '_>> {
         let result = self.has_tuple(user, relation, object);
         Box::pin(async move { Ok(result) })
+    }
+
+    fn write_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        self.add_tuple(user, relation, object);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn delete_tuple(
+        &self,
+        user: &str,
+        relation: &str,
+        object: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), OpenFgaError>> + Send + '_>> {
+        self.remove_tuple(user, relation, object);
+        Box::pin(async { Ok(()) })
     }
 }

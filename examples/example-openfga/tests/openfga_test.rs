@@ -77,6 +77,80 @@ async fn non_viewer_is_denied() {
         .assert_forbidden();
 }
 
+/// The typed write path end-to-end: an editor shares the document (grant
+/// through `FgaClient`), the grantee immediately gains access (write-through
+/// cache invalidation), then loses it again on unshare.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn share_grants_and_unshare_revokes_view_access() {
+    let app = boot().await;
+
+    // Prime the decision cache with bob's deny.
+    app.get("/documents/readme")
+        .as_user("bob", &[])
+        .send()
+        .await
+        .assert_forbidden();
+
+    // Alice (editor) shares with bob; bob's next request must see it even
+    // though his deny was cached.
+    app.post("/documents/readme/share/bob")
+        .as_user("alice", &[])
+        .send()
+        .await
+        .assert_ok();
+    app.get("/documents/readme")
+        .as_user("bob", &[])
+        .send()
+        .await
+        .assert_ok();
+
+    app.delete("/documents/readme/share/bob")
+        .as_user("alice", &[])
+        .send()
+        .await
+        .assert_ok();
+    app.get("/documents/readme")
+        .as_user("bob", &[])
+        .send()
+        .await
+        .assert_forbidden();
+}
+
+/// Sharing is editor-gated: a mere viewer cannot grant access.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn non_editor_cannot_share() {
+    let app = boot().await;
+
+    // Alice grants bob viewer only.
+    app.post("/documents/readme/share/bob")
+        .as_user("alice", &[])
+        .send()
+        .await
+        .assert_ok();
+
+    app.post("/documents/readme/share/carol")
+        .as_user("bob", &[])
+        .send()
+        .await
+        .assert_forbidden();
+}
+
+/// Metacharacters in the grantee id are rejected before reaching the store —
+/// the same `:`/`#`/`*` guard as the request-time object resolvers.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn share_rejects_metacharacters_in_user_id() {
+    let app = boot().await;
+
+    app.post("/documents/readme/share/bob%23admin")
+        .as_user("alice", &[])
+        .send()
+        .await
+        .assert_bad_request();
+}
+
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn editor_is_allowed_but_non_editor_is_denied() {

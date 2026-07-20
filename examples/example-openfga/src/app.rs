@@ -9,7 +9,7 @@ use std::sync::Arc;
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use r2e::prelude::*;
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-use r2e::r2e_openfga::{GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub mod controllers;
@@ -91,6 +91,14 @@ async fn openfga_registry(backend: GrpcBackend) -> OpenFgaRegistry {
     OpenFgaRegistry::with_cache(backend, 60)
 }
 
+/// The typed client for handler-level FGA operations: `grant`/`revoke`
+/// (compile-checked subjects + write-through cache invalidation) and
+/// `check`.
+#[producer]
+async fn openfga_client(registry: OpenFgaRegistry) -> FgaClient {
+    FgaClient::new(registry)
+}
+
 /// The canonical application blueprint.
 pub struct OpenFgaApp;
 
@@ -104,6 +112,7 @@ impl App for OpenFgaApp {
             .provide(demo_validator())
             .register::<OpenfgaBackend>()
             .register::<OpenfgaRegistry>()
+            .register::<OpenfgaClient>()
             .build_state()
             .await
             .with(Health)

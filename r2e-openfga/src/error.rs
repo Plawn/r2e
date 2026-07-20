@@ -17,6 +17,9 @@ pub enum OpenFgaError {
     InvalidConfig(String),
     /// Failed to resolve object ID from request.
     ObjectResolutionFailed(String),
+    /// The backend does not implement this operation (only `check` is
+    /// required by [`OpenFgaBackend`](crate::backend::OpenFgaBackend)).
+    Unsupported(&'static str),
 }
 
 impl fmt::Display for OpenFgaError {
@@ -29,6 +32,9 @@ impl fmt::Display for OpenFgaError {
             OpenFgaError::InvalidConfig(msg) => write!(f, "Invalid OpenFGA config: {}", msg),
             OpenFgaError::ObjectResolutionFailed(msg) => {
                 write!(f, "Failed to resolve object: {}", msg)
+            }
+            OpenFgaError::Unsupported(op) => {
+                write!(f, "OpenFGA backend does not support '{}'", op)
             }
         }
     }

@@ -33,24 +33,29 @@
 //!
 //! # Architecture
 //!
-//! The crate is split into two concerns:
+//! The crate is split into three concerns:
 //!
 //! - **[`OpenFgaRegistry`]** — wraps any [`OpenFgaBackend`](backend::OpenFgaBackend)
 //!   and adds decision caching. Only exposes `check()`. Used by the guard.
+//! - **[`FgaClient`]** — the typed, schema-first client for handler code:
+//!   `grant`/`revoke` (compile-checked subject types, write-through cache
+//!   invalidation) and `check`. **This is the idiomatic write path.**
 //! - **[`GrpcBackend`]** — the concrete gRPC implementation. Exposes the raw
-//!   `openfga-rs` client via [`client()`](GrpcBackend::client) for full API access
-//!   (writes, deletes, list objects, model management, batch operations, etc.).
+//!   `openfga-rs` client via [`client()`](GrpcBackend::client) for anything
+//!   beyond single tuples (batch writes, conditional tuples, list objects,
+//!   model management).
 //!
 //! ```ignore
-//! // Cached check (via registry)
-//! let allowed = registry.check("user:alice", "viewer", "document:1").await?;
+//! // Typed write path — compile-checked against the model, cache-safe:
+//! let alice = authz::user::id("alice");
+//! let doc = authz::document::id("1");
+//! fga.grant(&alice, authz::document::viewer, &doc).await?;
+//! let allowed = fga.check(&alice, authz::document::viewer, &doc).await?;
 //!
-//! // Raw gRPC operations (via backend)
+//! // Raw gRPC escape hatch (batch/conditional writes, model management):
 //! let mut client = backend.client().clone();
 //! client.write(tonic::Request::new(/* ... */)).await?;
-//!
-//! // Then invalidate the cache
-//! registry.invalidate_object("document:1");
+//! registry.invalidate_object("document:1"); // manual invalidation required
 //! ```
 //!
 //! # Custom Backends
@@ -168,6 +173,7 @@
 
 pub mod backend;
 pub mod cache;
+pub mod client;
 pub mod config;
 pub mod error;
 pub mod guard;
@@ -186,6 +192,7 @@ pub use r2e_openfga_macros::model;
 
 // Re-exports
 pub use backend::{GrpcBackend, MockBackend, OpenFgaBackend};
+pub use client::FgaClient;
 pub use config::OpenFgaConfig;
 pub use error::OpenFgaError;
 pub use guard::{
@@ -199,6 +206,7 @@ pub use typed::{
 
 /// Prelude for convenient imports.
 pub mod prelude {
+    pub use crate::client::FgaClient;
     pub use crate::config::OpenFgaConfig;
     pub use crate::error::OpenFgaError;
     pub use crate::guard::FgaCheck;
