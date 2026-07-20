@@ -1,0 +1,11 @@
+error: model!: relation `Viewer` on type `document` collides with its generated marker struct `Viewer` — use a lowercase relation name
+  --> compile-fail/fga_uppercase_relation.rs:5:49
+   |
+ 5 |   r2e::r2e_openfga::model!(pub mod authz = inline r#"
+   |  _________________________________________________^
+ 6 | | model
+ 7 | |   schema 1.1
+...  |
+13 | |     define Viewer: [user]
+14 | | "#);
+   | |__^

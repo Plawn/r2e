@@ -2,7 +2,7 @@
 
 ## Overview
 
-R2E provides 22 main features, each documented in a dedicated file.
+R2E provides 23 main features, each documented in a dedicated file.
 
 | # | Feature | File | Crate |
 |---|---------|------|-------|
@@ -28,6 +28,7 @@ R2E provides 22 main features, each documented in a dedicated file.
 | 20 | Proxy & Catch-All Routes | [20-proxy-catch-all.md](./20-proxy-catch-all.md) | `r2e-macros` / `r2e-core` |
 | 21 | Dynamic Scheduled Tasks | [21-dynamic-scheduled-tasks.md](./21-dynamic-scheduled-tasks.md) | `r2e-scheduler` |
 | 22 | Serve Lifecycle (Stop & Drain) | [22-serve-lifecycle.md](./22-serve-lifecycle.md) | `r2e-core` / `r2e-grpc` |
+| 23 | OpenFGA Authorization (ReBAC, schema-first) | [23-openfga.md](./23-openfga.md) | `r2e-openfga` |
 
 ## Crate Architecture
 

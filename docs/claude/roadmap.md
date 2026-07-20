@@ -251,7 +251,33 @@ JSON in the app (`examples/example-openfga/src/app.rs::document_model()`);
 writes go through the raw tonic client + manual `registry.invalidate_object`;
 nothing verifies that the compiled-in model matches what the store serves.
 
-### Phase 1 — `model!` macro + generated typed API (the core)
+### Phase 1 — `model!` macro + generated typed API (the core) — SHIPPED 2026-07-20
+
+Landed as specified below. Notes for later phases:
+- Crates live at `r2e-openfga/model` (`r2e-openfga-model`) and
+  `r2e-openfga/macros` (`r2e-openfga-macros`), following the `r2e-grpc/build`
+  layout. The parser round-trips the entire vendored `openfga/language`
+  transformer corpus (29 cases, `r2e-openfga/model/tests/corpus/`).
+- Split discovered during implementation: the official transformer is
+  **syntax-only** (its corpus contains semantically dangling refs), so the
+  crate exposes `parse` (corpus-exact) + `validate` (semantic referential
+  checks) separately; `model!` runs both.
+- Parens + n-ary `or`/`and` are part of DSL 1.1 (not in the original plan's
+  grammar sketch) — supported; operator *mixing* without parens is rejected.
+- Generated subject markers for `DirectlyAssignable`: `user::Ty` (direct),
+  `(team::Ty, team::Member)` (userset), `WildcardOf<user::Ty>` (`user:*`) —
+  Phase 2 `grant`/`revoke` bounds consume these. `FgaSubject::subject_str()`
+  renders the wire form.
+- `example-openfga` migrated (guards use `authz::…`); its `document_model()`
+  now derives from `authz::MODEL` — Phase 3 deletes it when the plugin owns
+  apply/verify.
+- Post-review hardening (code review 2026-07-20): condition bodies are
+  captured **verbatim** (comment stripping is statement-only — a `#` inside a
+  CEL string is not a comment); the injection guard covers `:`/`#`/`*` on
+  BOTH sides (object ids in resolvers + `id()`/`try_id()`, and
+  `identity.sub()` → 403 fail-closed before interpolating `user:{sub}`).
+  Phase 2's `FgaClient` writes must apply the same subject/object character
+  guards.
 
 - New pure crate `r2e-openfga-model`: parser for the OpenFGA DSL 1.1
   (`.fga` → AST → schema-1.1 JSON). No proc-macro deps; testable standalone.

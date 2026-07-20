@@ -64,7 +64,9 @@ r2e-openapi     → OpenAPI 3.1.0 spec generation, Swagger UI at /docs.
 r2e-prometheus   → Prometheus metrics plugin: HTTP request tracking, /metrics endpoint.
 r2e-observability → OpenTelemetry plugin: distributed tracing and context propagation via OTLP.
 r2e-oidc        → Embedded OIDC server plugin: issue JWTs without an external IdP.
-r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control.
+r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control. Schema-first typed API via `model!` (guards: `FgaCheck::has(authz::document::viewer)`).
+  model/            → r2e-openfga-model: pure `.fga` DSL parser (schema 1.1) → typed model → JSON. Syntax (`parse`) and semantic (`validate`) layers; validated against the vendored openfga/language corpus. No proc-macro deps.
+  macros/           → r2e-openfga-macros: `model!(pub mod authz = "fga/model.fga")` — compile-time parse+validate, generates typed markers (`FgaType`/`FgaRel` consts/`DirectlyAssignable` impls) + `authz::MODEL` JSON.
 r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
 r2e-test        → TestApp (HTTP client + App boot: TestApp::boot::<A>() / #[r2e::test(app = MyApp)], bean::<T>() access, .as_user() via auto-wired TestJwt), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
 r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, workspace-session shared containers reaped by Ryuk after the final test process exits, URL injected via override_config_value. Features `postgres`, `redis`.
@@ -160,6 +162,7 @@ impl UserController {
 |---|---|
 | `R2eConfig`, `ConfigProperties`, `ConfigValue`, `FromConfigValue`, `#[config(...)]`, `load_config`, `with_config`, secrets (`${...}`), YAML config, typed sections, `#[config(section)]`, env overlay, `serve_auto` | `docs/claude/configuration.md` |
 | `Guard`, `PreAuthGuard`, `GuardContext`, `#[guard]`, `#[roles]`, `Identity`, `RolesGuard`, `RateLimitGuard`, `PreRateLimit`, `Interceptor`, `#[intercept]`, `DecoratorSpec`, `SelfBuilt`, `#[derive(DecoratorBean)]`, `build_decorator`, `Logged`, `Timed`, `Cache` store bean, middleware ordering | `docs/claude/guards-interceptors.md` |
+| OpenFGA schema-first: `model!`, `.fga` DSL parser, `FgaCheck::has`, `FgaType`/`FgaRel`/`FgaObject`, `DirectlyAssignable`, `authz::MODEL` | `docs/features/23-openfga.md` (user guide) + `docs/claude/roadmap.md` § W12 |
 | controller lifetime, controller reconstruction, struct-level identity, parameter identity, request façade, `Controller::routes(&state, core, ctx)`, handler generation, controller codegen performance | `docs/claude/controller-identity-codegen-refactor.md` |
 | `HttpError`, `ApiError`, `#[derive(ApiError)]`, `map_error!`, validation, `garde`, `ManagedResource`, `#[managed]`, error responses | `docs/claude/error-handling.md` |
 | `Bean`, `AsyncBean`, `Producer`, `#[bean]`, `#[producer]`, `#[inject]`, `#[post_construct]`, `BeanRegistry`, `BeanContext`, `build_state`, dependency injection, bean graph | `docs/claude/beans-di.md` |

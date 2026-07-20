@@ -74,12 +74,16 @@
 //! let registry = OpenFgaRegistry::with_cache(MyCustomBackend { /* ... */ }, 60);
 //! ```
 //!
-//! # Using Guards
+//! # Using Guards (schema-first, recommended)
 //!
-//! The `FgaCheck` builder creates guards for authorization checks:
+//! Check the `.fga` model into the repo and generate a typed API with
+//! [`model!`]; guards then reference relations through the generated module,
+//! so a typo'd relation is a **compile error**, not a silent permanent 403:
 //!
 //! ```ignore
 //! use r2e_openfga::FgaCheck;
+//!
+//! r2e_openfga::model!(pub mod authz = "fga/model.fga");
 //!
 //! #[controller(path = "/documents")]
 //! pub struct DocumentController {
@@ -91,23 +95,28 @@
 //!
 //! #[routes]
 //! impl DocumentController {
-//!     // Check using path parameter: GET /documents/{doc_id}.
-//!     // `path::doc_id` is compile-checked against the route's `{doc_id}`.
+//!     // GET /documents/{doc_id}: `authz::document::viewer` is checked
+//!     // against the model, `path::doc_id` against the route path.
 //!     #[get("/{doc_id}")]
-//!     #[guard(FgaCheck::relation("viewer").on("document").from_path(path::doc_id))]
+//!     #[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]
 //!     async fn get(&self, Path(doc_id): Path<String>) -> Json<Document> { ... }
 //!
 //!     // Check using query parameter: GET /documents?id=123
 //!     #[get("/")]
-//!     #[guard(FgaCheck::relation("viewer").on("document").from_query("id"))]
+//!     #[guard(FgaCheck::has(authz::document::viewer).from_query("id"))]
 //!     async fn list(&self, Query(q): Query<DocQuery>) -> Json<Vec<Document>> { ... }
 //!
 //!     // Check using fixed object (e.g., global admin)
 //!     #[delete("/all")]
-//!     #[guard(FgaCheck::relation("admin").on("system").fixed("system:global"))]
+//!     #[guard(FgaCheck::has(authz::system::admin).fixed("system:global"))]
 //!     async fn delete_all(&self) -> StatusCode { ... }
 //! }
 //! ```
+//!
+//! The generated `authz::MODEL` (schema 1.1 JSON) is the payload to write to
+//! the store, so code and store share one source of truth. For dynamic
+//! models there is an unchecked escape hatch:
+//! `FgaCheck::relation("viewer").on("document")`.
 //!
 //! An FGA check resolves `user:{identity.sub()}`, so it **requires an
 //! authenticated identity**. `FgaCheck` sets
@@ -163,9 +172,17 @@ pub mod config;
 pub mod error;
 pub mod guard;
 pub mod registry;
+pub mod typed;
 
 // Re-export openfga-rs so users can access raw types.
 pub use openfga_rs;
+
+// The `.fga` parser, for standalone use (build scripts, tooling).
+pub use r2e_openfga_model as model_parser;
+
+/// Generate a typed authorization API from a checked-in `.fga` model file —
+/// see [`typed`] and [`FgaCheck::has`].
+pub use r2e_openfga_macros::model;
 
 // Re-exports
 pub use backend::{GrpcBackend, MockBackend, OpenFgaBackend};
@@ -175,11 +192,16 @@ pub use guard::{
     FgaCheck, FgaCheckBuilder, FgaGuard, FgaObjectBuilder, ObjectResolver, PathParamName,
 };
 pub use registry::OpenFgaRegistry;
+pub use typed::{
+    DirectlyAssignable, FgaObject, FgaRel, FgaSubject, FgaType, FgaUserset, FgaWildcard,
+    InvalidObjectId,
+};
 
 /// Prelude for convenient imports.
 pub mod prelude {
     pub use crate::config::OpenFgaConfig;
     pub use crate::error::OpenFgaError;
     pub use crate::guard::FgaCheck;
+    pub use crate::model;
     pub use crate::registry::OpenFgaRegistry;
 }

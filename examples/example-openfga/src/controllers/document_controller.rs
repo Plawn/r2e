@@ -6,9 +6,12 @@
 //! `document:{doc_id}` from the `{doc_id}` path parameter, and asks OpenFGA
 //! whether that relation holds. A denied check returns 403.
 //!
-//! The literal `from_path("doc_id")` is compile-checked against the route's
-//! `{doc_id}` placeholder.
+//! Everything in the guard expression is compile-checked: the relation and
+//! object type against the checked-in `fga/model.fga` (`authz::…`, generated
+//! by `model!`), the path parameter against the route's `{doc_id}`
+//! placeholder (`path::doc_id`).
 
+use crate::authz;
 use r2e::prelude::*;
 use r2e::r2e_openfga::FgaCheck;
 
@@ -22,7 +25,7 @@ pub struct DocumentController {
 impl DocumentController {
     /// Read a document — requires the `viewer` relation.
     #[get("/{doc_id}")]
-    #[guard(FgaCheck::relation("viewer").on("document").from_path("doc_id"))]
+    #[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]
     async fn view(&self, Path(doc_id): Path<String>) -> Json<serde_json::Value> {
         Json(serde_json::json!({
             "id": doc_id,
@@ -33,7 +36,7 @@ impl DocumentController {
 
     /// Edit a document — requires the `editor` relation.
     #[put("/{doc_id}")]
-    #[guard(FgaCheck::relation("editor").on("document").from_path("doc_id"))]
+    #[guard(FgaCheck::has(authz::document::editor).from_path(path::doc_id))]
     async fn edit(&self, Path(doc_id): Path<String>) -> Json<serde_json::Value> {
         Json(serde_json::json!({
             "id": doc_id,

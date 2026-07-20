@@ -5,16 +5,20 @@ relationship-based access control wired into R2E controllers via `#[guard]`.
 
 ## What it shows
 
-- **`FgaCheck` guards** on a `DocumentController`:
-  - `GET /documents/{doc_id}` requires the `viewer` relation
-  - `PUT /documents/{doc_id}` requires the `editor` relation
-  - Object IDs are resolved from the `{doc_id}` path parameter and checked as
-    `document:{doc_id}`; the caller is `user:{sub}` from the JWT identity.
+- **Schema-first authorization**: the model lives in `fga/model.fga` (OpenFGA
+  DSL); `model!(pub mod authz = "fga/model.fga")` in `app.rs` generates a
+  typed API from it at compile time. `authz::MODEL` is the schema 1.1 JSON
+  the tests write to the store — code and store share one source of truth.
+- **Typed `FgaCheck` guards** on a `DocumentController`:
+  - `GET /documents/{doc_id}` requires `authz::document::viewer`
+  - `PUT /documents/{doc_id}` requires `authz::document::editor`
+  - A typo'd relation is a compile error, not a silent 403. Object IDs are
+    resolved from the `{doc_id}` path parameter (`path::doc_id`, also
+    compile-checked) and checked as `document:{doc_id}`; the caller is
+    `user:{sub}` from the JWT identity.
 - **Config-driven OpenFGA client**: two `#[producer]`s build the `GrpcBackend`
   and cached `OpenFgaRegistry` from `openfga.endpoint` / `openfga.store_id` /
   `openfga.model_id`.
-- **A small authorization model** (`document` with `viewer` / `editor`), defined
-  in `app.rs::document_model()` and reused verbatim by the tests.
 
 ## Running the tests (recommended)
 
@@ -41,7 +45,7 @@ docker compose up -d          # OpenFGA on :8080 (HTTP) and :8081 (gRPC)
 STORE=$(curl -s -X POST http://localhost:8080/stores \
   -d '{"name":"documents"}' | jq -r .id)
 
-# Write the model (see app.rs::document_model for the exact JSON)
+# Write the model (the JSON below is authz::MODEL, generated from fga/model.fga)
 MODEL=$(curl -s -X POST http://localhost:8080/stores/$STORE/authorization-models \
   -d '{"schema_version":"1.1","type_definitions":[
         {"type":"user"},

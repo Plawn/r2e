@@ -16,6 +16,11 @@ pub mod controllers;
 
 use controllers::document_controller::DocumentController;
 
+// Typed authorization API generated from the checked-in model: `authz::MODEL`
+// (the schema 1.1 JSON) plus compile-checked markers — a typo in
+// `authz::document::viewer` is a build error, not a prod 403.
+r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+
 /// HS256 secret for the demo validator. Tests replace the validator entirely
 /// via the `#[r2e::test]` / `TestApp::boot` harness, so this only matters for
 /// standalone `cargo run` + the demo token below.
@@ -23,30 +28,12 @@ const DEMO_SECRET: &[u8] = b"r2e-openfga-demo-secret-change-in-production";
 const DEMO_ISSUER: &str = "r2e-openfga-demo";
 const DEMO_AUDIENCE: &str = "r2e-openfga-app";
 
-/// The document authorization model (OpenFGA schema 1.1): a `document` has
-/// `viewer` and `editor` relations, both granted directly to `user`s.
-///
-/// Exposed so integration tests write the exact same model the guards expect.
+/// The document authorization model, straight from `fga/model.fga` via the
+/// `model!`-generated `authz::MODEL` — code and store share one source of
+/// truth. Exposed so integration tests write the exact model the guards are
+/// compile-checked against.
 pub fn document_model() -> serde_json::Value {
-    serde_json::json!({
-        "schema_version": "1.1",
-        "type_definitions": [
-            { "type": "user" },
-            {
-                "type": "document",
-                "relations": {
-                    "viewer": { "this": {} },
-                    "editor": { "this": {} }
-                },
-                "metadata": {
-                    "relations": {
-                        "viewer": { "directly_related_user_types": [{ "type": "user" }] },
-                        "editor": { "directly_related_user_types": [{ "type": "user" }] }
-                    }
-                }
-            }
-        ]
-    })
+    serde_json::from_str(authz::MODEL).expect("model! output is valid JSON")
 }
 
 /// Mint a demo HS256 JWT accepted by the app's own validator, for `curl` usage

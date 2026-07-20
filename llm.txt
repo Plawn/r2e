@@ -833,11 +833,60 @@ AppBuilder::new()
 `cache_enabled`, `cache_ttl_secs`). Builder-only fields also exist
 (`with_connect_timeout`, `with_request_timeout`, `without_cache`).
 
-**Guard idiom** — `FgaCheck::relation(rel).on(type).<resolver>`; the resolver
-supplies the object id:
+**Schema-first typed API (recommended)** — check the `.fga` model into the
+repo and generate a typed module from it with `model!`. Relations and object
+types used in code are then compile-checked against the model — a typo'd
+relation is a build error, not a silent permanent 403:
+
+```rust
+// fga/model.fga (OpenFGA DSL, schema 1.1 — path relative to the crate root)
+//   model
+//     schema 1.1
+//   type user
+//   type document
+//     relations
+//       define viewer: [user]
+//       define editor: [user]
+r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+// tests / tiny models: inline DSL instead of a path
+r2e::r2e_openfga::model!(pub mod authz = inline r#"model
+  schema 1.1
+type user"#);
+```
+
+The `.fga` file is parsed AND semantically validated at compile time (unknown
+relation/type/condition in the model = build error at the invocation, with the
+`.fga` line). The generated module contains:
+
+- `authz::MODEL: &str` — the model as schema 1.1 JSON (the
+  `WriteAuthorizationModel` payload) for boot-time apply/verify;
+- `authz::DSL: &str` — the embedded source (also makes edits to the `.fga`
+  retrigger compilation);
+- per type: `authz::document::Ty` (marker implementing `FgaType`),
+  `authz::document::id("readme")` → `FgaObject<Ty>` (formats `document:readme`,
+  panics on `:` in the id; `try_id` is the fallible form for request input),
+  `authz::document::wildcard()` → the `document:*` subject;
+- per relation: `authz::document::viewer` — a `FgaRel<Ty, Viewer>` const
+  (lowercase, like `path::doc_id`) carrying relation + object type;
+  `authz::team::member.of(authz::team::id("eng"))` → the `team:eng#member`
+  userset subject;
+- `DirectlyAssignable<SubjectMarker>` impls mirroring the model's
+  `directly_related_user_types` (subject markers: `user::Ty`,
+  `(team::Ty, team::Member)`, `WildcardOf<user::Ty>`) — the typed write API
+  bounds grants on it.
+
+Grammar surface: full DSL 1.1 — `or`/`and`/`but not` (+ parentheses),
+`X from Y`, `[user, user:*, team#member]`, `with <condition>` + `condition`
+blocks (CEL passthrough). Modular models (schema 1.2 `module`/`extend`) are
+rejected. The standalone parser is `r2e_openfga::model_parser`
+(`parse`/`validate`, crate `r2e-openfga-model`, no proc-macro deps).
+
+**Guard idiom** — `FgaCheck::has(authz::<type>::<relation>).<resolver>`; the
+resolver supplies the object id:
 
 ```rust
 use r2e::r2e_openfga::FgaCheck;
+use crate::authz;
 
 #[controller(path = "/documents")]
 pub struct DocumentController {
@@ -847,25 +896,30 @@ pub struct DocumentController {
 
 #[routes]
 impl DocumentController {
-    // `path::doc_id` is compile-checked against the route's `{doc_id}`
-    // placeholder — a typo or missing param fails to build. A raw string
-    // (`from_path("doc_id")`) also works but is unchecked.
+    // Everything checked at compile time: `authz::document::viewer` against
+    // the .fga model, `path::doc_id` against the route's `{doc_id}`.
     #[get("/{doc_id}")]
-    #[guard(FgaCheck::relation("viewer").on("document").from_path(path::doc_id))]
+    #[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]
     async fn get(&self, Path(doc_id): Path<String>) -> Result<Json<Document>, HttpError> { ... }
 
     #[put("/{doc_id}")]
-    #[guard(FgaCheck::relation("editor").on("document").from_path(path::doc_id))]
+    #[guard(FgaCheck::has(authz::document::editor).from_path(path::doc_id))]
     async fn update(&self, Path(doc_id): Path<String>, Json(b): Json<Update>) -> ... { ... }
 }
 ```
+
+`FgaCheck::relation("viewer").on("document")` is the **unchecked escape
+hatch** for dynamic models (nothing verifies the strings) — prefer
+`FgaCheck::has` whenever the model is checked in.
 
 Resolvers: `.from_path(path::id | "id")` (route param), `.from_query("id")`
 (query string), `.from_header("X-Document-Id")`, `.fixed("system:global")`
 (pre-formatted `type:id` literal). Denied → 403, no identity → 401, missing/
 unresolvable id → 400. **Security:** dynamic resolvers reject ids containing
-`:` (object-type injection guard); only `.fixed(...)` accepts a `type:id`
-string.
+`:`, `#`, or `*` (object-type / userset / wildcard injection guard) — so do
+`id()`/`try_id()`; only `.fixed(...)` accepts a `type:id` string. The subject
+side is guarded too: an `identity.sub()` containing a reserved character is
+rejected with 403 (fail closed) rather than interpolated into `user:{sub}`.
 
 **Writing tuples** — the registry only caches `check`. Use the raw client via
 `GrpcBackend`, then invalidate the cache:

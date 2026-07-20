@@ -18,6 +18,8 @@ members = [
     "r2e-prometheus",
     "r2e-observability",
     "r2e-openfga",
+    "r2e-openfga/model",
+    "r2e-openfga/macros",
     "r2e-grpc",
     "r2e-grpc/build",
     "r2e-oidc",
@@ -78,6 +80,8 @@ r2e-openapi = { path = "r2e-openapi", version = "0.1.0" }
 r2e-prometheus = { path = "r2e-prometheus", version = "0.1.0" }
 r2e-observability = { path = "r2e-observability", version = "0.1.0" }
 r2e-openfga = { path = "r2e-openfga", version = "0.1.0" }
+r2e-openfga-model = { path = "r2e-openfga/model", version = "0.1.0" }
+r2e-openfga-macros = { path = "r2e-openfga/macros", version = "0.1.0" }
 r2e-grpc = { path = "r2e-grpc", version = "0.1.0" }
 r2e-grpc-build = { path = "r2e-grpc/build", version = "0.1.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.1.0" }

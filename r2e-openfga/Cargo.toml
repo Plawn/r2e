@@ -12,6 +12,8 @@ description = "OpenFGA fine-grained authorization for R2E - Zanzibar-style relat
 
 [dependencies]
 r2e-core = {workspace = true}
+r2e-openfga-model = {workspace = true}
+r2e-openfga-macros = {workspace = true}
 openfga-rs = {workspace = true}
 tokio = {workspace = true, features = ["sync", "time"]}
 dashmap = {workspace = true}

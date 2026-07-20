@@ -1,0 +1,15 @@
+[package]
+name = "r2e-openfga-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["openfga", "authorization", "zanzibar", "dsl", "parser"]
+categories = ["parser-implementations", "web-programming"]
+description = "OpenFGA DSL parser for R2E - .fga authorization models to schema 1.1 JSON, no proc-macro deps"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

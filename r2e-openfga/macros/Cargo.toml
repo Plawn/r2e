@@ -1,0 +1,22 @@
+[package]
+name = "r2e-openfga-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["openfga", "authorization", "zanzibar", "macros"]
+categories = ["web-programming", "development-tools"]
+description = "Proc macros for r2e-openfga - model! generates a typed API from a .fga authorization model"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+r2e-openfga-model = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+proc-macro-crate = { workspace = true }
+serde_json = { workspace = true }

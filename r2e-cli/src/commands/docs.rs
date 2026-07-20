@@ -153,6 +153,12 @@ static DOCS: &[DocEntry] = &[
         crates: &["r2e-core", "r2e-grpc"],
         body: include_str!("../../../docs/features/22-serve-lifecycle.md"),
     },
+    DocEntry {
+        slug: "openfga",
+        title: "OpenFGA Authorization (ReBAC, schema-first)",
+        crates: &["r2e-openfga"],
+        body: include_str!("../../../docs/features/23-openfga.md"),
+    },
 ];
 
 /// Extract the `## TL;DR` section from a document body: everything from the

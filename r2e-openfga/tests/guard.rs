@@ -400,3 +400,41 @@ async fn built_guard_unauthorized_without_identity() {
     let response = guard.check(&ctx).await.expect_err("should be unauthorized");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// A crafted subject must never be interpolated into `user:{sub}`:
+/// `*` would collapse onto public-wildcard grants, `:` would cross types,
+/// `#` would form a userset reference. Fail closed with 403.
+#[tokio::test]
+async fn built_guard_forbids_subject_with_reserved_characters() {
+    for sub in ["*", "alice#owner", "team:eng"] {
+        let mock = MockBackend::new();
+        // A wildcard grant exists — a forged `sub = "*"` must NOT match it.
+        mock.add_tuple("user:*", "viewer", "document:123");
+        let guard = build_guard(
+            mock,
+            FgaCheck::relation("viewer")
+                .on("document")
+                .from_path("doc_id"),
+        )
+        .await;
+
+        let uri: Uri = "/api/documents/123".parse().unwrap();
+        let headers = HeaderMap::new();
+        let pairs = [("doc_id", "123")];
+        let path_params = PathParams::from_pairs(&pairs);
+        let identity = TestIdentity {
+            sub: sub.to_string(),
+        };
+        let ctx = GuardContext {
+            method_name: "get",
+            controller_name: "DocumentController",
+            headers: &headers,
+            uri: &uri,
+            path_params,
+            identity: Some(&identity),
+        };
+
+        let response = guard.check(&ctx).await.expect_err("must be rejected");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "sub = {sub:?}");
+    }
+}
