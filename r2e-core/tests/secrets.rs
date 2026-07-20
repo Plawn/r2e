@@ -22,8 +22,7 @@ fn test_explicit_env_resolution() {
 fn test_mixed_resolution() {
     unsafe { std::env::set_var("TEST_R2E_MIX_HOST", "localhost") };
     let resolver = DefaultSecretResolver;
-    let result =
-        resolve_placeholders("http://${TEST_R2E_MIX_HOST}:8080/api", &resolver).unwrap();
+    let result = resolve_placeholders("http://${TEST_R2E_MIX_HOST}:8080/api", &resolver).unwrap();
     assert_eq!(result, "http://localhost:8080/api");
     unsafe { std::env::remove_var("TEST_R2E_MIX_HOST") };
 }

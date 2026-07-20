@@ -98,9 +98,8 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = &item.ident;
     let krate = r2e_core_path();
 
-    let to_tokens = |types: &[Type]| -> Vec<TokenStream2> {
-        types.iter().map(|ty| quote! { #ty }).collect()
-    };
+    let to_tokens =
+        |types: &[Type]| -> Vec<TokenStream2> { types.iter().map(|ty| quote! { #ty }).collect() };
     let providers = build_tcons_type(&to_tokens(&args.providers), &krate);
     let exports = build_tcons_type(&to_tokens(&args.exports), &krate);
     let imports = build_tcons_type(&to_tokens(&args.imports), &krate);

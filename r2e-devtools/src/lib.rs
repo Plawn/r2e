@@ -71,10 +71,8 @@ pub async fn serve_with_hotreload<Env, SetupFut, ServerFn, ServerFut>(
 /// * `env` — Pre-computed environment (DB pool, config, etc.) that persists
 ///   across hot-patches.
 /// * `server_fn` — Called on every hot-patch.
-pub async fn serve_with_hotreload_env<Env, ServerFn, ServerFut>(
-    env: Env,
-    server_fn: ServerFn,
-) where
+pub async fn serve_with_hotreload_env<Env, ServerFn, ServerFut>(env: Env, server_fn: ServerFn)
+where
     Env: Clone + Send + Sync + 'static,
     ServerFn: Fn(Env) -> ServerFut + Send + Sync + 'static,
     ServerFut: std::future::Future<Output = ()> + 'static,

@@ -54,9 +54,16 @@ async fn skip_if_suppresses_ticks_and_counts_skips() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(runs.load(Ordering::SeqCst), 0, "all ticks must be skipped");
     let info = registry.job("gated").expect("job registered");
-    assert!(info.skip_count >= 2, "skips recorded, got {}", info.skip_count);
+    assert!(
+        info.skip_count >= 2,
+        "skips recorded, got {}",
+        info.skip_count
+    );
     assert_eq!(info.run_count, 0, "skipped ticks must not count as runs");
-    assert!(info.last_run.is_none(), "last_run only set when the body runs");
+    assert!(
+        info.last_run.is_none(),
+        "last_run only set when the body runs"
+    );
     assert!(
         info.last_duration.is_none(),
         "last_duration only set when the body runs"

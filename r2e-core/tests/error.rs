@@ -1,6 +1,6 @@
-use r2e_core::HttpError;
-use r2e_core::http::{StatusCode, IntoResponse};
 use http_body_util::BodyExt;
+use r2e_core::http::{IntoResponse, StatusCode};
+use r2e_core::HttpError;
 
 async fn error_parts(err: HttpError) -> (StatusCode, serde_json::Value) {
     let resp = err.into_response();
@@ -59,18 +59,12 @@ async fn app_error_custom_status_and_body() {
 
 #[test]
 fn app_error_display_formatting() {
-    assert_eq!(
-        HttpError::NotFound("x".into()).to_string(),
-        "Not Found: x"
-    );
+    assert_eq!(HttpError::NotFound("x".into()).to_string(), "Not Found: x");
     assert_eq!(
         HttpError::Unauthorized("y".into()).to_string(),
         "Unauthorized: y"
     );
-    assert_eq!(
-        HttpError::Forbidden("z".into()).to_string(),
-        "Forbidden: z"
-    );
+    assert_eq!(HttpError::Forbidden("z".into()).to_string(), "Forbidden: z");
     assert_eq!(
         HttpError::BadRequest("w".into()).to_string(),
         "Bad Request: w"

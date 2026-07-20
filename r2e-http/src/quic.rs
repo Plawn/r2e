@@ -2,9 +2,9 @@
 // (r2e-core depends on r2e-http), so this file cannot use r2e_core::rt.
 // tokio::spawn is called directly here.  The quinn/h3 libraries are also
 // tokio-bound, so this is a permanent documented exception.
+use bytes::{Buf, Bytes};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use bytes::{Buf, Bytes};
 
 pub use quinn;
 
@@ -73,7 +73,10 @@ impl From<h3::error::StreamError> for QuicError {
 ///
 /// Sets ALPN to `h3` for HTTP/3. Use [`build_server_config_with_alpn`] for
 /// custom protocols.
-pub fn build_server_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<quinn::ServerConfig, QuicError> {
+pub fn build_server_config(
+    cert_pem: &[u8],
+    key_pem: &[u8],
+) -> Result<quinn::ServerConfig, QuicError> {
     build_server_config_with_alpn(cert_pem, key_pem, vec![b"h3".to_vec()])
 }
 
@@ -392,16 +395,18 @@ pub fn apply_alt_svc(router: crate::Router, port: u16, max_age: u32) -> crate::R
     let header_value = format!("h3=\":{port}\"; ma={max_age}");
     let header_value =
         http::HeaderValue::from_str(&header_value).expect("valid Alt-Svc header value");
-    router.layer(axum::middleware::from_fn(move |req: crate::Request, next: axum::middleware::Next| {
-        let hv = header_value.clone();
-        async move {
-            let mut response = next.run(req).await;
-            response
-                .headers_mut()
-                .insert(http::header::HeaderName::from_static("alt-svc"), hv);
-            response
-        }
-    }))
+    router.layer(axum::middleware::from_fn(
+        move |req: crate::Request, next: axum::middleware::Next| {
+            let hv = header_value.clone();
+            async move {
+                let mut response = next.run(req).await;
+                response
+                    .headers_mut()
+                    .insert(http::header::HeaderName::from_static("alt-svc"), hv);
+                response
+            }
+        },
+    ))
 }
 
 // ── Raw QUIC endpoint ──────────────────────────────────────────────────────
@@ -431,10 +436,7 @@ pub struct QuicEndpoint {
 
 impl QuicEndpoint {
     /// Bind a new QUIC endpoint to `addr`.
-    pub fn bind(
-        addr: SocketAddr,
-        server_config: quinn::ServerConfig,
-    ) -> Result<Self, QuicError> {
+    pub fn bind(addr: SocketAddr, server_config: quinn::ServerConfig) -> Result<Self, QuicError> {
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
         Ok(Self { inner: endpoint })
     }
@@ -483,16 +485,12 @@ impl QuicConnection {
     }
 
     /// Accept the next bidirectional stream opened by the peer.
-    pub async fn accept_bi(
-        &self,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream), QuicError> {
+    pub async fn accept_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), QuicError> {
         self.inner.accept_bi().await.map_err(QuicError::Connection)
     }
 
     /// Open a new bidirectional stream.
-    pub async fn open_bi(
-        &self,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream), QuicError> {
+    pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), QuicError> {
         self.inner.open_bi().await.map_err(QuicError::Connection)
     }
 

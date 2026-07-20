@@ -297,7 +297,9 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         // without a named body type (raw Multipart) is modeled as a free-form
         // object.
         let body_schema = match (&route.request_body_type, &route.request_body_content_type) {
-            (Some(body_type), _) => Some(json!({ "$ref": format!("#/components/schemas/{body_type}") })),
+            (Some(body_type), _) => {
+                Some(json!({ "$ref": format!("#/components/schemas/{body_type}") }))
+            }
             (None, Some(_)) => Some(json!({ "type": "object" })),
             (None, None) => None,
         };
@@ -345,59 +347,65 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
 
         // Conditional 401/403 only when route has auth
         if route.has_auth {
-            responses.insert("401".into(), json!({
-                "description": "Unauthorized",
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+            responses.insert(
+                "401".into(),
+                json!({
+                    "description": "Unauthorized",
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                        }
                     }
-                }
-            }));
-            responses.insert("403".into(), json!({
-                "description": "Forbidden",
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                }),
+            );
+            responses.insert(
+                "403".into(),
+                json!({
+                    "description": "Forbidden",
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                        }
                     }
-                }
-            }));
+                }),
+            );
         }
 
         // Default 500 response
-        responses.insert("500".into(), json!({
-            "description": "Internal server error",
-            "content": {
-                "application/json": {
-                    "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+        responses.insert(
+            "500".into(),
+            json!({
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                    }
                 }
-            }
-        }));
+            }),
+        );
 
         // If route has a request body, it may return 400
         if route.request_body_type.is_some() || route.request_body_content_type.is_some() {
-            responses.entry("400".to_string()).or_insert_with(|| json!({
-                "description": "Bad request / Validation error",
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" }
+            responses.entry("400".to_string()).or_insert_with(|| {
+                json!({
+                    "description": "Bad request / Validation error",
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" }
+                        }
                     }
-                }
-            }));
+                })
+            });
         }
 
         operation.insert("responses".into(), Value::Object(responses));
 
         // Security
         if !route.roles.is_empty() {
-            operation.insert(
-                "security".into(),
-                json!([{ "bearerAuth": route.roles }]),
-            );
+            operation.insert("security".into(), json!([{ "bearerAuth": route.roles }]));
         }
 
-        let path_entry = paths
-            .entry(axum_path)
-            .or_insert_with(|| json!({}));
+        let path_entry = paths.entry(axum_path).or_insert_with(|| json!({}));
 
         if let Some(obj) = path_entry.as_object_mut() {
             obj.insert(method_lower, Value::Object(operation));
@@ -425,14 +433,24 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         // Collect request body schemas
         if let Some(ref body_type) = route.request_body_type {
             if !schemas.contains_key(body_type) {
-                insert_schema(&mut schemas, &mut extra_definitions, body_type, &route.request_body_schema);
+                insert_schema(
+                    &mut schemas,
+                    &mut extra_definitions,
+                    body_type,
+                    &route.request_body_schema,
+                );
             }
         }
 
         // Collect response schemas
         if let Some(ref resp_type) = route.response_type {
             if !schemas.contains_key(resp_type) {
-                insert_schema(&mut schemas, &mut extra_definitions, resp_type, &route.response_schema);
+                insert_schema(
+                    &mut schemas,
+                    &mut extra_definitions,
+                    resp_type,
+                    &route.response_schema,
+                );
             }
         }
     }
@@ -463,36 +481,40 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
     }
 
     // Insert standard error schemas
-    schemas.entry("ErrorResponse".to_string()).or_insert_with(|| {
-        json!({
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string",
-                    "description": "A human-readable error message"
-                }
-            },
-            "required": ["error"]
-        })
-    });
-    schemas.entry("ValidationErrorResponse".to_string()).or_insert_with(|| {
-        json!({
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string",
-                    "description": "Always \"Validation failed\""
-                },
-                "details": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/FieldError"
+    schemas
+        .entry("ErrorResponse".to_string())
+        .or_insert_with(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string",
+                        "description": "A human-readable error message"
                     }
-                }
-            },
-            "required": ["error", "details"]
-        })
-    });
+                },
+                "required": ["error"]
+            })
+        });
+    schemas
+        .entry("ValidationErrorResponse".to_string())
+        .or_insert_with(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string",
+                        "description": "Always \"Validation failed\""
+                    },
+                    "details": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/FieldError"
+                        }
+                    }
+                },
+                "required": ["error", "details"]
+            })
+        });
     schemas.entry("FieldError".to_string()).or_insert_with(|| {
         json!({
             "type": "object",

@@ -104,7 +104,11 @@ async fn bean_consumers_do_not_subscribe_at_build_state_alone() {
         .build_state()
         .await;
 
-    bus.emit(Ping { msg: "early".into() }).await.unwrap();
+    bus.emit(Ping {
+        msg: "early".into(),
+    })
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 0);
@@ -143,7 +147,11 @@ async fn provided_instance_does_not_auto_subscribe() {
         .build_with_consumers()
         .await;
 
-    bus.emit(Ping { msg: "provided".into() }).await.unwrap();
+    bus.emit(Ping {
+        msg: "provided".into(),
+    })
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(

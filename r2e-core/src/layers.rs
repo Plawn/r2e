@@ -26,8 +26,8 @@ pub fn init_tracing() {
 /// `RUST_LOG` env var always takes priority over `config.filter`.
 /// This function is idempotent — subsequent calls are silently ignored.
 pub fn init_tracing_with_config(config: &TracingConfig) {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| config.filter.parse().unwrap());
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| config.filter.parse().unwrap());
 
     let span_events = config.effective_span_events();
     let target = config.target.unwrap_or(true);
@@ -84,12 +84,15 @@ pub fn default_cors() -> CorsLayer {
 ///
 /// Uses `tower_http`'s default classification which logs at the `DEBUG` level
 /// for requests and responses.
-pub fn default_trace() -> TraceLayer<tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>> {
+pub fn default_trace(
+) -> TraceLayer<tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>>
+{
     TraceLayer::new_for_http()
 }
 
 /// Returns a `CatchPanicLayer` that converts panics into JSON 500 responses.
-pub fn catch_panic_layer() -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) -> crate::http::Response> {
+pub fn catch_panic_layer(
+) -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) -> crate::http::Response> {
     CatchPanicLayer::custom(panic_handler as fn(_) -> _)
 }
 

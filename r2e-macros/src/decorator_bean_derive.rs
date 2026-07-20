@@ -143,7 +143,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 let is_option = crate::type_utils::is_option_type(field_type);
                 let owner = format!("decorator bean `{name_str}`");
                 let expr = crate::field_resolver::config_resolve_expr(
-                    &quote! { __cfg }, key, Some(field_type), &owner, is_option, &krate,
+                    &quote! { __cfg },
+                    key,
+                    Some(field_type),
+                    &owner,
+                    is_option,
+                    &krate,
                 );
                 resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;

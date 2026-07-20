@@ -34,10 +34,7 @@ fn config_defaults() {
     assert!(config.auto_create);
     assert_eq!(config.default_partitions, 3);
     assert_eq!(config.poll_batch_size, 1000);
-    assert_eq!(
-        config.poll_interval,
-        std::time::Duration::from_millis(10)
-    );
+    assert_eq!(config.poll_interval, std::time::Duration::from_millis(10));
     assert!(config.username.is_none());
     assert!(config.password.is_none());
 }
@@ -119,7 +116,10 @@ fn metadata_roundtrip() {
     // Verify fields are set
     assert_eq!(metadata.correlation_id.as_deref(), Some("corr-123"));
     assert_eq!(metadata.partition_key.as_deref(), Some("user-42"));
-    assert_eq!(metadata.headers.get("source").map(|s| s.as_str()), Some("test"));
+    assert_eq!(
+        metadata.headers.get("source").map(|s| s.as_str()),
+        Some("test")
+    );
 }
 
 // ── Error bridging ───────────────────────────────────────────────────
@@ -271,15 +271,24 @@ async fn live_broker_request_reply_roundtrip() {
     let config = IggyConfig::builder()
         .consumer_group(format!("r2e-integration-{nonce:016x}"))
         .build();
-    let bus = IggyEventBus::builder(config).topic::<Ping>(topic).connect().await
+    let bus = IggyEventBus::builder(config)
+        .topic::<Ping>(topic)
+        .connect()
+        .await
         .expect("Iggy broker must be available for integration tests");
-    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
-        Ok::<_, String>(Pong(env.event.0 + 1))
-    }).await.unwrap();
-    let reply: Pong = bus.request_with(
-        Ping(41),
-        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
-    ).await.unwrap();
+    let _responder = bus
+        .respond(|env: EventEnvelope<Ping>| async move { Ok::<_, String>(Pong(env.event.0 + 1)) })
+        .await
+        .unwrap();
+    let reply: Pong = bus
+        .request_with(
+            Ping(41),
+            RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+        )
+        .await
+        .unwrap();
     assert_eq!(reply, Pong(42));
-    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
+    bus.shutdown(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
 }

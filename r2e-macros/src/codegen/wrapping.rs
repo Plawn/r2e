@@ -246,4 +246,3 @@ fn generate_transverse_method(
 fn generate_async_exec_method(am: &AsyncExecMethod) -> TokenStream {
     transverse::async_exec_method(&am.fn_item, &am.executor_field, |_block| {})
 }
-

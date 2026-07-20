@@ -102,10 +102,7 @@ impl GrpcServer {
     /// stored once.
     #[cfg(feature = "reflection")]
     pub fn with_reflection_descriptor(mut self, descriptor_set: &'static [u8]) -> Self {
-        crate::registry::push_unique(
-            self.reflection.get_or_insert_with(Vec::new),
-            descriptor_set,
-        );
+        crate::registry::push_unique(self.reflection.get_or_insert_with(Vec::new), descriptor_set);
         self
     }
 }
@@ -281,6 +278,8 @@ fn apply_reflection(
         .expect("gRPC reflection: v1alpha build failed on descriptor sets v1 accepted");
     services.routes = services.routes.add_service(v1).add_service(v1alpha);
     services.names.push("grpc.reflection.v1.ServerReflection");
-    services.names.push("grpc.reflection.v1alpha.ServerReflection");
+    services
+        .names
+        .push("grpc.reflection.v1alpha.ServerReflection");
     services
 }

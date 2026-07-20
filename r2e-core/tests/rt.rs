@@ -1,5 +1,5 @@
-use std::time::Duration;
 use r2e_core::rt;
+use std::time::Duration;
 
 #[tokio::test]
 async fn spawn_and_await_result() {
@@ -100,11 +100,10 @@ fn spawn_ctl_with_control_plane_runs_on_control_plane_runtime() {
             rt.block_on(async {
                 // From inside the worker's current_thread runtime, spawn_ctl
                 // must land on the multi-thread control plane.
-                let flavor = rt::spawn_ctl(async {
-                    tokio::runtime::Handle::current().runtime_flavor()
-                })
-                .await
-                .expect("ctl task should not fail");
+                let flavor =
+                    rt::spawn_ctl(async { tokio::runtime::Handle::current().runtime_flavor() })
+                        .await
+                        .expect("ctl task should not fail");
                 assert_eq!(
                     flavor,
                     RuntimeFlavor::MultiThread,
@@ -112,11 +111,10 @@ fn spawn_ctl_with_control_plane_runs_on_control_plane_runtime() {
                 );
 
                 // A plain spawn, by contrast, stays on the worker's current_thread runtime.
-                let local_flavor = rt::spawn(async {
-                    tokio::runtime::Handle::current().runtime_flavor()
-                })
-                .await
-                .expect("local task should not fail");
+                let local_flavor =
+                    rt::spawn(async { tokio::runtime::Handle::current().runtime_flavor() })
+                        .await
+                        .expect("local task should not fail");
                 assert_eq!(local_flavor, RuntimeFlavor::CurrentThread);
             });
         })

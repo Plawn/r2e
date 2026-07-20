@@ -150,8 +150,5 @@ fn render_no_placeholders() {
 
 #[test]
 fn render_repeated_placeholder() {
-    assert_eq!(
-        render("{{x}} and {{x}}", &[("x", "ok")]),
-        "ok and ok"
-    );
+    assert_eq!(render("{{x}} and {{x}}", &[("x", "ok")]), "ok and ok");
 }

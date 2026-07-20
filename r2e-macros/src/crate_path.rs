@@ -64,9 +64,10 @@ fn resolve_cached_optional(
         }
         None
     });
-    rendered
-        .as_ref()
-        .map(|s| s.parse().expect("r2e-macros: cached crate path must be valid Rust"))
+    rendered.as_ref().map(|s| {
+        s.parse()
+            .expect("r2e-macros: cached crate path must be valid Rust")
+    })
 }
 
 /// Returns the token stream for accessing `r2e_core` types.

@@ -203,22 +203,26 @@ mod responder {
         let state = state();
 
         let first = state
-            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
-                Ok(User {
-                    id: env.event.id,
-                    name: "Alice".into(),
-                })
-            })
+            .register_responder::<GetUser, User, String, _, _>(
+                |env: EventEnvelope<GetUser>| async move {
+                    Ok(User {
+                        id: env.event.id,
+                        name: "Alice".into(),
+                    })
+                },
+            )
             .await;
         assert!(first.is_ok(), "first responder should register");
 
         let second = state
-            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
-                Ok(User {
-                    id: env.event.id,
-                    name: "Bob".into(),
-                })
-            })
+            .register_responder::<GetUser, User, String, _, _>(
+                |env: EventEnvelope<GetUser>| async move {
+                    Ok(User {
+                        id: env.event.id,
+                        name: "Bob".into(),
+                    })
+                },
+            )
             .await;
         assert!(
             second.is_err(),
@@ -231,12 +235,14 @@ mod responder {
         let state = state();
 
         state
-            .register_responder::<GetUser, User, String, _, _>(|_env: EventEnvelope<GetUser>| async move {
-                Ok(User {
-                    id: 1,
-                    name: "Alice".into(),
-                })
-            })
+            .register_responder::<GetUser, User, String, _, _>(
+                |_env: EventEnvelope<GetUser>| async move {
+                    Ok(User {
+                        id: 1,
+                        name: "Alice".into(),
+                    })
+                },
+            )
             .await
             .unwrap();
 
@@ -245,14 +251,19 @@ mod responder {
             .await;
 
         let again = state
-            .register_responder::<GetUser, User, String, _, _>(|_env: EventEnvelope<GetUser>| async move {
-                Ok(User {
-                    id: 2,
-                    name: "Bob".into(),
-                })
-            })
+            .register_responder::<GetUser, User, String, _, _>(
+                |_env: EventEnvelope<GetUser>| async move {
+                    Ok(User {
+                        id: 2,
+                        name: "Bob".into(),
+                    })
+                },
+            )
             .await;
-        assert!(again.is_ok(), "re-registration after unregister should work");
+        assert!(
+            again.is_ok(),
+            "re-registration after unregister should work"
+        );
     }
 
     #[tokio::test]
@@ -261,12 +272,14 @@ mod responder {
 
         let state = state();
         state
-            .register_responder::<GetUser, User, String, _, _>(|env: EventEnvelope<GetUser>| async move {
-                Ok(User {
-                    id: env.event.id,
-                    name: format!("user-{}", env.event.id),
-                })
-            })
+            .register_responder::<GetUser, User, String, _, _>(
+                |env: EventEnvelope<GetUser>| async move {
+                    Ok(User {
+                        id: env.event.id,
+                        name: format!("user-{}", env.event.id),
+                    })
+                },
+            )
             .await
             .unwrap();
 
@@ -370,15 +383,24 @@ async fn live_broker_request_reply_roundtrip() {
     let config = RabbitMqConfig::builder()
         .consumer_group(format!("r2e-integration-{nonce:016x}"))
         .build();
-    let bus = RabbitMqEventBus::builder(config).topic::<Ping>(topic).connect().await
+    let bus = RabbitMqEventBus::builder(config)
+        .topic::<Ping>(topic)
+        .connect()
+        .await
         .expect("RabbitMQ broker must be available for integration tests");
-    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
-        Ok::<_, String>(Pong(env.event.0 + 1))
-    }).await.unwrap();
-    let reply: Pong = bus.request_with(
-        Ping(41),
-        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
-    ).await.unwrap();
+    let _responder = bus
+        .respond(|env: EventEnvelope<Ping>| async move { Ok::<_, String>(Pong(env.event.0 + 1)) })
+        .await
+        .unwrap();
+    let reply: Pong = bus
+        .request_with(
+            Ping(41),
+            RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+        )
+        .await
+        .unwrap();
     assert_eq!(reply, Pong(42));
-    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
+    bus.shutdown(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
 }

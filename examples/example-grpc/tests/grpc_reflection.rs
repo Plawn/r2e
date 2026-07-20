@@ -126,8 +126,7 @@ async fn reflection_lists_services_on_separate_port() {
 
     // v1alpha is served too (older grpcurl versions speak only v1alpha).
     use tonic_reflection::pb::v1alpha;
-    let mut client =
-        v1alpha::server_reflection_client::ServerReflectionClient::new(channel);
+    let mut client = v1alpha::server_reflection_client::ServerReflectionClient::new(channel);
     let request = v1alpha::ServerReflectionRequest {
         host: String::new(),
         message_request: Some(
@@ -146,8 +145,7 @@ async fn reflection_lists_services_on_separate_port() {
         .expect("v1alpha reflection stream closed without a response")
         .message_response
         .expect("v1alpha reflection response carried no message");
-    let v1alpha::server_reflection_response::MessageResponse::ListServicesResponse(list) =
-        response
+    let v1alpha::server_reflection_response::MessageResponse::ListServicesResponse(list) = response
     else {
         panic!("expected v1alpha ListServicesResponse, got {response:?}");
     };

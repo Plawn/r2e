@@ -40,10 +40,8 @@ async fn serve_h3_round_trip() {
     let (cert_pem, key_pem) = generate_test_certs();
     let server_config = quic::build_server_config(&cert_pem, &key_pem).unwrap();
 
-    let router = r2e_http::Router::new().route(
-        "/ping",
-        r2e_http::routing::get(|| async { "pong" }),
-    );
+    let router =
+        r2e_http::Router::new().route("/ping", r2e_http::routing::get(|| async { "pong" }));
 
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
     let server_addr = endpoint.local_addr().unwrap();
@@ -205,7 +203,10 @@ async fn serve_h3_payload_too_large() {
     // Send Content-Length that exceeds DEFAULT_MAX_BODY_SIZE (2 MiB).
     // The server should reject with 413 via the Content-Length pre-check.
     let req = http::Request::post("https://localhost/upload")
-        .header("content-length", (quic::DEFAULT_MAX_BODY_SIZE + 1).to_string())
+        .header(
+            "content-length",
+            (quic::DEFAULT_MAX_BODY_SIZE + 1).to_string(),
+        )
         .body(())
         .unwrap();
     let mut resp_stream = send_request.send_request(req).await.unwrap();
@@ -229,8 +230,7 @@ async fn raw_quic_bidirectional_stream() {
         quic::build_server_config_with_alpn(&cert_pem, &key_pem, vec![b"test-proto".to_vec()])
             .unwrap();
 
-    let endpoint =
-        quic::QuicEndpoint::bind("127.0.0.1:0".parse().unwrap(), server_config).unwrap();
+    let endpoint = quic::QuicEndpoint::bind("127.0.0.1:0".parse().unwrap(), server_config).unwrap();
     let server_addr = endpoint.local_addr().unwrap();
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();

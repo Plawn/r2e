@@ -79,10 +79,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         dir.filter(|e| {
                             e.as_ref()
                                 .map(|e| {
-                                    e.path()
-                                        .extension()
-                                        .map(|ext| ext == "rs")
-                                        .unwrap_or(false)
+                                    e.path().extension().map(|ext| ext == "rs").unwrap_or(false)
                                 })
                                 .unwrap_or(false)
                         })
@@ -223,10 +220,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if issues == 0 {
         println!("{}", "All checks passed!".green().bold());
     } else {
-        println!(
-            "{}",
-            format!("{} issue(s) found", issues).yellow().bold()
-        );
+        println!("{}", format!("{} issue(s) found", issues).yellow().bold());
     }
 
     Ok(())

@@ -245,7 +245,8 @@ pub trait BeanLookup {
 
     /// Borrow the bean of type `T`, if present.
     fn bean_ref<T: Send + Sync + 'static>(&self) -> Option<&T> {
-        self.lookup_bean(std::any::TypeId::of::<T>())?.downcast_ref()
+        self.lookup_bean(std::any::TypeId::of::<T>())?
+            .downcast_ref()
     }
 
     /// Clone the bean of type `T` out of the state, if present.
@@ -611,7 +612,16 @@ impl_plugin_provisions!((A, 0), (B, 1), (C, 2), (D, 3));
 impl_plugin_provisions!((A, 0), (B, 1), (C, 2), (D, 3), (E, 4));
 impl_plugin_provisions!((A, 0), (B, 1), (C, 2), (D, 3), (E, 4), (F, 5));
 impl_plugin_provisions!((A, 0), (B, 1), (C, 2), (D, 3), (E, 4), (F, 5), (G, 6));
-impl_plugin_provisions!((A, 0), (B, 1), (C, 2), (D, 3), (E, 4), (F, 5), (G, 6), (H, 7));
+impl_plugin_provisions!(
+    (A, 0),
+    (B, 1),
+    (C, 2),
+    (D, 3),
+    (E, 4),
+    (F, 5),
+    (G, 6),
+    (H, 7)
+);
 
 /// Registers a tuple of controllers into an [`AppBuilder`](crate::AppBuilder) in
 /// one call.
@@ -660,7 +670,13 @@ impl_controller_tuple!((C0, W0, D0));
 impl_controller_tuple!((C0, W0, D0), (C1, W1, D1));
 impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2));
 impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2), (C3, W3, D3));
-impl_controller_tuple!((C0, W0, D0), (C1, W1, D1), (C2, W2, D2), (C3, W3, D3), (C4, W4, D4));
+impl_controller_tuple!(
+    (C0, W0, D0),
+    (C1, W1, D1),
+    (C2, W2, D2),
+    (C3, W3, D3),
+    (C4, W4, D4)
+);
 impl_controller_tuple!(
     (C0, W0, D0),
     (C1, W1, D1),

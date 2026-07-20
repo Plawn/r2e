@@ -2,7 +2,9 @@
 //! the witness-free `BeanAccess::get` façade, `BuildHList` materialization from
 //! a resolved `BeanContext`, and `Contains`/`AllSatisfied` over `HCons`.
 
-use r2e_core::type_list::{AllSatisfied, BeanAccess, BuildHList, HCons, HNil, HasBean, TCons, TNil};
+use r2e_core::type_list::{
+    AllSatisfied, BeanAccess, BuildHList, HCons, HNil, HasBean, TCons, TNil,
+};
 use r2e_core::BeanRegistry;
 
 #[derive(Clone, Debug, PartialEq)]

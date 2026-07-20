@@ -95,10 +95,7 @@ impl WsTestClient {
 
     /// Send a close frame.
     pub async fn close(&mut self) -> Result<(), WsTestError> {
-        self.stream
-            .close(None)
-            .await
-            .map_err(WsTestError::Protocol)
+        self.stream.close(None).await.map_err(WsTestError::Protocol)
     }
 
     // ── Receive ──

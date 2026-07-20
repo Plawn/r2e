@@ -50,8 +50,7 @@ pub fn compile() -> Result<(), Box<dyn Error>> {
     ProtoCompiler::new().compile()
 }
 
-type ConfigureFn =
-    Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>;
+type ConfigureFn = Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>;
 
 /// Configurable proto compilation for R2E build scripts.
 ///
@@ -128,13 +127,15 @@ impl ProtoCompiler {
                 "cargo:warning=r2e-grpc-build: no .proto files under {} — generating an empty proto module",
                 proto_dir.display()
             );
-            std::fs::write(&aggregator_path, render_aggregator(&PackageTree::default(), false))?;
+            std::fs::write(
+                &aggregator_path,
+                render_aggregator(&PackageTree::default(), false),
+            )?;
             return Ok(());
         }
 
         let descriptor_path = out_dir.join("r2e_descriptor.bin");
-        let mut builder =
-            tonic_prost_build::configure().file_descriptor_set_path(&descriptor_path);
+        let mut builder = tonic_prost_build::configure().file_descriptor_set_path(&descriptor_path);
         if let Some(configure) = self.configure {
             builder = configure(builder);
         }
@@ -267,11 +268,11 @@ fn render_node(node: &PackageTree, package_path: &str, out: &mut String, depth: 
 /// trailing underscore for the keywords that cannot be raw (`self`, …).
 fn escape_ident(segment: &str) -> String {
     const KEYWORDS: &[&str] = &[
-        "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn",
-        "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in",
-        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
-        "ref", "return", "static", "struct", "trait", "true", "try", "type", "typeof",
-        "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+        "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn", "else",
+        "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop",
+        "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
+        "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
+        "virtual", "where", "while", "yield",
     ];
     if matches!(segment, "self" | "Self" | "super" | "crate") {
         format!("{segment}_")

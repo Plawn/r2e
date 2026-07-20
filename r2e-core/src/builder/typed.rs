@@ -554,17 +554,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // controller.
         if C::HAS_PRE_DESTROY {
             let core_for_dispose = Arc::clone(&core);
-            self.controller_disposers.push(
-                Box::new(move || C::pre_destroy(core_for_dispose))
-                    as crate::plugin::AsyncShutdownHook,
-            );
+            self.controller_disposers
+                .push(Box::new(move || C::pre_destroy(core_for_dispose))
+                    as crate::plugin::AsyncShutdownHook);
         }
 
         // Consumers start later during serve(), but use the same controller
         // core that was constructed above for routes and scheduled tasks.
-        self.consumer_registrations.push(Box::new(move |state| {
-            C::register_consumers(state, core)
-        }));
+        self.consumer_registrations
+            .push(Box::new(move |state| C::register_consumers(state, core)));
 
         Ok(self)
     }
@@ -818,16 +816,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         #[cfg(feature = "quic")]
         let quic_server_config = this.shared.config.as_ref().and_then(|config| {
             let port = config.try_get::<u16>("server.quic.port")?;
-            let cert_path = config.try_get::<String>("server.quic.cert")
-                .or_else(|| {
-                    tracing::error!("server.quic.port is set but server.quic.cert is missing");
-                    None
-                })?;
-            let key_path = config.try_get::<String>("server.quic.key")
-                .or_else(|| {
-                    tracing::error!("server.quic.port is set but server.quic.key is missing");
-                    None
-                })?;
+            let cert_path = config.try_get::<String>("server.quic.cert").or_else(|| {
+                tracing::error!("server.quic.port is set but server.quic.cert is missing");
+                None
+            })?;
+            let key_path = config.try_get::<String>("server.quic.key").or_else(|| {
+                tracing::error!("server.quic.port is set but server.quic.key is missing");
+                None
+            })?;
             let host = config
                 .try_get::<String>("server.host")
                 .unwrap_or_else(|| "0.0.0.0".into());
@@ -846,11 +842,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         });
 
         #[cfg(feature = "quic")]
-        let quic_alt_svc_max_age = this.shared.config.as_ref()
+        let quic_alt_svc_max_age = this
+            .shared
+            .config
+            .as_ref()
             .and_then(|c| c.try_get::<u32>("server.quic.alt_svc_max_age"))
             .unwrap_or(3600);
 
-        let tcp_nodelay = this.shared.config.as_ref()
+        let tcp_nodelay = this
+            .shared
+            .config
+            .as_ref()
             .and_then(|c| c.try_get::<bool>("server.tcp_nodelay"))
             .unwrap_or(true);
 

@@ -24,22 +24,14 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     let spec_json = serde_json::to_string_pretty(&spec).unwrap_or_else(|_| "{}".to_string());
     let docs_ui = config.docs_ui;
 
-    let state = Arc::new(OpenApiState {
-        spec_json,
-    });
+    let state = Arc::new(OpenApiState { spec_json });
 
     let state_clone = state.clone();
     let mut router = Router::<T>::new().route(
         "/openapi.json",
         get(move || {
             let json = state_clone.spec_json.clone();
-            async move {
-                (
-                    [("content-type", "application/json")],
-                    json,
-                )
-                    .into_response()
-            }
+            async move { ([("content-type", "application/json")], json).into_response() }
         }),
     );
 
@@ -50,29 +42,17 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
                 "/docs",
                 get(move || {
                     let _ = &state_for_ui;
-                    async move {
-                        Html(WTI_HTML).into_response()
-                    }
+                    async move { Html(WTI_HTML).into_response() }
                 }),
             )
             .route(
                 "/docs/wti-element.css",
-                get(|| async {
-                    (
-                        [("content-type", "text/css")],
-                        WTI_CSS,
-                    )
-                        .into_response()
-                }),
+                get(|| async { ([("content-type", "text/css")], WTI_CSS).into_response() }),
             )
             .route(
                 "/docs/wti-element.js",
                 get(|| async {
-                    (
-                        [("content-type", "application/javascript")],
-                        WTI_JS,
-                    )
-                        .into_response()
+                    ([("content-type", "application/javascript")], WTI_JS).into_response()
                 }),
             );
     }

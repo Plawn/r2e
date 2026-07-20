@@ -12,7 +12,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 use crate::crate_path::r2e_core_path;
 use crate::field_resolver::{
-    ClassifyOpts, FieldKind, classify_fields, config_init_panic, config_section_init_panic,
+    classify_fields, config_init_panic, config_section_init_panic, ClassifyOpts, FieldKind,
 };
 
 pub fn expand(input: TokenStream) -> TokenStream {
@@ -41,9 +41,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                          sure every #[inject] field type is provided/registered on the AppBuilder",
                     ))
                 } else {
-                    Err(meta.error(
-                        "unknown attribute in #[service(...)]",
-                    ))
+                    Err(meta.error("unknown attribute in #[service(...)]"))
                 }
             })?;
         }
@@ -97,7 +95,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
             FieldKind::Config { key, .. } => {
                 let is_option = crate::type_utils::is_option_type(cf.ty);
-                field_inits.push(config_init_panic(cf.name, key, &name_str, is_option, &krate));
+                field_inits.push(config_init_panic(
+                    cf.name, key, &name_str, is_option, &krate,
+                ));
                 has_any_config = true;
             }
             FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),
@@ -131,10 +131,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-fn generate_unit_impl(
-    name: &syn::Ident,
-    krate: &TokenStream2,
-) -> TokenStream2 {
+fn generate_unit_impl(name: &syn::Ident, krate: &TokenStream2) -> TokenStream2 {
     quote! {
         impl #krate::ServiceComponent for #name {
             fn from_context(_ctx: &#krate::beans::BeanContext) -> Self { #name }

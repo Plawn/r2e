@@ -134,5 +134,8 @@ async fn build_state_after_raw_load_config_provides_unit_slot() {
     // "Bean of type `()` not found in context".
     let app = AppBuilder::new().load_config::<()>().build_state().await;
     let _: () = app.state().get::<()>();
-    assert!(app.bean_context().try_get::<r2e_core::R2eConfig>().is_some());
+    assert!(app
+        .bean_context()
+        .try_get::<r2e_core::R2eConfig>()
+        .is_some());
 }

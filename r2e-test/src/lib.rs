@@ -10,7 +10,10 @@ mod sse;
 #[cfg(feature = "ws")]
 mod ws;
 
-pub use app::{PathToken, SameSite, SetCookie, TestApp, TestRequest, TestResponse, json_contains, resolve_path, tokenize_path};
+pub use app::{
+    json_contains, resolve_path, tokenize_path, PathToken, SameSite, SetCookie, TestApp,
+    TestRequest, TestResponse,
+};
 pub use jwt::{TestJwt, TokenBuilder};
 pub use server::TestServer;
 pub use session::{SessionRequest, TestSession};

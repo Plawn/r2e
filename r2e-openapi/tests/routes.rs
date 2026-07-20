@@ -40,14 +40,8 @@ fn config_without_ui() -> OpenApiConfig {
     OpenApiConfig::new("Test API", "1.0.0").with_docs_ui(false)
 }
 
-async fn get_response(
-    router: Router,
-    path: &str,
-) -> (http::StatusCode, String, http::HeaderMap) {
-    let req = Request::builder()
-        .uri(path)
-        .body(Body::empty())
-        .unwrap();
+async fn get_response(router: Router, path: &str) -> (http::StatusCode, String, http::HeaderMap) {
+    let req = Request::builder().uri(path).body(Body::empty()).unwrap();
 
     let response = router.oneshot(req).await.unwrap();
     let status = response.status();

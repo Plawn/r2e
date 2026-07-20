@@ -73,7 +73,11 @@ async fn missing_dependency() {
     let err = reg.resolve().await.unwrap_err();
     match &err {
         BeanError::MissingDependency { dependency, .. } => {
-            assert!(dependency.contains("Dep"), "error should name the missing type: {}", err);
+            assert!(
+                dependency.contains("Dep"),
+                "error should name the missing type: {}",
+                err
+            );
         }
         _ => panic!("expected MissingDependency, got {:?}", err),
     }
@@ -235,7 +239,7 @@ async fn async_bean_resolution() {
 async fn mixed_sync_async_graph() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 10 });
-    reg.register::<ServiceA>();          // sync: depends on Dep
+    reg.register::<ServiceA>(); // sync: depends on Dep
     reg.register_async::<AsyncService>(); // async: depends on Dep
     let ctx = reg.resolve().await.unwrap();
 
@@ -336,7 +340,11 @@ impl PostConstruct for InitTracker {
     fn post_construct(
         &self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
+        Box<
+            dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+                + Send
+                + '_,
+        >,
     > {
         Box::pin(async move {
             self.initialized.store(true, Ordering::SeqCst);
@@ -375,7 +383,11 @@ impl PostConstruct for FailingBean {
     fn post_construct(
         &self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
+        Box<
+            dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+                + Send
+                + '_,
+        >,
     > {
         Box::pin(async move { Err("init failed".into()) })
     }
@@ -433,7 +445,9 @@ async fn optional_dep_none_when_absent() {
 async fn optional_dep_some_when_provided() {
     let mut reg = BeanRegistry::new();
     reg.provide(Dep { value: 20 });
-    reg.provide(ServiceA { dep: Dep { value: 20 } });
+    reg.provide(ServiceA {
+        dep: Dep { value: 20 },
+    });
     reg.register::<OptionalConsumer>();
     let ctx = reg.resolve().await.unwrap();
 
@@ -478,7 +492,10 @@ async fn all_optional_deps_none() {
 async fn all_optional_deps_some_when_provided() {
     let dep = Dep { value: 5 };
     let svc_a = ServiceA { dep: dep.clone() };
-    let svc_b = ServiceB { a: svc_a.clone(), dep: dep.clone() };
+    let svc_b = ServiceB {
+        a: svc_a.clone(),
+        dep: dep.clone(),
+    };
 
     let mut reg = BeanRegistry::new();
     reg.provide(dep);
@@ -749,7 +766,10 @@ async fn option_consumer_sees_some_when_producer_returns_some() {
 
     let consumer: LlmConsumer = ctx.get();
     assert!(consumer.client.is_some());
-    assert_eq!(consumer.client.unwrap().endpoint, "https://example.azure.com");
+    assert_eq!(
+        consumer.client.unwrap().endpoint,
+        "https://example.azure.com"
+    );
 }
 
 #[r2e_core::test]
@@ -1017,7 +1037,10 @@ async fn pin_provide_wins_over_later_provide() {
     let ctx = reg.resolve().await.unwrap();
 
     let dep: Dep = ctx.get();
-    assert_eq!(dep.value, 1, "pinned instance must win over a later provide");
+    assert_eq!(
+        dep.value, 1,
+        "pinned instance must win over a later provide"
+    );
 }
 
 #[r2e_core::test]
@@ -1043,7 +1066,10 @@ async fn pin_provide_wins_over_later_register() {
     let ctx = reg.resolve().await.unwrap();
 
     let m: Marked = ctx.get();
-    assert_eq!(m.origin, "pinned", "pinned instance must win over a later register");
+    assert_eq!(
+        m.origin, "pinned",
+        "pinned instance must win over a later register"
+    );
 }
 
 #[r2e_core::test]

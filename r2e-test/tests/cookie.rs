@@ -26,7 +26,7 @@ fn test_parse_basic_cookie() {
 #[test]
 fn test_parse_all_attributes() {
     let resp = cookie_response(&[
-        "token=xyz; Path=/api; Domain=example.com; Max-Age=3600; Secure; HttpOnly; SameSite=Strict"
+        "token=xyz; Path=/api; Domain=example.com; Max-Age=3600; Secure; HttpOnly; SameSite=Strict",
     ]);
     let c = resp.set_cookie("token").unwrap();
     assert_eq!(c.name, "token");

@@ -85,7 +85,10 @@ async fn assert_no_controller_extension(
 struct AllowAll;
 impl r2e_core::SelfBuilt for AllowAll {}
 impl<I: Identity> Guard<I> for AllowAll {
-    fn check(&self, _ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Response>> + Send {
+    fn check(
+        &self,
+        _ctx: &GuardContext<'_, I>,
+    ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
@@ -205,7 +208,10 @@ impl SseController {
 struct AllowAllPre;
 impl r2e_core::SelfBuilt for AllowAllPre {}
 impl PreAuthGuard for AllowAllPre {
-    fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> impl Future<Output = Result<(), Response>> + Send {
+    fn check(
+        &self,
+        _ctx: &PreAuthGuardContext<'_>,
+    ) -> impl Future<Output = Result<(), Response>> + Send {
         async { Ok(()) }
     }
 }
@@ -484,8 +490,7 @@ async fn direct_state_aware_routes_still_work() {
     // The generated `Controller` impl requires the state to implement
     // `BeanLookup`; the empty HList `HNil` is the minimal such state.
     use r2e_core::type_list::HNil;
-    let core =
-        Arc::new(<DirectRoutesController as r2e_core::ContextConstruct>::from_context(&ctx));
+    let core = Arc::new(<DirectRoutesController as r2e_core::ContextConstruct>::from_context(&ctx));
     let router =
         <DirectRoutesController as r2e_core::Controller<HNil, _>>::routes(&HNil, core, &ctx)
             .with_state(HNil);

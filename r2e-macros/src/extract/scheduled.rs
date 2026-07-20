@@ -20,13 +20,20 @@ fn parse_duration_value(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<u6
         let lit: syn::LitInt = value.parse()?;
         let secs: u64 = lit.base10_parse()?;
         if secs == 0 {
-            return Err(syn::Error::new(lit.span(), "duration must be greater than zero"));
+            return Err(syn::Error::new(
+                lit.span(),
+                "duration must be greater than zero",
+            ));
         }
         Ok(secs * 1_000) // convert seconds to ms
     } else if lookahead.peek(syn::LitStr) {
         let lit: syn::LitStr = value.parse()?;
-        parse_duration_ms(&lit.value())
-            .map_err(|e| syn::Error::new(lit.span(), format!("invalid duration '{}': {}", lit.value(), e)))
+        parse_duration_ms(&lit.value()).map_err(|e| {
+            syn::Error::new(
+                lit.span(),
+                format!("invalid duration '{}': {}", lit.value(), e),
+            )
+        })
     } else {
         Err(lookahead.error())
     }

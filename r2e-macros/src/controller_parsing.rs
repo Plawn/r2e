@@ -100,10 +100,7 @@ pub fn parse_controller_args(
 ///
 /// `prefix` comes from the attribute arguments; field scopes are read from
 /// the struct's named fields.
-pub fn parse(
-    prefix: Option<String>,
-    item: &syn::ItemStruct,
-) -> syn::Result<ControllerStructDef> {
+pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<ControllerStructDef> {
     let name = item.ident.clone();
 
     let fields: Vec<&syn::Field> = match &item.fields {

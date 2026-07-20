@@ -60,7 +60,12 @@ fn descriptors_are_collected_and_deduplicated() {
     let services = registry.take().expect("four services were registered");
     assert_eq!(
         services.names,
-        vec!["pkg.ServiceA", "pkg.ServiceB", "pkg.ServiceC", "pkg.ServiceD"]
+        vec![
+            "pkg.ServiceA",
+            "pkg.ServiceB",
+            "pkg.ServiceC",
+            "pkg.ServiceD"
+        ]
     );
     assert_eq!(services.descriptors, vec![SET_A, SET_B]);
 }

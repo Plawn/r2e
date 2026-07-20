@@ -121,10 +121,7 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 }
 
 /// Parse a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
-pub fn parse(
-    args: GrpcRoutesArgs,
-    item: syn::ItemImpl,
-) -> syn::Result<GrpcRoutesImplDef> {
+pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoutesImplDef> {
     let GrpcRoutesArgs {
         service_trait,
         descriptor,

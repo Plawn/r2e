@@ -331,11 +331,7 @@ fn generate_crud_migration_sql() {
 
     generate::crud(
         "User",
-        &[
-            "name:String".into(),
-            "age:i64".into(),
-            "active:bool".into(),
-        ],
+        &["name:String".into(), "age:i64".into(), "active:bool".into()],
     )
     .unwrap();
 

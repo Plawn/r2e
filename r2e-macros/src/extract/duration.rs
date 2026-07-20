@@ -48,7 +48,12 @@ pub fn parse_duration_ms(input: &str) -> Result<u64, String> {
                 "m" => 60_000,
                 "h" => 3_600_000,
                 "d" => 86_400_000,
-                _ => return Err(format!("unknown duration suffix '{}' — use ms, s, m, h, or d", suffix)),
+                _ => {
+                    return Err(format!(
+                        "unknown duration suffix '{}' — use ms, s, m, h, or d",
+                        suffix
+                    ))
+                }
             };
 
             total_ms += num * multiplier;

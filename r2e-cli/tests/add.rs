@@ -126,7 +126,10 @@ fn add_openapi_includes_schemars() {
 
     let cargo = fs::read_to_string("Cargo.toml").unwrap();
     assert!(cargo.contains("r2e-openapi"));
-    assert!(cargo.contains("schemars"), "Expected schemars companion dependency");
+    assert!(
+        cargo.contains("schemars"),
+        "Expected schemars companion dependency"
+    );
 }
 
 #[test]
@@ -165,5 +168,8 @@ fn add_all_known_extensions() {
         );
     }
     // openapi should also add schemars as a companion dependency
-    assert!(cargo.contains("schemars"), "Expected schemars companion dependency for openapi");
+    assert!(
+        cargo.contains("schemars"),
+        "Expected schemars companion dependency for openapi"
+    );
 }

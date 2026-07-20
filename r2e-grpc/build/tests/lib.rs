@@ -12,8 +12,9 @@ fn single_package_renders_one_module() {
     let mut tree = PackageTree::default();
     tree.insert("greeter");
     let out = render_aggregator(&tree, true);
-    assert!(out
-        .contains("pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(\"r2e_descriptor.bin\");"));
+    assert!(out.contains(
+        "pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(\"r2e_descriptor.bin\");"
+    ));
     assert!(out.contains("pub mod greeter {"));
     assert!(out.contains("include!(\"greeter.rs\");"));
 }

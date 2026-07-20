@@ -28,17 +28,20 @@ pub use openid::RoleExtractor;
 // and proc-macros to reference RolesGuard via r2e_security::__macro_support.
 #[doc(hidden)]
 pub mod __macro_support {
-    pub use r2e_core::http;
+    pub use crate::guards::AllRolesGuard;
+    pub use crate::guards::RolesGuard;
     pub use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+    pub use r2e_core::http;
     pub use r2e_core::type_list::HasBean;
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
     pub use serde_json;
-    pub use crate::guards::AllRolesGuard;
-    pub use crate::guards::RolesGuard;
 }
 
 pub mod prelude {
     //! Re-exports of the most commonly used security types.
-    pub use crate::{AllRolesGuard, AuthenticatedUser, JwtValidator, RoleBasedIdentity, RolesGuard, SecurityConfig};
+    pub use crate::{
+        AllRolesGuard, AuthenticatedUser, JwtValidator, RoleBasedIdentity, RolesGuard,
+        SecurityConfig,
+    };
 }

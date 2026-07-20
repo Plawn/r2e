@@ -1,5 +1,5 @@
-use r2e_cache::{InMemoryStore, CacheStore, TtlCache};
 use bytes::Bytes;
+use r2e_cache::{CacheStore, InMemoryStore, TtlCache};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -47,7 +47,9 @@ fn test_cache_clear() {
 #[r2e_core::test]
 async fn test_in_memory_store() {
     let store = InMemoryStore::new();
-    store.set("k1", Bytes::from("v1"), Duration::from_secs(60)).await;
+    store
+        .set("k1", Bytes::from("v1"), Duration::from_secs(60))
+        .await;
     assert_eq!(store.get("k1").await, Some(Bytes::from("v1")));
 
     store.remove("k1").await;
@@ -57,9 +59,15 @@ async fn test_in_memory_store() {
 #[r2e_core::test]
 async fn test_in_memory_store_prefix_removal() {
     let store = InMemoryStore::new();
-    store.set("users:1", Bytes::from("a"), Duration::from_secs(60)).await;
-    store.set("users:2", Bytes::from("b"), Duration::from_secs(60)).await;
-    store.set("posts:1", Bytes::from("c"), Duration::from_secs(60)).await;
+    store
+        .set("users:1", Bytes::from("a"), Duration::from_secs(60))
+        .await;
+    store
+        .set("users:2", Bytes::from("b"), Duration::from_secs(60))
+        .await;
+    store
+        .set("posts:1", Bytes::from("c"), Duration::from_secs(60))
+        .await;
 
     store.remove_by_prefix("users:").await;
     assert_eq!(store.get("users:1").await, None);

@@ -221,8 +221,7 @@ mod imp {
                         // context.
                         let listener = tokio::net::TcpListener::from_std(std_listener)
                             .map_err(|e| format!("failed to adopt worker listener: {e}"))?;
-                        let svc = router
-                            .into_make_service_with_connect_info::<SocketAddr>();
+                        let svc = router.into_make_service_with_connect_info::<SocketAddr>();
                         let shutdown = child_token.cancelled_owned();
                         let serve_result = if tcp_nodelay {
                             use crate::http::ListenerExt as _;

@@ -1,6 +1,6 @@
-use r2e_core::request_id::RequestId;
-use r2e_core::http::IntoResponse;
 use http_body_util::BodyExt;
+use r2e_core::http::IntoResponse;
+use r2e_core::request_id::RequestId;
 
 #[test]
 fn request_id_display() {

@@ -72,7 +72,11 @@ async fn complete_reply_ok_delivers_payload() {
     let pending = Arc::new(PendingRequests::new());
     let (id, _guard, rx) = pending.register();
 
-    let headers = ReplyHeaders { request_id: id, reply_to: None, reply_error: None };
+    let headers = ReplyHeaders {
+        request_id: id,
+        reply_to: None,
+        reply_error: None,
+    };
     pending.complete_reply(&headers, b"payload".to_vec());
 
     let received = rx.await.unwrap();
@@ -103,7 +107,11 @@ async fn complete_reply_unknown_id_is_noop() {
     let (_id, guard, _rx) = pending.register();
     drop(guard);
 
-    let headers = ReplyHeaders { request_id: 999, reply_to: None, reply_error: None };
+    let headers = ReplyHeaders {
+        request_id: 999,
+        reply_to: None,
+        reply_error: None,
+    };
     pending.complete_reply(&headers, b"x".to_vec());
     assert!(pending.is_empty());
 }
@@ -174,8 +182,7 @@ async fn await_reply_observes_pre_cancelled_shutdown_token() {
     let cancel = tokio_util::sync::CancellationToken::new();
     cancel.cancel();
 
-    let result: Result<Pong, _> =
-        await_reply(rx, Duration::from_secs(5), cancel.cancelled()).await;
+    let result: Result<Pong, _> = await_reply(rx, Duration::from_secs(5), cancel.cancelled()).await;
     assert!(matches!(result, Err(EventBusError::Shutdown)));
     drop(guard);
 }
@@ -204,7 +211,9 @@ fn reply_headers_roundtrip_request() {
     assert!(pairs.iter().any(|(k, _)| k == HEADER_REQUEST_ID));
     // It must NOT leak into the user's correlation-id slot.
     assert!(!pairs.iter().any(|(k, _)| k == HEADER_CORRELATION_ID));
-    assert!(pairs.iter().any(|(k, v)| k == HEADER_REPLY_TO && v == "app.replies.abcd"));
+    assert!(pairs
+        .iter()
+        .any(|(k, v)| k == HEADER_REPLY_TO && v == "app.replies.abcd"));
     assert!(!pairs.iter().any(|(k, _)| k == HEADER_REPLY_ERROR));
 
     let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
@@ -239,16 +248,15 @@ fn user_correlation_id_survives_alongside_request_id() {
     metadata.correlation_id = Some("user-corr-123".to_string());
 
     let pairs: Vec<_> = encode_metadata(&metadata)
-        .chain(encode_reply_headers(
-            777,
-            Some("app.replies.f00d"),
-            None,
-        ))
+        .chain(encode_reply_headers(777, Some("app.replies.f00d"), None))
         .collect();
 
     // The user correlation id decodes unchanged.
     let decoded_meta = decode_metadata(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())));
-    assert_eq!(decoded_meta.correlation_id.as_deref(), Some("user-corr-123"));
+    assert_eq!(
+        decoded_meta.correlation_id.as_deref(),
+        Some("user-corr-123")
+    );
 
     // The internal request id decodes independently.
     let decoded_reply = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))

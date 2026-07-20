@@ -1,16 +1,13 @@
-use r2e_core::http::{Body, Request, StatusCode};
 use http_body_util::BodyExt;
 use r2e_core::builder::AppBuilder;
+use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
 use r2e_core::request_id::RequestIdPlugin;
 use r2e_core::secure_headers::SecureHeaders;
 use tower::ServiceExt;
 
 async fn send_get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String) {
-    let req = Request::builder()
-        .uri(path)
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     let resp = router.oneshot(req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -132,7 +129,12 @@ async fn request_id_propagated() {
     let router = build_app().with(Health).with(RequestIdPlugin).build();
     let resp = send_get_with_header(router, "/health", "x-request-id", "test-123").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let req_id = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
+    let req_id = resp
+        .headers()
+        .get("x-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert_eq!(req_id, "test-123");
 }
 
@@ -149,7 +151,11 @@ async fn secure_headers_in_response() {
 
     let headers = resp.headers();
     assert_eq!(
-        headers.get("x-content-type-options").unwrap().to_str().unwrap(),
+        headers
+            .get("x-content-type-options")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "nosniff"
     );
     assert_eq!(
@@ -236,7 +242,12 @@ async fn advanced_health_liveness_always_ok() {
 async fn advanced_health_readiness_filters() {
     // LivenessOnly check is down but doesn't affect readiness
     let router = build_app()
-        .with(Health::builder().check(AlwaysUp).check(LivenessOnly).build())
+        .with(
+            Health::builder()
+                .check(AlwaysUp)
+                .check(LivenessOnly)
+                .build(),
+        )
         .build();
     let (status, body) = send_get(router, "/health/ready").await;
     assert_eq!(status, StatusCode::OK);
@@ -248,10 +259,7 @@ async fn advanced_health_readiness_filters() {
 
 #[r2e_core::test]
 async fn cors_permissive_allows_origin() {
-    let router = build_app()
-        .with(Health)
-        .with(Cors::permissive())
-        .build();
+    let router = build_app().with(Health).with(Cors::permissive()).build();
     let resp = send_get_with_header(router, "/health", "origin", "http://example.com").await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
@@ -262,10 +270,7 @@ async fn cors_permissive_allows_origin() {
 
 #[r2e_core::test]
 async fn cors_preflight_returns_200() {
-    let router = build_app()
-        .with(Health)
-        .with(Cors::permissive())
-        .build();
+    let router = build_app().with(Health).with(Cors::permissive()).build();
     let resp = send_request(
         router,
         "OPTIONS",
@@ -353,7 +358,11 @@ impl AsyncBean for AsyncService {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> impl std::future::Future<Output = Self> + Send + '_ {
-        async { AsyncService { label: "async-built".into() } }
+        async {
+            AsyncService {
+                label: "async-built".into(),
+            }
+        }
     }
 }
 
@@ -389,9 +398,7 @@ impl Producer for TestProducer {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn produce(
-        _ctx: &BeanContext,
-    ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
+    fn produce(_ctx: &BeanContext) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
         async { ProducedValue("produced".into()) }
     }
 }
@@ -458,11 +465,13 @@ impl Producer for MaybeServiceProducer {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<ServiceEnabled>(), "ServiceEnabled")]
     }
-    fn produce(
-        ctx: &BeanContext,
-    ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
+    fn produce(ctx: &BeanContext) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
         let enabled = ctx.get::<ServiceEnabled>().0;
-        async move { enabled.then(|| TestService { label: "built".into() }) }
+        async move {
+            enabled.then(|| TestService {
+                label: "built".into(),
+            })
+        }
     }
 }
 
@@ -554,7 +563,9 @@ async fn producer_option_present_via_config_flag() {
 
     // Compute the flag from config via the public `config_flag` helper before
     // consuming the builder, then feed it into the producer.
-    let builder = AppBuilder::new().override_config(config).load_config::<()>();
+    let builder = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>();
     let enabled = builder.config_flag("features.test-service");
     assert!(enabled);
 
@@ -575,7 +586,9 @@ async fn producer_option_absent_via_config_flag() {
     let mut config = R2eConfig::empty();
     config.set("features.test-service", ConfigValue::Bool(false));
 
-    let builder = AppBuilder::new().override_config(config).load_config::<()>();
+    let builder = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>();
     let enabled = builder.config_flag("features.test-service");
     assert!(!enabled);
 
@@ -593,7 +606,9 @@ async fn producer_option_absent_via_config_flag() {
 async fn config_flag_missing_key_defaults_to_false() {
     use r2e_core::config::R2eConfig;
 
-    let builder = AppBuilder::new().override_config(R2eConfig::empty()).load_config::<()>();
+    let builder = AppBuilder::new()
+        .override_config(R2eConfig::empty())
+        .load_config::<()>();
     // Missing key → `config_flag` yields false → producer emits `None`.
     let enabled = builder.config_flag("features.nonexistent");
     assert!(!enabled);
@@ -627,7 +642,9 @@ async fn profile_is_reflects_active_profile() {
     let mut config = R2eConfig::empty();
     config.set("r2e.profile", ConfigValue::String("prod".into()));
 
-    let builder = AppBuilder::new().override_config(config).load_config::<()>();
+    let builder = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>();
     // `R2E_PROFILE` (if set in the environment) overrides the config key, so
     // pin the expectation to whatever the resolver actually chose.
     let active = builder.active_profile().to_string();
@@ -670,25 +687,37 @@ async fn plugin_ordering_layers_respected() {
     let router = build_app()
         .with(Health)
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
-                let mut resp = next.run(req).await;
-                resp.headers_mut().insert("x-plugin-a", HeaderValue::from_static("a"));
-                resp
-            }))
+            router.layer(r2e_core::http::middleware::from_fn(
+                |req, next: r2e_core::http::middleware::Next| async move {
+                    let mut resp = next.run(req).await;
+                    resp.headers_mut()
+                        .insert("x-plugin-a", HeaderValue::from_static("a"));
+                    resp
+                },
+            ))
         })
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
-                let mut resp = next.run(req).await;
-                resp.headers_mut().insert("x-plugin-b", HeaderValue::from_static("b"));
-                resp
-            }))
+            router.layer(r2e_core::http::middleware::from_fn(
+                |req, next: r2e_core::http::middleware::Next| async move {
+                    let mut resp = next.run(req).await;
+                    resp.headers_mut()
+                        .insert("x-plugin-b", HeaderValue::from_static("b"));
+                    resp
+                },
+            ))
         })
         .build();
 
     let resp = send_get_with_header(router, "/health", "accept", "*/*").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(resp.headers().get("x-plugin-a").unwrap().to_str().unwrap(), "a");
-    assert_eq!(resp.headers().get("x-plugin-b").unwrap().to_str().unwrap(), "b");
+    assert_eq!(
+        resp.headers().get("x-plugin-a").unwrap().to_str().unwrap(),
+        "a"
+    );
+    assert_eq!(
+        resp.headers().get("x-plugin-b").unwrap().to_str().unwrap(),
+        "b"
+    );
 }
 
 #[r2e_core::test]
@@ -698,18 +727,25 @@ async fn with_layer_fn_applied() {
     let router = build_app()
         .with(Health)
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(|req, next: r2e_core::http::middleware::Next| async move {
-                let mut resp = next.run(req).await;
-                resp.headers_mut().insert("x-custom-layer", HeaderValue::from_static("applied"));
-                resp
-            }))
+            router.layer(r2e_core::http::middleware::from_fn(
+                |req, next: r2e_core::http::middleware::Next| async move {
+                    let mut resp = next.run(req).await;
+                    resp.headers_mut()
+                        .insert("x-custom-layer", HeaderValue::from_static("applied"));
+                    resp
+                },
+            ))
         })
         .build();
 
     let resp = send_get_with_header(router, "/health", "accept", "*/*").await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get("x-custom-layer").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("x-custom-layer")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "applied"
     );
 }
@@ -757,8 +793,8 @@ async fn multiple_route_registrations_merge() {
 
 #[r2e_core::test]
 async fn register_routes_with_state_access() {
-    use r2e_core::http::State;
     use r2e_core::http::routing::get;
+    use r2e_core::http::State;
 
     #[derive(Clone)]
     struct AppState {

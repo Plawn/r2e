@@ -2,12 +2,16 @@ use std::future::Future;
 use std::pin::Pin;
 
 /// A startup hook that receives a reference to the application state.
-pub type StartupHook<T> =
-    Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> + Send>;
+pub type StartupHook<T> = Box<
+    dyn FnOnce(
+            T,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
+        > + Send,
+>;
 
 /// A shutdown hook that runs when the server stops.
-pub type ShutdownHook<T> =
-    Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+pub type ShutdownHook<T> = Box<dyn FnOnce(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 /// A drain hook, awaited when shutdown is triggered — after the signal (or
 /// [`StopHandle::stop`]) but **before** the server stops accepting
@@ -67,9 +71,8 @@ impl StopHandle {
 /// Boxed future returned by fallible lifecycle methods
 /// ([`LifecycleController::on_start`],
 /// [`PostConstruct::post_construct`](crate::beans::PostConstruct::post_construct)).
-pub type LifecycleFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
->;
+pub type LifecycleFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>>;
 
 /// Trait for controllers that define lifecycle methods.
 ///

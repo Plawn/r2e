@@ -162,7 +162,10 @@ pub fn tldr(body: &str) -> Option<&str> {
     let start = find_heading(body, "## TL;DR")?;
     let after = &body[start..];
     // Skip past the heading line itself before looking for the next `## `.
-    let heading_end = after.find('\n').map(|i| start + i + 1).unwrap_or(body.len());
+    let heading_end = after
+        .find('\n')
+        .map(|i| start + i + 1)
+        .unwrap_or(body.len());
     let end = match find_heading(&body[heading_end..], "## ") {
         Some(rel) => heading_end + rel,
         None => body.len(),
@@ -211,7 +214,9 @@ fn print_list() {
     for entry in rows {
         println!("  {}", label(entry));
     }
-    println!("\nRun `r2e docs <module>` to read one (add --full for the whole doc, --pretty to render).");
+    println!(
+        "\nRun `r2e docs <module>` to read one (add --full for the whole doc, --pretty to render)."
+    );
 }
 
 /// Look up a module by exact slug.

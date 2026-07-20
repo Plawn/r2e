@@ -7,7 +7,10 @@ use crate::{EventFilter, EventMetadata, HandlerResult, RetryPolicy};
 
 /// Type-erased async handler function.
 pub type Handler = Arc<
-    dyn Fn(Arc<dyn Any + Send + Sync>, EventMetadata) -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
+    dyn Fn(
+            Arc<dyn Any + Send + Sync>,
+            EventMetadata,
+        ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
         + Send
         + Sync,
 >;

@@ -2,19 +2,21 @@
 //! must build the struct from the resolved bean graph and forward `start`
 //! to `run`.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use r2e_core::ServiceComponent;
 use r2e_core::prelude::BackgroundService;
+use r2e_core::ServiceComponent;
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 use tokio_util::sync::CancellationToken;
 
 #[derive(BackgroundService, Clone)]
 struct Worker {
-    #[inject] executor: PoolExecutor,
-    #[inject] counter: Arc<AtomicU32>,
+    #[inject]
+    executor: PoolExecutor,
+    #[inject]
+    counter: Arc<AtomicU32>,
 }
 
 impl Worker {
@@ -49,5 +51,8 @@ async fn derive_background_service_runs_until_cancelled() {
     token.cancel();
     task.await.expect("worker exits cleanly on cancel");
 
-    assert!(counter.load(Ordering::SeqCst) > 0, "worker should have submitted at least one job");
+    assert!(
+        counter.load(Ordering::SeqCst) > 0,
+        "worker should have submitted at least one job"
+    );
 }

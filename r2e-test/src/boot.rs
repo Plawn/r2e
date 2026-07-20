@@ -48,9 +48,7 @@ impl TestApp {
     ///
     /// The hook runs after the harness defaults, so it may also re-pin the
     /// JWT validators or change the profile.
-    pub async fn boot_with<A: App>(
-        configure: impl FnOnce(AppBuilder) -> AppBuilder,
-    ) -> Self {
+    pub async fn boot_with<A: App>(configure: impl FnOnce(AppBuilder) -> AppBuilder) -> Self {
         let jwt = TestJwt::new();
         let builder = AppBuilder::new()
             .with_profile("test")
@@ -64,9 +62,7 @@ impl TestApp {
     /// Boot an [`App`] **without** the harness JWT wiring — for apps whose
     /// validator carries custom behaviour (role extractor, identity type)
     /// that the test wants to keep. The `test` profile is still forced.
-    pub async fn boot_plain<A: App>(
-        configure: impl FnOnce(AppBuilder) -> AppBuilder,
-    ) -> Self {
+    pub async fn boot_plain<A: App>(configure: impl FnOnce(AppBuilder) -> AppBuilder) -> Self {
         let builder = AppBuilder::new().with_profile("test");
         let env = A::setup().await;
         let built = A::build(configure(builder), env).await;

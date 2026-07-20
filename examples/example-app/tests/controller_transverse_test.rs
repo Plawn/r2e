@@ -284,7 +284,10 @@ async fn controller_consumer_direct_call_is_intercepted() {
     // Fill the slot (the registration step) without event wiring.
     PingController::fill_slot(app.state(), &core, app.bean_context());
 
-    core.on_ping(Arc::new(Ping { msg: "direct".into() })).await;
+    core.on_ping(Arc::new(Ping {
+        msg: "direct".into(),
+    }))
+    .await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -309,7 +312,10 @@ async fn controller_consumer_unregistered_core_is_undecorated() {
         .await;
 
     let core = PingController::from_context(app.bean_context());
-    core.on_ping(Arc::new(Ping { msg: "direct".into() })).await;
+    core.on_ping(Arc::new(Ping {
+        msg: "direct".into(),
+    }))
+    .await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 1, "body must run");
     assert!(

@@ -171,7 +171,8 @@ async fn derive_decorator_bean_end_to_end() {
     config.set("audit.suffix", ConfigValue::String("s1".into()));
 
     let app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .provide(counter.clone())
         .provide(sink.clone())
         .build_state()

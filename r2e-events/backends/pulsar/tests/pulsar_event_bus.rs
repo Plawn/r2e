@@ -35,10 +35,7 @@ fn config_defaults() {
     assert_eq!(config.default_partitions, 0);
     assert!(!config.tls_hostname_verification);
     assert!(config.auth_token.is_none());
-    assert!(matches!(
-        config.subscription_type,
-        SubscriptionType::Shared
-    ));
+    assert!(matches!(config.subscription_type, SubscriptionType::Shared));
 }
 
 // -- PulsarConfig builder ---------------------------------------------------
@@ -79,7 +76,10 @@ fn subscription_type_variants() {
     let _key_shared = SubscriptionType::KeyShared;
     let _default = SubscriptionType::default();
     // Default should be Shared
-    assert!(matches!(SubscriptionType::default(), SubscriptionType::Shared));
+    assert!(matches!(
+        SubscriptionType::default(),
+        SubscriptionType::Shared
+    ));
 }
 
 // -- Full topic name --------------------------------------------------------
@@ -263,7 +263,10 @@ fn reply_headers_request_roundtrip() {
     let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k, v))).unwrap();
 
     assert_eq!(decoded.request_id, 0xABCD_1234);
-    assert_eq!(decoded.reply_to.as_deref(), Some("persistent://x/replies.00"));
+    assert_eq!(
+        decoded.reply_to.as_deref(),
+        Some("persistent://x/replies.00")
+    );
     assert!(decoded.reply_error.is_none());
 }
 
@@ -335,15 +338,24 @@ async fn live_broker_request_reply_roundtrip() {
     let config = PulsarConfig::builder()
         .subscription(format!("r2e-integration-{nonce:016x}"))
         .build();
-    let bus = PulsarEventBus::builder(config).topic::<Ping>(topic).connect().await
+    let bus = PulsarEventBus::builder(config)
+        .topic::<Ping>(topic)
+        .connect()
+        .await
         .expect("Pulsar broker must be available for integration tests");
-    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
-        Ok::<_, String>(Pong(env.event.0 + 1))
-    }).await.unwrap();
-    let reply: Pong = bus.request_with(
-        Ping(41),
-        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
-    ).await.unwrap();
+    let _responder = bus
+        .respond(|env: EventEnvelope<Ping>| async move { Ok::<_, String>(Pong(env.event.0 + 1)) })
+        .await
+        .unwrap();
+    let reply: Pong = bus
+        .request_with(
+            Ping(41),
+            RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+        )
+        .await
+        .unwrap();
     assert_eq!(reply, Pong(42));
-    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
+    bus.shutdown(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
 }

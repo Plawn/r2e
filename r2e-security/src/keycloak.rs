@@ -177,10 +177,7 @@ impl RoleExtractor {
     }
 
     /// Include roles from multiple clients at once.
-    pub fn with_clients(
-        mut self,
-        client_ids: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
+    pub fn with_clients(mut self, client_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.client_ids
             .extend(client_ids.into_iter().map(Into::into));
         self

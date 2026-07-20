@@ -2,8 +2,8 @@
 //! `#[bean]` impl — the marked method must return a `JobHandle<T>` whose
 //! result matches what the original body would have produced inline.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use r2e_core::prelude::*;
 use r2e_executor::{ExecutorConfig, JobHandle, PoolExecutor, RejectedError};
@@ -11,8 +11,10 @@ use r2e_executor::{ExecutorConfig, JobHandle, PoolExecutor, RejectedError};
 #[controller]
 #[derive(Clone)]
 struct Worker {
-    #[inject] executor: PoolExecutor,
-    #[inject] counter: Arc<AtomicU32>,
+    #[inject]
+    executor: PoolExecutor,
+    #[inject]
+    counter: Arc<AtomicU32>,
 }
 
 #[routes]

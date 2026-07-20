@@ -65,11 +65,8 @@ impl DevOpenFga {
         ryuk::ensure_lease().await;
         let configuration =
             format!("image=openfga/openfga:{DEFAULT_TAG};http={HTTP_PORT};grpc={GRPC_PORT}");
-        let request = common::label_isolated(
-            base_image().with_cmd(["run"]),
-            "openfga",
-            &configuration,
-        );
+        let request =
+            common::label_isolated(base_image().with_cmd(["run"]), "openfga", &configuration);
         Self::from_request(request).await
     }
 
@@ -198,7 +195,12 @@ impl DevOpenFga {
     ///
     /// Panics if the request fails or OpenFGA returns a non-success status
     /// (writing a duplicate tuple is an error in OpenFGA).
-    pub async fn write_tuples(&self, store_id: &str, model_id: &str, tuples: &[(&str, &str, &str)]) {
+    pub async fn write_tuples(
+        &self,
+        store_id: &str,
+        model_id: &str,
+        tuples: &[(&str, &str, &str)],
+    ) {
         if tuples.is_empty() {
             return;
         }

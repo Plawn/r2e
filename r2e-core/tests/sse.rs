@@ -8,7 +8,8 @@ async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {
         std::future::poll_fn(|cx| {
             use futures_core::Stream;
             Pin::new(&mut *sub).poll_next(cx)
-        }).await
+        })
+        .await
     })
     .await
     .ok()
@@ -38,7 +39,10 @@ async fn sse_broadcaster_send_recv() {
     let event = next_event(&mut sub).await.expect("should receive event");
     // SseEvent doesn't expose fields directly, so check via Debug repr
     let debug = format!("{event:?}");
-    assert!(debug.contains("hello"), "event debug should contain data: {debug}");
+    assert!(
+        debug.contains("hello"),
+        "event debug should contain data: {debug}"
+    );
 }
 
 #[r2e_core::test]
@@ -48,8 +52,14 @@ async fn sse_broadcaster_typed_event() {
     broadcaster.send_event("msg", "payload").unwrap();
     let event = next_event(&mut sub).await.expect("should receive event");
     let debug = format!("{event:?}");
-    assert!(debug.contains("msg"), "event debug should contain event type: {debug}");
-    assert!(debug.contains("payload"), "event debug should contain data: {debug}");
+    assert!(
+        debug.contains("msg"),
+        "event debug should contain event type: {debug}"
+    );
+    assert!(
+        debug.contains("payload"),
+        "event debug should contain data: {debug}"
+    );
 }
 
 #[r2e_core::test]
@@ -121,7 +131,9 @@ async fn sse_lag_event_surfaces_synthetic_event() {
     broadcaster.send("four").unwrap();
 
     // First event out should be the synthetic "lagged" event.
-    let event = next_event(&mut sub).await.expect("should receive lag event");
+    let event = next_event(&mut sub)
+        .await
+        .expect("should receive lag event");
     let debug = format!("{event:?}");
     assert!(
         debug.contains("lagged"),
@@ -129,7 +141,9 @@ async fn sse_lag_event_surfaces_synthetic_event() {
     );
 
     // Subsequent events should be the still-buffered real messages.
-    let real = next_event(&mut sub).await.expect("should receive real event");
+    let real = next_event(&mut sub)
+        .await
+        .expect("should receive real event");
     let real_debug = format!("{real:?}");
     assert!(
         real_debug.contains("three") || real_debug.contains("four"),
@@ -215,9 +229,14 @@ async fn sse_subscribe_with_policy_delegates() {
     broadcaster.send("one").unwrap();
     broadcaster.send("two").unwrap();
     broadcaster.send("three").unwrap();
-    let event = next_event(&mut sub).await.expect("should receive lag event");
+    let event = next_event(&mut sub)
+        .await
+        .expect("should receive lag event");
     let debug = format!("{event:?}");
-    assert!(debug.contains("dropped"), "expected synthetic event, got: {debug}");
+    assert!(
+        debug.contains("dropped"),
+        "expected synthetic event, got: {debug}"
+    );
 }
 
 #[r2e_core::test]
@@ -263,13 +282,23 @@ async fn sse_topic_with_event_name_overrides_default() {
 async fn sse_topic_publish_roundtrip() {
     let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
     let mut sub = topic.subscribe();
-    let received = topic.publish(&SyncStatus { done: 10, total: 42 }).unwrap();
+    let received = topic
+        .publish(&SyncStatus {
+            done: 10,
+            total: 42,
+        })
+        .unwrap();
     assert_eq!(received, 1);
     let event = next_event(&mut sub).await.expect("should receive event");
     let debug = format!("{event:?}");
-    assert!(debug.contains("sync"), "event name should be on the wire: {debug}");
-    assert!(debug.contains(r#"\"done\":10"#) || debug.contains(r#""done":10"#),
-        "JSON payload should be on the wire: {debug}");
+    assert!(
+        debug.contains("sync"),
+        "event name should be on the wire: {debug}"
+    );
+    assert!(
+        debug.contains(r#"\"done\":10"#) || debug.contains(r#""done":10"#),
+        "JSON payload should be on the wire: {debug}"
+    );
 }
 
 #[r2e_core::test]
@@ -285,7 +314,10 @@ async fn sse_topic_clone_shares_channel() {
     let clone = topic.clone();
     let mut sub = clone.subscribe();
     topic.publish(&SyncStatus { done: 1, total: 2 }).unwrap();
-    assert!(next_event(&mut sub).await.is_some(), "clone should share the broadcast channel");
+    assert!(
+        next_event(&mut sub).await.is_some(),
+        "clone should share the broadcast channel"
+    );
 }
 
 #[r2e_core::test]
@@ -294,10 +326,18 @@ async fn sse_topic_custom_serializer() {
         .with_event_name("sync")
         .with_serializer(|s| Ok(format!("{}/{}", s.done, s.total)));
     let mut sub = topic.subscribe();
-    topic.publish(&SyncStatus { done: 10, total: 42 }).unwrap();
+    topic
+        .publish(&SyncStatus {
+            done: 10,
+            total: 42,
+        })
+        .unwrap();
     let event = next_event(&mut sub).await.expect("should receive event");
     let debug = format!("{event:?}");
-    assert!(debug.contains("10/42"), "custom format should be on the wire: {debug}");
+    assert!(
+        debug.contains("10/42"),
+        "custom format should be on the wire: {debug}"
+    );
 }
 
 #[r2e_core::test]
@@ -305,7 +345,12 @@ async fn sse_topic_serializer_error_is_returned() {
     let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
         .with_serializer(|_| Err("encoding broke".into()));
     let mut sub = topic.subscribe();
-    let err = topic.publish(&SyncStatus { done: 1, total: 1 }).unwrap_err();
+    let err = topic
+        .publish(&SyncStatus { done: 1, total: 1 })
+        .unwrap_err();
     assert!(err.to_string().contains("encoding broke"));
-    assert!(poll_once(&mut sub).is_none(), "nothing should have been broadcast");
+    assert!(
+        poll_once(&mut sub).is_none(),
+        "nothing should have been broadcast"
+    );
 }

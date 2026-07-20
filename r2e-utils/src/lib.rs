@@ -1,6 +1,6 @@
 pub mod interceptors;
 pub use interceptors::{
-    Cache, CacheInvalidate, Counted, LogLevel, Logged, MetricTimed, Timed, log_at_level,
+    log_at_level, Cache, CacheInvalidate, Counted, LogLevel, Logged, MetricTimed, Timed,
 };
 
 pub mod prelude {

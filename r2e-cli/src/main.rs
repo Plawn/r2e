@@ -4,7 +4,11 @@ use clap::{Parser, Subcommand};
 use commands::{add, dev, docs, doctor, generate, new_project, routes};
 
 #[derive(Parser)]
-#[command(name = "r2e", version, about = "R2E CLI — scaffold and manage R2E projects")]
+#[command(
+    name = "r2e",
+    version,
+    about = "R2E CLI — scaffold and manage R2E projects"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

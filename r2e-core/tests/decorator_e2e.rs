@@ -216,9 +216,7 @@ impl ContextConstruct for SpikeController {
     type Deps = TCons<SpikeService, TNil>;
 
     fn from_context(ctx: &BeanContext) -> Self {
-        Self {
-            service: ctx.get(),
-        }
+        Self { service: ctx.get() }
     }
 }
 
@@ -325,7 +323,10 @@ async fn decorators_build_from_context_not_state() {
         identity: None,
     };
     assert!(guard.check(&guard_ctx).await.is_ok());
-    assert!(guard.check(&guard_ctx).await.is_err(), "budget of 1 exhausted");
+    assert!(
+        guard.check(&guard_ctx).await.is_err(),
+        "budget of 1 exhausted"
+    );
 }
 
 /// s3 — end to end through the real `register_controller()` (witnesses

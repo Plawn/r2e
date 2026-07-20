@@ -61,7 +61,12 @@ impl PendingRequests {
     /// A no-op if the id is unknown (already completed, or the requester timed
     /// out and removed its entry).
     pub fn complete(&self, id: u128, result: ReplyResult) {
-        if let Some(tx) = self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) {
+        if let Some(tx) = self
+            .map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id)
+        {
             let _ = tx.send(result);
         }
     }
@@ -83,7 +88,10 @@ impl PendingRequests {
 
     /// Remove a pending entry without completing it (used by [`PendingGuard`]).
     fn remove(&self, id: u128) {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
     }
 
     /// Number of currently in-flight requests.
@@ -151,6 +159,5 @@ where
     };
 
     let bytes = result?;
-    serde_json::from_slice::<Resp>(&bytes)
-        .map_err(|e| EventBusError::Serialization(e.to_string()))
+    serde_json::from_slice::<Resp>(&bytes).map_err(|e| EventBusError::Serialization(e.to_string()))
 }

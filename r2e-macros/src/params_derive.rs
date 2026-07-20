@@ -11,8 +11,8 @@ enum ParamSource {
 }
 
 enum DefaultValue {
-    Trait,           // #[param(default)] → Default::default()
-    Expr(Expr),      // #[param(default = 42)] → 42
+    Trait,      // #[param(default)] → Default::default()
+    Expr(Expr), // #[param(default = 42)] → 42
 }
 
 struct ParamField {
@@ -24,8 +24,8 @@ struct ParamField {
 }
 
 enum NestedMode {
-    Flatten,                    // #[params] — pass through parent prefix
-    Prefix(String),             // #[params(prefix)] or #[params(prefix = "custom")]
+    Flatten,        // #[params] — pass through parent prefix
+    Prefix(String), // #[params(prefix)] or #[params(prefix = "custom")]
 }
 
 struct NestedParamsField {
@@ -508,7 +508,10 @@ fn parse_nested_mode(attr: &syn::Attribute, field_ident: &Ident) -> syn::Result<
                 }
             })?;
             mode.ok_or_else(|| {
-                syn::Error::new_spanned(attr, "expected #[params], #[params(prefix)], or #[params(prefix = \"...\")]")
+                syn::Error::new_spanned(
+                    attr,
+                    "expected #[params], #[params(prefix)], or #[params(prefix = \"...\")]",
+                )
             })
         }
         _ => Err(syn::Error::new_spanned(
@@ -534,7 +537,12 @@ fn parse_param_default(attr: &syn::Attribute) -> syn::Result<DefaultValue> {
             Err(meta.error("expected `default` or `default = <expr>`"))
         }
     })?;
-    result.ok_or_else(|| syn::Error::new_spanned(attr, "expected #[param(default)] or #[param(default = <expr>)]"))
+    result.ok_or_else(|| {
+        syn::Error::new_spanned(
+            attr,
+            "expected #[param(default)] or #[param(default = <expr>)]",
+        )
+    })
 }
 
 fn parse_name_attr(attr: &syn::Attribute) -> syn::Result<Option<String>> {
@@ -567,8 +575,9 @@ fn rust_type_to_openapi_str(ty: &Type) -> &'static str {
         if let Some(segment) = type_path.path.segments.last() {
             return match segment.ident.to_string().as_str() {
                 "String" | "str" => "string",
-                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64"
-                | "isize" => "integer",
+                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
+                    "integer"
+                }
                 "f32" | "f64" => "number",
                 "bool" => "boolean",
                 _ => "string",

@@ -6,7 +6,9 @@ use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 use crate::crate_path::r2e_core_path;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{parse_config_field, parse_config_section_prefix, to_pascal_case, type_base_name};
+use crate::type_utils::{
+    parse_config_field, parse_config_section_prefix, to_pascal_case, type_base_name,
+};
 
 /// Parsed `#[producer(...)]` arguments.
 struct ProducerArgs {
@@ -114,10 +116,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
 
                 // Check for #[config("key")] or #[config_section(prefix = "...")] attribute
-                let config_attr = pat_type
-                    .attrs
-                    .iter()
-                    .find(|a| a.path().is_ident("config"));
+                let config_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config"));
                 let config_section_attr = pat_type
                     .attrs
                     .iter()
@@ -146,13 +145,19 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     config_key_entries.push(quote! { (#key_str, #ty_name_str, #required) });
                     let owner = format!("producer `{struct_name}`");
                     let expr = crate::field_resolver::config_resolve_expr(
-                        &quote! { __r2e_config }, &key_str, Some(ty), &owner, is_option, &krate,
+                        &quote! { __r2e_config },
+                        &key_str,
+                        Some(ty),
+                        &owner,
+                        is_option,
+                        &krate,
                     );
                     build_args.push(quote! { let #arg_name: #ty = #expr; });
                     has_config = true;
                 } else {
-                    dep_type_ids
-                        .push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
+                    dep_type_ids.push(
+                        quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) },
+                    );
                     dep_types.push(quote! { #ty });
                     build_args.push(quote! { let #arg_name: #ty = ctx.get::<#ty>(); });
                 }
@@ -162,7 +167,9 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 let non_config_attrs: Vec<_> = pat_type
                     .attrs
                     .iter()
-                    .filter(|a| !a.path().is_ident("config") && !a.path().is_ident("config_section"))
+                    .filter(|a| {
+                        !a.path().is_ident("config") && !a.path().is_ident("config_section")
+                    })
                     .collect();
                 clean_params.push(quote! { #(#non_config_attrs)* #pat: #ty });
             }
@@ -180,8 +187,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
 
     let arg_forwards: Vec<_> = (0..item_fn.sig.inputs.len())
         .map(|i| {
-            let arg_name =
-                syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
+            let arg_name = syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
             quote! { #arg_name }
         })
         .collect();

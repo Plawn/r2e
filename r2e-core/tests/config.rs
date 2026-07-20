@@ -93,10 +93,7 @@ app:
     - "prometheus"
 "#;
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
-    assert_eq!(
-        config.get::<String>("app.features.0").unwrap(),
-        "openapi"
-    );
+    assert_eq!(config.get::<String>("app.features.0").unwrap(), "openapi");
     assert_eq!(
         config.get::<String>("app.features.1").unwrap(),
         "prometheus"
@@ -223,7 +220,10 @@ fn test_config_properties_custom_key_metadata() {
     assert_eq!(jwks_meta.key, "jwks.url");
     assert!(!jwks_meta.required);
 
-    let client_meta = meta.iter().find(|m| m.full_key == "oidc.client.id").unwrap();
+    let client_meta = meta
+        .iter()
+        .find(|m| m.full_key == "oidc.client.id")
+        .unwrap();
     assert_eq!(client_meta.key, "client.id");
     assert!(!client_meta.required); // has default
     assert!(client_meta.default_value.is_some());
@@ -452,12 +452,10 @@ db:
 #[test]
 fn test_config_validation_error_display() {
     use r2e_core::config::ConfigValidationDetail;
-    let err = ConfigError::Validation(vec![
-        ConfigValidationDetail {
-            key: "app.port".to_string(),
-            message: "must be between 1 and 65535".to_string(),
-        },
-    ]);
+    let err = ConfigError::Validation(vec![ConfigValidationDetail {
+        key: "app.port".to_string(),
+        message: "must be between 1 and 65535".to_string(),
+    }]);
     let msg = err.to_string();
     assert!(msg.contains("app.port"));
     assert!(msg.contains("must be between 1 and 65535"));
@@ -1258,7 +1256,11 @@ fn write_file(dir: &std::path::Path, name: &str, content: &str) -> std::path::Pa
 #[test]
 fn load_from_reads_custom_file() {
     let dir = tempfile::tempdir().unwrap();
-    let file = write_file(dir.path(), "patina.yaml", "app:\n  name: patina\n  port: 9000\n");
+    let file = write_file(
+        dir.path(),
+        "patina.yaml",
+        "app:\n  name: patina\n  port: 9000\n",
+    );
 
     let config = R2eConfig::load_from(&file).unwrap();
     assert_eq!(config.get::<String>("app.name").unwrap(), "patina");
@@ -1278,7 +1280,11 @@ fn load_from_missing_file_errors() {
 #[test]
 fn load_profiled_from_overlays_derived_profile_file() {
     let dir = tempfile::tempdir().unwrap();
-    let file = write_file(dir.path(), "patina.yaml", "app:\n  name: patina\n  port: 9000\n");
+    let file = write_file(
+        dir.path(),
+        "patina.yaml",
+        "app:\n  name: patina\n  port: 9000\n",
+    );
     // The overlay file name derives from the base name, not `application-*`.
     write_file(dir.path(), "patina-test.yaml", "app:\n  port: 1234\n");
 

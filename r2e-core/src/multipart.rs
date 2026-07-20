@@ -68,10 +68,16 @@ impl std::fmt::Display for MultipartError {
             Self::AxumError(msg) => write!(f, "multipart error: {msg}"),
             Self::ReadError(msg) => write!(f, "failed to read field data: {msg}"),
             Self::FieldTooLarge { field, limit } => {
-                write!(f, "field '{field}' exceeds the per-field byte limit ({limit} bytes)")
+                write!(
+                    f,
+                    "field '{field}' exceeds the per-field byte limit ({limit} bytes)"
+                )
             }
             Self::PayloadTooLarge { limit } => {
-                write!(f, "multipart payload exceeds the total byte limit ({limit} bytes)")
+                write!(
+                    f,
+                    "multipart payload exceeds the total byte limit ({limit} bytes)"
+                )
             }
         }
     }
@@ -203,30 +209,50 @@ impl MultipartFields {
     pub fn take_text(&mut self, name: &str) -> Result<String, MultipartError> {
         self.text
             .get_mut(name)
-            .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) })
+            .and_then(|v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.remove(0))
+                }
+            })
             .ok_or_else(|| MultipartError::MissingField(name.to_string()))
     }
 
     /// Take an optional text value for the given field name.
     pub fn take_text_opt(&mut self, name: &str) -> Option<String> {
-        self.text
-            .get_mut(name)
-            .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) })
+        self.text.get_mut(name).and_then(|v| {
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.remove(0))
+            }
+        })
     }
 
     /// Take a single required file for the given field name.
     pub fn take_file(&mut self, name: &str) -> Result<UploadedFile, MultipartError> {
         self.files
             .get_mut(name)
-            .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) })
+            .and_then(|v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.remove(0))
+                }
+            })
             .ok_or_else(|| MultipartError::MissingField(name.to_string()))
     }
 
     /// Take an optional file for the given field name.
     pub fn take_file_opt(&mut self, name: &str) -> Option<UploadedFile> {
-        self.files
-            .get_mut(name)
-            .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) })
+        self.files.get_mut(name).and_then(|v| {
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.remove(0))
+            }
+        })
     }
 
     /// Take all files for the given field name.

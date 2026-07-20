@@ -182,8 +182,7 @@ impl Plugin for AdvancedHealth {
             crate::http::Router::new()
                 .route(
                     "/health",
-                    crate::http::routing::get(crate::health::health_handler)
-                        .with_state(state),
+                    crate::http::routing::get(crate::health::health_handler).with_state(state),
                 )
                 .route(
                     "/health/live",
@@ -191,8 +190,7 @@ impl Plugin for AdvancedHealth {
                 )
                 .route(
                     "/health/ready",
-                    crate::http::routing::get(crate::health::readiness_handler)
-                        .with_state(s1),
+                    crate::http::routing::get(crate::health::readiness_handler).with_state(s1),
                 ),
         )
     }
@@ -227,7 +225,9 @@ impl Plugin for DevReload {
         app.mark_dev_reload_applied();
         app.register_routes(crate::dev::dev_routes())
             .with_layer_fn(|router| {
-                router.layer(crate::http::middleware::from_fn(crate::dev::dev_headers_middleware))
+                router.layer(crate::http::middleware::from_fn(
+                    crate::dev::dev_headers_middleware,
+                ))
             })
     }
 }

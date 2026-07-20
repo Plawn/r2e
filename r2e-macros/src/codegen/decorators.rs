@@ -68,8 +68,7 @@ pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
         // message.
         syn::Expr::Call(call) => match call.func.as_ref() {
             syn::Expr::Path(p) if p.path.segments.len() >= 2 => {
-                let segments: Vec<syn::PathSegment> =
-                    p.path.segments.iter().cloned().collect();
+                let segments: Vec<syn::PathSegment> = p.path.segments.iter().cloned().collect();
                 Some(syn::Path {
                     leading_colon: p.path.leading_colon,
                     segments: segments[..segments.len() - 1].iter().cloned().collect(),
@@ -109,9 +108,7 @@ pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
 /// generation uses this to degrade to the same no-decorator shape as the
 /// invocation function when extraction fails, so the only error the user
 /// sees is the spec-type one (no arity-mismatch cascade).
-pub(crate) fn all_specs_inferable<'a>(
-    exprs: impl IntoIterator<Item = &'a syn::Expr>,
-) -> bool {
+pub(crate) fn all_specs_inferable<'a>(exprs: impl IntoIterator<Item = &'a syn::Expr>) -> bool {
     exprs.into_iter().all(|e| spec_type_of(e).is_ok())
 }
 
@@ -192,11 +189,11 @@ pub(crate) fn generate_named_deco_items(
             .collect(),
     };
 
-    let sites = set
-        .guard_fields
-        .iter()
-        .zip(guard_exprs.iter())
-        .chain(set.intercept_fields.iter().zip(intercept_exprs.iter().copied()));
+    let sites = set.guard_fields.iter().zip(guard_exprs.iter()).chain(
+        set.intercept_fields
+            .iter()
+            .zip(intercept_exprs.iter().copied()),
+    );
 
     match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, path_param_module) {
         Ok(items) => (items, Some(set)),

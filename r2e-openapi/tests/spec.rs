@@ -226,10 +226,7 @@ fn route_with_summary() {
         ..route("GET", "/users", "list_users")
     }];
     let spec = build_spec(&default_config(), &routes);
-    assert_eq!(
-        spec["paths"]["/users"]["get"]["summary"],
-        "List all users"
-    );
+    assert_eq!(spec["paths"]["/users"]["get"]["summary"], "List all users");
 }
 
 #[test]
@@ -494,10 +491,7 @@ fn duplicate_body_types_not_duplicated() {
 
     let schemas = spec["components"]["schemas"].as_object().unwrap();
     // Only one "User" schema even though two routes reference it
-    assert_eq!(
-        schemas.keys().filter(|k| *k == "User").count(),
-        1
-    );
+    assert_eq!(schemas.keys().filter(|k| *k == "User").count(), 1);
 }
 
 #[test]
@@ -656,10 +650,7 @@ fn deprecated_flag_in_spec() {
     }];
     let spec = build_spec(&default_config(), &routes);
 
-    assert_eq!(
-        spec["paths"]["/v1/users"]["get"]["deprecated"],
-        json!(true)
-    );
+    assert_eq!(spec["paths"]["/v1/users"]["get"]["deprecated"], json!(true));
 }
 
 #[test]
@@ -692,10 +683,7 @@ fn route_with_description() {
     }];
     let spec = build_spec(&default_config(), &routes);
 
-    assert_eq!(
-        spec["paths"]["/users"]["get"]["summary"],
-        "List all users"
-    );
+    assert_eq!(spec["paths"]["/users"]["get"]["summary"], "List all users");
     assert_eq!(
         spec["paths"]["/users"]["get"]["description"],
         "Returns a paginated list of active users."
@@ -785,8 +773,10 @@ fn registry_schema_defs_are_promoted() {
 
 #[test]
 fn route_schema_takes_precedence_over_registry() {
-    let config = OpenApiConfig::new("Test", "1.0.0")
-        .with_raw_schema("User", json!({"type": "string", "description": "from registry"}));
+    let config = OpenApiConfig::new("Test", "1.0.0").with_raw_schema(
+        "User",
+        json!({"type": "string", "description": "from registry"}),
+    );
 
     let routes = vec![{
         let mut r = route("POST", "/users", "create_user");
@@ -971,6 +961,7 @@ fn json_request_body_content_type_defaults_to_json() {
     }];
     let spec = build_spec(&default_config(), &routes);
 
-    assert!(spec["paths"]["/users"]["post"]["requestBody"]["content"]["application/json"]
-        .is_object());
+    assert!(
+        spec["paths"]["/users"]["post"]["requestBody"]["content"]["application/json"].is_object()
+    );
 }

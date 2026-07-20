@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_executor::{ExecutorConfig, PoolExecutor, RejectedError};
@@ -36,12 +36,15 @@ async fn concurrent_limit_enforced_by_semaphore() {
         let inflight = inflight.clone();
         let max_seen = max_seen.clone();
         let release = release.clone();
-        handles.push(exec.submit(async move {
-            let cur = inflight.fetch_add(1, Ordering::SeqCst) + 1;
-            max_seen.fetch_max(cur, Ordering::SeqCst);
-            release.notified().await;
-            inflight.fetch_sub(1, Ordering::SeqCst);
-        }).expect("submit ok"));
+        handles.push(
+            exec.submit(async move {
+                let cur = inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_seen.fetch_max(cur, Ordering::SeqCst);
+                release.notified().await;
+                inflight.fetch_sub(1, Ordering::SeqCst);
+            })
+            .expect("submit ok"),
+        );
     }
 
     // Let pending jobs reach steady state.
@@ -58,7 +61,11 @@ async fn concurrent_limit_enforced_by_semaphore() {
     for h in handles {
         h.await.expect("job should succeed");
     }
-    assert_eq!(max_seen.load(Ordering::SeqCst), 2, "only 2 jobs may run at once");
+    assert_eq!(
+        max_seen.load(Ordering::SeqCst),
+        2,
+        "only 2 jobs may run at once"
+    );
 }
 
 #[tokio::test]
@@ -72,15 +79,22 @@ async fn try_submit_rejects_when_queue_full() {
 
     // Slot 1: running.
     let r1 = release.clone();
-    let h1 = exec.try_submit(async move { r1.notified().await }).expect("first slot ok");
+    let h1 = exec
+        .try_submit(async move { r1.notified().await })
+        .expect("first slot ok");
     // Slot 2: queued.
     let r2 = release.clone();
-    let h2 = exec.try_submit(async move { r2.notified().await }).expect("second slot ok");
+    let h2 = exec
+        .try_submit(async move { r2.notified().await })
+        .expect("second slot ok");
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     // Third must be rejected — cap is max_concurrent + queue_capacity = 2.
-    let err = exec.try_submit(async {}).err().expect("third should be rejected");
+    let err = exec
+        .try_submit(async {})
+        .err()
+        .expect("third should be rejected");
     assert_eq!(err, RejectedError::QueueFull);
     assert!(exec.metrics().rejected >= 1);
 
@@ -103,10 +117,13 @@ async fn graceful_shutdown_drains_running_jobs() {
     let mut handles = Vec::new();
     for _ in 0..4 {
         let c = counter.clone();
-        handles.push(exec.submit(async move {
-            tokio::time::sleep(Duration::from_millis(80)).await;
-            c.fetch_add(1, Ordering::SeqCst);
-        }).expect("submit ok"));
+        handles.push(
+            exec.submit(async move {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                c.fetch_add(1, Ordering::SeqCst);
+            })
+            .expect("submit ok"),
+        );
     }
 
     // Let all 4 jobs acquire their permits and start running.
@@ -139,7 +156,12 @@ async fn shutdown_aborts_queued_submissions() {
     let release = Arc::new(Notify::new());
 
     let r = release.clone();
-    let running = exec.submit(async move { r.notified().await; "done" }).expect("submit ok");
+    let running = exec
+        .submit(async move {
+            r.notified().await;
+            "done"
+        })
+        .expect("submit ok");
     // Queued — never gets a permit because we shut down before releasing.
     let queued = exec.submit(async { "never" }).expect("submit ok");
 

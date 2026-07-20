@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use r2e_test::ordering::inventory;
-use r2e_test::ordering::{OrderedTestEntry, TestOutcome, turn, turn_with_timeout};
+use r2e_test::ordering::{turn, turn_with_timeout, OrderedTestEntry, TestOutcome};
 
 // ---------------------------------------------------------------------------
 // 1. Out-of-order arrival still executes in ascending order.
@@ -102,13 +102,25 @@ fn panic_poisons_group_and_skips_successors() {
 
     let err1 = h1.join().expect_err("order 1 should panic");
     let msg1 = panic_message(&err1);
-    assert!(msg1.contains("boom in order 1"), "unexpected order-1 panic: {msg1}");
+    assert!(
+        msg1.contains("boom in order 1"),
+        "unexpected order-1 panic: {msg1}"
+    );
 
     let err2 = h2.join().expect_err("order 2 should panic (poisoned)");
     let msg2 = panic_message(&err2);
-    assert!(msg2.contains("skipped"), "order-2 panic missing 'skipped': {msg2}");
-    assert!(msg2.contains("predecessor"), "order-2 panic missing 'predecessor': {msg2}");
-    assert!(msg2.contains("'p1'"), "order-2 panic should name predecessor p1: {msg2}");
+    assert!(
+        msg2.contains("skipped"),
+        "order-2 panic missing 'skipped': {msg2}"
+    );
+    assert!(
+        msg2.contains("predecessor"),
+        "order-2 panic missing 'predecessor': {msg2}"
+    );
+    assert!(
+        msg2.contains("'p1'"),
+        "order-2 panic should name predecessor p1: {msg2}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +144,8 @@ fn err_outcome_poisons_group() {
             guard.mark_failed();
         }
     });
-    h1.join().expect("order 1 returns normally (Err is not a panic)");
+    h1.join()
+        .expect("order 1 returns normally (Err is not a panic)");
 
     let err2 = std::thread::spawn(|| {
         let _guard = turn("seq_err", 2, "e2");
@@ -140,7 +153,10 @@ fn err_outcome_poisons_group() {
     .join()
     .expect_err("order 2 should be skipped: predecessor failed via Err");
     let msg = panic_message(&err2);
-    assert!(msg.contains("skipped") && msg.contains("'e1'"), "unexpected message: {msg}");
+    assert!(
+        msg.contains("skipped") && msg.contains("'e1'"),
+        "unexpected message: {msg}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +205,10 @@ fn duplicate_registration_panics_both() {
         let msg = panic_message(err);
         assert!(msg.contains("duplicate ordered test"), "{label}: {msg}");
         assert!(msg.contains("seq_dup"), "{label} missing group: {msg}");
-        assert!(msg.contains("dup_a") && msg.contains("dup_b"), "{label} missing both paths: {msg}");
+        assert!(
+            msg.contains("dup_a") && msg.contains("dup_b"),
+            "{label} missing both paths: {msg}"
+        );
     }
 }
 
@@ -213,9 +232,18 @@ fn watchdog_reports_never_started() {
     .expect_err("order 2 should time out");
 
     let msg = panic_message(&err);
-    assert!(msg.contains("timed out"), "watchdog message missing 'timed out': {msg}");
-    assert!(msg.contains("never started"), "watchdog should flag 'never started': {msg}");
-    assert!(msg.contains("wd1"), "watchdog should name the pending predecessor wd1: {msg}");
+    assert!(
+        msg.contains("timed out"),
+        "watchdog message missing 'timed out': {msg}"
+    );
+    assert!(
+        msg.contains("never started"),
+        "watchdog should flag 'never started': {msg}"
+    );
+    assert!(
+        msg.contains("wd1"),
+        "watchdog should name the pending predecessor wd1: {msg}"
+    );
     assert!(
         start.elapsed() < Duration::from_secs(5),
         "watchdog took too long: {:?}",
@@ -256,7 +284,8 @@ fn slow_running_predecessor_does_not_trip_watchdog() {
     };
 
     h1.join().expect("slow order 1 completes");
-    h2.join().expect("order 2 must wait out the slow predecessor, not time out");
+    h2.join()
+        .expect("order 2 must wait out the slow predecessor, not time out");
     assert_eq!(*observed.lock().unwrap(), vec![1, 2]);
 }
 

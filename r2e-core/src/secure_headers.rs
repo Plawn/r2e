@@ -62,8 +62,7 @@ impl Plugin for SecureHeaders {
         app.with_layer_fn(move |mut router| {
             for (name, value) in headers {
                 router = router.layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
-                    name,
-                    value,
+                    name, value,
                 ));
             }
             router

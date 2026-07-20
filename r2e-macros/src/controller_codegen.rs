@@ -198,10 +198,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     // `#[anonymous]` (checked by `#[routes]` via const-assert) only makes sense
     // against a fail-closed baseline: a *required* struct identity. An
     // `Option<T>` identity never rejects, so there is nothing to opt out of.
-    let struct_identity_is_required = def
-        .identity_fields
-        .first()
-        .is_some_and(|f| !f.is_optional);
+    let struct_identity_is_required = def.identity_fields.first().is_some_and(|f| !f.is_optional);
 
     quote! {
         #[doc(hidden)]

@@ -42,6 +42,10 @@ async fn openfga_dev_service_boots_and_bootstraps() {
     let model_id = fga.write_model(&store_id, &model).await;
     assert!(!model_id.is_empty());
 
-    fga.write_tuples(&store_id, &model_id, &[("user:alice", "viewer", "document:readme")])
-        .await;
+    fga.write_tuples(
+        &store_id,
+        &model_id,
+        &[("user:alice", "viewer", "document:readme")],
+    )
+    .await;
 }

@@ -1,8 +1,8 @@
 use http::Request;
 use opentelemetry::propagation::Extractor;
+use pin_project_lite::pin_project;
 use r2e_core::http::extract::MatchedPath;
 use r2e_core::http::labels::{method_label, route_label};
-use pin_project_lite::pin_project;
 use std::{
     future::Future,
     pin::Pin,

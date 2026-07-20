@@ -218,10 +218,7 @@ fn parse_error_attr(attrs: &[Attribute], variant_ident: &Ident) -> syn::Result<E
     }
 
     let status = status.ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "#[error(...)] requires status = STATUS_CODE",
-        )
+        syn::Error::new_spanned(attr, "#[error(...)] requires status = STATUS_CODE")
     })?;
 
     Ok(ErrorAttr::Standard { status, message })
@@ -326,8 +323,7 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
             match message {
                 Some(msg) => {
                     // Explicit message with interpolation
-                    let (pattern, fmt_str) =
-                        interpolated_message_pattern(enum_name, variant, msg);
+                    let (pattern, fmt_str) = interpolated_message_pattern(enum_name, variant, msg);
                     quote! {
                         #pattern => write!(f, #fmt_str),
                     }
@@ -379,8 +375,7 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
                         }
                         VariantFields::Named(fields) => {
                             let from_field = fields.iter().find(|f| f.is_from);
-                            let field_names: Vec<&Ident> =
-                                fields.iter().map(|f| &f.name).collect();
+                            let field_names: Vec<&Ident> = fields.iter().map(|f| &f.name).collect();
                             if let Some(ff) = from_field {
                                 let src_name = &ff.name;
                                 quote! {
@@ -555,9 +550,10 @@ fn gen_error(def: &ApiErrorDef) -> TokenStream2 {
     // Only return source for non-transparent #[from] variants.
     // Transparent variants delegate Display + IntoResponse but don't
     // require the inner type to implement std::error::Error.
-    let has_any_non_transparent_from = def.variants.iter().any(|v| {
-        !matches!(v.error_attr, ErrorAttr::Transparent) && variant_has_from(v)
-    });
+    let has_any_non_transparent_from = def
+        .variants
+        .iter()
+        .any(|v| !matches!(v.error_attr, ErrorAttr::Transparent) && variant_has_from(v));
 
     if !has_any_non_transparent_from {
         return quote! { None };
@@ -706,7 +702,11 @@ fn is_string_type(ty: &Type) -> bool {
 /// Returns (match_pattern, inner_value_expr) for a single-field variant.
 /// When `owned` is true, generates move bindings (for IntoResponse which takes `self`).
 /// When false, generates `ref` bindings (for Display/source which take `&self`).
-fn single_field_pattern(enum_name: &Ident, variant: &ApiErrorVariant, owned: bool) -> (TokenStream2, TokenStream2) {
+fn single_field_pattern(
+    enum_name: &Ident,
+    variant: &ApiErrorVariant,
+    owned: bool,
+) -> (TokenStream2, TokenStream2) {
     let vname = &variant.ident;
     match &variant.fields {
         VariantFields::Tuple(_) => {
@@ -746,10 +746,7 @@ fn from_source_pattern(
                 })
                 .collect();
             let src = format_ident!("_{}", from_idx);
-            Some((
-                quote!(#enum_name::#vname(#(#bindings),*)),
-                quote!(#src),
-            ))
+            Some((quote!(#enum_name::#vname(#(#bindings),*)), quote!(#src)))
         }
         VariantFields::Named(fields) => {
             let from_field = fields.iter().find(|f| f.is_from)?;
@@ -791,10 +788,7 @@ fn interpolated_message_pattern(
     let vname = &variant.ident;
 
     match &variant.fields {
-        VariantFields::Unit => (
-            quote!(#enum_name::#vname),
-            message.to_string(),
-        ),
+        VariantFields::Unit => (quote!(#enum_name::#vname), message.to_string()),
         VariantFields::Tuple(fields) => {
             let bindings: Vec<TokenStream2> = fields
                 .iter()
@@ -808,16 +802,10 @@ fn interpolated_message_pattern(
             // Replace {0}, {1}, etc. with {_0}, {_1} for format!() captured idents
             let mut fmt_str = message.to_string();
             for i in (0..fields.len()).rev() {
-                fmt_str = fmt_str.replace(
-                    &format!("{{{}}}", i),
-                    &format!("{{_{}}}", i),
-                );
+                fmt_str = fmt_str.replace(&format!("{{{}}}", i), &format!("{{_{}}}", i));
             }
 
-            (
-                quote!(#enum_name::#vname(#(#bindings),*)),
-                fmt_str,
-            )
+            (quote!(#enum_name::#vname(#(#bindings),*)), fmt_str)
         }
         VariantFields::Named(fields) => {
             let field_names: Vec<TokenStream2> = fields

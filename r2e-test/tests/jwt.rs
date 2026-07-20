@@ -7,7 +7,9 @@ fn decode_payload(token: &str) -> Value {
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    let payload = URL_SAFE_NO_PAD.decode(parts[1]).expect("failed to decode JWT payload");
+    let payload = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .expect("failed to decode JWT payload");
     serde_json::from_slice(&payload).expect("failed to parse JWT payload")
 }
 
@@ -17,13 +19,17 @@ fn decode_header(token: &str) -> Value {
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    let header = URL_SAFE_NO_PAD.decode(parts[0]).expect("failed to decode JWT header");
+    let header = URL_SAFE_NO_PAD
+        .decode(parts[0])
+        .expect("failed to decode JWT header");
     serde_json::from_slice(&header).expect("failed to parse JWT header")
 }
 
 fn decode_exp(token: &str) -> u64 {
     let claims = decode_payload(token);
-    claims["exp"].as_u64().expect("exp claim missing or not a number")
+    claims["exp"]
+        .as_u64()
+        .expect("exp claim missing or not a number")
 }
 
 fn now_secs() -> u64 {

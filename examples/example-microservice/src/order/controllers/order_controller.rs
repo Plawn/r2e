@@ -17,10 +17,7 @@ impl OrderController {
     }
 
     #[post("/")]
-    async fn create(
-        &self,
-        Json(body): Json<CreateOrderRequest>,
-    ) -> Result<Json<Order>, HttpError> {
+    async fn create(&self, Json(body): Json<CreateOrderRequest>) -> Result<Json<Order>, HttpError> {
         let order = self.order_service.create(body).await?;
         Ok(Json(order))
     }

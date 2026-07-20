@@ -106,7 +106,10 @@ fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
                     let lit: syn::Expr = value.parse()?;
                     // String literals need .into() for &str → String, and their
                     // metadata string is the unquoted value.
-                    let lit_str = if let syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(s), .. }) = &lit {
+                    let lit_str = if let syn::Expr::Lit(syn::ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) = &lit
+                    {
                         result.default_is_str_lit = true;
                         s.value()
                     } else {
@@ -131,7 +134,9 @@ fn extract_field_config(attrs: &[syn::Attribute]) -> syn::Result<FieldConfig> {
                     result.skip = true;
                     Ok(())
                 } else {
-                    Err(meta.error("expected `default`, `key`, `section`, `env`, or `skip` in #[config(...)]"))
+                    Err(meta.error(
+                        "expected `default`, `key`, `section`, `env`, or `skip` in #[config(...)]",
+                    ))
                 }
             })?;
         }
@@ -893,7 +898,10 @@ fn camel_to_delimited(s: &str, delim: char) -> String {
 }
 
 /// Apply a `rename_all` style to a variant identifier. Default: snake_case.
-fn variant_tag_name(ident: &str, rename_all: Option<&(String, proc_macro2::Span)>) -> syn::Result<String> {
+fn variant_tag_name(
+    ident: &str,
+    rename_all: Option<&(String, proc_macro2::Span)>,
+) -> syn::Result<String> {
     match rename_all {
         None => Ok(camel_to_delimited(ident, '_')),
         Some((style, span)) => match style.as_str() {

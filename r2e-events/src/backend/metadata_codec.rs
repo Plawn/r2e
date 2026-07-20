@@ -129,20 +129,17 @@ pub fn encode_reply_headers<'a>(
     reply_to: Option<&'a str>,
     reply_error: Option<&'a str>,
 ) -> impl Iterator<Item = HeaderPair> + 'a {
-    std::iter::once((
-        Cow::Borrowed(HEADER_REQUEST_ID),
-        request_id.to_string(),
-    ))
-    .chain(
-        reply_to
-            .into_iter()
-            .map(|topic| (Cow::Borrowed(HEADER_REPLY_TO), topic.to_string())),
-    )
-    .chain(
-        reply_error
-            .into_iter()
-            .map(|error| (Cow::Borrowed(HEADER_REPLY_ERROR), error.to_string())),
-    )
+    std::iter::once((Cow::Borrowed(HEADER_REQUEST_ID), request_id.to_string()))
+        .chain(
+            reply_to
+                .into_iter()
+                .map(|topic| (Cow::Borrowed(HEADER_REPLY_TO), topic.to_string())),
+        )
+        .chain(
+            reply_error
+                .into_iter()
+                .map(|error| (Cow::Borrowed(HEADER_REPLY_ERROR), error.to_string())),
+        )
 }
 
 /// Decode request-reply control headers from message headers.

@@ -72,15 +72,17 @@ impl std::str::FromStr for ScheduleConfig {
         let s = s.trim();
         if s.is_empty() {
             return Err(ScheduleParseError {
-                message: "empty schedule string (expected a duration like \"30s\" or a cron expression)"
-                    .to_string(),
+                message:
+                    "empty schedule string (expected a duration like \"30s\" or a cron expression)"
+                        .to_string(),
             });
         }
 
         if s.contains(char::is_whitespace) || s.starts_with('@') {
-            s.parse::<cron::Schedule>().map_err(|e| ScheduleParseError {
-                message: format!("invalid cron expression '{}': {}", s, e),
-            })?;
+            s.parse::<cron::Schedule>()
+                .map_err(|e| ScheduleParseError {
+                    message: format!("invalid cron expression '{}': {}", s, e),
+                })?;
             Ok(ScheduleConfig::Cron(s.to_string()))
         } else {
             crate::duration::parse_duration(s)
@@ -108,18 +110,20 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
     ) -> Result<Self, r2e_core::config::ConfigError> {
         use r2e_core::config::{ConfigError, ConfigValue};
         match value {
-            ConfigValue::String(s) => s.parse().map_err(|e: ScheduleParseError| {
-                ConfigError::Deserialize {
-                    key: key.to_string(),
-                    message: e.message,
-                }
-            }),
+            ConfigValue::String(s) => {
+                s.parse()
+                    .map_err(|e: ScheduleParseError| ConfigError::Deserialize {
+                        key: key.to_string(),
+                        message: e.message,
+                    })
+            }
             ConfigValue::Integer(i) if *i > 0 => {
                 Ok(ScheduleConfig::Interval(Duration::from_secs(*i as u64)))
             }
             _ => Err(ConfigError::TypeMismatch {
                 key: key.to_string(),
-                expected: "schedule string (duration or cron expression) or positive integer seconds",
+                expected:
+                    "schedule string (duration or cron expression) or positive integer seconds",
             }),
         }
     }
@@ -229,12 +233,7 @@ impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {
     ///     |svc| async move { svc.sync().await },
     /// );
     /// ```
-    pub fn new<F, Fut>(
-        name: impl Into<String>,
-        schedule: ScheduleConfig,
-        state: T,
-        task: F,
-    ) -> Self
+    pub fn new<F, Fut>(name: impl Into<String>, schedule: ScheduleConfig, state: T, task: F) -> Self
     where
         F: Fn(T) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + 'static,

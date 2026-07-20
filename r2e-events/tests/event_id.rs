@@ -28,7 +28,10 @@ fn same_process_ids_are_unique_per_counter() {
     let mut seen = std::collections::HashSet::new();
     for counter in 1..=1000u64 {
         let id = compose_event_id(process, counter);
-        assert!(seen.insert(id), "duplicate id within a process at {counter}");
+        assert!(
+            seen.insert(id),
+            "duplicate id within a process at {counter}"
+        );
     }
 }
 

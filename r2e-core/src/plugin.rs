@@ -264,7 +264,8 @@ impl<'a> PluginInstallContext<'a> {
     where
         F: FnOnce() + Send + 'static,
     {
-        self.sugar.push(Box::new(move |dctx| dctx.on_shutdown(hook)));
+        self.sugar
+            .push(Box::new(move |dctx| dctx.on_shutdown(hook)));
     }
 
     /// Add an async shutdown hook awaited during shutdown. Sugar for a
@@ -877,7 +878,8 @@ impl DeferredAction {
 }
 
 /// A boxed async shutdown hook.
-pub type AsyncShutdownHook = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+pub type AsyncShutdownHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 /// Context for executing a deferred action.
 ///
@@ -889,10 +891,12 @@ pub struct DeferredContext<'a> {
     /// Transport-level router transforms, applied outermost (after layers and
     /// the catch-panic layer). See [`DeferredContext::wrap_router`].
     #[doc(hidden)]
-    pub router_wraps: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+    pub router_wraps:
+        &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
     /// Plugin data storage.
     #[doc(hidden)]
-    pub plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
+    pub plugin_data:
+        &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
     /// Serve hooks (called when server starts). Each hook receives a
     /// [`ServeContext`](crate::builder::ServeContext) tying it into the
     /// app's shutdown sequence.
@@ -942,7 +946,10 @@ impl DeferredContext<'_> {
     }
 
     /// Add a layer to the router.
-    pub fn add_layer(&mut self, layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+    pub fn add_layer(
+        &mut self,
+        layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>,
+    ) {
         self.layers.push(layer);
     }
 
@@ -957,7 +964,10 @@ impl DeferredContext<'_> {
     /// full middleware stack. Do NOT use it for ordinary HTTP middleware —
     /// it would also intercept the non-HTTP branch of any multiplexer
     /// installed by another plugin.
-    pub fn wrap_router(&mut self, wrap: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>) {
+    pub fn wrap_router(
+        &mut self,
+        wrap: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>,
+    ) {
         self.router_wraps.push(wrap);
     }
 
@@ -967,7 +977,8 @@ impl DeferredContext<'_> {
     /// through the builder lifecycle and can be retrieved during controller
     /// registration or serve hooks.
     pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
-        self.plugin_data.insert(std::any::TypeId::of::<D>(), Box::new(data));
+        self.plugin_data
+            .insert(std::any::TypeId::of::<D>(), Box::new(data));
     }
 
     /// Remove and return plugin data stored earlier, if present.
@@ -1018,7 +1029,7 @@ impl DeferredContext<'_> {
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.async_shutdown_hooks.push(Box::new(move || Box::pin(hook())));
+        self.async_shutdown_hooks
+            .push(Box::new(move || Box::pin(hook())));
     }
 }
-

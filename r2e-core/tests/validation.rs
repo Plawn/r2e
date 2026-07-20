@@ -76,7 +76,10 @@ db:
 "#;
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let errors = validate_section::<EnvUnsetConfig>(&config, Some("db"));
-    assert!(errors.is_empty(), "key present in map must pass: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "key present in map must pass: {errors:?}"
+    );
 }
 
 // The generated `PropertyMeta::resolvable` probe is the single resolution
@@ -203,7 +206,10 @@ app:
 "#;
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let errors = validate_section::<NestedParentConfig>(&config, Some("app"));
-    assert!(errors.is_empty(), "fully-populated nested config: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "fully-populated nested config: {errors:?}"
+    );
 }
 
 #[allow(dead_code)]
@@ -221,7 +227,11 @@ fn test_validate_section_recurses_through_multiple_levels() {
     let keys: Vec<&str> = errors.iter().map(|e| e.key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["root.middle.name", "root.middle.db.url", "root.middle.db.port"],
+        vec![
+            "root.middle.name",
+            "root.middle.db.url",
+            "root.middle.db.port"
+        ],
         "grandchild keys must be reported too: {errors:?}"
     );
 }
@@ -247,7 +257,11 @@ fn test_validate_section_skips_absent_optional_section() {
 fn test_validate_section_validates_present_optional_section() {
     let config = R2eConfig::from_yaml_str("app:\n  db:\n    port: 5432").unwrap();
     let errors = validate_section::<OptionalSectionConfig>(&config, Some("app"));
-    assert_eq!(errors.len(), 1, "present optional section must be validated: {errors:?}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "present optional section must be validated: {errors:?}"
+    );
     assert_eq!(errors[0].key, "app.db.url");
 }
 
@@ -278,7 +292,11 @@ fn test_validate_section_skips_absent_defaulted_section() {
 fn test_validate_section_validates_present_defaulted_section() {
     let config = R2eConfig::from_yaml_str("app:\n  cache:\n    ttl: 30").unwrap();
     let errors = validate_section::<DefaultedSectionConfig>(&config, Some("app"));
-    assert_eq!(errors.len(), 1, "present defaulted section must be validated: {errors:?}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "present defaulted section must be validated: {errors:?}"
+    );
     assert_eq!(errors[0].key, "app.cache.host");
 }
 
@@ -302,7 +320,11 @@ app:
 "#;
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     let errors = validate_section::<MapSectionConfig>(&config, Some("app"));
-    assert_eq!(errors.len(), 1, "only the incomplete entry must report: {errors:?}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "only the incomplete entry must report: {errors:?}"
+    );
     assert_eq!(errors[0].key, "app.endpoints.billing.url");
     assert_eq!(errors[0].source, "app.endpoints.billing");
 }

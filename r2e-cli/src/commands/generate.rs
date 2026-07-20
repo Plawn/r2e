@@ -2,7 +2,7 @@ use colored::Colorize;
 use std::fs;
 use std::path::Path;
 
-use super::templates::{self, to_snake_case, pluralize};
+use super::templates::{self, pluralize, to_snake_case};
 
 /// Generate a controller skeleton.
 ///
@@ -64,7 +64,6 @@ impl {name} {{
 
     Ok(())
 }
-
 
 /// Generate a service skeleton.
 ///
@@ -141,9 +140,7 @@ pub fn parse_fields(fields: &[String]) -> Result<Vec<Field>, Box<dyn std::error:
         .map(|f| {
             let parts: Vec<&str> = f.split(':').collect();
             if parts.len() != 2 {
-                return Err(
-                    format!("Invalid field format '{}'. Expected 'name:Type'", f).into(),
-                );
+                return Err(format!("Invalid field format '{}'. Expected 'name:Type'", f).into());
             }
             let name = parts[0].to_string();
             let rust_type = parts[1].to_string();
@@ -212,11 +209,7 @@ pub fn crud(name: &str, raw_fields: &[String]) -> Result<(), Box<dyn std::error:
     println!("  {} {}", "✓".green(), test_path.display());
 
     println!();
-    println!(
-        "{} CRUD generated for '{}'!",
-        "✓".green(),
-        name.green()
-    );
+    println!("{} CRUD generated for '{}'!", "✓".green(), name.green());
     println!();
     println!("  Next steps:");
     println!("  1. Register the controller in src/app.rs, inside App::build:");
@@ -525,11 +518,7 @@ async fn test_delete_{snake}(app: TestApp) {{
 pub fn grpc_service(name: &str, package: &str) -> Result<(), Box<dyn std::error::Error>> {
     let snake = to_snake_case(name);
 
-    println!(
-        "{} Generating gRPC service '{}'",
-        "->".blue(),
-        name.green()
-    );
+    println!("{} Generating gRPC service '{}'", "->".blue(), name.green());
 
     // 1. Proto file
     let proto_dir = Path::new("proto");
@@ -565,11 +554,7 @@ pub fn grpc_service(name: &str, package: &str) -> Result<(), Box<dyn std::error:
     println!("  {} {}", "✓".green(), service_path.display());
 
     println!();
-    println!(
-        "{} gRPC service '{}' generated!",
-        "✓".green(),
-        name.green()
-    );
+    println!("{} gRPC service '{}' generated!", "✓".green(), name.green());
     println!();
     println!("  Next steps:");
     println!(

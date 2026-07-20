@@ -22,11 +22,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use driver::Command;
-use r2e_core::prelude::ConfigProperties;
+use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
-use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::StatusCode;
+use r2e_core::prelude::ConfigProperties;
 use r2e_core::{AppBuilder, BeanContext, DeferredContext, PluginInstallContext, PreStatePlugin};
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 
@@ -65,7 +65,10 @@ impl SchedulerHandle {
     }
 
     /// Create a handle wired to the driver's command channel (plugin-internal).
-    pub(crate) fn with_commands(cancel: CancellationToken, commands: mpsc::Sender<Command>) -> Self {
+    pub(crate) fn with_commands(
+        cancel: CancellationToken,
+        commands: mpsc::Sender<Command>,
+    ) -> Self {
         Self {
             cancel,
             commands: Some(commands),
@@ -157,14 +160,10 @@ impl<S: Send + Sync> FromRequestParts<S> for SchedulerHandle {
         _state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         async move {
-            parts
-                .extensions
-                .get::<SchedulerHandle>()
-                .cloned()
-                .ok_or((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Scheduler not installed. Add `.plugin(Scheduler)` before build_state().",
-                ))
+            parts.extensions.get::<SchedulerHandle>().cloned().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Scheduler not installed. Add `.plugin(Scheduler)` before build_state().",
+            ))
         }
     }
 }

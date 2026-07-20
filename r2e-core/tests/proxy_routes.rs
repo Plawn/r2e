@@ -159,7 +159,12 @@ impl FallbackController {
             }
             path => (
                 StatusCode::NOT_FOUND,
-                format!("{}: no route for {} {}", self.greeting.0, req.method(), path),
+                format!(
+                    "{}: no route for {} {}",
+                    self.greeting.0,
+                    req.method(),
+                    path
+                ),
             )
                 .into_response(),
         }

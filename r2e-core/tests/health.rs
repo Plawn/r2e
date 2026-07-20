@@ -23,7 +23,9 @@ fn health_builder_default() {
 
 struct AlwaysUp;
 impl HealthIndicator for AlwaysUp {
-    fn name(&self) -> &str { "up-check" }
+    fn name(&self) -> &str {
+        "up-check"
+    }
     fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
         async { HealthStatus::Up }
     }
@@ -31,7 +33,9 @@ impl HealthIndicator for AlwaysUp {
 
 struct AlwaysDown;
 impl HealthIndicator for AlwaysDown {
-    fn name(&self) -> &str { "down-check" }
+    fn name(&self) -> &str {
+        "down-check"
+    }
     fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
         async { HealthStatus::Down("broken".into()) }
     }

@@ -107,7 +107,9 @@ pub struct HealthBuilder {
 #[doc(hidden)]
 pub trait HealthIndicatorErased: Send + Sync + 'static {
     fn name(&self) -> &str;
-    fn check(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthStatus> + Send + '_>>;
+    fn check(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthStatus> + Send + '_>>;
     fn affects_readiness(&self) -> bool;
 }
 
@@ -116,7 +118,9 @@ impl<T: HealthIndicator> HealthIndicatorErased for T {
         HealthIndicator::name(self)
     }
 
-    fn check(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthStatus> + Send + '_>> {
+    fn check(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthStatus> + Send + '_>> {
         Box::pin(HealthIndicator::check(self))
     }
 
@@ -181,10 +185,7 @@ impl HealthState {
     /// Build a `HealthState` from a fixed set of indicators, computing the
     /// readiness-name set from them so readiness filtering is order-independent.
     #[doc(hidden)]
-    pub fn new(
-        checks: Vec<Box<dyn HealthIndicatorErased>>,
-        cache_ttl: Option<Duration>,
-    ) -> Self {
+    pub fn new(checks: Vec<Box<dyn HealthIndicatorErased>>, cache_ttl: Option<Duration>) -> Self {
         let readiness_names = checks
             .iter()
             .filter(|c| c.affects_readiness())

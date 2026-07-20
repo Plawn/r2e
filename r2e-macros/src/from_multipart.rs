@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Type, PathSegment};
+use syn::{Data, DeriveInput, Fields, PathSegment, Type};
 
 use crate::codegen::controller_impl::type_to_openapi_str;
 use crate::crate_path::r2e_core_path;

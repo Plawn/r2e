@@ -1,7 +1,5 @@
 pub mod guard;
-pub use guard::{
-    PreAuthRateLimitGuard, PreRateLimit, RateLimit, RateLimitGuard, RateLimitKeyKind,
-};
+pub use guard::{PreAuthRateLimitGuard, PreRateLimit, RateLimit, RateLimitGuard, RateLimitKeyKind};
 
 use dashmap::DashMap;
 use std::hash::Hash;
@@ -60,13 +58,21 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
     ///
     /// Returns `true` if the request is allowed, `false` if rate-limited.
     pub fn try_acquire(&self, key: &K) -> bool {
-        let mut entry = self.buckets.entry(key.clone()).or_insert_with(|| TokenBucket {
-            tokens: self.max_tokens,
-            last_refill: Instant::now(),
-        });
+        let mut entry = self
+            .buckets
+            .entry(key.clone())
+            .or_insert_with(|| TokenBucket {
+                tokens: self.max_tokens,
+                last_refill: Instant::now(),
+            });
 
         let bucket = entry.value_mut();
-        refill_and_try_consume(&mut bucket.tokens, &mut bucket.last_refill, self.max_tokens, self.window)
+        refill_and_try_consume(
+            &mut bucket.tokens,
+            &mut bucket.last_refill,
+            self.max_tokens,
+            self.window,
+        )
     }
 }
 
@@ -125,7 +131,12 @@ impl RateLimitBackend for InMemoryRateLimiter {
             });
 
         let bucket = entry.value_mut();
-        refill_and_try_consume(&mut bucket.tokens, &mut bucket.last_refill, bucket.max_tokens, bucket.window)
+        refill_and_try_consume(
+            &mut bucket.tokens,
+            &mut bucket.last_refill,
+            bucket.max_tokens,
+            bucket.window,
+        )
     }
 }
 

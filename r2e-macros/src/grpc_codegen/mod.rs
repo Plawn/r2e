@@ -7,8 +7,8 @@
 //! - An impl of the tonic-generated trait for the wrapper
 //! - An impl of `GrpcService<T>` for the controller
 
-mod trait_impl;
 mod service_impl;
+mod trait_impl;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};

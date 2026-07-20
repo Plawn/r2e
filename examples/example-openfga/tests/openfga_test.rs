@@ -45,7 +45,10 @@ async fn boot() -> TestApp {
 #[ignore = "requires Docker"]
 async fn unauthenticated_request_is_rejected() {
     let app = boot().await;
-    app.get("/documents/readme").send().await.assert_unauthorized();
+    app.get("/documents/readme")
+        .send()
+        .await
+        .assert_unauthorized();
 }
 
 #[tokio::test]

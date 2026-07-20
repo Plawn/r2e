@@ -29,7 +29,10 @@ impl OpenApiPlugin {
 }
 
 impl Plugin for OpenApiPlugin {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: r2e_core::AppBuilder<T>) -> r2e_core::AppBuilder<T> {
+    fn install<T: Clone + Send + Sync + 'static>(
+        self,
+        app: r2e_core::AppBuilder<T>,
+    ) -> r2e_core::AppBuilder<T> {
         let config = self.config;
         app.with_meta_consumer::<RouteInfo, _>(move |routes| openapi_routes::<T>(config, routes))
     }

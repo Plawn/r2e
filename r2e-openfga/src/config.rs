@@ -3,10 +3,18 @@
 use crate::error::OpenFgaError;
 use serde::Deserialize;
 
-fn default_connect_timeout() -> u64 { 10 }
-fn default_request_timeout() -> u64 { 5 }
-fn default_cache_enabled() -> bool { true }
-fn default_cache_ttl() -> u64 { 60 }
+fn default_connect_timeout() -> u64 {
+    10
+}
+fn default_request_timeout() -> u64 {
+    5
+}
+fn default_cache_enabled() -> bool {
+    true
+}
+fn default_cache_ttl() -> u64 {
+    60
+}
 
 /// Configuration for connecting to an OpenFGA server.
 ///
@@ -109,10 +117,14 @@ impl OpenFgaConfig {
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), OpenFgaError> {
         if self.endpoint.is_empty() {
-            return Err(OpenFgaError::InvalidConfig("endpoint cannot be empty".into()));
+            return Err(OpenFgaError::InvalidConfig(
+                "endpoint cannot be empty".into(),
+            ));
         }
         if self.store_id.is_empty() {
-            return Err(OpenFgaError::InvalidConfig("store_id cannot be empty".into()));
+            return Err(OpenFgaError::InvalidConfig(
+                "store_id cannot be empty".into(),
+            ));
         }
         Ok(())
     }

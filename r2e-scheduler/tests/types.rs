@@ -1,4 +1,6 @@
-use r2e_scheduler::{ScheduleConfig, ScheduledResult, ScheduledTask, ScheduledTaskDef, extract_tasks};
+use r2e_scheduler::{
+    extract_tasks, ScheduleConfig, ScheduledResult, ScheduledTask, ScheduledTaskDef,
+};
 use std::any::Any;
 use std::time::Duration;
 
@@ -14,9 +16,7 @@ fn noop_task_def(name: &str, schedule: ScheduleConfig) -> ScheduledTaskDef<()> {
 }
 
 /// Double-box a `ScheduledTaskDef` so it can round-trip through `extract_tasks`.
-fn boxed_task<T: Clone + Send + Sync + 'static>(
-    task: ScheduledTaskDef<T>,
-) -> Box<dyn Any + Send> {
+fn boxed_task<T: Clone + Send + Sync + 'static>(task: ScheduledTaskDef<T>) -> Box<dyn Any + Send> {
     let trait_obj: Box<dyn ScheduledTask> = Box::new(task);
     Box::new(trait_obj)
 }

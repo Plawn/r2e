@@ -27,8 +27,8 @@
 
 use crate::http::extract::FromRequestParts;
 use crate::http::header::Parts;
-use crate::http::{HeaderName, HeaderValue};
 use crate::http::response::{IntoResponse, Response};
+use crate::http::{HeaderName, HeaderValue};
 
 use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
@@ -87,7 +87,9 @@ async fn request_id_middleware(
     req.extensions_mut().insert(RequestId(id));
 
     let mut response = next.run(req).await;
-    response.headers_mut().insert(X_REQUEST_ID.clone(), header_val);
+    response
+        .headers_mut()
+        .insert(X_REQUEST_ID.clone(), header_val);
     response
 }
 

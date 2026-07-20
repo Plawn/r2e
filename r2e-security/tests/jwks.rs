@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::Algorithm;
-use r2e_security::SecurityConfig;
 use r2e_security::jwks::{
-    CachedJwk, JwksCache, build_jwks_client, can_attempt, can_use_stale, is_stale,
-    kty_for_algorithm, validate_jwks_url,
+    build_jwks_client, can_attempt, can_use_stale, is_stale, kty_for_algorithm, validate_jwks_url,
+    CachedJwk, JwksCache,
 };
+use r2e_security::SecurityConfig;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TEST_JWKS: &str = r#"{"keys":[{"kid":"test-key","kty":"RSA","alg":"RS256","use":"sig","key_ops":["verify"],"n":"AQ","e":"AQAB"}]}"#;
@@ -298,10 +298,9 @@ fn checked_rejects_encryption_key_use() {
     };
 
     let err = jwk.to_decoding_key_checked(Algorithm::RS256).unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("does not permit signature verification")
-    );
+    assert!(err
+        .to_string()
+        .contains("does not permit signature verification"));
 }
 
 #[test]

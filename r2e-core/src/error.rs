@@ -15,9 +15,8 @@ struct ErrorBody<'a> {
 pub fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
     let message = message.into();
     let body = ErrorBody { error: &message };
-    let bytes = serde_json::to_vec(&body).unwrap_or_else(|_| {
-        br#"{"error":"internal serialization error"}"#.to_vec()
-    });
+    let bytes = serde_json::to_vec(&body)
+        .unwrap_or_else(|_| br#"{"error":"internal serialization error"}"#.to_vec());
     (
         status,
         [(
@@ -72,7 +71,9 @@ impl Clone for HttpError {
                 body: body.clone(),
             },
             HttpError::WithSource {
-                status, message, source,
+                status,
+                message,
+                source,
             } => HttpError::WithSource {
                 status: *status,
                 message: message.clone(),
@@ -167,7 +168,11 @@ impl HttpError {
             HttpError::Forbidden(msg) => HttpError::Forbidden(format!("{ctx}: {msg}").into()),
             HttpError::BadRequest(msg) => HttpError::BadRequest(format!("{ctx}: {msg}").into()),
             HttpError::Internal(msg) => HttpError::Internal(format!("{ctx}: {msg}").into()),
-            HttpError::WithSource { status, message, source } => HttpError::WithSource {
+            HttpError::WithSource {
+                status,
+                message,
+                source,
+            } => HttpError::WithSource {
                 status,
                 message: format!("{ctx}: {message}").into(),
                 source,
@@ -189,12 +194,10 @@ impl IntoResponse for HttpError {
                 });
                 (StatusCode::BAD_REQUEST, Json(body)).into_response()
             }
-            HttpError::Custom { status, body } => {
-                (status, Json(body)).into_response()
-            }
-            HttpError::WithSource { status, message, .. } => {
-                error_response(status, message)
-            }
+            HttpError::Custom { status, body } => (status, Json(body)).into_response(),
+            HttpError::WithSource {
+                status, message, ..
+            } => error_response(status, message),
             other => {
                 let (status, message) = match other {
                     HttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
@@ -220,9 +223,13 @@ impl std::fmt::Display for HttpError {
             HttpError::Forbidden(msg) => write!(f, "Forbidden: {msg}"),
             HttpError::BadRequest(msg) => write!(f, "Bad Request: {msg}"),
             HttpError::Internal(msg) => write!(f, "Internal Error: {msg}"),
-            HttpError::Validation(resp) => write!(f, "Validation Error: {} errors", resp.errors.len()),
+            HttpError::Validation(resp) => {
+                write!(f, "Validation Error: {} errors", resp.errors.len())
+            }
             HttpError::Custom { status, body } => write!(f, "Custom Error ({status}): {body}"),
-            HttpError::WithSource { status, message, .. } => write!(f, "Error ({status}): {message}"),
+            HttpError::WithSource {
+                status, message, ..
+            } => write!(f, "Error ({status}): {message}"),
         }
     }
 }

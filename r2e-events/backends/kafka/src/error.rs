@@ -1,6 +1,6 @@
+use r2e_events::EventBusError;
 use rdkafka::error::KafkaError;
 use rdkafka::types::RDKafkaErrorCode;
-use r2e_events::EventBusError;
 
 fn is_connection_error_code(code: RDKafkaErrorCode) -> bool {
     matches!(

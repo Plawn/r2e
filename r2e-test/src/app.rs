@@ -1,9 +1,11 @@
-use r2e_core::http::body::Body;
-use r2e_core::http::Router;
 use bytes::Bytes;
-use http::header::{HeaderMap, HeaderName, IntoHeaderName, AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE};
+use http::header::{
+    HeaderMap, HeaderName, IntoHeaderName, AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE,
+};
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
+use r2e_core::http::body::Body;
+use r2e_core::http::Router;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -48,9 +50,7 @@ impl RequestParts {
             Some(b) => Body::from(b),
             None => Body::empty(),
         };
-        let mut builder = Request::builder()
-            .method(self.method)
-            .uri(&uri);
+        let mut builder = Request::builder().method(self.method).uri(&uri);
         for (name, value) in &self.headers {
             builder = builder.header(name, value);
         }
@@ -126,7 +126,8 @@ pub(crate) fn parse_set_cookie_full(header_value: &str) -> Option<SetCookie> {
             cookie.max_age = val.parse().ok();
         } else if lower.starts_with("expires=") {
             // Preserve original case for the date string
-            cookie.expires = segment.strip_prefix("expires=")
+            cookie.expires = segment
+                .strip_prefix("expires=")
                 .or_else(|| segment.strip_prefix("Expires="))
                 .map(|s| s.to_string());
         } else if let Some(val) = lower.strip_prefix("samesite=") {
@@ -149,29 +150,26 @@ macro_rules! impl_request_builders {
     () => {
         /// Add a Bearer token authorization header.
         pub fn bearer(mut self, token: &str) -> Self {
-            self.parts.headers.insert(
-                AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
+            self.parts
+                .headers
+                .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
             self
         }
 
         /// Add a custom header.
         pub fn header(mut self, name: impl IntoHeaderName, value: impl AsRef<str>) -> Self {
-            self.parts.headers.insert(
-                name,
-                value.as_ref().parse().unwrap(),
-            );
+            self.parts
+                .headers
+                .insert(name, value.as_ref().parse().unwrap());
             self
         }
 
         /// Set the request body as JSON. Also sets Content-Type to `application/json`.
         pub fn json(mut self, body: &impl Serialize) -> Self {
             self.parts.body = Some(serde_json::to_vec(body).unwrap());
-            self.parts.headers.insert(
-                CONTENT_TYPE,
-                "application/json".parse().unwrap(),
-            );
+            self.parts
+                .headers
+                .insert(CONTENT_TYPE, "application/json".parse().unwrap());
             self
         }
 
@@ -214,7 +212,10 @@ macro_rules! impl_request_builders {
         }
 
         /// Add multiple query parameters.
-        pub fn queries(mut self, params: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Self {
+        pub fn queries(
+            mut self,
+            params: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+        ) -> Self {
             for (k, v) in params {
                 self.parts.queries.push((k.into(), v.into()));
             }
@@ -532,9 +533,9 @@ pub fn tokenize_path(path: &str) -> Vec<PathToken> {
             }
             let mut rest = &segment[bracket_pos..];
             while let Some(start) = rest.find('[') {
-                let end = rest.find(']').unwrap_or_else(|| {
-                    panic!("unclosed bracket in JSON path: \"{path}\"")
-                });
+                let end = rest
+                    .find(']')
+                    .unwrap_or_else(|| panic!("unclosed bracket in JSON path: \"{path}\""));
                 let index: usize = rest[start + 1..end]
                     .parse()
                     .unwrap_or_else(|_| panic!("non-numeric array index in JSON path: \"{path}\""));
@@ -565,10 +566,8 @@ pub fn resolve_path(root: &Value, path: &str) -> Value {
                     Value::Object(o) => o.len(),
                     Value::String(s) => s.len(),
                     other => {
-                        let consumed: Vec<_> = tokens[..i]
-                            .iter()
-                            .map(|t| format!("{t:?}"))
-                            .collect();
+                        let consumed: Vec<_> =
+                            tokens[..i].iter().map(|t| format!("{t:?}")).collect();
                         panic!(
                             "len() applied to non-collection at path segment {}: got {}\nResolved tokens so far: {:?}",
                             i, other, consumed,
@@ -591,9 +590,9 @@ pub fn resolve_path(root: &Value, path: &str) -> Value {
 /// - Scalars: exact equality.
 pub fn json_contains(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
-        (Value::Object(a), Value::Object(e)) => {
-            e.iter().all(|(k, v)| a.get(k).map_or(false, |av| json_contains(av, v)))
-        }
+        (Value::Object(a), Value::Object(e)) => e
+            .iter()
+            .all(|(k, v)| a.get(k).map_or(false, |av| json_contains(av, v))),
         (Value::Array(a), Value::Array(e)) => {
             e.iter().all(|ev| a.iter().any(|av| json_contains(av, ev)))
         }
@@ -779,11 +778,7 @@ impl TestResponse {
     /// ```ignore
     /// resp.assert_json_path_fn("tags", |v| v.as_array().unwrap().contains(&json!("rust")));
     /// ```
-    pub fn assert_json_path_fn(
-        &self,
-        path: &str,
-        predicate: impl FnOnce(&Value) -> bool,
-    ) -> &Self {
+    pub fn assert_json_path_fn(&self, path: &str, predicate: impl FnOnce(&Value) -> bool) -> &Self {
         let root = self.json_value();
         let actual = resolve_path(root, path);
         assert!(
@@ -897,7 +892,11 @@ impl TestResponse {
             .filter_map(|v| v.to_str().ok())
             .find_map(|cookie_str| {
                 let (n, v) = parse_set_cookie(cookie_str)?;
-                if n == name { Some(v.to_string()) } else { None }
+                if n == name {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
             })
     }
 
@@ -965,9 +964,9 @@ impl TestResponse {
     /// Assert that the SSE response contains a typed event with the given data.
     pub fn assert_sse_event(&self, event_type: &str, expected_data: &str) -> &Self {
         let events = self.sse_events();
-        let found = events.iter().any(|e| {
-            e.event.as_deref() == Some(event_type) && e.data == expected_data
-        });
+        let found = events
+            .iter()
+            .any(|e| e.event.as_deref() == Some(event_type) && e.data == expected_data);
         assert!(
             found,
             "SSE event assertion failed: no event with type=\"{event_type}\" and data=\"{expected_data}\"\n  Events: {events:?}",
@@ -978,7 +977,9 @@ impl TestResponse {
     /// Assert that the SSE response contains a data-only event with the given payload.
     pub fn assert_sse_data(&self, expected_data: &str) -> &Self {
         let events = self.sse_events();
-        let found = events.iter().any(|e| e.event.is_none() && e.data == expected_data);
+        let found = events
+            .iter()
+            .any(|e| e.event.is_none() && e.data == expected_data);
         assert!(
             found,
             "SSE data assertion failed: no data-only event with data=\"{expected_data}\"\n  Events: {events:?}",
@@ -996,7 +997,11 @@ impl TestResponse {
             .filter_map(|v| v.to_str().ok())
             .find_map(|cookie_str| {
                 let c = parse_set_cookie_full(cookie_str)?;
-                if c.name == name { Some(c) } else { None }
+                if c.name == name {
+                    Some(c)
+                } else {
+                    None
+                }
             })
     }
 
@@ -1012,7 +1017,8 @@ impl TestResponse {
 
     /// Assert that a Set-Cookie is marked `Secure`.
     pub fn assert_cookie_secure(&self, name: &str) -> &Self {
-        let c = self.set_cookie(name)
+        let c = self
+            .set_cookie(name)
             .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
         assert!(c.secure, "Expected cookie \"{name}\" to be Secure");
         self
@@ -1020,7 +1026,8 @@ impl TestResponse {
 
     /// Assert that a Set-Cookie is marked `HttpOnly`.
     pub fn assert_cookie_http_only(&self, name: &str) -> &Self {
-        let c = self.set_cookie(name)
+        let c = self
+            .set_cookie(name)
             .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
         assert!(c.http_only, "Expected cookie \"{name}\" to be HttpOnly");
         self
@@ -1028,7 +1035,8 @@ impl TestResponse {
 
     /// Assert that a Set-Cookie has a specific `SameSite` value.
     pub fn assert_cookie_same_site(&self, name: &str, expected: SameSite) -> &Self {
-        let c = self.set_cookie(name)
+        let c = self
+            .set_cookie(name)
             .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
         assert_eq!(
             c.same_site,
@@ -1041,7 +1049,8 @@ impl TestResponse {
 
     /// Assert that a Set-Cookie has a specific `Path`.
     pub fn assert_cookie_path(&self, name: &str, expected: &str) -> &Self {
-        let c = self.set_cookie(name)
+        let c = self
+            .set_cookie(name)
             .unwrap_or_else(|| panic!("No Set-Cookie header with name \"{name}\""));
         assert_eq!(
             c.path.as_deref(),

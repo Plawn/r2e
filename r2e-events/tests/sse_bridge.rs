@@ -36,13 +36,21 @@ async fn bridged_event_reaches_sse_subscribers() {
     let mut sub = topic.subscribe();
 
     bridge_event_to_sse(&bus, topic).await.unwrap();
-    bus.emit(SyncStatus { done: 10, total: 42 })
-        .await
-        .unwrap();
+    bus.emit(SyncStatus {
+        done: 10,
+        total: 42,
+    })
+    .await
+    .unwrap();
 
-    let event = next_event(&mut sub).await.expect("SSE stream should yield the bridged event");
+    let event = next_event(&mut sub)
+        .await
+        .expect("SSE stream should yield the bridged event");
     let debug = format!("{event:?}");
-    assert!(debug.contains("sync"), "SSE event name should be the topic's: {debug}");
+    assert!(
+        debug.contains("sync"),
+        "SSE event name should be the topic's: {debug}"
+    );
     assert!(
         debug.contains(r#"\"done\":10"#) || debug.contains(r#""done":10"#),
         "SSE data should be the JSON-serialized event: {debug}"
@@ -71,9 +79,7 @@ async fn bridge_with_no_sse_subscribers_still_acks() {
 
     bridge_event_to_sse(&bus, topic).await.unwrap();
     // No SSE clients connected — emit must still succeed (publish is Ok(0)).
-    bus.emit(SyncStatus { done: 0, total: 0 })
-        .await
-        .unwrap();
+    bus.emit(SyncStatus { done: 0, total: 0 }).await.unwrap();
 }
 
 #[r2e_core::test]
@@ -86,9 +92,7 @@ async fn unsubscribing_the_bridge_stops_forwarding() {
     handle.unsubscribe();
     // Unsubscription is applied by a spawned task — give it a beat to land.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    bus.emit(SyncStatus { done: 1, total: 1 })
-        .await
-        .unwrap();
+    bus.emit(SyncStatus { done: 1, total: 1 }).await.unwrap();
 
     assert!(
         next_event(&mut sub).await.is_none(),
@@ -104,12 +108,15 @@ async fn bridged_event_fans_out_to_all_sse_subscribers() {
     let mut sub2 = topic.subscribe();
 
     bridge_event_to_sse(&bus, topic).await.unwrap();
-    bus.emit(SyncStatus { done: 3, total: 7 })
-        .await
-        .unwrap();
+    bus.emit(SyncStatus { done: 3, total: 7 }).await.unwrap();
 
     for sub in [&mut sub1, &mut sub2] {
-        let event = next_event(sub).await.expect("every subscriber should receive the event");
-        assert!(format!("{event:?}").contains(r#"total\":7"#) || format!("{event:?}").contains(r#""total":7"#));
+        let event = next_event(sub)
+            .await
+            .expect("every subscriber should receive the event");
+        assert!(
+            format!("{event:?}").contains(r#"total\":7"#)
+                || format!("{event:?}").contains(r#""total":7"#)
+        );
     }
 }

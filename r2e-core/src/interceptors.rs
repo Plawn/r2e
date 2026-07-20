@@ -36,11 +36,7 @@ pub struct InterceptorContext {
     note = "implement `Interceptor<R>` for your type and apply it with `#[intercept(YourInterceptor)]`"
 )]
 pub trait Interceptor<R> {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send;

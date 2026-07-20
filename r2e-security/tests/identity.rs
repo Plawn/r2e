@@ -1,7 +1,7 @@
+use r2e_core::Identity;
 use r2e_security::identity::AuthenticatedUser;
 use r2e_security::openid::RoleExtractor;
 use r2e_security::RoleBasedIdentity;
-use r2e_core::Identity;
 use serde_json::json;
 
 // ── Construction from Claims ──
@@ -49,7 +49,11 @@ fn from_claims_with_custom_extractor() {
             claims
                 .get("custom_roles")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default()
         }
     }
@@ -158,7 +162,10 @@ fn identity_roles() {
     let user = AuthenticatedUser::from_claims(json!({
         "sub": "u", "roles": ["a", "b"]
     }));
-    assert_eq!(RoleBasedIdentity::roles(&user), &["a".to_string(), "b".to_string()]);
+    assert_eq!(
+        RoleBasedIdentity::roles(&user),
+        &["a".to_string(), "b".to_string()]
+    );
 }
 
 #[test]

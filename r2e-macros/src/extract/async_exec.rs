@@ -144,13 +144,11 @@ pub fn validate_async_exec_receiver(
     });
     match receiver {
         None => Err(syn::Error::new(sig.ident.span(), no_receiver_msg)),
-        Some(r) if r.reference.is_none() || r.mutability.is_some() => {
-            Err(syn::Error::new_spanned(
-                r,
-                "#[async_exec] methods must take `&self` (not `&mut self` or `self`) — \
+        Some(r) if r.reference.is_none() || r.mutability.is_some() => Err(syn::Error::new_spanned(
+            r,
+            "#[async_exec] methods must take `&self` (not `&mut self` or `self`) — \
                  the generated wrapper clones an immutable handle to submit the body to the pool",
-            ))
-        }
+        )),
         Some(_) => Ok(()),
     }
 }

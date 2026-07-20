@@ -89,9 +89,7 @@ impl PdController {
 
 // ─── Serve + stop helper ───
 
-async fn serve_then_stop<T: Clone + Send + Sync + 'static>(
-    prepared: r2e::builder::PreparedApp<T>,
-) {
+async fn serve_then_stop<T: Clone + Send + Sync + 'static>(prepared: r2e::builder::PreparedApp<T>) {
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server = tokio::spawn(async move {

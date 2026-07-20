@@ -107,7 +107,10 @@ async fn interval_task_stops_on_cancel() {
 
     sleep_ms(250).await;
     let count_before = counter.load(Ordering::SeqCst);
-    assert!(count_before >= 2, "expected >= 2 before cancel, got {count_before}");
+    assert!(
+        count_before >= 2,
+        "expected >= 2 before cancel, got {count_before}"
+    );
 
     token.cancel();
     // Give the task a chance to observe cancellation
@@ -137,7 +140,11 @@ async fn interval_with_initial_delay() {
 
     // Before delay expires
     sleep_ms(150).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 0, "should not run during delay");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        0,
+        "should not run during delay"
+    );
 
     // After delay + first interval tick (200ms delay + immediate first tick)
     sleep_ms(100).await;
@@ -179,8 +186,7 @@ async fn interval_task_state_accessible() {
         task: Box::new(|log: Arc<Mutex<Vec<String>>>| {
             Box::pin(async move {
                 log.lock().unwrap().push("tick".to_string());
-            })
-                as Pin<Box<dyn Future<Output = ()> + Send>>
+            }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }),
     };
     let _token = start_task(task);
@@ -188,7 +194,11 @@ async fn interval_task_state_accessible() {
     sleep_ms(350).await;
 
     let entries = log.lock().unwrap();
-    assert!(entries.len() >= 3, "expected >= 3 log entries, got {}", entries.len());
+    assert!(
+        entries.len() >= 3,
+        "expected >= 3 log entries, got {}",
+        entries.len()
+    );
     assert!(entries.iter().all(|e| e == "tick"));
 }
 
@@ -255,7 +265,10 @@ async fn cron_task_runs() {
     tokio::time::sleep(Duration::from_millis(2500)).await;
 
     let count = counter.load(Ordering::SeqCst);
-    assert!(count >= 1, "cron should have run at least once, got {count}");
+    assert!(
+        count >= 1,
+        "cron should have run at least once, got {count}"
+    );
 }
 
 #[r2e_core::test]
@@ -269,7 +282,11 @@ async fn cron_invalid_expression_no_panic() {
     let _token = start_task(task);
 
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 0, "invalid cron should never fire");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        0,
+        "invalid cron should never fire"
+    );
 }
 
 #[r2e_core::test]
@@ -292,7 +309,10 @@ async fn cron_task_stops_on_cancel() {
     tokio::time::sleep(Duration::from_millis(2000)).await;
     let count_after = counter.load(Ordering::SeqCst);
 
-    assert_eq!(count_snapshot, count_after, "counter should not increment after cancel");
+    assert_eq!(
+        count_snapshot, count_after,
+        "counter should not increment after cancel"
+    );
 }
 
 #[r2e_core::test]
@@ -444,8 +464,16 @@ async fn concurrent_tasks_independent_state() {
     let c2 = Arc::new(AtomicUsize::new(0));
 
     let token = CancellationToken::new();
-    let task1 = counting_task("ind1", ScheduleConfig::Interval(Duration::from_millis(100)), c1.clone());
-    let task2 = counting_task("ind2", ScheduleConfig::Interval(Duration::from_millis(200)), c2.clone());
+    let task1 = counting_task(
+        "ind1",
+        ScheduleConfig::Interval(Duration::from_millis(100)),
+        c1.clone(),
+    );
+    let task2 = counting_task(
+        "ind2",
+        ScheduleConfig::Interval(Duration::from_millis(200)),
+        c2.clone(),
+    );
 
     let pool = test_pool();
     let b1: Box<dyn ScheduledTask> = Box::new(task1);
@@ -484,7 +512,11 @@ async fn state_mutations_visible_via_arc_mutex() {
     sleep_ms(350).await;
 
     let entries = log.lock().unwrap();
-    assert!(entries.len() >= 3, "expected >= 3 entries, got {}", entries.len());
+    assert!(
+        entries.len() >= 3,
+        "expected >= 3 entries, got {}",
+        entries.len()
+    );
     // Verify sequential mutations are visible
     for (i, val) in entries.iter().enumerate() {
         assert_eq!(*val, (i + 1) as i32, "entry {i} should be {}", i + 1);
@@ -537,7 +569,10 @@ async fn jobs_run_concurrently_not_serialized() {
         f >= 4,
         "fast job must keep ticking while the slow job runs, got {f}"
     );
-    assert!(slow_ticks.load(Ordering::SeqCst) >= 1, "slow job should have fired");
+    assert!(
+        slow_ticks.load(Ordering::SeqCst) >= 1,
+        "slow job should have fired"
+    );
 }
 
 #[r2e_core::test]

@@ -127,7 +127,10 @@ async fn controller_skip_if_gates_ticks() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     cancel.cancel();
 
-    assert!(ticks.load(Ordering::SeqCst) >= 2, "ticks resume after the gate clears");
+    assert!(
+        ticks.load(Ordering::SeqCst) >= 2,
+        "ticks resume after the gate clears"
+    );
 }
 
 #[r2e::test]
@@ -163,7 +166,11 @@ async fn bean_async_skip_if_gates_ticks() {
     );
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(ticks.load(Ordering::SeqCst), 0, "async predicate gates the bean task");
+    assert_eq!(
+        ticks.load(Ordering::SeqCst),
+        0,
+        "async predicate gates the bean task"
+    );
     let info = registry.job("gated_bean_tick").expect("job registered");
     assert!(info.skip_count >= 2);
     assert_eq!(info.run_count, 0);
@@ -172,5 +179,8 @@ async fn bean_async_skip_if_gates_ticks() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     cancel.cancel();
 
-    assert!(ticks.load(Ordering::SeqCst) >= 2, "bean ticks resume after the gate clears");
+    assert!(
+        ticks.load(Ordering::SeqCst) >= 2,
+        "bean ticks resume after the gate clears"
+    );
 }

@@ -221,31 +221,33 @@ fn submit_tick(
 ) -> bool {
     let run_fut = (runtimes[idx].run)();
     let start = Instant::now();
-    let (fut, skipped_flag): (Pin<Box<dyn Future<Output = ()> + Send>>, Option<Arc<AtomicBool>>) =
-        match &runtimes[idx].skip {
-            None => (run_fut, None),
-            Some(skip) => {
-                let skip_fut = skip();
-                let flag = Arc::new(AtomicBool::new(false));
-                let flag_in_tick = Arc::clone(&flag);
-                let registry = registry.clone();
-                let name = runtimes[idx].name.clone();
-                let fut = Box::pin(async move {
-                    if skip_fut.await {
-                        flag_in_tick.store(true, Ordering::Relaxed);
-                        tracing::debug!(task = %name, "Scheduled tick skipped by skip predicate");
-                        registry.update_job(&name, |i| i.skip_count += 1);
-                    } else {
-                        registry.update_job(&name, |i| {
-                            i.last_run = Some(Utc::now());
-                            i.run_count += 1;
-                        });
-                        run_fut.await;
-                    }
-                });
-                (fut as Pin<Box<dyn Future<Output = ()> + Send>>, Some(flag))
-            }
-        };
+    let (fut, skipped_flag): (
+        Pin<Box<dyn Future<Output = ()> + Send>>,
+        Option<Arc<AtomicBool>>,
+    ) = match &runtimes[idx].skip {
+        None => (run_fut, None),
+        Some(skip) => {
+            let skip_fut = skip();
+            let flag = Arc::new(AtomicBool::new(false));
+            let flag_in_tick = Arc::clone(&flag);
+            let registry = registry.clone();
+            let name = runtimes[idx].name.clone();
+            let fut = Box::pin(async move {
+                if skip_fut.await {
+                    flag_in_tick.store(true, Ordering::Relaxed);
+                    tracing::debug!(task = %name, "Scheduled tick skipped by skip predicate");
+                    registry.update_job(&name, |i| i.skip_count += 1);
+                } else {
+                    registry.update_job(&name, |i| {
+                        i.last_run = Some(Utc::now());
+                        i.run_count += 1;
+                    });
+                    run_fut.await;
+                }
+            });
+            (fut as Pin<Box<dyn Future<Output = ()> + Send>>, Some(flag))
+        }
+    };
     match executor.submit(fut) {
         Ok(handle) => {
             runtimes[idx].in_flight += 1;
@@ -269,7 +271,13 @@ fn submit_tick(
 }
 
 /// Push a job's next deadline onto the heap and mirror it into the registry.
-fn arm_next(idx: usize, runtimes: &mut [JobRuntime], heap: &mut BinaryHeap<Reverse<(Instant, usize)>>, registry: &ScheduledJobRegistry, now: Instant) {
+fn arm_next(
+    idx: usize,
+    runtimes: &mut [JobRuntime],
+    heap: &mut BinaryHeap<Reverse<(Instant, usize)>>,
+    registry: &ScheduledJobRegistry,
+    now: Instant,
+) {
     let next = compute_next(&mut runtimes[idx].rearm, now, &runtimes[idx].name);
     if let Some(t) = next {
         heap.push(Reverse((t, idx)));
@@ -280,7 +288,12 @@ fn arm_next(idx: usize, runtimes: &mut [JobRuntime], heap: &mut BinaryHeap<Rever
 }
 
 /// Set/clear a job's paused flag. Returns `false` for an unknown job.
-fn set_paused(name: &str, paused: bool, runtimes: &mut [JobRuntime], registry: &ScheduledJobRegistry) -> bool {
+fn set_paused(
+    name: &str,
+    paused: bool,
+    runtimes: &mut [JobRuntime],
+    registry: &ScheduledJobRegistry,
+) -> bool {
     match runtimes.iter_mut().find(|j| j.name == name) {
         Some(job) => {
             job.paused = paused;

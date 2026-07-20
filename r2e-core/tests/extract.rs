@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 
 use r2e_core::extract::{
-    FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean, assert_unambiguous_extractor,
+    assert_unambiguous_extractor, FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean,
 };
 use r2e_core::http::extract::{MatchedPath, Query};
 use r2e_core::http::header::{HeaderMap, Parts};

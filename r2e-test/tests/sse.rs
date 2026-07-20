@@ -14,8 +14,20 @@ fn test_parse_data_only_events() {
     let resp = sse_response("data: hello\n\ndata: world\n\n");
     let events = resp.sse_events();
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0], ParsedSseEvent { event: None, data: "hello".into() });
-    assert_eq!(events[1], ParsedSseEvent { event: None, data: "world".into() });
+    assert_eq!(
+        events[0],
+        ParsedSseEvent {
+            event: None,
+            data: "hello".into()
+        }
+    );
+    assert_eq!(
+        events[1],
+        ParsedSseEvent {
+            event: None,
+            data: "world".into()
+        }
+    );
 }
 
 #[test]

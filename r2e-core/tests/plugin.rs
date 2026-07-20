@@ -20,7 +20,9 @@ use tower::ServiceExt;
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
     layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
-    router_wraps: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
+    router_wraps: &'a mut Vec<
+        Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>,
+    >,
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
     serve_hooks: &'a mut Vec<Box<dyn FnOnce(ServeContext) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
@@ -220,7 +222,10 @@ async fn multi_provision_plugin_resolves_both_beans_from_state() {
     assert_eq!(state.get::<Beta>(), Beta("hello".into()));
     // Both are injectable via the bean context, by type.
     assert_eq!(app.bean_context().as_ref().get::<Alpha>(), Alpha(42));
-    assert_eq!(app.bean_context().as_ref().get::<Beta>(), Beta("hello".into()));
+    assert_eq!(
+        app.bean_context().as_ref().get::<Beta>(),
+        Beta("hello".into())
+    );
 }
 
 #[test]
@@ -388,7 +393,10 @@ async fn sugar_serve_and_shutdown_hooks_execute_after_explicit() {
         es.is_some() && ss.is_some(),
         "both serve hooks ran: {entries:?}"
     );
-    assert!(es < ss, "explicit action runs before sugar action: {entries:?}");
+    assert!(
+        es < ss,
+        "explicit action runs before sugar action: {entries:?}"
+    );
 
     // Shutdown hooks (sync + async) executed; explicit before sugar.
     let esh = entries.iter().position(|e| *e == "explicit-shutdown");
@@ -491,7 +499,11 @@ async fn late_deps_resolves_provided_bean_in_configure() {
         .provide(Alpha(7))
         .build_state()
         .await;
-    assert_eq!(log.values(), vec![7], "configure received the provided Alpha");
+    assert_eq!(
+        log.values(),
+        vec![7],
+        "configure received the provided Alpha"
+    );
 }
 
 /// THE acceptance test's plugin: `LateDeps = (FactoryBean,)` — a bean that only
@@ -564,7 +576,11 @@ async fn late_deps_resolves_bean_provided_by_another_plugin() {
         .plugin(LateProvidedPlugin { log: log.clone() })
         .build_state()
         .await;
-    assert_eq!(log.values(), vec![11], "consumer configure saw producer's Alpha");
+    assert_eq!(
+        log.values(),
+        vec![11],
+        "consumer configure saw producer's Alpha"
+    );
 
     // Consumer installed first: `LateDeps` binds against the final graph, not
     // install order, so the result is identical.
@@ -737,7 +753,8 @@ async fn plugin_config_loaded_from_present_section() {
     let sink = Arc::new(Mutex::new(None));
     let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  name: hello\n  count: 5\n").unwrap();
     let _app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .plugin(ConfigReadingPlugin { sink: sink.clone() })
         .build_state()
         .await;
@@ -758,12 +775,17 @@ async fn plugin_config_absent_section_is_none() {
     let sink = Arc::new(Mutex::new(None));
     let config = r2e_core::R2eConfig::from_yaml_str("other:\n  key: 1\n").unwrap();
     let _app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .plugin(ConfigReadingPlugin { sink: sink.clone() })
         .build_state()
         .await;
 
-    assert_eq!(*sink.lock().unwrap(), Some(None), "absent section yields None");
+    assert_eq!(
+        *sink.lock().unwrap(),
+        Some(None),
+        "absent section yields None"
+    );
 }
 
 #[r2e_core::test]
@@ -776,7 +798,11 @@ async fn plugin_config_no_config_loaded_is_none() {
         .build_state()
         .await;
 
-    assert_eq!(*sink.lock().unwrap(), Some(None), "no config loaded yields None");
+    assert_eq!(
+        *sink.lock().unwrap(),
+        Some(None),
+        "no config loaded yields None"
+    );
 }
 
 #[r2e_core::test]
@@ -787,7 +813,8 @@ async fn plugin_config_malformed_section_panics_at_boot() {
     // validation error naming the plugin and section.
     let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  port: not-a-number\n").unwrap();
     let _app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .plugin(StrictConfigPlugin)
         .build_state()
         .await;
@@ -941,13 +968,7 @@ impl PreStatePlugin for GatedPlugin {
         (Alpha(99),)
     }
 
-    fn configure(
-        self,
-        _p: &(Alpha,),
-        (): (),
-        _config: Option<()>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
+    fn configure(self, _p: &(Alpha,), (): (), _config: Option<()>, ctx: &mut DeferredContext<'_>) {
         ctx.store_data(GatedConfigured(2));
     }
 }
@@ -957,7 +978,8 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
     // No `gated.enabled` key at all → defaults to enabled: sugar + configure run.
     let config = r2e_core::R2eConfig::from_yaml_str("gated:\n  other: 1\n").unwrap();
     let app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .plugin(GatedPlugin)
         .build_state()
         .await;
@@ -966,7 +988,10 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
     assert_eq!(app.state().get::<Alpha>(), Alpha(99));
     // Sugar store_data + configure store_data both landed.
     assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(1));
-    assert_eq!(app.get_plugin_data::<GatedConfigured>().map(|d| d.0), Some(2));
+    assert_eq!(
+        app.get_plugin_data::<GatedConfigured>().map(|d| d.0),
+        Some(2)
+    );
     // Sugar route reachable.
     let (status, body) = get_route(app.build(), "/gated").await;
     assert_eq!(status, StatusCode::OK);
@@ -977,7 +1002,8 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
 async fn plugin_enabled_false_skips_effects_but_keeps_beans() {
     let config = r2e_core::R2eConfig::from_yaml_str("gated:\n  enabled: false\n").unwrap();
     let app = AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .plugin(GatedPlugin)
         .build_state()
         .await;
@@ -1001,5 +1027,8 @@ async fn plugin_enabled_false_without_config_loaded_is_enabled() {
 
     assert_eq!(app.state().get::<Alpha>(), Alpha(99));
     assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(1));
-    assert_eq!(app.get_plugin_data::<GatedConfigured>().map(|d| d.0), Some(2));
+    assert_eq!(
+        app.get_plugin_data::<GatedConfigured>().map(|d| d.0),
+        Some(2)
+    );
 }

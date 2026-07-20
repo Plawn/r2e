@@ -1,4 +1,7 @@
-use r2e_events::{EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, LocalEventBus, RequestOptions, DEFAULT_MAX_CONCURRENCY};
+use r2e_events::{
+    EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult, LocalEventBus,
+    RequestOptions, DEFAULT_MAX_CONCURRENCY,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -140,7 +143,11 @@ async fn test_backpressure_limits_concurrency() {
         "Max concurrent handlers ({}) exceeded limit (3)",
         max_seen.load(Ordering::SeqCst)
     );
-    assert_eq!(completed.load(Ordering::SeqCst), 10, "All events should be processed");
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        10,
+        "All events should be processed"
+    );
 }
 
 #[r2e_core::test]
@@ -465,11 +472,11 @@ async fn test_drain_no_subscribers() {
 async fn test_default_eventbus() {
     let default_bus = LocalEventBus::default();
     let new_bus = LocalEventBus::new();
+    assert_eq!(default_bus.concurrency_limit(), new_bus.concurrency_limit(),);
     assert_eq!(
         default_bus.concurrency_limit(),
-        new_bus.concurrency_limit(),
+        Some(DEFAULT_MAX_CONCURRENCY)
     );
-    assert_eq!(default_bus.concurrency_limit(), Some(DEFAULT_MAX_CONCURRENCY));
 }
 
 #[r2e_core::test]
@@ -781,15 +788,16 @@ async fn test_unsubscribe_prevents_future_dispatch() {
     let counter = Arc::new(AtomicUsize::new(0));
 
     let c = counter.clone();
-    let handle = bus.subscribe(move |_: EventEnvelope<TestEvent>| {
-        let c = c.clone();
-        async move {
-            c.fetch_add(1, Ordering::SeqCst);
-            HandlerResult::Ack
-        }
-    })
-    .await
-    .unwrap();
+    let handle = bus
+        .subscribe(move |_: EventEnvelope<TestEvent>| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                HandlerResult::Ack
+            }
+        })
+        .await
+        .unwrap();
 
     // First emit: handler should fire
     emit_and_drain(&bus, TestEvent { value: 1 }).await;
@@ -919,9 +927,9 @@ async fn test_shutdown_subscribe_rejected() {
     let bus = LocalEventBus::new();
     bus.shutdown(Duration::from_secs(1)).await.unwrap();
 
-    let result = bus.subscribe(move |_: EventEnvelope<TestEvent>| async move {
-        HandlerResult::Ack
-    }).await;
+    let result = bus
+        .subscribe(move |_: EventEnvelope<TestEvent>| async move { HandlerResult::Ack })
+        .await;
     assert!(matches!(result, Err(EventBusError::Shutdown)));
 }
 
@@ -1004,9 +1012,9 @@ async fn test_request_without_responder_is_no_responder() {
 async fn test_responder_error_maps_to_remote() {
     let bus = LocalEventBus::new();
 
-    bus.respond(|_env: EventEnvelope<Add>| async move {
-        Err::<Sum, String>("cannot add".to_string())
-    })
+    bus.respond(
+        |_env: EventEnvelope<Add>| async move { Err::<Sum, String>("cannot add".to_string()) },
+    )
     .await
     .unwrap();
 

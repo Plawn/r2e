@@ -53,9 +53,8 @@ async fn registry_bean_can_register_at_runtime() {
 
     // Access the registry through the global function
     let reg = r2e_prometheus::registry();
-    let gauge =
-        r2e_prometheus::prometheus::IntGauge::new("runtime_gauge", "registered at runtime")
-            .unwrap();
+    let gauge = r2e_prometheus::prometheus::IntGauge::new("runtime_gauge", "registered at runtime")
+        .unwrap();
     gauge.set(99);
 
     reg.register(Box::new(gauge))
@@ -139,8 +138,7 @@ async fn endpoint_is_driven_by_file_config() {
     // The builder does NOT set an endpoint, so the `prometheus.endpoint` file
     // value drives the metrics route. This proves file config reaches
     // `configure`.
-    let config =
-        R2eConfig::from_yaml_str("prometheus:\n  endpoint: /custom-metrics\n").unwrap();
+    let config = R2eConfig::from_yaml_str("prometheus:\n  endpoint: /custom-metrics\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
@@ -164,8 +162,7 @@ async fn endpoint_is_driven_by_file_config() {
 #[r2e_core::test]
 async fn builder_endpoint_wins_over_file_config() {
     // `Prometheus::new` sets the endpoint explicitly, so it beats file config.
-    let config =
-        R2eConfig::from_yaml_str("prometheus:\n  endpoint: /from-file\n").unwrap();
+    let config = R2eConfig::from_yaml_str("prometheus:\n  endpoint: /from-file\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
@@ -178,10 +175,7 @@ async fn builder_endpoint_wins_over_file_config() {
         status_of(router.clone(), "/from-builder").await,
         StatusCode::OK
     );
-    assert_eq!(
-        status_of(router, "/from-file").await,
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(status_of(router, "/from-file").await, StatusCode::NOT_FOUND);
 }
 
 #[r2e_core::test]

@@ -40,7 +40,10 @@ async fn field_too_large_body_contains_limit() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let msg = json["error"].as_str().unwrap();
     assert!(msg.contains("avatar"), "error should name the field: {msg}");
-    assert!(msg.contains("4096"), "error should include the limit: {msg}");
+    assert!(
+        msg.contains("4096"),
+        "error should include the limit: {msg}"
+    );
 }
 
 #[r2e_core::test]

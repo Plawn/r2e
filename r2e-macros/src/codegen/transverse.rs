@@ -743,9 +743,7 @@ pub(crate) fn scan_post_construct_methods(
 }
 
 /// Scan all `&self` methods in an impl block for `#[pre_destroy]`.
-pub(crate) fn scan_pre_destroy_methods(
-    item_impl: &ItemImpl,
-) -> syn::Result<Vec<PreDestroyMethod>> {
+pub(crate) fn scan_pre_destroy_methods(item_impl: &ItemImpl) -> syn::Result<Vec<PreDestroyMethod>> {
     scan_lifecycle_methods(item_impl, "pre_destroy", "#[pre_destroy]")
 }
 

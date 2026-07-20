@@ -16,7 +16,10 @@ fn to_json_value(cv: &ConfigValue) -> serde_json::Value {
             serde_json::Value::Array(items.iter().map(to_json_value).collect())
         }
         ConfigValue::Map(map) => {
-            let obj = map.iter().map(|(k, v)| (k.clone(), to_json_value(v))).collect();
+            let obj = map
+                .iter()
+                .map(|(k, v)| (k.clone(), to_json_value(v)))
+                .collect();
             serde_json::Value::Object(obj)
         }
     }

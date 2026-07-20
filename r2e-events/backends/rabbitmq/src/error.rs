@@ -9,12 +9,8 @@ pub fn map_lapin_error(err: lapin::Error) -> EventBusError {
         ErrorKind::IOError(_)
         | ErrorKind::ProtocolError(_)
         | ErrorKind::InvalidChannelState(..)
-        | ErrorKind::InvalidConnectionState(_) => {
-            EventBusError::Connection(err.to_string())
-        }
-        ErrorKind::SerialisationError(_) => {
-            EventBusError::Serialization(err.to_string())
-        }
+        | ErrorKind::InvalidConnectionState(_) => EventBusError::Connection(err.to_string()),
+        ErrorKind::SerialisationError(_) => EventBusError::Serialization(err.to_string()),
         _ => EventBusError::Other(err.to_string()),
     }
 }
@@ -24,9 +20,7 @@ pub fn map_lapin_error(err: lapin::Error) -> EventBusError {
 /// `PublisherConfirm::await` only reports protocol/connection failures through
 /// its outer `Result`; broker nacks and channels without confirm mode are
 /// successful `Result`s carrying a non-ack [`Confirmation`].
-pub(crate) fn require_publisher_ack(
-    confirmation: Confirmation,
-) -> Result<(), EventBusError> {
+pub(crate) fn require_publisher_ack(confirmation: Confirmation) -> Result<(), EventBusError> {
     match confirmation {
         Confirmation::Ack(None) => Ok(()),
         Confirmation::Ack(Some(_)) => Err(EventBusError::Other(

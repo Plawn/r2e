@@ -83,9 +83,9 @@ impl<I: Identity + GrpcRoleBasedIdentity> GrpcGuard<I> for GrpcRolesGuard {
         ctx: &GrpcGuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Status>> + Send {
         let result = (|| {
-            let identity = ctx.identity.ok_or_else(|| {
-                Status::unauthenticated("No identity available for role check")
-            })?;
+            let identity = ctx
+                .identity
+                .ok_or_else(|| Status::unauthenticated("No identity available for role check"))?;
             let roles = identity.roles();
             let has_role = self
                 .required_roles

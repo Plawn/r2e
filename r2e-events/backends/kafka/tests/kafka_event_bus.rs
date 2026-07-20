@@ -61,7 +61,10 @@ fn security_protocol_variants() {
     let _ssl = SecurityProtocol::Ssl;
     let _sasl = SecurityProtocol::SaslPlaintext;
     let _sasl_ssl = SecurityProtocol::SaslSsl;
-    assert!(matches!(SecurityProtocol::default(), SecurityProtocol::Plaintext));
+    assert!(matches!(
+        SecurityProtocol::default(),
+        SecurityProtocol::Plaintext
+    ));
 }
 
 #[test]
@@ -186,7 +189,11 @@ fn request_and_reply_topic_naming() {
     let id = instance_id();
     let reply = reply_topic("r2e-app", id);
     assert!(reply.starts_with("r2e-app.replies."));
-    assert_eq!(reply, reply_topic("r2e-app", id), "reply topic is stable for an instance id");
+    assert_eq!(
+        reply,
+        reply_topic("r2e-app", id),
+        "reply topic is stable for an instance id"
+    );
     // 16 hex chars for the u64 instance nonce.
     let suffix = reply.trim_start_matches("r2e-app.replies.");
     assert_eq!(suffix.len(), 16);
@@ -205,7 +212,10 @@ fn reply_header_roundtrip_ok() {
     // Simulate the produce -> consume header path (UTF-8 string values).
     let decoded = decode_reply_headers(pairs.iter().map(|(k, v)| (k.as_ref(), v.as_str())))
         .expect("request id present");
-    assert_eq!(decoded.request_id, 0x1234_5678_9abc_def0_1111_2222_3333_4444);
+    assert_eq!(
+        decoded.request_id,
+        0x1234_5678_9abc_def0_1111_2222_3333_4444
+    );
     assert!(decoded.reply_to.is_none());
     assert!(decoded.reply_error.is_none());
 }
@@ -252,7 +262,10 @@ fn request_id_is_separate_from_user_correlation_id() {
         "exactly one request-id header"
     );
     assert_eq!(
-        pairs.iter().filter(|(k, _)| k == HEADER_CORRELATION_ID).count(),
+        pairs
+            .iter()
+            .filter(|(k, _)| k == HEADER_CORRELATION_ID)
+            .count(),
         1,
         "the user's correlation id flows through untouched"
     );
@@ -267,7 +280,10 @@ fn request_id_is_separate_from_user_correlation_id() {
     assert_eq!(decoded_meta.correlation_id.as_deref(), Some("trace-abc"));
     assert_eq!(decoded_meta.event_id, metadata.event_id);
     assert_eq!(decoded_meta.partition_key.as_deref(), Some("user-7"));
-    assert_eq!(decoded_meta.headers.get("source").map(|s| s.as_str()), Some("svc"));
+    assert_eq!(
+        decoded_meta.headers.get("source").map(|s| s.as_str()),
+        Some("svc")
+    );
 }
 
 // ── Request-reply: responder registration (at most one per type) ────
@@ -431,15 +447,24 @@ async fn live_broker_request_reply_roundtrip() {
     let config = KafkaConfig::builder()
         .group_id(format!("r2e-integration-{nonce:016x}"))
         .build();
-    let bus = KafkaEventBus::builder(config).topic::<Ping>(topic).connect().await
+    let bus = KafkaEventBus::builder(config)
+        .topic::<Ping>(topic)
+        .connect()
+        .await
         .expect("Kafka broker must be available for integration tests");
-    let _responder = bus.respond(|env: EventEnvelope<Ping>| async move {
-        Ok::<_, String>(Pong(env.event.0 + 1))
-    }).await.unwrap();
-    let reply: Pong = bus.request_with(
-        Ping(41),
-        RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
-    ).await.unwrap();
+    let _responder = bus
+        .respond(|env: EventEnvelope<Ping>| async move { Ok::<_, String>(Pong(env.event.0 + 1)) })
+        .await
+        .unwrap();
+    let reply: Pong = bus
+        .request_with(
+            Ping(41),
+            RequestOptions::new().with_timeout(std::time::Duration::from_secs(20)),
+        )
+        .await
+        .unwrap();
     assert_eq!(reply, Pong(42));
-    bus.shutdown(std::time::Duration::from_secs(10)).await.unwrap();
+    bus.shutdown(std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
 }

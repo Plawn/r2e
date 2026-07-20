@@ -25,8 +25,7 @@ impl ResolutionGuard {
         RESOLVING.with(|stack| {
             let mut stack = stack.borrow_mut();
             if let Some(pos) = stack.iter().position(|(t, _)| *t == tid) {
-                let mut trace: Vec<&'static str> =
-                    stack[pos..].iter().map(|(_, n)| *n).collect();
+                let mut trace: Vec<&'static str> = stack[pos..].iter().map(|(_, n)| *n).collect();
                 trace.push(name);
                 panic!(
                     "circular lazy bean dependency detected: {}",
@@ -165,9 +164,9 @@ where
             Ok(Err(join_err)) if join_err.is_panic() => {
                 std::panic::resume_unwind(join_err.into_panic())
             }
-            Ok(Err(join_err)) => panic!(
-                "lazy bean factory task was cancelled on the control plane: {join_err}"
-            ),
+            Ok(Err(join_err)) => {
+                panic!("lazy bean factory task was cancelled on the control plane: {join_err}")
+            }
             Err(_) => panic!(
                 "control-plane runtime shut down while resolving lazy bean {}",
                 std::any::type_name::<T>()
@@ -217,9 +216,7 @@ where
 /// `tests/` can drive control-plane lazy resolution without `#[cfg(test)]`
 /// visibility hacks. Not part of the public API.
 #[doc(hidden)]
-pub fn __resolve_lazy_factory_for_tests<T>(
-    factory: LazyFactory<T>,
-) -> T
+pub fn __resolve_lazy_factory_for_tests<T>(factory: LazyFactory<T>) -> T
 where
     T: Send + 'static,
 {

@@ -36,10 +36,7 @@ pub(crate) fn schedule_config_expr(
 }
 
 /// Generate the `OverlapPolicy` expression for a parsed `#[scheduled]` config.
-pub(crate) fn overlap_policy_expr(
-    overlap: OverlapMode,
-    sched_krate: &TokenStream,
-) -> TokenStream {
+pub(crate) fn overlap_policy_expr(overlap: OverlapMode, sched_krate: &TokenStream) -> TokenStream {
     match overlap {
         OverlapMode::Skip => quote! { #sched_krate::OverlapPolicy::Skip },
         OverlapMode::Concurrent => quote! { #sched_krate::OverlapPolicy::Concurrent },

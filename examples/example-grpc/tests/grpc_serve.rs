@@ -123,9 +123,7 @@ async fn serve_starts_grpc_on_separate_port() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{http_port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move {
-        prepared.run().await.map_err(|e| e.to_string())
-    });
+    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     let mut client = connect_client(grpc_port).await;
 
@@ -166,9 +164,7 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move {
-        prepared.run().await.map_err(|e| e.to_string())
-    });
+    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     // gRPC on the HTTP port (content-type routed, h2c prior knowledge).
     let mut client = connect_client(port).await;
@@ -196,7 +192,10 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
         response.starts_with("HTTP/1.1 200"),
         "unexpected HTTP response: {response}"
     );
-    assert!(response.contains("pong"), "unexpected HTTP body: {response}");
+    assert!(
+        response.contains("pong"),
+        "unexpected HTTP body: {response}"
+    );
 
     stop_and_await_clean(stop, server).await;
 }

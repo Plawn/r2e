@@ -50,8 +50,8 @@ use std::task::{Context, Poll};
 use crate::http::response::SseEvent;
 use dashmap::DashMap;
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
 
 // ── SseBroadcaster ───────────────────────────────────────────────────────
 

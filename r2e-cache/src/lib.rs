@@ -55,7 +55,8 @@ impl<K: Eq + Hash + Clone, V: Clone> TtlCache<K, V> {
 
     /// Remove all expired entries.
     pub fn evict_expired(&self) {
-        self.inner.retain(|_, (_, inserted)| inserted.elapsed() < self.ttl);
+        self.inner
+            .retain(|_, (_, inserted)| inserted.elapsed() < self.ttl);
     }
 }
 
@@ -75,10 +76,18 @@ impl<K: Eq + Hash + Clone, V: Clone> TtlCache<K, V> {
 /// ```
 pub trait CacheStore: Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Option<Bytes>> + Send + 'a>>;
-    fn set<'a>(&'a self, key: &'a str, value: Bytes, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    fn set<'a>(
+        &'a self,
+        key: &'a str,
+        value: Bytes,
+        ttl: Duration,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     fn remove<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     fn clear(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
-    fn remove_by_prefix<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    fn remove_by_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
 
 /// Default in-memory cache store backed by `DashMap`.
@@ -127,9 +136,15 @@ impl CacheStore for InMemoryStore {
         })
     }
 
-    fn set<'a>(&'a self, key: &'a str, value: Bytes, ttl: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn set<'a>(
+        &'a self,
+        key: &'a str,
+        value: Bytes,
+        ttl: Duration,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
-            self.inner.insert(key.to_string(), (value, Instant::now(), ttl));
+            self.inner
+                .insert(key.to_string(), (value, Instant::now(), ttl));
         })
     }
 
@@ -145,10 +160,12 @@ impl CacheStore for InMemoryStore {
         })
     }
 
-    fn remove_by_prefix<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn remove_by_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             self.inner.retain(|k, _| !k.starts_with(prefix));
         })
     }
 }
-

@@ -1,6 +1,6 @@
-use r2e_core::http::{Body, HeaderMap, Router, Request, StatusCode};
 use r2e_core::http::body::to_bytes;
-use r2e_static::{EmbeddedFrontend, rust_embed};
+use r2e_core::http::{Body, HeaderMap, Request, Router, StatusCode};
+use r2e_static::{rust_embed, EmbeddedFrontend};
 use tower::ServiceExt;
 
 #[derive(rust_embed::Embed, Clone)]
@@ -171,31 +171,20 @@ async fn if_none_match_returns_304_on_matching_etag() {
     let etag = headers.get("etag").unwrap().to_str().unwrap();
 
     // Second request with If-None-Match.
-    let (status, resp_headers, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("If-None-Match", etag)],
-    )
-    .await;
+    let (status, resp_headers, body) =
+        get_with_headers(app, "/style.css", &[("If-None-Match", etag)]).await;
 
     assert_eq!(status, StatusCode::NOT_MODIFIED);
     assert!(body.is_empty());
-    assert_eq!(
-        resp_headers.get("etag").unwrap().to_str().unwrap(),
-        etag,
-    );
+    assert_eq!(resp_headers.get("etag").unwrap().to_str().unwrap(), etag,);
 }
 
 #[r2e_core::test]
 async fn if_none_match_returns_200_on_mismatched_etag() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (status, _, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("If-None-Match", "\"wrong-etag\"")],
-    )
-    .await;
+    let (status, _, body) =
+        get_with_headers(app, "/style.css", &[("If-None-Match", "\"wrong-etag\"")]).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("body { margin: 0; }"));
@@ -205,8 +194,7 @@ async fn if_none_match_returns_200_on_mismatched_etag() {
 async fn if_none_match_star_returns_304() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (status, _, body) =
-        get_with_headers(app, "/style.css", &[("If-None-Match", "*")]).await;
+    let (status, _, body) = get_with_headers(app, "/style.css", &[("If-None-Match", "*")]).await;
 
     assert_eq!(status, StatusCode::NOT_MODIFIED);
     assert!(body.is_empty());
@@ -220,12 +208,7 @@ async fn if_none_match_multiple_etags() {
     let etag = headers.get("etag").unwrap().to_str().unwrap();
 
     let multi = format!("\"other\", {}", etag);
-    let (status, _, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("If-None-Match", &multi)],
-    )
-    .await;
+    let (status, _, _) = get_with_headers(app, "/style.css", &[("If-None-Match", &multi)]).await;
 
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 }
@@ -236,12 +219,8 @@ async fn if_none_match_multiple_etags() {
 async fn brotli_served_when_accepted() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (status, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "br, gzip")],
-    )
-    .await;
+    let (status, headers, _) =
+        get_with_headers(app, "/style.css", &[("Accept-Encoding", "br, gzip")]).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -262,12 +241,8 @@ async fn brotli_served_when_accepted() {
 async fn gzip_served_when_br_not_accepted() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (status, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "gzip")],
-    )
-    .await;
+    let (status, headers, _) =
+        get_with_headers(app, "/style.css", &[("Accept-Encoding", "gzip")]).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -281,12 +256,8 @@ async fn uncompressed_when_no_compressed_variant_exists() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
     // index.html has no .br/.gz variant
-    let (status, headers, body) = get_with_headers(
-        app,
-        "/index.html",
-        &[("Accept-Encoding", "br, gzip")],
-    )
-    .await;
+    let (status, headers, body) =
+        get_with_headers(app, "/index.html", &[("Accept-Encoding", "br, gzip")]).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(headers.get("content-encoding").is_none());
@@ -301,12 +272,8 @@ async fn compression_disabled_serves_uncompressed() {
             .build(),
     );
 
-    let (status, headers, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "br, gzip")],
-    )
-    .await;
+    let (status, headers, body) =
+        get_with_headers(app, "/style.css", &[("Accept-Encoding", "br, gzip")]).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(headers.get("content-encoding").is_none());
@@ -317,12 +284,8 @@ async fn compression_disabled_serves_uncompressed() {
 async fn quality_zero_encoding_rejected() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (_, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "br;q=0, gzip")],
-    )
-    .await;
+    let (_, headers, _) =
+        get_with_headers(app, "/style.css", &[("Accept-Encoding", "br;q=0, gzip")]).await;
 
     assert_eq!(
         headers.get("content-encoding").unwrap().to_str().unwrap(),
@@ -393,12 +356,7 @@ async fn content_length_present() {
 async fn content_length_on_compressed_response() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (_, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "gzip")],
-    )
-    .await;
+    let (_, headers, _) = get_with_headers(app, "/style.css", &[("Accept-Encoding", "gzip")]).await;
 
     assert!(headers.get("content-length").is_some());
 }
@@ -415,12 +373,8 @@ async fn range_request_returns_206() {
             .build(),
     );
 
-    let (status, headers, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Range", "bytes=0-3")],
-    )
-    .await;
+    let (status, headers, body) =
+        get_with_headers(app, "/style.css", &[("Range", "bytes=0-3")]).await;
 
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
     assert_eq!(body, "body");
@@ -441,12 +395,8 @@ async fn range_suffix_request() {
     );
 
     // "body { margin: 0; }\n" — last 4 bytes = "}\n" ... let's request last 3
-    let (status, headers, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Range", "bytes=-3")],
-    )
-    .await;
+    let (status, headers, body) =
+        get_with_headers(app, "/style.css", &[("Range", "bytes=-3")]).await;
 
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
     assert_eq!(body.len(), 3);
@@ -462,12 +412,7 @@ async fn range_open_end() {
     );
 
     // Request from byte 5 to end: "{ margin: 0; }\n"
-    let (status, _, body) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Range", "bytes=5-")],
-    )
-    .await;
+    let (status, _, body) = get_with_headers(app, "/style.css", &[("Range", "bytes=5-")]).await;
 
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
     assert!(body.starts_with("{ margin"));
@@ -481,12 +426,8 @@ async fn invalid_range_returns_416() {
             .build(),
     );
 
-    let (status, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Range", "bytes=9999-")],
-    )
-    .await;
+    let (status, headers, _) =
+        get_with_headers(app, "/style.css", &[("Range", "bytes=9999-")]).await;
 
     assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
     let cr = headers.get("content-range").unwrap().to_str().unwrap();
@@ -512,12 +453,7 @@ async fn accept_ranges_header_present() {
 async fn no_accept_ranges_on_compressed() {
     let app = make_app(EmbeddedFrontend::new::<TestAssets>());
 
-    let (_, headers, _) = get_with_headers(
-        app,
-        "/style.css",
-        &[("Accept-Encoding", "br")],
-    )
-    .await;
+    let (_, headers, _) = get_with_headers(app, "/style.css", &[("Accept-Encoding", "br")]).await;
 
     assert!(headers.get("accept-ranges").is_none());
 }

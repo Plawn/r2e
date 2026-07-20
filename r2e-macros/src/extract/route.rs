@@ -205,7 +205,9 @@ pub fn extract_pre_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::E
 
 /// Extract `#[sse("/path")]` or `#[sse("/path", keep_alive = ...)]`.
 /// Returns `(path, keep_alive)` if found.
-pub fn extract_sse_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(String, crate::types::SseKeepAlive)>> {
+pub fn extract_sse_attr(
+    attrs: &[syn::Attribute],
+) -> syn::Result<Option<(String, crate::types::SseKeepAlive)>> {
     for attr in attrs {
         if !attr.path().is_ident("sse") {
             continue;
@@ -220,7 +222,12 @@ pub fn extract_sse_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(String,
                 lit: syn::Lit::Str(lit_str),
                 ..
             })) => lit_str.value(),
-            _ => return Err(syn::Error::new_spanned(attr, "#[sse] requires a path string as first argument")),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[sse] requires a path string as first argument",
+                ))
+            }
         };
 
         let mut keep_alive = crate::types::SseKeepAlive::Default;
@@ -243,18 +250,24 @@ pub fn extract_sse_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<(String,
                                 lit: syn::Lit::Int(ref i),
                                 ..
                             }) => {
-                                keep_alive = crate::types::SseKeepAlive::Interval(i.base10_parse()?);
+                                keep_alive =
+                                    crate::types::SseKeepAlive::Interval(i.base10_parse()?);
                             }
-                            _ => return Err(syn::Error::new_spanned(
-                                &assign.right,
-                                "keep_alive must be a bool or integer",
-                            )),
+                            _ => {
+                                return Err(syn::Error::new_spanned(
+                                    &assign.right,
+                                    "keep_alive must be a bool or integer",
+                                ))
+                            }
                         }
                         continue;
                     }
                 }
             }
-            return Err(syn::Error::new_spanned(expr, "unexpected argument in #[sse]"));
+            return Err(syn::Error::new_spanned(
+                expr,
+                "unexpected argument in #[sse]",
+            ));
         }
 
         return Ok(Some((path, keep_alive)));
@@ -328,10 +341,7 @@ pub fn extract_doc_comments(attrs: &[syn::Attribute]) -> (Option<String>, Option
     }
 
     // Remaining non-empty lines form the description
-    let desc_lines: Vec<&str> = doc_lines[desc_start..]
-        .iter()
-        .map(|l| l.trim())
-        .collect();
+    let desc_lines: Vec<&str> = doc_lines[desc_start..].iter().map(|l| l.trim()).collect();
     let description = if desc_lines.is_empty() || desc_lines.iter().all(|l| l.is_empty()) {
         None
     } else {

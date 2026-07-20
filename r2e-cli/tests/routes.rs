@@ -32,10 +32,7 @@ fn extracts_controller_path() {
 #[controller(path = "/users")]
 pub struct UserController;
 "#;
-    assert_eq!(
-        extract_controller_path(content),
-        Some("/users".to_string())
-    );
+    assert_eq!(extract_controller_path(content), Some("/users".to_string()));
 }
 
 #[test]

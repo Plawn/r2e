@@ -305,11 +305,8 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
 
     // ── App-boot path: #[r2e::test(app = MyApp)] ─────────────────────────
     if args.app_fn.is_some() && !is_test {
-        return syn::Error::new_spanned(
-            sig,
-            "`app = ...` is only valid on #[r2e::test]",
-        )
-        .to_compile_error();
+        return syn::Error::new_spanned(sig, "`app = ...` is only valid on #[r2e::test]")
+            .to_compile_error();
     }
     if args.app_fn.is_none() && (args.with_expr.is_some() || !args.jwt) {
         return syn::Error::new_spanned(
@@ -418,7 +415,11 @@ impl OrderedHooks {
             );
             #expect_panic
         };
-        Self { submit, turn, test_crate }
+        Self {
+            submit,
+            turn,
+            test_crate,
+        }
     }
 
     /// Wrap the user body so its outcome reaches the guard before it drops:
@@ -506,11 +507,8 @@ fn expand_boot_test(
             bindings.push(quote! { let #pat: #ty = __r2e_test_app.bean::<#ty>(); });
         } else if type_ends_with(ty, "TestApp") {
             if app_binding.is_some() {
-                return syn::Error::new_spanned(
-                    param,
-                    "only one `TestApp` parameter is allowed",
-                )
-                .to_compile_error();
+                return syn::Error::new_spanned(param, "only one `TestApp` parameter is allowed")
+                    .to_compile_error();
             }
             app_binding = Some(quote! { let #pat: #ty = __r2e_test_app; });
         } else if type_ends_with(ty, "TestJwt") {

@@ -48,8 +48,9 @@ pub trait JwtClaimsValidatorLike: Send + Sync {
     fn validate(
         &self,
         token: &str,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>>
-           + Send;
+    ) -> impl std::future::Future<
+        Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+    > + Send;
 }
 
 /// Wrapper to use a gRPC identity extractor with any type that holds an
@@ -75,8 +76,9 @@ impl<T: JwtClaimsValidatorLike> JwtClaimsValidatorLike for Arc<T> {
     fn validate(
         &self,
         token: &str,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>>
-           + Send {
+    ) -> impl std::future::Future<
+        Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+    > + Send {
         (**self).validate(token)
     }
 }

@@ -317,7 +317,9 @@ async fn built_guard_allows_when_tuple_present() {
     mock.add_tuple("user:alice", "viewer", "document:123");
     let guard = build_guard(
         mock,
-        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+        FgaCheck::relation("viewer")
+            .on("document")
+            .from_path("doc_id"),
     )
     .await;
 
@@ -345,7 +347,9 @@ async fn built_guard_forbids_when_tuple_absent() {
     let mock = MockBackend::new();
     let guard = build_guard(
         mock,
-        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+        FgaCheck::relation("viewer")
+            .on("document")
+            .from_path("doc_id"),
     )
     .await;
 
@@ -374,7 +378,9 @@ async fn built_guard_unauthorized_without_identity() {
     let mock = MockBackend::new();
     let guard = build_guard(
         mock,
-        FgaCheck::relation("viewer").on("document").from_path("doc_id"),
+        FgaCheck::relation("viewer")
+            .on("document")
+            .from_path("doc_id"),
     )
     .await;
 

@@ -200,10 +200,7 @@ where
 {
     type Rejection = r2e_core::HttpError;
 
-    async fn from_request_parts_via(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts_via(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let claims = extract_jwt_claims(parts, state).await?;
         Ok(AuthenticatedUser::from_claims(claims))
     }

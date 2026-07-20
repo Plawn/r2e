@@ -16,8 +16,10 @@ use crate::{
 use crate::EventFilter;
 
 type Handler = Arc<
-    dyn Fn(Arc<dyn Any + Send + Sync>, EventMetadata)
-        -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
+    dyn Fn(
+            Arc<dyn Any + Send + Sync>,
+            EventMetadata,
+        ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send>>
         + Send
         + Sync,
 >;
@@ -26,8 +28,10 @@ type Handler = Arc<
 /// either the reply value (`Box<dyn Any + Send>`) or a remote-error message.
 /// The reply is boxed (not `Arc`) so `Resp` need only be `Send`, not `Sync`.
 type LocalResponder = Arc<
-    dyn Fn(Arc<dyn Any + Send + Sync>, EventMetadata)
-        -> Pin<Box<dyn Future<Output = Result<Box<dyn Any + Send>, String>> + Send>>
+    dyn Fn(
+            Arc<dyn Any + Send + Sync>,
+            EventMetadata,
+        ) -> Pin<Box<dyn Future<Output = Result<Box<dyn Any + Send>, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -189,12 +193,7 @@ impl LocalEventBus {
             let in_flight_zero = self.in_flight_zero.clone();
 
             let permit = match &self.semaphore {
-                Some(sem) => Some(
-                    sem.clone()
-                        .acquire_owned()
-                        .await
-                        .expect("semaphore closed"),
-                ),
+                Some(sem) => Some(sem.clone().acquire_owned().await.expect("semaphore closed")),
                 None => None,
             };
 
@@ -203,7 +202,10 @@ impl LocalEventBus {
             // semaphore, the counter stays accurate and wait_idle won't hang.
             in_flight.fetch_add(1, Ordering::Relaxed);
             r2e_core::rt::spawn(async move {
-                let _guard = InFlightGuard { in_flight, in_flight_zero };
+                let _guard = InFlightGuard {
+                    in_flight,
+                    in_flight_zero,
+                };
                 let result = h(e, m).await;
                 drop(permit);
                 if let HandlerResult::Nack(ref reason) = result {
@@ -254,19 +256,16 @@ impl EventBus for LocalEventBus {
                 new_map
             });
 
-            Ok(SubscriptionHandle::new(
-                SubscriptionId(id),
-                move || {
-                    let handlers = handlers_for_unsub.clone();
-                    handlers.rcu(move |map| {
-                        let mut new_map = HashMap::clone(map);
-                        if let Some(entries) = new_map.get_mut(&type_id) {
-                            entries.retain(|e| e.id != id);
-                        }
-                        new_map
-                    });
-                },
-            ))
+            Ok(SubscriptionHandle::new(SubscriptionId(id), move || {
+                let handlers = handlers_for_unsub.clone();
+                handlers.rcu(move |map| {
+                    let mut new_map = HashMap::clone(map);
+                    if let Some(entries) = new_map.get_mut(&type_id) {
+                        entries.retain(|e| e.id != id);
+                    }
+                    new_map
+                });
+            }))
         }
     }
 
@@ -354,15 +353,16 @@ impl EventBus for LocalEventBus {
             // emit dispatch discipline; time out waiting for the reply.
             in_flight.fetch_add(1, Ordering::Relaxed);
             let handle = r2e_core::rt::spawn(async move {
-                let _guard = InFlightGuard { in_flight, in_flight_zero };
+                let _guard = InFlightGuard {
+                    in_flight,
+                    in_flight_zero,
+                };
                 responder(req_any, metadata).await
             });
 
             match r2e_core::rt::timeout(options.timeout, handle).await {
                 Err(_) => Err(EventBusError::RequestTimeout),
-                Ok(Err(_join)) => {
-                    Err(EventBusError::Other("responder task panicked".to_string()))
-                }
+                Ok(Err(_join)) => Err(EventBusError::Other("responder task panicked".to_string())),
                 Ok(Ok(Err(msg))) => Err(EventBusError::Remote(msg)),
                 Ok(Ok(Ok(reply))) => match reply.downcast::<Resp>() {
                     Ok(boxed) => Ok(*boxed),

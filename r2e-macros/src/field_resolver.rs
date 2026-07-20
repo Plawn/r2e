@@ -8,13 +8,8 @@ use crate::type_utils::{
 pub enum FieldKind {
     Inject,
     InjectNamed { name: String },
-    Config {
-        key: String,
-        ty_name: String,
-    },
-    ConfigSection {
-        prefix: String,
-    },
+    Config { key: String, ty_name: String },
+    ConfigSection { prefix: String },
     Default,
 }
 
@@ -96,10 +91,7 @@ pub fn classify_fields<'a>(
             let msg = format!(
                 "{} field must be annotated with one of:\n{}",
                 opts.context_label,
-                hints
-                    .iter()
-                    .map(|h| format!("\n  {h}"))
-                    .collect::<String>()
+                hints.iter().map(|h| format!("\n  {h}")).collect::<String>()
             );
             return Err(syn::Error::new_spanned(field_name, msg));
         }

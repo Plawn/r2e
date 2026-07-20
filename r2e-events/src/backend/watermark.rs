@@ -56,7 +56,9 @@ impl<O: Ord + Copy> Default for PartitionState<O> {
 impl<P: Eq + Hash + Copy, O: Ord + Copy> WatermarkTracker<P, O> {
     /// Create an empty tracker (fresh per consumer session).
     pub fn new() -> Self {
-        Self { partitions: HashMap::new() }
+        Self {
+            partitions: HashMap::new(),
+        }
     }
 
     /// Record that a message was received.

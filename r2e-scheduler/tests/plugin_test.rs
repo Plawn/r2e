@@ -6,8 +6,8 @@ use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::AppBuilder;
 use r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
-    extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, Scheduler, ScheduledTask,
-    ScheduledTaskDef, SchedulerCommands,
+    extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask,
+    ScheduledTaskDef, Scheduler, SchedulerCommands,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -131,7 +131,10 @@ async fn full_lifecycle_without_serve() {
     // Let it run a bit
     tokio::time::sleep(Duration::from_millis(200)).await;
     let count_before = counter.load(Ordering::SeqCst);
-    assert!(count_before >= 1, "task should have run at least once, got {count_before}");
+    assert!(
+        count_before >= 1,
+        "task should have run at least once, got {count_before}"
+    );
 
     // Cancel and wait for cancellation to take effect
     token.cancel();

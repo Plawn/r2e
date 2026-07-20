@@ -23,14 +23,14 @@ pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
+use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
+use crate::meta::MetaRegistry;
 use crate::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
     ModuleScope, RequiredPluginsInstalled,
 };
-use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
-use crate::meta::MetaRegistry;
-use crate::service::ServiceComponent;
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
+use crate::service::ServiceComponent;
 use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -94,7 +94,10 @@ type ConsumerReg<T> =
 /// before consumer registrations. State-free (the future already captures the
 /// core `Arc`), so — unlike [`ConsumerReg`] — it carries no `T`.
 type PostConstructReg = std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
+    Box<
+        dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+            + Send,
+    >,
 >;
 
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;

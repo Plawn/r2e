@@ -150,7 +150,12 @@ mod tests {
     fn encode_binary_data_preserved() {
         let binary = vec![0x00, 0xFF, 0x80, 0x01];
         let mut form = MultipartForm::new();
-        form.add_file("data", "bin.dat", "application/octet-stream", binary.clone());
+        form.add_file(
+            "data",
+            "bin.dat",
+            "application/octet-stream",
+            binary.clone(),
+        );
         let encoded = form.encode();
         // The binary bytes must appear in the encoded output
         assert!(encoded

@@ -38,8 +38,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use r2e_core::http::header::{
-    HeaderMap, ACCEPT_ENCODING, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_ENCODING,
-    CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE, VARY,
+    HeaderMap, ACCEPT_ENCODING, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH,
+    CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE, VARY,
 };
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{Body, Response, StatusCode};
@@ -431,9 +431,7 @@ impl StaticFileHandler {
                         if self.config.compression {
                             builder = builder.header(VARY, "Accept-Encoding");
                         }
-                        return Some(
-                            builder.body(Body::empty()).unwrap().into_response(),
-                        );
+                        return Some(builder.body(Body::empty()).unwrap().into_response());
                     }
                 }
             }
@@ -467,10 +465,7 @@ impl StaticFileHandler {
                             if self.config.compression {
                                 builder = builder.header(VARY, "Accept-Encoding");
                             }
-                            builder
-                                .body(Body::from(slice))
-                                .unwrap()
-                                .into_response()
+                            builder.body(Body::from(slice)).unwrap().into_response()
                         }
                         None => range_not_satisfiable(data_len),
                     });
@@ -501,12 +496,7 @@ impl StaticFileHandler {
             builder = builder.header(VARY, "Accept-Encoding");
         }
 
-        Some(
-            builder
-                .body(Body::from(file.data))
-                .unwrap()
-                .into_response(),
-        )
+        Some(builder.body(Body::from(file.data)).unwrap().into_response())
     }
 }
 
@@ -561,29 +551,26 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
 
         app.with_layer_fn(move |router| {
             let handler = handler.clone();
-            router.fallback(
-                move |req: r2e_core::http::extract::Request| async move {
-                    let path = req.uri().path().to_string();
+            router.fallback(move |req: r2e_core::http::extract::Request| async move {
+                let path = req.uri().path().to_string();
 
-                    let effective_path =
-                        if let Some(ref base) = handler.config.base_path {
-                            match path.strip_prefix(base.as_str()) {
-                                Some(rest) => {
-                                    if rest.is_empty() || rest.starts_with('/') {
-                                        rest
-                                    } else {
-                                        return not_found();
-                                    }
-                                }
-                                None => return not_found(),
+                let effective_path = if let Some(ref base) = handler.config.base_path {
+                    match path.strip_prefix(base.as_str()) {
+                        Some(rest) => {
+                            if rest.is_empty() || rest.starts_with('/') {
+                                rest
+                            } else {
+                                return not_found();
                             }
-                        } else {
-                            &path
-                        };
+                        }
+                        None => return not_found(),
+                    }
+                } else {
+                    &path
+                };
 
-                    handler.serve(effective_path, req.headers())
-                },
-            )
+                handler.serve(effective_path, req.headers())
+            })
         })
     }
 

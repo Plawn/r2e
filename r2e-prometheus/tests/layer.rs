@@ -89,7 +89,11 @@ async fn junk_404_paths_do_not_create_one_series_each() {
 async fn matched_routes_are_labeled_with_the_route_template() {
     let router = test_router(MetricsConfig::default());
 
-    for path in ["/users/1", "/users/2", "/users/de5c8bd2-aaaa-bbbb-cccc-1234567890ab"] {
+    for path in [
+        "/users/1",
+        "/users/2",
+        "/users/de5c8bd2-aaaa-bbbb-cccc-1234567890ab",
+    ] {
         assert_eq!(send(&router, path).await, StatusCode::OK);
     }
 

@@ -52,7 +52,10 @@ async fn pause_freezes_execution_and_resume_restarts_it() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(counter.load(Ordering::SeqCst) >= 1, "should have ticked");
 
-    assert!(handle.pause("pausable").await, "pause of a known job succeeds");
+    assert!(
+        handle.pause("pausable").await,
+        "pause of a known job succeeds"
+    );
     // Let any in-flight tick settle, then snapshot.
     tokio::time::sleep(Duration::from_millis(80)).await;
     let frozen = counter.load(Ordering::SeqCst);
@@ -64,7 +67,10 @@ async fn pause_freezes_execution_and_resume_restarts_it() {
         "paused job must not execute"
     );
 
-    assert!(handle.resume("pausable").await, "resume of a known job succeeds");
+    assert!(
+        handle.resume("pausable").await,
+        "resume of a known job succeeds"
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
         counter.load(Ordering::SeqCst) > frozen,
@@ -89,9 +95,16 @@ async fn trigger_now_fires_a_job_immediately() {
     let (handle, token) = spawn(task, ScheduledJobRegistry::new());
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 0, "must not fire on its own");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        0,
+        "must not fire on its own"
+    );
 
-    assert!(handle.trigger_now("manual").await, "trigger of a known job succeeds");
+    assert!(
+        handle.trigger_now("manual").await,
+        "trigger of a known job succeeds"
+    );
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
         counter.load(Ordering::SeqCst),
@@ -184,7 +197,11 @@ async fn stats_are_populated_and_paused_flag_toggles() {
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     let info = registry.job("stats").expect("job registered");
-    assert!(info.run_count >= 3, "run_count should accrue, got {}", info.run_count);
+    assert!(
+        info.run_count >= 3,
+        "run_count should accrue, got {}",
+        info.run_count
+    );
     assert!(info.last_run.is_some(), "last_run recorded");
     assert!(info.next_run.is_some(), "next_run recorded");
     assert!(info.last_duration.is_some(), "last_duration recorded");
@@ -196,7 +213,10 @@ async fn stats_are_populated_and_paused_flag_toggles() {
 
     assert!(handle.resume("stats").await);
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(!registry.job("stats").unwrap().paused, "paused flag cleared");
+    assert!(
+        !registry.job("stats").unwrap().paused,
+        "paused flag cleared"
+    );
 
     // Unknown-job control returns false.
     assert!(!handle.pause("ghost").await);

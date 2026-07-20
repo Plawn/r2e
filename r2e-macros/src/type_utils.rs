@@ -18,7 +18,9 @@ pub fn type_last_segment_is(ty: &Type, name: &str) -> bool {
 /// framework's Result aliases (`Result`, `ApiResult`, `JsonResult`).
 pub fn is_result_like(ty: &Type) -> bool {
     let Type::Path(p) = ty else { return false };
-    let Some(last) = p.path.segments.last() else { return false };
+    let Some(last) = p.path.segments.last() else {
+        return false;
+    };
     matches!(
         last.ident.to_string().as_str(),
         "Result" | "ApiResult" | "JsonResult"
@@ -51,7 +53,9 @@ pub fn result_ok_type(ty: &Type) -> Option<&Type> {
 /// If `ty` is `Option<X>` (or `std::option::Option<X>`), return `Some(X)`.
 /// Otherwise, return `None`.
 pub fn unwrap_option_type(ty: &Type) -> Option<&Type> {
-    let Type::Path(type_path) = ty else { return None };
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
     let segments = &type_path.path.segments;
 
     // Match `Option<X>` or `std::option::Option<X>`
@@ -107,7 +111,10 @@ pub fn type_base_name(ty: &Type) -> String {
 pub fn named_bean_newtype_ident(name: &str, ty: &Type) -> syn::Ident {
     let pascal_name = to_pascal_case(name);
     let base = type_base_name(ty);
-    syn::Ident::new(&format!("{}{}", pascal_name, base), proc_macro2::Span::call_site())
+    syn::Ident::new(
+        &format!("{}{}", pascal_name, base),
+        proc_macro2::Span::call_site(),
+    )
 }
 
 /// Parse `#[inject(name = "...")]` from attributes, returning the name if present.
@@ -172,7 +179,8 @@ pub fn parse_config_field(attr: &syn::Attribute, ty: &Type) -> syn::Result<(Stri
 /// env-var suggestion and points at YAML only. Dotted keys keep the env hint.
 pub fn config_hint_sentence(key: &str) -> String {
     if key.contains('-') {
-        "Add it to application.yaml (kebab-case keys are not addressable via R2E_ env vars).".to_string()
+        "Add it to application.yaml (kebab-case keys are not addressable via R2E_ env vars)."
+            .to_string()
     } else {
         let env = key.replace('.', "_").to_uppercase();
         format!("Add it to application.yaml or set env var `{env}`.")

@@ -275,10 +275,7 @@ pub type DefaultIdentityBuilder = IdentityBuilderWith<DefaultRoleExtractor>;
 
 impl Default for DefaultIdentityBuilder {
     fn default() -> Self {
-        Self::new(Merge(
-            StandardRoleExtractor,
-            keycloak::RealmRoleExtractor,
-        ))
+        Self::new(Merge(StandardRoleExtractor, keycloak::RealmRoleExtractor))
     }
 }
 

@@ -10,8 +10,8 @@ use crate::codegen::transverse::{
 };
 use crate::crate_path::r2e_core_path;
 use crate::extract::async_exec::{
-    extract_async_exec, strip_async_exec_attrs, validate_async_exec_method,
-    AsyncExecHost, ASYNC_EXEC_INTERCEPT_MSG,
+    extract_async_exec, strip_async_exec_attrs, validate_async_exec_method, AsyncExecHost,
+    ASYNC_EXEC_INTERCEPT_MSG,
 };
 use crate::extract::consumer::{
     classify_consumer_return, extract_consumer, extract_event_type_from_arc, strip_consumer_attrs,
@@ -20,10 +20,10 @@ use crate::extract::route::extract_intercept_fns;
 use crate::extract::scheduled::extract_scheduled;
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
-use crate::types::ConsumerKind;
 use crate::type_utils::{
     named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
 };
+use crate::types::ConsumerKind;
 
 /// Parsed `#[bean(...)]` arguments.
 struct BeanArgs {
@@ -219,12 +219,16 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             }
             FnArg::Typed(pat_type) => {
                 let ty = &*pat_type.ty;
-                let arg_name = syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
+                let arg_name =
+                    syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
 
                 let inject_name = parse_inject_name(&pat_type.attrs)?;
 
                 let config_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config"));
-                let config_section_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config_section"));
+                let config_section_attr = pat_type
+                    .attrs
+                    .iter()
+                    .find(|a| a.path().is_ident("config_section"));
 
                 if let Some(name) = inject_name {
                     let newtype_ident = named_bean_newtype_ident(&name, ty);
@@ -254,12 +258,19 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     config_key_entries.push(quote! { (#key_str, #ty_name_str, #required) });
                     let owner = format!("bean `{type_name_str}`");
                     let expr = crate::field_resolver::config_resolve_expr(
-                        &quote! { __r2e_config }, &key_str, Some(ty), &owner, is_option, &krate,
+                        &quote! { __r2e_config },
+                        &key_str,
+                        Some(ty),
+                        &owner,
+                        is_option,
+                        &krate,
                     );
                     build_args.push(quote! { let #arg_name: #ty = #expr; });
                     has_config = true;
                 } else {
-                    dep_type_ids.push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
+                    dep_type_ids.push(
+                        quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) },
+                    );
                     dep_types.push(quote! { #ty });
                     build_args.push(quote! { let #arg_name: #ty = ctx.get::<#ty>(); });
                 }
@@ -475,9 +486,16 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         .filter_map(|it| match it {
             ImplItem::Fn(m)
                 if !m.attrs.iter().any(|a| {
-                    ["scheduled", "consumer", "async_exec", "post_construct", "pre_destroy", "intercept"]
-                        .iter()
-                        .any(|k| a.path().is_ident(k))
+                    [
+                        "scheduled",
+                        "consumer",
+                        "async_exec",
+                        "post_construct",
+                        "pre_destroy",
+                        "intercept",
+                    ]
+                    .iter()
+                    .any(|k| a.path().is_ident(k))
                 }) =>
             {
                 Some(m)
@@ -497,8 +515,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 // interceptor set (a non-inferable set already emits a
                 // compile_error and skips the wrapper — don't stack an
                 // await-on-sync error on top).
-                emitted_async: sm.is_async
-                    || intercepted.iter().any(|im| im.fn_name == sm.fn_name),
+                emitted_async: sm.is_async || intercepted.iter().any(|im| im.fn_name == sm.fn_name),
                 skip: crate::codegen::scheduled::resolve_skip_if(
                     &sm.config,
                     plain_fns.iter().copied(),
@@ -506,8 +523,11 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             })
         })
         .collect::<syn::Result<_>>()?;
-    let scheduled_source_impl =
-        transverse::scheduled_source_impl(&quote! { #self_ty }, &type_ident.to_string(), &sched_defs);
+    let scheduled_source_impl = transverse::scheduled_source_impl(
+        &quote! { #self_ty },
+        &type_ident.to_string(),
+        &sched_defs,
+    );
 
     let consumer_defs: Vec<ConsumerMethodDef> = consumer_methods
         .iter()
@@ -525,8 +545,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         .collect();
     // A bean implements `EventSubscriber` for its own type, so custom
     // `deserializer` associated fns are reached through `Self`.
-    let subscriber_impl =
-        transverse::event_subscriber_impl(&quote! { #self_ty }, &consumer_defs);
+    let subscriber_impl = transverse::event_subscriber_impl(&quote! { #self_ty }, &consumer_defs);
 
     let post_construct_impl = transverse::post_construct_impl(&quote! { #self_ty }, &pc_methods);
     let pre_destroy_impl =
@@ -540,14 +559,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     {
         let pc_hook = (!pc_methods.is_empty())
             .then(|| quote! { registry.register_post_construct::<Self>(); });
-        let pd_hook = (!pd_methods.is_empty())
-            .then(|| quote! { registry.register_pre_destroy::<Self>(); });
+        let pd_hook =
+            (!pd_methods.is_empty()).then(|| quote! { registry.register_pre_destroy::<Self>(); });
         let sched_hook = (!scheduled_methods.is_empty())
             .then(|| quote! { registry.register_scheduled_source::<Self>(); });
         let sub_hook = (!consumer_methods.is_empty())
             .then(|| quote! { registry.register_event_subscriber::<Self>(); });
-        let deco_hook =
-            has_decos.then(|| quote! { registry.register_deco_fill::<Self>(); });
+        let deco_hook = has_decos.then(|| quote! { registry.register_deco_fill::<Self>(); });
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
                 #pc_hook
@@ -686,8 +704,7 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
             let is_scheduled = method.attrs.iter().any(|a| a.path().is_ident("scheduled"));
             let is_consumer = method.attrs.iter().any(|a| a.path().is_ident("consumer"));
             if !is_scheduled && !is_consumer {
-                let is_async_exec =
-                    method.attrs.iter().any(|a| a.path().is_ident("async_exec"));
+                let is_async_exec = method.attrs.iter().any(|a| a.path().is_ident("async_exec"));
                 if is_async_exec {
                     // Shared message with the controller path; spanned on the
                     // whole signature here (this fires before the async_exec
@@ -856,7 +873,12 @@ fn scan_scheduled_methods(
 fn find_constructor(item_impl: &ItemImpl) -> syn::Result<(&syn::ImplItemFn, bool)> {
     for item in &item_impl.items {
         if let ImplItem::Fn(method) = item {
-            if method.sig.inputs.iter().any(|arg| matches!(arg, FnArg::Receiver(_))) {
+            if method
+                .sig
+                .inputs
+                .iter()
+                .any(|arg| matches!(arg, FnArg::Receiver(_)))
+            {
                 continue;
             }
             if returns_self(&method.sig.output, &item_impl.self_ty) {
@@ -936,7 +958,8 @@ impl VisitMut for DecoLiteralInjector {
         if already {
             return;
         }
-        node.fields.push(syn::parse_quote!(__r2e_decos: ::core::default::Default::default()));
+        node.fields
+            .push(syn::parse_quote!(__r2e_decos: ::core::default::Default::default()));
     }
 }
 
@@ -965,7 +988,11 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
 
     for item in &item_impl.items {
         if let ImplItem::Fn(method) = item {
-            let is_constructor = !method.sig.inputs.iter().any(|arg| matches!(arg, FnArg::Receiver(_)))
+            let is_constructor = !method
+                .sig
+                .inputs
+                .iter()
+                .any(|arg| matches!(arg, FnArg::Receiver(_)))
                 && returns_self(&method.sig.output, self_ty);
 
             if is_constructor {
@@ -979,30 +1006,41 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                 }
                 let attrs = &method.attrs;
 
-                let clean_params: Vec<TokenStream2> = method.sig.inputs.iter().map(|arg| {
-                    match arg {
+                let clean_params: Vec<TokenStream2> = method
+                    .sig
+                    .inputs
+                    .iter()
+                    .map(|arg| match arg {
                         FnArg::Receiver(r) => quote! { #r },
                         FnArg::Typed(pt) => {
-                            let non_config_attrs: Vec<_> = pt.attrs.iter()
+                            let non_config_attrs: Vec<_> = pt
+                                .attrs
+                                .iter()
                                 .filter(|a| {
                                     !a.path().is_ident("config")
-                                    && !a.path().is_ident("config_section")
-                                    && !a.path().is_ident("inject")
+                                        && !a.path().is_ident("config_section")
+                                        && !a.path().is_ident("inject")
                                 })
                                 .collect();
                             let pat = &pt.pat;
                             let ty = &pt.ty;
                             quote! { #(#non_config_attrs)* #pat: #ty }
                         }
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 items.push(quote! {
                     #(#attrs)*
                     #vis #sig_asyncness fn #sig_ident(#(#clean_params),*) #sig_output #body
                 });
             } else if let Some(im) = intercepted_by_name(&method.sig.ident) {
-                items.push(emit_intercepted_method(method, im, self_ty, &mut injector, has_intercepts));
+                items.push(emit_intercepted_method(
+                    method,
+                    im,
+                    self_ty,
+                    &mut injector,
+                    has_intercepts,
+                ));
             } else if let Some(am) = async_exec_by_name(&method.sig.ident) {
                 // `#[async_exec]`: split into a renamed inner fn + a synchronous
                 // pool-submission wrapper (shared emitter with `#[routes]`).

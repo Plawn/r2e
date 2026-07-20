@@ -117,14 +117,11 @@ impl GrpcBackend {
         if let Some(token) = &self.api_token {
             request.metadata_mut().insert(
                 "authorization",
-                format!("Bearer {}", token)
-                    .parse()
-                    .map_err(|e: tonic::metadata::errors::InvalidMetadataValue| {
-                        OpenFgaError::InvalidConfig(format!(
-                            "invalid api_token for header: {}",
-                            e
-                        ))
-                    })?,
+                format!("Bearer {}", token).parse().map_err(
+                    |e: tonic::metadata::errors::InvalidMetadataValue| {
+                        OpenFgaError::InvalidConfig(format!("invalid api_token for header: {}", e))
+                    },
+                )?,
             );
         }
         Ok(request)

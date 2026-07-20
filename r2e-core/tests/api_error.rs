@@ -1,5 +1,5 @@
-use r2e_core::http::{StatusCode, IntoResponse};
 use http_body_util::BodyExt;
+use r2e_core::http::{IntoResponse, StatusCode};
 use r2e_core::prelude::*;
 
 async fn error_parts(err: impl IntoResponse) -> (StatusCode, serde_json::Value) {

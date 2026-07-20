@@ -1,6 +1,6 @@
 use r2e_core::interceptors::{Interceptor, InterceptorContext};
 use r2e_core::DecoratorSpec;
-use r2e_utils::{Cache, CacheInvalidate, Logged, LogLevel, Timed};
+use r2e_utils::{Cache, CacheInvalidate, LogLevel, Logged, Timed};
 
 fn test_ctx() -> InterceptorContext {
     InterceptorContext {
@@ -129,13 +129,15 @@ async fn test_cache_invalidate_interceptor() {
 
     // Pre-populate cache under group prefix
     store
-        .set("mygroup:item1", bytes::Bytes::from("\"val\""), std::time::Duration::from_secs(60))
+        .set(
+            "mygroup:item1",
+            bytes::Bytes::from("\"val\""),
+            std::time::Duration::from_secs(60),
+        )
         .await;
 
     let invalidator = CacheInvalidate::group("mygroup").build(&bean_ctx);
-    let result = invalidator
-        .around(ctx, || async { 42 })
-        .await;
+    let result = invalidator.around(ctx, || async { 42 }).await;
     assert_eq!(result, 42);
 
     // Entry should be gone

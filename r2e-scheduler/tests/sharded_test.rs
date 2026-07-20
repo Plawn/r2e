@@ -18,7 +18,7 @@ use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::config::R2eConfig;
 use r2e_core::AppBuilder;
 use r2e_executor::Executor;
-use r2e_scheduler::{ScheduleConfig, Scheduler, ScheduledTask, ScheduledTaskDef};
+use r2e_scheduler::{ScheduleConfig, ScheduledTask, ScheduledTaskDef, Scheduler};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -108,9 +108,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
     )]);
 
     let app = app
-        .register_routes(
-            r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })),
-        )
+        .register_routes(r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })))
         .prepare(&addr);
 
     assert_eq!(app.workers().unwrap(), Some(2));

@@ -42,7 +42,12 @@ impl ProductService {
     }
 
     pub async fn get_by_id(&self, id: u64) -> Option<ProductInfo> {
-        self.products.read().await.iter().find(|p| p.id == id).cloned()
+        self.products
+            .read()
+            .await
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
     }
 
     pub async fn check_availability(&self, id: u64) -> Option<AvailabilityResponse> {

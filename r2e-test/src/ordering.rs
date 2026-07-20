@@ -177,7 +177,9 @@ fn groups() -> &'static Mutex<GroupMap> {
 
 fn group_cell(group: &'static str) -> Arc<GroupCell> {
     let mut map = recover(groups().lock());
-    map.entry(group).or_insert_with(|| Arc::new(GroupCell::new(group))).clone()
+    map.entry(group)
+        .or_insert_with(|| Arc::new(GroupCell::new(group)))
+        .clone()
 }
 
 /// Default watchdog timeout, read once from `R2E_TEST_ORDER_TIMEOUT_SECS`.
@@ -223,15 +225,14 @@ pub fn turn_with_timeout(
     turn_inner(group, order, test, timeout)
 }
 
-fn turn_inner(
-    group: &'static str,
-    order: u32,
-    test: &'static str,
-    timeout: Duration,
-) -> TurnGuard {
+fn turn_inner(group: &'static str, order: u32, test: &'static str, timeout: Duration) -> TurnGuard {
     let cell = group_cell(group);
-    let lower: Vec<(u32, &'static str)> =
-        cell.entries.iter().copied().filter(|&(o, _)| o < order).collect();
+    let lower: Vec<(u32, &'static str)> = cell
+        .entries
+        .iter()
+        .copied()
+        .filter(|&(o, _)| o < order)
+        .collect();
 
     let mut st = recover(cell.state.lock());
     loop {
@@ -267,8 +268,9 @@ fn turn_inner(
         // deadline (a hung predecessor hangs the suite like any hung test).
         // The watchdog only arms while the group is idle with never-started
         // lower orders outstanding — the would-be-deadlock case.
-        let in_flight =
-            lower.iter().any(|(o, _)| st.started.contains(o) && !st.completed.contains(o));
+        let in_flight = lower
+            .iter()
+            .any(|(o, _)| st.started.contains(o) && !st.completed.contains(o));
         if in_flight {
             st = recover(cell.condvar.wait(st));
             continue;
@@ -306,7 +308,10 @@ fn watchdog_message(
             continue;
         }
         if st.started.contains(&o) {
-            msg.push_str(&format!("  - order {} ('{}'): started but never finished\n", o, t));
+            msg.push_str(&format!(
+                "  - order {} ('{}'): started but never finished\n",
+                o, t
+            ));
         } else {
             msg.push_str(&format!(
                 "  - order {} ('{}'): registered but never started (likely filtered out by a \

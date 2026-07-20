@@ -260,7 +260,9 @@ pub fn interval(period: Duration) -> Interval {
 /// The concrete listener type remains `tokio::net::TcpListener` because axum
 /// requires it directly.  The binding itself goes through this facade so the
 /// call site is isolated.
-pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<tokio::net::TcpListener> {
+pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(
+    addr: A,
+) -> io::Result<tokio::net::TcpListener> {
     tokio::net::TcpListener::bind(addr).await
 }
 

@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use r2e::builder::ScheduledTaskMarker;
 use r2e::prelude::*;
 use r2e::r2e_events::{EventBus, LocalEventBus};
 use r2e::r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e::r2e_scheduler::{
     extract_tasks, start_jobs, ScheduledJobRegistry, Scheduler, SchedulerCommands,
 };
-use r2e::builder::ScheduledTaskMarker;
 use r2e::{Decorate, TaskRegistryHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -262,7 +262,11 @@ async fn scheduled_interceptor_fires_on_direct_calls() {
 
     assert_eq!(ticks.load(Ordering::SeqCst), 2);
     let entries = evidence.snapshot();
-    assert_eq!(entries, vec!["tick:tick", "synctick:sync_tick"], "{entries:?}");
+    assert_eq!(
+        entries,
+        vec!["tick:tick", "synctick:sync_tick"],
+        "{entries:?}"
+    );
 }
 
 #[r2e::test]
@@ -333,13 +337,13 @@ async fn direct_call_on_registered_consumer_bean_is_intercepted() {
 
     let bean: PingConsumer = app.bean_context().get();
     // Direct in-code call goes through the same dispatch wrapper.
-    bean.on_ping(Arc::new(Ping { msg: "direct".into() })).await;
+    bean.on_ping(Arc::new(Ping {
+        msg: "direct".into(),
+    }))
+    .await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        evidence.snapshot(),
-        vec!["impl:on_ping", "method:on_ping"],
-    );
+    assert_eq!(evidence.snapshot(), vec!["impl:on_ping", "method:on_ping"],);
 }
 
 #[r2e::test]
@@ -399,7 +403,10 @@ async fn two_intercepted_beans_co_resolved_in_one_app() {
     let entries = evidence.snapshot();
     assert!(entries.contains(&"tick:tick".to_string()), "{entries:?}");
     assert!(entries.contains(&"impl:on_ping".to_string()), "{entries:?}");
-    assert!(entries.contains(&"method:on_ping".to_string()), "{entries:?}");
+    assert!(
+        entries.contains(&"method:on_ping".to_string()),
+        "{entries:?}"
+    );
     assert!(entries.contains(&"resp:answer".to_string()), "{entries:?}");
 }
 
@@ -457,7 +464,10 @@ async fn hand_built_instance_decorated_explicitly() {
     // A hand-built, unregistered instance: `Decorate::decorate` builds its
     // chains from the resolved graph and fills the slot.
     let evidence = Evidence::default();
-    let app = AppBuilder::new().provide(evidence.clone()).build_state().await;
+    let app = AppBuilder::new()
+        .provide(evidence.clone())
+        .build_state()
+        .await;
 
     let ticks = Arc::new(AtomicUsize::new(0));
     let svc = SchedTicker::new(ticks.clone());

@@ -26,17 +26,11 @@ fn test_config() -> SecurityConfig {
 }
 
 fn test_claims_validator() -> JwtClaimsValidator {
-    JwtClaimsValidator::new_with_static_key(
-        DecodingKey::from_secret(TEST_SECRET),
-        test_config(),
-    )
+    JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), test_config())
 }
 
 fn test_validator() -> JwtValidator {
-    JwtValidator::new_with_static_key(
-        DecodingKey::from_secret(TEST_SECRET),
-        test_config(),
-    )
+    JwtValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), test_config())
 }
 
 fn make_token(sub: &str, roles: &[&str], email: Option<&str>, exp_offset: i64) -> String {
@@ -125,7 +119,10 @@ async fn validate_expired_token() {
     let result = validator.validate(&token).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::TokenExpired), "expected TokenExpired, got: {err}");
+    assert!(
+        matches!(err, SecurityError::TokenExpired),
+        "expected TokenExpired, got: {err}"
+    );
 }
 
 #[r2e_core::test]
@@ -180,16 +177,17 @@ async fn validate_invalid_signature() {
     let result = validator.validate(&token).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::InvalidToken(_)), "expected InvalidToken, got: {err}");
+    assert!(
+        matches!(err, SecurityError::InvalidToken(_)),
+        "expected InvalidToken, got: {err}"
+    );
 }
 
 #[r2e_core::test]
 async fn validate_disallowed_algorithm() {
     let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE);
-    let validator = JwtClaimsValidator::new_with_static_key(
-        DecodingKey::from_secret(TEST_SECRET),
-        config,
-    );
+    let validator =
+        JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), config);
     let token = valid_token("user-1", &["admin"]);
     let result = validator.validate(&token).await;
     assert!(result.is_err());
@@ -201,10 +199,8 @@ async fn validate_disallowed_algorithm() {
 async fn validate_empty_allowed_algorithms() {
     let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
         .with_allowed_algorithms(std::iter::empty::<Algorithm>());
-    let validator = JwtClaimsValidator::new_with_static_key(
-        DecodingKey::from_secret(TEST_SECRET),
-        config,
-    );
+    let validator =
+        JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), config);
     let token = valid_token("user-1", &["admin"]);
     let result = validator.validate(&token).await;
     assert!(result.is_err());
@@ -235,7 +231,10 @@ async fn validate_wrong_issuer() {
     let result = validator.validate(&token).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+    assert!(
+        matches!(err, SecurityError::ValidationFailed(_)),
+        "expected ValidationFailed, got: {err}"
+    );
 }
 
 #[r2e_core::test]
@@ -261,7 +260,10 @@ async fn validate_wrong_audience() {
     let result = validator.validate(&token).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+    assert!(
+        matches!(err, SecurityError::ValidationFailed(_)),
+        "expected ValidationFailed, got: {err}"
+    );
 }
 
 #[r2e_core::test]
@@ -328,8 +330,14 @@ async fn validate_missing_sub() {
 
     let result = validator.validate(&token).await;
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
-    assert!(err.to_string().contains("sub"), "error should mention sub: {err}");
+    assert!(
+        matches!(err, SecurityError::ValidationFailed(_)),
+        "expected ValidationFailed, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("sub"),
+        "error should mention sub: {err}"
+    );
 }
 
 #[r2e_core::test]
@@ -340,7 +348,10 @@ async fn validate_empty_sub() {
 
     let result = validator.validate(&token).await;
     let err = result.unwrap_err();
-    assert!(matches!(err, SecurityError::ValidationFailed(_)), "expected ValidationFailed, got: {err}");
+    assert!(
+        matches!(err, SecurityError::ValidationFailed(_)),
+        "expected ValidationFailed, got: {err}"
+    );
 }
 
 #[r2e_core::test]
@@ -348,7 +359,10 @@ async fn validate_malformed_token() {
     let validator = test_claims_validator();
     let result = validator.validate("not.a.jwt").await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), SecurityError::InvalidToken(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        SecurityError::InvalidToken(_)
+    ));
 }
 
 #[r2e_core::test]
@@ -356,7 +370,10 @@ async fn validate_empty_token() {
     let validator = test_claims_validator();
     let result = validator.validate("").await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), SecurityError::InvalidToken(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        SecurityError::InvalidToken(_)
+    ));
 }
 
 // ── JwtValidator with Identity Builder ──

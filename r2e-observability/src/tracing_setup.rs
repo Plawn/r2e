@@ -1,5 +1,5 @@
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_sdk::trace::{SdkTracerProvider, Sampler};
+use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
 use r2e_core::LogFormat;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
@@ -58,8 +58,8 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
 
     // Build the tracing-subscriber stack using TracingConfig values.
     let tc = &config.tracing;
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&tc.filter));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&tc.filter));
 
     let span_events = tc.effective_span_events();
     let target = tc.target.unwrap_or(true);

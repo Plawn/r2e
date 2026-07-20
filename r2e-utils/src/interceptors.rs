@@ -35,22 +35,34 @@ pub struct Logged {
 
 impl Logged {
     pub fn new() -> Self {
-        Logged { level: LogLevel::Info }
+        Logged {
+            level: LogLevel::Info,
+        }
     }
     pub fn info() -> Self {
-        Logged { level: LogLevel::Info }
+        Logged {
+            level: LogLevel::Info,
+        }
     }
     pub fn debug() -> Self {
-        Logged { level: LogLevel::Debug }
+        Logged {
+            level: LogLevel::Debug,
+        }
     }
     pub fn warn() -> Self {
-        Logged { level: LogLevel::Warn }
+        Logged {
+            level: LogLevel::Warn,
+        }
     }
     pub fn trace() -> Self {
-        Logged { level: LogLevel::Trace }
+        Logged {
+            level: LogLevel::Trace,
+        }
     }
     pub fn error() -> Self {
-        Logged { level: LogLevel::Error }
+        Logged {
+            level: LogLevel::Error,
+        }
     }
     pub fn level(level: LogLevel) -> Self {
         Logged { level }
@@ -96,22 +108,40 @@ pub struct Timed {
 
 impl Timed {
     pub fn new() -> Self {
-        Timed { level: LogLevel::Info, threshold_ms: None }
+        Timed {
+            level: LogLevel::Info,
+            threshold_ms: None,
+        }
     }
     pub fn info() -> Self {
-        Timed { level: LogLevel::Info, threshold_ms: None }
+        Timed {
+            level: LogLevel::Info,
+            threshold_ms: None,
+        }
     }
     pub fn debug() -> Self {
-        Timed { level: LogLevel::Debug, threshold_ms: None }
+        Timed {
+            level: LogLevel::Debug,
+            threshold_ms: None,
+        }
     }
     pub fn warn() -> Self {
-        Timed { level: LogLevel::Warn, threshold_ms: None }
+        Timed {
+            level: LogLevel::Warn,
+            threshold_ms: None,
+        }
     }
     pub fn threshold(ms: u64) -> Self {
-        Timed { level: LogLevel::Info, threshold_ms: Some(ms) }
+        Timed {
+            level: LogLevel::Info,
+            threshold_ms: Some(ms),
+        }
     }
     pub fn threshold_warn(ms: u64) -> Self {
-        Timed { level: LogLevel::Warn, threshold_ms: Some(ms) }
+        Timed {
+            level: LogLevel::Warn,
+            threshold_ms: Some(ms),
+        }
     }
 }
 
@@ -138,11 +168,7 @@ impl<R: Send> Interceptor<R> for Timed {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             match threshold_ms {
                 Some(threshold) if elapsed_ms <= threshold => {}
-                _ => log_at_level(
-                    level,
-                    method_name,
-                    &format!("elapsed_ms={elapsed_ms}"),
-                ),
+                _ => log_at_level(level, method_name, &format!("elapsed_ms={elapsed_ms}")),
             }
             result
         }
@@ -202,9 +228,7 @@ impl Cache {
     }
 
     fn full_key(&self, controller_name: &str, method_name: &str) -> String {
-        let prefix = self.group.as_deref().unwrap_or_else(|| {
-            ""
-        });
+        let prefix = self.group.as_deref().unwrap_or_else(|| "");
         let prefix = if prefix.is_empty() {
             format!("__{}_{}", controller_name, method_name)
         } else {
@@ -240,11 +264,7 @@ impl<R> Interceptor<R> for CacheInterceptor
 where
     R: r2e_core::Cacheable,
 {
-    fn around<F, Fut>(
-        &self,
-        ctx: InterceptorContext,
-        next: F,
-    ) -> impl Future<Output = R> + Send
+    fn around<F, Fut>(&self, ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
@@ -290,9 +310,7 @@ pub struct CacheInvalidate {
 
 impl CacheInvalidate {
     pub fn group(name: &str) -> Self {
-        CacheInvalidate {
-            group: name.into(),
-        }
+        CacheInvalidate { group: name.into() }
     }
 }
 
@@ -378,11 +396,7 @@ impl<R: Send> Interceptor<R> for Counted {
         let method_name = ctx.method_name;
         async move {
             let result = next().await;
-            log_at_level(
-                level,
-                method_name,
-                &format!("counted metric={metric_name}"),
-            );
+            log_at_level(level, method_name, &format!("counted metric={metric_name}"));
             result
         }
     }

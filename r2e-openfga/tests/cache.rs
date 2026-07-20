@@ -57,7 +57,9 @@ fn test_cache_max_capacity() {
     // This should be silently dropped (cache full, no expired entries).
     cache.set(CacheKey::new("user:d", "viewer", "doc:4"), true);
     assert_eq!(cache.len(), 3);
-    assert!(cache.get(&CacheKey::new("user:d", "viewer", "doc:4")).is_none());
+    assert!(cache
+        .get(&CacheKey::new("user:d", "viewer", "doc:4"))
+        .is_none());
 }
 
 #[test]

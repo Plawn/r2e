@@ -4,7 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 use crate::crate_path::r2e_core_path;
-use crate::field_resolver::{ClassifyOpts, FieldKind, classify_fields};
+use crate::field_resolver::{classify_fields, ClassifyOpts, FieldKind};
 use crate::hash_tokens::hash_token_stream;
 use crate::type_list_gen::build_tcons_type;
 use crate::type_utils::named_bean_newtype_ident;
@@ -92,7 +92,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 config_key_entries.push(quote! { (#key, #ty_name, #required) });
                 let owner = format!("bean `{name_str}`");
                 let expr = crate::field_resolver::config_resolve_expr(
-                    &quote! { __cfg }, key, Some(field_type), &owner, is_option, &krate,
+                    &quote! { __cfg },
+                    key,
+                    Some(field_type),
+                    &owner,
+                    is_option,
+                    &krate,
                 );
                 field_inits.push(quote! { #field_name: #expr });
                 has_config = true;

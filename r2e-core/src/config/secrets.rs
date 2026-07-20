@@ -50,7 +50,12 @@ pub fn resolve_placeholders(
 
         let resolved = resolve_with_default(reference, resolver)?;
 
-        result = format!("{}{}{}", &result[..start], resolved, &result[start + end + 1..]);
+        result = format!(
+            "{}{}{}",
+            &result[..start],
+            resolved,
+            &result[start + end + 1..]
+        );
     }
     Ok(result)
 }

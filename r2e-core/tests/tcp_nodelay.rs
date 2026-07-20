@@ -4,7 +4,8 @@ use r2e_core::config::R2eConfig;
 fn prepare_with_yaml(yaml: &str) -> r2e_core::builder::PreparedApp<()> {
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     AppBuilder::new()
-        .override_config(config).load_config::<()>()
+        .override_config(config)
+        .load_config::<()>()
         .with_state(())
         .prepare("0.0.0.0:0")
 }

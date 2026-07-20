@@ -50,16 +50,14 @@ async fn unknown_key_id_401() {
 #[r2e_core::test]
 async fn jwks_fetch_error_503() {
     // A JWKS fetch failure is a server-side problem, not a client auth failure.
-    let (status, body) =
-        error_parts(SecurityError::JwksFetchError("timeout".into())).await;
+    let (status, body) = error_parts(SecurityError::JwksFetchError("timeout".into())).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "Service unavailable");
 }
 
 #[r2e_core::test]
 async fn validation_failed_401() {
-    let (status, body) =
-        error_parts(SecurityError::ValidationFailed("bad issuer".into())).await;
+    let (status, body) = error_parts(SecurityError::ValidationFailed("bad issuer".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "Unauthorized");
 }

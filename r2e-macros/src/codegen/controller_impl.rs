@@ -814,7 +814,11 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
             } else {
                 quote! { None }
             };
-            (quote! { Some(#name.to_string()) }, schema_token, quote! { None })
+            (
+                quote! { Some(#name.to_string()) },
+                schema_token,
+                quote! { None },
+            )
         }
         Some(BodyExtractor::TypedMultipart { name, ty }) => (
             quote! { Some(#name.to_string()) },
@@ -963,7 +967,9 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         let container = super::decorators::sched_container_ident(name);
         let slot_access = quote! { self.__r2e_decos };
         let ctrl_field = ctrl_for_transverse.then(|| {
-            let set = ctrl_set.as_ref().expect("ctrl_for_transverse implies ctrl_set");
+            let set = ctrl_set
+                .as_ref()
+                .expect("ctrl_for_transverse implies ctrl_set");
             transverse::CtrlContainerField {
                 set_ty: set.struct_ident.clone(),
                 ctor: set.ctor_ident.clone(),
@@ -1108,8 +1114,11 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
     // inlined here, run from the core `Arc` at shutdown. An `Err` is logged and
     // swallowed (disposal never aborts shutdown).
     if !def.pre_destroy_methods.is_empty() {
-        let calls =
-            transverse::pre_destroy_calls(&quote! { __self }, &owner_name, &def.pre_destroy_methods);
+        let calls = transverse::pre_destroy_calls(
+            &quote! { __self },
+            &owner_name,
+            &def.pre_destroy_methods,
+        );
         controller_fns.push(quote! {
             const HAS_PRE_DESTROY: bool = true;
 
@@ -1202,7 +1211,13 @@ fn emit_streaming_route_info(
         .map(|r| quote! { #r.to_string() })
         .collect();
     let has_roles = !roles.is_empty() || !all_roles.is_empty();
-    let has_auth = has_auth_expr(anonymous, has_roles, has_identity_param, has_guards, meta_mod);
+    let has_auth = has_auth_expr(
+        anonymous,
+        has_roles,
+        has_identity_param,
+        has_guards,
+        meta_mod,
+    );
 
     quote! {
         #krate::meta::RouteInfo {
@@ -1500,4 +1515,3 @@ fn pre_auth_registration(
         }
     }
 }
-

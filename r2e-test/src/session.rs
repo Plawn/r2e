@@ -36,10 +36,8 @@ impl<'a> TestSession<'a> {
 
     /// Set a default Bearer token for all requests in this session.
     pub fn with_bearer(mut self, token: &str) -> Self {
-        self.default_headers.insert(
-            AUTHORIZATION,
-            format!("Bearer {token}").parse().unwrap(),
-        );
+        self.default_headers
+            .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
         self
     }
 
@@ -62,7 +60,9 @@ impl<'a> TestSession<'a> {
 
     /// Manually set a cookie in the session jar.
     pub fn set_cookie(&self, name: &str, value: &str) {
-        self.cookies.borrow_mut().insert(name.to_string(), value.to_string());
+        self.cookies
+            .borrow_mut()
+            .insert(name.to_string(), value.to_string());
     }
 
     /// Remove a cookie from the session jar.
@@ -173,7 +173,14 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
     /// Cookies from the session jar are included automatically.
     /// `Set-Cookie` headers from the response update the session jar.
     pub async fn send(self) -> TestResponse {
-        let RequestParts { method, path, headers, body, queries, multipart } = self.parts;
+        let RequestParts {
+            method,
+            path,
+            headers,
+            body,
+            queries,
+            multipart,
+        } = self.parts;
 
         // Start with session defaults, override with per-request headers
         let mut merged = self.session.default_headers.clone();

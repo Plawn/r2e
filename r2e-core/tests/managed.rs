@@ -1,7 +1,7 @@
+use http_body_util::BodyExt;
+use r2e_core::http::{IntoResponse, Response, StatusCode};
 use r2e_core::managed::ManagedErr;
 use r2e_core::HttpError;
-use r2e_core::http::{StatusCode, IntoResponse, Response};
-use http_body_util::BodyExt;
 
 #[r2e_core::test]
 async fn managed_err_http_error_into_response() {
