@@ -139,3 +139,136 @@ async fn build_state_after_raw_load_config_provides_unit_slot() {
         .try_get::<r2e_core::R2eConfig>()
         .is_some());
 }
+
+// ── Pre-state builder registration methods ──────────────────────────────────
+
+use r2e_core::beans::{AsyncBean, PostConstruct, PreDestroy, Producer};
+use r2e_core::config::{ConfigValue, R2eConfig};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct Hooked {
+    flag: Arc<AtomicBool>,
+}
+
+impl PostConstruct for Hooked {
+    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+        Box::pin(async move {
+            self.flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+#[r2e_core::test]
+async fn provide_with_post_construct_runs_hook_during_build_state() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let app = AppBuilder::new()
+        .provide_with_post_construct(Hooked { flag: flag.clone() })
+        .build_state()
+        .await;
+
+    assert!(flag.load(Ordering::SeqCst), "post-construct hook must fire");
+    let _: Hooked = app.state().get();
+}
+
+#[derive(Clone)]
+struct Disposed {
+    flag: Arc<AtomicBool>,
+}
+
+impl PreDestroy for Disposed {
+    fn pre_destroy(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.flag.store(true, Ordering::SeqCst);
+        })
+    }
+}
+
+#[r2e_core::test]
+async fn provide_with_pre_destroy_defers_hook_to_shutdown() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let app = AppBuilder::new()
+        .provide_with_pre_destroy(Disposed { flag: flag.clone() })
+        .build_state()
+        .await;
+
+    let _: Disposed = app.state().get();
+    // The disposal hook belongs to the shutdown phase — it must not run at
+    // build time. (Hook execution order is covered by the registry tests.)
+    assert!(!flag.load(Ordering::SeqCst));
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AsyncGreeter {
+    salutation: String,
+}
+
+impl AsyncBean for AsyncGreeter {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    async fn build(_ctx: &BeanContext) -> Self {
+        tokio::task::yield_now().await;
+        AsyncGreeter {
+            salutation: "async hello".into(),
+        }
+    }
+}
+
+#[r2e_core::test]
+async fn with_default_async_bean_builds() {
+    let app = AppBuilder::new()
+        .with_default_async_bean::<AsyncGreeter>()
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<AsyncGreeter>().salutation, "async hello");
+}
+
+struct GreeterProducer;
+
+impl Producer for GreeterProducer {
+    type Output = Greeter;
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    async fn produce(_ctx: &BeanContext) -> Greeter {
+        Greeter {
+            salutation: "produced".into(),
+        }
+    }
+}
+
+#[r2e_core::test]
+async fn with_default_producer_builds() {
+    let app = AppBuilder::new()
+        .with_default_producer::<GreeterProducer>()
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<Greeter>().salutation, "produced");
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct FactoryMade(String);
+
+#[r2e_core::test]
+async fn with_bean_factory_reads_config() {
+    let mut config = R2eConfig::empty();
+    config.set("app.name", ConfigValue::String("factory-app".into()));
+
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .with_bean_factory(|config: &R2eConfig| {
+            FactoryMade(config.get::<String>("app.name").unwrap())
+        })
+        .build_state()
+        .await;
+
+    assert_eq!(app.state().get::<FactoryMade>().0, "factory-app");
+}

@@ -7,6 +7,15 @@
 - **Uncovered lines**: 1296
 - **Existing tests**: ~574
 
+### Update 2026-07-21 (evening) — Bean/DI wave done
+
+29 tests added (`tests/lazy.rs`, `tests/beans.rs`, `tests/builder_hlist.rs`). New `cargo llvm-cov --workspace` numbers:
+
+- `src/lazy.rs`: 39.8% → **94.1%** (remainder: `lazy-fallback-runtime` cfg arms, measured only under that feature)
+- `src/beans.rs`: 69.2% → **86.4%** (remainder: dev-reload-only paths — `try_get_eager`, `ReusePlan` carryover — exercised by `tests/dev_reload_partial.rs` under `--features dev-reload`)
+- `src/builder/nostate.rs`: 80.7% → **94.7%**
+- r2e-core total: 74.9% → **80.2%**; workspace total: 68.1% → **69.2%**
+
 ---
 
 ## Uncovered Areas by File (sorted by gap size)
@@ -27,15 +36,17 @@ Largest single gap. Most uncovered code is in the `AppBuilder` pre-state methods
 
 | Test | Description |
 |---|---|
-| `provide_with_post_construct_runs_hook` | Post-construct hook fires during `build_state()` |
-| `provide_with_pre_destroy_registers_disposer` | Pre-destroy hook stored for shutdown |
-| `register_missing_dep_panics` | `register::<T>()` with unsatisfied dep → compile/panic diagnostic |
-| `build_state_resolves_graph` | Full bean graph resolution produces correct HList state |
-| `build_state_overlay_merges` | Overlay beans override base beans |
-| `build_state_lazy_slots_deferred` | `#[bean(lazy)]` slots are not resolved eagerly |
-| `build_state_fingerprint_computed` | `compute_fingerprint` produces stable hash for same graph |
-| `build_state_dev_reload_reuse` | dev-reload path reuses unchanged beans (feature `dev-reload`) |
-| `deferred_action_added_to_prepared` | `add_deferred()` actions appear in prepared builder |
+| `provide_with_post_construct_runs_hook` | ✅ DONE (`tests/builder_hlist.rs::provide_with_post_construct_runs_hook_during_build_state`) |
+| `provide_with_pre_destroy_registers_disposer` | ✅ DONE (`tests/builder_hlist.rs::provide_with_pre_destroy_defers_hook_to_shutdown` + e2e `tests/builder_prepared.rs::provide_with_pre_destroy_runs_disposer_on_graceful_shutdown`; order covered at registry level in `tests/beans.rs`) |
+| `register_missing_dep_panics` | N/A — compile-time check (`AllSatisfied`), covered by r2e-compile-tests |
+| `build_state_resolves_graph` | ✅ already covered (`tests/builder_hlist.rs::build_state_materializes_hlist_from_provisions`) |
+| `build_state_overlay_merges` | ✅ DONE (`tests/beans.rs::bean_context_snapshot_does_not_see_later_beans`) |
+| `build_state_lazy_slots_deferred` | ✅ DONE (`tests/beans.rs::lazy_bean_constructed_on_first_get_only`) |
+| `build_state_fingerprint_computed` | ✅ DONE (`tests/beans.rs::compute_fingerprint_*`, 3 tests, feature `dev-reload`) |
+| `build_state_dev_reload_reuse` | ✅ already covered (`tests/dev_reload_partial.rs`) |
+| `deferred_action_added_to_prepared` | Open — covered indirectly by plugin tests; no direct test |
+
+Also added 2026-07-21: `with_default_async_bean_builds`, `with_default_producer_builds`, `with_bean_factory_reads_config` (`tests/builder_hlist.rs`).
 
 ### 2. `src/beans.rs` — ~470 uncovered lines
 
@@ -52,16 +63,18 @@ Bean registry internals and context overlay.
 
 | Test | Description |
 |---|---|
-| `bean_context_clone_shares_arc` | `BeanContext::clone()` shares underlying data |
-| `bean_context_empty_has_no_beans` | `BeanContext::empty()` has zero beans |
-| `bean_context_overlay_shadows_base` | Overlay bean returned instead of base for same type |
-| `bean_context_lazy_slot_resolves_on_get` | Lazy slot factory runs on first `get::<T>()` |
-| `bean_registry_factory_produces_bean` | `Factory` closure produces the registered bean |
-| `bean_registry_post_construct_fires` | `PostConstructFn` runs after bean creation |
-| `bean_registry_disposer_fires_on_shutdown` | `DisposerBuilder` produces disposer that runs at shutdown |
-| `compute_fingerprint_stable` | Same registrations → same fingerprint |
-| `compute_fingerprint_changes_on_diff` | Different registrations → different fingerprint |
-| `resolve_reusing_skips_unchanged` | `resolve_reusing` skips re-creation of unchanged beans |
+| `bean_context_clone_shares_arc` | ✅ DONE (`bean_context_clone_shares_lazy_slots`, `bean_context_clone_does_not_carry_disposers`) |
+| `bean_context_empty_has_no_beans` | ✅ DONE (`bean_context_empty_has_no_beans_and_debug_shows_counts`) |
+| `bean_context_overlay_shadows_base` | ✅ DONE (`bean_context_snapshot_does_not_see_later_beans` — overlay insert + snapshot isolation) |
+| `bean_context_lazy_slot_resolves_on_get` | ✅ DONE (`lazy_bean_constructed_on_first_get_only` + `lazy_to_lazy_dependency_resolves_on_first_get` + `lazy_async_bean_resolves_on_first_get`) |
+| `bean_registry_factory_produces_bean` | ✅ already covered (`resolve_simple_graph`) |
+| `bean_registry_post_construct_fires` | ✅ already covered (`post_construct_is_called`) |
+| `bean_registry_disposer_fires_on_shutdown` | ✅ already covered (`pre_destroy_disposers_run_in_reverse_registration_order`) |
+| `compute_fingerprint_stable` | ✅ DONE (`compute_fingerprint_stable_for_same_graph`, feature `dev-reload`) |
+| `compute_fingerprint_changes_on_diff` | ✅ DONE (`compute_fingerprint_changes_when_graph_differs`, `compute_fingerprint_changes_on_config_edit`) |
+| `resolve_reusing_skips_unchanged` | ✅ already covered (`tests/dev_reload_partial.rs::partial_rebuild_reuses_unchanged_beans_across_cycles`) |
+
+Also added 2026-07-21 (lazy graph paths): `lazy_bean_missing_dependency_errors_at_resolve`, `lazy_bean_registered_twice_is_duplicate`, `lazy_bean_conflicting_with_provided_is_duplicate`, `lazy_bean_conflicting_with_eager_registration_is_duplicate`, `lazy_default_superseded_by_later_registration`, `lazy_bean_required_config_key_missing_fails_at_resolve` / `_present_resolves`, `lazy_bean_optional_config_key_absent_is_fine`.
 
 ### 3. `src/ws.rs` — ~306 uncovered lines
 
@@ -132,15 +145,17 @@ Lazy bean resolution — critical control-plane path untested.
 
 | Test | Description |
 |---|---|
-| `resolution_guard_detects_cycle` | Re-entrant `ResolutionGuard::enter` panics with cycle trace |
-| `resolution_guard_cleans_up_on_drop` | Guard pops from thread-local stack on drop |
-| `lazy_slot_resolves_once` | `LazySlot::get_or_init` runs factory exactly once |
-| `lazy_slot_cached_after_first` | Second `get_or_init` returns cached value (no factory call) |
-| `resolve_lazy_factory_multithread` | `resolve_lazy_factory` works on multi-thread runtime |
-| `resolve_lazy_factory_control_plane` | Control-plane path spawns on control-plane handle |
-| `resolve_lazy_factory_no_runtime_panics` | No runtime + no fallback feature → panic |
-| `lazy_wrapper_get_resolves` | `Lazy<T>::get()` resolves on first call |
-| `lazy_wrapper_clone_shares_cell` | `Lazy<T>::clone()` shares the inner `OnceCell` |
+| `resolution_guard_detects_cycle` | ✅ DONE (`circular_lazy_dependency_panics_with_cycle_trace` — A→B→A trace) |
+| `resolution_guard_cleans_up_on_drop` | ✅ DONE (implicit: successful lazy resolutions push+pop; repeat gets stay clean) |
+| `lazy_slot_resolves_once` | ✅ DONE (`tests/beans.rs::lazy_bean_constructed_on_first_get_only`) |
+| `lazy_slot_cached_after_first` | ✅ DONE (same test — second `get` does not re-run factory) |
+| `resolve_lazy_factory_multithread` | ✅ DONE (`resolve_lazy_factory_on_multi_thread_runtime`) |
+| `resolve_lazy_factory_control_plane` | ✅ DONE (`resolve_lazy_factory_uses_control_plane_when_registered` + `_panic_resurfaces`) |
+| `resolve_lazy_factory_no_runtime_panics` | ✅ DONE (`resolve_lazy_factory_without_runtime_panics`, `_current_thread_runtime_panics`; fallback-feature variants also added) |
+| `lazy_wrapper_get_resolves` | ✅ already covered (`lazy_resolves_once`) |
+| `lazy_wrapper_clone_shares_cell` | ✅ DONE (`lazy_clone_shares_cell`) |
+
+Note (2026-07-21): the `lazy-fallback-runtime` branches originally used `Runtime::block_on`, which panics from within async execution ("Cannot start a runtime from within a runtime") — i.e. the feature's main advertised case. FIXED the same day: both fallback branches now route through the shared `resolve_on` spawn+channel helper (same mechanism as the control-plane path); `resolve_lazy_factory_falls_back_on_current_thread_runtime` proves the async-context case and asserts the factory ran off-thread.
 
 ### 6. `src/error.rs` — ~224 uncovered lines
 

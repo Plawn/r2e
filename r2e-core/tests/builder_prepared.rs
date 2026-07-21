@@ -167,3 +167,51 @@ async fn drain_sequence_finishes_in_flight_requests_and_orders_hooks() {
     // (after the drain completed).
     assert_eq!(log.entries(), vec!["drain", "request_done", "stop"]);
 }
+
+#[derive(Clone)]
+struct DisposedOnStop {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl r2e_core::beans::PreDestroy for DisposedOnStop {
+    fn pre_destroy(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.flag
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+    }
+}
+
+#[tokio::test]
+async fn provide_with_pre_destroy_runs_disposer_on_graceful_shutdown() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let flag = Arc::new(AtomicBool::new(false));
+    let stop = StopHandle::new();
+    let app = AppBuilder::new()
+        .with_stop_handle(stop.clone())
+        .provide_with_pre_destroy(DisposedOnStop { flag: flag.clone() })
+        .build_state()
+        .await;
+    let prepared = app.prepare("127.0.0.1:0");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = tokio::spawn(async move {
+        prepared
+            .run_with_listener(listener)
+            .await
+            .map_err(|e| e.to_string())
+    });
+
+    // Not yet: the disposer belongs to the shutdown phase.
+    assert!(!flag.load(Ordering::SeqCst));
+
+    stop.stop();
+    await_clean_stop(server).await;
+    assert!(
+        flag.load(Ordering::SeqCst),
+        "pre-destroy disposer must run during graceful shutdown"
+    );
+}
