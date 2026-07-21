@@ -67,13 +67,15 @@ pub(crate) trait LazyResolve: Send + Sync {
 ///
 /// Unlike [`Lazy<T>`], this is **not** exposed to users. When a bean is
 /// marked `#[bean(lazy)]`, the registry stores a `LazySlot<T>` in the
-/// context's `lazy_slots` map. On first `get::<T>()`, the factory runs
-/// via `block_in_place` + `block_on` and the result is cached in `OnceLock`.
+/// context's `lazy_slots` map. On first `get::<T>()`, the factory runs on
+/// the current multi-thread runtime (`block_in_place` + `block_on`) — or,
+/// when that is not usable, on the control-plane runtime (sharded workers)
+/// or the global fallback runtime via [`resolve_on`] — and the result is
+/// cached in `OnceLock`.
 ///
-/// **Runtime note:** this requires a Tokio multi-thread runtime. If the
-/// `lazy-fallback-runtime` feature is enabled, resolution will fall back
-/// to a global runtime when none is available (or when running on a
-/// current-thread runtime).
+/// **Runtime note:** this requires a Tokio multi-thread runtime, a
+/// registered control-plane handle, or the `lazy-fallback-runtime` feature
+/// (which covers current-thread runtimes and runtime-less threads).
 pub(crate) struct LazySlot<T: Clone + Send + Sync + 'static> {
     cell: OnceLock<T>,
     factory: std::sync::Mutex<Option<LazyFactory<T>>>,
@@ -114,6 +116,59 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
     }
 }
 
+/// Resolve `factory` on the runtime behind `handle`, blocking the current
+/// thread on a channel for the result.
+///
+/// Legal from ANY context — including from within async execution, where
+/// `Handle::block_on` / `Runtime::block_on` would panic — because the wait is
+/// a plain thread block and the factory runs on `handle`'s own workers.
+/// A factory panic is re-raised on this thread with its original payload.
+///
+/// CAUTION: while this thread waits on `recv()`, whatever runtime it was
+/// driving is stalled — on a `current_thread` runtime every other in-flight
+/// task stops being polled until the factory completes. Lazy beans should be
+/// resolved eagerly during state construction; this path exists so an
+/// off-main-runtime first-touch is *correct*, not so it is cheap.
+///
+/// Known limitation: the circular-lazy-dependency detector (`RESOLVING`
+/// thread-local) does not see across threads. A factory running on `handle`
+/// that circularly re-touches the bean being resolved on this thread
+/// deadlocks instead of panicking with a cycle trace. Same-thread detection
+/// on the main runtime is unaffected (this helper is never used there).
+fn resolve_on<T>(
+    handle: &tokio::runtime::Handle,
+    factory: LazyFactory<T>,
+    runtime_desc: &str,
+) -> T
+where
+    T: Send + 'static,
+{
+    // Two-stage spawn so the factory's JoinHandle outcome (value, panic
+    // payload, cancellation) crosses the thread boundary intact: the second
+    // task awaits the first and forwards the join result over the channel.
+    let factory_task = handle.spawn(factory());
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    handle.spawn(async move {
+        // If this send fails, the receiver was dropped — nothing to do.
+        let _ = tx.send(factory_task.await);
+    });
+    match rx.recv() {
+        Ok(Ok(value)) => value,
+        // Re-raise the factory's own panic on this thread so the caller
+        // sees the original payload, not a generic message.
+        Ok(Err(join_err)) if join_err.is_panic() => {
+            std::panic::resume_unwind(join_err.into_panic())
+        }
+        Ok(Err(join_err)) => {
+            panic!("lazy bean factory task was cancelled on the {runtime_desc}: {join_err}")
+        }
+        Err(_) => panic!(
+            "{runtime_desc} shut down while resolving lazy bean {}",
+            std::any::type_name::<T>()
+        ),
+    }
+}
+
 fn resolve_lazy_factory<T>(factory: LazyFactory<T>) -> T
 where
     T: Send + 'static,
@@ -123,55 +178,13 @@ where
     // a worker cannot use `block_in_place` (it panics on current_thread
     // runtimes). When the worker thread has a control-plane handle registered
     // (see `crate::rt::set_control_plane`), resolve the factory on the
-    // control-plane (main multi-thread) runtime and block this thread on a
-    // channel for the result. We deliberately do NOT use `Handle::block_on` /
-    // `Runtime::block_on` here: both panic when called from within an async
-    // execution context, which is exactly where a worker-side first-touch
-    // happens.
-    //
-    // CAUTION: while this thread waits on `recv()`, the worker's entire
-    // `current_thread` runtime is stalled — every other in-flight connection
-    // on this worker stops being polled until the factory completes. Lazy
-    // beans should be resolved eagerly during state construction; this path
-    // exists so a worker-side first-touch is *correct*, not so it is cheap.
-    //
-    // Known limitation: the circular-lazy-dependency detector (`RESOLVING`
-    // thread-local) does not see across threads. A factory running on the
-    // control plane that circularly re-touches the bean being resolved on a
-    // worker deadlocks instead of panicking with a cycle trace. This limitation
-    // already existed with the `lazy-fallback-runtime` fallback (whose factory
-    // also ran on other threads); same-thread detection on the main runtime is
-    // unaffected (this branch is never active there).
+    // control-plane (main multi-thread) runtime.
     if let Some(handle) = crate::rt::control_plane_handle() {
         tracing::debug!(
             bean = std::any::type_name::<T>(),
             "resolving lazy bean on the control-plane runtime"
         );
-        // Two-stage spawn so the factory's JoinHandle outcome (value, panic
-        // payload, cancellation) crosses the thread boundary intact: the
-        // second task awaits the first and forwards the join result over the
-        // channel.
-        let factory_task = handle.spawn(factory());
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        handle.spawn(async move {
-            // If this send fails, the receiver was dropped — nothing to do.
-            let _ = tx.send(factory_task.await);
-        });
-        return match rx.recv() {
-            Ok(Ok(value)) => value,
-            // Re-raise the factory's own panic on this thread so the caller
-            // sees the original payload, not a generic message.
-            Ok(Err(join_err)) if join_err.is_panic() => {
-                std::panic::resume_unwind(join_err.into_panic())
-            }
-            Ok(Err(join_err)) => {
-                panic!("lazy bean factory task was cancelled on the control plane: {join_err}")
-            }
-            Err(_) => panic!(
-                "control-plane runtime shut down while resolving lazy bean {}",
-                std::any::type_name::<T>()
-            ),
-        };
+        return resolve_on(&handle, factory, "control-plane runtime");
     }
 
     match tokio::runtime::Handle::try_current() {
@@ -179,9 +192,18 @@ where
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 tokio::task::block_in_place(|| handle.block_on(factory()))
             } else {
+                // A current_thread runtime without a control plane. `block_on`
+                // on the fallback runtime would panic here whenever we are
+                // inside async execution ("Cannot start a runtime from within
+                // a runtime"), so route through the same spawn+channel
+                // mechanism as the control-plane path.
                 #[cfg(feature = "lazy-fallback-runtime")]
                 {
-                    fallback_runtime().block_on(factory())
+                    tracing::debug!(
+                        bean = std::any::type_name::<T>(),
+                        "resolving lazy bean on the lazy-fallback runtime"
+                    );
+                    resolve_on(fallback_runtime().handle(), factory, "lazy-fallback runtime")
                 }
                 #[cfg(not(feature = "lazy-fallback-runtime"))]
                 {
@@ -196,7 +218,7 @@ where
         Err(_) => {
             #[cfg(feature = "lazy-fallback-runtime")]
             {
-                fallback_runtime().block_on(factory())
+                resolve_on(fallback_runtime().handle(), factory, "lazy-fallback runtime")
             }
             #[cfg(not(feature = "lazy-fallback-runtime"))]
             {
