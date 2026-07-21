@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Run background tasks on a fixed interval or cron expression, with graceful shutdown via `CancellationToken`. Mark a controller method `#[scheduled(every = 30)]` (or a cron string); `#[inject]` fields are available inside (no request scope). Install `.plugin(Scheduler)` before `build_state()` — it **requires** the Executor plugin (`type LateDeps = (PoolExecutor,)`; the `scheduler` feature pulls in `executor`), and every tick runs as a bounded pool job. Runtime control via `SchedulerHandle::{pause, resume, trigger_now}`.
+Run background tasks on a fixed interval or cron expression, with graceful shutdown via `CancellationToken`. Mark a controller method `#[scheduled(every = 30)]` (or a cron string); `#[inject]` fields are available inside (no request scope). Install `.plugin(Scheduler)` before `build_state()` — it **requires** the Executor plugin (`type Deps = (PoolExecutor,)`; the `scheduler` feature pulls in `executor`), and every tick runs as a bounded pool job. Runtime control via `SchedulerHandle::{pause, resume, trigger_now}`.
 
 
 ## Objective
@@ -13,7 +13,7 @@ Execute background tasks periodically (fixed interval or cron expression), with 
 
 ### Scheduler plugin
 
-The scheduled task manager. Installed with `.plugin(Scheduler)` **before** `build_state()`, it collects every `#[scheduled]` method of the registered controllers and starts each as a background schedule loop. **The Scheduler requires the Executor plugin** — it declares `type LateDeps = (PoolExecutor,)`, so a build with `.plugin(Scheduler)` but no `PoolExecutor` in the graph fails at `build_state()` with the guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Because `LateDeps` are checked against the final provision list, the order between `.plugin(Executor)` and `.plugin(Scheduler)` does not matter. The `scheduler` feature pulls in `executor`.
+The scheduled task manager. Installed with `.plugin(Scheduler)` **before** `build_state()`, it collects every `#[scheduled]` method of the registered controllers and starts each as a background schedule loop. **The Scheduler requires the Executor plugin** — it declares `type Deps = (PoolExecutor,)`, so a build with `.plugin(Scheduler)` but no `PoolExecutor` in the graph fails at `build_state()` with the guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Because `Deps` are checked against the final provision list, the order between `.plugin(Executor)` and `.plugin(Scheduler)` does not matter. The `scheduler` feature pulls in `executor`.
 
 ### `#[scheduled]`
 
@@ -247,7 +247,7 @@ scheduler:
 ```
 
 In dedicated mode a private `PoolExecutor` is built from the sizing keys and
-drained gracefully on shutdown. `PoolExecutor` remains a hard `LateDeps`
+drained gracefully on shutdown. `PoolExecutor` remains a hard `Deps`
 requirement even in dedicated mode (a type-level requirement cannot be
 config-conditional) — the shared pool is simply not used to run ticks. An
 unrecognized `executor` value panics at boot. Setting `scheduler.enabled = false`

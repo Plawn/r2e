@@ -1,8 +1,11 @@
 # Plugin System Reference
 
 Authoritative reference for R2E's plugin system as of the plugin DX/DI
-overhaul (phases 1–6, PR #29). Source of truth: `r2e-core/src/plugin.rs`,
-`r2e-core/src/type_list.rs` (`PluginDeps` / `PluginProvisions`),
+overhaul (phases 1–6, PR #29) and the deps unification (2026-07-21: the
+pre-state `Deps` was removed and `LateDeps` renamed `Deps` — one dep list,
+resolved post-state, compile-checked at `build_state()`). Source of truth:
+`r2e-core/src/plugin.rs`, `r2e-core/src/type_list.rs` (`PluginDeps` /
+`PluginProvisions`), `r2e-core/src/late.rs` (`Late<T>`),
 `r2e-core/src/config/mod.rs` (`PluginConfig`).
 
 ## Two plugin kinds
@@ -25,21 +28,20 @@ builder warns if another post-state plugin is added after one that returns
 ```rust
 impl PreStatePlugin for MyPlugin {
     type Provided = (HandleA, HandleB);   // tuple: (A,), (A, B), or () — never a bare type
-    type Deps     = (DbPool,);            // resolved at .plugin() time (pre-state)
-    type LateDeps = (AppService,);        // resolved after build_state() (full graph)
+    type Deps     = (DbPool, AppService); // any bean; resolved after build_state() (full graph)
     type Config   = MyPluginConfig;       // or (); typed file-config section
     const CONFIG_PREFIX: Option<&'static str> = Some("my_plugin");
 
-    fn install(&mut self, (pool,): (DbPool,), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
         ctx.add_layer(|router| router.layer(...));   // sugar — see ordering below
         ctx.on_shutdown(|| { ... });
-        (HandleA::new(pool), HandleB::new())
+        (HandleA::new(), HandleB::new())             // shells; deps arrive in configure
     }
 
     fn configure(
         self,                                  // by value: builder fields still on self
         (a, _b): &Self::Provided,              // the plugin's OWN instances (see pin-override note)
-        (svc,): Self::LateDeps,                // any bean, incl. .register()-ed
+        (pool, svc): Self::Deps,               // any bean, incl. .register()-ed
         config: Option<Self::Config>,          // None if section absent / no config loaded
         ctx: &mut DeferredContext<'_>,
     ) { ... }
@@ -52,32 +54,51 @@ impl PreStatePlugin for MyPlugin {
 .plugin(Me)                 build_state()                          (serve)
      │                           │                                    │
      ▼                           ▼                                    ▼
- install(&mut self, Deps)   [bean graph built]                   on_serve hooks
+ install(&mut self)         [bean graph built]                   on_serve hooks
    Provided → registry      then deferred actions run, per plugin,
                             in install order:
                             [A.explicit…, A.sugar, A.configure,
                              B.explicit…, B.sugar, B.configure]
-                            configure(self, &Provided, LateDeps, Config)
+                            configure(self, &Provided, Deps, Config)
 ```
 
 There is **no** "all installs, then all configures" phase separation: deferred
 work is grouped per plugin. A layer added from A's `configure` is applied
 before (nested inside) a layer added at install time by a later plugin B.
 
-### `Deps` vs `LateDeps` decision rule
+### `Deps` — one list, resolved at `configure`
 
-- `Deps` — pre-built infrastructure handed to `.provide(instance)` *before*
-  the `.plugin()` call. Checked at the call site (`AllSatisfied`); resolved at
-  install. A `.register()`-ed type in `Deps` panics at runtime with a message
-  steering to `LateDeps` (type-level fix was evaluated and deferred — tagging
-  `P` would churn `Contains`/`AllSatisfied` everywhere).
-- `LateDeps` — everything else: factory-built beans (`.register::<T>()`),
-  beans from other plugins, beans registered *after* this plugin. Appended to
-  the builder's requirement list `R` via `RawPreStatePlugin::AllRequired` and
-  verified against the **final** provision list at `build_state()` (missing →
-  the standard guided "missing `.provide::<X>()` or `.register::<X>()`"
-  compile error). Resolved via `PluginDeps::resolve_from_context` from the
-  materialized `BeanContext`.
+Any bean qualifies: `.provide()`-d values, factory-built beans
+(`.register::<T>()`), beans from other plugins, beans supplied *after* this
+plugin. Appended to the builder's requirement list `R` via
+`RawPreStatePlugin::Required` and verified against the **final** provision
+list at `build_state()` (missing → the standard guided "missing
+`.provide::<X>()` or `.register::<X>()`" compile error; nothing is checked at
+the `.plugin()` call site). Resolved via `PluginDeps::resolve_from_context`
+from the materialized `BeanContext` and passed to `configure` by value.
+
+**Provided bean needs a dep? Provide a shell, fill it post-state.** Install
+runs before the graph exists, so a provided bean that depends on another bean
+starts as a shell over a `Late<T>` cell (`r2e_core::Late` — Arc-shared,
+first-write-wins, clones share the fill; NOT in the prelude, import
+explicitly). Two fill routes:
+
+- **sync** — call `late.fill(...)` from `configure` (deps arrive by value);
+- **async** — register the fill as a `PostConstruct` on a provided bean via
+  `ctx.run_post_construct::<Bean>()`; it is awaited inside `build_state()`.
+  Dogfood: the OpenFga plugin boots its `GrpcBackend` this way
+  (`r2e-openfga/src/plugin.rs`, `LazyBackend` over `Late<GrpcBackend>`).
+
+Either way the cell is filled before `build_state()` returns; `Late::expect`
+panics with lifecycle guidance on a pre-boot read, `Late::get` is the
+non-panicking form (OpenFga maps it to a fail-closed `NotReady` error).
+
+History: until 2026-07-21 there were two lists — a pre-state `Deps` (resolved
+at install, `.provide()`-d values only, with a runtime panic on `.register()`-ed
+types the call-site check couldn't distinguish) and a post-state `LateDeps`.
+The pre-state path had zero users and carried the "type-level Deps-hole"; it
+was removed and `LateDeps` renamed `Deps`. `install` no longer takes a deps
+parameter.
 
 ### Tuple `Provided` / `PluginProvisions`
 
@@ -93,7 +114,7 @@ the type-level list advances by one `with_updated_types()` phantom cast.
 `configure`'s `provided` argument is a copy of exactly what `install` returned
 (the plugin owns what it built). If a test pins an override for a `Provided`
 type, the state/`BeanContext` hold the override but `provided` does **not**.
-To see the bean as the app sees it, read it through the graph (`LateDeps` or
+To see the bean as the app sees it, read it through the graph (`Deps` or
 `ctx.bean_context()`). Locked by
 `configure_provided_arg_keeps_own_instance_under_pin_override`.
 
@@ -261,10 +282,9 @@ earlier than declaring the individual bean in `Imports` (which is verified at
 
 `#[doc(hidden)]`. HList-typed full-builder-access form that `.plugin()`
 dispatches on; every `PreStatePlugin` gets it via the blanket impl
-(`Provisions = Provided::AsList`, `Required = Deps::AsList` checked at call
-site, `AllRequired = Deps ++ LateDeps` appended to `R`). Implement directly
-only to drive arbitrary builder methods during install — no in-tree
-implementor remains.
+(`Provisions = Provided::AsList`, `Required = Deps::AsList` appended to `R` —
+nothing checked at the call site). Implement directly only to drive arbitrary
+builder methods during install — no in-tree implementor remains.
 
 ## Testing plugins
 

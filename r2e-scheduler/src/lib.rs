@@ -314,7 +314,7 @@ impl Default for ScheduledJobRegistry {
 /// The Scheduler therefore **requires** a `PoolExecutor` bean in the final
 /// graph — install `.plugin(Executor)` (or any provider of `PoolExecutor`)
 /// somewhere in the builder chain. This is enforced at compile time via the
-/// plugin's `LateDeps`: a missing `PoolExecutor` is a guided compile error at
+/// plugin's `Deps`: a missing `PoolExecutor` is a guided compile error at
 /// `build_state()`, not a runtime failure. Running ticks on the pool also means
 /// a panicking tick is contained in its pool job — the schedule loop logs and
 /// keeps ticking instead of dying.
@@ -359,7 +359,7 @@ pub struct Scheduler;
 ///
 /// Every field is optional. `executor` selects which pool ticks run on:
 /// - `"shared"` (default) — the app-wide [`PoolExecutor`] from the `Executor`
-///   plugin (resolved via `LateDeps`).
+///   plugin (resolved via the plugin's `Deps`).
 /// - `"dedicated"` — a private pool sized by the keys below, so scheduled work
 ///   never contends with other background jobs. The sizing keys are used **only**
 ///   in dedicated mode (ignored under `shared`) and mirror `ExecutorConfig`.
@@ -396,18 +396,16 @@ pub struct SchedulerConfig {
 
 impl PreStatePlugin for Scheduler {
     type Provided = (CancellationToken, ScheduledJobRegistry);
-    type Deps = ();
-    // `PoolExecutor` stays a hard `LateDeps` requirement even when the config
+    // `PoolExecutor` stays a hard `Deps` requirement even when the config
     // selects a dedicated pool — a type-level requirement cannot be made
     // config-conditional. In dedicated mode the shared pool is simply not used
     // to run ticks (a private pool is built instead).
-    type LateDeps = (PoolExecutor,);
+    type Deps = (PoolExecutor,);
     type Config = SchedulerConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("scheduler");
 
     fn install(
         &mut self,
-        (): (),
         ctx: &mut PluginInstallContext<'_>,
     ) -> (CancellationToken, ScheduledJobRegistry) {
         let token = CancellationToken::new();

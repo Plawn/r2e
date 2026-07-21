@@ -234,11 +234,10 @@ pub fn resolve_config(
 impl PreStatePlugin for Prometheus {
     type Provided = (PrometheusRegistry,);
     type Deps = ();
-    type LateDeps = ();
     type Config = PrometheusConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("prometheus");
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
         // All config-dependent work (metric init, custom collectors, the layer
         // and route) is deferred to `configure`, where file config is
         // guaranteed loaded. The injectable handle delegates to the global

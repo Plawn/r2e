@@ -56,7 +56,8 @@
 //! The plugin must be installed **after** `load_config()` / `with_config()`.
 
 use std::sync::Arc;
-use std::sync::OnceLock;
+
+use r2e_core::Late;
 
 use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
 use openfga_rs::tonic::transport::Channel;
@@ -154,11 +155,10 @@ impl OpenFga {
 impl PreStatePlugin for OpenFga {
     type Provided = (OpenFgaRegistry, FgaClient, OpenFgaHandle);
     type Deps = ();
-    type LateDeps = ();
     type Config = OpenFgaPluginConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("openfga");
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
         let config = ctx.config().unwrap_or_else(|| {
             panic!(
                 "the OpenFga plugin reads `openfga.*` at install time — call \
@@ -171,7 +171,7 @@ impl PreStatePlugin for OpenFga {
 
         let enabled = cfg.enabled.unwrap_or(true);
 
-        let slot: Arc<OnceLock<GrpcBackend>> = Arc::new(OnceLock::new());
+        let slot: Late<GrpcBackend> = Late::new();
         let lazy = LazyBackend { slot: slot.clone() };
         let registry = if cfg.cache_enabled.unwrap_or(true) {
             OpenFgaRegistry::with_cache(lazy, cfg.cache_ttl_secs.unwrap_or(60))
@@ -269,7 +269,7 @@ struct HandleInner {
     /// `None` when the plugin is disabled (`openfga.enabled: false`) — the
     /// post-construct is not registered then, and the slot stays empty.
     boot: Option<(BootSettings, &'static str)>,
-    slot: Arc<OnceLock<GrpcBackend>>,
+    slot: Late<GrpcBackend>,
 }
 
 impl OpenFgaHandle {
@@ -311,7 +311,7 @@ impl PostConstruct for OpenFgaHandle {
                 return Ok(());
             }
             let backend = boot(settings, model_json).await?;
-            let _ = self.inner.slot.set(backend);
+            let _ = self.inner.slot.fill(backend);
             Ok(())
         })
     }
@@ -598,7 +598,7 @@ fn verify(
 /// runs inside `build_state()`, before the app serves).
 #[derive(Clone)]
 struct LazyBackend {
-    slot: Arc<OnceLock<GrpcBackend>>,
+    slot: Late<GrpcBackend>,
 }
 
 impl OpenFgaBackend for LazyBackend {

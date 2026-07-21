@@ -25,7 +25,7 @@ AppBuilder::new()
     .unwrap();
 ```
 
-Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` and a `ScheduledJobRegistry` to the bean graph and **requires the `Executor` plugin**: it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`LateDeps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
+Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` and a `ScheduledJobRegistry` to the bean graph and **requires the `Executor` plugin**: it declares `type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`Deps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
 
 ### Configuration (`scheduler.*`)
 
@@ -136,7 +136,7 @@ Six fields: `second minute hour day_of_month month day_of_week`
 ## How it works
 
 1. `Scheduler` plugin creates a `CancellationToken` and defers setup
-2. `build_state()` provides the token to the bean graph and verifies the `PoolExecutor` dependency (`Scheduler::LateDeps`)
+2. `build_state()` provides the token to the bean graph and verifies the `PoolExecutor` dependency (`Scheduler::Deps`)
 3. `register_controller::<ScheduledJobs>()` collects scheduled task definitions
 4. `serve()` starts each schedule loop; every tick body is submitted to the shared `PoolExecutor` and the loop awaits it before the next tick
 5. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled and in-flight ticks drain via the pool (`executor.shutdown-timeout`)

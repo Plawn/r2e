@@ -11,6 +11,7 @@ pub mod guards;
 pub mod health;
 pub mod http;
 pub mod interceptors;
+pub mod late;
 pub mod layers;
 pub mod lazy;
 pub mod lifecycle;
@@ -72,6 +73,7 @@ pub use guards::{
     PreAuthGuardContext,
 };
 pub use interceptors::{Cacheable, Interceptor, InterceptorContext};
+pub use late::Late;
 pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
 pub use lazy::Lazy;
 pub use lifecycle::{LifecycleController, StopHandle};

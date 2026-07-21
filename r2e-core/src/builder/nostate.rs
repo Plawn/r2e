@@ -51,11 +51,6 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
 }
 
 impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
-    /// Access the bean registry (for internal use by the blanket PreStatePlugin impl).
-    pub(crate) fn bean_registry(&self) -> &BeanRegistry {
-        &self.shared.bean_registry
-    }
-
     /// Mutable access to the bean registry (for internal use by the blanket
     /// `PreStatePlugin` impl to deposit a plugin's provided beans).
     pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
@@ -547,18 +542,17 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     .build_state()
     ///     .await
     /// ```
-    pub fn plugin<Pl: RawPreStatePlugin, RIdx>(
+    pub fn plugin<Pl: RawPreStatePlugin>(
         self,
         plugin: Pl,
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::AllRequired>,
-        // Only the pre-state `Deps` (`Required`) are checked here, against the
-        // provisions present so far. The `LateDeps` portion of `AllRequired` is
-        // appended to `R` and verified against the final provision list at
-        // `build_state()`.
-        Pl::Required: AllSatisfied<P, RIdx>,
+        // Nothing is checked at the call site: the plugin's `Deps` are appended
+        // to `R` and verified against the final provision list at
+        // `build_state()`, so a dependency may be provided or registered after
+        // this call.
+        R: TAppend<Pl::Required>,
     {
         plugin.install(self)
     }
@@ -569,14 +563,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///
     /// Use [`.plugin()`](Self::plugin) instead.
     #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: RawPreStatePlugin, RIdx>(
+    pub fn with_plugin<Pl: RawPreStatePlugin>(
         self,
         plugin: Pl,
     ) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::AllRequired>,
-        Pl::Required: AllSatisfied<P, RIdx>,
+        R: TAppend<Pl::Required>,
     {
         plugin.install(self)
     }
@@ -595,7 +588,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     type Provided = (MyToken,);
     ///     type Deps = ();
     ///
-    ///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
+    ///     fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///

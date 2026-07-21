@@ -795,25 +795,6 @@ impl BeanRegistry {
         self
     }
 
-    /// Get a reference to a previously provided instance.
-    pub fn get_provided<T: Clone + 'static>(&self) -> Option<&T> {
-        self.provided
-            .get(&TypeId::of::<T>())
-            .and_then(|v| v.downcast_ref::<T>())
-    }
-
-    /// Returns `true` if a bean (eager or lazy) of type `T` is registered
-    /// (via `register`) but not yet materialized.
-    ///
-    /// Used by plugin dependency resolution to produce a clear error when
-    /// a plugin asks for a bean that exists only as a registration at
-    /// plugin-install time (before the bean graph is built).
-    #[doc(hidden)]
-    pub fn is_bean_registered(&self, tid: TypeId) -> bool {
-        self.beans.iter().any(|r| r.type_id == tid)
-            || self.lazy_beans.iter().any(|r| r.type_id == tid)
-    }
-
     /// Whether a same-fingerprint dev-reload cycle must still resolve the
     /// graph instead of returning the monolithic cached state directly.
     ///

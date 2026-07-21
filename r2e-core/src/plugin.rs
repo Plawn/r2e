@@ -85,7 +85,7 @@ pub trait Plugin: Send + 'static {
 /// Plugins can read configuration values loaded by [`AppBuilder::load_config`]:
 ///
 /// ```ignore
-/// fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
+/// fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
 ///     let name = ctx.config_get::<String>("my_plugin.name")
 ///         .unwrap_or_else(|| "default".into());
 ///     (MyConfig { name },)
@@ -94,21 +94,10 @@ pub trait Plugin: Send + 'static {
 ///
 /// # Typed Dependencies
 ///
-/// For bean dependencies, declare [`PreStatePlugin::Deps`] instead of reading
-/// from the context. Dependencies are passed as a typed tuple parameter and
-/// verified at compile time:
-///
-/// ```ignore
-/// impl PreStatePlugin for MyPlugin {
-///     type Provided = (MyThing,);
-///     type Deps = (DbPool, CancellationToken);
-///     type LateDeps = ();
-///
-///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyThing,) {
-///         (MyThing::new(pool, token),)
-///     }
-/// }
-/// ```
+/// For bean dependencies, declare [`PreStatePlugin::Deps`]. They are verified
+/// at compile time against the final provision list and arrive as a typed
+/// tuple in [`PreStatePlugin::configure`], after the bean graph is built —
+/// install runs pre-state and never sees resolved beans.
 pub struct PluginInstallContext<'a> {
     deferred: Vec<DeferredAction>,
     /// Buffered sugar calls ([`add_layer`](Self::add_layer),
@@ -142,6 +131,13 @@ impl<'a> PluginInstallContext<'a> {
     /// opt a provided type `B` into the same post-construct lifecycle as a
     /// factory bean: the hook fires during `build_state()`, after every
     /// factory-bean post-construct, reading `B` from the resolved graph.
+    ///
+    /// **Not gated by `<prefix>.enabled`.** Unlike sugar actions and
+    /// `configure`, lifecycle registrars always run — the provided beans exist
+    /// in the graph either way. If disabling the plugin should suppress the
+    /// hook's work (e.g. a [`Late<T>`](crate::Late) fill that connects
+    /// somewhere), guard the `run_post_construct` call — or the hook body —
+    /// on the plugin's own config, as the OpenFga plugin does.
     pub fn run_post_construct<B: crate::PostConstruct + Clone>(&mut self) {
         self.registry_ops
             .push(Box::new(|reg| reg.register_provided_post_construct::<B>()));
@@ -336,30 +332,31 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 ///
 /// 1. **install** — runs at `.plugin()` time, *before* the bean graph is built.
 ///    It produces the plugin's [`Provided`](Self::Provided) beans and may
-///    register deferred actions. Its [`Deps`](Self::Deps) are resolved here, so
-///    they can only name beans already supplied via `.provide(instance)`.
+///    register deferred actions. No beans are resolvable yet — a provided bean
+///    that needs a dependency starts as a [`Late<T>`](crate::Late) shell.
 /// 2. **configure** — runs *after* [`build_state()`](crate::AppBuilder::build_state),
-///    with the fully materialized bean graph in hand. Its
-///    [`LateDeps`](Self::LateDeps) can name **any** bean — `.provide()`-d,
+///    with the fully materialized bean graph in hand. Its resolved
+///    [`Deps`](Self::Deps) can name **any** bean — `.provide()`-d,
 ///    `.register()`-ed (factory-built), or produced by another plugin.
 ///
 /// ```text
 ///   .plugin(Me)              build_state()             (serve)
 ///        │                        │                       │
 ///        ▼                        ▼                       ▼
-///     install(Deps)  ─────►  [bean graph built]  ─►  configure(LateDeps)
+///     install()      ─────►  [bean graph built]  ─►  configure(Deps)
 /// ```
 ///
-/// ## `Deps` vs `LateDeps`
+/// ## Consuming `Deps`
 ///
-/// - **`Deps`** = pre-built infrastructure you hand to `.provide()` (a
-///   `DbPool`, a `CancellationToken`). Available at install time.
-/// - **`LateDeps`** = anything else, including **factory-built beans**
-///   (`.register::<T>()`) and beans other plugins provide. Available only in
-///   `configure()`.
+/// Dependencies arrive **by value** in [`configure`](Self::configure). A plugin
+/// whose *provided* bean must be built from a dependency provides a shell at
+/// install and fills it post-state:
 ///
-/// Rule of thumb: if the type is `.provide()`-d, put it in `Deps`; otherwise
-/// put it in `LateDeps` and consume it from `configure()`.
+/// - **sync fill** — fill a [`Late<T>`](crate::Late) cell (or bind a handle)
+///   directly in `configure`, which receives the resolved deps;
+/// - **async fill** — register the fill as a bean post-construct via
+///   [`PluginInstallContext::run_post_construct`]; it runs (and is awaited)
+///   inside `build_state()` (the `OpenFga` plugin's boot works this way).
 ///
 /// [`Provided`](Self::Provided) is a **tuple** of beans: `(A,)` for a single
 /// bean, `(A, B)` for several, or `()` for none. This covers multi-bean plugins
@@ -368,20 +365,16 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 ///
 /// # Compile-Time Dependency Checking
 ///
-/// Declare dependencies via [`Deps`](Self::Deps). The compiler verifies at
-/// each `.plugin()` call site that all dependencies have already been provided:
+/// Declare dependencies via [`Deps`](Self::Deps). They are appended to the
+/// builder's requirement list and verified against the **final** provision
+/// list at `build_state()` — order-independent, so a dependency may be
+/// `.provide()`-d or `.register()`-ed before *or after* the `.plugin()` call:
 ///
 /// ```ignore
 /// AppBuilder::new()
-///     .plugin(Scheduler)          // provides CancellationToken
-///     .plugin(Executor)           // Scheduler runs ticks on the shared pool
-///     .provide(pool)              // provides DbPool
-///     .plugin(MyPlugin { .. })    // ✅ compiles: both deps are in P
-///
-/// // But swap the order:
-/// AppBuilder::new()
-///     .plugin(MyPlugin { .. })    // ❌ compile error: deps not yet provided
-///     .plugin(Scheduler)
+///     .plugin(MyPlugin { .. })    // Deps = (DbPool,)
+///     .provide(pool)              // ✅ provided after the plugin — fine
+///     .build_state().await        // ❌ compile error HERE if DbPool is missing
 /// ```
 ///
 /// For plugins that need arbitrary builder access (calling `.register()`,
@@ -403,24 +396,32 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (String,);
 ///     type Deps = ();
-///     type LateDeps = ();
 ///
-///     fn install(self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (String,) {
-///         (self.value,)
+///     fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (String,) {
+///         (std::mem::take(&mut self.value),)
 ///     }
 /// }
 /// ```
 ///
-/// Plugin with dependencies:
+/// Plugin with dependencies (provided bean built from a dep — `Late<T>` shell):
 ///
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
-///     type Provided = (MyService,);
+///     type Provided = (MyServiceHandle,);
 ///     type Deps = (DbPool, CancellationToken);
-///     type LateDeps = ();
 ///
-///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
-///         (MyService::new(pool, token),)
+///     fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyServiceHandle,) {
+///         (MyServiceHandle::new(),) // wraps a Late<MyService>
+///     }
+///
+///     fn configure(
+///         self,
+///         (handle,): &(MyServiceHandle,),
+///         (pool, token): (DbPool, CancellationToken),
+///         _config: Option<()>,
+///         _ctx: &mut DeferredContext<'_>,
+///     ) {
+///         handle.fill(MyService::new(pool, token));
 ///     }
 /// }
 /// ```
@@ -431,9 +432,8 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// impl PreStatePlugin for Scheduler {
 ///     type Provided = (CancellationToken, ScheduledJobRegistry);
 ///     type Deps = ();
-///     type LateDeps = ();
 ///
-///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, ScheduledJobRegistry) {
+///     fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, ScheduledJobRegistry) {
 ///         let token = CancellationToken::new();
 ///         let registry = ScheduledJobRegistry::new();
 ///         // ... ctx.add_layer(..) / ctx.on_serve(..) / ctx.on_shutdown(..) ...
@@ -453,42 +453,25 @@ pub trait PreStatePlugin: Send + 'static {
     /// Each element must be `Clone + Send + Sync + 'static`.
     type Provided: PluginProvisions;
 
-    /// Bean dependencies this plugin requires, as a concrete tuple.
+    /// Bean dependencies this plugin requires, as a concrete tuple — resolved
+    /// **after** `build_state()`, from the fully materialized bean graph.
     ///
-    /// The compiler checks at each `.plugin()` call site that every type in
-    /// this tuple has already been provided (via `.provide()` or an earlier
-    /// `.plugin()`). Dependencies are resolved from the bean registry and
-    /// passed to [`install()`](Self::install) as the `deps` parameter.
+    /// These may name **any** bean — `.provide()`-d values, `.register::<T>()`-ed
+    /// (factory-built) beans, and beans other plugins provide — because they are
+    /// resolved in [`configure`](Self::configure), after the whole graph is
+    /// constructed. They are appended to the builder's requirement list and
+    /// verified against the **final** provision list at `build_state()` (not at
+    /// the `.plugin()` call site), so a dependency may be supplied *after* this
+    /// plugin is installed.
     ///
-    /// Most plugins set this to `()` (no dependencies).
-    ///
-    /// **Constraint:** plugin install runs *before* the bean graph is built,
-    /// so every type listed here must be a `.provide(instance)` value, not a
-    /// `.register::<T>()` registration. If a `register`-ed (factory-built) type
-    /// appears in `Deps`, runtime resolution panics with a message steering you
-    /// to move it to [`LateDeps`](Self::LateDeps). For beans that are not
-    /// `.provide()`-d, use `LateDeps` + [`configure`](Self::configure) instead.
-    type Deps: crate::type_list::PluginDeps;
-
-    /// Bean dependencies resolved **after** `build_state()`, from the fully
-    /// materialized bean graph.
-    ///
-    /// Unlike [`Deps`](Self::Deps), these may name any bean — including
-    /// `.register::<T>()`-ed (factory-built) beans and beans other plugins
-    /// provide — because they are resolved in [`configure`](Self::configure),
-    /// after the whole graph is constructed. They are appended to the builder's
-    /// requirement list and verified against the **final** provision list at
-    /// `build_state()` (not at the `.plugin()` call site), so a dependency may
-    /// be `.register()`-ed *after* this plugin is installed.
-    ///
-    /// Most plugins set this to `()` (no late dependencies). On stable Rust
+    /// Most plugins set this to `()` (no dependencies). On stable Rust
     /// associated types have no defaults, so every impl must write it
     /// explicitly:
     ///
     /// ```ignore
-    /// type LateDeps = ();
+    /// type Deps = ();
     /// ```
-    type LateDeps: crate::type_list::PluginDeps;
+    type Deps: crate::type_list::PluginDeps;
 
     /// The plugin's typed configuration section.
     ///
@@ -517,28 +500,30 @@ pub trait PreStatePlugin: Send + 'static {
 
     /// Install the plugin in the pre-state phase.
     ///
-    /// `deps` contains the resolved dependency values declared by [`Deps`](Self::Deps).
-    /// Return the value to be provided to the bean registry. Optionally
-    /// register deferred actions via `ctx.add_deferred()`.
+    /// Runs *before* the bean graph is built — no beans are resolvable here
+    /// ([`Deps`](Self::Deps) arrive later, in [`configure`](Self::configure)).
+    /// Return the value to be provided to the bean registry; a provided bean
+    /// that needs a dependency starts as a [`Late<T>`](crate::Late) shell.
+    /// Optionally register deferred actions via `ctx.add_deferred()`.
     ///
     /// Takes `&mut self` (not `self`) so the plugin instance survives into the
     /// post-state [`configure`](Self::configure) call, where the loaded config
     /// is available to merge with programmatic builder settings. Move owned
     /// fields out with [`std::mem::take`] / clone if `install` needs them, or
     /// leave them for `configure` (which receives `self` by value).
-    fn install(&mut self, deps: Self::Deps, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided;
 
     /// Configure the plugin in the **post-state** phase, after `build_state()`.
     ///
     /// Called once — consuming the plugin instance (`self`) so it can merge its
     /// programmatic builder settings with file config — with the plugin's
     /// [`Provided`](Self::Provided) beans (as a borrowed copy), its resolved
-    /// [`LateDeps`](Self::LateDeps), the loaded typed [`Config`](Self::Config)
+    /// [`Deps`](Self::Deps), the loaded typed [`Config`](Self::Config)
     /// (see below), and a [`DeferredContext`] for adding layers, serve/shutdown
     /// hooks, or plugin data — exactly the same surface deferred actions get.
     /// Use this to wire up anything that needs a factory-built or app-level bean.
     ///
-    /// The default is a no-op, so plugins with `type LateDeps = ()`,
+    /// The default is a no-op, so plugins with `type Deps = ()`,
     /// `type Config = ()`, and no post-state work need not implement it.
     ///
     /// # `config`
@@ -561,18 +546,17 @@ pub trait PreStatePlugin: Send + 'static {
     /// override, but `provided` still holds the plugin's original value: the
     /// plugin owns what it built. To observe the bean **as the rest of the app
     /// sees it** (override included), read it through the graph instead — list
-    /// it in [`LateDeps`](Self::LateDeps) or use `ctx.bean_context()`.
+    /// it in [`Deps`](Self::Deps) or use `ctx.bean_context()`.
     ///
     /// # Example
     ///
     /// ```ignore
     /// impl PreStatePlugin for MetricsExporter {
     ///     type Provided = (ExporterHandle,);
-    ///     type Deps = ();
-    ///     type LateDeps = (MetricsRegistry,); // registered elsewhere via `.register()`
+    ///     type Deps = (MetricsRegistry,); // registered elsewhere via `.register()`
     ///     type Config = ();
     ///
-    ///     fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    ///     fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
     ///         (ExporterHandle::new(),)
     ///     }
     ///
@@ -592,7 +576,7 @@ pub trait PreStatePlugin: Send + 'static {
     fn configure(
         self,
         provided: &Self::Provided,
-        deps: Self::LateDeps,
+        deps: Self::Deps,
         config: Option<Self::Config>,
         ctx: &mut DeferredContext<'_>,
     ) where
@@ -636,22 +620,13 @@ pub trait RawPreStatePlugin: Send + 'static {
     /// For multiple: `TCons<A, TCons<B, TNil>>`.
     type Provisions;
 
-    /// Bean dependencies this plugin requires from the bean graph, checked at
-    /// the `.plugin()` **call site** against the provisions present so far.
+    /// The requirement list appended to the builder's `R`: the plugin's `Deps`.
     ///
-    /// This is the pre-state `Deps` list: it must already be provided when the
-    /// plugin is installed. It is a *sublist* of [`AllRequired`](Self::AllRequired)
-    /// (the part that gets a call-site check).
+    /// Nothing is checked at the `.plugin()` call site — the list rides along
+    /// in `R` and is verified against the **final** provision list at
+    /// `build_state()`, so a dependency may be provided or registered *after*
+    /// this plugin is installed.
     type Required;
-
-    /// The full requirement list appended to the builder's `R`: the pre-state
-    /// `Deps` (`Required`) concatenated with the post-state `LateDeps`.
-    ///
-    /// Only [`Required`](Self::Required) is checked at the `.plugin()` call
-    /// site; the `LateDeps` portion rides along in `R` and is verified against
-    /// the **final** provision list at `build_state()`, so a `LateDeps` bean may
-    /// be registered *after* this plugin is installed.
-    type AllRequired;
 
     /// Install the plugin in the pre-state phase with full builder access.
     ///
@@ -663,7 +638,7 @@ pub trait RawPreStatePlugin: Send + 'static {
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::AllRequired>;
+        R: TAppend<Self::Required>;
 }
 
 // Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
@@ -677,15 +652,9 @@ pub trait RawPreStatePlugin: Send + 'static {
 impl<T> RawPreStatePlugin for T
 where
     T: PreStatePlugin,
-    // `AsList` is always a `TCons`/`TNil` chain, so this always holds — but it
-    // must be stated for the `AllRequired` associated type below to be
-    // well-formed for an abstract `T`.
-    <T::Deps as PluginDeps>::AsList: TAppend<<T::LateDeps as PluginDeps>::AsList>,
 {
     type Provisions = <T::Provided as PluginProvisions>::AsList;
     type Required = <T::Deps as PluginDeps>::AsList;
-    type AllRequired =
-        <<T::Deps as PluginDeps>::AsList as TAppend<<T::LateDeps as PluginDeps>::AsList>>::Output;
 
     fn install<P, R, Mods>(
         self,
@@ -693,9 +662,8 @@ where
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::AllRequired>,
+        R: TAppend<Self::Required>,
     {
-        let deps = T::Deps::resolve(app.bean_registry());
         let name = plugin_action_name::<T>();
         // The `<prefix>.enabled` config gate (phase 6). When a plugin declares a
         // `CONFIG_PREFIX` and `<prefix>.enabled` is `false`, its POST-STATE
@@ -713,7 +681,7 @@ where
             let mut ctx = PluginInstallContext::new(app.r2e_config_ref());
             // Fully qualify: `install`/`configure` exist on both this trait and
             // `RawPreStatePlugin`, so `plugin.install(..)` would be ambiguous.
-            let provided = PreStatePlugin::install(&mut plugin, deps, &mut ctx);
+            let provided = PreStatePlugin::install(&mut plugin, &mut ctx);
             // Lift the lifecycle registrars (run_post_construct / run_pre_destroy)
             // out before `flush` consumes the context.
             let registry_ops = ctx.take_registry_ops();
@@ -735,10 +703,10 @@ where
             op(builder.bean_registry_mut());
         }
         // Schedule `configure` to run after `build_state()`, when the full bean
-        // graph is available to resolve `LateDeps` from AND `R2eConfig` is
+        // graph is available to resolve `Deps` from AND `R2eConfig` is
         // guaranteed loaded (so typed `Config` is delivered here, not at
         // install). Runs as a deferred action (post-resolution). For
-        // `LateDeps = ()`, `Config = ()`, and the default (no-op) `configure`,
+        // `Deps = ()`, `Config = ()`, and the default (no-op) `configure`,
         // this is an inert closure. Also gated on `<prefix>.enabled`; this action
         // is the single place we emit the "plugin disabled" diagnostic, since
         // exactly one configure action is scheduled per plugin.
@@ -751,9 +719,9 @@ where
                 );
                 return;
             }
-            let late = <T::LateDeps as PluginDeps>::resolve_from_context(dctx.bean_context());
+            let deps = <T::Deps as PluginDeps>::resolve_from_context(dctx.bean_context());
             let config = load_plugin_config::<T>(dctx.config(), name);
-            PreStatePlugin::configure(plugin, &provided_for_configure, late, config, dctx);
+            PreStatePlugin::configure(plugin, &provided_for_configure, deps, config, dctx);
         }));
         builder.with_updated_types()
     }
@@ -845,9 +813,8 @@ fn gate_on_enabled(action: DeferredAction, prefix: Option<&'static str>) -> Defe
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyToken,);
 ///     type Deps = ();
-///     type LateDeps = ();
 ///
-///     fn install(self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
+///     fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
 ///         let token = MyToken::new();
 ///         let handle = MyHandle::new(token.clone());
 ///
@@ -912,7 +879,7 @@ pub struct DeferredContext<'a> {
     /// after `build_state()`. Read beans out of it via
     /// [`bean_context`](DeferredContext::bean_context) — this is what backs a
     /// plugin's post-state [`configure`](crate::PreStatePlugin::configure)
-    /// `LateDeps` resolution.
+    /// `Deps` resolution.
     #[doc(hidden)]
     pub bean_context: &'a crate::beans::BeanContext,
     /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any. Deferred
@@ -931,7 +898,7 @@ impl DeferredContext<'_> {
     /// `.provide()`-d, `.register()`-ed (factory-built), or produced by another
     /// plugin — is materialized and readable here (`ctx.bean_context().get::<T>()`).
     /// This is how a plugin's [`configure`](crate::PreStatePlugin::configure)
-    /// hook resolves its `LateDeps`.
+    /// hook resolves its `Deps`.
     pub fn bean_context(&self) -> &crate::beans::BeanContext {
         self.bean_context
     }

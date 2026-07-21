@@ -51,7 +51,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Execute deferred actions (new API). They run here — after the bean
         // graph is resolved — so `ctx.bean_context()` exposes the fully
-        // materialized graph (this is what backs plugin `configure`/`LateDeps`).
+        // materialized graph (this is what backs plugin `configure`/`Deps`).
         for action in deferred_actions {
             let mut ctx = DeferredContext {
                 layers: &mut builder.shared.custom_layers,
