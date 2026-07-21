@@ -12,10 +12,9 @@ pub struct MarkerPlugin;
 impl PreStatePlugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (PluginBean,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (PluginBean,) {
         (PluginBean,)
     }
 }

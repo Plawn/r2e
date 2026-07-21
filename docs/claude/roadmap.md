@@ -55,10 +55,18 @@ this file's git history.
 
 **Leftovers folded back into this backlog:**
 
-- **Type-level `Deps`-hole fix (deferred from phase 3)** — a `.register()`-ed
-  type in a plugin's `Deps` still panics at runtime (steering to `LateDeps`)
-  rather than failing at compile time; tagging `P` was judged to churn
-  `Contains`/`AllSatisfied` everywhere. Revisit only if it bites in practice.
+- **Type-level `Deps`-hole fix — CLOSED by unification (2026-07-21).** Instead
+  of tagging `P` (rejected: churns `Contains`/`AllSatisfied` everywhere), the
+  pre-state `Deps` was **removed** — it had zero in-tree users (every plugin
+  declared `Deps = ()`; no `install` read its deps argument) and was the only
+  carrier of the hole. `LateDeps` renamed `Deps`: ONE list, appended to `R`,
+  verified against the final provision list at `build_state()` (guided compile
+  error), resolved at `configure`. `install` lost its deps parameter
+  (BREAKING). New `r2e_core::Late<T>` write-once cell covers "provided bean
+  needs a dep" (sync fill in `configure`, async via `run_post_construct` —
+  dogfooded by the OpenFga plugin's `LazyBackend`). The
+  `PluginDeps::resolve` pre-state path and its runtime panic are deleted.
+  Reference: plugins.md; fixtures: `compile-fail/plugin_deps_missing.rs`.
 - **Serve-path e2e per plugin** — still open, see **W4** below (phase-6's
   `enabled` gate widens the surface: a disabled plugin's serve promise must
   also be verified as *absent*).

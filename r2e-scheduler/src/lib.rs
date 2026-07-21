@@ -8,7 +8,7 @@ mod duration;
 mod types;
 
 pub use driver::{start_jobs, SchedulerCommands};
-pub use duration::parse_duration;
+pub use duration::{parse_duration, PositiveDuration};
 pub use types::{
     extract_tasks, OverlapPolicy, ScheduleConfig, ScheduleParseError, ScheduledJob,
     ScheduledResult, ScheduledTask, ScheduledTaskDef, SkipFn,
@@ -281,7 +281,8 @@ impl ScheduledJobRegistry {
 
     /// Mutate the entry named `name` in place (no-op if absent). Used by the
     /// driver to keep runtime stats current.
-    pub(crate) fn update_job(&self, name: &str, f: impl FnOnce(&mut ScheduledJobInfo)) {
+    #[doc(hidden)] // pub for tests only; not part of the public API
+    pub fn update_job(&self, name: &str, f: impl FnOnce(&mut ScheduledJobInfo)) {
         let mut g = self.inner.lock().unwrap();
         if let Some(info) = g.iter_mut().find(|i| i.name == name) {
             f(info);
@@ -313,7 +314,7 @@ impl Default for ScheduledJobRegistry {
 /// The Scheduler therefore **requires** a `PoolExecutor` bean in the final
 /// graph — install `.plugin(Executor)` (or any provider of `PoolExecutor`)
 /// somewhere in the builder chain. This is enforced at compile time via the
-/// plugin's `LateDeps`: a missing `PoolExecutor` is a guided compile error at
+/// plugin's `Deps`: a missing `PoolExecutor` is a guided compile error at
 /// `build_state()`, not a runtime failure. Running ticks on the pool also means
 /// a panicking tick is contained in its pool job — the schedule loop logs and
 /// keeps ticking instead of dying.
@@ -358,7 +359,7 @@ pub struct Scheduler;
 ///
 /// Every field is optional. `executor` selects which pool ticks run on:
 /// - `"shared"` (default) — the app-wide [`PoolExecutor`] from the `Executor`
-///   plugin (resolved via `LateDeps`).
+///   plugin (resolved via the plugin's `Deps`).
 /// - `"dedicated"` — a private pool sized by the keys below, so scheduled work
 ///   never contends with other background jobs. The sizing keys are used **only**
 ///   in dedicated mode (ignored under `shared`) and mirror `ExecutorConfig`.
@@ -395,18 +396,16 @@ pub struct SchedulerConfig {
 
 impl PreStatePlugin for Scheduler {
     type Provided = (CancellationToken, ScheduledJobRegistry);
-    type Deps = ();
-    // `PoolExecutor` stays a hard `LateDeps` requirement even when the config
+    // `PoolExecutor` stays a hard `Deps` requirement even when the config
     // selects a dedicated pool — a type-level requirement cannot be made
     // config-conditional. In dedicated mode the shared pool is simply not used
     // to run ticks (a private pool is built instead).
-    type LateDeps = (PoolExecutor,);
+    type Deps = (PoolExecutor,);
     type Config = SchedulerConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("scheduler");
 
     fn install(
         &mut self,
-        (): (),
         ctx: &mut PluginInstallContext<'_>,
     ) -> (CancellationToken, ScheduledJobRegistry) {
         let token = CancellationToken::new();
@@ -711,7 +710,11 @@ fn start_scheduled_tasks(
         ));
     }
 
-    tracing::info!(count = tasks.len(), "Starting scheduled tasks");
+    // Bind the count to a plain statement: `tracing::info!(field = expr, …)`
+    // evaluates `expr` inside a macro-internal region that coverage tooling
+    // does not attribute to this line even when executed.
+    let count = tasks.len();
+    tracing::info!(count, "Starting scheduled tasks");
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(jobs, token, executor, job_registry, commands);
 }

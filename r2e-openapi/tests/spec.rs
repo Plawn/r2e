@@ -744,6 +744,20 @@ fn registry_schema_appears_in_spec() {
 }
 
 #[test]
+fn non_object_schema_is_inserted_verbatim() {
+    // JSON Schema allows a boolean/scalar to stand in as a whole schema. Such a
+    // value is not an object, so `insert_schema` skips the `$schema`/`$defs`
+    // grooming and stores it as-is. Exercises the `as_object_mut() == None` path.
+    let config = OpenApiConfig::new("Test", "1.0.0")
+        .with_raw_schema("AnyValue", json!(true))
+        .with_raw_schema("Scalar", json!(42));
+    let spec = build_spec(&config, &[]);
+
+    assert_eq!(spec["components"]["schemas"]["AnyValue"], json!(true));
+    assert_eq!(spec["components"]["schemas"]["Scalar"], json!(42));
+}
+
+#[test]
 fn registry_schema_defs_are_promoted() {
     let config = OpenApiConfig::new("Test", "1.0.0").with_raw_schema(
         "Parent",

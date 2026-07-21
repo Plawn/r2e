@@ -53,9 +53,9 @@ AppBuilder::new()
 ```
 
 `Scheduler` **requires the `Executor` plugin**: it declares
-`type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor`
+`type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor`
 in the graph fails at `build_state()` with the guided "missing
-`.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. `LateDeps` are
+`.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. `Deps` are
 checked against the final provision list, so the order between the two plugins does
 not matter.
 
@@ -154,46 +154,31 @@ pub struct MyPreStatePlugin;
 
 impl PreStatePlugin for MyPreStatePlugin {
     type Provided = (MyConfig,);
-    type Deps = ();
-    type LateDeps = ();      // no post-state dependencies
+    type Deps = ();          // no dependencies on other beans
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
         (MyConfig::default(),)
     }
 }
 ```
 
-Every impl declares `type LateDeps` — set it to `()` unless the plugin consumes
-an application bean after `build_state()` (see
+Every impl declares `type Deps` — set it to `()` unless the plugin consumes
+an application bean (see
 [Consuming application beans](#consuming-application-beans)).
-
-Plugins can declare typed dependencies via `Deps`. The compiler verifies at each `.plugin()` call that all deps have already been provided:
-
-```rust
-impl PreStatePlugin for MyPlugin {
-    type Provided = (MyService,);
-    type Deps = (DbPool, CancellationToken);
-    type LateDeps = ();
-    type Config = ();
-
-    fn install(&mut self, (pool, token): (DbPool, CancellationToken), _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
-        (MyService::new(pool, token),)
-    }
-}
-```
-
-`Deps` must be `.provide(instance)` values — `install` runs before the bean
-graph exists. To consume a factory-built bean (`.register::<T>()`) or a bean
-another plugin provides, use `LateDeps` + `configure` (next-but-one section).
 
 ### Consuming application beans
 
 A pre-state plugin has a **two-stage lifecycle**: `install` (before
-`build_state()`) and `configure` (after it). `Deps` resolve at install time and
-can only name `.provide()`-d beans; `LateDeps` resolve in `configure` from the
-fully materialized bean graph, so they can name **any** bean — factory-built
-(`.register::<T>()`) or provided by another plugin.
+`build_state()`) and `configure` (after it). `install` runs pre-state and never
+sees resolved beans. `Deps` is the plugin's single dependency list: it is
+appended to the builder's requirement list and verified against the **final**
+provision list at `build_state()` — nothing is checked at the `.plugin()` call
+site, so the order between `.plugin()`, `.provide()`, and `.register()` calls
+does not matter. `Deps` can name **any** bean — provided, factory-built
+(`.register::<T>()`), or provided by another plugin. A missing dep is a guided
+compile error ("missing `.provide::<X>()` or `.register::<X>()`"). The resolved
+beans are passed **by value** to `configure`:
 
 ```rust
 use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
@@ -202,18 +187,17 @@ pub struct MetricsExporter;
 
 impl PreStatePlugin for MetricsExporter {
     type Provided = (ExporterHandle,);
-    type Deps = ();
-    type LateDeps = (MetricsRegistry,);   // factory-built; not available at install
+    type Deps = (MetricsRegistry,);   // factory-built is fine — resolved post-state
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
         (ExporterHandle::new(),)
     }
 
     fn configure(
         self,
         (handle,): &(ExporterHandle,),
-        (registry,): (MetricsRegistry,),
+        (registry,): Self::Deps,
         _config: Option<()>,
         ctx: &mut DeferredContext<'_>,
     ) {
@@ -222,7 +206,7 @@ impl PreStatePlugin for MetricsExporter {
     }
 }
 
-// `MetricsRegistry` may be registered AFTER the plugin — `LateDeps` is checked
+// `MetricsRegistry` may be registered AFTER the plugin — `Deps` is checked
 // against the final provision list at `build_state()`, not at the call site.
 AppBuilder::new()
     .plugin(MetricsExporter)
@@ -231,9 +215,17 @@ AppBuilder::new()
 ```
 
 `configure` gets a borrowed copy of the plugin's `Provided`, the resolved
-`LateDeps`, and a `DeferredContext` (same surface as deferred actions). Its
-default is a no-op. **Rule:** `Deps` = pre-built infrastructure you `.provide()`;
-`LateDeps` = anything else, including factory-built beans.
+`Deps` (by value), and a `DeferredContext` (same surface as deferred actions).
+Its default is a no-op.
+
+**Provided bean needs a dep?** `install` cannot construct it (deps are not
+resolved yet). Provide a **shell** over `r2e::Late<T>` — a `Clone`, Arc-shared,
+first-write-wins write-once cell — and fill it post-state: sync via
+`late.fill(value)` in `configure`, or async via
+`ctx.run_post_construct::<Bean>()` (awaited inside `build_state()`). Read with
+`Late::get() -> Option<&T>` or `Late::expect("what")`. See
+[Custom Plugins](../advanced/custom-plugins.md#compile-time-dependency-checking)
+for a worked example.
 
 ### Deferred actions
 
@@ -247,10 +239,9 @@ use r2e::{PreStatePlugin, PluginInstallContext};
 impl PreStatePlugin for MyPlugin {
     type Provided = (MyToken,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
         let token = MyToken::new();
         let t = token.clone();
         ctx.add_layer(|router| router);
@@ -285,10 +276,9 @@ pub struct MultiProvider;
 impl PreStatePlugin for MultiProvider {
     type Provided = (TokenA, TokenB);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
         (TokenA::new(), TokenB::new())
     }
 }

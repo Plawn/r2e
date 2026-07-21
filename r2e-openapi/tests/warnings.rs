@@ -131,6 +131,15 @@ fn warns_on_schemaless_request_type() {
             type_name: "CreateUser".to_string(),
         }
     );
+
+    // The message renders the request-body arm: names the route, the type, and
+    // points at the `JsonSchema` derive fix.
+    let msg = warnings[0].message();
+    assert!(msg.contains("POST"));
+    assert!(msg.contains("/users"));
+    assert!(msg.contains("CreateUser"));
+    assert!(msg.contains("request type"));
+    assert!(msg.contains("JsonSchema"));
 }
 
 #[test]
@@ -160,3 +169,4 @@ fn build_spec_documents_unmapped_response_without_body() {
     assert!(resp.get("description").is_some());
     assert!(resp.get("content").is_none());
 }
+

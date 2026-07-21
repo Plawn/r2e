@@ -386,11 +386,11 @@ where
 // ── Plugin dependency resolution ─────────────────────────────────────────
 
 /// Maps a concrete tuple type to a type-level list and resolves values from
-/// the bean registry.
+/// the materialized bean graph.
 ///
 /// This trait bridges compile-time plugin dependency declarations (`type Deps`)
 /// with the type-level provision tracking (`TCons`/`TNil`) and runtime value
-/// resolution from [`BeanRegistry`](crate::beans::BeanRegistry).
+/// resolution from [`BeanContext`](crate::beans::BeanContext).
 ///
 /// # Arity Implementations
 ///
@@ -410,40 +410,31 @@ where
 ///     type Provided = (MyThing,);
 ///     type Deps = (DbPool, CancellationToken);
 ///
-///     fn install(self, (pool, token): (DbPool, CancellationToken), ctx: &mut PluginInstallContext<'_>) -> (MyThing,) {
-///         (MyThing::new(pool, token),)
-///     }
+///     fn configure(
+///         self,
+///         (thing,): &(MyThing,),
+///         (pool, token): (DbPool, CancellationToken),
+///         _config: Option<()>,
+///         _ctx: &mut DeferredContext<'_>,
+///     ) { /* wire `thing` up with `pool`/`token` */ }
 /// }
 /// ```
 pub trait PluginDeps: Send {
     /// The type-level list representation of these dependencies.
     type AsList;
 
-    /// Resolve all dependency values from the bean registry.
-    ///
-    /// This is the **pre-state** resolution path used for
-    /// [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): it runs during
-    /// plugin install, before the bean graph is built, so it can only see
-    /// beans supplied via `.provide(instance)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a required bean is not present. This should never happen when
-    /// the compile-time `AllSatisfied` bound on `.plugin()` is satisfied.
-    fn resolve(registry: &crate::beans::BeanRegistry) -> Self;
-
     /// Resolve all dependency values from the fully materialized
     /// [`BeanContext`](crate::beans::BeanContext).
     ///
-    /// This is the **post-state** resolution path used for
-    /// [`PreStatePlugin::LateDeps`](crate::PreStatePlugin::LateDeps): it runs
-    /// after `build_state()`, so every bean — `.provide()`-d, `.register()`-ed
-    /// (factory-built), or produced by another plugin — is available.
+    /// Used for [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): it runs
+    /// after `build_state()` (backing the plugin's `configure` call), so every
+    /// bean — `.provide()`-d, `.register()`-ed (factory-built), or produced by
+    /// another plugin — is available.
     ///
     /// # Panics
     ///
     /// Panics if a required bean is absent from the context. This should never
-    /// happen: `LateDeps` is appended to the builder's requirement list and
+    /// happen: `Deps` is appended to the builder's requirement list and
     /// verified against the final provision list at `build_state()`.
     fn resolve_from_context(ctx: &crate::beans::BeanContext) -> Self;
 }
@@ -451,8 +442,6 @@ pub trait PluginDeps: Send {
 // Arity 0
 impl PluginDeps for () {
     type AsList = TNil;
-
-    fn resolve(_registry: &crate::beans::BeanRegistry) -> Self {}
 
     fn resolve_from_context(_ctx: &crate::beans::BeanContext) -> Self {}
 }
@@ -465,38 +454,12 @@ macro_rules! impl_plugin_deps {
         {
             type AsList = impl_plugin_deps!(@list $($T),+);
 
-            fn resolve(registry: &crate::beans::BeanRegistry) -> Self {
-                ($(
-                    registry.get_provided::<$T>().cloned()
-                        .unwrap_or_else(|| {
-                            if registry.is_bean_registered(std::any::TypeId::of::<$T>()) {
-                                panic!(
-                                    "PluginDeps: bean `{name}` is registered via `.register::<{name}>()` but not \
-                                     yet materialized — plugin `Deps` can only reference types supplied via \
-                                     `.provide(instance)` at plugin-install time (beans are built later, after all \
-                                     plugins install). Move `{name}` from the plugin's `Deps` to its `LateDeps`: \
-                                     `LateDeps` is resolved after `build_state()` from the full bean graph, so it \
-                                     can consume `.register()`-ed and factory-built beans. Handle it in \
-                                     `configure()` instead of `install()`. (Alternatively, change the provider to \
-                                     `.provide(instance)`.)",
-                                    name = std::any::type_name::<$T>()
-                                )
-                            } else {
-                                panic!(
-                                    "PluginDeps: bean `{}` not found in registry (this is a bug — the compile-time bound should have caught this)",
-                                    std::any::type_name::<$T>()
-                                )
-                            }
-                        }),
-                )+)
-            }
-
             fn resolve_from_context(ctx: &crate::beans::BeanContext) -> Self {
                 ($(
                     ctx.try_get::<$T>().unwrap_or_else(|| {
                         panic!(
                             "PluginDeps: bean `{}` not found in the resolved bean context (this is a bug — \
-                             `LateDeps` is appended to the builder's requirement list and should have been \
+                             plugin `Deps` is appended to the builder's requirement list and should have been \
                              verified against the final provision list at `build_state()`)",
                             std::any::type_name::<$T>()
                         )

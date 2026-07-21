@@ -260,12 +260,10 @@ pub struct OidcRuntime {
 impl PreStatePlugin for OidcRuntime {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
     fn install(
         &mut self,
-        (): (),
         ctx: &mut PluginInstallContext<'_>,
     ) -> (Arc<JwtClaimsValidator>,) {
         // `install` takes `&mut self`; the layer closure needs owned values, so
@@ -281,18 +279,16 @@ impl PreStatePlugin for OidcRuntime {
 impl PreStatePlugin for OidcServer {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
     fn install(
         &mut self,
-        (): (),
         ctx: &mut PluginInstallContext<'_>,
     ) -> (Arc<JwtClaimsValidator>,) {
         // Take ownership out of `&mut self` (OidcServer: Default) to build the
         // runtime, then delegate to its `install`.
         let mut runtime = std::mem::take(self).build();
-        runtime.install((), ctx)
+        runtime.install(ctx)
     }
 }
 

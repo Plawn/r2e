@@ -156,10 +156,9 @@ struct SingleProvider;
 impl PreStatePlugin for SingleProvider {
     type Provided = (Alpha,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         (Alpha(7),)
     }
 }
@@ -171,10 +170,9 @@ struct MultiProvider;
 impl PreStatePlugin for MultiProvider {
     type Provided = (Alpha, Beta);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha, Beta) {
         (Alpha(42), Beta("hello".into()))
     }
 }
@@ -185,10 +183,9 @@ struct NoProvider;
 impl PreStatePlugin for NoProvider {
     type Provided = ();
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) {
         ctx.add_deferred(DeferredAction::new("no-provider", |_dctx| {}));
     }
 }
@@ -277,10 +274,9 @@ struct SugarBuildPlugin;
 impl PreStatePlugin for SugarBuildPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         ctx.store_data(StoredData(42));
         ctx.add_layer(|router| router.route("/sugar", get(|| async { "sugar-ok" })));
         ctx.wrap_router(|router| router.route("/wrapped", get(|| async { "wrapped-ok" })));
@@ -330,10 +326,9 @@ struct EveryHookPlugin {
 impl PreStatePlugin for EveryHookPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         let log = self.log.clone();
 
         // Escape hatch: explicit actions run BEFORE the buffered sugar action.
@@ -423,10 +418,10 @@ fn plugin_action_name_trims_to_last_segment() {
     assert_eq!(plugin_action_name::<u32>(), "u32");
 }
 
-// ── LateDeps + configure (Phase 3) ──────────────────────────────────────────
+// ── Deps + configure ──────────────────────────────────────────
 
 /// A shared sink the `configure` hook writes into, so the test can observe
-/// which `LateDeps` value it received.
+/// which `Deps` value it received.
 #[derive(Clone, Default)]
 struct ConfigureLog(Arc<Mutex<Vec<u32>>>);
 
@@ -463,18 +458,17 @@ impl Registrable for FactoryBean {
     }
 }
 
-/// `LateDeps = (Alpha,)` where `Alpha` is `.provide()`-d after the plugin.
+/// `Deps = (Alpha,)` where `Alpha` is `.provide()`-d after the plugin.
 struct LateProvidedPlugin {
     log: ConfigureLog,
 }
 
 impl PreStatePlugin for LateProvidedPlugin {
     type Provided = (ConfigureLog,);
-    type Deps = ();
-    type LateDeps = (Alpha,);
+    type Deps = (Alpha,);
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
         (self.log.clone(),)
     }
 
@@ -492,7 +486,7 @@ impl PreStatePlugin for LateProvidedPlugin {
 #[r2e_core::test]
 async fn late_deps_resolves_provided_bean_in_configure() {
     let log = ConfigureLog::default();
-    // `Alpha` is provided AFTER `.plugin()` — `LateDeps` is not checked at the
+    // `Alpha` is provided AFTER `.plugin()` — `Deps` is not checked at the
     // call site, only against the final provision list at `build_state()`.
     let _app = AppBuilder::new()
         .plugin(LateProvidedPlugin { log: log.clone() })
@@ -506,7 +500,7 @@ async fn late_deps_resolves_provided_bean_in_configure() {
     );
 }
 
-/// THE acceptance test's plugin: `LateDeps = (FactoryBean,)` — a bean that only
+/// THE acceptance test's plugin: `Deps = (FactoryBean,)` — a bean that only
 /// the graph can build, registered *after* this plugin.
 struct LateFactoryPlugin {
     log: ConfigureLog,
@@ -514,11 +508,10 @@ struct LateFactoryPlugin {
 
 impl PreStatePlugin for LateFactoryPlugin {
     type Provided = (ConfigureLog,);
-    type Deps = ();
-    type LateDeps = (FactoryBean,);
+    type Deps = (FactoryBean,);
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
         (self.log.clone(),)
     }
 
@@ -538,7 +531,7 @@ async fn late_deps_resolves_factory_built_bean_registered_after_plugin() {
     let log = ConfigureLog::default();
     // `FactoryBean` is `.register()`-ed AFTER the plugin. Under the old `Deps`
     // machinery this would panic at runtime ("registered but not materialized");
-    // as a `LateDeps` it resolves from the fully built graph in `configure`.
+    // as a `Deps` it resolves from the fully built graph in `configure`.
     let app = AppBuilder::new()
         .plugin(LateFactoryPlugin { log: log.clone() })
         .register::<FactoryBean>()
@@ -559,10 +552,9 @@ struct AlphaProviderPlugin;
 impl PreStatePlugin for AlphaProviderPlugin {
     type Provided = (Alpha,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         (Alpha(11),)
     }
 }
@@ -582,7 +574,7 @@ async fn late_deps_resolves_bean_provided_by_another_plugin() {
         "consumer configure saw producer's Alpha"
     );
 
-    // Consumer installed first: `LateDeps` binds against the final graph, not
+    // Consumer installed first: `Deps` binds against the final graph, not
     // install order, so the result is identical.
     let log = ConfigureLog::default();
     let _app = AppBuilder::new()
@@ -594,7 +586,7 @@ async fn late_deps_resolves_bean_provided_by_another_plugin() {
 }
 
 /// Records, in `configure`, both the `provided` argument (the plugin's own
-/// instance) and the graph's view of the same bean (via `LateDeps`) — the
+/// instance) and the graph's view of the same bean (via `Deps`) — the
 /// pin-override contract documented on `PreStatePlugin::configure`.
 struct PinContractPlugin {
     log: ConfigureLog,
@@ -602,11 +594,10 @@ struct PinContractPlugin {
 
 impl PreStatePlugin for PinContractPlugin {
     type Provided = (Alpha, ConfigureLog);
-    type Deps = ();
-    type LateDeps = (Alpha,);
+    type Deps = (Alpha,);
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
         (Alpha(11), self.log.clone())
     }
 
@@ -634,7 +625,7 @@ async fn configure_provided_arg_keeps_own_instance_under_pin_override() {
     // The state and the graph hold the pinned override…
     assert_eq!(app.state().get::<Alpha>(), Alpha(99));
     // …while configure's `provided` arg keeps the plugin's own instance (11)
-    // and its `LateDeps` view reflects the override (99).
+    // and its `Deps` view reflects the override (99).
     assert_eq!(log.values(), vec![11, 99]);
 }
 
@@ -643,11 +634,10 @@ struct LateConfigureCtxPlugin;
 
 impl PreStatePlugin for LateConfigureCtxPlugin {
     type Provided = (SugarMarker,);
-    type Deps = ();
-    type LateDeps = (Alpha,);
+    type Deps = (Alpha,);
     type Config = ();
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
         (SugarMarker,)
     }
 
@@ -709,11 +699,10 @@ struct ConfigReadingPlugin {
 impl PreStatePlugin for ConfigReadingPlugin {
     type Provided = ();
     type Deps = ();
-    type LateDeps = ();
     type Config = DemoConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
 
     fn configure(
         self,
@@ -732,11 +721,10 @@ struct StrictConfigPlugin;
 impl PreStatePlugin for StrictConfigPlugin {
     type Provided = ();
     type Deps = ();
-    type LateDeps = ();
     type Config = StrictConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
-    fn install(&mut self, (): (), _ctx: &mut PluginInstallContext<'_>) {}
+    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
 
     fn configure(
         self,
@@ -848,10 +836,9 @@ struct PostConstructPlugin {
 impl PreStatePlugin for PostConstructPlugin {
     type Provided = (InitBean,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (InitBean,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (InitBean,) {
         ctx.run_post_construct::<InitBean>();
         (InitBean {
             log: self.log.clone(),
@@ -893,10 +880,9 @@ struct DisposePlugin {
 impl PreStatePlugin for DisposePlugin {
     type Provided = (DisposeBean,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (DisposeBean,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (DisposeBean,) {
         let log = self.log.clone();
         ctx.on_shutdown_async(move || {
             let log = log.clone();
@@ -958,11 +944,10 @@ struct GatedConfigured(u32);
 impl PreStatePlugin for GatedPlugin {
     type Provided = (Alpha,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("gated");
 
-    fn install(&mut self, (): (), ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
         ctx.store_data(StoredData(1));
         ctx.add_layer(|router| router.route("/gated", get(|| async { "gated-ok" })));
         (Alpha(99),)

@@ -341,12 +341,10 @@ struct MarkerPlugin;
 impl r2e_core::PreStatePlugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
-    type LateDeps = ();
     type Config = ();
 
     fn install(
         &mut self,
-        (): (),
         _ctx: &mut r2e_core::plugin::PluginInstallContext<'_>,
     ) -> (PluginBean,) {
         (PluginBean(7),)

@@ -234,11 +234,13 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
     // Surface schema gaps once, at boot (build_spec runs during plugin install),
     // so silently-undocumented bodies become visible instead of vanishing.
     for warning in spec_warnings(routes) {
+        // Render the message eagerly (once per gap, at boot) so the warning path
+        // is observable without relying on a subscriber-gated lazy format arg.
+        let message = warning.message();
         tracing::warn!(
             method = %warning.method,
             path = %warning.path,
-            "{}",
-            warning.message()
+            "{message}"
         );
     }
 

@@ -1,5 +1,6 @@
 use r2e_scheduler::{
-    extract_tasks, ScheduleConfig, ScheduledResult, ScheduledTask, ScheduledTaskDef,
+    extract_tasks, ScheduleConfig, ScheduleParseError, ScheduledResult, ScheduledTask,
+    ScheduledTaskDef,
 };
 use std::any::Any;
 use std::time::Duration;
@@ -25,9 +26,9 @@ fn boxed_task<T: Clone + Send + Sync + 'static>(task: ScheduledTaskDef<T>) -> Bo
 
 #[test]
 fn schedule_config_interval() {
-    let cfg = ScheduleConfig::Interval(Duration::from_secs(60));
+    let cfg = ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap());
     match cfg {
-        ScheduleConfig::Interval(d) => assert_eq!(d, Duration::from_secs(60)),
+        ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(60)),
         _ => panic!("expected Interval"),
     }
 }
@@ -35,7 +36,7 @@ fn schedule_config_interval() {
 #[test]
 fn schedule_config_interval_with_delay() {
     let cfg = ScheduleConfig::IntervalWithDelay {
-        interval: Duration::from_secs(30),
+        interval: r2e_scheduler::PositiveDuration::from_secs(30).unwrap(),
         initial_delay: Duration::from_secs(5),
     };
     match cfg {
@@ -43,7 +44,7 @@ fn schedule_config_interval_with_delay() {
             interval,
             initial_delay,
         } => {
-            assert_eq!(interval, Duration::from_secs(30));
+            assert_eq!(interval.get(), Duration::from_secs(30));
             assert_eq!(initial_delay, Duration::from_secs(5));
         }
         _ => panic!("expected IntervalWithDelay"),
@@ -87,7 +88,7 @@ fn extract_tasks_empty() {
 
 #[test]
 fn extract_tasks_single() {
-    let task = noop_task_def("single", ScheduleConfig::Interval(Duration::from_secs(1)));
+    let task = noop_task_def("single", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()));
     let boxed = boxed_task(task);
     let tasks = extract_tasks(vec![boxed]);
     assert_eq!(tasks.len(), 1);
@@ -103,7 +104,7 @@ fn extract_tasks_wrong_type_ignored() {
 
 #[test]
 fn extract_tasks_mixed() {
-    let valid = noop_task_def("valid", ScheduleConfig::Interval(Duration::from_secs(1)));
+    let valid = noop_task_def("valid", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()));
     let valid_boxed = boxed_task(valid);
     let invalid: Box<dyn Any + Send> = Box::new("not a task".to_string());
     let tasks = extract_tasks(vec![valid_boxed, invalid]);
@@ -115,10 +116,10 @@ fn extract_tasks_mixed() {
 
 #[test]
 fn task_def_name_and_schedule() {
-    let task = noop_task_def("my_task", ScheduleConfig::Interval(Duration::from_secs(10)));
+    let task = noop_task_def("my_task", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(10).unwrap()));
     assert_eq!(task.name(), "my_task");
     match task.schedule() {
-        ScheduleConfig::Interval(d) => assert_eq!(*d, Duration::from_secs(10)),
+        ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(10)),
         _ => panic!("expected Interval"),
     }
 }
@@ -129,7 +130,7 @@ fn task_def_name_and_schedule() {
 fn task_def_new_captures_state() {
     let task = ScheduledTaskDef::new(
         "with_state",
-        ScheduleConfig::Interval(Duration::from_secs(1)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         42u32,
         |_n| async {},
     );
@@ -141,7 +142,7 @@ fn task_def_new_captures_state() {
 fn task_def_from_fn_is_stateless() {
     let task = ScheduledTaskDef::from_fn(
         "stateless",
-        ScheduleConfig::Interval(Duration::from_secs(1)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         || async {},
     );
     assert_eq!(task.name(), "stateless");
@@ -152,7 +153,7 @@ fn task_def_new_accepts_result_closures() {
     // Compiles: the closure returns Result<(), E>, wrapped via ScheduledResult.
     let _task = ScheduledTaskDef::new(
         "fallible",
-        ScheduleConfig::Interval(Duration::from_secs(1)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         (),
         |_| async { Err::<(), _>("boom".to_string()) },
     );
@@ -162,7 +163,7 @@ fn task_def_new_accepts_result_closures() {
 fn into_boxed_any_roundtrips_through_extract_tasks() {
     let task = ScheduledTaskDef::from_fn(
         "roundtrip",
-        ScheduleConfig::Interval(Duration::from_secs(1)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         || async {},
     );
     let tasks = extract_tasks(vec![task.into_boxed_any()]);
@@ -176,13 +177,13 @@ fn into_boxed_any_roundtrips_through_extract_tasks() {
 fn from_str_duration_is_interval() {
     let cfg: ScheduleConfig = "30s".parse().unwrap();
     match cfg {
-        ScheduleConfig::Interval(d) => assert_eq!(d, Duration::from_secs(30)),
+        ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(30)),
         _ => panic!("expected Interval"),
     }
 
     let cfg: ScheduleConfig = "1h30m".parse().unwrap();
     match cfg {
-        ScheduleConfig::Interval(d) => assert_eq!(d, Duration::from_secs(5400)),
+        ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(5400)),
         _ => panic!("expected Interval"),
     }
 }
@@ -203,6 +204,20 @@ fn from_str_at_shortcut_is_cron() {
 }
 
 #[test]
+fn schedule_parse_error_display_and_error_trait() {
+    // The `Display` impl writes the inner message verbatim.
+    let err: ScheduleParseError = "".parse::<ScheduleConfig>().err().unwrap();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("empty schedule string"),
+        "Display should surface the message, got: {msg}"
+    );
+    // Also usable as a std::error::Error trait object.
+    let dyn_err: &dyn std::error::Error = &err;
+    assert!(!dyn_err.to_string().is_empty());
+}
+
+#[test]
 fn from_str_rejects_garbage() {
     assert!("".parse::<ScheduleConfig>().is_err());
     assert!("abc".parse::<ScheduleConfig>().is_err());
@@ -220,11 +235,11 @@ fn from_config_value_string_and_integer() {
     let cfg =
         ScheduleConfig::from_config_value(&ConfigValue::String("5m".to_string()), "app.sched")
             .unwrap();
-    assert!(matches!(cfg, ScheduleConfig::Interval(d) if d == Duration::from_secs(300)));
+    assert!(matches!(cfg, ScheduleConfig::Interval(d) if d.get() == Duration::from_secs(300)));
 
     // Integer = seconds, mirroring #[scheduled(every = 30)]
     let cfg = ScheduleConfig::from_config_value(&ConfigValue::Integer(30), "app.sched").unwrap();
-    assert!(matches!(cfg, ScheduleConfig::Interval(d) if d == Duration::from_secs(30)));
+    assert!(matches!(cfg, ScheduleConfig::Interval(d) if d.get() == Duration::from_secs(30)));
 }
 
 #[test]

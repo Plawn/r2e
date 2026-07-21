@@ -6,7 +6,7 @@ Background task scheduler for R2E — interval, cron, and delayed task execution
 
 Provides a scheduler plugin that auto-discovers `#[scheduled]` methods on controllers and beans and runs them from a single driver task backed by a min-heap of next-fire times (not one Tokio task per schedule). Each tick body is submitted to the shared `PoolExecutor` (from the `Executor` plugin); a job is re-armed only when its tick completes, so a task never overlaps with itself while different jobs still run concurrently. Tasks are lifecycle-managed via `CancellationToken` for clean shutdown, and in-flight ticks drain through the pool.
 
-**Requires the `Executor` plugin.** `Scheduler` declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. The `scheduler` facade feature pulls in `executor`.
+**Requires the `Executor` plugin.** `Scheduler` declares `type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. The `scheduler` facade feature pulls in `executor`.
 
 ## Usage
 
@@ -111,7 +111,7 @@ remain). `scheduler.executor` selects the pool ticks run on: `"shared"` (default
 the app-wide `PoolExecutor`) or `"dedicated"` (a private pool sized by
 `scheduler.max-concurrent` / `queue-capacity` / `shutdown-timeout`, mirroring
 `executor.*`, with its own graceful drain). `PoolExecutor` stays a required
-`LateDeps` even in dedicated mode; an unknown `executor` value panics at boot.
+`Deps` even in dedicated mode; an unknown `executor` value panics at boot.
 
 ## Runtime control and stats
 
@@ -126,7 +126,7 @@ stats live on `ScheduledJobInfo` via `ScheduledJobRegistry::list_jobs()` /
 ## Lifecycle
 
 1. `Scheduler` plugin creates a `CancellationToken` during `plugin()` phase
-2. `build_state()` verifies the `PoolExecutor` dependency (`Scheduler::LateDeps`)
+2. `build_state()` verifies the `PoolExecutor` dependency (`Scheduler::Deps`)
 3. Tasks are collected from controllers during `register_controller()`
 4. `serve()` spawns ONE driver task (`start_jobs`) that owns a min-heap of next-fire deadlines for all schedules; when the earliest deadline is reached, due tick bodies are submitted to the shared `PoolExecutor` and each job is re-armed only when its own tick completes
 5. On shutdown signal (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled; the driver stops without aborting in-flight ticks, which drain via the pool (`executor.shutdown-timeout`)

@@ -378,6 +378,33 @@ impl ChatService {
 For conditional plugins/layers (no provision-list change) use
 `.when(cond, |b| b.with(...))` with `config_flag("key")` / `profile_is("prod")`.
 
+### Writing a pre-state plugin — one `Deps` list, resolved post-state
+
+```rust
+impl PreStatePlugin for MyPlugin {
+    type Provided = (MyHandle,);          // tuple of beans deposited at install
+    type Deps = (DbPool,);                // ANY bean (.provide()-d or .register()-ed),
+                                          // verified at build_state(), order-independent
+    type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
+
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+        (MyHandle::new(),)                // NO deps here — install runs pre-graph
+    }
+
+    fn configure(self, (handle,): &Self::Provided, (pool,): Self::Deps,
+                 _config: Option<()>, _ctx: &mut DeferredContext<'_>) {
+        handle.bind(pool);                // deps arrive by value, post-state
+    }
+}
+```
+
+A provided bean that must be BUILT from a dep starts as a shell over
+`r2e::Late<T>` (write-once, Arc-shared, clones see the fill; not in the
+prelude): fill it synchronously in `configure`, or asynchronously by
+registering the fill as a post-construct (`ctx.run_post_construct::<Bean>()`
+in `install` — awaited inside `build_state()`). `late.get()` is `None` only
+before boot; `late.expect("what")` panics with lifecycle guidance.
+
 ### `#[post_construct]` — lifecycle hooks
 
 Runs after the full bean graph is resolved. `&self` only, sync or async,
@@ -1325,7 +1352,7 @@ b.provide(SseTopic::<UserCreatedEvent>::new(64).with_event_name("user_created"))
 ## Scheduled Tasks
 
 Requires feature: `scheduler` (pulls in `executor`). **The Scheduler requires the
-Executor plugin** — it declares `type LateDeps = (PoolExecutor,)`, so `.plugin(Scheduler)`
+Executor plugin** — it declares `type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)`
 without a `PoolExecutor` in the graph fails at `build_state()` with the guided
 "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Install
 both **before** `build_state()` (order between them does not matter):
@@ -1484,7 +1511,7 @@ Config (`scheduler.*` YAML section, all optional): `scheduler.enabled = false`
 (standard gate — skips starting tasks, keeps beans); `scheduler.executor =
 "shared"` (default, app-wide `PoolExecutor`) | `"dedicated"` (private pool sized
 by `scheduler.max-concurrent` / `queue-capacity` / `shutdown-timeout`, mirroring
-`executor.*`). `PoolExecutor` stays a hard `LateDeps` requirement even in
+`executor.*`). `PoolExecutor` stays a hard `Deps` requirement even in
 dedicated mode. An unknown `executor` value panics at boot.
 
 Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()` /
@@ -1501,6 +1528,10 @@ when paused; `false` for a `skip` job already in flight). Each returns `bool`
 (`false` = unknown job / no driver).
 `ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
 from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
+Interval variants carry a `PositiveDuration` (a `Duration` guaranteed non-zero;
+`PositiveDuration::from_secs(60).unwrap()` / derefs to `Duration`), so a zero
+interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.
+`#[scheduled(every = "0s")]` is a compile error.
 
 ---
 

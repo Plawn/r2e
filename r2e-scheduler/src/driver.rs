@@ -323,7 +323,7 @@ async fn run_driver(
             // Fires immediately, matching tokio interval's immediate first tick.
             ScheduleConfig::Interval(period) => (
                 Rearm::Interval {
-                    period: *period,
+                    period: period.get(),
                     deadline: now,
                 },
                 Some(now),
@@ -335,7 +335,7 @@ async fn run_driver(
                 let first = now + *initial_delay;
                 (
                     Rearm::Interval {
-                        period: *interval,
+                        period: interval.get(),
                         deadline: first,
                     },
                     Some(first),

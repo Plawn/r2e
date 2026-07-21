@@ -103,7 +103,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
     // (`take_of::<ScheduledTaskMarker>()`) picks the task up and starts it.
     registry.add_boxed_for::<ScheduledTaskMarker>(vec![counting_task(
         "ticker",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         counter.clone(),
     )]);
 
