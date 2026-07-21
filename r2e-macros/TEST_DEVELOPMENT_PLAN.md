@@ -1,5 +1,96 @@
 # r2e-macros — Test Development Plan
 
+## Coverage Gaps (llvm-cov 2026-07-21)
+
+- **Line coverage: 84.9% (7234/8517)**
+- **Function coverage: 89.0% (690/775)**
+
+### Per-file uncovered lines (sorted by gap)
+
+| File | Covered | Total | Line% | Uncovered | Key uncovered code paths |
+|---|---|---|---|---|---|
+| `api_error_derive.rs` | 399 | 524 | 76.1% | 125 | Named-field variants in Display/IntoResponse/From codegen (multi-unnamed, `#[from]` on named, humanized fallback) |
+| `bean_attr.rs` | 638 | 749 | 85.2% | 111 | `BeanConsumerMethod`/`BeanScheduledMethod`/`BeanInterceptedMethod` struct construction; sync `Bean` trait impl (vs async path); `register_call` sync branch |
+| `main_attr.rs` | 239 | 341 | 70.1% | 102 | `OrderedHooks` (ordered test barrier/poison logic); `expand_test` runtime builder codegen; `parse_bool`/`parse_int`/`parse_str` helpers; `current_thread` flavor branch |
+| `config_derive.rs` | 424 | 513 | 82.7% | 89 | `FieldInfo` struct; `extract_doc_comment`; `Option<T>` with env+default codegen; env-only `Option` branch; garde `Validate` call codegen; tagged-enum `ConfigProperties` impl (`from_config` tag dispatch, metadata, none_arm) |
+| `codegen/controller_impl.rs` | 826 | 910 | 90.8% | 84 | `Controller<S,W>` trait impl body (construct/routes/register_meta/validate_config); route metadata builder (all fields); pre-auth guard middleware codegen with `PreAuthGuardContext` |
+| `params_derive.rs` | 195 | 278 | 70.1% | 83 | `PrefixedExtract`/`FromRequestParts` impls; `ParamsMetadata` codegen; per-field extraction: optional path params, query with default expr, query required, header optional/required (full branch matrix) |
+| `lib.rs` | 55 | 133 | 41.4% | 78 | Attribute-macro entry points (`#[controller]`, `#[routes]`, `#[bean]`, `#[grpc_routes]`, `#[main]`, `#[test]`) — thin dispatch, covered indirectly |
+| `codegen/handlers.rs` | 845 | 911 | 92.8% | 66 | `generate_single_handler` case matrix; WebSocket handler codegen (pattern 2: method returns `impl WsHandler`, guard preflight, upgrade closure, deco items); handler-level extra params |
+| `type_utils.rs` | 95 | 147 | 64.6% | 52 | `type_base_name` (non-Path fallback); `named_bean_newtype_ident`; `parse_inject_name` (bare `#[inject]`, `#[inject(identity)]` skip, `#[inject(name = "...")]`, unknown-arg error) |
+| `grpc_routes_parsing.rs` | 75 | 118 | 63.6% | 43 | `GrpcRoutesArgs` parsing (descriptor, unknown arg error); `GrpcRoutesImplDef` fields; `extract_identity_param` (duplicate identity error, optional identity, attr stripping) |
+| `bg_service_derive.rs` | 33 | 75 | 44.0% | 42 | `#[service(state)]` removed-attr error; unit struct vs named struct branches; field classification (#[inject]/#[config]/#[config_section]); `ServiceComponent` impl codegen; `generate_unit_impl` |
+| `extract/scheduled.rs` | 95 | 133 | 71.4% | 38 | Overlap policy parsing; skip_if parsing; `ScheduledConfig` struct construction from attrs |
+| `routes_parsing.rs` | 420 | 455 | 92.3% | 35 | Various edge-case attribute parsing branches |
+| `extract/route.rs` | 214 | 253 | 84.6% | 39 | Summary/description/deprecated/tag extraction from doc comments |
+| `extract/consumer.rs` | 80 | 112 | 71.4% | 32 | `ConsumerConfig` attr parsing (concurrency, batch_size, group, ack_mode) |
+| `field_resolver.rs` | 74 | 100 | 70.0% | 31 | `FieldKind::Default` branch; unannotated-field error message with hints; `config_resolve_expr` Option branch (absent → None, mistyped → panic) |
+| `producer_attr.rs` | 221 | 253 | 78.0% | 32 | Producer codegen for named-inject and config section fields |
+| `from_multipart.rs` | 184 | 209 | 78.0% | 25 | `#[derive(FromMultipart)]` Vec/Option field codegen |
+| `decorator_bean_derive.rs` | 167 | 187 | 81.0% | 20 | `#[derive(DecoratorBean)]` guard/interceptor trait impl |
+
+### What tests would close these gaps
+
+**1. `api_error_derive.rs` (125 uncov)** — compile-pass/integration tests exercising:
+- Named-field variant with `#[from]` + extra fields (codegen: `From` impl + `Display` delegation)
+- Multi-unnamed-field variant (humanized `Display` fallback, tuple bindings in `IntoResponse`)
+- Single-named-String-field variant (uses the string field as error body)
+- `std::error::Error::source()` on named `#[from]` variant
+
+**2. `bean_attr.rs` (111 uncov)** — integration tests exercising:
+- Sync `#[bean]` (non-async build fn) — the `Bean` trait impl vs `AsyncBean`
+- `#[bean]` with `#[consumer]` method (BeanConsumerMethod path)
+- `#[bean]` with `#[scheduled]` + `#[intercept]` (BeanInterceptedMethod path)
+- `#[bean]` with `#[async_exec(executor = "field")]`
+
+**3. `main_attr.rs` (102 uncov)** — compile-pass tests for:
+- `#[r2e::test(order = N)]` ordered barrier codegen
+- `#[r2e::test(order = N)]` with `#[should_panic]` (expected-panic-mark)
+- `#[r2e::main(flavor = "current_thread")]`
+- `#[r2e::main]` runtime config helpers (`parse_bool`, `parse_int`, `parse_str`)
+
+**4. `config_derive.rs` (89 uncov)** — integration/compile-pass tests for:
+- Tagged-enum `ConfigProperties` (tag dispatch, unknown tag error, missing tag with default)
+- `Option<T>` field with `#[config(env = "...", default = ...)]` 
+- `Option<T>` field with `#[config(env = "...")]` only
+- `#[validate(...)]` fields triggering garde validation in `from_config`
+- `#[config(section)]` nested struct with `register_children`
+
+**5. `params_derive.rs` (83 uncov)** — integration tests for:
+- Optional path parameter (`Option<T>` path)
+- Query parameter with `#[param(default = expr)]`
+- Required header parameter (missing → 400)
+- Optional header parameter
+- Nested `#[param(prefix = "...")]` struct (PrefixedExtract composition)
+
+**6. `codegen/handlers.rs` (66 uncov)** — integration tests exercising:
+- WebSocket handler returning `impl WsHandler` (pattern 2)
+- WebSocket handler with guards (guard preflight → upgrade)
+- Handler with `#[managed]` params and interceptors (Case 3)
+
+**7. `bg_service_derive.rs` (42 uncov)** — compile-pass/fail tests for:
+- `#[derive(BackgroundService)]` on unit struct
+- `#[derive(BackgroundService)]` with `#[inject]` + `#[config]` fields
+- `#[derive(BackgroundService)]` on enum → compile error
+- `#[service(state = ...)]` → removed-attribute error
+
+**8. `type_utils.rs` (52 uncov)** — unit tests for:
+- `type_base_name` with path type, non-path type
+- `named_bean_newtype_ident` → PascalCase composition
+- `parse_inject_name` all branches: bare `#[inject]`, `#[inject(identity)]`, `#[inject(name = "x")]`, unknown arg error
+
+**9. `grpc_routes_parsing.rs` (43 uncov)** — unit/compile tests for:
+- `GrpcRoutesArgs` with `descriptor = expr`
+- Unknown `#[grpc_routes]` argument → error
+- `extract_identity_param`: duplicate identity → error, optional identity
+
+**10. `field_resolver.rs` (31 uncov)** — compile-fail tests for:
+- Unannotated field in bean/service context → error with hints
+- `#[default]` field in context where `allow_default = false`
+- `config_resolve_expr` with `Option<T>` (absent key → None)
+
+---
+
 ## Current State
 
 - **65 tests** (36 compile via trybuild, 29 integration via example-app)

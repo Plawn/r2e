@@ -1,10 +1,61 @@
 # r2e-test — Test Development Plan
 
-## Current State
+## Coverage Gaps (llvm-cov 2026-07-21)
 
-- **0 tests** (this is a test utility crate, heavily used by example-app but no self-tests)
-- **Coverage**: 0% direct (used by 26+ integration tests indirectly)
-- **Gap**: TestApp request building, TestResponse assertions, TestJwt token generation — no direct verification
+- **Line coverage**: 69.4% (947/1365)
+- **Function coverage**: 65.4% (155/237)
+
+| File | Covered | Total | Line % | Uncovered |
+|------|---------|-------|--------|-----------|
+| `src/app.rs` | 391 | 638 | 61.3% | 247 |
+| `src/session.rs` | 30 | 116 | 25.9% | 86 |
+| `src/ws.rs` | 49 | 84 | 58.3% | 35 |
+| `src/jwt.rs` | 126 | 147 | 85.7% | 21 |
+| `src/ordering.rs` | 151 | 159 | 95.0% | 8 |
+| `src/sse.rs` | 23 | 31 | 74.2% | 8 |
+| `src/boot.rs` | 24 | 31 | 77.4% | 7 |
+| `src/server.rs` | 37 | 43 | 86.0% | 6 |
+
+### `src/app.rs` — 247 uncovered lines
+
+Uncovered code paths:
+
+| Lines | Code path | Missing test |
+|-------|-----------|--------------|
+| L180-237 | `RequestBuilder::form()`, `cookie()`, `query()`, `queries()`, `content_type()`, `file()` | Test request builder with form-encoded body, cookies, query params, content-type override, multipart file |
+| L601-652 | `json_type_name()`, `json_shape_errors()` recursive matching (object/array/type mismatch branches) | Test `assert_json_shape` with nested objects, arrays with typed elements, type mismatches at depth |
+| L752-835 | `assert_json_path()`, `assert_json_path_fn()`, `assert_json_contains()`, `assert_json_path_contains()`, `assert_json_shape()` on TestResponse | Test all JSON assertion methods on a TestResponse (not just the free functions) |
+| L840-875 | `assert_header()`, `assert_header_exists()`, `json_path::<T>()` deserialization | Test header assertions (match, exists, missing) and typed json_path extraction |
+| L923-962 | `bytes()`, `content_type()`, `is_json()`, `json_optional()`, `assert_content_type()`, `sse_events()` | Test response body accessors: raw bytes, content-type detection, optional JSON, SSE parsing |
+
+### `src/session.rs` — 86 uncovered lines
+
+Uncovered code paths:
+
+| Lines | Code path | Missing test |
+|-------|-----------|--------------|
+| L37-53 | `with_bearer()`, `as_user()` | Test session-level auth: bearer header applied to all requests |
+| L55-76 | `with_default_header()`, `set_cookie()`, `remove_cookie()`, `clear_cookies()`, `cookie()` | Test session cookie jar CRUD and default headers |
+| L83-99 | `get()`, `post()`, `put()`, `patch()` request builders | Test that session requests inherit cookies and default headers |
+
+### `src/ws.rs` — 35 uncovered lines
+
+Uncovered code paths:
+
+| Lines | Code path | Missing test |
+|-------|-----------|--------------|
+| L39-49 | `WsTestError` Display impls (Timeout/Closed/Protocol/Json) | Test error Display formatting for all variants |
+| L86-99 | `send_binary()`, `close()` | Test binary message send + explicit close |
+| L125-151 | `next_binary()`, `assert_no_message()` | Test binary receive with timeout + assert_no_message |
+
+### `src/jwt.rs` — 21 uncovered lines
+
+Uncovered code paths:
+
+| Lines | Code path | Missing test |
+|-------|-----------|--------------|
+| L27-46 | `with_config()`, `token()`, `token_with_claims()` convenience methods | Test custom issuer/audience config + email claim in token |
+| L99-125 | `Default for TestJwt`, `Expiration` enum, `TokenBuilder` fields | Test `TestJwt::default()`, token builder chain with all fields set |
 
 ---
 
