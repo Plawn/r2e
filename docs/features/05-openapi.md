@@ -13,7 +13,7 @@ Automatically generate an OpenAPI 3.1.0 specification from controller route meta
 
 ### Route metadata
 
-Each controller annotated with `#[controller]` + `#[routes]` implements `Controller::route_metadata()`, which returns a list of `RouteInfo` — path, HTTP method, parameters, required roles, request/response schemas.
+Each controller annotated with `#[controller]` + `#[routes]` implements `Controller::register_meta(&mut MetaRegistry)`, which pushes one `RouteInfo` per route — path, HTTP method, parameters, required roles, request/response schemas. The plugin drains these via `with_meta_consumer::<RouteInfo, _>`.
 
 ### OpenApiConfig
 
@@ -128,12 +128,25 @@ let config = OpenApiConfig::new("Titre", "1.0.0")
 
 ## Documentation interface (WTI)
 
-When `.with_docs_ui(true)` is enabled, the `/docs` endpoint serves an HTML page containing the WTI interface, configured to load `/openapi.json`. The CSS and JS assets are embedded in the binary via `include_str!` and served at `/docs/wti-element.css` and `/docs/wti-element.js`.
+When `.with_docs_ui(true)` is enabled, the `/docs` endpoint serves an HTML page containing the WTI (`<wti-element>`) web component, configured to load `/openapi.json`. The CSS and JS assets are embedded in the binary via `include_str!` and served at `/docs/wti-element.css` and `/docs/wti-element.js` — no external CDN, no network access required at runtime.
 
 The interface allows you to:
 - Browse all endpoints
 - View parameters and types
 - Test endpoints directly from the browser
+
+### `<wti-element>` attributes
+
+The served HTML wires the component with a fixed configuration. The component itself supports:
+
+| Attribute | Values | Default | Notes |
+|-----------|--------|---------|-------|
+| `spec-url` | URL | — | Points at `/openapi.json` (set by R2E). |
+| `spec-type` | `openapi`, `grpc` | `openapi` | R2E serves an OpenAPI spec. |
+| `theme` | `light`, `dark` | `light` | R2E's page pins `dark`. |
+| `locale` | `en`, `fr` | `en` | R2E's page pins `en`. |
+
+The bundled assets are vendored from the [WTI](https://github.com/plawn/wti) monorepo (`packages/web-component`, currently **v0.3.1**). To refresh them, rebuild `wti-element` there (`bun run build` in `packages/web-component`) and copy `dist/wti-element.iife.js` + `dist/wti-element.css` into `r2e-openapi/assets/`.
 
 ## Validation criteria
 

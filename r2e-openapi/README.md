@@ -71,6 +71,12 @@ Precedence: overrides > route schemas > registry > built-in error schemas.
 4. The spec is assembled and served as a JSON endpoint
 5. When `docs_ui` is enabled, an interactive UI is served at `/docs`
 
+## Docs UI assets
+
+The `/docs` UI is the `<wti-element>` web component, vendored under `assets/` and embedded in the binary via `include_str!` (no CDN, no runtime network access). Assets track the [WTI](https://github.com/plawn/wti) monorepo (`packages/web-component`, **v0.3.1**).
+
+To refresh: run `bun run build` in `wti/packages/web-component`, then copy `dist/wti-element.iife.js` and `dist/wti-element.css` into `r2e-openapi/assets/`.
+
 ## License
 
 Apache-2.0
