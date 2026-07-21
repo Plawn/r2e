@@ -1501,6 +1501,10 @@ when paused; `false` for a `skip` job already in flight). Each returns `bool`
 (`false` = unknown job / no driver).
 `ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
 from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
+Interval variants carry a `PositiveDuration` (a `Duration` guaranteed non-zero;
+`PositiveDuration::from_secs(60).unwrap()` / derefs to `Duration`), so a zero
+interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.
+`#[scheduled(every = "0s")]` is a compile error.
 
 ---
 

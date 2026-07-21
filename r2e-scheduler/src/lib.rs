@@ -8,7 +8,7 @@ mod duration;
 mod types;
 
 pub use driver::{start_jobs, SchedulerCommands};
-pub use duration::parse_duration;
+pub use duration::{parse_duration, PositiveDuration};
 pub use types::{
     extract_tasks, OverlapPolicy, ScheduleConfig, ScheduleParseError, ScheduledJob,
     ScheduledResult, ScheduledTask, ScheduledTaskDef, SkipFn,
@@ -281,7 +281,8 @@ impl ScheduledJobRegistry {
 
     /// Mutate the entry named `name` in place (no-op if absent). Used by the
     /// driver to keep runtime stats current.
-    pub(crate) fn update_job(&self, name: &str, f: impl FnOnce(&mut ScheduledJobInfo)) {
+    #[doc(hidden)] // pub for tests only; not part of the public API
+    pub fn update_job(&self, name: &str, f: impl FnOnce(&mut ScheduledJobInfo)) {
         let mut g = self.inner.lock().unwrap();
         if let Some(info) = g.iter_mut().find(|i| i.name == name) {
             f(info);
@@ -711,7 +712,11 @@ fn start_scheduled_tasks(
         ));
     }
 
-    tracing::info!(count = tasks.len(), "Starting scheduled tasks");
+    // Bind the count to a plain statement: `tracing::info!(field = expr, …)`
+    // evaluates `expr` inside a macro-internal region that coverage tooling
+    // does not attribute to this line even when executed.
+    let count = tasks.len();
+    tracing::info!(count, "Starting scheduled tasks");
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(jobs, token, executor, job_registry, commands);
 }

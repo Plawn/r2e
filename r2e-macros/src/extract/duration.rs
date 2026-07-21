@@ -17,7 +17,6 @@ pub fn parse_duration_ms(input: &str) -> Result<u64, String> {
     let mut total_ms: u64 = 0;
     let mut current_num = String::new();
     let mut chars = s.chars().peekable();
-    let mut found_any = false;
 
     while let Some(&ch) = chars.peek() {
         if ch.is_ascii_digit() {
@@ -56,9 +55,11 @@ pub fn parse_duration_ms(input: &str) -> Result<u64, String> {
                 }
             };
 
-            total_ms += num * multiplier;
+            total_ms = num
+                .checked_mul(multiplier)
+                .and_then(|segment| total_ms.checked_add(segment))
+                .ok_or_else(|| format!("duration too large: '{}' overflows", s))?;
             current_num.clear();
-            found_any = true;
         } else {
             return Err(format!("unexpected character '{}' in duration", ch));
         }
@@ -71,10 +72,9 @@ pub fn parse_duration_ms(input: &str) -> Result<u64, String> {
         ));
     }
 
-    if !found_any {
-        return Err("no duration segments found".to_string());
-    }
-
+    // Any non-empty input either returns early above or leaves a trailing
+    // number (rejected just above), so reaching here means at least one segment
+    // was parsed — only a zero total remains to reject.
     if total_ms == 0 {
         return Err("duration must be greater than zero".to_string());
     }

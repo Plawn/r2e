@@ -1,4 +1,4 @@
-//! Runtime duration-string parser (`"5m"`, `"1h30m"`, `"500ms"` → [`Duration`]).
+//! Runtime duration-string parser (`"5m"`, `"1h30m"`, `"500ms"` → [`PositiveDuration`]).
 //!
 //! Twin of the compile-time parser in `r2e-macros/src/extract/duration.rs`
 //! (proc-macro crates cannot export ordinary functions). Keep the grammars in
@@ -6,11 +6,73 @@
 
 use std::time::Duration;
 
-/// Parse a duration string like `"5s"`, `"2m"`, `"1h30m"`, `"500ms"` into a [`Duration`].
+/// A [`Duration`] guaranteed to be strictly greater than zero.
+///
+/// Scheduler intervals must be positive — a zero interval would busy-loop the
+/// driver. Encoding the invariant in the type removes defensive zero-checks at
+/// every call site: once you hold a `PositiveDuration`, it is non-zero *by
+/// construction*, and an illegal (zero) interval is simply unrepresentable.
+///
+/// `PositiveDuration` derefs to the underlying [`Duration`], so all `Duration`
+/// accessors (`as_secs`, `as_millis`, …) are available directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PositiveDuration(Duration);
+
+impl PositiveDuration {
+    /// Wrap a [`Duration`], returning `None` if it is zero.
+    pub const fn new(d: Duration) -> Option<Self> {
+        if d.is_zero() {
+            None
+        } else {
+            Some(Self(d))
+        }
+    }
+
+    /// Construct from milliseconds, returning `None` if `ms == 0`.
+    pub const fn from_millis(ms: u64) -> Option<Self> {
+        Self::new(Duration::from_millis(ms))
+    }
+
+    /// Construct from whole seconds, returning `None` if `secs == 0`.
+    pub const fn from_secs(secs: u64) -> Option<Self> {
+        Self::new(Duration::from_secs(secs))
+    }
+
+    /// The underlying [`Duration`] (always non-zero).
+    pub const fn get(self) -> Duration {
+        self.0
+    }
+}
+
+impl std::ops::Deref for PositiveDuration {
+    type Target = Duration;
+
+    fn deref(&self) -> &Duration {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PositiveDuration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl From<PositiveDuration> for Duration {
+    fn from(p: PositiveDuration) -> Duration {
+        p.0
+    }
+}
+
+/// Parse a duration string like `"5s"`, `"2m"`, `"1h30m"`, `"500ms"` into a
+/// [`PositiveDuration`].
 ///
 /// Supported suffixes: `ms`, `s`, `m`, `h`, `d`.
 /// Multiple segments can be combined: `"1h30m"`, `"2m30s"`, `"1h15m30s"`.
-pub fn parse_duration(input: &str) -> Result<Duration, String> {
+///
+/// A zero total (e.g. `"0s"`) is rejected — a schedule interval must be
+/// positive (see [`PositiveDuration`]).
+pub fn parse_duration(input: &str) -> Result<PositiveDuration, String> {
     let s = input.trim();
     if s.is_empty() {
         return Err("empty duration string".to_string());
@@ -19,7 +81,6 @@ pub fn parse_duration(input: &str) -> Result<Duration, String> {
     let mut total_ms: u64 = 0;
     let mut current_num = String::new();
     let mut chars = s.chars().peekable();
-    let mut found_any = false;
 
     while let Some(&ch) = chars.peek() {
         if ch.is_ascii_digit() {
@@ -58,9 +119,11 @@ pub fn parse_duration(input: &str) -> Result<Duration, String> {
                 }
             };
 
-            total_ms += num * multiplier;
+            total_ms = num
+                .checked_mul(multiplier)
+                .and_then(|segment| total_ms.checked_add(segment))
+                .ok_or_else(|| format!("duration too large: '{}' overflows", s))?;
             current_num.clear();
-            found_any = true;
         } else {
             return Err(format!("unexpected character '{}' in duration", ch));
         }
@@ -73,13 +136,10 @@ pub fn parse_duration(input: &str) -> Result<Duration, String> {
         ));
     }
 
-    if !found_any {
-        return Err("no duration segments found".to_string());
-    }
-
-    if total_ms == 0 {
-        return Err("duration must be greater than zero".to_string());
-    }
-
-    Ok(Duration::from_millis(total_ms))
+    // `found_any` is not tracked: any non-empty input either returns early
+    // above or leaves a trailing number (rejected just above), so reaching here
+    // means at least one segment was parsed. A zero total is the only remaining
+    // invalid case, caught by the `PositiveDuration` constructor.
+    PositiveDuration::from_millis(total_ms)
+        .ok_or_else(|| "duration must be greater than zero".to_string())
 }

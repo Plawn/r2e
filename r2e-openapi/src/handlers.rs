@@ -21,7 +21,8 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     routes: &[RouteInfo],
 ) -> Router<T> {
     let spec = build_spec(&config, &routes);
-    let spec_json = serde_json::to_string_pretty(&spec).unwrap_or_else(|_| "{}".to_string());
+    let spec_json = serde_json::to_string_pretty(&spec)
+        .expect("OpenAPI spec is a serde_json::Value and serializes infallibly");
     let docs_ui = config.docs_ui;
 
     let state = Arc::new(OpenApiState { spec_json });

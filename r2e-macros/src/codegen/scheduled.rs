@@ -13,18 +13,27 @@ pub(crate) fn schedule_config_expr(
     sched_krate: &TokenStream,
 ) -> TokenStream {
     if let Some(every_ms) = config.every_ms {
+        // Construct the positive interval in a `const` block: a zero interval
+        // (`every = "0s"` / `every = 0`) fails const-eval → a compile error,
+        // so the runtime type only ever sees a strictly-positive interval.
+        let interval = quote! {
+            const {
+                match #sched_krate::PositiveDuration::from_millis(#every_ms) {
+                    Some(d) => d,
+                    None => panic!("#[scheduled] interval must be greater than zero"),
+                }
+            }
+        };
         if let Some(delay_ms) = config.initial_delay_ms {
             quote! {
                 #sched_krate::ScheduleConfig::IntervalWithDelay {
-                    interval: std::time::Duration::from_millis(#every_ms),
+                    interval: #interval,
                     initial_delay: std::time::Duration::from_millis(#delay_ms),
                 }
             }
         } else {
             quote! {
-                #sched_krate::ScheduleConfig::Interval(
-                    std::time::Duration::from_millis(#every_ms)
-                )
+                #sched_krate::ScheduleConfig::Interval(#interval)
             }
         }
     } else {

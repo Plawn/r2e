@@ -43,7 +43,7 @@ async fn pause_freezes_execution_and_resume_restarts_it() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "pausable",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         counter.clone(),
     );
     let (handle, token) = spawn(task, ScheduledJobRegistry::new());
@@ -87,7 +87,7 @@ async fn trigger_now_fires_a_job_immediately() {
     let task = counting_task(
         "manual",
         ScheduleConfig::IntervalWithDelay {
-            interval: Duration::from_secs(3600),
+            interval: r2e_scheduler::PositiveDuration::from_secs(3600).unwrap(),
             initial_delay: Duration::from_secs(3600),
         },
         counter.clone(),
@@ -126,7 +126,7 @@ async fn trigger_now_on_in_flight_skip_job_returns_false() {
     let task = ScheduledTaskDef::new(
         "slow",
         ScheduleConfig::IntervalWithDelay {
-            interval: Duration::from_secs(3600),
+            interval: r2e_scheduler::PositiveDuration::from_secs(3600).unwrap(),
             initial_delay: Duration::from_secs(3600),
         },
         e,
@@ -160,7 +160,7 @@ async fn concurrent_job_always_accepts_trigger_now() {
     let task = ScheduledTaskDef::new(
         "conc",
         ScheduleConfig::IntervalWithDelay {
-            interval: Duration::from_secs(3600),
+            interval: r2e_scheduler::PositiveDuration::from_secs(3600).unwrap(),
             initial_delay: Duration::from_secs(3600),
         },
         e,
@@ -190,7 +190,7 @@ async fn stats_are_populated_and_paused_flag_toggles() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "stats",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         counter.clone(),
     );
     let (handle, token) = spawn(task, registry.clone());

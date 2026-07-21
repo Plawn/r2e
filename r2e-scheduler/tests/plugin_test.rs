@@ -81,7 +81,7 @@ async fn registry_collects_and_extracts() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "collected",
-        ScheduleConfig::Interval(Duration::from_secs(60)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
         counter,
     );
     registry.add_boxed(vec![boxed_task(task)]);
@@ -107,7 +107,7 @@ async fn full_lifecycle_without_serve() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "lifecycle",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         counter.clone(),
     );
     registry.add_boxed(vec![boxed_task(task)]);

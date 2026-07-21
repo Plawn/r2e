@@ -21,7 +21,7 @@ type SkipState = (Arc<AtomicUsize>, Arc<AtomicBool>);
 fn gated_task(runs: Arc<AtomicUsize>, gate: Arc<AtomicBool>) -> ScheduledTaskDef<SkipState> {
     ScheduledTaskDef::new(
         "gated",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         (runs, gate),
         |(runs, _): SkipState| async move {
             runs.fetch_add(1, Ordering::SeqCst);
@@ -92,7 +92,7 @@ async fn skip_if_applies_to_trigger_now() {
     // Long interval: only the immediate initial tick plus our trigger_now fire.
     let task = ScheduledTaskDef::new(
         "gated_manual",
-        ScheduleConfig::Interval(Duration::from_secs(3600)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(3600).unwrap()),
         (runs.clone(), gate.clone()),
         |(runs, _): SkipState| async move {
             runs.fetch_add(1, Ordering::SeqCst);

@@ -44,7 +44,7 @@ async fn concurrent_job_overlaps_with_itself() {
     let m = max_seen.clone();
     let task = ScheduledTaskDef::new(
         "concurrent",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         (l, m),
         |(l, m): (Arc<AtomicUsize>, Arc<AtomicUsize>)| async move {
             let now = l.fetch_add(1, Ordering::SeqCst) + 1;
@@ -76,7 +76,7 @@ async fn skip_job_never_overlaps_under_load() {
     let o = saw_overlap.clone();
     let task = ScheduledTaskDef::new(
         "skip",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         (l, o),
         |(l, o): (Arc<AtomicUsize>, Arc<AtomicBool>)| async move {
             if l.fetch_add(1, Ordering::SeqCst) + 1 > 1 {

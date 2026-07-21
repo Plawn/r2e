@@ -22,7 +22,7 @@ async fn schedule_task_lands_under_scheduler_marker() {
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
             "dynamic_one",
-            ScheduleConfig::Interval(Duration::from_secs(60)),
+            ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
             || async {},
         ));
 
@@ -33,7 +33,7 @@ async fn schedule_task_lands_under_scheduler_marker() {
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].name(), "dynamic_one");
     match tasks[0].schedule() {
-        ScheduleConfig::Interval(d) => assert_eq!(*d, Duration::from_secs(60)),
+        ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(60)),
         _ => panic!("expected Interval"),
     }
 }
@@ -86,7 +86,7 @@ async fn dynamic_task_runs_and_stops_on_cancel() {
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
             "ticker",
-            ScheduleConfig::Interval(Duration::from_millis(50)),
+            ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
             move || {
                 let c = c.clone();
                 async move {
@@ -141,7 +141,7 @@ async fn result_returning_closure_logs_instead_of_panicking() {
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
             "failing",
-            ScheduleConfig::Interval(Duration::from_millis(50)),
+            ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
             move || {
                 let r = r.clone();
                 async move {
@@ -188,7 +188,7 @@ async fn schedule_task_with_pulls_state_from_bean_context() {
         .schedule_task_with(|ctx| {
             ScheduledTaskDef::new(
                 "bean_backed",
-                ScheduleConfig::Interval(Duration::from_millis(50)),
+                ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
                 ctx.get::<Arc<AtomicUsize>>(),
                 |c| async move {
                     c.fetch_add(1, Ordering::SeqCst);
@@ -239,7 +239,7 @@ async fn schedule_tasks_with_builds_a_batch_from_the_context() {
                 .map(|name| {
                     ScheduledTaskDef::new(
                         format!("sync_{name}"),
-                        ScheduleConfig::Interval(Duration::from_secs(60)),
+                        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
                         c.clone(),
                         |c| async move {
                             c.fetch_add(1, Ordering::SeqCst);
@@ -266,7 +266,7 @@ async fn schedule_task_without_plugin_panics() {
         .await
         .schedule_task(ScheduledTaskDef::from_fn(
             "orphan",
-            ScheduleConfig::Interval(Duration::from_secs(60)),
+            ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
             || async {},
         ));
 }

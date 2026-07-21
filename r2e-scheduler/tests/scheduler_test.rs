@@ -83,7 +83,7 @@ async fn interval_task_runs_repeatedly() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "repeat",
-        ScheduleConfig::Interval(Duration::from_millis(100)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         counter.clone(),
     );
     let _token = start_task(task);
@@ -100,7 +100,7 @@ async fn interval_task_stops_on_cancel() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "cancel_me",
-        ScheduleConfig::Interval(Duration::from_millis(100)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         counter.clone(),
     );
     let token = start_task(task);
@@ -131,7 +131,7 @@ async fn interval_with_initial_delay() {
     let task = counting_task(
         "delayed",
         ScheduleConfig::IntervalWithDelay {
-            interval: Duration::from_millis(100),
+            interval: r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
             initial_delay: Duration::from_millis(200),
         },
         counter.clone(),
@@ -158,7 +158,7 @@ async fn interval_cancel_during_delay() {
     let task = counting_task(
         "cancel_in_delay",
         ScheduleConfig::IntervalWithDelay {
-            interval: Duration::from_millis(100),
+            interval: r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
             initial_delay: Duration::from_millis(500),
         },
         counter.clone(),
@@ -181,7 +181,7 @@ async fn interval_task_state_accessible() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "logger".to_string(),
-        schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
+        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         state: log.clone(),
         task: Box::new(|log: Arc<Mutex<Vec<String>>>| {
             Box::pin(async move {
@@ -216,7 +216,7 @@ async fn interval_task_panic_isolation() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "panicker".to_string(),
-        schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
+        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         state: a,
         task: Box::new(|a: Arc<AtomicUsize>| {
             Box::pin(async move {
@@ -228,7 +228,7 @@ async fn interval_task_panic_isolation() {
 
     let good_task = counting_task(
         "good",
-        ScheduleConfig::Interval(Duration::from_millis(100)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         counter.clone(),
     );
 
@@ -339,7 +339,7 @@ fn extract_tasks_from_boxed() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "boxed".to_string(),
-        schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
+        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         state: (),
         task: Box::new(|_| Box::pin(async {})),
     };
@@ -369,7 +369,7 @@ async fn multiple_tasks_all_start() {
             .map(|(name, counter)| {
                 Box::new(counting_task(
                     name,
-                    ScheduleConfig::Interval(Duration::from_millis(100)),
+                    ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
                     counter,
                 )) as Box<dyn ScheduledTask>
             })
@@ -390,7 +390,7 @@ fn task_name_via_trait() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "trait_name".to_string(),
-        schedule: ScheduleConfig::Interval(Duration::from_secs(1)),
+        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
         state: (),
         task: Box::new(|_| Box::pin(async {})),
     };
@@ -422,7 +422,7 @@ async fn state_cloned_per_execution() {
     let counter = Arc::new(AtomicUsize::new(0));
     let task = counting_task(
         "clone_counter",
-        ScheduleConfig::Interval(Duration::from_millis(100)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         counter.clone(),
     );
     let _token = start_task(task);
@@ -444,7 +444,7 @@ async fn concurrent_tasks_shared_state() {
         .map(|name| {
             Box::new(counting_task(
                 name,
-                ScheduleConfig::Interval(Duration::from_millis(100)),
+                ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
                 shared.clone(),
             )) as Box<dyn ScheduledTask>
         })
@@ -466,12 +466,12 @@ async fn concurrent_tasks_independent_state() {
     let token = CancellationToken::new();
     let task1 = counting_task(
         "ind1",
-        ScheduleConfig::Interval(Duration::from_millis(100)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         c1.clone(),
     );
     let task2 = counting_task(
         "ind2",
-        ScheduleConfig::Interval(Duration::from_millis(200)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(200).unwrap()),
         c2.clone(),
     );
 
@@ -497,7 +497,7 @@ async fn state_mutations_visible_via_arc_mutex() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "mutator".to_string(),
-        schedule: ScheduleConfig::Interval(Duration::from_millis(100)),
+        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
         state: log.clone(),
         task: Box::new(|log: Arc<Mutex<Vec<i32>>>| {
             Box::pin(async move {
@@ -540,7 +540,7 @@ async fn jobs_run_concurrently_not_serialized() {
     let sa = slow_ticks.clone();
     let slow = ScheduledTaskDef::new(
         "slow",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         sa,
         |sa: Arc<AtomicUsize>| async move {
             sa.fetch_add(1, Ordering::SeqCst);
@@ -551,7 +551,7 @@ async fn jobs_run_concurrently_not_serialized() {
     // Job B: 50ms cadence, fast counter.
     let fast = counting_task(
         "fast",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         fast_ticks.clone(),
     );
 
@@ -588,7 +588,7 @@ async fn per_job_ticks_never_overlap() {
     // invariant, ticks would pile up and the gauge would exceed 1.
     let task = ScheduledTaskDef::new(
         "overlap_guard",
-        ScheduleConfig::Interval(Duration::from_millis(50)),
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
         (c, o),
         |(c, o): (Arc<AtomicUsize>, Arc<AtomicBool>)| async move {
             let live = c.fetch_add(1, Ordering::SeqCst) + 1;

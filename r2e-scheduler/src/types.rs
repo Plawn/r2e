@@ -30,10 +30,10 @@ pub enum OverlapPolicy {
 /// How a scheduled task should be triggered.
 pub enum ScheduleConfig {
     /// Run at a fixed interval (e.g., every 60 seconds).
-    Interval(Duration),
+    Interval(crate::duration::PositiveDuration),
     /// Run at a fixed interval with an initial delay before the first execution.
     IntervalWithDelay {
-        interval: Duration,
+        interval: crate::duration::PositiveDuration,
         initial_delay: Duration,
     },
     /// Run on a cron expression (e.g., `"0 */5 * * * *"` = every 5 minutes).
@@ -117,9 +117,10 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
                         message: e.message,
                     })
             }
-            ConfigValue::Integer(i) if *i > 0 => {
-                Ok(ScheduleConfig::Interval(Duration::from_secs(*i as u64)))
-            }
+            ConfigValue::Integer(i) if *i > 0 => Ok(ScheduleConfig::Interval(
+                crate::duration::PositiveDuration::from_secs(*i as u64)
+                    .expect("a strictly positive integer is a positive duration"),
+            )),
             _ => Err(ConfigError::TypeMismatch {
                 key: key.to_string(),
                 expected:
