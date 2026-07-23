@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use crate::model::{
-    AuthorizationModel, Condition, ConditionParamType, Metadata, ObjectRelation,
-    RelationMetadata, RelationReference, TypeDefinition, Userset, Wildcard,
+    AuthorizationModel, Condition, ConditionParamType, Metadata, ObjectRelation, RelationMetadata,
+    RelationReference, TypeDefinition, Userset, Wildcard,
 };
 
 /// A parse failure, with the 1-based source line it occurred on.
@@ -129,7 +129,10 @@ impl<'a> Parser<'a> {
             None => return err(1, "empty model: expected `model` header"),
         };
         if line.trim() != "model" {
-            return err(line_no, format!("expected `model` header, found `{}`", line.trim()));
+            return err(
+                line_no,
+                format!("expected `model` header, found `{}`", line.trim()),
+            );
         }
         let (line_no, line) = match self.next() {
             Some(l) => l,
@@ -137,7 +140,12 @@ impl<'a> Parser<'a> {
         };
         let schema_version = match line.trim().strip_prefix("schema") {
             Some(v) if !v.is_empty() && v.starts_with(char::is_whitespace) => v.trim().to_string(),
-            _ => return err(line_no, format!("expected `schema <version>`, found `{}`", line.trim())),
+            _ => {
+                return err(
+                    line_no,
+                    format!("expected `schema <version>`, found `{}`", line.trim()),
+                )
+            }
         };
         if schema_version != "1.1" {
             return err(
@@ -160,7 +168,11 @@ impl<'a> Parser<'a> {
             let trimmed = line.trim();
             if let Some(rest) = keyword_rest(trimmed, "type") {
                 let type_def = self.parse_type(line_no, rest)?;
-                if model.type_definitions.iter().any(|t| t.type_name == type_def.type_name) {
+                if model
+                    .type_definitions
+                    .iter()
+                    .any(|t| t.type_name == type_def.type_name)
+                {
                     return err(line_no, format!("duplicate type `{}`", type_def.type_name));
                 }
                 model.type_definitions.push(type_def);
@@ -178,12 +190,18 @@ impl<'a> Parser<'a> {
             {
                 return err(
                     line_no,
-                    format!("`{}` is not supported: modular models (schema 1.2) are out of scope", trimmed.split_whitespace().next().unwrap_or(trimmed)),
+                    format!(
+                        "`{}` is not supported: modular models (schema 1.2) are out of scope",
+                        trimmed.split_whitespace().next().unwrap_or(trimmed)
+                    ),
                 );
             } else {
                 return err(
                     line_no,
-                    format!("expected `type <name>` or `condition <name>(...)`, found `{}`", trimmed),
+                    format!(
+                        "expected `type <name>` or `condition <name>(...)`, found `{}`",
+                        trimmed
+                    ),
                 );
             }
         }
@@ -229,7 +247,10 @@ impl<'a> Parser<'a> {
             if type_def.relations.contains_key(&name) {
                 return err(
                     line_no,
-                    format!("duplicate relation `{}` on type `{}`", name, type_def.type_name),
+                    format!(
+                        "duplicate relation `{}` on type `{}`",
+                        name, type_def.type_name
+                    ),
                 );
             }
             type_def.relations.insert(name.clone(), rewrite);
@@ -250,7 +271,11 @@ impl<'a> Parser<'a> {
 
     /// Parse a `condition name(p: type, ...) { <cel> }` block. The body may
     /// span multiple lines; braces inside CEL string literals are ignored.
-    fn parse_condition(&mut self, line_no: usize, first_line: &str) -> Result<Condition, ParseError> {
+    fn parse_condition(
+        &mut self,
+        line_no: usize,
+        first_line: &str,
+    ) -> Result<Condition, ParseError> {
         let rest = keyword_rest(first_line, "condition").unwrap();
 
         let open_paren = match rest.find('(') {
@@ -285,7 +310,10 @@ impl<'a> Parser<'a> {
                     // trailing `# comment` is allowed, anything else is not.
                     let trailing = strip_comment(&segment[end + 1..]).trim();
                     if !trailing.is_empty() {
-                        return err(line_no, format!("unexpected `{}` after condition body", trailing));
+                        return err(
+                            line_no,
+                            format!("unexpected `{}` after condition body", trailing),
+                        );
                     }
                     break;
                 }
@@ -294,7 +322,10 @@ impl<'a> Parser<'a> {
                     body.push_str(segment);
                     body.push('\n');
                     let Some((_, next_line)) = self.next_raw() else {
-                        return err(self.last_line_no(), format!("unterminated condition body for `{}`", name));
+                        return err(
+                            self.last_line_no(),
+                            format!("unterminated condition body for `{}`", name),
+                        );
                     };
                     segment = next_line;
                 }
@@ -322,8 +353,11 @@ fn keyword_rest<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 
 fn is_identifier(s: &str) -> bool {
     !s.is_empty()
-        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 enum ScanOutcome {
@@ -377,11 +411,22 @@ fn parse_condition_params(
     for part in params.split(',') {
         let (name, ty) = match part.split_once(':') {
             Some(p) => p,
-            None => return err(line_no, format!("expected `name: type` in condition parameters, found `{}`", part.trim())),
+            None => {
+                return err(
+                    line_no,
+                    format!(
+                        "expected `name: type` in condition parameters, found `{}`",
+                        part.trim()
+                    ),
+                )
+            }
         };
         let name = name.trim();
         if !is_identifier(name) {
-            return err(line_no, format!("invalid condition parameter name `{}`", name));
+            return err(
+                line_no,
+                format!("invalid condition parameter name `{}`", name),
+            );
         }
         let ty = parse_param_type(line_no, ty.trim())?;
         if map.insert(name.to_string(), ty).is_some() {
@@ -413,7 +458,12 @@ fn parse_param_type(line_no: usize, ty: &str) -> Result<ConditionParamType, Pars
         "duration" => "TYPE_NAME_DURATION",
         "timestamp" => "TYPE_NAME_TIMESTAMP",
         "ipaddress" => "TYPE_NAME_IPADDRESS",
-        _ => return err(line_no, format!("unknown condition parameter type `{}`", ty)),
+        _ => {
+            return err(
+                line_no,
+                format!("unknown condition parameter type `{}`", ty),
+            )
+        }
     };
     Ok(ConditionParamType {
         type_name: type_name.to_string(),
@@ -462,14 +512,38 @@ fn tokenize(line_no: usize, input: &str) -> Result<Vec<Token<'_>>, ParseError> {
         let c = bytes[i];
         match c {
             b' ' | b'\t' => i += 1,
-            b'(' => { tokens.push(Token::LParen); i += 1; }
-            b')' => { tokens.push(Token::RParen); i += 1; }
-            b'[' => { tokens.push(Token::LBracket); i += 1; }
-            b']' => { tokens.push(Token::RBracket); i += 1; }
-            b',' => { tokens.push(Token::Comma); i += 1; }
-            b':' => { tokens.push(Token::Colon); i += 1; }
-            b'*' => { tokens.push(Token::Star); i += 1; }
-            b'#' => { tokens.push(Token::Hash); i += 1; }
+            b'(' => {
+                tokens.push(Token::LParen);
+                i += 1;
+            }
+            b')' => {
+                tokens.push(Token::RParen);
+                i += 1;
+            }
+            b'[' => {
+                tokens.push(Token::LBracket);
+                i += 1;
+            }
+            b']' => {
+                tokens.push(Token::RBracket);
+                i += 1;
+            }
+            b',' => {
+                tokens.push(Token::Comma);
+                i += 1;
+            }
+            b':' => {
+                tokens.push(Token::Colon);
+                i += 1;
+            }
+            b'*' => {
+                tokens.push(Token::Star);
+                i += 1;
+            }
+            b'#' => {
+                tokens.push(Token::Hash);
+                i += 1;
+            }
             _ if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
                 while i < bytes.len()
@@ -480,7 +554,13 @@ fn tokenize(line_no: usize, input: &str) -> Result<Vec<Token<'_>>, ParseError> {
                 tokens.push(Token::Ident(&input[start..i]));
             }
             _ => {
-                return err(line_no, format!("unexpected character `{}`", &input[i..].chars().next().unwrap()));
+                return err(
+                    line_no,
+                    format!(
+                        "unexpected character `{}`",
+                        &input[i..].chars().next().unwrap()
+                    ),
+                );
             }
         }
     }
@@ -513,7 +593,10 @@ fn parse_define(
 
     let rewrite = p.parse_expr()?;
     if let Some(tok) = p.next_token() {
-        return err(line_no, format!("unexpected {} after relation expression", tok));
+        return err(
+            line_no,
+            format!("unexpected {} after relation expression", tok),
+        );
     }
 
     Ok((name, p.direct_types.take().unwrap_or_default(), rewrite))
@@ -542,8 +625,14 @@ impl<'a, 't> ExprParser<'a, 't> {
 
     fn unexpected<T>(&self, found: Option<Token<'t>>, expected: &str) -> Result<T, ParseError> {
         match found {
-            Some(tok) => err(self.line_no, format!("expected {}, found {}", expected, tok)),
-            None => err(self.line_no, format!("expected {}, found end of line", expected)),
+            Some(tok) => err(
+                self.line_no,
+                format!("expected {}, found {}", expected, tok),
+            ),
+            None => err(
+                self.line_no,
+                format!("expected {}, found end of line", expected),
+            ),
         }
     }
 

@@ -192,7 +192,11 @@ async fn changed_model_appends_new_version() {
     let h2 = app.state().get::<OpenFgaHandle>();
 
     assert_eq!(h1.store_id(), h2.store_id());
-    assert_ne!(h1.model_id(), h2.model_id(), "changed model appends a new version");
+    assert_ne!(
+        h1.model_id(),
+        h2.model_id(),
+        "changed model appends a new version"
+    );
 }
 
 #[r2e_core::test]
@@ -246,12 +250,18 @@ async fn typed_grant_and_check_through_plugin_beans() {
     let alice = authz::user::id("alice");
     let doc = authz::document::id("readme");
 
-    assert!(!client.check(&alice, authz::document::viewer, &doc).await.unwrap());
+    assert!(!client
+        .check(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap());
     client
         .grant(&alice, authz::document::viewer, &doc)
         .await
         .unwrap();
-    assert!(client.check(&alice, authz::document::viewer, &doc).await.unwrap());
+    assert!(client
+        .check(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap());
     assert!(registry
         .check("user:alice", "viewer", "document:readme")
         .await

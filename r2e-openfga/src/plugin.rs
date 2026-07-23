@@ -165,9 +165,8 @@ impl PreStatePlugin for OpenFga {
                  `load_config()`/`with_config()` before `.plugin(OpenFga::model(...))`"
             )
         });
-        let cfg =
-            <OpenFgaPluginConfig as r2e_core::PluginConfig>::plugin_load(config, "openfga")
-                .unwrap_or_else(|e| panic!("invalid `openfga.*` configuration: {e}"));
+        let cfg = <OpenFgaPluginConfig as r2e_core::PluginConfig>::plugin_load(config, "openfga")
+            .unwrap_or_else(|e| panic!("invalid `openfga.*` configuration: {e}"));
 
         let enabled = cfg.enabled.unwrap_or(true);
 
@@ -277,9 +276,8 @@ impl OpenFgaHandle {
     /// only reachable when the plugin was disabled (`openfga.enabled: false`)
     /// or the handle escaped `build_state()`.
     pub fn backend(&self) -> GrpcBackend {
-        self.try_backend().unwrap_or_else(|| {
-            panic!("OpenFgaHandle used before the OpenFga boot sequence ran")
-        })
+        self.try_backend()
+            .unwrap_or_else(|| panic!("OpenFgaHandle used before the OpenFga boot sequence ran"))
     }
 
     /// The connected backend, `None` before the boot sequence has run.
@@ -495,7 +493,9 @@ async fn resolve_model(
             .into_inner()
             .authorization_model
             .ok_or_else(|| {
-                boot_err(format!("OpenFga: store `{store_id}` has no model `{pinned}`"))
+                boot_err(format!(
+                    "OpenFga: store `{store_id}` has no model `{pinned}`"
+                ))
             })?;
         return verify(compiled, &live, store_id);
     }
@@ -607,9 +607,8 @@ impl OpenFgaBackend for LazyBackend {
         user: &str,
         relation: &str,
         object: &str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<bool, OpenFgaError>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, OpenFgaError>> + Send + '_>>
+    {
         match self.slot.get() {
             Some(backend) => backend.check(user, relation, object),
             None => Box::pin(async { Err(OpenFgaError::NotReady) }),

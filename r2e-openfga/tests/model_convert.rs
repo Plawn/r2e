@@ -234,19 +234,14 @@ fn round_trip_equality_ignores_server_noise() {
         .iter_mut()
         .find(|t| t.r#type == "team")
         .unwrap();
-    live_team
-        .metadata
-        .as_mut()
-        .unwrap()
-        .relations
-        .insert(
-            "ghost".to_owned(),
-            openfga_rs::RelationMetadata {
-                directly_related_user_types: Vec::new(),
-                module: "core".to_owned(),
-                source_info: None,
-            },
-        );
+    live_team.metadata.as_mut().unwrap().relations.insert(
+        "ghost".to_owned(),
+        openfga_rs::RelationMetadata {
+            directly_related_user_types: Vec::new(),
+            module: "core".to_owned(),
+            source_info: None,
+        },
+    );
 
     assert!(
         models_equal(&compiled, &live),

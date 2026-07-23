@@ -135,11 +135,7 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
 /// that circularly re-touches the bean being resolved on this thread
 /// deadlocks instead of panicking with a cycle trace. Same-thread detection
 /// on the main runtime is unaffected (this helper is never used there).
-fn resolve_on<T>(
-    handle: &tokio::runtime::Handle,
-    factory: LazyFactory<T>,
-    runtime_desc: &str,
-) -> T
+fn resolve_on<T>(handle: &tokio::runtime::Handle, factory: LazyFactory<T>, runtime_desc: &str) -> T
 where
     T: Send + 'static,
 {
@@ -203,7 +199,11 @@ where
                         bean = std::any::type_name::<T>(),
                         "resolving lazy bean on the lazy-fallback runtime"
                     );
-                    resolve_on(fallback_runtime().handle(), factory, "lazy-fallback runtime")
+                    resolve_on(
+                        fallback_runtime().handle(),
+                        factory,
+                        "lazy-fallback runtime",
+                    )
                 }
                 #[cfg(not(feature = "lazy-fallback-runtime"))]
                 {
@@ -218,7 +218,11 @@ where
         Err(_) => {
             #[cfg(feature = "lazy-fallback-runtime")]
             {
-                resolve_on(fallback_runtime().handle(), factory, "lazy-fallback runtime")
+                resolve_on(
+                    fallback_runtime().handle(),
+                    factory,
+                    "lazy-fallback runtime",
+                )
             }
             #[cfg(not(feature = "lazy-fallback-runtime"))]
             {

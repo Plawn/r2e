@@ -398,7 +398,10 @@ impl EventBus for KafkaEventBus {
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
-                let envelope = EventEnvelope { event, metadata: std::sync::Arc::new(metadata) };
+                let envelope = EventEnvelope {
+                    event,
+                    metadata: std::sync::Arc::new(metadata),
+                };
                 Box::pin(handler(envelope))
             });
 
@@ -445,7 +448,10 @@ impl EventBus for KafkaEventBus {
 
             let h: Handler = Arc::new(move |any, metadata| {
                 let event = any.downcast::<E>().expect("event type mismatch");
-                let envelope = EventEnvelope { event, metadata: std::sync::Arc::new(metadata) };
+                let envelope = EventEnvelope {
+                    event,
+                    metadata: std::sync::Arc::new(metadata),
+                };
                 Box::pin(handler(envelope))
             });
 

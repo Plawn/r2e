@@ -262,10 +262,7 @@ impl PreStatePlugin for OidcRuntime {
     type Deps = ();
     type Config = ();
 
-    fn install(
-        &mut self,
-        ctx: &mut PluginInstallContext<'_>,
-    ) -> (Arc<JwtClaimsValidator>,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         // `install` takes `&mut self`; the layer closure needs owned values, so
         // clone cheap runtime state for each install cycle.
         let oidc_state = self.state.clone();
@@ -281,10 +278,7 @@ impl PreStatePlugin for OidcServer {
     type Deps = ();
     type Config = ();
 
-    fn install(
-        &mut self,
-        ctx: &mut PluginInstallContext<'_>,
-    ) -> (Arc<JwtClaimsValidator>,) {
+    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
         // Take ownership out of `&mut self` (OidcServer: Default) to build the
         // runtime, then delegate to its `install`.
         let mut runtime = std::mem::take(self).build();

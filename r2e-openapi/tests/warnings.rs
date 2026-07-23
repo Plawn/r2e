@@ -169,4 +169,3 @@ fn build_spec_documents_unmapped_response_without_body() {
     assert!(resp.get("description").is_some());
     assert!(resp.get("content").is_none());
 }
-

@@ -14,7 +14,12 @@ fn positive_duration_rejects_zero_and_wraps_nonzero() {
     assert_eq!(d.get(), Duration::from_secs(5));
     assert_eq!(Duration::from(d), Duration::from_secs(5));
     assert_eq!(d.as_secs(), 5); // via Deref to Duration
-    assert_eq!(PositiveDuration::new(Duration::from_millis(250)).unwrap().get(), Duration::from_millis(250));
+    assert_eq!(
+        PositiveDuration::new(Duration::from_millis(250))
+            .unwrap()
+            .get(),
+        Duration::from_millis(250)
+    );
 }
 
 #[test]
@@ -25,17 +30,35 @@ fn positive_duration_display_matches_underlying_duration() {
 
 #[test]
 fn parses_simple_suffixes() {
-    assert_eq!(parse_duration("500ms").unwrap().get(), Duration::from_millis(500));
+    assert_eq!(
+        parse_duration("500ms").unwrap().get(),
+        Duration::from_millis(500)
+    );
     assert_eq!(parse_duration("5s").unwrap().get(), Duration::from_secs(5));
-    assert_eq!(parse_duration("2m").unwrap().get(), Duration::from_secs(120));
-    assert_eq!(parse_duration("1h").unwrap().get(), Duration::from_secs(3600));
-    assert_eq!(parse_duration("1d").unwrap().get(), Duration::from_secs(86_400));
+    assert_eq!(
+        parse_duration("2m").unwrap().get(),
+        Duration::from_secs(120)
+    );
+    assert_eq!(
+        parse_duration("1h").unwrap().get(),
+        Duration::from_secs(3600)
+    );
+    assert_eq!(
+        parse_duration("1d").unwrap().get(),
+        Duration::from_secs(86_400)
+    );
 }
 
 #[test]
 fn parses_compound_segments() {
-    assert_eq!(parse_duration("1h30m").unwrap().get(), Duration::from_secs(5400));
-    assert_eq!(parse_duration("2m30s").unwrap().get(), Duration::from_secs(150));
+    assert_eq!(
+        parse_duration("1h30m").unwrap().get(),
+        Duration::from_secs(5400)
+    );
+    assert_eq!(
+        parse_duration("2m30s").unwrap().get(),
+        Duration::from_secs(150)
+    );
     assert_eq!(
         parse_duration("1h15m30s").unwrap().get(),
         Duration::from_secs(4530)
@@ -44,7 +67,10 @@ fn parses_compound_segments() {
 
 #[test]
 fn trims_whitespace() {
-    assert_eq!(parse_duration(" 5s ").unwrap().get(), Duration::from_secs(5));
+    assert_eq!(
+        parse_duration(" 5s ").unwrap().get(),
+        Duration::from_secs(5)
+    );
 }
 
 #[test]

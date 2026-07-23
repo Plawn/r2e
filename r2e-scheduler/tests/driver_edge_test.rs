@@ -112,7 +112,9 @@ async fn panicking_tick_increments_panic_count() {
         overlap: OverlapPolicy::Skip,
         skip: None,
         name: "panicker".to_string(),
-        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
+        schedule: ScheduleConfig::Interval(
+            r2e_scheduler::PositiveDuration::from_millis(50).unwrap(),
+        ),
         state: (),
         task: Box::new(|()| {
             Box::pin(async move {
@@ -164,7 +166,13 @@ async fn skip_scheduled_ticks_yield_to_an_in_flight_oob_tick() {
     ); // default Skip
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    start_jobs(jobs, cancel.clone(), test_pool(), registry.clone(), commands);
+    start_jobs(
+        jobs,
+        cancel.clone(),
+        test_pool(),
+        registry.clone(),
+        commands,
+    );
 
     // Fire out of band while the scheduled entry is still pending in the future.
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -229,11 +237,7 @@ async fn cron_exhausts_after_its_single_occurrence() {
     let counter = Arc::new(AtomicUsize::new(0));
     let registry = ScheduledJobRegistry::new();
     let cancel = CancellationToken::new();
-    let task = counting_task(
-        "one_shot_cron",
-        ScheduleConfig::Cron(expr),
-        counter.clone(),
-    );
+    let task = counting_task("one_shot_cron", ScheduleConfig::Cron(expr), counter.clone());
     start_one(task, cancel.clone(), test_pool(), registry.clone());
 
     // Wait past the single occurrence + re-arm.

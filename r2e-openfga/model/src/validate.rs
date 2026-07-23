@@ -24,7 +24,11 @@ pub struct ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.relation {
-            Some(rel) => write!(f, "type `{}`, relation `{}`: {}", self.type_name, rel, self.message),
+            Some(rel) => write!(
+                f,
+                "type `{}`, relation `{}`: {}",
+                self.type_name, rel, self.message
+            ),
             None => write!(f, "type `{}`: {}", self.type_name, self.message),
         }
     }
@@ -47,7 +51,10 @@ pub fn validate(model: &AuthorizationModel) -> Result<(), Vec<ValidationError>> 
 
             for reference in type_def.directly_related_user_types(relation) {
                 match model.type_definition(&reference.type_name) {
-                    None => push(format!("unknown type `{}` in direct type restrictions", reference.type_name)),
+                    None => push(format!(
+                        "unknown type `{}` in direct type restrictions",
+                        reference.type_name
+                    )),
                     Some(target) => {
                         if let Some(rel) = &reference.relation {
                             if !target.relations.contains_key(rel) {

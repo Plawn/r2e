@@ -1,6 +1,9 @@
 
 ## Remaining (mirrored in docs/claude/roadmap.md § W11, triage 2026-07-17)
 
+- Avoir un conf provider type vault ou autre -> interface clean + implem de vault + version open source de vault
+- avoir une feature pour router différents bean en fonction du tenant, type plusieurs DB un peu en R2e -> si possible infra générique puis implem specifique db
+- remplacer des guards+check par des newTypes si cohérent, rendre les états invalides non representables
 - better grpc/proto automagic setup, auto compile, auto build.rs + etc
 - xitca web ? -> zero copy ?
 - audit de responsibilities boundaries (reste — la moitié scheduled/consumer est faite via W10)

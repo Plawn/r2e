@@ -42,7 +42,10 @@ impl fmt::Display for OpenFgaError {
                 write!(f, "OpenFGA backend does not support '{}'", op)
             }
             OpenFgaError::NotReady => {
-                write!(f, "OpenFGA backend is not ready (boot sequence not finished)")
+                write!(
+                    f,
+                    "OpenFGA backend is not ready (boot sequence not finished)"
+                )
             }
         }
     }

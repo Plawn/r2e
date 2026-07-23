@@ -297,7 +297,6 @@ impl OpenFgaBackend for GrpcBackend {
             Ok(())
         })
     }
-
 }
 
 // ── MockBackend ────────────────────────────────────────────────────────

@@ -88,10 +88,15 @@ async fn grant_writes_tuple_and_check_sees_it() {
     let alice = authz::user::id("alice");
     let doc = authz::document::id("readme");
 
-    fga.grant(&alice, authz::document::viewer, &doc).await.unwrap();
+    fga.grant(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap();
 
     assert!(mock.has_tuple("user:alice", "viewer", "document:readme"));
-    assert!(fga.check(&alice, authz::document::viewer, &doc).await.unwrap());
+    assert!(fga
+        .check(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap());
 }
 
 #[tokio::test]
@@ -100,11 +105,18 @@ async fn revoke_deletes_tuple() {
     let alice = authz::user::id("alice");
     let doc = authz::document::id("readme");
 
-    fga.grant(&alice, authz::document::viewer, &doc).await.unwrap();
-    fga.revoke(&alice, authz::document::viewer, &doc).await.unwrap();
+    fga.grant(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap();
+    fga.revoke(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap();
 
     assert!(!mock.has_tuple("user:alice", "viewer", "document:readme"));
-    assert!(!fga.check(&alice, authz::document::viewer, &doc).await.unwrap());
+    assert!(!fga
+        .check(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap());
 }
 
 /// The write-through contract: a cached *deny* must not survive a grant,
@@ -117,17 +129,28 @@ async fn grant_and_revoke_invalidate_cached_decisions() {
     let doc = authz::document::id("readme");
 
     // Prime the cache with a deny.
-    assert!(!fga.check(&alice, authz::document::viewer, &doc).await.unwrap());
+    assert!(!fga
+        .check(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap());
 
-    fga.grant(&alice, authz::document::viewer, &doc).await.unwrap();
+    fga.grant(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap();
     assert!(
-        fga.check(&alice, authz::document::viewer, &doc).await.unwrap(),
+        fga.check(&alice, authz::document::viewer, &doc)
+            .await
+            .unwrap(),
         "grant must invalidate the cached deny"
     );
 
-    fga.revoke(&alice, authz::document::viewer, &doc).await.unwrap();
+    fga.revoke(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap();
     assert!(
-        !fga.check(&alice, authz::document::viewer, &doc).await.unwrap(),
+        !fga.check(&alice, authz::document::viewer, &doc)
+            .await
+            .unwrap(),
         "revoke must invalidate the cached allow"
     );
 }
@@ -138,7 +161,9 @@ async fn userset_and_wildcard_subjects_render_wire_form() {
     let doc = authz::document::id("readme");
 
     let eng_members = authz::team::member.of(authz::team::id("eng"));
-    fga.grant(&eng_members, authz::document::viewer, &doc).await.unwrap();
+    fga.grant(&eng_members, authz::document::viewer, &doc)
+        .await
+        .unwrap();
     assert!(mock.has_tuple("team:eng#member", "viewer", "document:readme"));
 
     fga.grant(&authz::user::wildcard(), authz::document::viewer, &doc)
@@ -171,8 +196,14 @@ async fn check_only_backend_reports_unsupported_writes() {
     let alice = authz::user::id("alice");
     let doc = authz::document::id("readme");
 
-    let err = fga.grant(&alice, authz::document::viewer, &doc).await.unwrap_err();
+    let err = fga
+        .grant(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap_err();
     assert!(matches!(err, OpenFgaError::Unsupported("write_tuple")));
-    let err = fga.revoke(&alice, authz::document::viewer, &doc).await.unwrap_err();
+    let err = fga
+        .revoke(&alice, authz::document::viewer, &doc)
+        .await
+        .unwrap_err();
     assert!(matches!(err, OpenFgaError::Unsupported("delete_tuple")));
 }

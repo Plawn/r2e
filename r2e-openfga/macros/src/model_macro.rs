@@ -46,7 +46,12 @@ impl Parse for ModelInput {
             false
         };
         let literal: LitStr = input.parse()?;
-        Ok(ModelInput { vis, mod_name, inline, literal })
+        Ok(ModelInput {
+            vis,
+            mod_name,
+            inline,
+            literal,
+        })
     }
 }
 
@@ -70,7 +75,12 @@ fn r2e_openfga_path() -> TokenStream {
 }
 
 pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
-    let ModelInput { vis, mod_name, inline, literal } = syn::parse2(input)?;
+    let ModelInput {
+        vis,
+        mod_name,
+        inline,
+        literal,
+    } = syn::parse2(input)?;
     let span = literal.span();
 
     // (source label for errors, DSL text, include_str! path for rebuild
@@ -82,7 +92,10 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             .map_err(|_| syn::Error::new(span, "model!: CARGO_MANIFEST_DIR is not set"))?;
         let abs_path = std::path::Path::new(&manifest_dir).join(literal.value());
         let dsl = std::fs::read_to_string(&abs_path).map_err(|e| {
-            syn::Error::new(span, format!("model!: cannot read `{}`: {}", abs_path.display(), e))
+            syn::Error::new(
+                span,
+                format!("model!: cannot read `{}`: {}", abs_path.display(), e),
+            )
         })?;
         let include_path = LitStr::new(&abs_path.to_string_lossy(), span);
         (literal.value(), dsl, Some(include_path))
@@ -94,7 +107,11 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         let rendered: Vec<String> = errors.iter().map(|e| format!("  - {}", e)).collect();
         syn::Error::new(
             span,
-            format!("model!: {} is not a valid model:\n{}", source, rendered.join("\n")),
+            format!(
+                "model!: {} is not a valid model:\n{}",
+                source,
+                rendered.join("\n")
+            ),
         )
     })?;
 
@@ -147,7 +164,10 @@ impl ModuleNames {
             if let Some(other) = type_idents.insert(ident_str.clone(), t.type_name.clone()) {
                 return Err(syn::Error::new(
                     span,
-                    format!("model!: types `{}` and `{}` both map to module `{}`", other, t.type_name, ident_str),
+                    format!(
+                        "model!: types `{}` and `{}` both map to module `{}`",
+                        other, t.type_name, ident_str
+                    ),
                 ));
             }
             types.insert(t.type_name.clone(), make_ident(&ident_str, span, "type")?);
@@ -214,7 +234,10 @@ fn expand_type(
     let type_name = &type_def.type_name;
     let mod_ident = &names.types[type_name];
     let ty_doc = format!("Marker for the `{}` object type.", type_name);
-    let id_doc = format!("`{}:<id>` — panics if `id` contains `:`; see `try_id`.", type_name);
+    let id_doc = format!(
+        "`{}:<id>` — panics if `id` contains `:`; see `try_id`.",
+        type_name
+    );
     let wildcard_doc = format!("The public wildcard subject `{}:*`.", type_name);
 
     let relations = type_def
@@ -228,12 +251,22 @@ fn expand_type(
             let mut assignable = Vec::new();
             let mut seen = Vec::new();
             for reference in type_def.directly_related_user_types(rel) {
-                let key = (reference.type_name.clone(), reference.relation.clone(), reference.wildcard.is_some());
+                let key = (
+                    reference.type_name.clone(),
+                    reference.relation.clone(),
+                    reference.wildcard.is_some(),
+                );
                 if seen.contains(&key) {
                     continue; // same subject with/without condition — one impl
                 }
                 seen.push(key);
-                assignable.push(assignable_impl(reference, marker_ident, names, krate, span)?);
+                assignable.push(assignable_impl(
+                    reference,
+                    marker_ident,
+                    names,
+                    krate,
+                    span,
+                )?);
             }
 
             Ok(quote! {
@@ -288,7 +321,10 @@ fn assignable_impl(
 ) -> syn::Result<TokenStream> {
     // `validate()` guarantees the referenced type/relation exist.
     let subject_mod = names.types.get(&reference.type_name).ok_or_else(|| {
-        syn::Error::new(span, format!("model!: unknown type `{}`", reference.type_name))
+        syn::Error::new(
+            span,
+            format!("model!: unknown type `{}`", reference.type_name),
+        )
     })?;
 
     let subject_marker = if reference.wildcard.is_some() {
@@ -342,7 +378,10 @@ fn make_ident(name: &str, span: proc_macro2::Span, what: &str) -> syn::Result<Id
         .map_err(|_| {
             syn::Error::new(
                 span,
-                format!("model!: {} name `{}` cannot be used as a Rust identifier", what, name),
+                format!(
+                    "model!: {} name `{}` cannot be used as a Rust identifier",
+                    what, name
+                ),
             )
         })
 }

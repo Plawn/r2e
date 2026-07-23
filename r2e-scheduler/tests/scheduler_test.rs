@@ -181,7 +181,9 @@ async fn interval_task_state_accessible() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "logger".to_string(),
-        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
+        schedule: ScheduleConfig::Interval(
+            r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
+        ),
         state: log.clone(),
         task: Box::new(|log: Arc<Mutex<Vec<String>>>| {
             Box::pin(async move {
@@ -216,7 +218,9 @@ async fn interval_task_panic_isolation() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "panicker".to_string(),
-        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
+        schedule: ScheduleConfig::Interval(
+            r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
+        ),
         state: a,
         task: Box::new(|a: Arc<AtomicUsize>| {
             Box::pin(async move {
@@ -369,7 +373,9 @@ async fn multiple_tasks_all_start() {
             .map(|(name, counter)| {
                 Box::new(counting_task(
                     name,
-                    ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
+                    ScheduleConfig::Interval(
+                        r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
+                    ),
                     counter,
                 )) as Box<dyn ScheduledTask>
             })
@@ -444,7 +450,9 @@ async fn concurrent_tasks_shared_state() {
         .map(|name| {
             Box::new(counting_task(
                 name,
-                ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
+                ScheduleConfig::Interval(
+                    r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
+                ),
                 shared.clone(),
             )) as Box<dyn ScheduledTask>
         })
@@ -497,7 +505,9 @@ async fn state_mutations_visible_via_arc_mutex() {
         overlap: r2e_scheduler::OverlapPolicy::Skip,
         skip: None,
         name: "mutator".to_string(),
-        schedule: ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
+        schedule: ScheduleConfig::Interval(
+            r2e_scheduler::PositiveDuration::from_millis(100).unwrap(),
+        ),
         state: log.clone(),
         task: Box::new(|log: Arc<Mutex<Vec<i32>>>| {
             Box::pin(async move {

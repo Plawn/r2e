@@ -94,7 +94,9 @@ fn update_job_is_a_noop_when_the_name_is_absent() {
 
     // Mutating an absent entry is a no-op: the closure must never run, and
     // the registry is left untouched.
-    reg.update_job("ghost", |_| panic!("closure must not run for an absent job"));
+    reg.update_job("ghost", |_| {
+        panic!("closure must not run for an absent job")
+    });
     assert_eq!(reg.list_jobs().len(), 1);
     assert!(reg.job("ghost").is_none());
 }

@@ -61,7 +61,9 @@ fn wildcard_subject_renders_type_star() {
 #[test]
 fn has_builds_the_same_check_as_the_stringly_form() {
     let typed = FgaCheck::has(VIEWER).from_query("doc_id");
-    let stringly = FgaCheck::relation("viewer").on("document").from_query("doc_id");
+    let stringly = FgaCheck::relation("viewer")
+        .on("document")
+        .from_query("doc_id");
     assert_eq!(typed.relation, stringly.relation);
     assert_eq!(typed.object_type, stringly.object_type);
 }

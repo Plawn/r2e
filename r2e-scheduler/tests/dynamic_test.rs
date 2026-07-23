@@ -239,7 +239,9 @@ async fn schedule_tasks_with_builds_a_batch_from_the_context() {
                 .map(|name| {
                     ScheduledTaskDef::new(
                         format!("sync_{name}"),
-                        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
+                        ScheduleConfig::Interval(
+                            r2e_scheduler::PositiveDuration::from_secs(60).unwrap(),
+                        ),
                         c.clone(),
                         |c| async move {
                             c.fetch_add(1, Ordering::SeqCst);

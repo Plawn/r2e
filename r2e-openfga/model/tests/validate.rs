@@ -22,7 +22,9 @@ fn valid_model_passes() {
 
 #[test]
 fn unknown_type_in_restrictions() {
-    let errs = errors_of(&format!("{HEADER}type doc\n  relations\n    define viewer: [user]\n"));
+    let errs = errors_of(&format!(
+        "{HEADER}type doc\n  relations\n    define viewer: [user]\n"
+    ));
     assert!(errs[0].contains("unknown type `user`"), "{errs:?}");
 }
 
@@ -31,7 +33,10 @@ fn unknown_userset_relation() {
     let errs = errors_of(&format!(
         "{HEADER}type user\ntype team\ntype doc\n  relations\n    define viewer: [team#member]\n"
     ));
-    assert!(errs[0].contains("relation `member` does not exist on type `team`"), "{errs:?}");
+    assert!(
+        errs[0].contains("relation `member` does not exist on type `team`"),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -39,7 +44,10 @@ fn unknown_computed_userset() {
     let errs = errors_of(&format!(
         "{HEADER}type user\ntype doc\n  relations\n    define viewer: [user] or editor\n"
     ));
-    assert!(errs[0].contains("relation `editor` does not exist on type `doc`"), "{errs:?}");
+    assert!(
+        errs[0].contains("relation `editor` does not exist on type `doc`"),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -47,7 +55,10 @@ fn unknown_tupleset_relation() {
     let errs = errors_of(&format!(
         "{HEADER}type user\ntype doc\n  relations\n    define viewer: viewer from parent\n"
     ));
-    assert!(errs[0].contains("tupleset relation `parent` does not exist"), "{errs:?}");
+    assert!(
+        errs[0].contains("tupleset relation `parent` does not exist"),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -55,7 +66,10 @@ fn tupleset_subject_types_must_define_computed_relation() {
     let errs = errors_of(&format!(
         "{HEADER}type user\ntype folder\n  relations\n    define owner: [user]\ntype doc\n  relations\n    define parent: [folder]\n    define viewer: reader from parent\n"
     ));
-    assert!(errs[0].contains("relation `reader` does not exist on any subject type of `parent`"), "{errs:?}");
+    assert!(
+        errs[0].contains("relation `reader` does not exist on any subject type of `parent`"),
+        "{errs:?}"
+    );
 }
 
 #[test]

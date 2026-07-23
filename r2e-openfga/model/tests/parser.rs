@@ -22,9 +22,10 @@ fn corpus_round_trips() {
     for case in entries {
         let name = case.file_name().unwrap().to_string_lossy().to_string();
         let dsl = std::fs::read_to_string(case.join("authorization-model.fga")).unwrap();
-        let expected: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(case.join("authorization-model.json")).unwrap())
-                .unwrap();
+        let expected: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(case.join("authorization-model.json")).unwrap(),
+        )
+        .unwrap();
 
         cases += 1;
         let model = match parse(&dsl) {
@@ -123,7 +124,10 @@ fn rejects_duplicates() {
 
 #[test]
 fn reports_line_numbers() {
-    let err = parse(&format!("{HEADER}type user\ntype doc\n  relations\n    define a: or\n")).unwrap_err();
+    let err = parse(&format!(
+        "{HEADER}type user\ntype doc\n  relations\n    define a: or\n"
+    ))
+    .unwrap_err();
     assert_eq!(err.line, 6);
 }
 

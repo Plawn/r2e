@@ -88,7 +88,10 @@ fn extract_tasks_empty() {
 
 #[test]
 fn extract_tasks_single() {
-    let task = noop_task_def("single", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()));
+    let task = noop_task_def(
+        "single",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
+    );
     let boxed = boxed_task(task);
     let tasks = extract_tasks(vec![boxed]);
     assert_eq!(tasks.len(), 1);
@@ -104,7 +107,10 @@ fn extract_tasks_wrong_type_ignored() {
 
 #[test]
 fn extract_tasks_mixed() {
-    let valid = noop_task_def("valid", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()));
+    let valid = noop_task_def(
+        "valid",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(1).unwrap()),
+    );
     let valid_boxed = boxed_task(valid);
     let invalid: Box<dyn Any + Send> = Box::new("not a task".to_string());
     let tasks = extract_tasks(vec![valid_boxed, invalid]);
@@ -116,7 +122,10 @@ fn extract_tasks_mixed() {
 
 #[test]
 fn task_def_name_and_schedule() {
-    let task = noop_task_def("my_task", ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(10).unwrap()));
+    let task = noop_task_def(
+        "my_task",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(10).unwrap()),
+    );
     assert_eq!(task.name(), "my_task");
     match task.schedule() {
         ScheduleConfig::Interval(d) => assert_eq!(d.get(), Duration::from_secs(10)),

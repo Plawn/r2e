@@ -542,10 +542,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     .build_state()
     ///     .await
     /// ```
-    pub fn plugin<Pl: RawPreStatePlugin>(
-        self,
-        plugin: Pl,
-    ) -> WithPluginInstalled<Pl, P, R, Mods>
+    pub fn plugin<Pl: RawPreStatePlugin>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
         // Nothing is checked at the call site: the plugin's `Deps` are appended

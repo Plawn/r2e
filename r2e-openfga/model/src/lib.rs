@@ -39,8 +39,8 @@ mod parser;
 mod validate;
 
 pub use model::{
-    AuthorizationModel, Condition, ConditionParamType, Metadata, ObjectRelation,
-    RelationMetadata, RelationReference, TypeDefinition, Userset, Wildcard,
+    AuthorizationModel, Condition, ConditionParamType, Metadata, ObjectRelation, RelationMetadata,
+    RelationReference, TypeDefinition, Userset, Wildcard,
 };
 pub use parser::{parse, ParseError};
 pub use validate::{validate, ValidationError};

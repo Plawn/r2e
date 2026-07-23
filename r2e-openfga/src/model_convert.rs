@@ -358,7 +358,10 @@ pub fn diff_summary(compiled: &CompiledModel, live: &openfga_rs::AuthorizationMo
 
     let only_compiled = names_only_in(&compiled_types, &live_types);
     if !only_compiled.is_empty() {
-        segments.push(format!("types only in compiled: {}", fmt_list(&only_compiled)));
+        segments.push(format!(
+            "types only in compiled: {}",
+            fmt_list(&only_compiled)
+        ));
     }
     let only_live = names_only_in(&live_types, &compiled_types);
     if !only_live.is_empty() {

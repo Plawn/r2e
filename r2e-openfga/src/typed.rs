@@ -34,7 +34,11 @@ pub struct InvalidObjectId(pub String);
 
 impl fmt::Display for InvalidObjectId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "object ID must not contain ':', '#', or '*' (got '{}')", self.0)
+        write!(
+            f,
+            "object ID must not contain ':', '#', or '*' (got '{}')",
+            self.0
+        )
     }
 }
 
