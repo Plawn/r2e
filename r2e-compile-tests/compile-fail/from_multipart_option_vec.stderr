@@ -1,5 +1,0 @@
-error: FromMultipart: Option<Vec<UploadedFile>> is not supported — use Vec<UploadedFile>; an absent field yields an empty Vec
- --> compile-fail/from_multipart_option_vec.rs:6:22
-  |
-6 |     pub attachments: Option<Vec<UploadedFile>>,
-  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^

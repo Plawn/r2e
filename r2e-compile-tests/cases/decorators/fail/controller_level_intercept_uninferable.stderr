@@ -1,0 +1,5 @@
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/decorators/fail/controller_level_intercept_uninferable.rs:36:13
+   |
+36 | #[intercept(make_interceptor())]
+   |             ^^^^^^^^^^^^^^^^^^

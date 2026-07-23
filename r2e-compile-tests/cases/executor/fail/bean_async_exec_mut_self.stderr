@@ -1,0 +1,5 @@
+error: #[async_exec] methods must take `&self` (not `&mut self` or `self`) — the generated wrapper clones an immutable handle to submit the body to the pool
+  --> cases/executor/fail/bean_async_exec_mut_self.rs:20:27
+   |
+20 |     async fn generate_pdf(&mut self) -> Vec<u8> {
+   |                           ^^^^^^^^^

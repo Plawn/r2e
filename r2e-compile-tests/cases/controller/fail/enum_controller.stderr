@@ -1,0 +1,5 @@
+error: expected `struct`
+ --> cases/controller/fail/enum_controller.rs:7:5
+  |
+7 | pub enum MyController {
+  |     ^^^^

@@ -1,0 +1,5 @@
+error: `#[identity]` was removed; use `#[inject(identity)]`
+ --> cases/controller/fail/old_identity_syntax.rs:8:5
+  |
+8 |     #[identity]
+  |     ^^^^^^^^^^^

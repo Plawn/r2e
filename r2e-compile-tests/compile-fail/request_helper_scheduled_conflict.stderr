@@ -1,5 +1,0 @@
-error: #[request_helper] cannot be combined with #[scheduled] on the same method — a request helper is a plain method emitted on the request façade, not a route or an off-request wiring hook
-  --> compile-fail/request_helper_scheduled_conflict.rs:31:14
-   |
-31 |     async fn who(&self) {
-   |              ^^^

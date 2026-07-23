@@ -1,0 +1,5 @@
+error: `group` requires `order` — `group` only names the barrier for tests that also declare an `order`
+ --> cases/testing/fail/test_group_without_order.rs:5:21
+  |
+5 | #[r2e::test(group = "seq")]
+  |                     ^^^^^

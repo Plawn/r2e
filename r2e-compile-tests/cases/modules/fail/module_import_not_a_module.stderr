@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `NotAModule: FeatureModule` is not satisfied
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
+   |
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |__^ unsatisfied trait bound
+   |
+help: the trait `FeatureModule` is not implemented for `NotAModule`
+  --> cases/modules/fail/module_import_not_a_module.rs:24:1
+   |
+24 | pub struct NotAModule;
+   | ^^^^^^^^^^^^^^^^^^^^^
+help: the trait `FeatureModule` is implemented for `BadModule`
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
+   |
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |__^
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `NotAModule: FeatureModule` is not satisfied
+  --> cases/modules/fail/module_import_not_a_module.rs:37:14
+   |
+37 |             .register_module::<BadModule>()
+   |              ^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FeatureModule` is not implemented for `NotAModule`
+  --> cases/modules/fail/module_import_not_a_module.rs:24:1
+   |
+24 | pub struct NotAModule;
+   | ^^^^^^^^^^^^^^^^^^^^^
+help: the trait `FeatureModule` is implemented for `BadModule`
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
+   |
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |__^
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)

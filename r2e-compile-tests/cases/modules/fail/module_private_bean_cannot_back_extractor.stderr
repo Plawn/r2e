@@ -1,0 +1,139 @@
+error[E0277]: `Stamp` cannot be extracted from a request against this application state
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:64:14
+   |
+64 |             .build_state()
+   |              ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:20:1
+   |
+20 | pub struct Stamp(pub String);
+   | ^^^^^^^^^^^^^^^^
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:22:1
+   |
+22 | / impl<S, I> FromRequestPartsVia<S, ViaBean<I>> for Stamp
+23 | | where
+24 | |     S: HasBean<Secret, I> + Send + Sync,
+25 | |     I: Send + Sync,
+   | |___________________^
+note: required for `__R2eRequestData_StampedController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:37:1
+   |
+37 | #[controller(path = "/stamped")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:43:1
+   |
+43 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+44 | impl StampedController {
+   |      ^^^^^^^^^^^^^^^^^
+   = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
+   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Stamp` cannot be extracted from a request against this application state
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:62:9
+   |
+62 | /         r2e::AppBuilder::new()
+63 | |             .register_module::<StampModule>()
+64 | |             .build_state()
+   | |__________________________^ unsatisfied trait bound
+   |
+help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:20:1
+   |
+20 | pub struct Stamp(pub String);
+   | ^^^^^^^^^^^^^^^^
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:22:1
+   |
+22 | / impl<S, I> FromRequestPartsVia<S, ViaBean<I>> for Stamp
+23 | | where
+24 | |     S: HasBean<Secret, I> + Send + Sync,
+25 | |     I: Send + Sync,
+   | |___________________^
+note: required for `__R2eRequestData_StampedController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:37:1
+   |
+37 | #[controller(path = "/stamped")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:43:1
+   |
+43 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+44 | impl StampedController {
+   |      ^^^^^^^^^^^^^^^^^
+   = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
+   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Stamp` cannot be extracted from a request against this application state
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:65:14
+   |
+65 |             .await
+   |              ^^^^^ unsatisfied trait bound
+   |
+help: the trait `r2e::FromRequestPartsVia<HNil, _>` is not implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:20:1
+   |
+20 | pub struct Stamp(pub String);
+   | ^^^^^^^^^^^^^^^^
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `r2e::FromRequestPartsVia<S, ViaBean<I>>` is implemented for `Stamp`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:22:1
+   |
+22 | / impl<S, I> FromRequestPartsVia<S, ViaBean<I>> for Stamp
+23 | | where
+24 | |     S: HasBean<Secret, I> + Send + Sync,
+25 | |     I: Send + Sync,
+   | |___________________^
+note: required for `__R2eRequestData_StampedController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:37:1
+   |
+37 | #[controller(path = "/stamped")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
+  --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:43:1
+   |
+43 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+44 | impl StampedController {
+   |      ^^^^^^^^^^^^^^^^^
+   = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
+   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+   |
+   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+   |                  ----------- required by a bound in this associated function
+...
+   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

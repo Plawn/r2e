@@ -1,5 +1,0 @@
-error[E0080]: evaluation panicked: this #[guard] requires an authenticated identity, but the route can never provide one: add a struct-level `#[inject(identity)]` field or an identity parameter on the route. An `#[anonymous]` route needs an `Option<..>` identity parameter to opt back in.
-  --> compile-fail/fga_guard_on_anonymous_route.rs:20:13
-   |
-20 |     #[guard(FgaCheck::relation("viewer").on("document").from_path("id"))]
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

@@ -1,0 +1,5 @@
+error: invalid overlap policy 'sometimes': expected "skip" or "concurrent"
+  --> cases/scheduler/fail/scheduled_invalid_overlap.rs:11:43
+   |
+11 |     #[scheduled(every = "50ms", overlap = "sometimes")]
+   |                                           ^^^^^^^^^^^

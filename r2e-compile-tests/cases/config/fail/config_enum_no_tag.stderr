@@ -1,0 +1,5 @@
+error: #[derive(ConfigProperties)] on an enum requires #[config(tag = "...")] — the config key whose value selects the variant
+ --> cases/config/fail/config_enum_no_tag.rs:4:10
+  |
+4 | pub enum StorageConfig {
+  |          ^^^^^^^^^^^^^

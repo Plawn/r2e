@@ -1,0 +1,5 @@
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/decorators/fail/pre_guard_spec_type_uninferable.rs:32:17
+   |
+32 |     #[pre_guard(make_pre_guard())]
+   |                 ^^^^^^^^^^^^^^^^

@@ -1,7 +1,0 @@
-error: route methods cannot expose `Self` in their return type
-
-       route methods run on the generated request façade, where `Self` no longer refers to the controller. Name the controller type explicitly instead of using `Self`.
-  --> compile-fail/route_exposes_self.rs:21:33
-   |
-21 |     async fn clone_me(&self) -> Json<Self> {
-   |                                 ^^^^^^^^^^

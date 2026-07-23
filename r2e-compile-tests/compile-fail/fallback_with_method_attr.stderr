@@ -1,5 +1,0 @@
-error: #[fallback] cannot be combined with a method attribute: it already matches every HTTP method on every unmatched path
-  --> compile-fail/fallback_with_method_attr.rs:11:5
-   |
-11 |     #[fallback]
-   |     ^^^^^^^^^^^

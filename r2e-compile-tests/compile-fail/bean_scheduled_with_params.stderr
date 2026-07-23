@@ -1,5 +1,0 @@
-error: #[scheduled] methods cannot have parameters other than &self
-  --> compile-fail/bean_scheduled_with_params.rs:13:5
-   |
-13 |     async fn purge(&self, name: String) {
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

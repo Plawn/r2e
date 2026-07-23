@@ -1,5 +1,0 @@
-error: #[post_construct] cannot be combined with a route, #[scheduled], #[consumer], #[sse], #[ws], #[async_exec], or #[pre_destroy] on the same method — it is a plain lifecycle hook that runs once after the graph resolves
-  --> compile-fail/controller_post_construct_combined.rs:15:14
-   |
-15 |     async fn init(&self) -> &'static str {
-   |              ^^^^

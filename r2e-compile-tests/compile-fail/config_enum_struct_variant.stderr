@@ -1,5 +1,0 @@
-error: tagged-enum variants must be unit variants or single-field tuple variants whose field implements ConfigProperties
- --> compile-fail/config_enum_struct_variant.rs:6:5
-  |
-6 |     S3 { bucket: String },
-  |     ^^^^^^^^^^^^^^^^^^^^^

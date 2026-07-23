@@ -1,0 +1,5 @@
+error: `order` is only supported on `#[r2e::test]`
+ --> cases/testing/fail/main_with_order.rs:4:21
+  |
+4 | #[r2e::main(order = 1)]
+  |                     ^

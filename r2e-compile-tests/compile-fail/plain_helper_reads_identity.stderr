@@ -1,7 +1,0 @@
-error[E0609]: no field `user` on type `&MyController`
-  --> compile-fail/plain_helper_reads_identity.rs:41:14
-   |
-41 |         self.user.sub().to_string()
-   |              ^^^^ unknown field
-   |
-   = note: available field is: `__r2e_decos`

@@ -1,5 +1,0 @@
-error: #[fallback] takes no arguments: it handles every request no other route matched
-  --> compile-fail/fallback_with_path_arg.rs:11:5
-   |
-11 |     #[fallback("/x")]
-   |     ^^^^^^^^^^^^^^^^^

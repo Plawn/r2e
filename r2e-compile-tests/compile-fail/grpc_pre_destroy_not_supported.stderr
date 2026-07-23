@@ -1,5 +1,0 @@
-error: #[pre_destroy] is not supported on #[grpc_routes] methods
-  --> compile-fail/grpc_pre_destroy_not_supported.rs:26:5
-   |
-26 |     #[pre_destroy]
-   |     ^^^^^^^^^^^^^^

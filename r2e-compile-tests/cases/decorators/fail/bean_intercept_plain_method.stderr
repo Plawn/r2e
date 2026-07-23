@@ -1,0 +1,13 @@
+error: #[intercept] on a bean method is only supported on #[scheduled]/#[consumer] methods — a plain method has no dispatch wrapper to run the interceptor chain
+  --> cases/decorators/fail/bean_intercept_plain_method.rs:19:5
+   |
+19 |     async fn helper(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::r2e_utils::Logged`
+ --> cases/decorators/fail/bean_intercept_plain_method.rs:6:5
+  |
+6 | use r2e::r2e_utils::Logged;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -1,0 +1,9 @@
+error: consumer method must have an event parameter typed as Arc<EventType>:
+
+         #[consumer(bus = "event_bus")]
+
+         async fn on_event(&self, event: Arc<MyEvent>) { }
+  --> cases/events/fail/consumer_no_event_param.rs:18:14
+   |
+18 |     async fn on_event(&self) {
+   |              ^^^^^^^^

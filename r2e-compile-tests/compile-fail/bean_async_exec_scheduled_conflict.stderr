@@ -1,5 +1,0 @@
-error: #[async_exec] cannot be combined with #[scheduled] on the same method — it rewrites the method into a pool-submission wrapper
-  --> compile-fail/bean_async_exec_scheduled_conflict.rs:20:5
-   |
-20 |     async fn generate_pdf(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

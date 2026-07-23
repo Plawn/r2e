@@ -1,0 +1,6 @@
+error: #[config(skip)] cannot be combined with other #[config(...)] attributes
+ --> cases/config/fail/config_skip_combined.rs:5:5
+  |
+5 | /     #[config(skip, default = "x")]
+6 | |     pub token: String,
+  | |_____________________^

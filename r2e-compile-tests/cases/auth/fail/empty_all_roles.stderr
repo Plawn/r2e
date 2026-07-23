@@ -1,0 +1,5 @@
+error: #[all_roles] roles cannot be empty or whitespace-only
+ --> cases/auth/fail/empty_all_roles.rs:9:17
+  |
+9 |     #[all_roles("   ")]
+  |                 ^^^^^

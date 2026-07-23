@@ -1,5 +1,0 @@
-error: #[async_exec] cannot be combined with a route verb (#[get], #[post], ...) on the same method — it rewrites the method into a pool-submission wrapper
-  --> compile-fail/async_exec_route_conflict.rs:20:5
-   |
-20 |     async fn generate_pdf(&self) -> Vec<u8> {
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

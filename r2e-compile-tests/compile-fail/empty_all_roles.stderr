@@ -1,5 +1,0 @@
-error: #[all_roles] roles cannot be empty or whitespace-only
- --> compile-fail/empty_all_roles.rs:9:17
-  |
-9 |     #[all_roles("   ")]
-  |                 ^^^^^

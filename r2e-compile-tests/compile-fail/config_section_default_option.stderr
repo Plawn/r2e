@@ -1,6 +1,0 @@
-error: #[config(section, default)] cannot be used on Option fields — an absent optional section is already None
-  --> compile-fail/config_section_default_option.rs:10:5
-   |
-10 | /     #[config(section, default)]
-11 | |     pub tls: Option<TlsConfig>,
-   | |______________________________^

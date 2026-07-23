@@ -1,0 +1,5 @@
+error: unknown key `provider` in #[module] — expected `providers`, `controllers`, `exports`, `imports`, or `requires_plugins`
+  --> cases/modules/fail/module_unknown_key.rs:15:10
+   |
+15 | #[module(provider(Svc))]
+   |          ^^^^^^^^

@@ -1,0 +1,23 @@
+error: #[derive(DecoratorBean)] only works on structs — enums and unions are not supported
+ --> cases/decorators/fail/decorator_bean_unsupported.rs:7:10
+  |
+7 | pub enum NotAStruct {
+  |          ^^^^^^^^^^
+
+error: #[derive(DecoratorBean)] only works on structs with named fields:
+
+         #[derive(DecoratorBean)]
+         struct MyGuard {
+             #[inject] pool: PgPool,
+             max: u64, // plain field = config, set via MyGuard::spec(max)
+         }
+  --> cases/decorators/fail/decorator_bean_unsupported.rs:12:12
+   |
+12 | pub struct TupleShape(pub u64);
+   |            ^^^^^^^^^^
+
+error: #[derive(DecoratorBean)] does not support generic types
+  --> cases/decorators/fail/decorator_bean_unsupported.rs:15:24
+   |
+15 | pub struct GenericGuard<T> {
+   |                        ^^^

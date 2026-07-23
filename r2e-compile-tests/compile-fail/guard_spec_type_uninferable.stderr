@@ -1,5 +1,0 @@
-error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
-  --> compile-fail/guard_spec_type_uninferable.rs:32:13
-   |
-32 |     #[guard(make_guard())]
-   |             ^^^^^^^^^^^^

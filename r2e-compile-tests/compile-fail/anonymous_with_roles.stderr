@@ -1,7 +1,0 @@
-error: #[anonymous] cannot be combined with #[roles]/#[all_roles]
-
-       Role checks need an authenticated identity; an anonymous route has none.
-  --> compile-fail/anonymous_with_roles.rs:18:14
-   |
-18 |     async fn show(&self) -> Json<String> {
-   |              ^^^^

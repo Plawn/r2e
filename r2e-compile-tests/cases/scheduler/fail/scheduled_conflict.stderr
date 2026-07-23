@@ -1,0 +1,5 @@
+error: `every` and `cron` are mutually exclusive — use one or the other
+  --> cases/scheduler/fail/scheduled_conflict.rs:11:5
+   |
+11 |     #[scheduled(every = 5, cron = "0 */5 * * * *")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

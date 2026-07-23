@@ -1,0 +1,5 @@
+error: #[post_construct] is not supported on #[grpc_routes] methods
+  --> cases/grpc/fail/grpc_post_construct_not_supported.rs:19:5
+   |
+19 |     #[post_construct]
+   |     ^^^^^^^^^^^^^^^^^

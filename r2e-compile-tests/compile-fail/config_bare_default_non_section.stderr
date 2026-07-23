@@ -1,6 +1,0 @@
-error: #[config(default)] without a value is only supported on #[config(section)] fields (uses Default::default() when the section is absent)
- --> compile-fail/config_bare_default_non_section.rs:5:5
-  |
-5 | /     #[config(default)]
-6 | |     pub name: String,
-  | |____________________^

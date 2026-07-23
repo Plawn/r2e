@@ -1,0 +1,33 @@
+error[E0277]: type `AuditSink` was not provided to the AppBuilder
+  --> cases/decorators/fail/consumer_intercept_missing_dep.rs:56:36
+   |
+56 |             .register_controller::<Consumers>()
+   |                                    ^^^^^^^^^ missing `.provide::<AuditSink>()` or `.register::<AuditSink>()`
+   |
+   = help: the trait `Contains<AuditSink, _>` is not implemented for `HNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+help: the following other types implement trait `Contains<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   | impl<H, T> Contains<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `Contains<H, Here>`
+...
+   | impl<H, X, T, I> Contains<H, There<I>> for TCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `Contains<H, There<I>>`
+...
+   | impl<H, T> Contains<H, Here> for HCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, T>` implements `Contains<H, Here>`
+   | impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `HCons<LocalEventBus, HNil>` to implement `Contains<AuditSink, There<_>>`
+   = note: required for `TCons<AuditSink, TNil>` to implement `AllSatisfied<HCons<LocalEventBus, HNil>, (There<_>, ())>`
+   = note: 1 redundant requirement hidden
+   = note: required for `TCons<LocalEventBus, TCons<AuditSink, TNil>>` to implement `AllSatisfied<HCons<LocalEventBus, HNil>, (Here, (There<_>, ()))>`
+note: required by a bound in `register_controller`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_controller<C>(self) -> Self
+   |        ------------------- required by a bound in this associated function
+...
+   |         C::Deps: AllSatisfied<T, DepIdx>;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterController::register_controller`

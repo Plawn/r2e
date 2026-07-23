@@ -1,0 +1,5 @@
+error: #[intercept] on a controller method is only supported on route, #[scheduled], or #[consumer] methods — a plain method has no dispatch wrapper to run the interceptor chain
+  --> cases/decorators/fail/controller_stray_intercept.rs:33:14
+   |
+33 |     async fn helper(&self) {}
+   |              ^^^^^^

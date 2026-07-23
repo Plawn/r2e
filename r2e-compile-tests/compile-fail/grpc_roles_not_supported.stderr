@@ -1,5 +1,0 @@
-error: #[roles] is not supported on #[grpc_routes] methods
-  --> compile-fail/grpc_roles_not_supported.rs:17:5
-   |
-17 |     #[roles("admin")]
-   |     ^^^^^^^^^^^^^^^^^

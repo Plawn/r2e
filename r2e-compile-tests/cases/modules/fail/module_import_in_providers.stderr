@@ -1,0 +1,5 @@
+error: `module(...)` is only valid inside `imports(...)`, not `providers(...)` — module imports go in `imports(...)`
+  --> cases/modules/fail/module_import_in_providers.rs:16:20
+   |
+16 | #[module(providers(module(Svc)))]
+   |                    ^^^^^^

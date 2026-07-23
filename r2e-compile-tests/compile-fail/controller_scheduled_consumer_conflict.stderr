@@ -1,5 +1,0 @@
-error: #[scheduled] and #[consumer] cannot be combined on the same method
-  --> compile-fail/controller_scheduled_consumer_conflict.rs:25:5
-   |
-25 |     async fn both(&self, _e: std::sync::Arc<Evt>) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

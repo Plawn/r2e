@@ -1,9 +1,0 @@
-error[E0599]: no method named `subject` found for reference `&MyController` in the current scope
-  --> compile-fail/anonymous_calls_request_helper.rs:41:19
-   |
-41 |         Json(self.subject())
-   |                   ^^^^^^^ method not found in `&MyController`
-   |
-   = help: items from traits can only be used if the trait is implemented and in scope
-   = note: the following trait defines an item `subject`, perhaps you need to implement it:
-           candidate #1: `JwtClaimSet`

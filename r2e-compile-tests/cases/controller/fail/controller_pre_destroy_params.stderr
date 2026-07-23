@@ -1,0 +1,5 @@
+error: #[pre_destroy] method must take only `&self` — no additional parameters
+  --> cases/controller/fail/controller_pre_destroy_params.rs:14:5
+   |
+14 |     async fn shutdown(&self, _extra: u32) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

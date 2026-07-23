@@ -1,0 +1,27 @@
+error[E0277]: this feature module requires the `MarkerPlugin` plugin, which is not installed before it
+  --> cases/modules/fail/module_required_plugin_not_installed.rs:37:54
+   |
+37 |     let _ = r2e::AppBuilder::new().register_module::<NeedsPluginModule>();
+   |                                                      ^^^^^^^^^^^^^^^^^ `MarkerPlugin` must be installed before this module
+   |
+   = help: the trait `RequiredPluginInstalled<MarkerPlugin, (_, ())>` is not implemented for `TNil`
+   = note: install it with `.plugin(MarkerPlugin)` *before* `.register_module::<_>()` — a module's `RequiredPlugins` must already be in the provision list `P`
+   = help: the following other types implement trait `RequiredPluginsInstalled<P, Indices>`:
+             `()` implements `RequiredPluginsInstalled<P, ()>`
+             `(P0, P1)` implements `RequiredPluginsInstalled<P, (I0, I1)>`
+             `(P0, P1, P2)` implements `RequiredPluginsInstalled<P, (I0, I1, I2)>`
+             `(P0, P1, P2, P3)` implements `RequiredPluginsInstalled<P, (I0, I1, I2, I3)>`
+             `(P0, P1, P2, P3, P4)` implements `RequiredPluginsInstalled<P, (I0, I1, I2, I3, I4)>`
+             `(P0, P1, P2, P3, P4, P5)` implements `RequiredPluginsInstalled<P, (I0, I1, I2, I3, I4, I5)>`
+             `(P0, P1, P2, P3, P4, P5, P6)` implements `RequiredPluginsInstalled<P, (I0, I1, I2, I3, I4, I5, I6)>`
+             `(P0, P1, P2, P3, P4, P5, P6, P7)` implements `RequiredPluginsInstalled<P, (I0, I1, I2, I3, I4, I5, I6, I7)>`
+             `(P0,)` implements `RequiredPluginsInstalled<P, (I0,)>`
+   = note: required for `(MarkerPlugin,)` to implement `RequiredPluginsInstalled<TNil, ((_, ()),)>`
+note: required by a bound in `register_module`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
+   |        --------------- required by a bound in this associated function
+...
+   |         M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterModule::register_module`

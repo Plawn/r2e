@@ -1,0 +1,5 @@
+error: `state = ...` was removed — controllers are constructed from the bean graph by type; drop the key and make sure every #[inject] field type is provided or registered on the AppBuilder before build_state()
+ --> cases/controller/fail/unknown_controller_attr.rs:6:30
+  |
+6 | #[controller(path = "/test", state = AppState, foo = "bar")]
+  |                              ^^^^^
