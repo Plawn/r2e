@@ -55,8 +55,9 @@ promise.
 - Dev services for the remaining backends: **Kafka, RabbitMQ, Pulsar**
   (crate `r2e-devservices`, same workspace-session/Ryuk lifecycle as the
   shipped `DevPostgres`/`DevRedis`/`DevOpenFga`).
-- Demo dev-services usage in `example-postgres` (currently no `DevPostgres`
-  usage there).
+- ~~Demo dev-services usage in `example-postgres`~~ — SHIPPED 2026-07-23
+  (`examples/example-postgres/tests/postgres_test.rs`: `DevPostgres::shared()`
+  + isolated per-test database + `override_config_value("database.url", …)`).
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
 - **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
@@ -90,8 +91,6 @@ Kept where the context lives rather than duplicated here:
 - `plans/phase2-profiles-alternatives.md` — `#[bean(profile = "…")]` sugar
   (open design conflict with `P`), guaranteed profile groups, two profile test
   gaps (`R2E_PROFILE` precedence, `"default"` fallback).
-- `docs/claude/di-builder-refactor.md` — module-imports-module composition
-  (`#[module(imports = [OtherModule])]`).
 - `docs/claude/controller-identity-codegen-refactor.md` — request-scoped
   helper methods (`#[request_helper]`), deliberately deferred.
 - `docs/claude/eventbus-perf.md` — P4.4 Kafka consumer multiplexing, Kafka
