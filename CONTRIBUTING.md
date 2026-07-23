@@ -65,7 +65,7 @@ For more detail see [`docs/book/src/reference/crate-map.md`](docs/book/src/refer
 
 The macro crate (`r2e-macros`) has two main code paths:
 
-- **Derive path:** `derive_controller.rs` → `derive_parsing.rs` → `derive_codegen.rs`
+- **Controller path:** `controller_attr.rs` → `controller_parsing.rs` → `controller_codegen.rs`
 - **Routes path:** `routes_attr.rs` → `routes_parsing.rs` → `routes_codegen.rs`
 
 Use `cargo expand` to inspect generated code:

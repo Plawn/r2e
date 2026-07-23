@@ -1,8 +1,10 @@
 # Transport Adapters — Adding a Wire Format to R2E
 
-Status: **REFERENCE** — recorded 2026-07-09 (DI backlog item 10). Read
-this before wiring a new entry point (a wire protocol, a message-driven
-dispatcher, anything that invokes endpoint methods from outside).
+Status: **REFERENCE** — recorded 2026-07-09, verified against the code
+2026-07-23. Read this before wiring a new entry point (a wire protocol, a
+message-driven dispatcher, anything that invokes endpoint methods from
+outside). Nothing here is pending work: every mechanism described is
+implemented.
 
 ## The architecture in one paragraph
 
@@ -19,7 +21,7 @@ the three existing adapters — use them as references.
 ## What a new transport must provide
 
 1. **A parsing + codegen macro** (in `r2e-macros`), analogous to
-   `grpc_codegen/` (the smallest adapter: ~420 lines across
+   `grpc_codegen/` (the smallest adapter: ~680 lines across
    `grpc_routes_parsing.rs` + `grpc_codegen/{mod,trait_impl,service_impl}.rs`).
    The struct keeps using `#[controller]` unchanged — that macro owns
    `#[inject]`/`#[config]` fields and emits `ContextConstruct`.
@@ -57,11 +59,10 @@ the three existing adapters — use them as references.
    ```
 
    Call sites stay `.register_xyz_service::<MyService>()` — never name the
-   witnesses. Do NOT ship an unchecked registration path: that was the gRPC
-   gap item 10 closed.
+   witnesses. Do NOT ship an unchecked registration path.
 
 6. **Wire-specific pieces, kept wire-specific** (do not abstract these —
-   deliberate decision, see DI backlog item 10 discussion):
+   deliberate decision):
    - identity extraction (HTTP: `FromRequestParts`; gRPC:
      `GrpcIdentityExtractor` over metadata),
    - a guard trait with the wire's context and reject type (HTTP:
@@ -70,8 +71,8 @@ the three existing adapters — use them as references.
      registration, drained ONCE at serve time — see `GrpcServiceRegistry`:
      the `GrpcServer` plugin's `on_serve` hook drains it and spawns tonic on
      the separate port, or an `add_layer` router transform mounts the
-     accumulated routes behind `MultiplexService` for the single-port mode;
-     wired in DI backlog item 12).
+     accumulated routes behind `MultiplexService` for the single-port mode —
+     `r2e-grpc/src/server.rs`).
 
 7. **Tests** — a trybuild compile-fail for a missing bean at the
    registration call site (model: `grpc_intercept_missing_dep.rs`, which

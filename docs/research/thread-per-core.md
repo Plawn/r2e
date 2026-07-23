@@ -1,6 +1,9 @@
 # Research: Thread-per-core runtime support (monoio / compio / glommio)
 
-> Status: research notes, June 2026. Implementation tracked in Tasker tasks 534–538 (target `r2e`).
+> Status: research notes, June 2026; pruned 2026-07-23 (shipped items removed).
+> Option A (SO_REUSEPORT sharding, tasks 534–538 + 544) is **implemented** — see
+> `docs/features/19-sharded-serving.md`. What is left here is design reference plus the
+> unbuilt backlog (§6, §7, §8, §9).
 > Goal: support thread-per-core (TPC) async runtimes like ntex does, while keeping R2E's
 > ergonomics (controllers, DI, guards) and opening a path to high performance / zero-copy IO.
 
@@ -37,57 +40,28 @@ engine" (that is rewriting ntex). Decision: **do option A now** (SO_REUSEPORT sh
   hardest piece to design and the one to study first if option C is ever pursued
   (codebases to read: `ntex-io`, `xitca-web`).
 
-## 2. Where R2E is coupled to tokio today (arcle survey, snapshot 540 @ `ead533d`)
+## 2. Residual tokio coupling (post-534/537 — what is left)
 
-### `tokio::spawn` production call sites (~10, well localized)
+The `r2e_core::rt` facade (`r2e-core/src/rt.rs`) now owns every production spawn/sleep/
+timeout/bind touchpoint, so the survey that used to live here is obsolete. What remains
+coupled, deliberately:
 
-| Crate | Sites | Role |
-|---|---|---|
-| `r2e-core/src/builder.rs` | 2 | `ServiceComponent` start + QUIC server |
-| `r2e-events` (local.rs + backend/state.rs) | 5 | handler dispatch, unsubscribe |
-| `r2e-events/backends/{iggy,kafka,pulsar,rabbitmq}` | 2 each | pollers/consumers |
-| `r2e-executor/src/lib.rs` | 2 | `PoolExecutor` core |
-| `r2e-scheduler/src/types.rs` | 1 | scheduled task loop |
-| `r2e-http/src/quic.rs` | 1 | per-request h3 spawn |
-
-### Public-API leaks of tokio types (the two that matter)
-
-1. **`r2e-executor` exposes `tokio::task::JoinHandle` directly**, and the `#[async_exec]`
-   codegen (`r2e-macros/src/codegen/wrapping.rs`) hardcodes
-   `::tokio::task::JoinHandle<#return_ty>` in generated signatures. Needs an opaque
-   `JobHandle<T>` wrapper (breaking change — acceptable, not in production). → task 535
-2. **`SseBroadcaster`/`WsBroadcaster` document `tokio::sync::broadcast` semantics** (lag,
-   `len`, `is_empty`) in their public contract. Less severe: broadcast works fine on
-   current_thread; it is a doc/semantics coupling only.
-
-### Runtime-flavor assumptions
-
-- `r2e-core/src/lazy.rs::resolve_lazy_factory` is the **only** place that introspects the
-  runtime flavor: `block_in_place` only on multi-thread, otherwise falls back to a hidden
-  `OnceLock` multi-thread fallback runtime. In sharded current-thread workers every lazy
-  bean resolution would silently go through that fallback runtime — works, but must be
-  handled explicitly (route to the control-plane runtime instead). → task 537
-
-### Useful existing mechanics
-
-- `r2e-core/src/dev.rs` already does `std listener try_clone → from_std` for hot-reload.
-  That is exactly the mechanism needed for SO_REUSEPORT sharding (socket2 to set the
-  option, then per-worker `from_std`).
-- `#[r2e::main]` already supports `flavor = "current_thread"` (`r2e-macros/src/main_attr.rs`).
-- Shutdown already uses `CancellationToken` (tokio-util) everywhere — broadcasts to N
-  workers as-is.
-- Serve path: `r2e-core/src/builder.rs:1406` (`serve`) → `:1614`
-  (`crate::http::serve` + `into_make_service_with_connect_info`), listener =
-  `tokio::net::TcpListener::bind`.
-- Distributed event backends spawn via tokio-bound client libs (rdkafka, lapin, pulsar,
-  iggy). They stay on tokio in **every** scenario — in a TPC architecture they live on a
-  side/control-plane runtime, never in HTTP workers.
-- `tokio::sync` primitives (broadcast, Notify, Semaphore, RwLock — e.g. `r2e-security/src/jwks.rs`)
-  are runtime-agnostic and out of scope for any abstraction.
+- **`r2e-http/src/quic.rs`** calls `tokio::spawn` directly — it sits below r2e-core in the
+  dep graph and quinn/h3 are tokio-bound. Permanent exception.
+- **`r2e-core/src/lazy.rs`** introspects the runtime flavor (`block_in_place` on multi-thread,
+  control-plane routing on sharded workers). Out of scope for the facade.
+- **`SseBroadcaster` / `WsBroadcaster`** document `tokio::sync::broadcast` semantics (lag,
+  `len`, `is_empty`) in their public contract (`r2e-core/src/ws.rs`, `sse.rs`). A doc/semantics
+  coupling only — broadcast works fine on `current_thread`. **Not addressed.**
+- **Distributed event backends** (rdkafka, lapin, pulsar, iggy) are tokio-bound client libs.
+  They stay on tokio in *every* scenario; in a TPC architecture they live on the control-plane
+  runtime, never in HTTP workers.
+- `tokio::sync` primitives (broadcast, Notify, Semaphore, RwLock) are runtime-agnostic and
+  out of scope for any abstraction.
 
 ## 3. The options
 
-### Option A — SO_REUSEPORT sharding on tokio (CHOSEN, tasks 534–538)
+### Option A — SO_REUSEPORT sharding on tokio (CHOSEN — SHIPPED)
 
 N threads, each with its own `current_thread` tokio runtime and its own listener bound with
 SO_REUSEPORT. The kernel distributes connections; zero work-stealing, zero cross-core synchro
@@ -97,6 +71,8 @@ on the accept path, good cache locality. Same spirit as ntex's default worker mo
 - ~70–80 % of the TPC benefit (the scheduling part), but still epoll and no io_uring zero-copy.
 - Handlers stay `Send` (axum requires it regardless).
 - Config: `server.workers: <n> | "per-core"`, absent = current behavior (opt-in!).
+
+Shipped in `r2e-core/src/sharded.rs`; kept here for the rationale behind B/C/D below.
 
 ### Option B — compat bridges (axum/hyper on monoio/compio) — REJECTED
 
@@ -192,7 +168,7 @@ each connection is spawned onto the multi-thread runtime and **work-stealing** d
   the reason tokio made it opt-out rather than default.
 
 TPC wins on **short, homogeneous** requests (the TechEmpower profile — hence ntex/actix
-numbers); it loses on long-tail workloads. Hence `server.workers` is opt-in in task 536.
+numbers); it loses on long-tail workloads. Hence `server.workers` is opt-in.
 Nothing *prevents* doing it with axum (bind N SO_REUSEPORT sockets yourself, run N
 `axum::serve` on N current_thread runtimes) — it is just ~60 lines of socket2 + threads +
 shutdown plumbing that R2E turns into one config line. actix-web and ntex have run N
@@ -245,62 +221,46 @@ sacred, compute goes elsewhere. Fits the macro system naturally.
 without `await` can still freeze its core — the hard guarantee does not exist in async
 Rust, for anyone.
 
-## 7. Implementation plan (Tasker, target `r2e`)
+## 7. Backlog (nothing here is implemented)
 
-| # | Task | Priority | Depends on |
-|---|---|---|---|
-| 534 | `r2e_core::rt` facade centralizing tokio touchpoints | high | — |
-| 535 | Opaque `JobHandle<T>` in r2e-executor + `#[async_exec]` codegen (breaking) | high | relates to 534 |
-| 536 | SO_REUSEPORT sharded serving — `server.workers` config, N current-thread runtimes | high | 534 |
-| 537 | Control-plane / data-plane split (scheduler, services, events, lazy beans) | medium | 536 |
-| 538 | Docs + benchmark sharded vs multi-thread | low | 537 |
+Tasks 534–538 and 544 are done (see `HANDOFF-perf-tpc.md`). Never filed, never built:
+stall detector, `#[offload]` / `#[blocking]` route attributes, `threads_per_worker` config,
+`#[inject(per_worker)]` scope, actix-style dispatch accept, option D raw io_uring
+data-plane listeners. All are described in §6 and §3 above.
 
-Natural order: 534 → 535 ∥ 536 → 537 → 538.
+## 8. Other performance axes (beyond thread-per-core) — none of these are built
 
-Backlog candidates (not yet filed): stall detector (could fold into 536), `#[offload]` /
-`#[blocking]` route attributes, `threads_per_worker` config, `#[inject(per_worker)]` scope,
-actix-style dispatch accept, option D raw io_uring data-plane listeners.
-
-Also filed (surfaced by the proxy-mesh case study, §10):
-- **544** — `r2e-core`: expose `server.tcp_nodelay` (set TCP_NODELAY on accepted connections).
-  Relates to 536, blocks proxy-mesh 539.
-
-## 8. Other performance axes (beyond thread-per-core)
-
-Verified against the code (`derive_codegen.rs`, `response.rs`, `request_id.rs`).
 Ordered by gain/effort. **Do #8.0 first — without it, everything else is guesswork.**
 
 **8.0 Continuous benchmark harness (prerequisite).** criterion microbenches on the generated
 path (dispatch → DI extract → guards → handler → serialization) + a macro bench (oha) in CI to
-catch regressions. Partly covered by task 538 — should be widened to a permanent harness.
+catch regressions. `tools/bench-sharded.sh` + `examples/example-sharded-bench` (task 538) cover
+the sharded-vs-default macro case only — widen to a permanent harness.
 
 Quick wins (days):
-1. **TCP_NODELAY on accepted connections** — `axum::serve` doesn't set it; Nagle + delayed-ACK
-   can add ~40ms on small responses. Default `true` + config key. → **filed as task 544.**
-2. **SIMD JSON behind a feature flag** — `r2e::Json<T>` switching to sonic-rs behind
+1. **SIMD JSON behind a feature flag** — `r2e::Json<T>` switching to sonic-rs behind
    `feature = "fast-json"` (drop-in), typically ×2–3 on (de)serialize. R2E owns the re-exported
    `Json` type, so this is exactly framework-packageable value.
-3. **Build controllers once, not per request** — the generated extractor does N `Arc::clone` +
-   struct construction per request (`derive_codegen.rs:159/285`). For controllers with NO
-   identity fields, the derive could build the instance once at boot and share an
-   `Arc<Controller>` → one clone per request instead of N. Identity controllers keep the
-   current path. Localized change, invisible to users.
 
 Medium (weeks):
-4. **Validated-token cache in r2e-security** — JWKS is cached, but signature verification (RSA
+2. **Validated-token cache in r2e-security** — JWKS is cached, but signature verification (RSA
    especially) is paid per request — often the #1 CPU cost of an authenticated API. A bounded
    LRU `hash(token) → claims` keyed by token `exp` removes it (revocation window = cache TTL,
    document honestly).
-5. **moka backend for the cache** — `CacheStore` is already a pluggable trait; a moka backend
+3. **moka backend for the cache** — `CacheStore` is already a pluggable trait; a moka backend
    (lock-free, TinyLFU) makes the `Cache` interceptor + `TtlCache` far less contended under
    load. Converges with the TPC "hot shared bean" topic.
-6. **Hot-path allocations** — request-id (UUID v4 + `to_string` per request, `request_id.rs:64`
-   — go stack-encoded everywhere, or a faster id), EventBus metadata (already tracked tech debt:
-   Arc metadata, lazy `EventMetadata::new`), and a `HeaderValue::from_static` / pre-allocated
-   capacity audit on plugin-built responses.
-7. **Default observability overhead** — per-request tracing span + Prometheus histogram cost
+4. **Hot-path allocations** — request-id still allocates a `String` per request
+   (`r2e-core/src/request_id.rs`: UUID v4 + `to_string`; the double String+HeaderValue alloc
+   was already removed, the id itself was not) — go stack-encoded, or a faster id. Plus a
+   `HeaderValue::from_static` / pre-allocated capacity audit on plugin-built responses.
+5. **Default observability overhead** — per-request tracing span + Prometheus histogram cost
    more than expected (~µs/req, matters at 100k rps). Offer a "minimal telemetry" mode:
    level-gated spans, reduced histogram buckets, no eager span-field evaluation when filtered.
+
+> Dropped as done: TCP_NODELAY on accepted connections (task 544, `server.tcp_nodelay`);
+> build-controllers-once (the controller core is now built once into an `Arc` at registration,
+> one clone per request); EventBus `Arc<EventMetadata>` + lazy construction.
 
 ## 9. io_uring / zero-copy for specific features
 
@@ -330,33 +290,21 @@ io_uring usage; its tokio-interop edge doesn't matter for an isolated channel-fe
 
 proxy-mesh is the ideal workload to validate all of the above: Master (HTTP/CONNECT forward
 proxy) ⟷ QUIC/WS ⟷ Agent (exit node). Pure network relay, no DB/CPU on the hot path — exactly
-where TPC and zero-copy pay. Data path has two very different regimes (arcle survey, snapshot
-552):
+where TPC and zero-copy pay.
 
-- **CONNECT tunnel (HTTPS)**: dedicated QUIC bidi stream per tunnel, raw bytes, `Bytes`
-  throughout, relayed via mpsc (`read_tunnel_recv` → channel cap 256 → `run_tunnel_writer`).
-  Already good — 8-byte `RequestId` header + raw bytes, *off* the MessagePack path.
-- **HTTP forward**: `HttpResult.body: Vec<u8>` (`proxy-master/src/responses.rs`) — body **fully
-  buffered** AND carried *inside* a MessagePack message. TTFB = full response time; peak memory
-  = body size per in-flight request. The biggest architectural gap.
+The headline finding — *HTTP forward buffered while CONNECT tunnels already streamed* — has
+been **fixed**: tasks 541 (body off MessagePack → raw framing, protocol v2), 542 (agent streams
+both directions) and 540 (master streams both directions) shipped as one wire block, along with
+539 (TCP_NODELAY on all hot-path sockets). See `HANDOFF-perf-tpc.md` for the deploy gate.
 
-Optimizations by implementation layer:
+Still open there:
 
-| Layer | Opportunity | Tasker |
-|---|---|---|
-| **r2e (framework)** | SO_REUSEPORT sharding (proxy = ideal TPC workload, no contended hot-path state); TCP_NODELAY config | 536, 544 |
-| **proxy-master** | Stream HTTP responses (align with tunnels); TCP_NODELAY on client sockets; tunnel relay via `copy_bidirectional` to skip the mpsc hop | 540, 539, 543 |
-| **transport / proxy-protocol** | Move HTTP body off MessagePack → raw framing like tunnels; reuse `BytesMut` in codec | 541 |
-| **proxy-agent** | Stream upstream via `reqwest::bytes_stream()`/hyper instead of full-body buffer; TCP_NODELAY on outbound; TPC (same profile as master) | 542, 539 |
-| **kernel zero-copy (option D, future)** | splice/sendfile on tunnels — BUT master↔agent is QUIC (UDP userspace via quinn), so splice doesn't apply there; only agent↔target (if TCP) would benefit. QUIC (resilience, 0-RTT, no HoL) vs splice (zero-copy) is a conscious trade-off | — |
-
-**Headline finding: HTTP forward buffers, tunnels already stream.** Aligning the former on the
-latter is the single biggest architectural win in proxy-mesh, and it's independent of all the
-TPC/r2e work. Recommended order: (1) TCP_NODELAY everywhere — cheapest latency win; (2) HTTP
-response streaming (master+protocol+agent together, 540/541/542); (3) r2e sharding (536) when
-ready — proxy benefits directly; (4) `copy_bidirectional` on tunnels (543, measure-first);
-(5) kernel zero-copy only after benchmarks, accepting the QUIC trade-off.
-
-proxy-mesh Tasker tasks: 539 (TCP_NODELAY), 540 (HTTP streaming), 541 (body off MessagePack),
-542 (agent streaming), 543 (tunnel copy_bidirectional). Dependencies: 540 → {541, 542};
-539 → r2e 544 → relates r2e 536.
+- **543 — tunnel relay via `copy_bidirectional`** to skip the mpsc hop on QUIC streams
+  (`read_tunnel_recv` → channel cap 256 → `run_tunnel_writer`). **Measure-first.** The
+  `try_send→Full→spawn` chunk-reorder hazard on tunnels belongs to this task.
+- **r2e sharding (536) applied to proxy-mesh** — the framework side is shipped; proxy-mesh has
+  not been switched to `server.workers` / benchmarked under it.
+- **Kernel zero-copy (option D, future)** — splice/sendfile on tunnels, BUT master↔agent is
+  QUIC (UDP userspace via quinn), so splice does not apply on that hop; only agent↔target
+  (if TCP) would benefit. QUIC (resilience, 0-RTT, no HoL) vs splice (zero-copy) is a
+  conscious trade-off. Only after benchmarks.

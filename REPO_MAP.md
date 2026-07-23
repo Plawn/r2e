@@ -56,7 +56,7 @@ src/
   # Controller attribute pipeline
   controller_attr.rs        Entry point for #[controller(...)] (transforming attribute)
   controller_parsing.rs     Parse the struct -> ControllerStructDef
-  controller_codegen.rs     Generate the core, meta module, __R2eRequestData_ extractor, __R2eRequest_ façade (+ Deref), StatefulConstruct impl
+  controller_codegen.rs     Generate the core, meta module, __R2eRequestData_ extractor, __R2eRequest_ façade (+ Deref), ContextConstruct impl
 
   # Routes attribute pipeline
   routes_attr.rs            Entry point for #[routes] on impl blocks
@@ -100,8 +100,8 @@ AppBuilder, controllers, guards, interceptors, plugins, configuration, DI, and H
 ```
 src/
   lib.rs                    Entry point — re-exports all public types
-  builder.rs                AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
-  controller.rs             Controller<S> and StatefulConstruct<S> trait definitions
+  builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
+  controller.rs             Controller<S, W>, ContextConstruct and EndpointDeps trait definitions
   beans.rs                  DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry
   error.rs                  HttpError enum (BadRequest, NotFound, Unauthorized, Forbidden, Internal)
   guards.rs                 Guard<S,I>, PreAuthGuard<S>, GuardContext, RolesGuard, PathParams

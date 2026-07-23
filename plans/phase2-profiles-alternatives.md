@@ -1,250 +1,50 @@
-# Phase 2 — Profiles & Bean Alternatives
+# Phase 2 — Profiles & Bean Alternatives (remaining items)
 
-**Depends on:** Phase 1 (`Option<T>` + conditional builder methods)
+Most of this plan shipped. Implemented and verified in code:
 
-## Goal
-
-Add environment-based profile selection and default/alternative bean patterns, enabling different wiring for dev/test/prod without `if/else` sprawl in main.
+- Active-profile resolution (`with_profile` > `R2E_PROFILE` > `r2e.profile` > `"default"`),
+  stored on `BuilderConfig::active_profile` — `r2e-core/src/builder/mod.rs:166`.
+- `active_profile()` / `profile_is()` inspectors — `r2e-core/src/builder/nostate.rs:215,224`.
+- Profile-conditional wiring via `.when(cond, |b| …)` — `r2e-core/src/builder/mod.rs:311`.
+  The `with_bean_for_profile` / `with_*_when` family from the original plan was
+  deliberately **dropped** by the DI refactor (§1d of `docs/claude/di-builder-refactor.md`):
+  a runtime flag cannot change the compile-time provision list `P`; the compile-time-safe
+  path is `#[producer] -> Option<T>`.
+- Default/alternative beans: `with_default_bean` / `with_default_async_bean` /
+  `with_default_producer` + per-registration `overridable` flag and last-wins resolution —
+  `r2e-core/src/builder/nostate.rs:235`, `r2e-core/src/beans.rs:522,1574`.
+- Tests: `r2e-core/tests/di/defaults.rs`, `r2e-core/tests/builder/overrides.rs:84`,
+  `r2e-core/tests/builder/state_wiring.rs:365`.
 
 ---
 
-## Feature A: Profiles
+## Remaining
 
-### User-facing API
+### 1. (Deferred, optional) Macro sugar `#[bean(profile = "dev")]`
 
-```yaml
-# application.yaml
-r2e:
-  profile: dev    # or via env: R2E_PROFILE=prod
-```
+Not implemented — `r2e-macros` has no `profile` attribute parsing.
 
 ```rust
-// Bean registered only in "dev" profile
 #[bean(profile = "dev")]
-impl FakeMailer {
-    fn new() -> Self { Self }
-}
-
-// Bean registered only in "prod" profile
-#[bean(profile = "prod")]
-impl SmtpMailer {
-    async fn new(#[config("smtp.host")] host: String) -> Self { ... }
-}
-
-// Builder API
-AppBuilder::new()
-    .load_config::<AppConfig>()
-    .with_bean_for_profile::<FakeMailer>("dev")
-    .with_async_bean_for_profile::<SmtpMailer>("prod")
-    .build_state::<AppState, _, _>().await
+impl FakeMailer { fn new() -> Self { Self } }
 ```
 
-### Design
+Would generate `const PROFILE: Option<&'static str>` on the `Bean` impl and let the
+registry filter at registration time. **Open design question:** this conflicts with the
+DI-refactor rule that runtime conditions must not remove a type from `P`. If pursued,
+it must degrade to an `Option<T>` slot, not a silently missing bean.
 
-#### Active profile resolution
+### 2. (Deferred) Guaranteed profile groups
 
-1. Check env var `R2E_PROFILE`
-2. Fall back to config key `r2e.profile`
-3. Default: `"default"` (matches beans with no `profile` attribute)
+Not implemented. `with_profiled_group::<…>() / profile_bean::<B>("dev") / end_group()` —
+exactly one impl always present so the type stays in `P`. The plan itself recommended
+deferring this; the documented workaround is a wrapper enum / `#[producer]` that switches
+on `#[config("r2e.profile")]`.
 
-Resolved once at `load_config()` time, stored in `BuilderConfig`.
+### 3. Test gaps (small)
 
-#### Compile-time safety
-
-Profiled beans behave like conditional beans (Phase 1):
-- `with_bean_for_profile::<B>("dev")` does **NOT** add `B` to `P`
-- Consumers use `Option<T>` — compiler enforces
-
-#### Guaranteed profile groups (advanced)
-
-For cases where exactly one impl is always present:
-
-```rust
-// Exactly one of these will be registered — type Mailer IS in P
-AppBuilder::new()
-    .with_profiled_group::<dyn MailerTrait>()
-    .profile_bean::<FakeMailer>("dev")
-    .profile_bean::<SmtpMailer>("prod")
-    .end_group()  // compile-time: at least one profile must match
-```
-
-**Alternative (simpler):** Use a wrapper enum or trait object. The user registers a single type that delegates:
-
-```rust
-#[bean]
-impl MailerService {
-    fn new(config: AppConfig, #[config("r2e.profile")] profile: String) -> Self {
-        match profile.as_str() {
-            "prod" => Self::Smtp(SmtpMailer::new(config)),
-            _ => Self::Fake(FakeMailer),
-        }
-    }
-}
-```
-
-**Recommendation:** Start with the simple `with_bean_for_profile` (same as `with_bean_when` but reads the active profile). Defer guaranteed profile groups to later if needed.
-
-### Implementation
-
-#### 1. Store active profile in `BuilderConfig`
-
-```rust
-struct BuilderConfig {
-    // ... existing fields ...
-    active_profile: String,
-}
-```
-
-Set during `load_config()`:
-```rust
-let profile = std::env::var("R2E_PROFILE")
-    .ok()
-    .or_else(|| config.try_get::<String>("r2e.profile").ok())
-    .unwrap_or_else(|| "default".to_string());
-self.shared.active_profile = profile;
-```
-
-#### 2. Builder methods
-
-```rust
-pub fn with_bean_for_profile<B: Bean>(mut self, profile: &str) -> AppBuilder<NoState, P, R> {
-    if self.shared.active_profile == profile {
-        self.shared.bean_registry.register::<B>();
-    }
-    self.with_updated_types()
-}
-
-pub fn with_async_bean_for_profile<B: AsyncBean>(mut self, profile: &str) -> AppBuilder<NoState, P, R> {
-    if self.shared.active_profile == profile {
-        self.shared.bean_registry.register_async::<B>();
-    }
-    self.with_updated_types()
-}
-
-pub fn with_producer_for_profile<Pr: Producer>(mut self, profile: &str) -> AppBuilder<NoState, P, R> {
-    if self.shared.active_profile == profile {
-        self.shared.bean_registry.register_producer::<Pr>();
-    }
-    self.with_updated_types()
-}
-
-/// Returns the active profile name.
-pub fn active_profile(&self) -> &str {
-    &self.shared.active_profile
-}
-```
-
-#### 3. Macro support (optional — pure sugar)
-
-`#[bean(profile = "dev")]` → generates a marker in the `Bean` impl:
-
-```rust
-impl Bean for FakeMailer {
-    const PROFILE: Option<&'static str> = Some("dev");
-    // ... rest unchanged
-}
-```
-
-The builder can then auto-filter by profile during registration. But the simpler approach is the builder method — the macro attribute is sugar for later.
-
----
-
-## Feature B: Default / Alternative Beans
-
-### User-facing API
-
-```rust
-// Default impl — always registered
-#[bean(default)]
-impl InMemoryCache {
-    fn new() -> Self { Self { store: HashMap::new() } }
-}
-
-// Alternative — replaces default when condition is met
-#[bean(alternative, when = "cache.redis.enabled")]
-impl RedisCache {
-    async fn new(#[config("cache.redis.url")] url: String) -> Self { ... }
-}
-```
-
-Both `InMemoryCache` and `RedisCache` implement the same contract (e.g., same field type in the state struct, or a shared trait).
-
-### Design
-
-This builds on `allow_overrides` which already exists in `BeanRegistry`.
-
-**Resolution order:**
-1. Register the `default` bean (adds to `P`)
-2. Register the `alternative` bean — if its condition is met, it overrides the default (same `TypeId`)
-3. If condition is NOT met, the alternative is not registered; default stays
-
-**Compile-time safety:**
-- The `default` bean IS in `P` — consumers can use `T` directly (not `Option<T>`)
-- The `alternative` replaces it at runtime; same type, so `P` is unchanged
-
-### Implementation
-
-#### 1. Builder methods
-
-```rust
-/// Register a default bean that can be overridden by alternatives.
-/// Adds to the provision list (guaranteed to be present).
-pub fn with_default_bean<B: Bean>(mut self) -> AppBuilder<NoState, TCons<B, P>, ...> {
-    self.shared.bean_registry.allow_overrides = true;
-    self.shared.bean_registry.register::<B>();
-    self.with_updated_types()
-}
-
-/// Register an alternative bean that replaces the default when condition is true.
-/// Does NOT change the provision list (the default already covers it).
-pub fn with_alternative_bean_when<B: Bean>(mut self, condition: bool) -> AppBuilder<NoState, P, R> {
-    if condition {
-        self.shared.bean_registry.register::<B>();  // overrides due to allow_overrides
-    }
-    self.with_updated_types()
-}
-```
-
-**Note:** `allow_overrides` is currently a global flag. For fine-grained control, we may need per-registration override flags instead. Add `allow_override: bool` to `BeanRegistration`.
-
-#### 2. Per-registration override flag
-
-```rust
-struct BeanRegistration {
-    // ... existing fields ...
-    /// When true, this registration can be overridden by a later one of the same TypeId.
-    overridable: bool,
-}
-```
-
-The `register_default()` method sets `overridable: true`. The alternative registration replaces only overridable entries.
-
----
-
-## Test Plan
-
-### Profiles
-1. Active profile from env var `R2E_PROFILE`
-2. Active profile from config `r2e.profile`
-3. Default profile when neither is set
-4. Bean registered only for matching profile
-5. Bean NOT registered for non-matching profile → consumers get `None`
-6. Multiple profiles: only matching beans constructed
-
-### Alternatives
-7. Default bean present when no alternative matches
-8. Alternative replaces default when condition is true
-9. Multiple alternatives — last matching wins
-10. Default + alternative produce same type — consumers use `T` directly
-
----
-
-## File Change Summary
-
-| File | Change |
-|------|--------|
-| `r2e-core/src/builder.rs` | `active_profile` field, `with_bean_for_profile`, `with_default_bean`, `with_alternative_bean_when` |
-| `r2e-core/src/beans.rs` | `overridable` field on `BeanRegistration`, per-registration override logic |
-| `r2e-core/src/config.rs` | `try_get::<String>("r2e.profile")` (may already exist from Phase 1) |
-| `r2e-macros/src/bean_attr.rs` | (Optional) Parse `#[bean(profile = "...", default, alternative)]` |
-| `r2e-core/tests/` | Profile + alternative test cases |
+- No test asserts `R2E_PROFILE` env-var precedence directly — the two existing tests
+  (`config/loader.rs:68`, `builder/state_wiring.rs:379`) *skip* their assertion when the
+  variable is set instead of setting it under `support::env_lock()`.
+- No test asserts the `"default"` fallback when neither `R2E_PROFILE` nor `r2e.profile`
+  is present.
