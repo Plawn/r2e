@@ -18,3 +18,7 @@ tracing-subscriber = {workspace = true}
 garde = {workspace = true}
 schemars = {workspace = true}
 chrono = {workspace = true, features = ["serde"]}
+
+[dev-dependencies]
+r2e-test = {workspace = true}
+r2e-devservices = {workspace = true, features = ["postgres"]}

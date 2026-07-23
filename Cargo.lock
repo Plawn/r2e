@@ -2606,6 +2606,8 @@ dependencies = [
  "chrono",
  "garde",
  "r2e",
+ "r2e-devservices",
+ "r2e-test",
  "schemars 1.2.1",
  "serde",
  "serde_json",
