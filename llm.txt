@@ -489,13 +489,20 @@ checked closed subgraph:
     providers(UserService),
     controllers(UserController, UserEventConsumer),
     exports(UserService),                 // visible to the rest of the app
-    imports(LocalEventBus, SqlitePool),   // satisfied by the app's provide/load_config
+    imports(LocalEventBus, SqlitePool,    // beans: satisfied by the app's provide/load_config
+            module(BillingModule)),       // module(...): pulls in BillingModule's exports
 )]
 pub struct UserModule;
 
 // in App::build:
-b.register_module::<UserModule>()
+b.register_module::<BillingModule>()      // imported modules are NOT auto-registered
+ .register_module::<UserModule>()
 ```
+
+An `imports(...)` entry is either a bean type (satisfied by the app's
+`provide`/`load_config`) or `module(OtherModule)`, which pulls in that module's
+`exports` without restating them. Importing a module only *requires* its exports —
+you must still `.register_module::<OtherModule>()` yourself.
 
 ### Same-typed beans
 

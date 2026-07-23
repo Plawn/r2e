@@ -359,6 +359,129 @@ impl FeatureModule for NeedsPluginModule {
     type RequiredPlugins = (MarkerPlugin,);
 }
 
+// ── module(...) import form: compose on another module's exports ────────────
+
+#[derive(Clone)]
+struct InvoiceService {
+    users: UserService,
+}
+
+#[bean]
+impl InvoiceService {
+    fn new(users: UserService) -> Self {
+        Self { users }
+    }
+}
+
+#[controller(path = "/invoices")]
+struct InvoiceController {
+    #[inject]
+    invoices: InvoiceService,
+}
+
+#[routes]
+impl InvoiceController {
+    #[get("/")]
+    async fn list(&self) -> String {
+        format!("invoices for {}", self.invoices.users.repo.pool.0)
+    }
+}
+
+/// Imports another module by name: `module(UserModule)` appends
+/// `UserModule::Exports` (`UserService`) to this module's `Imports` — no need
+/// to restate the exported bean type.
+#[module(
+    providers(InvoiceService),
+    controllers(InvoiceController),
+    exports(InvoiceService),
+    imports(module(UserModule))
+)]
+struct InvoiceModule;
+
+#[derive(Clone)]
+struct ReportService {
+    users: UserService,
+    pool: DbPool,
+}
+
+#[bean]
+impl ReportService {
+    fn new(users: UserService, pool: DbPool) -> Self {
+        Self { users, pool }
+    }
+}
+
+#[controller(path = "/reports")]
+struct ReportController {
+    #[inject]
+    reports: ReportService,
+}
+
+#[routes]
+impl ReportController {
+    #[get("/")]
+    async fn list(&self) -> String {
+        format!(
+            "reports for {}/{}",
+            self.reports.pool.0, self.reports.users.repo.pool.0
+        )
+    }
+}
+
+/// Mixes a plain bean import (`DbPool`) with a module import
+/// (`module(UserModule)` → `UserService`).
+#[module(
+    providers(ReportService),
+    controllers(ReportController),
+    exports(ReportService),
+    imports(DbPool, module(UserModule))
+)]
+struct ReportModule;
+
+/// The `module(...)` import form appends the imported module's exports to
+/// `Imports` at the type level; mixing bean + module imports keeps the plain
+/// beans at the head and the exports appended after.
+#[test]
+fn module_import_appends_exports() {
+    assert_same::<<InvoiceModule as FeatureModule>::Imports, TCons<UserService, TNil>>();
+    assert_same::<<ReportModule as FeatureModule>::Imports, TCons<DbPool, TCons<UserService, TNil>>>(
+    );
+}
+
+/// A module can import another module by name (`imports(module(UserModule))`):
+/// the imported module's exports join this module's scope. The imported module
+/// is NOT auto-registered — the app registers both.
+#[r2e_core::test]
+async fn module_imports_module_by_name() {
+    let app = AppBuilder::new()
+        .provide(DbPool("mod-db"))
+        .register_module::<UserModule>()
+        .register_module::<InvoiceModule>()
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/invoices").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "invoices for mod-db");
+}
+
+/// `imports(...)` mixes plain bean types and `module(...)` freely.
+#[r2e_core::test]
+async fn module_imports_mixed_bean_and_module() {
+    let app = AppBuilder::new()
+        .provide(DbPool("mod-db"))
+        .register_module::<UserModule>()
+        .register_module::<ReportModule>()
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/reports").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "reports for mod-db/mod-db");
+}
+
 #[r2e_core::test]
 async fn module_required_plugin_present_compiles_and_builds() {
     use r2e_core::type_list::BeanAccess;

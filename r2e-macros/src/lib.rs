@@ -955,20 +955,27 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 /// controllers are wired automatically at `build_state()`, and the
 /// closed-subgraph encapsulation checks run at compile time.
 ///
+/// An `imports(...)` entry is either a bean type or `module(OtherModule)`. The
+/// latter appends the imported module's exports to this module's imports, so
+/// composition never restates the exported bean types. Importing a module only
+/// *requires* its exports; the app must still `.register_module::<OtherModule>()`
+/// (deliberate — two modules importing the same module do not double-register).
+///
 /// # Example
 ///
 /// ```ignore
 /// #[module(
-///     providers(UserRepo, UserService),
-///     controllers(UserController, AdminController),
-///     exports(UserService),      // UserRepo stays private to the module
-///     imports(DbPool),           // supplied by the app or another module
+///     providers(OrderRepo, OrderService),
+///     controllers(OrderController),
+///     exports(OrderService),
+///     imports(DbPool, module(BillingModule)),  // DbPool + BillingModule::Exports
 /// )]
-/// pub struct UserModule;
+/// pub struct OrderModule;
 ///
 /// AppBuilder::new()
 ///     .provide(db_pool)
-///     .register_module::<UserModule>()
+///     .register_module::<BillingModule>()      // still register imported modules
+///     .register_module::<OrderModule>()
 ///     .build_state()
 ///     .await
 /// ```

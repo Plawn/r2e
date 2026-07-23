@@ -123,6 +123,17 @@ frameworks cannot offer.
   controller dep out of scope, private bean invisible to app controllers.
 - `#[module(providers(...), controllers(...), exports(...), imports(...),
   requires_plugins(...))]` generates the `FeatureModule` impl; all keys optional.
+- **Module-imports-module composition.** An `imports(...)` entry is either a bean
+  type or `module(OtherModule)`, mixed freely (`imports(DbPool, module(Billing))`;
+  `module(A, B)` and repeated `module(A), module(B)` are equivalent). The macro
+  appends each imported module's `Exports` to `Imports` via `TAppend`, so the
+  generated `type Imports` is e.g.
+  `<TCons<DbPool, TNil> as TAppend<<Billing as FeatureModule>::Exports>>::Output`
+  (multiple modules chain the appends). This is macro-only — `module.rs` is
+  untouched. Importing a module **only requires its exports**; it does NOT
+  register the module — the app must still `.register_module::<Billing>()`
+  (deliberate: two modules importing the same one don't double-register →
+  `DuplicateBean`). `module(...)` in any other key is a targeted macro error.
 - Same-typed **private** beans in different modules collide at runtime
   (`DuplicateBean` at startup, by design — the graph is `TypeId`-keyed). Use
   newtypes.
@@ -147,10 +158,6 @@ frameworks cannot offer.
 
 ## Remaining work
 
-- **Module-imports-module composition.** `Imports` is a type-level list of *bean
-  types*; composing modules today works only via exported bean types. A
-  first-class `imports = [OtherModule]` form is not implemented
-  (`r2e-macros/src/module_attr.rs` accepts types only).
-
-The rest of the DI/builder backlog has landed; the live backlog is
+The DI/builder backlog has landed (including first-class module-imports-module
+composition via `imports(module(...))`, above); the live backlog is
 `docs/claude/roadmap.md`.
