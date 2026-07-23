@@ -91,8 +91,6 @@ Kept where the context lives rather than duplicated here:
 - `plans/phase2-profiles-alternatives.md` — `#[bean(profile = "…")]` sugar
   (open design conflict with `P`), guaranteed profile groups, two profile test
   gaps (`R2E_PROFILE` precedence, `"default"` fallback).
-- `docs/claude/controller-identity-codegen-refactor.md` — request-scoped
-  helper methods (`#[request_helper]`), deliberately deferred.
 - `docs/claude/eventbus-perf.md` — P4.4 Kafka consumer multiplexing, Kafka
   blocking drain commit, Iggy producer batching, failure-injection/redelivery
   tests + throughput bench.
