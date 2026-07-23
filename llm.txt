@@ -166,7 +166,7 @@ use r2e::prelude::*;
 
 The prelude provides everything a controller needs — no direct `axum` imports.
 Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP verbs,
-`guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `intercept`,
+`guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `request_helper`, `intercept`,
 `managed`, `consumer`, `scheduled`, `bean`, `producer`, `module`, derives `Bean`,
 `DecoratorBean`, `BackgroundService`, `Params`, `ConfigProperties`, `FromConfigValue`,
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
@@ -234,6 +234,45 @@ impl UserController {
     async fn delete(&self, Path(id): Path<u64>) -> StatusResult { ... }
 }
 ```
+
+### Helper Methods
+
+A plain method (no route/lifecycle marker) on a `#[routes]` impl stays on the
+controller **core**. It is callable from both routes and off-request methods
+(`#[consumer]`/`#[scheduled]`/`#[anonymous]`), but the core has no request-scoped
+fields, so it **cannot** read `#[inject(identity)]` / `#[inject(request)]` —
+`self.user` there is a compile error ("no field `user`"). Mark it or pass the
+value as a parameter.
+
+`#[request_helper]` moves the helper onto the per-request façade, next to route
+methods, so it reads request-scoped fields directly and reaches `#[inject]` /
+`#[config]` fields and core helpers through `Deref`. It may be `async` or take
+parameters.
+
+```rust
+#[routes]
+impl UserController {
+    // Core helper — reachable everywhere, but no identity access.
+    fn label(&self, id: u64) -> String { format!("{}#{id}", self.greeting) }
+
+    // Façade helper — reads request identity; callable ONLY from request-scoped
+    // methods (routes/SSE/WS).
+    #[request_helper]
+    fn caller_tag(&self) -> String { format!("caller={}", self.user.sub()) }
+
+    #[get("/{id}")]
+    async fn get(&self, Path(id): Path<u64>) -> Json<String> {
+        Json(format!("{} {}", self.label(id), self.caller_tag()))
+    }
+}
+```
+
+Intended scope boundary: a request helper does not exist on the core, so calling
+it from a `#[consumer]`/`#[scheduled]`/`#[anonymous]` method is a "method not
+found" compile error. `#[request_helper]` cannot be combined with a route verb /
+`#[sse]` / `#[ws]` / `#[consumer]` / `#[scheduled]` / `#[async_exec]` /
+`#[post_construct]` / `#[pre_destroy]` / `#[anonymous]` / `#[intercept]`, and is
+rejected on a `#[bean]` impl (no façade).
 
 ### Return Type Aliases
 
@@ -2109,6 +2148,7 @@ Alongside `&self`:
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
+| `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
 | `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
 
 ## Builder Method Quick Reference

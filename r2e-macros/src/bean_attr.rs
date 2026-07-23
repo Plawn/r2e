@@ -324,6 +324,11 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     // kinds, whose dispatch wrappers can run the chain.
     reject_stray_intercepts(item_impl)?;
 
+    // `#[request_helper]` is a controller-only marker (it moves a helper onto the
+    // request façade). A bean has no façade, so it would otherwise pass through
+    // as a silent no-op attribute — reject it with a targeted error instead.
+    reject_request_helper(item_impl)?;
+
     // Scan for #[scheduled] methods FIRST (its scheduled+consumer conflict
     // check must fire before the consumer scan's signature validation).
     let scheduled_methods = scan_scheduled_methods(item_impl, &impl_intercepts)?;
@@ -718,6 +723,27 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
                     &method.sig,
                     "#[intercept] on a bean method is only supported on #[scheduled]/#[consumer] \
                      methods — a plain method has no dispatch wrapper to run the interceptor chain",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject `#[request_helper]` on a bean method — it is a controller-only marker
+/// (the request façade only exists for `#[routes]` controllers).
+fn reject_request_helper(item_impl: &ItemImpl) -> syn::Result<()> {
+    for item in &item_impl.items {
+        if let ImplItem::Fn(method) = item {
+            if let Some(attr) = method
+                .attrs
+                .iter()
+                .find(|a| a.path().is_ident("request_helper"))
+            {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[request_helper] is only valid inside a #[routes] controller impl — it moves \
+                     a helper onto the per-request façade, which a #[bean] impl does not have",
                 ));
             }
         }

@@ -1,0 +1,5 @@
+error: #[intercept] on a #[request_helper] method is not supported — a plain helper has no dispatch wrapper to run the interceptor chain
+  --> compile-fail/request_helper_intercept.rs:30:8
+   |
+30 |     fn who(&self) -> String {
+   |        ^^^

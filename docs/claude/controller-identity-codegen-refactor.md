@@ -161,8 +161,8 @@ pub fn bind_request<__M>(
 
 `#[routes]` splits the source impl by execution scope:
 
-- HTTP, SSE, WebSocket methods and their generated wrappers →
-  `impl __R2eRequest_<Name>`;
+- HTTP, SSE, WebSocket methods and their generated wrappers, plus
+  `#[request_helper]` helpers → `impl __R2eRequest_<Name>`;
 - consumers, `#[scheduled]`, `#[post_construct]`/`#[pre_destroy]`, and ordinary
   helper methods → `impl <Name>` (the core);
 - interceptor/managed-resource wrappers are emitted on the same type as the
@@ -174,6 +174,28 @@ A façade route can call core helpers through `Deref` as long as those helpers d
 not use request identity. Route methods that expose `Self` in their public
 signature are rejected (`compile-fail/route_exposes_self.rs`) — inside a moved
 method `Self` would mean the hidden façade.
+
+**`#[request_helper]` — helpers on the façade.** Core placement is the right
+default: a core helper is callable from BOTH façade routes (through `Deref`) and
+off-request methods (consumers/scheduled/anonymous). A helper that must read the
+request-scoped identity or an `#[inject(request)]` field cannot live there — the
+core has no such field ("no field `user`"). Mark it `#[request_helper]` to emit
+it verbatim on `impl __R2eRequest_<Name>`, alongside route methods; it then
+reads request-scoped fields directly and reaches `#[inject]`/`#[config]` fields
+and core helpers through `Deref`. It may be `async` or take parameters.
+
+Consequence (intended): a request helper is callable ONLY from request-scoped
+methods (routes/SSE/WS). Off-request methods run on the core, where it does not
+exist, so calling it there is a "method not found" compile error
+(`compile-fail/anonymous_calls_request_helper.rs`). The marker is classified
+first in `#[routes]`, so combining it with a route verb / `#[sse]` / `#[ws]` /
+`#[consumer]` / `#[scheduled]` / `#[async_exec]` / `#[post_construct]` /
+`#[pre_destroy]` / `#[anonymous]` yields a targeted error naming the conflict,
+and `#[intercept]` on it is rejected (no dispatch wrapper). `Self` in its
+signature is rejected exactly like route methods. On a `#[bean]` impl the marker
+is rejected outright (a bean has no façade). The façade type
+(`__R2eRequest_<Name>`) is always generated, so a controller whose only methods
+are request helpers still compiles.
 
 ### 6. Router construction
 
@@ -248,9 +270,10 @@ clones captured `Arc`s — an explicit clone plus a closure clone would be two).
 
 ## Remaining work
 
-- **Request-scoped helper methods** are still unsupported. A helper that needs
-  `self.user` must be inlined into the route body. If this becomes a real need,
-  add an explicit `#[request_helper]` marker that emits the helper on the façade
-  — never infer a call graph in the proc macro. There is no compile-fail case
-  for this yet; the failure is a plain "no field `user`" type error from the
-  core impl block.
+- **Request-scoped helper methods** shipped as `#[request_helper]` (see §5). The
+  helper is emitted verbatim on the façade, never inferred from a call graph.
+  Coverage: `compile-pass/request_helper.rs`, the five
+  `compile-fail/request_helper_*.rs` / `anonymous_calls_request_helper.rs` /
+  `plain_helper_reads_identity.rs` cases, and
+  `r2e-core/tests/controller/facade.rs` (`RequestHelperController`,
+  `MixedScopeController`).

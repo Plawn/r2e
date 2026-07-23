@@ -18,6 +18,10 @@ pub struct RoutesImplDef {
     /// `#[pre_destroy]` disposal methods (bodies stay on the core impl,
     /// recorded here to drive the `Controller::pre_destroy` override codegen).
     pub pre_destroy_methods: Vec<crate::codegen::transverse::PreDestroyMethod>,
+    /// `#[request_helper]` methods — emitted verbatim on the request façade
+    /// (`impl __R2eRequest_<Name>`), so they can read the request-scoped identity
+    /// / `#[inject(request)]` fields directly and reach core fields via `Deref`.
+    pub request_helper_methods: Vec<syn::ImplItemFn>,
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
@@ -209,6 +213,84 @@ fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
     Ok(ws_param)
 }
 
+/// Classify a `#[request_helper]` method.
+///
+/// The marked method is emitted verbatim on the request façade
+/// (`impl __R2eRequest_<Name>`), alongside routes, so it can read the identity /
+/// `#[inject(request)]` fields directly. Being a plain helper it must not double
+/// as a route or any transverse/lifecycle marker, and it has no dispatch wrapper
+/// to run an interceptor chain. Like route methods it runs on the façade, so
+/// `Self` in its signature is rejected. `Ok(None)` when the method does not
+/// carry the marker (the caller falls through to the next classification arm).
+///
+/// Returns the marker-stripped attributes when the method carried
+/// `#[request_helper]` (the caller installs them and moves the method to
+/// `request_helper_methods`).
+fn classify_request_helper(
+    sig: &syn::Signature,
+    all_attrs: &[syn::Attribute],
+) -> syn::Result<Option<Vec<syn::Attribute>>> {
+    if !all_attrs
+        .iter()
+        .any(|a| a.path().is_ident("request_helper"))
+    {
+        return Ok(None);
+    }
+    let conflict = [
+        (
+            "a route verb (#[get], #[post], ...)",
+            extract_route_kind(all_attrs)?.is_some(),
+        ),
+        ("#[sse]", extract_sse_attr(all_attrs)?.is_some()),
+        ("#[ws]", extract_ws_attr(all_attrs)?.is_some()),
+        ("#[consumer]", extract_consumer(all_attrs)?.is_some()),
+        ("#[scheduled]", extract_scheduled(all_attrs)?.is_some()),
+        ("#[async_exec]", extract_async_exec(all_attrs)?.is_some()),
+        (
+            "#[post_construct]",
+            all_attrs
+                .iter()
+                .any(|a| a.path().is_ident("post_construct")),
+        ),
+        (
+            "#[pre_destroy]",
+            all_attrs.iter().any(|a| a.path().is_ident("pre_destroy")),
+        ),
+        (
+            "#[anonymous]",
+            all_attrs.iter().any(|a| a.path().is_ident("anonymous")),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(name, present)| present.then_some(name));
+    if let Some(name) = conflict {
+        return Err(syn::Error::new(
+            sig.ident.span(),
+            format!(
+                "#[request_helper] cannot be combined with {name} on the same method — a request \
+                 helper is a plain method emitted on the request façade, not a route or an \
+                 off-request wiring hook"
+            ),
+        ));
+    }
+    if all_attrs.iter().any(|a| a.path().is_ident("intercept")) {
+        return Err(syn::Error::new(
+            sig.ident.span(),
+            "#[intercept] on a #[request_helper] method is not supported — a plain helper has no \
+             dispatch wrapper to run the interceptor chain",
+        ));
+    }
+    // Runs on the façade, where `Self` no longer names the controller.
+    reject_self_in_route_signature(sig, "request helper")?;
+    Ok(Some(
+        all_attrs
+            .iter()
+            .filter(|a| !a.path().is_ident("request_helper"))
+            .cloned()
+            .collect(),
+    ))
+}
+
 /// Shared classifier for the two plain lifecycle hooks on a controller impl
 /// (`#[post_construct]` and `#[pre_destroy]`). Both are `&self` bodies that stay
 /// on the core impl, reject `#[intercept]`, and cannot double as a route or any
@@ -291,12 +373,25 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut consumer_methods = Vec::new();
     let mut scheduled_methods = Vec::new();
     let mut async_exec_methods = Vec::new();
+    let mut request_helper_methods = Vec::new();
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
         match impl_item {
             syn::ImplItem::Fn(mut method) => {
                 let all_attrs = std::mem::take(&mut method.attrs);
+
+                // `#[request_helper]` — a plain helper deliberately moved onto
+                // the request façade so it can read the identity /
+                // `#[inject(request)]` fields. Classified FIRST so any
+                // conflicting marker yields a targeted request-helper error from
+                // this arm (the later route/transverse/lifecycle arms never see
+                // — and so never silently strip or retain — the marker).
+                if let Some(attrs) = classify_request_helper(&method.sig, &all_attrs)? {
+                    method.attrs = attrs;
+                    request_helper_methods.push(method);
+                    continue;
+                }
 
                 // `#[post_construct]` — a plain lifecycle hook. Its body stays on
                 // the core impl (recorded in `post_construct_methods` above); it
@@ -601,6 +696,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         async_exec_methods,
         post_construct_methods,
         pre_destroy_methods,
+        request_helper_methods,
         other_methods,
     })
 }

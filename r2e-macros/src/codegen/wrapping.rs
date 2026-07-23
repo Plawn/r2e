@@ -62,6 +62,16 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .map(|wm| emit_verbatim(&wm.fn_item))
         .collect();
 
+    // Request helpers are emitted verbatim on the façade too, so they can read
+    // the identity / `#[inject(request)]` fields directly and reach core fields
+    // via `Deref`. They are therefore callable only from other façade methods
+    // (routes/SSE/WS); an off-request call site fails with "method not found".
+    let request_helper_fns: Vec<TokenStream> = def
+        .request_helper_methods
+        .iter()
+        .map(emit_verbatim)
+        .collect();
+
     // ── Core (anonymous) route methods ──
     let anon_route_fns: Vec<TokenStream> = def
         .route_methods
@@ -142,7 +152,11 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
 
     let other_fns: Vec<_> = def.other_methods.iter().collect();
 
-    let facade_impl = if route_fns.is_empty() && sse_fns.is_empty() && ws_fns.is_empty() {
+    let facade_impl = if route_fns.is_empty()
+        && sse_fns.is_empty()
+        && ws_fns.is_empty()
+        && request_helper_fns.is_empty()
+    {
         quote! {}
     } else {
         quote! {
@@ -150,6 +164,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 #(#route_fns)*
                 #(#sse_fns)*
                 #(#ws_fns)*
+                #(#request_helper_fns)*
             }
         }
     };

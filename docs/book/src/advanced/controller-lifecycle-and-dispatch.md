@@ -80,6 +80,15 @@ the application dependencies per request.
 > `#[inject(identity)]`. They live on the façade exactly the same way; only
 > `#[inject(identity)]` participates in guards and roles.
 
+A plain (unmarked) helper method stays on the core, so it cannot read
+request-scoped fields — reaching `self.user` there is a compile error. Mark it
+`#[request_helper]` to emit it on the façade next to route methods; it then reads
+identity / `#[inject(request)]` fields directly and reaches `#[inject]` /
+`#[config]` fields through `Deref`. Because it lives on the façade, a request
+helper is callable only from request-scoped methods (routes/SSE/WS); calling it
+from a `#[consumer]` / `#[scheduled]` / `#[anonymous]` method (which run on the
+core) is a "method not found" compile error.
+
 ## Normal registration path
 
 `.register_controller::<C>()` (from the `RegisterController` extension trait, in

@@ -395,6 +395,58 @@ pub fn anonymous(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Emit a helper method on the per-request **façade** instead of the core.
+///
+/// `#[routes]` splits methods by execution scope: routes/SSE/WS run on the
+/// generated request façade (which holds the `#[inject(identity)]` /
+/// `#[inject(request)]` fields), while ordinary helpers stay on the core — built
+/// once at startup, with the request-scoped fields physically stripped. A plain
+/// helper therefore cannot read `self.user`; the core has no such field.
+///
+/// Mark a helper with `#[request_helper]` to move it onto the façade, alongside
+/// the route methods, so it can read the identity and `#[inject(request)]`
+/// fields directly and reach `#[inject]`/`#[config]` fields and core helpers
+/// through `Deref`:
+///
+/// ```ignore
+/// #[routes]
+/// impl OrderController {
+///     #[request_helper]
+///     fn tenant_id(&self) -> String {
+///         self.user.claim("tenant")     // reads the request-scoped identity
+///     }
+///
+///     #[get("/")]
+///     async fn list(&self) -> Json<Vec<Order>> {
+///         let t = self.tenant_id();     // route and helper share the façade
+///         Json(self.orders.for_tenant(&t).await)
+///     }
+/// }
+/// ```
+///
+/// The method may be `async` and take ordinary parameters.
+///
+/// **Scope (intended):** a request helper is callable **only** from
+/// request-scoped methods (routes/SSE/WS). Off-request methods — `#[consumer]`,
+/// `#[scheduled]`, `#[async_exec]`, `#[anonymous]` routes, plain helpers, and
+/// lifecycle hooks — run on the core, where the helper does not exist, so
+/// calling it there is a "method not found" compile error. Keep shared logic
+/// that both scopes need on the core (a plain helper) and pass the identity in
+/// as a parameter.
+///
+/// Rejected combinations (compile error): `#[request_helper]` with any route
+/// verb, `#[sse]`, `#[ws]`, `#[consumer]`, `#[scheduled]`, `#[async_exec]`,
+/// `#[post_construct]`, `#[pre_destroy]`, `#[anonymous]`, or `#[intercept]`
+/// (a plain helper has no dispatch wrapper to run the chain). `Self` in the
+/// signature is rejected — like route methods, the helper runs on the façade
+/// where `Self` no longer names the controller.
+///
+/// This attribute is consumed by [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn request_helper(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Restrict a route to users that have **all** of the specified roles (AND semantics).
 ///
 /// Requires an identity source: either an `#[inject(identity)]` field on the

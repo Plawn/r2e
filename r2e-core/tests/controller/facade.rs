@@ -832,6 +832,113 @@ async fn core_fields_reachable_via_deref() {
     assert_eq!(body, "core:ken");
 }
 
+// ── 12b. #[request_helper]: façade helpers reading request-scoped fields ─────
+
+#[controller]
+struct RequestHelperController {
+    #[inject]
+    label: String,
+    #[inject(identity)]
+    user: Subject,
+    #[inject(request)]
+    tenant: TenantId,
+}
+
+#[routes]
+impl RequestHelperController {
+    // Sync request helper reading the identity field directly.
+    #[request_helper]
+    fn greeting(&self) -> String {
+        format!("{}:{}", self.label, self.user.0)
+    }
+
+    // Async request helper reading a `#[inject(request)]` field.
+    #[request_helper]
+    async fn tenant_tag(&self) -> String {
+        // A trivial await so the `async` path is exercised.
+        tokio::task::yield_now().await;
+        format!("tenant={}", self.tenant.0)
+    }
+
+    #[get("/rh")]
+    async fn rh(&self) -> String {
+        format!("{} {}", self.greeting(), self.tenant_tag().await)
+    }
+}
+
+#[r2e_core::test]
+async fn request_helpers_read_request_scoped_fields() {
+    let router = r2e_core::AppBuilder::new()
+        .provide("hi".to_string())
+        .build_state()
+        .await
+        .register_controller::<RequestHelperController>()
+        .build();
+
+    let (status, body) = req(router, "/rh", Some("mona"), Some("acme")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "hi:mona tenant=acme");
+}
+
+// A request helper coexisting with an off-request route (`#[anonymous]`, which
+// also runs on the **core**) that calls a *core* helper — proving the façade and
+// core scopes live side by side in one impl. (Coexistence with `#[scheduled]` /
+// `#[consumer]` is covered by the compile-pass suite, which has the full facade;
+// r2e-core cannot depend on the scheduler/events crates without a cycle.)
+#[controller]
+struct MixedScopeController {
+    #[inject]
+    prefix: String,
+    #[inject(identity)]
+    user: Subject,
+}
+
+#[routes]
+impl MixedScopeController {
+    // Façade helper — reads the request-scoped identity.
+    #[request_helper]
+    fn who(&self) -> String {
+        self.user.0.clone()
+    }
+
+    #[get("/mixed")]
+    async fn mixed(&self) -> String {
+        self.who()
+    }
+
+    // Off-request route: runs on the core, calls a core helper (never the request
+    // helper `who`, which does not exist on the core).
+    #[get("/mixed/public")]
+    #[anonymous]
+    async fn public(&self) -> String {
+        self.tag()
+    }
+
+    // Plain core helper, reachable from the anonymous core route and (via
+    // `Deref`) the façade route.
+    fn tag(&self) -> String {
+        format!("[{}]", self.prefix)
+    }
+}
+
+#[r2e_core::test]
+async fn request_helper_coexists_with_core_route_helper() {
+    let router = r2e_core::AppBuilder::new()
+        .provide("pub".to_string())
+        .build_state()
+        .await
+        .register_controller::<MixedScopeController>()
+        .build();
+
+    let (status, body) = req(router.clone(), "/mixed", Some("nora"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "nora");
+
+    let (status, body) = req(router, "/mixed/public", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "[pub]");
+}
+
 // ── 12. No Arc<Controller> request extension is installed ────────────────────
 
 #[controller]

@@ -34,7 +34,8 @@ pub use r2e_macros::{any, delete, fallback, get, patch, post, put};
 
 // Route-level attributes
 pub use r2e_macros::{
-    anonymous, guard, intercept, layer, managed, middleware, pre_guard, returns, roles, status,
+    anonymous, guard, intercept, layer, managed, middleware, pre_guard, request_helper, returns,
+    roles, status,
 };
 
 // SSE & WebSocket attributes
