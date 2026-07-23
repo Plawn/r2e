@@ -1,20 +1,22 @@
 use super::typed::ConfigProperties;
 use super::{ConfigError, R2eConfig};
 
-/// Derive the `R2E_`-style env-var hint for a config key — but only when the
-/// key is actually reachable through the env overlay.
+/// Derive the `R2E_` env-var hint for a config key — but only when the key is
+/// actually reachable through the env overlay.
 ///
-/// `apply_env_overlay` maps `R2E_X_Y` → `x.y`
-/// (only `_`→`.`), so it can never produce a dashed key. A kebab-case key such
-/// as `database.min-idle` is therefore **not** addressable via any `R2E_` var
-/// (`R2E_DATABASE_MIN_IDLE` would insert `database.min.idle`), and this returns
-/// `None` so callers fall back to YAML-only wording. Dotted keys return their
-/// `SCREAMING_SNAKE` env var.
+/// The overlay mapping is strict: `R2E_X_Y` → `x.y` (every `_` becomes `.`,
+/// nothing else). It can therefore never produce a `-` nor an in-segment `_`:
+/// a kebab-case key (`database.min-idle`) or snake_case key
+/// (`database.max_idle`) is **not** addressable via any `R2E_` var
+/// (`R2E_DATABASE_MAX_IDLE` would insert `database.max.idle`), and this
+/// returns `None` so callers fall back to YAML/placeholder wording. Purely
+/// dotted keys return their full working var — `R2E_` prefix included, since
+/// unprefixed env vars are ignored by the overlay.
 pub(crate) fn derived_env_hint(key: &str) -> Option<String> {
-    if key.contains('-') {
+    if key.contains('-') || key.contains('_') {
         None
     } else {
-        Some(key.to_uppercase().replace('.', "_"))
+        Some(format!("R2E_{}", key.to_uppercase().replace('.', "_")))
     }
 }
 
@@ -27,8 +29,9 @@ pub struct MissingKeyError {
     pub key: String,
     /// The expected type name.
     pub expected_type: String,
-    /// Environment variable hint. `Some` only when the key is reachable via an
-    /// `R2E_` env var; `None` for kebab-case keys (settable in YAML only).
+    /// Environment variable hint: the `R2E_…` var (or exact `#[config(env)]`
+    /// var) that sets this key. `None` when the key is not env-reachable
+    /// (contains `-` or `_`): settable via YAML / `${VAR}` placeholder only.
     pub env_hint: Option<String>,
     /// Optional description (from `ConfigProperties` metadata).
     pub description: Option<String>,
@@ -45,7 +48,7 @@ impl std::fmt::Display for MissingKeyError {
             Some(hint) => write!(f, " — set env var `{}`", hint)?,
             None => write!(
                 f,
-                " — set '{}' in application.yaml (kebab-case keys are not addressable via R2E_ env vars)",
+                " — set '{}' in application.yaml (keys containing '-' or '_' are not addressable via R2E_ env vars; use a ${{VAR}} placeholder for env-driven values)",
                 self.key
             )?,
         }

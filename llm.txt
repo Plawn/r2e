@@ -554,7 +554,13 @@ listens with graceful shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
 1. `application.yaml` (hierarchies flattened to dotted keys) + `application-{profile}.yaml` (profile from `R2E_PROFILE`)
 2. `.env` file
 3. `${VAR}` / `${VAR:default}` / `${file:/path}` secret placeholders in string values
-4. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`)
+4. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`). The
+   mapping is strict (`_`→`.`, nothing else — no fuzzy matching): a key
+   containing `-` or an in-segment `_` (`security.jwt.jwks-url`,
+   `database.max_idle`) is NOT addressable via any `R2E_` var. For env-driven
+   values of such keys use a `${VAR}` placeholder in YAML
+   (`jwks-url: "${JWKS_URL:}"` → set `JWKS_URL`, unprefixed). Other unprefixed
+   env vars are ignored.
 
 ### `load_config` — the idiomatic path
 
@@ -589,9 +595,11 @@ variant from a config key. Enums as scalar values: `#[derive(FromConfigValue)]`
 via serde.
 
 Missing **required** `#[config]` keys fail at startup (controller registration
-validates them). The message names the `R2E_…` env var for dotted keys, but a
-kebab-case key (`database.min-idle`) is not addressable via the `R2E_` overlay
-(which maps only `_`→`.`), so its message points at `application.yaml` only.
+validates them). The message names the full working `R2E_…` env var (prefix
+included) for purely dotted keys; a key containing `-` or `_`
+(`database.min-idle`, `database.max_idle`) is not addressable via the strict
+`R2E_` overlay, so its message points at `application.yaml` / `${VAR}`
+placeholders instead.
 `Option<T>` `#[config]` fields are optional — a missing key resolves to `None`
 and is never reported as missing.
 

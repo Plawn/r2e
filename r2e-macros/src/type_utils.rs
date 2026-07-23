@@ -173,17 +173,18 @@ pub fn parse_config_field(attr: &syn::Attribute, ty: &Type) -> syn::Result<(Stri
 /// Build the actionable remediation sentence appended to a required-config
 /// panic message.
 ///
-/// The `R2E_` env overlay maps only `_`→`.`, so a kebab-case key such as
-/// `database.min-idle` is **not** addressable via an env var (`R2E_DATABASE_MIN_IDLE`
-/// would insert `database.min.idle`). For those keys the sentence omits the
-/// env-var suggestion and points at YAML only. Dotted keys keep the env hint.
+/// The `R2E_` overlay mapping is strict (`_`→`.`, nothing else), so a key
+/// containing `-` or an in-segment `_` (`database.min-idle`,
+/// `database.max_idle`) is **not** addressable via any `R2E_` var — those
+/// keys point at YAML / `${VAR}` placeholders. Purely dotted keys name their
+/// full working var, `R2E_` prefix included (unprefixed env vars are ignored
+/// by the overlay).
 pub fn config_hint_sentence(key: &str) -> String {
-    if key.contains('-') {
-        "Add it to application.yaml (kebab-case keys are not addressable via R2E_ env vars)."
-            .to_string()
+    if key.contains('-') || key.contains('_') {
+        "Add it to application.yaml (keys containing '-' or '_' are not addressable via R2E_ env vars; use a ${VAR} placeholder for env-driven values).".to_string()
     } else {
         let env = key.replace('.', "_").to_uppercase();
-        format!("Add it to application.yaml or set env var `{env}`.")
+        format!("Add it to application.yaml or set env var `R2E_{env}`.")
     }
 }
 

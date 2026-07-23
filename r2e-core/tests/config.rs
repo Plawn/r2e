@@ -764,6 +764,51 @@ fn test_env_overlay_bare_prefix_is_ignored() {
     assert!(values.is_empty());
 }
 
+// The overlay mapping is deliberately STRICT — no fuzzy/relaxed matching
+// against existing keys (a silently mis-mapped setting is worse than an
+// unaddressable one). `R2E_SECURITY_JWT_JWKS_URL` derives
+// `security.jwt.jwks.url` and must NOT touch a kebab-case
+// `security.jwt.jwks-url` (or a snake_case `jwks_url`): such keys are only
+// settable via YAML / `${VAR}` placeholders, and the validation hints say so.
+#[test]
+fn test_env_overlay_is_strict_never_touches_kebab_or_snake_keys() {
+    use std::collections::HashMap;
+    let mut values: HashMap<String, ConfigValue> = HashMap::new();
+    values.insert(
+        "security.jwt.jwks-url".to_string(),
+        ConfigValue::String("from-yaml".to_string()),
+    );
+    values.insert(
+        "app.jwks_url".to_string(),
+        ConfigValue::String("from-yaml".to_string()),
+    );
+
+    let env = vec![
+        (
+            "R2E_SECURITY_JWT_JWKS_URL".to_string(),
+            "from-env".to_string(),
+        ),
+        ("R2E_APP_JWKS_URL".to_string(), "from-env".to_string()),
+    ];
+    R2eConfig::apply_env_overlay_for_test(&mut values, env);
+
+    let mut cfg = R2eConfig::empty();
+    for (k, v) in values {
+        cfg.set(&k, v);
+    }
+    // Existing keys untouched; the env vars land on their strict dotted keys.
+    assert_eq!(
+        cfg.get::<String>("security.jwt.jwks-url").unwrap(),
+        "from-yaml"
+    );
+    assert_eq!(cfg.get::<String>("app.jwks_url").unwrap(), "from-yaml");
+    assert_eq!(
+        cfg.get::<String>("security.jwt.jwks.url").unwrap(),
+        "from-env"
+    );
+    assert_eq!(cfg.get::<String>("app.jwks.url").unwrap(), "from-env");
+}
+
 // =========================================================================
 // ConfigError::Deserialize display
 // =========================================================================

@@ -2,9 +2,10 @@
 
 use r2e_core::config::{validate_keys, validate_section, R2eConfig};
 
-// Regression: a kebab-case key like `database.min-idle` is NOT addressable via
-// an `R2E_` env var (the overlay maps only `_`→`.`), so the hint must be `None`
-// and the message must point at YAML only — not the misleading `R2E_DATABASE_MIN_IDLE`.
+// Regression: a kebab-case key like `database.min-idle` is NOT addressable
+// via an `R2E_` env var (the strict overlay maps only `_`→`.`), so the hint
+// must be `None` and the message must point at YAML/placeholders — not the
+// misleading `R2E_DATABASE_MIN_IDLE`.
 #[test]
 fn test_validate_keys_dashed_key_has_no_env_hint() {
     let config = R2eConfig::empty();
@@ -14,17 +15,34 @@ fn test_validate_keys_dashed_key_has_no_env_hint() {
     let rendered = errors[0].to_string();
     assert!(
         rendered.contains("application.yaml") && !rendered.contains("set env var"),
-        "dashed-key message must be YAML-only: {rendered}"
+        "dashed-key message must be YAML/placeholder-only: {rendered}"
     );
 }
 
-// A dotted (env-reachable) key keeps its `R2E_`-style hint.
+// Same for a snake_case key: `R2E_DATABASE_MAX_IDLE` would insert
+// `database.max.idle`, never `database.max_idle` — suggesting it would be a
+// lie, so the hint must be `None` too.
 #[test]
-fn test_validate_keys_dotted_key_has_env_hint() {
+fn test_validate_keys_snake_key_has_no_env_hint() {
     let config = R2eConfig::empty();
     let errors = validate_keys(&config, &[("src", "database.max_idle", "u32")]);
     assert_eq!(errors.len(), 1, "absent key must be reported: {errors:?}");
-    assert_eq!(errors[0].env_hint.as_deref(), Some("DATABASE_MAX_IDLE"));
+    assert_eq!(errors[0].env_hint, None, "snake key is not env-reachable");
+}
+
+// A purely dotted (env-reachable) key names its full working var —
+// `R2E_` prefix included, since unprefixed env vars are ignored.
+#[test]
+fn test_validate_keys_dotted_key_has_prefixed_env_hint() {
+    let config = R2eConfig::empty();
+    let errors = validate_keys(&config, &[("src", "database.pool.size", "u32")]);
+    assert_eq!(errors.len(), 1, "absent key must be reported: {errors:?}");
+    assert_eq!(errors[0].env_hint.as_deref(), Some("R2E_DATABASE_POOL_SIZE"));
+    let rendered = errors[0].to_string();
+    assert!(
+        rendered.contains("set env var `R2E_DATABASE_POOL_SIZE`"),
+        "dotted-key message must name the full R2E_-prefixed var: {rendered}"
+    );
 }
 
 #[allow(dead_code)]
@@ -185,7 +203,7 @@ fn test_validate_section_reports_all_nested_missing_keys_with_metadata() {
     let url = errors.iter().find(|e| e.key == "app.db.url").unwrap();
     assert_eq!(url.source, "app.db");
     assert_eq!(url.expected_type, "String");
-    assert_eq!(url.env_hint.as_deref(), Some("APP_DB_URL"));
+    assert_eq!(url.env_hint.as_deref(), Some("R2E_APP_DB_URL"));
     assert_eq!(
         url.description.as_deref(),
         Some("Connection URL for the nested service.")

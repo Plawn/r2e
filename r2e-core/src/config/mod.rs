@@ -70,9 +70,12 @@ impl std::error::Error for ConfigError {}
 /// 2. `.env` file (loaded into process environment)
 /// 3. Environment variables prefixed with `R2E_` (e.g., `R2E_SERVER_PORT=8080`
 ///    sets `server.port`). The prefix is stripped, the remainder is
-///    lowercased, and `_` is replaced with `.`. Unprefixed env vars are
-///    ignored so the config namespace does not collide with the general
-///    process environment.
+///    lowercased, and `_` is replaced with `.`. The mapping is strict (no
+///    fuzzy matching): a key containing `-` or an in-segment `_`
+///    (`security.jwt.jwks-url`) is not addressable via any `R2E_` var — use
+///    a `${VAR}` placeholder in YAML for env-driven values of such keys.
+///    Unprefixed env vars are ignored so the config namespace does not
+///    collide with the general process environment.
 ///
 /// `.env` files never overwrite already-set environment variables.
 #[derive(Debug, Clone)]
@@ -99,6 +102,14 @@ fn profile_file_for(base: &Path, profile: &str) -> std::path::PathBuf {
 }
 
 /// Overlay `R2E_`-prefixed environment variables onto a config values map.
+///
+/// The mapping is **strict**: the prefix is stripped, the remainder is
+/// lowercased, and every `_` becomes `.` (`R2E_SERVER_PORT` → `server.port`).
+/// No fuzzy/relaxed matching against existing keys — a silently mis-mapped
+/// setting is worse than an unaddressable one. Consequence: a key containing
+/// `-` or an in-segment `_` (`security.jwt.jwks-url`, `database.max_idle`)
+/// cannot be targeted by any `R2E_` var; env-driven values for such keys go
+/// through `${VAR}` placeholders in YAML instead.
 fn apply_env_overlay<I: IntoIterator<Item = (String, String)>>(
     values: &mut HashMap<String, ConfigValue>,
     env: I,
@@ -152,7 +163,7 @@ impl R2eConfig {
     ///    `patina-test.yaml`, when the file exists and the profile is not
     ///    `default`)
     /// 3. `${...}` secret placeholders resolved in string values
-    /// 4. `R2E_`-prefixed environment variables
+    /// 4. `R2E_`-prefixed environment variables (strict `_`→`.` mapping)
     ///
     /// The profile itself is resolved as: `profile` argument >
     /// `R2E_PROFILE` env var > `r2e.profile` key in the base file >

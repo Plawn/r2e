@@ -44,7 +44,7 @@ On the builder: `.with_config_file("patina.yaml")` before `.load_config::<C>()`.
 1. `application.yaml` (hierarchies flattened: `app.database.url`)
 2. `.env` file (via dotenvy, won't overwrite existing env vars)
 3. `${...}` secret placeholders resolved in string values
-4. Environment variables **prefixed with `R2E_`** (`R2E_SERVER_PORT=8080` ↔ `server.port = "8080"`). The `R2E_` prefix is stripped, the remainder is lowercased, and `_` becomes `.`. Unprefixed process env vars are ignored so the config namespace does not collide with the general process environment. Use `#[config(env = "VAR")]` on a `ConfigProperties` field if you need to pull in a specific unprefixed variable.
+4. Environment variables **prefixed with `R2E_`** (`R2E_SERVER_PORT=8080` ↔ `server.port = "8080"`). The `R2E_` prefix is stripped, the remainder is lowercased, and `_` becomes `.`. The mapping is **strict** — no fuzzy/relaxed matching against existing keys (deliberate: a silently mis-mapped setting is worse than an unaddressable one). Consequence: a key containing `-` or an in-segment `_` (`security.jwt.jwks-url`, `database.max_idle`) is **not addressable** via any `R2E_` var; for env-driven values of such keys, use a `${VAR}` placeholder in YAML (`jwks-url: "${JWKS_URL:}"` — set `JWKS_URL`, unprefixed). Unprefixed process env vars are otherwise ignored so the config namespace does not collide with the general process environment. Use `#[config(env = "VAR")]` on a `ConfigProperties` field if you need to pull in a specific unprefixed variable.
 
 ### Methods
 
@@ -432,10 +432,13 @@ Semantics and guards:
 - Calls `validate_section::<T>(config, Some(prefix))` for `#[config_section]` fields
 - Panics with formatted error listing missing keys, expected types, remediation hints, descriptions
 
-Env-var hints are truthful: the `R2E_` overlay maps only `_`→`.`, so a
-**kebab-case** key (`database.min-idle`) is not addressable via an env var. Those
-messages point at `application.yaml` only; dotted keys keep the `R2E_…` hint.
-`MissingKeyError::env_hint` is `Option<String>` (`None` = YAML-only).
+Env-var hints are truthful: the strict `R2E_` overlay maps only `_`→`.`, so a
+key containing `-` or `_` (`database.min-idle`, `database.max_idle`) is not
+addressable via any env var — those messages point at YAML / `${VAR}`
+placeholders. Purely dotted keys name their full working var with the `R2E_`
+prefix included (`server.port` → `R2E_SERVER_PORT`); `#[config(env = "VAR")]`
+fields hint their exact unprefixed var. `MissingKeyError::env_hint` is
+`Option<String>` (`None` = not env-reachable).
 
 Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKeyError>`.
 
