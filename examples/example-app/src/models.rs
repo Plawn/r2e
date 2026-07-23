@@ -17,6 +17,26 @@ pub struct CreateUserRequest {
     pub email: String,
 }
 
+/// An order placed by a user.
+///
+/// `user_name` is denormalized from the looked-up `User` at creation time —
+/// it visibly proves that `OrderService` reached across into `UserService`
+/// (imported via `imports(module(UserModule))`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Order {
+    pub id: u64,
+    pub user_id: u64,
+    pub user_name: String,
+    pub item: String,
+}
+
+/// Request body for placing an order.
+#[derive(Deserialize, JsonSchema)]
+pub struct PlaceOrderRequest {
+    pub user_id: u64,
+    pub item: String,
+}
+
 /// Database row used by the paginated data controller.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserEntity {

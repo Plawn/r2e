@@ -6,7 +6,7 @@ use r2e::prelude::*;
 use r2e::sse::SseBroadcaster;
 use r2e::ws::WsRooms;
 
-use crate::models::{User, UserCreatedEvent};
+use crate::models::{Order, User, UserCreatedEvent};
 
 #[derive(Clone)]
 pub struct UserService {
@@ -64,6 +64,51 @@ impl UserService {
 
     pub async fn count(&self) -> usize {
         self.users.read().await.len()
+    }
+}
+
+/// An order service that lives in its own feature module (`OrderModule`) and
+/// injects `UserService` — a bean exported by `UserModule`. `OrderModule`
+/// pulls it in with `imports(module(UserModule))` instead of re-listing the
+/// `UserService` type, so this cross-module dependency is resolved by name.
+#[derive(Clone)]
+pub struct OrderService {
+    orders: Arc<RwLock<Vec<Order>>>,
+    users: UserService,
+}
+
+#[bean]
+impl OrderService {
+    pub fn new(users: UserService) -> Self {
+        Self {
+            orders: Arc::new(RwLock::new(Vec::new())),
+            users,
+        }
+    }
+
+    pub async fn list(&self) -> Vec<Order> {
+        self.orders.read().await.clone()
+    }
+
+    /// Place an order for `user_id`. Returns `None` when no such user exists —
+    /// the lookup goes through the injected `UserService`, exercising the
+    /// cross-module dependency at runtime. The looked-up name is denormalized
+    /// onto the stored `Order` so callers can see the reach-across happened.
+    pub async fn place_order(&self, user_id: u64, item: String) -> Option<Order> {
+        let user = self.users.get_by_id(user_id).await?;
+        let order = {
+            let mut orders = self.orders.write().await;
+            let id = orders.len() as u64 + 1;
+            let order = Order {
+                id,
+                user_id: user.id,
+                user_name: user.name,
+                item,
+            };
+            orders.push(order.clone());
+            order
+        };
+        Some(order)
     }
 }
 

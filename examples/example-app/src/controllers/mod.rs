@@ -6,6 +6,7 @@ pub mod document_controller;
 pub mod event_controller;
 pub mod mixed_controller;
 pub mod notification_controller;
+pub mod order_controller;
 pub mod proxy_controller;
 pub mod report_controller;
 pub mod scheduled_controller;

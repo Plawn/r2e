@@ -29,6 +29,7 @@ use controllers::document_controller::{DocumentController, DocumentService};
 use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::notification_controller::NotificationController;
+use controllers::order_controller::OrderController;
 use controllers::proxy_controller::ProxyController;
 use controllers::report_controller::ReportController;
 use controllers::scheduled_controller::ScheduledJobs;
@@ -38,7 +39,7 @@ use controllers::user_controller::UserController;
 use controllers::ws_controller::WsEchoController;
 pub use env::demo_token;
 use env::{provision_env, AppEnv};
-use services::UserService;
+use services::{OrderService, UserService};
 
 /// The "users" vertical slice as a feature module: one `register_module`
 /// call registers the service and both controllers. `UserService` is
@@ -59,6 +60,24 @@ use services::UserService;
     )
 )]
 pub struct UserModule;
+
+/// A second feature module that demonstrates **module-to-module composition**.
+///
+/// `imports(module(UserModule))` appends `UserModule::Exports` (i.e.
+/// `UserService`) to this module's imports at the type level — so `OrderService`
+/// can inject `UserService` without this module re-listing the `UserService`
+/// type in `imports(...)`. That is the whole point of the `module(...)` import
+/// form: you name the exporting module, not each exported bean.
+///
+/// Note the imported module is NOT auto-registered: the app must register BOTH
+/// `UserModule` and `OrderModule` on the builder (see `.register_module` below).
+#[module(
+    providers(OrderService),
+    controllers(OrderController),
+    exports(OrderService),
+    imports(module(UserModule))
+)]
+pub struct OrderModule;
 
 /// The canonical application blueprint. Production (`r2e::app_main!(ExampleApp)`),
 /// dev hot-reload, and tests (`#[r2e::test(app = example_app::ExampleApp)]` /
@@ -118,6 +137,9 @@ impl App for ExampleApp {
             .provide(fga)
             .provide(DocumentService::seeded())
             .register_module::<UserModule>()
+            // Both modules must be registered — `imports(module(UserModule))`
+            // wires the dependency at the type level but does not auto-register.
+            .register_module::<OrderModule>()
             .build_state()
             .await
             // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is

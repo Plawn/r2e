@@ -58,6 +58,10 @@ promise.
 - ~~Demo dev-services usage in `example-postgres`~~ — SHIPPED 2026-07-23
   (`examples/example-postgres/tests/postgres_test.rs`: `DevPostgres::shared()`
   + isolated per-test database + `override_config_value("database.url", …)`).
+- ~~Demo module-to-module composition (`imports(module(…))`) in an example
+  app~~ — SHIPPED 2026-07-23 (`example-app` `OrderModule` imports
+  `module(UserModule)`; `OrderService` injects the exported `UserService`;
+  `tests/order_module_test.rs` proves the cross-module reach-across at runtime).
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
 - **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
