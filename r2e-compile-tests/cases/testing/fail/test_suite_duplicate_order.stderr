@@ -1,0 +1,5 @@
+error: duplicate #[case(order = 1)] in this test suite: both `first` and `second` claim it
+  --> cases/testing/fail/test_suite_duplicate_order.rs:12:8
+   |
+12 |     fn second(&mut self) {}
+   |        ^^^^^^

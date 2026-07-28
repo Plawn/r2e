@@ -27,6 +27,7 @@ pub(crate) mod producer_attr;
 pub(crate) mod route;
 pub(crate) mod routes_attr;
 pub(crate) mod routes_parsing;
+pub(crate) mod test_suite_attr;
 pub(crate) mod type_list_gen;
 pub(crate) mod type_utils;
 pub(crate) mod types;
@@ -1497,4 +1498,69 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn test(args: TokenStream, input: TokenStream) -> TokenStream {
     main_attr::expand_test(args, input)
+}
+
+/// Attribute macro on an inherent `impl` block — generates one Cargo test per
+/// `#[case]` method while sharing the suite instance and lifecycle hooks.
+#[proc_macro_attribute]
+pub fn test_suite(args: TokenStream, input: TokenStream) -> TokenStream {
+    test_suite_attr::expand(args, input)
+}
+
+/// Marks a method inside `#[r2e::test_suite]` as a generated test case.
+#[proc_macro_attribute]
+pub fn case(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marks the suite initializer inside `#[r2e::test_suite]`.
+#[proc_macro_attribute]
+pub fn before_all(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// CamelCase alias for J2E-style suites.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn beforeAll(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marks a per-case setup hook inside `#[r2e::test_suite]`.
+#[proc_macro_attribute]
+pub fn before_each(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// CamelCase alias for J2E-style suites.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn beforeEach(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marks a per-case teardown hook inside `#[r2e::test_suite]`.
+#[proc_macro_attribute]
+pub fn after_each(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// CamelCase alias for J2E-style suites.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn afterEach(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marks the suite finalizer inside `#[r2e::test_suite]`.
+#[proc_macro_attribute]
+pub fn after_all(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// CamelCase alias for J2E-style suites.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn afterAll(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
 }

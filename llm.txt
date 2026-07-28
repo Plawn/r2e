@@ -111,7 +111,7 @@ impl HelloController {
 ```rust
 // tests/app.rs — boots the REAL app
 use r2e::prelude::*;
-use r2e_test::TestApp;
+use r2e_test::{TestApp, TestJwt};
 
 #[r2e::test(app = my_app::MyApp)]                // app = a TYPE implementing App
 async fn hello_works(app: TestApp) {
@@ -1975,6 +1975,39 @@ async fn lists_created_user(app: TestApp) { /* … */ }
 // only on lower orders of its OWN group (default = the unnamed group).
 #[r2e::test(app = my_app::MyApp, order = 10, group = "billing")]
 async fn billing_step(app: TestApp) { /* … */ }
+
+// Suite form: one Cargo test per #[case], one shared suite instance.
+struct UserSuite {
+    app: TestApp,
+    service: UserService,
+    user_token: String,
+}
+
+#[r2e::test_suite(app = my_app::MyApp, with = |b| b.override_bean(MockUsers::new()))]
+impl UserSuite {
+    #[before_all]
+    async fn setup(app: TestApp, #[inject] service: UserService, jwt: TestJwt) -> Self {
+        let user_token = jwt.token("alice", &["user"]);
+        Self { app, service, user_token }
+    }
+
+    #[before_each]
+    async fn reset(&mut self) { self.service.clear().await; }
+
+    #[case]
+    async fn creates_user(&mut self) {
+        self.app.post("/users").bearer(self.user_token.clone()).send().await.assert_ok();
+    }
+
+    #[case(order = 10)]
+    async fn lists_user(&mut self) { /* ordered relative to ordered suite cases */ }
+
+    #[after_each]
+    async fn cleanup(&mut self) { /* … */ }
+
+    #[after_all]
+    async fn teardown(&mut self) { /* full-suite runs only */ }
+}
 ```
 
 Ordered-test rules (copy literally):
@@ -1993,6 +2026,18 @@ Ordered-test rules (copy literally):
   by `--test-threads`. A running (started) predecessor never trips the watchdog,
   however slow.
 - `group` without `order` is a compile error; `order`/`group` on `#[r2e::main]`
+  are compile errors.
+
+Suite-test rules:
+- `#[r2e::test_suite]` goes on a non-generic inherent `impl`; helper attributes
+  are `#[case]`, `#[before_all]`, `#[before_each]`, `#[after_each]`,
+  `#[after_all]` (camelCase aliases accepted).
+- `#[before_all]` is optional. If it returns `Self` / `Result<Self, E>`, that
+  constructs the suite; otherwise the suite type must implement `Default`.
+- Cases are unordered by default. `#[case(order = N)]` opts into the existing
+  ordered-test barrier within that suite.
+- `after_all` is guaranteed for full-suite runs; partial `cargo test <filter>`
+  runs may skip it because libtest does not expose the selected case set.
   is a compile error. Using `order` requires the `r2e-test` dev-dependency
   (already present when using `app = …`).
 

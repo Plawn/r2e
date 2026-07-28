@@ -1,0 +1,5 @@
+error: #[r2e::test_suite] requires at least one #[case] method
+ --> cases/testing/fail/test_suite_no_case.rs:7:1
+  |
+7 | impl BadSuite {
+  | ^^^^

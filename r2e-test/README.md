@@ -275,6 +275,52 @@ Booting forces the `test` profile, so `application-test.yaml` overlays your
 base config. The non-macro form is `TestApp::boot::<my_app::MyApp>().await` /
 `TestApp::boot_with::<my_app::MyApp>(|b| ...).await`.
 
+Suite form keeps J2E-style shared state without free test functions. Each
+`#[case]` is still a separate Cargo test; methods share one suite instance and
+run under a per-suite lock.
+
+```rust
+use r2e_test::{TestApp, TestJwt};
+
+struct UserSuite {
+    app: TestApp,
+    users: UserService,
+    user_token: String,
+}
+
+#[r2e::test_suite(app = my_app::MyApp, with = |b| b.override_bean(MockUsers::new()))]
+impl UserSuite {
+    #[before_all]
+    async fn setup(app: TestApp, #[inject] users: UserService, jwt: TestJwt) -> Self {
+        let user_token = jwt.token("alice", &["user"]);
+        Self { app, users, user_token }
+    }
+
+    #[before_each]
+    async fn reset(&mut self) { self.users.clear().await; }
+
+    #[case]
+    async fn creates_user(&mut self) {
+        self.app.post("/users").bearer(self.user_token.clone()).send().await.assert_ok();
+    }
+
+    #[case(order = 10)]
+    async fn lists_user(&mut self) { /* ordered only relative to ordered cases */ }
+
+    #[after_each]
+    async fn cleanup(&mut self) { /* ... */ }
+
+    #[after_all]
+    async fn teardown(&mut self) { /* full-suite runs only */ }
+}
+```
+
+Cases are unordered by default (Cargo decides start order, R2E serializes
+access to `self`). `#[case(order = N)]` opts specific cases into the existing
+ordered-test barrier. `after_all` is guaranteed for full suite runs; partial
+`cargo test <filter>` runs may skip it because Rust's test harness does not
+publish the selected test set.
+
 ## Full example
 
 ```rust

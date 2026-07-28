@@ -107,3 +107,4 @@ pub use dev::invalidate_state_cache;
 // Entry-point macros
 pub use r2e_macros::main;
 pub use r2e_macros::test;
+pub use r2e_macros::test_suite;

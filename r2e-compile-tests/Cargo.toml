@@ -16,6 +16,7 @@ r2e-grpc-build = {workspace = true}
 
 [dev-dependencies]
 r2e = {workspace = true, features = ["full"]}
+r2e-test = {workspace = true}
 bytes = {workspace = true}
 schemars = {workspace = true}
 serde = {workspace = true}

@@ -49,6 +49,11 @@ pub use r2e_macros::grpc_routes;
 
 // Entry-point macro (r2e::test is NOT in prelude to avoid conflict with #[test])
 pub use r2e_macros::main;
+pub use r2e_macros::test_suite;
+pub use r2e_macros::{
+    afterAll, afterEach, after_all, after_each, beforeAll, beforeEach, before_all, before_each,
+    case,
+};
 
 // Bean / DI macros
 pub use r2e_macros::bean;

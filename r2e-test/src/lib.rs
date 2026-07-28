@@ -7,6 +7,7 @@ pub mod ordering;
 mod server;
 mod session;
 mod sse;
+pub mod suite;
 #[cfg(feature = "ws")]
 mod ws;
 

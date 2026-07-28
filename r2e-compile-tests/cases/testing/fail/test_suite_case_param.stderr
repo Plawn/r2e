@@ -1,0 +1,5 @@
+error: #[case] methods must take `&self` or `&mut self` and no other parameters
+ --> cases/testing/fail/test_suite_case_param.rs:9:35
+  |
+9 |     async fn has_param(&mut self, value: u32) {
+  |                                   ^^^^^^^^^^

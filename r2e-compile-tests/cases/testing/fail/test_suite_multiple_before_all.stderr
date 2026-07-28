@@ -1,0 +1,5 @@
+error: only one #[before_all] method is allowed per test suite
+  --> cases/testing/fail/test_suite_multiple_before_all.rs:12:8
+   |
+12 |     fn two() {}
+   |        ^^^
