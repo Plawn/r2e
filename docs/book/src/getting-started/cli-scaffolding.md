@@ -301,6 +301,44 @@ Requires the Dioxus CLI: `cargo install dioxus-cli`.
 
 ---
 
+## Test runner and coverage
+
+```bash
+r2e test
+r2e test --coverage
+r2e test --sonarqube
+```
+
+`r2e test` runs `cargo test`. Use `--coverage` to run `cargo llvm-cov`, or
+`--sonarqube` to generate an LCOV report at `coverage/lcov.info`.
+
+Configure SonarQube with:
+
+```properties
+sonar.rust.lcov.reportPaths=coverage/lcov.info
+```
+
+Useful options:
+
+```bash
+r2e test --workspace
+r2e test -p my-crate --features sqlite openapi
+r2e test --sonarqube --output-path reports/lcov.info
+r2e test -- --nocapture
+```
+
+Coverage requires:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+`r2e test` generates the report only; CI should run `sonar-scanner` afterwards
+when SonarQube analysis is needed.
+
+---
+
 ## Project health check
 
 ```bash

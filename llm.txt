@@ -2006,6 +2006,21 @@ For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
 next `load_config::<C>()` uses it instead of reading disk (see Configuration).
 
+CLI test runner:
+- `r2e test` is the blessed wrapper for project tests; default behavior is
+  equivalent to `cargo test`.
+- `r2e test --coverage` runs `cargo llvm-cov` and prints the coverage summary.
+- `r2e test --sonarqube` implies coverage and writes
+  `coverage/lcov.info` via `cargo llvm-cov --lcov --output-path`; configure
+  SonarQube with `sonar.rust.lcov.reportPaths=coverage/lcov.info`.
+- `r2e test --sonarqube --output-path reports/lcov.info` changes the LCOV path.
+- Cargo scoping/options: `--workspace`, repeatable `-p/--package`,
+  `--features`, `--all-features`, `--no-default-features`; args after `--`
+  go to the test binary (e.g. `r2e test -- --nocapture`).
+- `r2e test` does **not** run `sonar-scanner`; CI runs scanner after the LCOV
+  report exists. Coverage prerequisites: `cargo install cargo-llvm-cov` and
+  `rustup component add llvm-tools-preview`.
+
 - `app.bean::<T>()` — fetch any bean from the booted graph; `app.config()`.
 - `TestRequest`: `.bearer(t)`, `.header(...)`, `.json(body)`, `.form(...)`,
   `.query(k, v)`, `.file(...)` — then `.send().await`.

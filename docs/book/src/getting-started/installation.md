@@ -53,6 +53,7 @@ This gives you access to:
 - `r2e new <name>` — scaffold a new project
 - `r2e dev` — start a development server with hot-reload
 - `r2e generate` — generate controllers, services, and CRUD scaffolds
+- `r2e test` — run tests, optionally with `--coverage` or SonarQube LCOV output
 - `r2e doctor` — check your project setup
 - `r2e routes` — list all registered routes
 

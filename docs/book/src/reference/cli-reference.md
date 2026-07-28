@@ -431,6 +431,58 @@ Your app implements the `App` trait (see [Dev Mode](../advanced/dev-mode.md)):
 
 ---
 
+## `r2e test`
+
+Run tests from the current Rust project. Without coverage flags, this delegates
+to `cargo test`.
+
+```
+r2e test [options] [-- <cargo test args>...]
+
+Options:
+  --coverage                    Run tests with cargo llvm-cov
+  --sonarqube                   Generate coverage/lcov.info for SonarQube
+  --output-path <PATH>          LCOV output path for --sonarqube
+  --workspace                   Test all workspace packages
+  -p, --package <PKG>           Package to test (repeatable)
+  --features <FEAT>...          Extra Cargo features to enable
+  --all-features                Activate all available features
+  --no-default-features         Do not activate default features
+```
+
+Examples:
+
+```bash
+r2e test
+r2e test --workspace --features sqlite openapi -- --nocapture
+r2e test --coverage
+r2e test --sonarqube
+r2e test --sonarqube --output-path reports/lcov.info
+```
+
+`--sonarqube` implies coverage and writes LCOV by default:
+
+```bash
+cargo llvm-cov --lcov --output-path coverage/lcov.info
+```
+
+Configure SonarQube with:
+
+```properties
+sonar.rust.lcov.reportPaths=coverage/lcov.info
+```
+
+`r2e test` only generates the report; it does not run `sonar-scanner`.
+
+Coverage prerequisites:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+---
+
 ## `r2e doctor`
 
 Run 9 project health checks against the current directory.

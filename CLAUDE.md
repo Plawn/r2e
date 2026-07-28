@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+AGENTS.md-aware agents are bound through `AGENTS.md`, which delegates to this
+file. Keep cross-agent guidance changes visible from both `CLAUDE.md` and
+`AGENTS.md`.
+
 ## Project Status
 
 R2E is **not in production yet**. Breaking changes are always allowed — no need to gate them behind feature flags or maintain backward compatibility. Just mention breaking changes explicitly in plans so they are acknowledged.

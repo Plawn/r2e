@@ -49,8 +49,8 @@ impl UserController {
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
 - **Multipart** — Multipart form/file upload support
 - **Static file serving** — Embed frontend assets in the binary with SPA fallback via `EmbeddedFrontend` plugin
-- **Testing** — `TestApp` HTTP client wrapper and `TestJwt` token generator for integration tests
-- **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate` for scaffolding
+- **Testing** — `TestApp`, `TestJwt`, and `r2e test --sonarqube` coverage for integration tests
+- **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate`, `r2e test` for scaffolding and workflows
 
 ## Quick start
 

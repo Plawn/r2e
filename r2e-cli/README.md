@@ -18,6 +18,7 @@ This installs the `r2e` binary globally.
 | [`r2e generate`](#r2e-generate) | Generate controllers, services, CRUD, middleware, gRPC |
 | [`r2e add`](#r2e-add-extension) | Add an extension to your project |
 | [`r2e dev`](#r2e-dev) | Start development server with hot-reload |
+| [`r2e test`](#r2e-test) | Run tests, optionally with coverage for SonarQube |
 | [`r2e doctor`](#r2e-doctor) | Check project health |
 | [`r2e routes`](#r2e-routes) | List all declared routes |
 
@@ -258,6 +259,53 @@ cargo install dioxus-cli
 
 ---
 
+### `r2e test`
+
+Run the project tests. By default this is a thin wrapper around `cargo test`.
+
+```
+r2e test [options] [-- <cargo test args>...]
+
+Options:
+  --coverage                    Run tests with cargo llvm-cov
+  --sonarqube                   Generate coverage/lcov.info for SonarQube
+  --output-path <PATH>          LCOV output path for --sonarqube
+  --workspace                   Test all workspace packages
+  -p, --package <PKG>           Package to test (repeatable)
+  --features <FEAT>...          Extra Cargo features to enable
+  --all-features                Activate all available features
+  --no-default-features         Do not activate default features
+```
+
+Examples:
+
+```bash
+r2e test
+r2e test --workspace --features sqlite openapi -- --nocapture
+r2e test --coverage
+r2e test --sonarqube
+r2e test --sonarqube --output-path reports/lcov.info
+```
+
+`--sonarqube` uses `cargo llvm-cov --lcov --output-path coverage/lcov.info`
+unless `--output-path` is provided. Configure SonarQube with:
+
+```properties
+sonar.rust.lcov.reportPaths=coverage/lcov.info
+```
+
+`r2e test` does not run `sonar-scanner`; CI remains responsible for invoking
+SonarQube analysis after the LCOV report is generated.
+
+Prerequisites for coverage:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+---
+
 ### `r2e doctor`
 
 Run project health diagnostics.
@@ -355,10 +403,13 @@ r2e generate grpc-service Notification
 # 5. Check project health
 r2e doctor
 
-# 6. See all routes
+# 6. Run tests with SonarQube-compatible coverage
+r2e test --sonarqube
+
+# 7. See all routes
 r2e routes
 
-# 7. Start developing
+# 8. Start developing
 r2e dev
 ```
 

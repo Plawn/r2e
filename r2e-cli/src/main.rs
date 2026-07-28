@@ -1,7 +1,8 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{add, dev, docs, doctor, generate, new_project, routes};
+use commands::{add, dev, docs, doctor, generate, new_project, routes, test};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -60,6 +61,36 @@ enum Commands {
         /// Extra Cargo features to enable
         #[arg(long, num_args = 1..)]
         features: Vec<String>,
+    },
+    /// Run tests, optionally with coverage for SonarQube
+    Test {
+        /// Run tests with cargo-llvm-cov
+        #[arg(long)]
+        coverage: bool,
+        /// Generate an LCOV report consumable by SonarQube
+        #[arg(long)]
+        sonarqube: bool,
+        /// LCOV output path for --sonarqube
+        #[arg(long)]
+        output_path: Option<PathBuf>,
+        /// Test all workspace packages
+        #[arg(long)]
+        workspace: bool,
+        /// Package to test
+        #[arg(long = "package", short = 'p')]
+        packages: Vec<String>,
+        /// Extra Cargo features to enable
+        #[arg(long, num_args = 1..)]
+        features: Vec<String>,
+        /// Activate all available features
+        #[arg(long)]
+        all_features: bool,
+        /// Do not activate default features
+        #[arg(long)]
+        no_default_features: bool,
+        /// Arguments forwarded to the test binary after `--`
+        #[arg(last = true, allow_hyphen_values = true, num_args = 0..)]
+        test_args: Vec<String>,
     },
     /// Check project health
     Doctor,
@@ -147,6 +178,27 @@ fn main() {
         },
         Commands::Add { extension } => add::run(&extension),
         Commands::Dev { port, features } => dev::run(port, features),
+        Commands::Test {
+            coverage,
+            sonarqube,
+            output_path,
+            workspace,
+            packages,
+            features,
+            all_features,
+            no_default_features,
+            test_args,
+        } => test::run(test::TestOptions {
+            coverage,
+            sonarqube,
+            output_path,
+            workspace,
+            packages,
+            features,
+            all_features,
+            no_default_features,
+            test_args,
+        }),
         Commands::Doctor => doctor::run(),
         Commands::Routes => routes::run(),
         Commands::Docs {

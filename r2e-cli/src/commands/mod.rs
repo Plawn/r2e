@@ -47,6 +47,12 @@ pub mod new_project;
 /// routes, HTTP methods, handler names, and role annotations.
 pub mod routes;
 
+/// Test runner — `r2e test`.
+///
+/// Wraps `cargo test` and can generate `cargo llvm-cov` coverage reports,
+/// including LCOV output consumable by SonarQube.
+pub mod test;
+
 /// Shared template helpers and code templates.
 ///
 /// Provides string utilities (`to_snake_case`, `to_pascal_case`, `pluralize`,
