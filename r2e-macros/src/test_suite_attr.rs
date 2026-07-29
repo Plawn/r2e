@@ -10,21 +10,15 @@ use syn::{
 };
 
 use crate::crate_path::{r2e_core_path, r2e_test_path};
+use crate::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
 
 struct SuiteArgs {
     tracing: bool,
     app_ty: Option<syn::Path>,
     with_expr: Option<syn::Expr>,
     jwt: bool,
-    worker_threads: Option<usize>,
-    flavor: Option<bool>,
-    max_blocking_threads: Option<usize>,
-    thread_stack_size: Option<usize>,
-    thread_name: Option<String>,
-    global_queue_interval: Option<u32>,
-    event_interval: Option<u32>,
-    thread_keep_alive_secs: Option<u64>,
-    start_paused: Option<bool>,
+    /// Shared Tokio `runtime::Builder` knobs (`flavor`, `worker_threads`, …).
+    runtime: RuntimeArgs,
 }
 
 impl Default for SuiteArgs {
@@ -34,15 +28,7 @@ impl Default for SuiteArgs {
             app_ty: None,
             with_expr: None,
             jwt: true,
-            worker_threads: None,
-            flavor: None,
-            max_blocking_threads: None,
-            thread_stack_size: None,
-            thread_name: None,
-            global_queue_interval: None,
-            event_interval: None,
-            thread_keep_alive_secs: None,
-            start_paused: None,
+            runtime: RuntimeArgs::default(),
         }
     }
 }
@@ -70,30 +56,11 @@ impl SuiteArgs {
                 "app" => this.app_ty = Some(meta.value()?.parse()?),
                 "with" => this.with_expr = Some(meta.value()?.parse()?),
                 "jwt" => this.jwt = parse_bool(&meta)?,
-                "flavor" => {
-                    let s: syn::LitStr = meta.value()?.parse()?;
-                    this.flavor = Some(match s.value().as_str() {
-                        "current_thread" => true,
-                        "multi_thread" => false,
-                        other => {
-                            return Err(syn::Error::new_spanned(
-                                &s,
-                                format!(
-                                    "unknown flavor \"{other}\", expected \"current_thread\" or \"multi_thread\""
-                                ),
-                            ));
-                        }
-                    });
+                _ => {
+                    if !this.runtime.try_parse(&key, &meta)? {
+                        return Err(meta.error(format!("unknown argument `{key}`")));
+                    }
                 }
-                "worker_threads" => this.worker_threads = Some(parse_int(&meta)?),
-                "max_blocking_threads" => this.max_blocking_threads = Some(parse_int(&meta)?),
-                "thread_stack_size" => this.thread_stack_size = Some(parse_int(&meta)?),
-                "thread_name" => this.thread_name = Some(parse_str(&meta)?),
-                "global_queue_interval" => this.global_queue_interval = Some(parse_int(&meta)?),
-                "event_interval" => this.event_interval = Some(parse_int(&meta)?),
-                "thread_keep_alive" => this.thread_keep_alive_secs = Some(parse_int(&meta)?),
-                "start_paused" => this.start_paused = Some(parse_bool(&meta)?),
-                _ => return Err(meta.error(format!("unknown argument `{key}`"))),
             }
             Ok(())
         });
@@ -101,66 +68,6 @@ impl SuiteArgs {
         syn::parse::Parser::parse(parser, args)?;
         Ok(this)
     }
-
-    fn runtime_builder_tokens(&self) -> TokenStream2 {
-        let builder_fn = if self.flavor.unwrap_or(false) {
-            quote! { ::tokio::runtime::Builder::new_current_thread() }
-        } else {
-            quote! { ::tokio::runtime::Builder::new_multi_thread() }
-        };
-        let worker_threads = self.worker_threads.map(|n| quote! { .worker_threads(#n) });
-        let max_blocking = self
-            .max_blocking_threads
-            .map(|n| quote! { .max_blocking_threads(#n) });
-        let stack_size = self
-            .thread_stack_size
-            .map(|n| quote! { .thread_stack_size(#n) });
-        let thread_name = self
-            .thread_name
-            .as_ref()
-            .map(|s| quote! { .thread_name(#s) });
-        let gqi = self
-            .global_queue_interval
-            .map(|n| quote! { .global_queue_interval(#n) });
-        let ei = self.event_interval.map(|n| quote! { .event_interval(#n) });
-        let keep_alive = self.thread_keep_alive_secs.map(|secs| {
-            quote! { .thread_keep_alive(::std::time::Duration::from_secs(#secs)) }
-        });
-        let start_paused = self.start_paused.map(|b| quote! { .start_paused(#b) });
-
-        quote! {
-            #builder_fn
-                #worker_threads
-                #max_blocking
-                #stack_size
-                #thread_name
-                #gqi
-                #ei
-                #keep_alive
-                #start_paused
-                .enable_all()
-                .build()
-                .expect("failed to build tokio runtime")
-        }
-    }
-}
-
-fn parse_bool(meta: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
-    let b: syn::LitBool = meta.value()?.parse()?;
-    Ok(b.value)
-}
-
-fn parse_int<T: std::str::FromStr>(meta: &syn::meta::ParseNestedMeta) -> syn::Result<T>
-where
-    T::Err: std::fmt::Display,
-{
-    let i: syn::LitInt = meta.value()?.parse()?;
-    i.base10_parse()
-}
-
-fn parse_str(meta: &syn::meta::ParseNestedMeta) -> syn::Result<String> {
-    let s: syn::LitStr = meta.value()?.parse()?;
-    Ok(s.value())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -396,7 +303,7 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
     let suite_mod = format_ident!("__r2e_suite_{}", def.suite_ident);
     let self_ty = &def.self_ty;
     let total_cases = def.cases.len();
-    let runtime_builder = args.runtime_builder_tokens();
+    let runtime_builder = args.runtime.builder_tokens();
     let tracing_init = args
         .tracing
         .then(|| quote! { #core_crate::init_tracing(); });
@@ -827,18 +734,6 @@ fn suite_ident(ty: &Type) -> syn::Result<syn::Ident> {
         ty,
         "#[r2e::test_suite] requires an impl for a concrete path type",
     ))
-}
-
-fn type_ends_with(ty: &Type, name: &str) -> bool {
-    match ty {
-        Type::Path(p) => p
-            .path
-            .segments
-            .last()
-            .map(|seg| seg.ident == name)
-            .unwrap_or(false),
-        _ => false,
-    }
 }
 
 fn type_is_self(ty: &Type, self_ty: &Type) -> bool {

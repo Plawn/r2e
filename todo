@@ -6,4 +6,3 @@
 - remplacer des guards+check par des newTypes si cohérent, rendre les états invalides non representables
 - better grpc/proto automagic setup, auto compile, auto build.rs + etc
 - xitca web ? -> zero copy ?
-- audit de responsibilities boundaries (reste — la moitié scheduled/consumer est faite via W10)
