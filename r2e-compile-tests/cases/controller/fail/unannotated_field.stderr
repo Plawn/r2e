@@ -8,6 +8,8 @@ error: every controller field must be annotated with one of:
 
          #[config("app.key")]   — resolve from R2eConfig
 
+         #[live_config("app.key")]  — runtime-updatable LiveConfig<T> handle
+
          #[config_section(prefix = "...")]  — resolve typed config section via ConfigProperties
   --> cases/controller/fail/unannotated_field.rs:10:5
    |

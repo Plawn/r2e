@@ -20,6 +20,43 @@ pub trait ContextConstruct {
     /// a compile error at the registration call site.
     type Deps;
 
+    /// **Introspection only**: the config keys this core declares, as
+    /// `(key, type name, kind)` — the
+    /// [`Bean::config_keys`](crate::beans::Bean::config_keys) counterpart for
+    /// controller cores ("the controller core IS a bean").
+    ///
+    /// The [`ConfigKeyKind`](crate::config::ConfigKeyKind) records *how* each
+    /// key is consumed: a plain `#[config("key")]` field is `Required`, an
+    /// `Option<T>` one is `Optional`, a `#[config_section(prefix = "…")]` field
+    /// is `Section` (the entry's key is the **prefix**), and a
+    /// `#[live_config("key")]` field is `Live`.
+    ///
+    /// # This list drives nothing at runtime
+    ///
+    /// Unlike its `Bean` namesake it takes **no** part in dev-reload
+    /// invalidation, and it does not need to: controller cores are not cached,
+    /// so `register_controller` rebuilds every core from a fresh
+    /// [`BeanContext`](crate::beans::BeanContext) on every hot-patch cycle and
+    /// each `#[config]` field is re-read from the `R2eConfig` in that context.
+    /// The only cycle shape that hands a core a context from an earlier cycle
+    /// is the dev-reload full-reuse fast path, and that path is gated on the
+    /// **whole-config** fingerprint being unchanged — i.e. on the config being
+    /// byte-identical. There is therefore nothing left for a per-controller
+    /// fingerprint to invalidate. (Wiring these keys into the graph fingerprint
+    /// would also require making cores participate in the bean graph, which
+    /// they deliberately do not.)
+    ///
+    /// Startup presence validation likewise does not read this list — it runs
+    /// through [`Controller::validate_config`], generated alongside it.
+    ///
+    /// What the list *is* for: machine-readable declaration of a controller's
+    /// config surface, consumed today by tests and intended for tooling
+    /// (`r2e routes` / `r2e doctor`-style "which keys does this app read?"
+    /// reports). See `docs/claude/dev-reload-config-semantics.md` (Q6/B6).
+    fn config_keys() -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> {
+        Vec::new()
+    }
+
     /// Pull every app-scoped field from the resolved context.
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 }

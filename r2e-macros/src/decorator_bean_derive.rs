@@ -95,6 +95,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             a.path().is_ident("inject")
                 || a.path().is_ident("config")
                 || a.path().is_ident("config_section")
+                || a.path().is_ident("live_config")
         })
     };
     let (resolved, plain): (Vec<&syn::Field>, Vec<&syn::Field>) =
@@ -113,6 +114,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut resolved_inits: Vec<TokenStream2> = Vec::new();
     let mut has_config = false;
+    let mut has_live_config = false;
 
     for cf in &classified {
         let field_name = cf.name;
@@ -129,14 +131,15 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 resolved_inits.push(quote! { #field_name: __ctx.get::<#field_type>() });
             }
             FieldKind::ConfigSection { prefix } => {
-                resolved_inits.push(quote! {
-                    #field_name: #krate::config::ConfigProperties::from_config(&__cfg, Some(#prefix)).unwrap_or_else(|e| {
-                        panic!(
-                            "Configuration error in decorator bean `{}`: config section '{}' — {}",
-                            #name_str, #prefix, e
-                        )
-                    })
-                });
+                let owner = format!("decorator bean `{name_str}`");
+                let expr = crate::field_resolver::config_section_resolve_expr(
+                    &quote! { __cfg },
+                    prefix,
+                    field_type,
+                    &krate,
+                    &owner,
+                );
+                resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
             FieldKind::Config { key, .. } => {
@@ -153,12 +156,24 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
+            FieldKind::LiveConfig { key, .. } => {
+                let expr = crate::field_resolver::live_config_resolve_expr(
+                    &quote! { __r2e_live },
+                    key,
+                    Some(field_type),
+                );
+                resolved_inits.push(quote! { #field_name: #expr });
+                has_live_config = true;
+            }
             FieldKind::Default => unreachable!("allow_default is false"),
         }
     }
 
     if has_config {
         dep_types.push(quote! { #krate::config::R2eConfig });
+    }
+    if has_live_config {
+        dep_types.push(crate::field_resolver::live_config_registry_ty(&krate));
     }
     let deps_type = build_tcons_type(&dep_types, &krate);
 
@@ -167,6 +182,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     } else {
         quote! {}
     };
+    let live_config_prelude =
+        crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
 
     let spec_ident = format_ident!("__R2eSpec_{}", name);
     let plain_names: Vec<&syn::Ident> = plain.iter().map(|f| f.ident.as_ref().unwrap()).collect();
@@ -205,6 +222,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             fn build(self, __ctx: &#krate::beans::BeanContext) -> #name {
                 #config_prelude
+                #live_config_prelude
                 #name {
                     #(#resolved_inits,)*
                     #(#plain_names: self.#plain_names,)*

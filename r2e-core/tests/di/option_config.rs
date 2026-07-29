@@ -1,6 +1,7 @@
 //! `Option<T>` fed by `#[config]` params on beans and producers.
 
 use r2e_core::beans::{Bean, BeanError, BeanRegistry, Producer};
+use r2e_core::config::ConfigKeyKind;
 
 // ── Option<T> `#[config]` params (optional config) ──────────────────────
 //
@@ -114,29 +115,47 @@ async fn bean_option_config_present_resolves_some() {
     assert_eq!(bean.label.as_deref(), Some("prod"));
 }
 
-// Fix 1 (dev-reload fingerprint): EVERY `#[config]` key — optional included —
-// must appear in `config_keys()` so an edit to an optional value under
-// `r2e dev` rebuilds the bean. The `required` flag (3rd tuple element) is
-// `false` for `Option<T>` keys (skipped by presence validation) and `true`
-// otherwise.
+// Fix 1 (dev-reload fingerprint): EVERY *copied* `#[config]` key — optional
+// included — must appear in `config_keys()` so an edit to an optional value
+// under `r2e dev` rebuilds the bean. The `ConfigKeyKind` (3rd tuple element)
+// is `Optional` for `Option<T>` keys (skipped by presence validation) and
+// `Required` otherwise — both are fingerprinted.
 #[test]
 fn producer_option_config_key_is_fingerprinted_but_not_required() {
     let keys = <CreateDbSettings as Producer>::config_keys();
     assert_eq!(
         keys,
-        vec![("database.min-idle", "Option < u32 >", false)],
-        "optional config key must be present with required=false: {keys:?}"
+        vec![(
+            "database.min-idle",
+            "Option < u32 >",
+            ConfigKeyKind::Optional
+        )],
+        "optional config key must be present as Optional: {keys:?}"
+    );
+    assert!(!keys[0].2.is_required());
+    assert!(
+        keys[0].2.is_fingerprinted(),
+        "an optional copied key is still fingerprinted"
     );
 }
 
 #[test]
 fn producer_required_config_key_is_required() {
     let keys = <CreateRequiredSettings as Producer>::config_keys();
-    assert_eq!(keys, vec![("database.max-idle", "u32", true)]);
+    assert_eq!(
+        keys,
+        vec![("database.max-idle", "u32", ConfigKeyKind::Required)]
+    );
+    assert!(keys[0].2.is_required());
+    assert!(keys[0].2.is_fingerprinted());
 }
 
 #[test]
 fn bean_option_config_key_is_fingerprinted_but_not_required() {
     let keys = <OptConfigBean as Bean>::config_keys();
-    assert_eq!(keys, vec![("app.label", "Option < String >", false)]);
+    assert_eq!(
+        keys,
+        vec![("app.label", "Option < String >", ConfigKeyKind::Optional)]
+    );
+    assert!(keys[0].2.is_fingerprinted());
 }

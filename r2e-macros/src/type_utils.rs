@@ -170,6 +170,23 @@ pub fn parse_config_field(attr: &syn::Attribute, ty: &Type) -> syn::Result<(Stri
     Ok((key, ty_name))
 }
 
+/// Parse a `#[live_config("app.key")]` attribute against its declared type,
+/// producing the key and a stringified type name.
+///
+/// Same shape as [`parse_config_field`], but a bare `#[live_config]` gets a
+/// targeted error instead of syn's generic "expected attribute arguments"
+/// message.
+pub fn parse_live_config_field(attr: &syn::Attribute, ty: &Type) -> syn::Result<(String, String)> {
+    if !matches!(attr.meta, syn::Meta::List(_)) {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[live_config] requires a config key:\n\
+             \n  #[live_config(\"app.key\")] url: LiveConfig<String>",
+        ));
+    }
+    parse_config_field(attr, ty)
+}
+
 /// Build the actionable remediation sentence appended to a required-config
 /// panic message.
 ///

@@ -17,6 +17,12 @@ postgres = ["diesel/postgres"]
 mysql = ["diesel/mysql"]
 
 [dependencies]
+arc-swap = "1"
 r2e-core = {workspace = true}
 diesel = {workspace = true, features = ["r2d2"]}
 tokio = {workspace = true, features = ["rt-multi-thread"]}
+tokio-util = {workspace = true}
+
+[dev-dependencies]
+tokio = {workspace = true, features = ["macros", "rt-multi-thread", "time"]}
+tokio-util = {workspace = true}

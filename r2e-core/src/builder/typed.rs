@@ -6,6 +6,55 @@ use super::*;
 // ── Typed phase (state resolved) ────────────────────────────────────────────
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
+    pub(crate) fn collect_service_sources(
+        mut self,
+        service_sources: Vec<(&'static str, crate::beans::ServiceSourceHook)>,
+    ) -> Self {
+        for (name, hook) in service_sources {
+            let ctx = Arc::clone(&self.bean_context);
+            self = self.register_service(move |token| {
+                tracing::debug!(service = name, "started bean service");
+                hook(&ctx, token)
+            });
+        }
+        self
+    }
+
+    /// Spawn a background task, track its join handle for shutdown draining,
+    /// and register a shutdown hook that cancels it. Shared by
+    /// [`spawn_service`](Self::spawn_service) and
+    /// [`collect_service_sources`](Self::collect_service_sources); `run`
+    /// receives the [`CancellationToken`] and returns the service future.
+    fn register_service<F, Fut>(mut self, run: F) -> Self
+    where
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let token = CancellationToken::new();
+        let shutdown_token = token.clone();
+
+        // Get-or-insert the shared ServiceHandles collector in plugin_data so
+        // `run_with_listener` can await all service tasks on shutdown.
+        let handles = self
+            .shared
+            .plugin_data
+            .entry(TypeId::of::<ServiceHandles>())
+            .or_insert_with(|| Box::new(ServiceHandles::default()))
+            .downcast_ref::<ServiceHandles>()
+            .expect("ServiceHandles type mismatch in plugin_data")
+            .clone();
+
+        self = self.on_start(move |_state| async move {
+            let join = crate::rt::spawn(run(token));
+            handles.push(join);
+            Ok(())
+        });
+        self.plugin_shutdown_hooks.push(Box::new(move || {
+            shutdown_token.cancel();
+        }));
+        self
+    }
+
     /// Internal: construct a typed builder from the pre-state shared config.
     ///
     /// `bean_context` is the resolved bean graph (retained so controllers and
@@ -391,33 +440,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///     .spawn_service::<MetricsExporter>()
     ///     .serve("0.0.0.0:3000").await
     /// ```
-    pub fn spawn_service<C: ServiceComponent>(mut self) -> Self {
-        let token = CancellationToken::new();
-        let shutdown_token = token.clone();
-
-        // Get-or-insert the shared ServiceHandles collector in plugin_data so
-        // `run_with_listener` can await all spawn_service tasks on shutdown.
-        let handles = self
-            .shared
-            .plugin_data
-            .entry(TypeId::of::<ServiceHandles>())
-            .or_insert_with(|| Box::new(ServiceHandles::default()))
-            .downcast_ref::<ServiceHandles>()
-            .expect("ServiceHandles type mismatch in plugin_data")
-            .clone();
-
+    pub fn spawn_service<C: ServiceComponent>(self) -> Self {
         let service = C::from_context(&self.bean_context);
-        self = self.on_start(move |_state| async move {
-            let join = crate::rt::spawn(service.start(token));
-            handles.push(join);
-            Ok(())
-        });
-
-        self.plugin_shutdown_hooks.push(Box::new(move || {
-            shutdown_token.cancel();
-        }));
-
-        self
+        self.register_service(move |token| service.start(token))
     }
 
     /// Get plugin data by type.

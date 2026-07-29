@@ -48,15 +48,19 @@ pub type Registered<Provided, Deps, P, R, Mods> =
     AppBuilder<NoState, TCons<Provided, P>, <R as TAppend<Deps>>::Output, Mods>;
 
 /// Builder returned by [`load_config`](AppBuilder::load_config): pushes the
-/// typed config `C`, the raw [`R2eConfig`](crate::config::R2eConfig), and
-/// `C`'s nested section types (`C::Children`) onto the provision list.
+/// typed config `C`, runtime [`LiveConfigRegistry`](crate::config::LiveConfigRegistry),
+/// the raw [`R2eConfig`](crate::config::R2eConfig), and `C`'s nested section
+/// types (`C::Children`) onto the provision list.
 pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
     NoState,
     TCons<
         C,
         TCons<
-            crate::config::R2eConfig,
-            <<C as crate::config::LoadableConfig>::Children as TAppend<P>>::Output,
+            crate::config::LiveConfigRegistry,
+            TCons<
+                crate::config::R2eConfig,
+                <<C as crate::config::LoadableConfig>::Children as TAppend<P>>::Output,
+            >,
         >,
     >,
     R,
@@ -173,6 +177,35 @@ fn resolve_profile(forced: Option<&str>, config: &crate::config::R2eConfig) -> S
         .unwrap_or_else(|| "default".to_string())
 }
 
+/// The [`LiveConfigRegistry`](crate::config::LiveConfigRegistry) this
+/// `load_config` cycle must hand to the bean graph.
+///
+/// Outside the Subsecond hot-patch loop — production, tests, anything that
+/// never calls `dev::mark_hot_reload_loop()` — this is a plain
+/// `LiveConfigRegistry::from_config`, one fresh registry per `load_config`.
+///
+/// **Inside** the loop the registry has a single identity for the whole
+/// process: `#[live_config]` handles bind one slot of one registry forever, so
+/// the surviving instance is re-seeded from the freshly loaded config rather
+/// than replaced (see [`LiveConfigRegistry::reseed`] for the diff rules).
+fn live_config_registry_for_cycle(
+    config: &crate::config::R2eConfig,
+    pinned_keys: std::collections::HashSet<String>,
+) -> crate::config::LiveConfigRegistry {
+    #[cfg(feature = "dev-reload")]
+    {
+        if let Some(carried) = crate::dev::carried_live_config_registry() {
+            carried.reseed(config, pinned_keys);
+            return carried;
+        }
+        let fresh = crate::config::LiveConfigRegistry::from_config(config, pinned_keys);
+        crate::dev::carry_live_config_registry(&fresh);
+        return fresh;
+    }
+    #[cfg(not(feature = "dev-reload"))]
+    crate::config::LiveConfigRegistry::from_config(config, pinned_keys)
+}
+
 /// Marker type: application state has not been set yet.
 ///
 /// `AppBuilder<NoState>` is the initial phase returned by [`AppBuilder::new()`].
@@ -225,6 +258,14 @@ struct BuilderConfig {
     /// dev-reload loop set it. Left `Some` at `build_state` (never consumed by
     /// a `load_config` call) is a panic — the config would be silently ignored.
     preloaded_config: Option<crate::config::R2eConfig>,
+    /// External config providers applied by `load_config`.
+    config_providers: Vec<Arc<dyn crate::config::ConfigProvider>>,
+    /// The live-config registry created by `load_config` (the very same
+    /// `Arc`-shared instance handed to the bean registry and to provider watch
+    /// tasks). Retained so a *late*
+    /// [`AppBuilder::override_config_value`](AppBuilder::override_config_value)
+    /// can patch and pin the live slot too, not just `R2eConfig`.
+    live_config: Option<crate::config::LiveConfigRegistry>,
     /// Stop handle wired via [`AppBuilder::with_stop_handle`]; `prepare()`
     /// creates one lazily when absent.
     stop_handle: Option<StopHandle>,

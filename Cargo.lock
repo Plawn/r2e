@@ -5719,6 +5719,7 @@ dependencies = [
 name = "r2e-core"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "criterion",
  "dashmap",
@@ -5750,18 +5751,25 @@ dependencies = [
 name = "r2e-data-diesel"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "diesel",
  "r2e-core",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
 name = "r2e-data-sqlx"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
+ "async-stream",
+ "futures-core",
+ "futures-util",
  "r2e-core",
  "sqlx",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

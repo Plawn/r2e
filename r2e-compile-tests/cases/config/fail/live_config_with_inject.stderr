@@ -1,0 +1,8 @@
+error: #[live_config] cannot be combined with #[inject] — pick one scope:
+
+         #[inject]                  — clone an app-scoped bean
+         #[live_config("app.key")]  — runtime-updatable config handle (LiveConfig<T>)
+ --> cases/config/fail/live_config_with_inject.rs:7:5
+  |
+7 |     #[live_config("db.url")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^

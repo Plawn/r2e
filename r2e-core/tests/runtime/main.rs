@@ -4,6 +4,9 @@
 
 #[cfg(feature = "dev-reload")]
 mod dev_reload;
+#[cfg(feature = "dev-reload")]
+mod dev_reload_config;
+mod dev_serial;
 mod rt;
 mod sharded;
 mod tcp_nodelay;

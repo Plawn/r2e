@@ -1,0 +1,7 @@
+error: #[live_config] requires a config key:
+
+         #[live_config("app.key")] url: LiveConfig<String>
+ --> cases/config/fail/live_config_missing_key.rs:7:5
+  |
+7 |     #[live_config]
+  |     ^^^^^^^^^^^^^^

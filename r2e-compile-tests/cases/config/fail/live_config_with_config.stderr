@@ -1,0 +1,8 @@
+error: #[live_config] cannot be combined with #[config] — pick one:
+
+         #[config("app.key")]       — boot-time snapshot (plain T)
+         #[live_config("app.key")]  — runtime-updatable handle (LiveConfig<T>)
+ --> cases/config/fail/live_config_with_config.rs:7:5
+  |
+7 |     #[live_config("db.url")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^

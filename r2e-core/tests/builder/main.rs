@@ -9,5 +9,6 @@ mod app;
 mod hlist;
 mod overrides;
 mod prepared;
+mod service_start;
 mod state_wiring;
 mod type_list;

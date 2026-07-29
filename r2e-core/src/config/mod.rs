@@ -1,5 +1,6 @@
 mod loader;
 pub mod registry;
+mod runtime;
 pub mod secrets;
 pub mod typed;
 pub mod validation;
@@ -10,12 +11,86 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use registry::{register_section, registered_sections, RegisteredSection};
+pub use runtime::{
+    ConfigProvider, ConfigProviderContext, ConfigUpdateSink, ConfigWatchContext, LiveConfig,
+    LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot,
+};
 pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{
     validate_keys, validate_section, validate_section_keys, ConfigValidationError, MissingKeyError,
 };
 pub use value::{deserialize_value, ConfigValue, FromConfigValue};
+
+/// How a bean/producer/controller consumes one of its declared config keys.
+///
+/// R2E has exactly **two freshness modes** for configuration, and this enum is
+/// the discriminator between them:
+///
+/// - **Copied** ([`Required`](ConfigKeyKind::Required) /
+///   [`Optional`](ConfigKeyKind::Optional) /
+///   [`Section`](ConfigKeyKind::Section)) — the value is read once at
+///   construction and stored in the bean. Freshness comes from *rebuilding*:
+///   the key participates in the bean's dev-reload fingerprint, so editing it
+///   under `r2e dev` reconstructs the declaring bean and its dependents.
+/// - **Subscribed** ([`Live`](ConfigKeyKind::Live)) — the bean holds a
+///   `LiveConfig<T>` handle bound to a registry slot. Freshness comes from
+///   *push*: the value is delivered through the slot, so the key must **not**
+///   be fingerprinted (rebuilding would be pointless churn that also throws
+///   away the bean's in-memory state).
+///
+/// Presence validation is orthogonal and only applies to `Required`.
+///
+/// One entry's `key` is an **exact** config key for every kind except
+/// [`Section`](ConfigKeyKind::Section), where it is a dotted **prefix**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConfigKeyKind {
+    /// `#[config("key")]` on a non-`Option` field/param: the value must be
+    /// present at startup, and it is fingerprinted.
+    Required,
+    /// `#[config("key")]` on an `Option<T>` field/param: absence is allowed,
+    /// but the value is still fingerprinted (editing it rebuilds the bean).
+    Optional,
+    /// `#[config_section(prefix = "…")]` — a typed [`ConfigProperties`] struct
+    /// copied out of the config at construction. The entry's key is the
+    /// **prefix**, not an exact key: the declaring bean is fingerprinted over
+    /// *every* config key under that prefix
+    /// ([`R2eConfig::prefix_fingerprint`]), so editing any field of the section
+    /// rebuilds it.
+    ///
+    /// Never presence-validated: a section validates itself at construction —
+    /// `ConfigProperties::from_config` reports a missing or mistyped field and
+    /// the generated init panics with the section name. Adding a second,
+    /// key-level presence check here would be redundant and could not even name
+    /// the required keys (they live in the struct, not in the attribute).
+    Section,
+    /// `#[live_config("key")]`: the value is subscribed, never presence-
+    /// validated, and deliberately **excluded** from the bean fingerprint.
+    Live,
+}
+
+impl ConfigKeyKind {
+    /// Whether the key must be present in the configuration at startup.
+    ///
+    /// `Section` is deliberately **not** required: construction *is* its
+    /// validator (see the variant docs).
+    pub fn is_required(self) -> bool {
+        matches!(self, ConfigKeyKind::Required)
+    }
+
+    /// Whether the key participates in the declaring bean's dev-reload
+    /// fingerprint (i.e. whether editing it should rebuild the bean).
+    pub fn is_fingerprinted(self) -> bool {
+        !matches!(self, ConfigKeyKind::Live)
+    }
+
+    /// Whether the entry's key is a dotted **prefix** covering a whole config
+    /// section rather than one exact key. Drives the fingerprint split in
+    /// `BeanRegistry::compute_reg_fingerprint`.
+    pub fn is_prefix(self) -> bool {
+        matches!(self, ConfigKeyKind::Section)
+    }
+}
 
 /// A single validation error detail from typed config validation (e.g., garde).
 #[derive(Debug, Clone)]
@@ -110,16 +185,19 @@ fn profile_file_for(base: &Path, profile: &str) -> std::path::PathBuf {
 /// `-` or an in-segment `_` (`security.jwt.jwks-url`, `database.max_idle`)
 /// cannot be targeted by any `R2E_` var; env-driven values for such keys go
 /// through `${VAR}` placeholders in YAML instead.
+fn env_overlay_key(env_key: &str) -> Option<String> {
+    env_key
+        .strip_prefix("R2E_")
+        .filter(|rest| !rest.is_empty())
+        .map(|rest| rest.to_lowercase().replace('_', "."))
+}
+
 fn apply_env_overlay<I: IntoIterator<Item = (String, String)>>(
     values: &mut HashMap<String, ConfigValue>,
     env: I,
 ) {
     for (env_key, env_val) in env {
-        if let Some(rest) = env_key.strip_prefix("R2E_") {
-            if rest.is_empty() {
-                continue;
-            }
-            let config_key = rest.to_lowercase().replace('_', ".");
+        if let Some(config_key) = env_overlay_key(&env_key) {
             values.insert(config_key, ConfigValue::String(env_val));
         }
     }
@@ -278,6 +356,31 @@ impl R2eConfig {
         apply_env_overlay(values, env);
     }
 
+    /// Re-apply the current process `R2E_` environment overlay.
+    #[doc(hidden)]
+    pub fn apply_current_env_overlay(&mut self) {
+        apply_env_overlay(Arc::make_mut(&mut self.values), std::env::vars());
+    }
+
+    /// Return the config keys addressed by current `R2E_` environment vars,
+    /// using the same strict mapping as the env overlay.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn current_env_overlay_keys() -> Vec<String> {
+        std::env::vars()
+            .filter_map(|(key, _)| env_overlay_key(&key))
+            .collect()
+    }
+
+    /// Resolve `${...}` placeholders in current string values.
+    #[doc(hidden)]
+    pub fn resolve_placeholders_with(
+        &mut self,
+        resolver: &dyn SecretResolver,
+    ) -> Result<(), ConfigError> {
+        resolve_string_values(Arc::make_mut(&mut self.values), resolver)
+    }
+
     /// Create a config from a YAML string (useful for testing).
     pub fn from_yaml_str(yaml: &str) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
@@ -297,6 +400,15 @@ impl R2eConfig {
     /// Set a value programmatically.
     pub fn set(&mut self, key: &str, value: ConfigValue) {
         Arc::make_mut(&mut self.values).insert(key.to_string(), value);
+    }
+
+    /// Borrow the raw, unconverted value for a key.
+    ///
+    /// The lazy-seed path of [`LiveConfigRegistry`]: a live slot created on
+    /// first access reads its boot value straight out of the config map, with
+    /// no typed conversion and no intermediate materialization.
+    pub(crate) fn raw(&self, key: &str) -> Option<&ConfigValue> {
+        self.values.get(key)
     }
 }
 
@@ -408,6 +520,37 @@ impl R2eConfig {
         hasher.finish()
     }
 
+    /// Fingerprint of every key under a dotted `prefix` — the section
+    /// counterpart of [`config_fingerprint`](Self::config_fingerprint).
+    ///
+    /// A `#[config_section(prefix = "db")]` field copies a whole subtree out of
+    /// the config, so the declaring bean must be rebuilt when *any* key under
+    /// that subtree moves. Exact-key hashing cannot express that: the section's
+    /// field set lives in the typed struct, not in the attribute. This hashes
+    /// the prefix itself, then every key equal to `prefix` or starting with
+    /// `"{prefix}."` together with its value, keys sorted — same shape and same
+    /// hasher as [`full_fingerprint`](Self::full_fingerprint), so adding or
+    /// removing a key inside the section moves the digest just like editing one
+    /// does.
+    pub fn prefix_fingerprint(&self, prefix: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let dotted = format!("{prefix}.");
+        let mut keys: Vec<&str> = self
+            .values
+            .keys()
+            .map(String::as_str)
+            .filter(|key| *key == prefix || key.starts_with(&dotted))
+            .collect();
+        keys.sort_unstable();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        prefix.hash(&mut hasher);
+        for key in keys {
+            key.hash(&mut hasher);
+            self.values[key].hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Compute a fingerprint (hash) over a set of config keys.
     ///
     /// Returns a `u64` hash of the values at the given keys. Used by the
@@ -474,8 +617,14 @@ impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
         registry: &mut crate::beans::BeanRegistry,
     ) -> Result<(), ConfigError> {
         let typed = T::from_config(config, None)?;
-        typed.register_children(registry);
-        registry.provide(typed);
+        // The typed struct and every nested `#[config(section)]` child are
+        // rebuilt from the fresh config by each `load_config`, so they must be
+        // exempt from the dev-reload pinning of provided values — otherwise a
+        // section edit stays invisible for the whole dev session.
+        registry.config_derived_scope(move |registry| {
+            typed.register_children(registry);
+            registry.provide(typed);
+        });
         Ok(())
     }
 }

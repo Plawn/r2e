@@ -54,9 +54,11 @@ pub use builder::{
 };
 pub use config::{
     deserialize_value, register_section, registered_sections, validate_keys, validate_section,
-    ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValidationError, ConfigValue,
-    DefaultSecretResolver, FromConfigValue, LoadableConfig, MissingKeyError, PluginConfig,
-    PropertyMeta, R2eConfig, RegisteredSection, SecretResolver,
+    ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
+    ConfigValidationDetail, ConfigValidationError, ConfigValue, ConfigWatchContext,
+    DefaultSecretResolver, FromConfigValue, LiveConfig, LiveConfigReceiver, LiveConfigRegistry,
+    LiveConfigSnapshot, LoadableConfig, MissingKeyError, PluginConfig, PropertyMeta, R2eConfig,
+    RegisteredSection, SecretResolver,
 };
 pub use controller::{ContextConstruct, Controller, EndpointDeps};
 pub use decorator::{

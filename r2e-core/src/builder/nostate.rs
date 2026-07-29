@@ -25,6 +25,8 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 config_file: None,
                 config_overrides: Vec::new(),
                 preloaded_config: None,
+                config_providers: Vec::new(),
+                live_config: None,
                 stop_handle: None,
                 bean_disposers: Vec::new(),
             },
@@ -359,16 +361,98 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             }
             .unwrap_or_else(|e| panic!("Failed to load config: {e}")),
         };
+        if !self.shared.config_providers.is_empty() {
+            let provider_profile = resolve_profile(self.shared.forced_profile.as_deref(), &config);
+            for provider in &self.shared.config_providers {
+                provider
+                    .load(
+                        &mut config,
+                        crate::config::ConfigProviderContext {
+                            profile: &provider_profile,
+                        },
+                    )
+                    .unwrap_or_else(|e| panic!("Failed to load config provider: {e}"));
+            }
+            config
+                .resolve_placeholders_with(&crate::config::DefaultSecretResolver)
+                .unwrap_or_else(|e| panic!("Failed to resolve provider config placeholders: {e}"));
+            config.apply_current_env_overlay();
+        }
+        let mut pinned_keys: std::collections::HashSet<String> =
+            crate::config::R2eConfig::current_env_overlay_keys()
+                .into_iter()
+                .collect();
         for (key, value) in self.shared.config_overrides.drain(..) {
+            pinned_keys.insert(key.clone());
             config.set(&key, value);
+        }
+        let live = live_config_registry_for_cycle(&config, pinned_keys);
+        if !self.shared.config_providers.is_empty() {
+            // A provider may fill a key in at runtime that is absent at boot, so
+            // "absent" stops being evidence of a typo — silence the dead-key
+            // warning `live_config()` would otherwise emit.
+            live.mark_has_providers();
         }
         C::register(&config, &mut self.shared.bean_registry)
             .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
         self.shared.active_profile =
             resolve_profile(self.shared.forced_profile.as_deref(), &config);
         self.shared.config = Some(config.clone());
-        self.shared.bean_registry.provide(config);
+        // Both are recomputed from the fresh config on every dev-reload cycle,
+        // so the partial rebuild must not pin them from the previous one.
+        let live_for_registry = live.clone();
+        self.shared
+            .bean_registry
+            .config_derived_scope(move |registry| {
+                registry.provide(config);
+                registry.provide(live_for_registry);
+            });
+        // Retained so a late `override_config_value` patches (and pins) the
+        // same shared registry the beans and provider watchers see.
+        self.shared.live_config = Some(live.clone());
+        if !self.shared.config_providers.is_empty() {
+            let providers = self.shared.config_providers.clone();
+            let profile = self.shared.active_profile.clone();
+            self.shared
+                .deferred_actions
+                .push(crate::plugin::DeferredAction::new(
+                    "ConfigProviderWatch",
+                    move |ctx| {
+                        for provider in providers {
+                            let live = live.clone();
+                            let profile = profile.clone();
+                            ctx.on_serve(move |serve_ctx| {
+                                let watch_ctx = crate::config::ConfigWatchContext::new(
+                                    profile,
+                                    serve_ctx.shutdown_token(),
+                                );
+                                let sink = crate::config::ConfigUpdateSink::new(live);
+                                let handle = crate::rt::spawn(async move {
+                                    if let Err(error) = provider.watch(watch_ctx, sink).await {
+                                        tracing::warn!(
+                                            error = %error,
+                                            "config provider watch stopped with an error"
+                                        );
+                                    }
+                                });
+                                serve_ctx.track(handle);
+                            });
+                        }
+                    },
+                ));
+        }
         self.with_updated_types()
+    }
+
+    /// Register an external config provider applied by a later [`load_config`](Self::load_config).
+    pub fn with_config_provider<Pv: crate::config::ConfigProvider>(mut self, provider: Pv) -> Self {
+        assert!(
+            self.shared.config.is_none(),
+            "with_config_provider() was called after load_config() - providers must be \
+             registered before load_config() so typed config and beans see their values."
+        );
+        self.shared.config_providers.push(Arc::new(provider));
+        self
     }
 
     // ── Test-harness pre-configuration ─────────────────────────────────
@@ -467,24 +551,45 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// [`load_config`](Self::load_config) loads — regardless of call order, and
     /// winning over [`override_config`](Self::override_config).
     ///
-    /// If config is already loaded, the key is set immediately; otherwise it
-    /// is stashed and applied right after loading (the `@TestProfile`
-    /// config-override equivalent).
+    /// If config is already loaded, the key is set immediately — in
+    /// [`R2eConfig`](crate::config::R2eConfig) **and** in the
+    /// [`LiveConfigRegistry`](crate::config::LiveConfigRegistry) slot, which is
+    /// also pinned so a config provider's runtime watch cannot overwrite the
+    /// override. Otherwise it is stashed and applied right after loading (the
+    /// `@TestProfile` config-override equivalent), with the same pinning.
+    ///
+    /// **Typed config structs are not rebuilt by a late override.** The
+    /// [`ConfigProperties`](crate::config::ConfigProperties) beans (and
+    /// `#[config(section)]` sections) are constructed inside
+    /// [`load_config`](Self::load_config) from the config as it stood then, so
+    /// an `override_config_value` called *after* `load_config` is invisible to
+    /// them — only the raw `R2eConfig` key, `#[config("key")]` injection, and
+    /// the live registry see it. Override **before** `load_config` when a typed
+    /// section must pick the value up.
     pub fn override_config_value(
         mut self,
         key: impl Into<String>,
         value: impl Into<crate::config::ConfigValue>,
     ) -> Self {
+        let key = key.into();
+        let value = value.into();
         match self.shared.config.as_mut() {
             Some(config) => {
-                config.set(&key.into(), value.into());
+                config.set(&key, value.clone());
                 // Keep the registry copy in sync with the patched config.
-                self.shared.bean_registry.provide(config.clone());
+                let patched = config.clone();
+                self.shared.bean_registry.provide(patched);
+                // …and the live registry, which is the read path for
+                // `#[live_config]` handles. `pin_set` also pins the key, so a
+                // provider watch cannot clobber the override at runtime — the
+                // same guarantee the pre-`load_config` path gets through
+                // `pinned_keys`.
+                if let Some(live) = self.shared.live_config.as_ref() {
+                    live.pin_set(key, value);
+                }
             }
             None => {
-                self.shared
-                    .config_overrides
-                    .push((key.into(), value.into()));
+                self.shared.config_overrides.push((key, value));
             }
         }
         self
@@ -717,6 +822,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let mut registry = std::mem::take(&mut self.shared.bean_registry);
         let scheduled_sources = registry.take_scheduled_sources();
         let event_subscribers = registry.take_event_subscribers();
+        let service_sources = registry.take_service_sources();
 
         // Only inside the actual Subsecond hot-patch loop (`r2e::launch!`
         // marks it) do the process-global dev-reload caches engage. Merely
@@ -749,6 +855,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     // even when the bean instances are reused.
                     return Ok(Mods::register_controllers(
                         AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
+                            .collect_service_sources(service_sources)
                             .collect_bean_scheduled_tasks(scheduled_sources)
                             .collect_bean_subscribers(event_subscribers),
                     ));
@@ -807,6 +914,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
             return Ok(Mods::register_controllers(
                 AppBuilder::from_pre(self.shared, state, ctx)
+                    .collect_service_sources(service_sources)
                     .collect_bean_scheduled_tasks(scheduled_sources)
                     .collect_bean_subscribers(event_subscribers),
             ));
@@ -819,6 +927,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
         Ok(Mods::register_controllers(
             AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
+                .collect_service_sources(service_sources)
                 .collect_bean_scheduled_tasks(scheduled_sources)
                 .collect_bean_subscribers(event_subscribers),
         ))

@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, Producer};
+use r2e_core::config::ConfigKeyKind;
 use r2e_core::type_list::TNil;
 
 // ── Lazy beans (`#[bean(lazy)]` runtime path) ───────────────────────────────
@@ -224,8 +225,8 @@ impl Bean for LazyCfgRequired {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
-        vec![("lazy.greeting", "String", true)]
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        vec![("lazy.greeting", "String", ConfigKeyKind::Required)]
     }
     fn build(_ctx: &BeanContext) -> Self {
         LazyCfgRequired
@@ -241,8 +242,8 @@ impl Bean for LazyCfgOptional {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
-        vec![("lazy.greeting", "String", false)]
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        vec![("lazy.greeting", "String", ConfigKeyKind::Optional)]
     }
     fn build(_ctx: &BeanContext) -> Self {
         LazyCfgOptional

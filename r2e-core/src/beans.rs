@@ -1,3 +1,4 @@
+use crate::config::ConfigKeyKind;
 use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -35,15 +36,21 @@ pub trait Bean: Clone + Send + Sync + 'static {
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys referenced by this bean as
-    /// `(key, type_name, required)` triples.
+    /// `(key, type_name, kind)` triples.
     ///
     /// Used by [`BeanRegistry::resolve`] to validate config presence and, under
-    /// `dev-reload`, to fingerprint the config values a bean depends on. Only
-    /// `required` keys (non-`Option<T>` fields) are presence-validated; **every**
-    /// key — required or optional — is fingerprinted, so editing an optional
-    /// value under `r2e dev` still rebuilds the bean. The default implementation
-    /// returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
+    /// `dev-reload`, to fingerprint the config values a bean depends on. The
+    /// [`ConfigKeyKind`] decides both:
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required`, [`Optional`](ConfigKeyKind::Optional) and
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted (editing any
+    /// of them rebuilds the bean under `r2e dev`); and
+    /// [`Live`](ConfigKeyKind::Live) keys — `#[live_config]` — are neither:
+    /// they are pushed into the bean's `LiveConfig` handle instead. A `Section`
+    /// entry's key is a dotted **prefix** (`#[config_section(prefix = "…")]`),
+    /// so the whole subtree under it is fingerprinted. The default
+    /// implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         Vec::new()
     }
 
@@ -120,10 +127,14 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys referenced by this bean as
-    /// `(key, type_name, required)` triples. Only `required` keys are
-    /// presence-validated; every key is fingerprinted under `dev-reload`.
-    /// The default implementation returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
+    /// `(key, type_name, kind)` triples. Only
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required` + [`Optional`](ConfigKeyKind::Optional) +
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted under
+    /// `dev-reload` (a `Section` key is a dotted **prefix**, and covers the
+    /// whole subtree under it), [`Live`](ConfigKeyKind::Live) keys are not. The
+    /// default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         Vec::new()
     }
 
@@ -180,10 +191,14 @@ pub trait Producer: Send + 'static {
     fn dependencies() -> Vec<(TypeId, &'static str)>;
 
     /// Returns the config keys referenced by this producer as
-    /// `(key, type_name, required)` triples. Only `required` keys are
-    /// presence-validated; every key is fingerprinted under `dev-reload`.
-    /// The default implementation returns an empty list.
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
+    /// `(key, type_name, kind)` triples. Only
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required` + [`Optional`](ConfigKeyKind::Optional) +
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted under
+    /// `dev-reload` (a `Section` key is a dotted **prefix**, and covers the
+    /// whole subtree under it), [`Live`](ConfigKeyKind::Live) keys are not. The
+    /// default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         Vec::new()
     }
 
@@ -212,6 +227,9 @@ pub trait Producer: Send + 'static {
     /// return `Some(...)` / `None`. The whole `Option<T>` is registered as
     /// a bean — consumers inject `Option<T>` as a hard dependency.
     fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
+
+    /// Called after registration to allow post-processing.
+    fn after_register(_registry: &mut BeanRegistry) {}
 }
 
 /// Lifecycle hook called after all beans have been constructed.
@@ -493,6 +511,16 @@ type ScheduledSourceHook = Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Sen
 type EventSubscriberHook =
     Box<dyn FnOnce(&BeanContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
+/// A lifecycle service hook: reads from the resolved graph and runs until the
+/// shutdown token is cancelled.
+pub(crate) type ServiceSourceHook = Box<
+    dyn FnOnce(
+            &BeanContext,
+            tokio_util::sync::CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send,
+>;
+
 /// A decorator-fill hook: reads its target bean by type from the resolved
 /// graph and fills the bean's shared decorator slot with interceptor sets
 /// built from that same graph. Run inside [`BeanRegistry::resolve`] after
@@ -507,10 +535,10 @@ struct LazyBeanRegistration {
     type_name: &'static str,
     /// (TypeId, human-readable name) for each dependency — used for validation only.
     dependencies: Vec<(TypeId, &'static str)>,
-    /// (config_key, expected_type_name, required) for config validation and
-    /// dev-reload fingerprinting. Optional (`required = false`) keys are
-    /// fingerprinted but not presence-validated.
-    config_keys: Vec<(&'static str, &'static str, bool)>,
+    /// (config_key, expected_type_name, kind) for config validation and
+    /// dev-reload fingerprinting. `Optional` keys are fingerprinted but not
+    /// presence-validated; `Live` keys are neither (they are pushed).
+    config_keys: Vec<(&'static str, &'static str, ConfigKeyKind)>,
     #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
     build_version: u64,
     /// Creates a `LazySlot<T>` (type-erased as `Arc<dyn LazyResolve>`) given a
@@ -527,7 +555,7 @@ struct FingerprintReg<'a> {
     type_id: TypeId,
     type_name: &'static str,
     dependencies: &'a Vec<(TypeId, &'static str)>,
-    config_keys: &'a Vec<(&'static str, &'static str, bool)>,
+    config_keys: &'a Vec<(&'static str, &'static str, ConfigKeyKind)>,
     build_version: u64,
     is_lazy: bool,
 }
@@ -572,6 +600,9 @@ pub struct BeanRegistry {
     /// the bean `TypeId` (one hook per type — the default/override pattern
     /// registers twice but must subscribe once).
     event_subscribers: Vec<(TypeId, &'static str, EventSubscriberHook)>,
+    /// Service hooks queued by `after_register`, usually generated by
+    /// `#[producer(start)]`.
+    service_sources: Vec<(TypeId, &'static str, ServiceSourceHook)>,
     /// Decorator-fill hooks queued by `after_register` (generated by `#[bean]`
     /// when a `#[scheduled]`/`#[consumer]` method carries `#[intercept]`). Run
     /// inside [`resolve`](Self::resolve) after bean construction and before
@@ -583,6 +614,17 @@ pub struct BeanRegistry {
     /// cycle's context (except `R2eConfig`, which is deliberately re-read
     /// per patch) so reused and rebuilt beans keep sharing one instance.
     provided_reuse_clones: HashMap<TypeId, ReuseCloneFn>,
+    /// Provided values that are **derived from the config** and therefore
+    /// recomputed from scratch by every `load_config`: the `R2eConfig` itself,
+    /// the `LiveConfigRegistry`, and every typed `ConfigProperties` /
+    /// `#[config(section)]` bean. The dev-reload partial rebuild must NOT pin
+    /// these from the previous cycle — doing so froze `#[config(section)]`
+    /// values for a whole dev session. Populated by
+    /// [`config_derived_scope`](Self::config_derived_scope).
+    config_derived: HashSet<TypeId>,
+    /// Whether `provide` calls should currently be recorded as config-derived.
+    /// Set only for the duration of a [`config_derived_scope`](Self::config_derived_scope).
+    in_config_derived_scope: bool,
 }
 
 struct BeanRegistration {
@@ -590,10 +632,10 @@ struct BeanRegistration {
     type_name: &'static str,
     /// (TypeId, human-readable name) for each dependency.
     dependencies: Vec<(TypeId, &'static str)>,
-    /// (config_key, expected_type_name, required) for config validation and
-    /// dev-reload fingerprinting. Optional (`required = false`) keys are
-    /// fingerprinted but not presence-validated.
-    config_keys: Vec<(&'static str, &'static str, bool)>,
+    /// (config_key, expected_type_name, kind) for config validation and
+    /// dev-reload fingerprinting. `Optional` keys are fingerprinted but not
+    /// presence-validated; `Live` keys are neither (they are pushed).
+    config_keys: Vec<(&'static str, &'static str, ConfigKeyKind)>,
     /// Hash of the constructor/producer source tokens, computed at compile time.
     /// Changes when the bean's code is modified. Used by the dev-reload
     /// fingerprinting system.
@@ -762,9 +804,33 @@ impl BeanRegistry {
             disposers: Vec::new(),
             scheduled_sources: Vec::new(),
             event_subscribers: Vec::new(),
+            service_sources: Vec::new(),
             deco_fills: Vec::new(),
             provided_reuse_clones: HashMap::new(),
+            // Seeded with the two types `load_config` always re-provides, so
+            // the never-pin rule holds even for a registry populated by hand
+            // (tests, plugins) rather than through `config_derived_scope`.
+            config_derived: HashSet::from([
+                TypeId::of::<crate::config::R2eConfig>(),
+                TypeId::of::<crate::config::LiveConfigRegistry>(),
+            ]),
+            in_config_derived_scope: false,
         }
+    }
+
+    /// Run `f` with every `provide` inside it recorded as **config-derived**.
+    ///
+    /// Config-derived provided values are exempt from the dev-reload
+    /// partial-rebuild pinning: they are rebuilt from the fresh `R2eConfig` by
+    /// the next cycle's `load_config`, so pinning the previous cycle's instance
+    /// would serve a stale value for the rest of the dev session. `load_config`
+    /// wraps the `R2eConfig` + `LiveConfigRegistry` provisions in one, and
+    /// `LoadableConfig for T: ConfigProperties` wraps the typed struct plus
+    /// every nested `#[config(section)]` child it registers.
+    pub fn config_derived_scope(&mut self, f: impl FnOnce(&mut Self)) {
+        let previous = std::mem::replace(&mut self.in_config_derived_scope, true);
+        f(self);
+        self.in_config_derived_scope = previous;
     }
 
     /// Provide a pre-built instance (e.g. external types like `SqlitePool`).
@@ -777,6 +843,9 @@ impl BeanRegistry {
         self.provided.insert(TypeId::of::<T>(), Box::new(value));
         self.provided_reuse_clones
             .insert(TypeId::of::<T>(), reuse_clone_of::<T>);
+        if self.in_config_derived_scope {
+            self.config_derived.insert(TypeId::of::<T>());
+        }
         self
     }
 
@@ -1028,6 +1097,25 @@ impl BeanRegistry {
         ));
     }
 
+    /// Register a resolved bean as a background service.
+    ///
+    /// The service is constructed from the final [`BeanContext`] and started by
+    /// the builder during server startup.
+    pub fn register_service_source<T: crate::ServiceComponent>(&mut self) {
+        let tid = TypeId::of::<T>();
+        if self.service_sources.iter().any(|(t, _, _)| *t == tid) {
+            return;
+        }
+        self.service_sources.push((
+            tid,
+            type_name::<T>(),
+            Box::new(|ctx: &BeanContext, shutdown| {
+                let service = T::from_context(ctx);
+                Box::pin(service.start(shutdown))
+            }),
+        ));
+    }
+
     /// Register a bean as a decorator-slot source.
     ///
     /// Called from generated `after_register` when a `#[bean]` impl carries a
@@ -1088,6 +1176,15 @@ impl BeanRegistry {
         Box<dyn FnOnce(&BeanContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
     )> {
         std::mem::take(&mut self.event_subscribers)
+            .into_iter()
+            .map(|(_, name, hook)| (name, hook))
+            .collect()
+    }
+
+    /// Drain background-service hooks queued by [`register_service_source`](Self::register_service_source).
+    #[doc(hidden)]
+    pub fn take_service_sources(&mut self) -> Vec<(&'static str, ServiceSourceHook)> {
+        std::mem::take(&mut self.service_sources)
             .into_iter()
             .map(|(_, name, hook)| (name, hook))
             .collect()
@@ -1190,6 +1287,7 @@ impl BeanRegistry {
             overridable,
             reuse_clone: reuse_clone_of::<P::Output>,
         });
+        P::after_register(self);
         self
     }
 
@@ -1354,11 +1452,14 @@ impl BeanRegistry {
             }
             // Pin provided values from the previous cycle so reused and
             // rebuilt beans keep sharing one instance (no split-brain).
-            // `R2eConfig` stays fresh: the per-patch YAML re-read is
-            // deliberate — config edits must apply on the next patch.
-            let config_tid = TypeId::of::<crate::config::R2eConfig>();
+            // **Config-derived** values stay fresh: `R2eConfig`, the
+            // `LiveConfigRegistry` and every typed `ConfigProperties` /
+            // `#[config(section)]` bean are recomputed from the freshly loaded
+            // config by this cycle's `load_config`, so the per-patch YAML
+            // re-read is deliberate — config edits must apply on the next
+            // patch, whatever shape they are read in.
             for (tid, value) in self.provided.iter_mut() {
-                if *tid == config_tid || forced_rebuild.contains(tid) {
+                if self.config_derived.contains(tid) || forced_rebuild.contains(tid) {
                     continue;
                 }
                 if let Some(clone_fn) = self.provided_reuse_clones.get(tid) {
@@ -1491,10 +1592,10 @@ impl BeanRegistry {
                 .lazy_beans
                 .iter()
                 .flat_map(|reg| {
-                    // Only `required` keys are presence-validated.
+                    // Only `Required` keys are presence-validated.
                     reg.config_keys
                         .iter()
-                        .filter(|(_, _, required)| *required)
+                        .filter(|(_, _, kind)| kind.is_required())
                         .map(move |(key, ty_name, _)| (reg.type_name, *key, *ty_name))
                 })
                 .collect();
@@ -1702,11 +1803,12 @@ impl BeanRegistry {
         let all_keys: Vec<_> = beans
             .iter()
             .flat_map(|reg| {
-                // Only `required` keys are presence-validated — optional
-                // `Option<T>` keys resolve to `None` when absent.
+                // Only `Required` keys are presence-validated — `Optional`
+                // (`Option<T>`) keys resolve to `None` when absent, and `Live`
+                // (`#[live_config]`) keys start empty and arrive by push.
                 reg.config_keys
                     .iter()
-                    .filter(|(_, _, required)| *required)
+                    .filter(|(_, _, kind)| kind.is_required())
                     .map(move |(key, ty_name, _)| (reg.type_name, *key, *ty_name))
             })
             .collect();
@@ -1873,13 +1975,41 @@ impl BeanRegistry {
         // changes graph semantics even when the constructor is unchanged.
         reg.is_lazy.hash(&mut hasher);
 
-        // 2. Config values this bean depends on
-        if !reg.config_keys.is_empty() {
-            if let Some(config) = config {
-                // Fingerprint EVERY config key — required and optional alike —
-                // so editing an optional value under `r2e dev` rebuilds the bean.
-                let keys: Vec<&str> = reg.config_keys.iter().map(|(k, _, _)| *k).collect();
-                config.config_fingerprint(&keys).hash(&mut hasher);
+        // 2. Config values this bean COPIES.
+        //
+        // Required, optional and section keys alike are fingerprinted, so
+        // editing any of them under `r2e dev` rebuilds the bean and its
+        // dependents. `#[live_config]` keys are deliberately excluded: their
+        // freshness comes from the registry push, not from a rebuild —
+        // fingerprinting them would churn the bean (and drop its in-memory
+        // state) on every live edit. Empty lists contribute nothing, so a
+        // live-only bean keeps a stable fingerprint across live edits.
+        //
+        // `Section` entries carry a dotted **prefix** instead of an exact key,
+        // so they are hashed separately: the bean copied a whole subtree, and
+        // must be rebuilt when any key under it moves.
+        if let Some(config) = config {
+            let mut exact: Vec<&str> = Vec::new();
+            let mut prefixes: Vec<&str> = Vec::new();
+            for (key, _, kind) in reg.config_keys.iter() {
+                if !kind.is_fingerprinted() {
+                    continue;
+                }
+                if kind.is_prefix() {
+                    prefixes.push(key);
+                } else {
+                    exact.push(key);
+                }
+            }
+            if !exact.is_empty() {
+                config.config_fingerprint(&exact).hash(&mut hasher);
+            }
+            if !prefixes.is_empty() {
+                prefixes.sort_unstable();
+                prefixes.dedup();
+                for prefix in prefixes {
+                    config.prefix_fingerprint(prefix).hash(&mut hasher);
+                }
             }
         }
 

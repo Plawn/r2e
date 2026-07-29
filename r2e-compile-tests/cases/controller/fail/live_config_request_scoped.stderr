@@ -1,0 +1,7 @@
+error: #[live_config] is app-scoped and cannot be combined with a request-scoped #[inject(identity)] / #[inject(request)] field
+
+         hint: declare the LiveConfig<T> handle on its own field
+ --> cases/controller/fail/live_config_request_scoped.rs:7:5
+  |
+7 |     #[live_config("app.banner")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

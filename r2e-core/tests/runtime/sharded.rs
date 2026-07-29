@@ -76,6 +76,7 @@ fn parse_workers_above_cap_is_error() {
 
 #[test]
 fn prepared_app_workers_accessor_ok() {
+    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str("server:\n  workers: 2\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
@@ -87,6 +88,7 @@ fn prepared_app_workers_accessor_ok() {
 
 #[test]
 fn prepared_app_workers_accessor_err() {
+    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str("server:\n  workers: 0\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
@@ -157,12 +159,17 @@ mod integration {
         let yaml = format!("server:\n  workers: 2\n  port: {port}\n");
         let config = R2eConfig::from_yaml_str(&yaml).unwrap();
 
+        // `load_config` mutates process-global dev-reload state; hold the lock
+        // only for the build, not for the serving loop below.
+        let serial = crate::dev_serial::dev_serial();
         let app = AppBuilder::new()
             .override_config(config)
             .load_config::<()>()
             .with_state(())
             .register_routes(r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })))
             .prepare(&addr);
+
+        drop(serial);
 
         // Sanity: the workers config parsed to Some(2).
         assert_eq!(app.workers().unwrap(), Some(2));
@@ -356,6 +363,7 @@ mod integration {
         let yaml = "server:\n  workers: 0\n";
         let config = R2eConfig::from_yaml_str(yaml).unwrap();
         let port = free_port();
+        let _serial = crate::dev_serial::dev_serial();
         let app = AppBuilder::new()
             .override_config(config)
             .load_config::<()>()

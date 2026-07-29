@@ -44,7 +44,9 @@ On the builder: `.with_config_file("patina.yaml")` before `.load_config::<C>()`.
 1. `application.yaml` (hierarchies flattened: `app.database.url`)
 2. `.env` file (via dotenvy, won't overwrite existing env vars)
 3. `${...}` secret placeholders resolved in string values
-4. Environment variables **prefixed with `R2E_`** (`R2E_SERVER_PORT=8080` ↔ `server.port = "8080"`). The `R2E_` prefix is stripped, the remainder is lowercased, and `_` becomes `.`. The mapping is **strict** — no fuzzy/relaxed matching against existing keys (deliberate: a silently mis-mapped setting is worse than an unaddressable one). Consequence: a key containing `-` or an in-segment `_` (`security.jwt.jwks-url`, `database.max_idle`) is **not addressable** via any `R2E_` var; for env-driven values of such keys, use a `${VAR}` placeholder in YAML (`jwks-url: "${JWKS_URL:}"` — set `JWKS_URL`, unprefixed). Unprefixed process env vars are otherwise ignored so the config namespace does not collide with the general process environment. Use `#[config(env = "VAR")]` on a `ConfigProperties` field if you need to pull in a specific unprefixed variable.
+4. External `ConfigProvider`s registered with `.with_config_provider(...)`
+5. `${...}` secret placeholders resolved again for provider-supplied strings
+6. Environment variables **prefixed with `R2E_`** (`R2E_SERVER_PORT=8080` ↔ `server.port = "8080"`). The `R2E_` prefix is stripped, the remainder is lowercased, and `_` becomes `.`. The mapping is **strict** — no fuzzy/relaxed matching against existing keys (deliberate: a silently mis-mapped setting is worse than an unaddressable one). Consequence: a key containing `-` or an in-segment `_` (`security.jwt.jwks-url`, `database.max_idle`) is **not addressable** via any `R2E_` var; for env-driven values of such keys, use a `${VAR}` placeholder in YAML (`jwks-url: "${JWKS_URL:}"` — set `JWKS_URL`, unprefixed). Unprefixed process env vars are otherwise ignored so the config namespace does not collide with the general process environment. Use `#[config(env = "VAR")]` on a `ConfigProperties` field if you need to pull in a specific unprefixed variable.
 
 ### Methods
 
@@ -107,6 +109,151 @@ Syntax in YAML string values:
 | `${file:/path}` | File contents (trimmed) |
 
 Custom resolvers implement `SecretResolver`: `fn resolve(&self, reference: &str) -> Result<String, ConfigError>`.
+
+---
+
+## Config Providers and Live Config
+
+`ConfigProvider` is the Quarkus-like extension point for sources such as Vault.
+Register providers before `load_config`:
+
+```rust
+AppBuilder::new()
+    .with_config_provider(VaultConfigProvider::new(...))
+    .load_config::<RootConfig>()
+```
+
+Provider `load(&mut R2eConfig, ConfigProviderContext)` runs during
+`load_config`, before typed `ConfigProperties` are built. Provider values are
+therefore visible to typed config, `#[config("...")]`, and bean dependencies.
+The process env overlay is applied again after providers, so `R2E_` values keep
+the highest boot-time priority.
+
+Runtime rotation does **not** mutate app-scoped `#[config]` fields or typed
+config beans. Those are boot snapshots. Values that change at runtime flow
+through the automatically provided `LiveConfigRegistry` bean. This mechanism has
+no confidentiality semantics — it is live/dynamic config (feature flags,
+timeouts, URLs, credentials alike); it is unrelated to the boot-time `${...}`
+secret placeholders above:
+
+```rust
+#[producer(start)]
+async fn create_pool(
+    #[live_config("database.url")] url: LiveConfig<String>,
+) -> DbPool<sqlx::Postgres> {
+    DbPool::connect(url).await.unwrap()
+}
+```
+
+`#[live_config("key")]` is also a **field** attribute, symmetric with
+`#[config("key")]` — on `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /
+`#[derive(BackgroundService)]` structs, on `#[bean]` constructor params, and on
+`#[controller]` structs:
+
+```rust
+#[derive(Clone, Bean)]
+pub struct PricingService {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+}
+
+#[controller(path = "/pricing")]
+pub struct PricingController {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+}
+```
+
+Like `#[config]`, the field is app-scoped: the handle is resolved once (bean
+`build()` / controller `register_controller()`), never per request — what is
+live is the *value* the handle reads. `LiveConfigRegistry` is added to the
+host's dependency list, so a missing `load_config` is a normal missing-bean
+error. Combining `#[live_config]` with `#[config]`, `#[config_section]`,
+`#[inject]`, or a request-scoped `#[inject(identity)]` / `#[inject(request)]`
+field is a compile error.
+
+- `LiveConfig<T>::get()` reads the current typed value. It is a **cached** read,
+  cheap enough for a per-request call: the watch slot is resolved once, at
+  handle creation, and the typed conversion runs only when the slot's version
+  moved — a steady-state `get()` is an atomic load plus a `T` clone. The cache
+  is shared by every clone of the handle. A conversion failure is never cached:
+  `get()` keeps returning `Err` (and retrying) until a convertible value is
+  published.
+- `LiveConfig<T>::subscribe()` returns a `LiveConfigReceiver<T>` for future
+  updates; `snapshot()` returns a versioned `LiveConfigSnapshot`.
+- Registry slots are **lazy**. `load_config` does not create a watch channel per
+  config entry; a slot is materialized on first access (handle creation, a
+  registry read, or a provider write) and seeded from the boot config if the key
+  was present — at version 1, stamped with the boot timestamp. A key absent at
+  boot starts at version 0 with no value, so `get()` reports `NotFound` until
+  something writes it.
+- `ConfigUpdateSink::set(key, value)` is what provider watchers call when a
+  value changes; `ConfigUpdateSink::registry()` hands back the underlying
+  `LiveConfigRegistry`.
+- A `#[live_config("key")]` key is never presence-validated at startup (the
+  value may legitimately be absent at boot, and `get()` returns a `Result`)
+  **and never fingerprinted for dev-reload** (see below). It appears in the
+  host's config-key list (`Bean`/`Producer::config_keys()`, or
+  `<C as ContextConstruct>::config_keys()` for a controller core) with
+  `ConfigKeyKind::Live`.
+- Values set by `override_config_value` or `R2E_...` env vars are pinned:
+  runtime provider updates for those keys are ignored, preserving explicit
+  test/process overrides.
+- **Typo guard.** Because a live key is never presence-validated, a misspelt
+  `#[live_config("db.ulr")]` would otherwise fail silently forever. Creating a
+  handle for a key that has no value *and* whose app registered no
+  `ConfigProvider` logs a `WARN` naming the key and both likely causes (typo, or
+  a value that was expected from a provider). It stays a warning: filling a key
+  in later with `LiveConfigRegistry::set` is a legitimate pattern. The
+  precondition is `LiveConfigRegistry::is_dead_key(key)`.
+
+### Copied vs subscribed — the two freshness modes
+
+A config value reaches application code in exactly one of two modes, and that
+choice — not the type, not whether the key is required — decides how it stays
+fresh:
+
+- **Copied** (`#[config]`, `#[config_section]`, `ConfigProperties`,
+  `config.get::<T>(…)`): read once at construction and stored by value.
+  Freshness comes from **rebuilding** the holder, so these keys **are**
+  fingerprinted — under `r2e dev`, editing one rebuilds the declaring bean and
+  its dependents.
+- **Subscribed** (`#[live_config]` → `LiveConfig<T>`): the handle binds a
+  registry slot and reads through it. Freshness comes from **pushing** a new
+  value into the slot (`ConfigUpdateSink`, `override_config_value`, or the
+  per-cycle re-seed under dev-reload), so these keys are deliberately **not**
+  fingerprinted — a rebuild would hand back an identical handle.
+
+`config_keys()` entries are `(key, type_name, ConfigKeyKind)`:
+
+| Kind | Declared by | Key is | Presence-validated | Fingerprinted |
+|---|---|---|---|---|
+| `Required` | `#[config("k")] x: T` | exact key | yes | yes |
+| `Optional` | `#[config("k")] x: Option<T>` | exact key | no | yes |
+| `Section` | `#[config_section(prefix = "p")]` | **prefix** | no¹ | yes (whole subtree) |
+| `Live` | `#[live_config("k")]` | exact key | no | **no** |
+
+`kind.is_required()` drives startup presence validation;
+`kind.is_fingerprinted()` (false only for `Live`) drives dev-reload rebuild
+invalidation; `kind.is_prefix()` (true only for `Section`) tells the fingerprint
+to hash `R2eConfig::prefix_fingerprint(prefix)` — every key under the prefix —
+instead of one exact value. `Optional` is a *copied* kind: not required, but
+still fingerprinted.
+
+¹ A section validates itself at construction: `ConfigProperties::from_config`
+reports a missing or mistyped field and the generated init panics naming the
+prefix. The section's field set lives in the typed struct, not in the attribute,
+so a key-level presence check here could not even enumerate what to check.
+
+Under `r2e dev` the `LiveConfigRegistry` has one stable identity for the whole
+session and is re-seeded from the fresh config on every hot patch, so the two
+modes behave as advertised across a hot patch: editing a **live** key in YAML is
+*pushed* into the existing handles without rebuilding anything, while editing a
+**copied** key (plain `#[config]`, or any key under a `#[config_section]`
+prefix) *rebuilds* the declaring bean and its dependents. Full details in
+[dev-reload-config-semantics.md](./dev-reload-config-semantics.md).
+
+Provider watchers start with the server lifecycle and receive a
+`ConfigWatchContext` with the active profile and shutdown token. A provider
+that cannot watch can implement only `load`.
 
 ---
 
@@ -366,8 +513,8 @@ for `load_config` to consume.
 The idiomatic way to set up configuration. Loads YAML + env, stores the raw config in the builder, and provides `R2eConfig` in the bean registry. If `C` is not `()`, also constructs the typed config, **auto-registers all nested `#[config(section)]` children as beans** (via `register_children`), and provides both `C` and `R2eConfig` in the compile-time type list.
 
 ```rust
-AppBuilder::new().load_config::<()>()           // raw config only
-AppBuilder::new().load_config::<RootConfig>()   // raw + typed + children (preferred)
+AppBuilder::new().load_config::<()>()           // raw + live config registry
+AppBuilder::new().load_config::<RootConfig>()   // raw + typed + children + live config registry (preferred)
 ```
 
 `C` must implement `LoadableConfig` — satisfied by `()` (raw only) and any `T: ConfigProperties`.
@@ -408,6 +555,13 @@ AppBuilder::new()
 Semantics and guards:
 - `override_config_value` **wins over** `override_config` regardless of call order
   (per-key overrides layer on top of the stashed config).
+- `override_config_value` is order-agnostic w.r.t. `load_config` too: called
+  *after* it, the key is patched into `R2eConfig` **and** into the
+  `LiveConfigRegistry` slot, and pinned there (a provider watch cannot clobber
+  it) — exactly what the pre-`load_config` path gets. One gap remains: typed
+  `ConfigProperties` sections are constructed *inside* `load_config`, so a late
+  override does **not** rebuild them. Override before `load_config` when a typed
+  section must see the value.
 - Fail-fast: `build_state` panics if `override_config` was set but `load_config`
   was never called; `override_config` combined with `with_config_file` panics.
 - Idiomatic guidance: config loaded from disk = just `.load_config::<C>()`;
@@ -525,4 +679,4 @@ Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `
 
 ### Prelude exports
 
-`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `NoChildren`, `PropertyMeta`, `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `TracingConfig`, `LogFormat`, `SpanEvents`.
+`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `NoChildren`, `PropertyMeta`, `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `ConfigProvider`, `ConfigProviderContext`, `ConfigWatchContext`, `ConfigUpdateSink`, `LiveConfig`, `LiveConfigRegistry`, `LiveConfigReceiver`, `LiveConfigSnapshot`, `TracingConfig`, `LogFormat`, `SpanEvents`.

@@ -15,6 +15,7 @@ mod graph;
 mod lazy_bean;
 mod lazy_cell;
 mod lifecycle;
+mod live_config;
 mod module;
 mod option_config;
 mod option_type;

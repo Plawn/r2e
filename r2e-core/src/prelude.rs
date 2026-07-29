@@ -85,8 +85,10 @@ pub use crate::lifecycle::StopHandle;
 // through `Deref` (e.g. `Arc<DashMap>::get`). Import it explicitly where
 // needed: `use r2e_core::type_list::BeanAccess;`.
 pub use crate::config::{
-    ConfigError, ConfigProperties, ConfigValidationDetail, ConfigValue, FromConfigValue,
-    NoChildren, PluginConfig, PropertyMeta, R2eConfig,
+    ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
+    ConfigValidationDetail, ConfigValue, ConfigWatchContext, FromConfigValue, LiveConfig,
+    LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot, NoChildren, PluginConfig,
+    PropertyMeta, R2eConfig,
 };
 pub use crate::controller::ContextConstruct;
 pub use crate::controller::Controller as ControllerTrait;

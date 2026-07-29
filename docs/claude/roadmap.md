@@ -76,6 +76,44 @@ promise.
   half was absorbed by W10; what remains is a pass over which concern lives in
   which crate/macro (core vs http vs macros vs integrations).
 
+## W13 — Live config × dev-reload — remainder
+
+Shipped: `#[secret]` → `#[live_config]` rename + field injection on every host
+(beans, decorator beans, background services, `#[bean]`/`#[producer]` params,
+controllers), the rotation fix, and Phases 0–4 of the dev-reload × config
+workstream — stable `LiveConfigRegistry` identity carried across hot patches
+with a differential re-seed (B1/B3), `config_derived` never-pin set so typed
+`ConfigProperties` beans refresh (B2), `ConfigKeyKind::{Required, Optional,
+Section, Live}` with live keys out of the per-bean fingerprint (B5) and
+`Section` keys hashing their whole prefix subtree, `ContextConstruct::
+config_keys()` requalified as introspection-only (B6), and a boot-time WARN for
+dead live keys. Reference: `docs/claude/dev-reload-config-semantics.md`.
+
+Remaining:
+
+- **B4 — `ConfigProvider::watch` starts once per process.** Serve hooks are
+  skipped from cycle 2 on, so a watch task that ends is never restarted under
+  `r2e dev`. Benign today (the one task writes to the one carried registry), but
+  it is a robustness gap, not a design.
+- **`bg_service_derive.rs` / `decorator_bean_derive.rs` emit no `config_keys()`
+  at all.** Background services and decorator beans resolve `#[config]` /
+  `#[config_section]` / `#[live_config]` fields but declare none of them, so
+  they are neither presence-validated nor dev-reload-fingerprinted. Pre-existing;
+  the fix is mechanical (reuse `field_resolver`'s three entry helpers), the
+  question is where the declaration lands for hosts that are not `Bean`s.
+- **`#[derive(BackgroundService)]` config/live deps are unchecked at compile
+  time.** `ServiceComponent` has no `Deps` surface, so a background service with
+  a `#[config]` or `#[live_config]` field fails at runtime inside `ctx.get()`
+  (`R2eConfig` / `LiveConfigRegistry` missing) instead of at registration like
+  every other host. Found by the 2026-07-29 simplify review. Fix likely pairs
+  with the `config_keys()` gap above: give `ServiceComponent` (or its
+  registration path) a deps/validation surface.
+- **Undeclared keys in hand-written beans stay stale on reuse.** A bean reading
+  `config.get("x")` without listing `"x"` in `config_keys()` keeps a stable
+  fingerprint and is reused with the old value. Documented and intended (declare
+  the key, or use `#[config]`); listed here only so it is not "rediscovered" as
+  a bug.
+
 ## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed

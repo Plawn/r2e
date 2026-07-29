@@ -10,6 +10,7 @@ use crate::http::{
     response::{IntoResponse, Response},
     StatusCode,
 };
+use crate::HttpError;
 use std::{future::Future, marker::PhantomData};
 
 /// Static and application state made available while acquiring a resource.
@@ -28,6 +29,23 @@ impl<'a, S> ManagedContext<'a, S> {
             controller,
             handler,
         }
+    }
+
+    /// Build the "required bean not found" error for a resource acquired by
+    /// type out of the state.
+    ///
+    /// Every `#[managed]` resource that resolves a bean through
+    /// [`BeanLookup`](crate::BeanLookup) can fail the same way — the bean was
+    /// never provided — and every one of them wants the same message shape:
+    /// what was missing, in which handler, and what to call at build time.
+    /// Keeping it here is what makes that message uniform across resources and
+    /// across backends.
+    #[must_use]
+    pub fn missing_bean(&self, prefix: &str, bean: &str, hint: &str) -> ManagedErr<HttpError> {
+        ManagedErr(HttpError::internal(format!(
+            "{prefix} `{bean}` not found for {}::{}; {hint} before build_state()",
+            self.controller, self.handler,
+        )))
     }
 }
 

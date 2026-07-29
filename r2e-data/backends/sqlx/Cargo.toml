@@ -17,8 +17,14 @@ postgres = ["sqlx/postgres"]
 mysql = ["sqlx/mysql"]
 
 [dependencies]
+arc-swap = "1"
+async-stream = "0.3"
+futures-core = {workspace = true}
+futures-util = {workspace = true}
 r2e-core = {workspace = true}
 sqlx = {workspace = true}
+tokio = {workspace = true}
+tokio-util = {workspace = true}
 
 [dev-dependencies]
-tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
+tokio = {workspace = true, features = ["macros", "rt-multi-thread", "time"]}

@@ -39,6 +39,23 @@ pub struct ConfigField {
     pub is_option: bool,
 }
 
+/// A `#[live_config("key")] field: LiveConfig<T>` controller field.
+///
+/// App-scoped exactly like [`ConfigField`] — resolved once at registration from
+/// the `LiveConfigRegistry` bean and stored on the controller core. The handle
+/// is the live part: per-request freshness comes from `field.get()`, not from
+/// re-resolution. The key is reported in the core's `config_keys()` as
+/// `ConfigKeyKind::Live`: never presence-validated (an absent value is legal —
+/// `get()` returns a `Result`) and never fingerprinted (freshness arrives by
+/// push, so rebuilding the core on an edit would be pointless churn).
+pub struct LiveConfigField {
+    pub name: syn::Ident,
+    /// Declared field type (`LiveConfig<T>`). Kept for the resolution span.
+    pub ty: syn::Type,
+    pub key: String,
+    pub ty_name: String,
+}
+
 pub struct ConfigSectionField {
     pub name: syn::Ident,
     pub ty: syn::Type,

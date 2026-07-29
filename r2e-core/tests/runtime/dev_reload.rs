@@ -11,7 +11,7 @@
 //! Everything lives in ONE test function: the dev-reload caches are
 //! process-global, so parallel test functions would clobber each other.
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
-use r2e_core::config::{ConfigValue, R2eConfig};
+use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
 use r2e_core::decorator::{BeanDecoFill, SharedDecoSlot};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, TCons, TNil};
@@ -81,8 +81,8 @@ impl Bean for ConfDep {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
-        vec![("dev.flip", "String", true)]
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        vec![("dev.flip", "String", ConfigKeyKind::Required)]
     }
     fn build(ctx: &BeanContext) -> Self {
         CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
@@ -299,6 +299,10 @@ impl Registrable for Disposable {
 
 #[r2e_core::test]
 async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
+    // The dev-reload caches are process-global: hold them exclusively and
+    // start cold, so a sibling test's cycles cannot leak into cycle 1.
+    let _serial = crate::dev_serial::dev_serial();
+    r2e_core::invalidate_state_cache();
     // The caches only engage inside the hot-patch loop (`r2e::launch!` marks
     // it); this test drives the loop's build cycles by hand, so opt in.
     r2e_core::dev::mark_hot_reload_loop();

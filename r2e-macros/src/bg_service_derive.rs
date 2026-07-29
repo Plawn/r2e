@@ -79,6 +79,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut field_inits: Vec<TokenStream2> = Vec::new();
     let mut has_any_config = false;
+    let mut has_live_config = false;
 
     for cf in &classified {
         match &cf.kind {
@@ -100,6 +101,16 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 ));
                 has_any_config = true;
             }
+            FieldKind::LiveConfig { key, .. } => {
+                let field_name = cf.name;
+                let expr = crate::field_resolver::live_config_resolve_expr(
+                    &quote! { __r2e_live },
+                    key,
+                    Some(cf.ty),
+                );
+                field_inits.push(quote! { #field_name: #expr });
+                has_live_config = true;
+            }
             FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),
         }
     }
@@ -111,11 +122,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     } else {
         quote! {}
     };
+    let live_config_prelude =
+        crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
 
     Ok(quote! {
         impl #krate::ServiceComponent for #name {
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude
+                #live_config_prelude
                 Self {
                     #(#field_inits,)*
                 }

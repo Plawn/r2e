@@ -54,6 +54,20 @@ pub fn mark_hot_reload_loop() {
     HOT_RELOAD_LOOP.store(true, Ordering::Release);
 }
 
+/// Undo [`mark_hot_reload_loop`] — **tests only**.
+///
+/// A test binary that drives hot-patch cycles by hand marks the loop, which is
+/// a one-way switch in production (`r2e::launch!` marks it once and never
+/// leaves the loop). Tests that need to assert the *production* path — where
+/// every `build_state()` is cold and every `load_config` builds its own
+/// `LiveConfigRegistry` — flip it back. Take the same serial lock the other
+/// dev-reload tests use before calling this.
+#[cfg(feature = "dev-reload")]
+#[doc(hidden)]
+pub fn unmark_hot_reload_loop() {
+    HOT_RELOAD_LOOP.store(false, Ordering::Release);
+}
+
 /// Whether [`mark_hot_reload_loop`] has been called in this process.
 #[cfg(feature = "dev-reload")]
 pub(crate) fn hot_reload_loop_active() -> bool {
@@ -179,6 +193,51 @@ pub(crate) fn cache_state<T: Clone + Send + Sync + 'static>(state: &T) {
     *guard = Some(Box::new(state.clone()));
 }
 
+// ── Live-config registry carrier ────────────────────────────────────────────
+
+/// The process-stable [`LiveConfigRegistry`](crate::config::LiveConfigRegistry)
+/// for the hot-patch loop.
+///
+/// A `LiveConfig<T>` handle binds **one slot of one registry** at construction
+/// and never looks the registry up again, so a fresh registry per hot-patch
+/// cycle would strand every handle built by an earlier cycle. Carrying the
+/// instance here gives the registry a single identity per process; each cycle's
+/// `load_config` re-seeds it (`LiveConfigRegistry::reseed`) instead of
+/// replacing it.
+///
+/// Single-slot like [`STATE_CACHE`]/[`CTX_CACHE`], and engaged only under
+/// [`hot_reload_loop_active`] — outside the loop (production, and any test that
+/// never marks the loop) `load_config` builds a fresh registry exactly as
+/// before.
+#[cfg(feature = "dev-reload")]
+static LIVE_CONFIG_REGISTRY: OnceLock<Mutex<Option<crate::config::LiveConfigRegistry>>> =
+    OnceLock::new();
+
+/// The registry carried over from an earlier hot-patch cycle, if any.
+///
+/// Always `None` outside the hot-patch loop, so every non-dev `load_config`
+/// keeps building its own registry.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn carried_live_config_registry() -> Option<crate::config::LiveConfigRegistry> {
+    if !hot_reload_loop_active() {
+        return None;
+    }
+    let store = LIVE_CONFIG_REGISTRY.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    guard.clone()
+}
+
+/// Carry `registry` into the next hot-patch cycle. No-op outside the loop.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn carry_live_config_registry(registry: &crate::config::LiveConfigRegistry) {
+    if !hot_reload_loop_active() {
+        return;
+    }
+    let store = LIVE_CONFIG_REGISTRY.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().expect("live config registry carrier poisoned");
+    *guard = Some(registry.clone());
+}
+
 /// The previous cycle's resolved [`BeanContext`](crate::beans::BeanContext),
 /// cached independently of the provision-list type `P` (unlike
 /// [`STATE_CACHE`], which is keyed by the monomorphized state tuple). This
@@ -232,6 +291,14 @@ pub fn invalidate_state_cache() {
         }
     }
     if let Some(store) = CTX_CACHE.get() {
+        if let Ok(mut guard) = store.lock() {
+            *guard = None;
+        }
+    }
+    // The carried registry is part of the cache group: "force a cold rebuild"
+    // must be cold for live config too, or the next cycle would keep pushing
+    // into slots seeded by a session that no longer exists.
+    if let Some(store) = LIVE_CONFIG_REGISTRY.get() {
         if let Ok(mut guard) = store.lock() {
             *guard = None;
         }

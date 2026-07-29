@@ -404,7 +404,25 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         .map(|f| config_section_init_panic(&f.name, &f.ty, &f.prefix, &controller_name_str, &krate))
         .collect();
 
+    // `#[live_config]` fields are app-scoped like `#[config]`: the handle is
+    // resolved once here, from the `LiveConfigRegistry` bean. Freshness comes
+    // from `field.get()` per read, not from re-resolving the field.
+    let live_config_inits: Vec<TokenStream> = def
+        .live_config_fields
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            let expr = crate::field_resolver::live_config_resolve_expr(
+                &quote! { __r2e_live },
+                &f.key,
+                Some(&f.ty),
+            );
+            quote! { #field_name: #expr }
+        })
+        .collect();
+
     let has_any_config = !def.config_fields.is_empty() || !def.config_section_fields.is_empty();
+    let has_live_config = !def.live_config_fields.is_empty();
     let config_prelude = if has_any_config {
         quote! {
             let __cfg = __ctx.get::<#krate::R2eConfig>();
@@ -412,10 +430,13 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
     } else {
         quote! {}
     };
+    let live_config_prelude =
+        crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
 
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
         .chain(config_inits.iter())
+        .chain(live_config_inits.iter())
         .chain(config_section_inits.iter())
         .collect();
 
@@ -444,14 +465,56 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
     if has_any_config {
         deps_types.push(quote! { #krate::R2eConfig });
     }
+    if has_live_config {
+        deps_types.push(crate::field_resolver::live_config_registry_ty(&krate));
+    }
     let deps_list = crate::type_list_gen::build_tcons_type(&deps_types, &krate);
+
+    // Config keys declared by the core, mirroring `Bean::config_keys()`:
+    // `#[config]` keys are `Required` unless `Option<T>` (then `Optional`),
+    // `#[config_section]` keys are `Section` (the entry's key is the prefix),
+    // and `#[live_config]` keys are `Live`. On a controller this list is pure
+    // introspection — cores are rebuilt from a fresh context every dev-reload
+    // cycle, so nothing fingerprints them; presence validation lives in
+    // `__r2e_meta_<Name>::validate_config`. See `ContextConstruct::config_keys`.
+    let config_key_entries: Vec<TokenStream> = def
+        .config_fields
+        .iter()
+        .map(|f| {
+            crate::field_resolver::copied_config_key_entry(&krate, &f.key, &f.ty_name, f.is_option)
+        })
+        .chain(
+            def.config_section_fields
+                .iter()
+                .map(|f| crate::field_resolver::section_config_key_entry(&krate, &f.prefix, &f.ty)),
+        )
+        .chain(
+            def.live_config_fields
+                .iter()
+                .map(|f| crate::field_resolver::live_config_key_entry(&krate, &f.key, &f.ty_name)),
+        )
+        .collect();
+
+    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_fn = if config_key_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> #config_keys_ret_ty {
+                vec![#(#config_key_entries),*]
+            }
+        }
+    };
 
     quote! {
         impl #krate::ContextConstruct for #name {
             type Deps = #deps_list;
 
+            #config_keys_fn
+
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude
+                #live_config_prelude
                 #struct_init
             }
         }

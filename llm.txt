@@ -600,7 +600,9 @@ listens with graceful shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
 1. `application.yaml` (hierarchies flattened to dotted keys) + `application-{profile}.yaml` (profile from `R2E_PROFILE`)
 2. `.env` file
 3. `${VAR}` / `${VAR:default}` / `${file:/path}` secret placeholders in string values
-4. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`). The
+4. Config providers registered with `.with_config_provider(...)`
+5. Provider-supplied string placeholders are resolved again
+6. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`). The
    mapping is strict (`_`→`.`, nothing else — no fuzzy matching): a key
    containing `-` or an in-segment `_` (`security.jwt.jwks-url`,
    `database.max_idle`) is NOT addressable via any `R2E_` var. For env-driven
@@ -632,6 +634,113 @@ b.load_config::<RootConfig>()             // typed + children as beans
 #[inject] db_config: DatabaseConfig,      // typed section, injected by type
 #[config("app.greeting")] greeting: String,  // single scalar
 ```
+
+### Config providers and rotation
+
+Implement `ConfigProvider` for external sources such as Vault and register it
+before `load_config`:
+
+```rust
+b.with_config_provider(VaultConfigProvider::new(...))
+ .load_config::<RootConfig>()
+```
+
+Provider `load` mutates the boot `R2eConfig` before typed config is built.
+Runtime rotations do not mutate app-scoped `#[config]` fields or typed config
+beans; use the automatically provided `LiveConfigRegistry` / `LiveConfig<T>`
+handles for live values. This is plain live/dynamic config (feature flags,
+timeouts, URLs, credentials alike) — it is not the `${...}` secret-placeholder
+mechanism:
+
+```rust
+#[producer(start)]
+async fn create_pool(
+    #[live_config("database.url")] url: LiveConfig<String>,
+) -> DbPool<sqlx::Postgres> {
+    DbPool::connect(url).await.unwrap()
+}
+```
+
+`#[live_config("key")]` is also a field attribute, symmetric with
+`#[config("key")]` — on `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /
+`#[derive(BackgroundService)]` structs, `#[bean]` constructor params, and
+`#[controller]` structs:
+
+```rust
+#[derive(Clone, Bean)]
+pub struct PricingService {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+}
+
+#[controller(path = "/pricing")]
+pub struct PricingController {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+}
+
+#[routes]
+impl PricingController {
+    #[get("/")]
+    async fn rate(&self) -> String {
+        self.multiplier.get().unwrap_or(1.0).to_string()
+    }
+}
+```
+
+The field is app-scoped like `#[config]` (resolved once — bean `build()`,
+controller `register_controller()`); freshness comes from `get()`, not from
+re-resolution. `LiveConfigRegistry` joins the host's dependency list, so a
+missing `load_config` is a normal missing-bean error. Combining `#[live_config]`
+with `#[config]`, `#[config_section]`, `#[inject]`, or a request-scoped
+`#[inject(identity)]` / `#[inject(request)]` field is a compile error.
+
+`LiveConfig<T>`: `get() -> Result<T, ConfigError>`, `snapshot() ->
+LiveConfigSnapshot` (versioned), `subscribe() -> LiveConfigReceiver<T>`. `get()`
+is a cached read — the slot is bound once at handle creation and the typed
+conversion only reruns when the version moved — so calling it per request is
+fine. Registry slots are created lazily on first access (seeded from the boot
+config when the key existed), not one per config entry at load.
+Provider watchers call `ConfigUpdateSink::set(key, value)` during serve-time
+(`ConfigUpdateSink::registry()` returns the `LiveConfigRegistry`). A
+`#[live_config]` key is never presence-checked at startup (the value may
+legitimately be absent at boot) and never fingerprinted for dev-reload — see
+"Copied vs subscribed" below. Because of that, a *typo'd* key would fail
+silently: creating a handle for a key that has no value and whose app registered
+no `ConfigProvider` logs a `WARN` naming the key (predicate:
+`LiveConfigRegistry::is_dead_key`). Keys overridden by
+`override_config_value` or `R2E_...` env vars are pinned and ignore runtime
+provider updates — including when `override_config_value` runs *after*
+`load_config` (it patches and pins the live slot too). A late
+`override_config_value` does **not** rebuild typed `ConfigProperties` sections
+already constructed by `load_config`; override before `load_config` for those.
+
+**Copied vs subscribed.** Every config key a component declares uses one of two
+freshness modes, recorded in its `config_keys()` entry
+`(key, type_name, ConfigKeyKind)`:
+
+- **Copied** — `#[config]`, `#[config_section]`, `ConfigProperties`,
+  `config.get::<T>(…)`. Read once at construction, stored by value.
+  `ConfigKeyKind::Required` (presence-validated at startup),
+  `ConfigKeyKind::Optional` (an `Option<T>` field; not validated), or
+  `ConfigKeyKind::Section` (a `#[config_section(prefix = "p")]` field — the
+  entry's key is the **prefix**, and the section validates itself at
+  construction, so it is not presence-checked either). **All three are
+  fingerprinted**: under `r2e dev`, editing the key — or, for a section, *any*
+  key under its prefix — rebuilds the declaring bean and its dependents.
+- **Subscribed** — `#[live_config]` → `LiveConfig<T>`. The handle binds a
+  registry slot; new values are pushed in. `ConfigKeyKind::Live`: never
+  presence-validated, **never fingerprinted** (a rebuild would produce an
+  identical handle). Under `r2e dev` the `LiveConfigRegistry` keeps one stable
+  identity for the session and is re-seeded from the fresh config on each hot
+  patch, so a live-key edit reaches existing handles with no bean rebuilt.
+
+`ConfigKeyKind::is_required()` drives startup validation; `is_fingerprinted()`
+(false only for `Live`) drives dev-reload invalidation; `is_prefix()` (true only
+for `Section`) makes the fingerprint hash the whole subtree via
+`R2eConfig::prefix_fingerprint(prefix)`. `Optional` is a copied kind — "not
+required" is not the same as "live".
+
+Net dev-reload behaviour: **live edit → push** (nothing rebuilt), **copied edit
+→ rebuild** (declaring bean + dependents).
 
 Field attributes: `#[config(default = ...)]`, `#[config(key = "...")]`,
 `#[config(env = "VAR")]`, `#[config(section)]` (+ `Option<Section>` =
@@ -1271,6 +1380,66 @@ Custom resources implement `ManagedResource<S>` (bound `S: BeanLookup` to pull
 beans by type: `state.bean::<T>()`), error type `ManagedErr<HttpError>`.
 `#[managed]` is the only transaction attribute (the legacy `#[transactional]`
 body wrapper was removed).
+
+For rotating credentials/URLs, produce `DbPool<DB>` from a live
+`LiveConfig<String>` and mark the producer `start`:
+
+```rust
+use r2e_data_sqlx::{DbPool, DbTx};
+
+#[producer(start)]
+async fn create_pool(#[live_config("database.url")] url: LiveConfig<String>) -> DbPool<Sqlite> {
+    DbPool::connect(url).await.unwrap()
+}
+
+#[post("/db")]
+async fn create_in_db(&self,
+                      #[managed] tx: &mut DbTx<'_, Sqlite>) -> JsonResult<User> {
+    sqlx::query("INSERT INTO users (name) VALUES (?)")
+        .bind("Ada").execute(tx.as_mut()).await?;
+    Ok(Json(user))
+}
+```
+
+`DbPool` connects a replacement pool when `database.url` changes, swaps only
+after the new connection succeeds, increments `generation()`, and closes the
+old pool in the background. In-flight `DbTx` values keep using the generation
+they acquired.
+
+The pool and its generation are published as one atomic snapshot, so they can
+never be read out of step: `snapshot() -> (Pool<DB>, u64)` returns the pair
+(`current()` and `generation()` remain, for when only one of them matters).
+Because the old pool is closed right after the swap, a snapshot taken just
+before a rotation can hit `sqlx::Error::PoolClosed`; `DbPool::begin() ->
+Result<(Transaction<'static, DB>, u64), sqlx::Error>` and the
+`Executor for &DbPool` impl re-read the snapshot and retry (bounded to three
+attempts), so a rotation never surfaces as a 500. `DbTx::generation()` always
+reports the pool the transaction actually ran on.
+
+`r2e-data-diesel` mirrors the same shape for r2d2 pools: `Tx`/`DieselTx<Conn>`
+on a provided `Pool<ConnectionManager<Conn>>` bean, and `DbPool<Conn>` +
+`DbTx<Conn>` (no lifetime param) for rotating credentials. Diesel's pools build
+on a blocking thread, so `DbPool::connect_with` takes a pool-factory closure
+instead of pool options; rotation drops the facade's handle on the old pool,
+which stays alive (and usable) until its last handle/connection goes away —
+r2d2 pools are never explicitly closed, so there is no closed-pool window and
+no retry. It exposes the same atomic
+`snapshot() -> (Pool<ConnectionManager<Conn>>, u64)`.
+
+```rust
+use r2e_data_diesel::{DbPool, DbTx};
+
+#[producer(start)]
+async fn create_pool(#[live_config("database.url")] url: LiveConfig<String>) -> DbPool<SqliteConnection> {
+    DbPool::connect(url).await.unwrap()
+}
+
+#[post("/db")]
+async fn create_in_db(&self, #[managed] tx: &mut DbTx<SqliteConnection>) -> JsonResult<User> {
+    tx.run(|c| diesel::insert_into(users::table).values(&new).execute(c)).await?;
+    Ok(Json(user))
+}
+```
 
 ---
 
@@ -2216,6 +2385,7 @@ Alongside `&self`:
 | Method | Phase | Purpose |
 |--------|-------|---------|
 | `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], GrpcServer, OidcServer, Prometheus) |
+| `.with_config_provider(p)` | pre-state | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
 | `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | pre-state | Provide a constructed bean |

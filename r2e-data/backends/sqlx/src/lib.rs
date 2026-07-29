@@ -22,10 +22,12 @@
 //! Responses below status 400 commit. Client/server error responses roll back.
 //! Cancellation and panic use SQLx's drop rollback as a safety fallback.
 
+mod pool;
 mod tx;
 
-pub use tx::{SqlxTx, Tx};
+pub use pool::DbPool;
+pub use tx::{DbTx, FixedPool, ManagedTx, RotatingPool, SqlxTx, Tx, TxSource};
 
 pub mod prelude {
-    pub use crate::{SqlxTx, Tx};
+    pub use crate::{DbPool, DbTx, SqlxTx, Tx};
 }

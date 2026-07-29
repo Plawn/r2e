@@ -36,6 +36,7 @@ tokio-util = {workspace = true}
 tokio-stream = {workspace = true, features = ["sync"]}
 uuid = {workspace = true}
 dashmap = {workspace = true}
+arc-swap = "1"
 bytes = {workspace = true}
 futures-core = {workspace = true}
 

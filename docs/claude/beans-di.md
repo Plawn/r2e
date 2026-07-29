@@ -242,6 +242,85 @@ struct MyService {
 
 When `#[config]` is used, `R2eConfig` (see [configuration.md](./configuration.md)) is automatically added to the dependency list. Missing config keys panic with a message including the env var equivalent (e.g., `APP_DB_URL`).
 
+## `#[live_config("key")]` and `#[producer(start)]`
+
+Producer params can request a runtime-updatable config handle:
+
+```rust
+#[producer(start)]
+async fn create_pool(
+    #[live_config("database.url")] url: LiveConfig<String>,
+) -> DbPool<sqlx::Postgres> {
+    DbPool::connect(url).await.unwrap()
+}
+```
+
+`#[live_config("...")]` injects `LiveConfig<T>` from the automatically provided
+`LiveConfigRegistry` bean, so `load_config` must have run before the producer is
+resolved. Unlike `#[config]`, this is a live handle: providers can push runtime
+updates through `ConfigUpdateSink`. The key is reported in the producer's
+`config_keys()` with `ConfigKeyKind::Live` — never presence-validated at
+startup (a live value may legitimately be absent at boot) and never
+fingerprinted for dev-reload (freshness arrives by push, so rebuilding the
+producer would be pointless churn).
+
+The same attribute works as a **field** attribute, symmetric with
+`#[config("key")]`, on `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /
+`#[derive(BackgroundService)]` structs, on `#[bean]` constructor params, and on
+`#[controller]` structs:
+
+```rust
+#[derive(Clone, Bean)]
+pub struct PricingService {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+    #[config("app.name")] name: String,   // boot snapshot, unchanged
+}
+
+#[controller(path = "/pricing")]
+pub struct PricingController {
+    #[live_config("pricing.multiplier")] multiplier: LiveConfig<f64>,
+}
+```
+
+Field resolution is app-scoped exactly like `#[config]` — the handle is built
+once (at `build()` for beans, at `register_controller()` for controller cores),
+not per request. Freshness comes from calling `get()`, not from re-resolving the
+field. `LiveConfigRegistry` is added to the host's dependency list, so forgetting
+`load_config` is a normal missing-bean error. Bean keys land in
+`Bean::config_keys()`; controller keys land in
+`<C as ContextConstruct>::config_keys()` — both with `ConfigKeyKind::Live`,
+and neither is emitted into the controller's `validate_config` presence check.
+
+### The two config freshness modes
+
+Every config key a component declares is in exactly one of two modes, and
+`config_keys()` records which:
+
+| | Copied | Subscribed |
+|---|---|---|
+| Declared by | `#[config]`, `#[config_section]`, `config.get(…)` | `#[live_config]` |
+| Field type | plain `T` / `Option<T>` | `LiveConfig<T>` |
+| `ConfigKeyKind` | `Required` / `Optional` | `Live` |
+| Presence-validated at startup | `Required` only | never |
+| In the per-bean dev-reload fingerprint | yes | **no** |
+| How a new value arrives | the holder is **rebuilt** | the value is **pushed** into the registry slot |
+
+`config_keys()` entries are `(key, type_name, ConfigKeyKind)`;
+`kind.is_required()` drives validation and `kind.is_fingerprinted()` (false
+only for `Live`) drives rebuild invalidation. Note that `Optional` is a
+*copied* kind — `required == false` is not the same thing as live, which is
+why the kind is explicit rather than a boolean. Dev-reload details in
+[dev-reload-config-semantics.md](./dev-reload-config-semantics.md).
+
+`#[live_config]` cannot be combined with `#[config]`, `#[config_section]`, or
+`#[inject]` on the same field (each is a different way to fill one slot), nor
+stacked on a request-scoped `#[inject(identity)]` / `#[inject(request)]` field.
+
+`#[producer(start)]` registers the produced output as a `ServiceComponent`.
+After the bean graph is resolved, the service is started with the server
+lifecycle and cancelled during graceful shutdown. The produced type must
+implement `ServiceComponent`; otherwise registration fails to compile.
+
 ## `#[consumer]` on beans
 
 Beans can declare event consumers using the same `#[consumer(bus = "field")]` syntax as controllers:

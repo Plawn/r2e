@@ -1,6 +1,8 @@
 use syn::parse::Parser;
 
-use crate::type_utils::{parse_config_field, parse_config_section_prefix, unwrap_option_type};
+use crate::type_utils::{
+    parse_config_field, parse_config_section_prefix, parse_live_config_field, unwrap_option_type,
+};
 use crate::types::*;
 
 /// Parsed representation of a `#[controller(...)]` struct.
@@ -11,6 +13,7 @@ pub struct ControllerStructDef {
     pub identity_fields: Vec<IdentityField>,
     pub request_fields: Vec<RequestField>,
     pub config_fields: Vec<ConfigField>,
+    pub live_config_fields: Vec<LiveConfigField>,
     pub config_section_fields: Vec<ConfigSectionField>,
 }
 
@@ -45,7 +48,13 @@ impl ControllerStructDef {
 /// struct would produce "cannot find attribute" errors.
 // `identity` is stripped only to keep the migration diagnostic targeted; it is
 // no longer accepted as controller syntax.
-pub const CONTROLLER_FIELD_ATTRS: &[&str] = &["inject", "identity", "config", "config_section"];
+pub const CONTROLLER_FIELD_ATTRS: &[&str] = &[
+    "inject",
+    "identity",
+    "config",
+    "live_config",
+    "config_section",
+];
 
 /// Check whether an `#[inject(...)]` attribute has the `identity` qualifier.
 pub fn has_identity_qualifier(attr: &syn::Attribute) -> bool {
@@ -120,6 +129,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
     let mut identity_fields = Vec::new();
     let mut request_fields = Vec::new();
     let mut config_fields = Vec::new();
+    let mut live_config_fields = Vec::new();
     let mut config_section_fields = Vec::new();
 
     for field in fields {
@@ -136,8 +146,33 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
             .attrs
             .iter()
             .find(|a| a.path().is_ident("config_section"));
+        let live_config_attr = field.attrs.iter().find(|a| a.path().is_ident("live_config"));
 
-        if let Some(attr) = removed_identity_attr {
+        // `#[live_config]` is app-scoped: stacking it on a request-scoped
+        // `#[inject(identity)]` / `#[inject(request)]` field mixes two scopes on
+        // one slot. Checked before the shared exclusivity rule so the message
+        // names the request scope.
+        if let (Some(live), Some(inject)) = (live_config_attr, inject_attr) {
+            if has_identity_qualifier(inject) || has_request_qualifier(inject) {
+                return Err(syn::Error::new_spanned(
+                    live,
+                    "#[live_config] is app-scoped and cannot be combined with a request-scoped \
+                     #[inject(identity)] / #[inject(request)] field\n\
+                     \n  hint: declare the LiveConfig<T> handle on its own field",
+                ));
+            }
+        }
+        crate::field_resolver::check_live_config_exclusive(&field.attrs)?;
+
+        if let Some(attr) = live_config_attr {
+            let (key, ty_name) = parse_live_config_field(attr, &field_type)?;
+            live_config_fields.push(LiveConfigField {
+                name: field_name,
+                ty: field_type,
+                key,
+                ty_name,
+            });
+        } else if let Some(attr) = removed_identity_attr {
             return Err(syn::Error::new_spanned(
                 attr,
                 "`#[identity]` was removed; use `#[inject(identity)]`",
@@ -192,6 +227,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
                  \n  #[inject(identity)]    — extract from request (e.g. AuthenticatedUser)\n\
                  \n  #[inject(request)]     — extract from request via FromRequestParts\n\
                  \n  #[config(\"app.key\")]   — resolve from R2eConfig\n\
+                 \n  #[live_config(\"app.key\")]  — runtime-updatable LiveConfig<T> handle\n\
                  \n  #[config_section(prefix = \"...\")]  — resolve typed config section via ConfigProperties",
             ));
         }
@@ -213,6 +249,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
         identity_fields,
         request_fields,
         config_fields,
+        live_config_fields,
         config_section_fields,
     })
 }

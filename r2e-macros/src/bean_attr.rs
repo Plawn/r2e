@@ -204,6 +204,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     let mut build_args = Vec::new();
     let mut config_key_entries = Vec::new();
     let mut has_config = false;
+    let mut has_live_config = false;
 
     let fn_name = &constructor.sig.ident;
     let type_name_str = quote!(#self_ty).to_string();
@@ -229,8 +230,32 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     .attrs
                     .iter()
                     .find(|a| a.path().is_ident("config_section"));
+                let live_config_attr = pat_type
+                    .attrs
+                    .iter()
+                    .find(|a| a.path().is_ident("live_config"));
 
-                if let Some(name) = inject_name {
+                crate::field_resolver::check_live_config_exclusive(&pat_type.attrs)?;
+
+                if let Some(attr) = live_config_attr {
+                    let (key_str, ty_name_str) =
+                        crate::type_utils::parse_live_config_field(attr, ty)?;
+                    // Declared as `Live`: never presence-validated (a live
+                    // value may legitimately be absent at boot) and never
+                    // fingerprinted (freshness arrives by push, not rebuild).
+                    config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                        &r2e_core_path(),
+                        &key_str,
+                        &ty_name_str,
+                    ));
+                    let expr = crate::field_resolver::live_config_resolve_expr(
+                        &quote! { __r2e_live },
+                        &key_str,
+                        Some(ty),
+                    );
+                    build_args.push(quote! { let #arg_name: #ty = #expr; });
+                    has_live_config = true;
+                } else if let Some(name) = inject_name {
                     let newtype_ident = named_bean_newtype_ident(&name, ty);
                     dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
                     dep_types.push(quote! { #newtype_ident });
@@ -238,24 +263,36 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 } else if let Some(attr) = config_section_attr {
                     let prefix_str = parse_config_section_prefix(attr)?;
                     let krate = r2e_core_path();
-                    build_args.push(quote! {
-                        let #arg_name: #ty = #krate::config::ConfigProperties::from_config(&__r2e_config, Some(#prefix_str)).unwrap_or_else(|e| {
-                            panic!(
-                                "Configuration error in bean `{}`: config section '{}' — {}",
-                                #type_name_str, #prefix_str, e
-                            )
-                        });
-                    });
+                    // Declared as `Section`: the key is the PREFIX, so
+                    // dev-reload fingerprints the whole subtree under it.
+                    config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                        &krate,
+                        &prefix_str,
+                        ty,
+                    ));
+                    let owner = format!("bean `{type_name_str}`");
+                    let expr = crate::field_resolver::config_section_resolve_expr(
+                        &quote! { __r2e_config },
+                        &prefix_str,
+                        ty,
+                        &krate,
+                        &owner,
+                    );
+                    build_args.push(quote! { let #arg_name: #ty = #expr; });
                     has_config = true;
                 } else if let Some(attr) = config_attr {
                     let (key_str, ty_name_str) = parse_config_field(attr, ty)?;
                     let krate = r2e_core_path();
                     let is_option = crate::type_utils::is_option_type(ty);
-                    // Emit a `config_keys()` entry for EVERY key (required and
-                    // optional) so dev-reload fingerprints the value; `required`
-                    // gates presence validation.
-                    let required = !is_option;
-                    config_key_entries.push(quote! { (#key_str, #ty_name_str, #required) });
+                    // Emit a `config_keys()` entry for EVERY copied key
+                    // (required and optional) so dev-reload fingerprints the
+                    // value; the kind gates presence validation.
+                    config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                        &krate,
+                        &key_str,
+                        &ty_name_str,
+                        is_option,
+                    ));
                     let owner = format!("bean `{type_name_str}`");
                     let expr = crate::field_resolver::config_resolve_expr(
                         &quote! { __r2e_config },
@@ -285,6 +322,14 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         );
         dep_types.push(quote! { #krate::config::R2eConfig });
     }
+    if has_live_config {
+        let krate = r2e_core_path();
+        let live_ty = crate::field_resolver::live_config_registry_ty(&krate);
+        dep_type_ids.push(
+            quote! { (std::any::TypeId::of::<#live_ty>(), std::any::type_name::<#live_ty>()) },
+        );
+        dep_types.push(live_ty);
+    }
 
     let arg_forwards: Vec<_> = (0..build_args.len())
         .map(|i| {
@@ -303,12 +348,15 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     } else {
         quote! {}
     };
+    let live_config_prelude =
+        crate::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
 
+    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
     let config_keys_fn = if config_key_entries.is_empty() {
         quote! {}
     } else {
         quote! {
-            fn config_keys() -> Vec<(&'static str, &'static str, bool)> {
+            fn config_keys() -> #config_keys_ret_ty {
                 vec![#(#config_key_entries),*]
             }
         }
@@ -598,6 +646,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 const BUILD_VERSION: u64 = #build_version;
                 async fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude
+                    #live_config_prelude
                     #(#build_args)*
                     Self::#fn_name(#(#arg_forwards),*).await
                 }
@@ -616,6 +665,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 const BUILD_VERSION: u64 = #build_version;
                 fn build(ctx: &#krate::beans::BeanContext) -> Self {
                     #config_prelude
+                    #live_config_prelude
                     #(#build_args)*
                     Self::#fn_name(#(#arg_forwards),*)
                 }
@@ -1045,6 +1095,7 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                                 .filter(|a| {
                                     !a.path().is_ident("config")
                                         && !a.path().is_ident("config_section")
+                                        && !a.path().is_ident("live_config")
                                         && !a.path().is_ident("inject")
                                 })
                                 .collect();

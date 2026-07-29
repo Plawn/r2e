@@ -10,6 +10,7 @@ mod config;
 mod core_path;
 mod facade;
 mod fixtures;
+mod live_config;
 mod proxy_routes;
 mod scope;
 mod tuple;

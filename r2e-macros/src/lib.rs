@@ -27,6 +27,7 @@ pub(crate) mod producer_attr;
 pub(crate) mod route;
 pub(crate) mod routes_attr;
 pub(crate) mod routes_parsing;
+pub(crate) mod runtime_args;
 pub(crate) mod test_suite_attr;
 pub(crate) mod type_list_gen;
 pub(crate) mod type_utils;
@@ -1052,7 +1053,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     #[inject] event_bus: EventBus,
 /// }
 /// ```
-#[proc_macro_derive(Bean, attributes(inject, config, config_section, default))]
+#[proc_macro_derive(Bean, attributes(inject, config, live_config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
 }
@@ -1091,7 +1092,7 @@ pub fn derive_bean(input: TokenStream) -> TokenStream {
 /// #[intercept(DbAuditLog::spec("api".into()))]
 /// async fn create(&self) -> Json<User> { ... }
 /// ```
-#[proc_macro_derive(DecoratorBean, attributes(inject, config, config_section))]
+#[proc_macro_derive(DecoratorBean, attributes(inject, config, live_config, config_section))]
 pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
     decorator_bean_derive::expand(input)
 }
@@ -1129,7 +1130,7 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 /// // Register in builder:
 /// app.spawn_service::<EmailWorker>();
 /// ```
-#[proc_macro_derive(BackgroundService, attributes(service, inject, config, config_section))]
+#[proc_macro_derive(BackgroundService, attributes(service, inject, config, live_config, config_section))]
 pub fn derive_background_service(input: TokenStream) -> TokenStream {
     bg_service_derive::expand(input)
 }

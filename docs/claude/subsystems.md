@@ -427,9 +427,26 @@ impl AdminController {
 ## Pagination and database transactions
 
 - `Pageable` and `Page<T>` live in `r2e-core` and are always available.
-- `r2e-data-sqlx` contains only cancellation-safe managed SQLx transactions.
+- `r2e-data-sqlx` contains cancellation-safe managed SQLx transactions.
+  Provide a normal `sqlx::Pool<DB>` and request `Tx<'_, DB>`, or produce a
+  rotating `DbPool<DB>` from a `LiveConfig<String>` and request
+  `DbTx<'_, DB>`. `DbPool` watches the live URL value as a `ServiceComponent`,
+  connects a replacement pool on rotation, swaps atomically on success, and
+  closes the old pool in the background. The pool and its generation live in a
+  single swapped cell — `snapshot() -> (Pool<DB>, u64)` reads both at once, so
+  `DbTx::generation()` can never name a pool the transaction did not run on.
+  Since the swap closes the pool it replaces, `DbPool::begin() ->
+  Result<(Transaction<'static, DB>, u64), sqlx::Error>` and the
+  `Executor for &DbPool` impl retry on `sqlx::Error::PoolClosed` (bounded to
+  three attempts, re-reading the snapshot each time), so requests in flight
+  during a rotation are not turned into 500s. Transaction sources implement
+  `TxSource<DB>` — `begin(&ManagedContext) -> (Transaction<'static, DB>, Meta)`
+  — so the rotating source owns the retry while `ManagedTx` keeps the shared
+  commit/rollback lifecycle.
 - `r2e-data-diesel` contains only managed Diesel/r2d2 transactions and a
-  blocking-pool `run` helper.
+  blocking-pool `run` helper. Its `DbPool` has the same atomic `snapshot()`,
+  but no retry: rotation only drops the facade's handle and r2d2 pools are
+  never explicitly closed, so a handle taken before the swap keeps working.
 - CRUD models and queries remain application-owned and use SQLx or Diesel
   directly.
 
