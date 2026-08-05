@@ -1930,13 +1930,34 @@ use r2e::r2e_observability::{Observability, ObservabilityConfig};
 .with(Observability::new(
     ObservabilityConfig::new("my-service")
         .with_service_version("1.0.0")
-        .with_endpoint("http://otel-collector:4317")
+        .with_endpoint("http://otel-collector:4318/v1/traces")
         .capture_header("x-tenant-id"),
 ))
 // or from YAML (observability.* keys): .with(Observability::from_config(&config, "my-service"))
+// or from standard OTEL_* env vars (tracing-only when no endpoint is set):
+// .with(Observability::from_env("my-service"))
 ```
 
-OTLP export (Jaeger, Tempo, …) + W3C `traceparent` propagation.
+OTLP/HTTP export (Jaeger, Tempo, …) + W3C `traceparent` propagation. The
+default endpoint is `http://localhost:4318/v1/traces`; pathless HTTP(S)
+endpoints receive `/v1/traces` automatically. Requesting gRPC logs a warning
+and uses HTTP. Logs inside traced spans include `trace_id` and `span_id`.
+
+Outgoing reqwest propagation is opt-in once per client:
+
+```rust
+use r2e::r2e_observability::{inject_current_context, traced_reqwest_client};
+
+let http = traced_reqwest_client(reqwest::Client::new());
+// Pass `http` to SDKs accepting reqwest_middleware::ClientWithMiddleware.
+// For a plain reqwest chokepoint instead:
+// inject_current_context(request.headers_mut());
+```
+
+`Observability::from_env` reads `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (preferred),
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, protocol variables,
+`OTEL_TRACES_SAMPLER`, and `OTEL_TRACES_SAMPLER_ARG`. With no endpoint it
+installs the normal R2E tracing subscriber/layer and no OTLP exporter.
 
 ---
 

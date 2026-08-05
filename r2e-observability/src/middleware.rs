@@ -10,6 +10,7 @@ use std::{
     time::Instant,
 };
 use tower::{Layer, Service};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Header extractor for OpenTelemetry propagation.
 struct HeaderExtractor<'a>(&'a http::HeaderMap);
@@ -69,7 +70,7 @@ where
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         // Extract parent context from incoming headers
-        let _parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+        let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
             propagator.extract(&HeaderExtractor(req.headers()))
         });
 
@@ -89,6 +90,7 @@ where
             http.status_code = tracing::field::Empty,
             otel.kind = "server",
         );
+        let _ = span.set_parent(parent_cx);
 
         // Log captured headers as span events
         for name in &self.capture_headers {

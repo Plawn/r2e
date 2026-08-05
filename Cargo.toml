@@ -128,6 +128,8 @@ testcontainers-modules = "0.15"
 # Security
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 reqwest = { version = "0.13", default-features = false }
+reqwest-middleware = "0.5"
+async-trait = "0.1"
 rsa = "0.9"
 argon2 = "0.5"
 rand = "0.8"

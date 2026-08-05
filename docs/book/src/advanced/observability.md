@@ -135,6 +135,47 @@ config is loaded. If you use that form and want configurable tracing instead:
 1. Disable the default tracing: `#[r2e::main(tracing = false)]`
 2. Load config first, then install the configured `Tracing` plugin
 
+## OpenTelemetry observability
+
+Enable the `observability` feature and install `Observability` instead of
+`Tracing` for distributed traces:
+
+```rust
+use r2e::r2e_observability::Observability;
+
+builder
+    .build_state()
+    .await
+    .with(Observability::from_env("my-service"))
+```
+
+`from_env` reads the standard OTLP endpoint, service-name, protocol, and
+sampler variables. With no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_ENDPOINT`, it installs ordinary R2E tracing without an
+exporter. This makes the canonical one-line `r2e::app_main!(MyApp)` entrypoint
+work in both local and deployed environments without conditional subscriber
+initialization. A custom `#[r2e::main]` entrypoint must still specify
+`tracing = false`, since that macro initializes its subscriber before the app
+is built.
+
+R2E exports OTLP/HTTP to `http://localhost:4318/v1/traces` by default. A
+pathless HTTP(S) endpoint receives `/v1/traces` automatically; requesting gRPC
+logs a warning and uses HTTP. Events emitted inside OTel spans include
+`trace_id` and `span_id` in pretty and JSON logs.
+
+To propagate the current trace through outgoing reqwest calls, wrap the client
+once:
+
+```rust
+use r2e::r2e_observability::traced_reqwest_client;
+
+let http = traced_reqwest_client(reqwest::Client::new());
+```
+
+Pass that `ClientWithMiddleware` to client SDKs. SDKs restricted to a plain
+reqwest client can instead call `inject_current_context(headers)` in their
+single request-construction chokepoint.
+
 ## RequestId plugin
 
 The `RequestIdPlugin` assigns a unique identifier to every request, enabling correlation across log lines and distributed systems.

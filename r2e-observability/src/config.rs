@@ -7,9 +7,9 @@ pub struct ObservabilityConfig {
     pub service_name: String,
     /// Service version (used in resource attributes).
     pub service_version: Option<String>,
-    /// OTLP exporter endpoint (default: "http://localhost:4317").
+    /// OTLP/HTTP traces endpoint (default: "http://localhost:4318/v1/traces").
     pub otlp_endpoint: String,
-    /// Protocol: Grpc (default) or Http.
+    /// Protocol requested by configuration. Only OTLP/HTTP is currently exported.
     pub otlp_protocol: OtlpProtocol,
     /// Whether to enable tracing export.
     pub tracing_enabled: bool,
@@ -26,10 +26,10 @@ pub struct ObservabilityConfig {
 }
 
 /// OTLP transport protocol.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OtlpProtocol {
-    #[default]
     Grpc,
+    #[default]
     Http,
 }
 
@@ -48,8 +48,8 @@ impl ObservabilityConfig {
         Self {
             service_name: service_name.to_string(),
             service_version: None,
-            otlp_endpoint: "http://localhost:4317".to_string(),
-            otlp_protocol: OtlpProtocol::Grpc,
+            otlp_endpoint: "http://localhost:4318/v1/traces".to_string(),
+            otlp_protocol: OtlpProtocol::Http,
             tracing_enabled: true,
             sampling_ratio: 1.0,
             propagation_format: PropagationFormat::W3c,
@@ -112,10 +112,48 @@ impl ObservabilityConfig {
         self
     }
 
+    /// Apply the standard OpenTelemetry environment variables supported by R2E.
+    ///
+    /// `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` takes precedence over
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`, and `OTEL_SERVICE_NAME` overrides the
+    /// supplied default. Ratio-based samplers read `OTEL_TRACES_SAMPLER_ARG`.
+    pub fn from_env(service_name: &str) -> Self {
+        let mut cfg = Self::new(service_name);
+
+        if let Some(name) = non_empty_env("OTEL_SERVICE_NAME") {
+            cfg.service_name = name;
+        }
+        if let Some(endpoint) = otlp_endpoint_from_env() {
+            cfg.otlp_endpoint = endpoint;
+        }
+        if let Some(protocol) = non_empty_env("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+            .or_else(|| non_empty_env("OTEL_EXPORTER_OTLP_PROTOCOL"))
+            .and_then(|value| parse_otlp_protocol(&value))
+        {
+            cfg.otlp_protocol = protocol;
+        }
+
+        match non_empty_env("OTEL_TRACES_SAMPLER").as_deref() {
+            Some("always_off") | Some("parentbased_always_off") => cfg.sampling_ratio = 0.0,
+            Some("always_on") | Some("parentbased_always_on") => cfg.sampling_ratio = 1.0,
+            Some("traceidratio") | Some("parentbased_traceidratio") | None => {
+                if let Some(ratio) = non_empty_env("OTEL_TRACES_SAMPLER_ARG")
+                    .and_then(|value| value.parse::<f64>().ok())
+                {
+                    cfg.sampling_ratio = ratio.clamp(0.0, 1.0);
+                }
+            }
+            Some(_) => {}
+        }
+
+        cfg
+    }
+
     /// Load from R2eConfig with prefix `observability`.
     ///
     /// Reads keys like:
     /// - `observability.otlp-endpoint`
+    /// - `observability.otlp-protocol`
     /// - `observability.sampling-ratio`
     /// - `observability.tracing.enabled`
     ///
@@ -126,6 +164,11 @@ impl ObservabilityConfig {
         let mut cfg = Self::new(service_name);
         if let Ok(endpoint) = config.get::<String>("observability.otlp-endpoint") {
             cfg.otlp_endpoint = endpoint;
+        }
+        if let Ok(protocol) = config.get::<String>("observability.otlp-protocol") {
+            if let Some(protocol) = parse_otlp_protocol(&protocol) {
+                cfg.otlp_protocol = protocol;
+            }
         }
         if let Ok(ratio) = config.get::<f64>("observability.sampling-ratio") {
             cfg.sampling_ratio = ratio.clamp(0.0, 1.0);
@@ -138,5 +181,24 @@ impl ObservabilityConfig {
             cfg.tracing = tracing;
         }
         cfg
+    }
+}
+
+pub(crate) fn otlp_endpoint_from_env() -> Option<String> {
+    non_empty_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        .or_else(|| non_empty_env("OTEL_EXPORTER_OTLP_ENDPOINT"))
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn parse_otlp_protocol(value: &str) -> Option<OtlpProtocol> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "http" | "http/protobuf" => Some(OtlpProtocol::Http),
+        "grpc" => Some(OtlpProtocol::Grpc),
+        _ => None,
     }
 }

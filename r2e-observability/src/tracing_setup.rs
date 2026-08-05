@@ -1,16 +1,23 @@
-use opentelemetry::trace::TracerProvider;
+use std::fmt;
+
+use opentelemetry::trace::{TraceContextExt, TracerProvider};
 use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
 use r2e_core::LogFormat;
+use tracing::{Event, Subscriber};
+use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
+use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
 
-use crate::config::ObservabilityConfig;
+use crate::config::{ObservabilityConfig, OtlpProtocol};
 
 /// Initialize the full tracing stack: console logs + OpenTelemetry export.
 ///
 /// This replaces `r2e_core::init_tracing()` when observability is enabled.
 /// Returns a guard that flushes traces on drop.
 pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
+    let grpc_requested = config.otlp_protocol == OtlpProtocol::Grpc;
     // Build resource attributes
     let mut resource_kv = vec![opentelemetry::KeyValue::new(
         opentelemetry_semantic_conventions::attribute::SERVICE_NAME,
@@ -37,21 +44,22 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
     };
 
     // Build the tracer provider
-    let mut provider_builder = SdkTracerProvider::builder()
+    let provider_builder = SdkTracerProvider::builder()
         .with_sampler(sampler)
         .with_resource(resource);
 
     // Add OTLP exporter if the feature is enabled
     #[cfg(feature = "otlp")]
-    {
+    let provider_builder = {
         use opentelemetry_otlp::WithExportConfig;
+        let endpoint = normalized_otlp_traces_endpoint(&config.otlp_endpoint);
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
-            .with_endpoint(&config.otlp_endpoint)
+            .with_endpoint(endpoint)
             .build()
             .expect("Failed to build OTLP span exporter");
-        provider_builder = provider_builder.with_batch_exporter(exporter);
-    }
+        provider_builder.with_batch_exporter(exporter)
+    };
 
     let provider = provider_builder.build();
     let tracer = provider.tracer("r2e");
@@ -72,7 +80,7 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
 
     match tc.effective_format() {
         LogFormat::Json => {
-            let fmt_layer = tracing_subscriber::fmt::layer()
+            let event_format = tracing_subscriber::fmt::format()
                 .json()
                 .with_target(target)
                 .with_thread_ids(thread_ids)
@@ -80,8 +88,11 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
                 .with_file(file)
                 .with_line_number(line_number)
                 .with_level(level)
-                .with_ansi(ansi)
-                .with_span_events(span_events);
+                .with_ansi(ansi);
+            let mut fmt_layer = tracing_subscriber::fmt::layer()
+                .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
+                .event_format(TraceIdFormat::json(event_format));
+            fmt_layer.set_span_events(span_events);
 
             let subscriber = Registry::default()
                 .with(env_filter)
@@ -93,15 +104,17 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
             }
         }
         LogFormat::Pretty => {
-            let fmt_layer = tracing_subscriber::fmt::layer()
+            let event_format = tracing_subscriber::fmt::format()
                 .with_target(target)
                 .with_thread_ids(thread_ids)
                 .with_thread_names(thread_names)
                 .with_file(file)
                 .with_line_number(line_number)
                 .with_level(level)
-                .with_ansi(ansi)
-                .with_span_events(span_events);
+                .with_ansi(ansi);
+            let mut fmt_layer =
+                tracing_subscriber::fmt::layer().event_format(TraceIdFormat::text(event_format));
+            fmt_layer.set_span_events(span_events);
 
             let subscriber = Registry::default()
                 .with(env_filter)
@@ -114,7 +127,126 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
         }
     }
 
+    if grpc_requested {
+        tracing::warn!(
+            "gRPC OTLP is not supported by r2e-observability; using OTLP/HTTP instead (normally port 4318)"
+        );
+    }
+
     OtelGuard { provider }
+}
+
+/// Normalize an OTLP/HTTP traces endpoint.
+///
+/// HTTP(S) endpoints without an explicit path receive the standard
+/// `/v1/traces` suffix. Explicit paths and non-HTTP schemes are preserved.
+pub fn normalized_otlp_traces_endpoint(endpoint: &str) -> String {
+    let Ok(mut url) = url::Url::parse(endpoint) else {
+        return endpoint.to_string();
+    };
+    if matches!(url.scheme(), "http" | "https") && matches!(url.path(), "" | "/") {
+        url.set_path("/v1/traces");
+        return url.to_string();
+    }
+    endpoint.to_string()
+}
+
+/// Event formatter that adds the active OpenTelemetry trace and span IDs.
+///
+/// Events outside an OpenTelemetry span are delegated unchanged, so the
+/// formatter is also safe in tracing-only mode.
+#[derive(Debug, Clone)]
+pub struct TraceIdFormat<F> {
+    inner: F,
+    json: bool,
+}
+
+impl<F> TraceIdFormat<F> {
+    pub fn text(inner: F) -> Self {
+        Self { inner, json: false }
+    }
+
+    pub fn json(inner: F) -> Self {
+        Self { inner, json: true }
+    }
+}
+
+impl<S, N, F> FormatEvent<S, N> for TraceIdFormat<F>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    F: FormatEvent<S, N>,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let mut rendered = String::new();
+        self.inner
+            .format_event(ctx, Writer::new(&mut rendered), event)?;
+
+        let Some((trace_id, span_id)) = current_otel_ids(ctx) else {
+            return writer.write_str(&rendered);
+        };
+
+        if self.json {
+            write_json_ids(&mut writer, &rendered, trace_id, span_id)
+        } else {
+            write_text_ids(&mut writer, &rendered, trace_id, span_id)
+        }
+    }
+}
+
+fn current_otel_ids<S, N>(ctx: &FmtContext<'_, S, N>) -> Option<(String, String)>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    ctx.parent_span()?;
+    // The tracing-opentelemetry layer activates the span's OpenTelemetry
+    // context on enter. Reading OTel's context directly avoids a re-entrant
+    // tracing-dispatch lookup while `FormatEvent` is running.
+    let context = opentelemetry::Context::current();
+    let otel_span = context.span();
+    let span_context = otel_span.span_context();
+    if !span_context.is_valid() {
+        return None;
+    }
+    Some((
+        span_context.trace_id().to_string(),
+        span_context.span_id().to_string(),
+    ))
+}
+
+fn write_text_ids(
+    writer: &mut Writer<'_>,
+    rendered: &str,
+    trace_id: String,
+    span_id: String,
+) -> fmt::Result {
+    let newline = rendered.find('\n').unwrap_or(rendered.len());
+    writer.write_str(&rendered[..newline])?;
+    write!(writer, " trace_id={trace_id} span_id={span_id}")?;
+    writer.write_str(&rendered[newline..])
+}
+
+fn write_json_ids(
+    writer: &mut Writer<'_>,
+    rendered: &str,
+    trace_id: String,
+    span_id: String,
+) -> fmt::Result {
+    let Some(end) = rendered.rfind('}') else {
+        return write_text_ids(writer, rendered, trace_id, span_id);
+    };
+    writer.write_str(&rendered[..end])?;
+    write!(
+        writer,
+        ",\"trace_id\":\"{trace_id}\",\"span_id\":\"{span_id}\""
+    )?;
+    writer.write_str(&rendered[end..])
 }
 
 /// Guard that ensures traces are flushed when the application shuts down.

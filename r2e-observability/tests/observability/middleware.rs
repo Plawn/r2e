@@ -6,9 +6,14 @@
 //! methods collapse into `OTHER_METHOD_LABEL`. The raw path is recorded as
 //! `url.path`, an unbounded per-span attribute.
 
+use http_body_util::BodyExt;
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use r2e_core::http::labels::{OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 use r2e_core::http::routing::get;
 use r2e_core::http::{Body, Request, Router};
+use r2e_observability::inject_current_context;
 use r2e_observability::middleware::OtelTraceLayer;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -92,4 +97,41 @@ async fn unmatched_requests_collapse_into_the_sentinel_route() {
 async fn extension_methods_collapse_into_the_other_label() {
     let fields = request_span_fields("PURGE", "/users/7").await;
     assert_eq!(fields["http.method"], OTHER_METHOD_LABEL);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_traceparent_is_used_for_downstream_propagation() {
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("middleware-test");
+    let subscriber = Registry::default().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    let router = Router::new()
+        .route(
+            "/propagate",
+            get(|| async {
+                let mut headers = http::HeaderMap::new();
+                inject_current_context(&mut headers);
+                headers["traceparent"].to_str().unwrap().to_string()
+            }),
+        )
+        .layer(OtelTraceLayer::new(vec![]));
+    let incoming_trace_id = "11111111111111111111111111111111";
+    let request = Request::builder()
+        .uri("/propagate")
+        .header(
+            "traceparent",
+            format!("00-{incoming_trace_id}-2222222222222222-01"),
+        )
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let propagated = std::str::from_utf8(&body).unwrap();
+    assert_eq!(propagated.split('-').nth(1), Some(incoming_trace_id));
+
+    drop(subscriber_guard);
+    provider.shutdown().unwrap();
 }

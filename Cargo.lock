@@ -5944,18 +5944,24 @@ dependencies = [
 name = "r2e-observability"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "http",
+ "http-body-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "pin-project-lite",
  "r2e-core",
+ "reqwest 0.13.4",
+ "reqwest-middleware",
+ "serde_json",
  "tokio",
  "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
