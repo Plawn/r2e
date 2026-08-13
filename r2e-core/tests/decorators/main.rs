@@ -5,6 +5,7 @@
 mod support;
 
 mod bean;
+mod config_keys;
 mod e2e;
 mod guards;
 mod interceptors;

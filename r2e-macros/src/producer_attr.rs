@@ -246,7 +246,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         .collect();
 
     let krate = r2e_core_path();
-    let deps_type = build_tcons_type(&dep_types, &krate);
+    let param_deps_type = build_tcons_type(&dep_types, &krate);
     let after_register_fn = if args.start {
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
@@ -315,6 +315,27 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     };
 
     let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+
+    // `#[producer(start)]` registers `Self::Output` as a background service, so
+    // the graph must also satisfy what the *service* pulls in
+    // `ServiceComponent::from_context` — not just what the producer function
+    // takes as parameters. Without this fold, a derived service with a missing
+    // `#[inject]` bean compiled fine and panicked in `ctx.get()` at serve time.
+    //
+    // The output type is registered verbatim (bare `T`, `Option<T>`, or the
+    // `name = "..."` newtype), and `register_service_source::<Self::Output>()`
+    // already requires exactly that type to be the `ServiceComponent`, so the
+    // same type is the one to ask for `Deps`. Both lists are concrete, so the
+    // `TAppend` projection normalizes without extra bounds.
+    let deps_type = if args.start {
+        quote! {
+            <#param_deps_type as #krate::type_list::TAppend<
+                <#effective_output_ty as #krate::ServiceComponent>::Deps,
+            >>::Output
+        }
+    } else {
+        param_deps_type
+    };
 
     Ok(quote! {
         // Emit the original function with cleaned params

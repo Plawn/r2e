@@ -113,6 +113,15 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut dep_types: Vec<TokenStream2> = Vec::new();
     let mut resolved_inits: Vec<TokenStream2> = Vec::new();
+    // Declared config keys — the `Bean::config_keys()` counterpart for a host
+    // that is not a bean registration. Aggregated by the site host (controller
+    // `validate_config` / the intercepting bean's own `config_keys`), so a
+    // missing key is a startup report instead of a panic inside `build`.
+    let mut config_key_entries: Vec<TokenStream2> = Vec::new();
+    // Type-aware `#[config_section]` declarations. `build` runs at controller
+    // registration, so a `Section` key entry (which the shared bridge skips)
+    // would only fail inside `build` — these give the host the real walk.
+    let mut config_section_entries: Vec<TokenStream2> = Vec::new();
     let mut has_config = false;
     let mut has_live_config = false;
 
@@ -131,6 +140,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 resolved_inits.push(quote! { #field_name: __ctx.get::<#field_type>() });
             }
             FieldKind::ConfigSection { prefix } => {
+                config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                    &krate, prefix, field_type,
+                ));
+                config_section_entries.push(crate::field_resolver::section_validator_entry(
+                    &krate, prefix, field_type,
+                ));
                 let owner = format!("decorator bean `{name_str}`");
                 let expr = crate::field_resolver::config_section_resolve_expr(
                     &quote! { __cfg },
@@ -142,8 +157,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
-            FieldKind::Config { key, .. } => {
+            FieldKind::Config { key, ty_name } => {
                 let is_option = crate::type_utils::is_option_type(field_type);
+                config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                    &krate, key, ty_name, is_option,
+                ));
                 let owner = format!("decorator bean `{name_str}`");
                 let expr = crate::field_resolver::config_resolve_expr(
                     &quote! { __cfg },
@@ -156,7 +174,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 resolved_inits.push(quote! { #field_name: #expr });
                 has_config = true;
             }
-            FieldKind::LiveConfig { key, .. } => {
+            FieldKind::LiveConfig { key, ty_name } => {
+                config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                    &krate, key, ty_name,
+                ));
                 let expr = crate::field_resolver::live_config_resolve_expr(
                     &quote! { __r2e_live },
                     key,
@@ -184,6 +205,36 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
     let live_config_prelude =
         crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
+
+    // Emitted on BOTH `DecoratorSpec` impls: sites name either the companion
+    // spec (`Name::spec(...)`) or the type itself (`#[guard(Name = value)]`),
+    // and the host folds `<Spec as DecoratorSpec>::config_keys()` from whichever
+    // path it sees.
+    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_fn = if config_key_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> #config_keys_ret_ty {
+                vec![#(#config_key_entries),*]
+            }
+        }
+    };
+
+    let config_sections_ret_ty = crate::field_resolver::config_sections_ret_ty(&krate);
+    let config_sections_fn = if config_section_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_sections() -> #config_sections_ret_ty {
+                vec![#(#config_section_entries),*]
+            }
+        }
+    };
+    let config_decl_fns = quote! {
+        #config_keys_fn
+        #config_sections_fn
+    };
 
     let spec_ident = format_ident!("__R2eSpec_{}", name);
     let plain_names: Vec<&syn::Ident> = plain.iter().map(|f| f.ident.as_ref().unwrap()).collect();
@@ -220,6 +271,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             type Product = #name;
             type Deps = #deps_type;
 
+            #config_decl_fns
+
             fn build(self, __ctx: &#krate::beans::BeanContext) -> #name {
                 #config_prelude
                 #live_config_prelude
@@ -238,6 +291,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         impl #krate::DecoratorSpec for #name {
             type Product = #name;
             type Deps = #deps_type;
+
+            #config_decl_fns
 
             fn build(self, __ctx: &#krate::beans::BeanContext) -> #name {
                 self

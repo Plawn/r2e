@@ -424,25 +424,53 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.register_routes(router)
     }
 
-    /// Spawn a background [`ServiceComponent`] that participates in DI.
+    /// Backend of the spawn path, without the dependency witness. The public
+    /// face is [`SpawnService::spawn_service`](super::SpawnService::spawn_service),
+    /// an extension trait so that `DepIdx` — the indices proving the service's
+    /// `Deps` are all in the state — is inferred rather than turbofished
+    /// (Rust forbids partial turbofish).
     ///
-    /// The service is constructed from the retained bean graph via
-    /// [`ServiceComponent::from_context`] and started in a Tokio task during
-    /// `on_start`. A [`CancellationToken`] is provided and cancelled
-    /// automatically during shutdown.
+    /// # Panics
     ///
-    /// # Example
+    /// Panics if config keys declared by the service are missing.
+    pub(crate) fn spawn_service_impl<C: ServiceComponent>(self) -> Self {
+        self.try_spawn_service_impl::<C>().unwrap_or_else(|err| {
+            panic!(
+                "\n=== CONFIGURATION ERRORS (service: {}) ===\n\n{}\n============================\n",
+                std::any::type_name::<C>(),
+                err
+            )
+        })
+    }
+
+    /// Non-panicking spawn backend; see
+    /// [`spawn_service_impl`](Self::spawn_service_impl).
     ///
-    /// ```ignore
-    /// AppBuilder::new()
-    ///     .provide(pool)
-    ///     .build_state().await
-    ///     .spawn_service::<MetricsExporter>()
-    ///     .serve("0.0.0.0:3000").await
-    /// ```
-    pub fn spawn_service<C: ServiceComponent>(self) -> Self {
+    /// The service's declared [`config_keys`](ServiceComponent::config_keys)
+    /// and [`config_sections`](ServiceComponent::config_sections) are validated
+    /// **before** `from_context` runs, so a missing `#[config]` key — or a
+    /// missing/ill-typed key inside a `#[config_section]` — is an aggregated
+    /// report naming every problem instead of a fail-late panic inside
+    /// `R2eConfig::get` / `ConfigProperties::from_config`.
+    pub(crate) fn try_spawn_service_impl<C: ServiceComponent>(
+        self,
+    ) -> Result<Self, crate::config::ConfigValidationError> {
+        if let Some(config) = &self.shared.config {
+            let mut errors = crate::config::validate_declared_keys(
+                std::any::type_name::<C>(),
+                &C::config_keys(),
+                config,
+            );
+            errors.extend(crate::config::validate_declared_sections(
+                &C::config_sections(),
+                config,
+            ));
+            if !errors.is_empty() {
+                return Err(crate::config::ConfigValidationError { errors });
+            }
+        }
         let service = C::from_context(&self.bean_context);
-        self.register_service(move |token| service.start(token))
+        Ok(self.register_service(move |token| service.start(token)))
     }
 
     /// Get plugin data by type.

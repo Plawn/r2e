@@ -104,7 +104,31 @@ where
     ///
     /// The service is built immediately from the retained bean graph
     /// ([`AppBuilder::bean_context`](r2e_core::AppBuilder::bean_context)).
+    ///
+    /// # Panics
+    ///
+    /// Panics if config keys or sections declared on the service (or on any of
+    /// its `#[intercept]` decorator specs) fail validation. Use
+    /// [`try_register_grpc_service`](Self::try_register_grpc_service) for a
+    /// non-panicking alternative — the gRPC peer of
+    /// [`try_register_controller`](r2e_core::RegisterController::try_register_controller).
     fn register_grpc_service<S>(self) -> Self
+    where
+        S: GrpcService + EndpointDeps,
+        S::Deps: AllSatisfied<T, DepIdx>;
+
+    /// Register a gRPC service, returning config-validation errors instead of
+    /// panicking.
+    ///
+    /// Behaves exactly like
+    /// [`register_grpc_service`](Self::register_grpc_service) on success. On
+    /// failure the service's aggregated
+    /// [`ConfigValidationError`](r2e_core::config::ConfigValidationError) is
+    /// returned and the builder is consumed (startup wiring cannot proceed with
+    /// a misconfigured service).
+    fn try_register_grpc_service<S>(
+        self,
+    ) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
         S: GrpcService + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
@@ -119,6 +143,32 @@ where
         S: GrpcService + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
+        self.try_register_grpc_service::<S>().unwrap_or_else(|err| {
+            panic!(
+                "\n=== CONFIGURATION ERRORS (grpc service: {}) ===\n\n{}\n============================\n",
+                std::any::type_name::<S>(),
+                err
+            )
+        })
+    }
+
+    fn try_register_grpc_service<S>(
+        self,
+    ) -> Result<Self, r2e_core::config::ConfigValidationError>
+    where
+        S: GrpcService + EndpointDeps,
+        S::Deps: AllSatisfied<T, DepIdx>,
+    {
+        // Aggregated config validation, before anything is built — the gRPC
+        // peer of the `register_controller` banner. Covers the core's own
+        // `#[config]` keys and every `#[intercept]` decorator spec's.
+        if let Some(config) = self.r2e_config() {
+            let errors = S::validate_config(config);
+            if !errors.is_empty() {
+                return Err(r2e_core::config::ConfigValidationError { errors });
+            }
+        }
+
         let registry = self
             .get_plugin_data::<GrpcServiceRegistry>()
             .expect(
@@ -132,7 +182,7 @@ where
 
         tracing::debug!(service = S::service_name(), "Registered gRPC service");
 
-        self
+        Ok(self)
     }
 }
 

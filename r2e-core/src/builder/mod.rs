@@ -18,7 +18,7 @@ mod typed;
 pub use app::{launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
-pub use registration::{RegisterController, RegisterControllers, RegisterModule};
+pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};

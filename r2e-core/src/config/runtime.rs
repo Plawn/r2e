@@ -58,12 +58,115 @@ pub trait ConfigProvider: Send + Sync + 'static {
     ///
     /// Providers that do not support runtime watching can keep the default
     /// implementation.
+    ///
+    /// The return value is a **contract**, because the watch task is
+    /// supervised (see [`supervise_config_watch`]):
+    ///
+    /// - `Ok(())` — done watching on purpose (the default impl, or a one-shot
+    ///   provider that pushes once). The supervisor stops; the provider is not
+    ///   called again.
+    /// - `Err(_)` — the watch broke (connection dropped, lease expired, …).
+    ///   The supervisor logs it and calls `watch` again after a capped
+    ///   exponential backoff, so a transient failure does not silently disable
+    ///   runtime config updates for the rest of the process' life.
+    ///
+    /// Long-lived watchers should therefore run until
+    /// [`ConfigWatchContext::shutdown_token`] fires and return `Ok(())` then —
+    /// returning `Ok(())` early means "never call me again".
     fn watch(
         self: Arc<Self>,
         _ctx: ConfigWatchContext,
         _sink: ConfigUpdateSink,
     ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + 'static>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+/// First retry delay after a failed [`ConfigProvider::watch`].
+const WATCH_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// Cap for the exponential retry delay.
+const WATCH_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+/// A watch attempt that ran at least this long is considered healthy: the next
+/// failure restarts from [`WATCH_BACKOFF_INITIAL`] instead of the grown delay.
+const WATCH_HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run one provider's [`watch`](ConfigProvider::watch) under supervision until
+/// shutdown.
+///
+/// A watch task used to be started exactly once and never restarted: a
+/// provider whose watch returned an error stopped feeding the
+/// [`LiveConfigRegistry`] for the whole life of the process (and under
+/// `r2e dev`, serve hooks are skipped from the second hot-patch cycle on, so
+/// nothing would have restarted it there either). This supervisor restarts a
+/// **failed** watch with a capped exponential backoff and treats `Ok(())` as a
+/// deliberate end — see [`ConfigProvider::watch`] for the contract.
+///
+/// Cancellation is honoured at every point of the cycle: before an attempt,
+/// **during** the in-flight `watch` future, and during the retry sleep. A
+/// provider that never resolves therefore cannot hold up a graceful drain.
+pub async fn supervise_config_watch(
+    provider: Arc<dyn ConfigProvider>,
+    ctx: ConfigWatchContext,
+    sink: ConfigUpdateSink,
+) {
+    supervise_config_watch_with_backoff(
+        provider,
+        ctx,
+        sink,
+        WATCH_BACKOFF_INITIAL,
+        WATCH_BACKOFF_MAX,
+    )
+    .await;
+}
+
+/// [`supervise_config_watch`] with explicit backoff bounds — tests only.
+#[doc(hidden)]
+pub async fn supervise_config_watch_with_backoff(
+    provider: Arc<dyn ConfigProvider>,
+    ctx: ConfigWatchContext,
+    sink: ConfigUpdateSink,
+    initial_backoff: std::time::Duration,
+    max_backoff: std::time::Duration,
+) {
+    let shutdown = ctx.shutdown_token();
+    let mut delay = initial_backoff;
+    loop {
+        if shutdown.is_cancelled() {
+            return;
+        }
+        let started = std::time::Instant::now();
+        // The watch future itself races the shutdown token, not just the
+        // retry sleep: a provider that never resolves (wedged connection,
+        // a `watch` that ignores its own shutdown token) would otherwise
+        // hold the graceful drain open for as long as it stays stuck.
+        // `biased` checks cancellation before polling the watch, so a token
+        // already cancelled on entry returns without touching the provider.
+        let outcome = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            outcome = provider.clone().watch(ctx.clone(), sink.clone()) => outcome,
+        };
+        match outcome {
+            Ok(()) => return,
+            Err(error) => {
+                if shutdown.is_cancelled() {
+                    return;
+                }
+                if started.elapsed() >= WATCH_HEALTHY_AFTER {
+                    delay = initial_backoff;
+                }
+                tracing::warn!(
+                    error = %error,
+                    retry_in_ms = delay.as_millis() as u64,
+                    "config provider watch failed — restarting"
+                );
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    () = tokio::time::sleep(delay) => {}
+                }
+                delay = std::cmp::min(delay.saturating_mul(2), max_backoff);
+            }
+        }
     }
 }
 

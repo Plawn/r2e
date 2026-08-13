@@ -529,8 +529,50 @@ pub(crate) fn deps_fold_from_base<'a>(
     deps
 }
 
-/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block.
-pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
+/// The unique spec types of a set of decorator sites, in first-seen order.
+/// Non-inferable expressions are skipped — `spec_type_of` already errors for
+/// them wherever the site is actually built.
+pub(crate) fn unique_spec_types<'a>(
+    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> Vec<syn::Path> {
+    let mut seen = std::collections::HashSet::new();
+    let mut specs = Vec::new();
+    for expr in site_exprs {
+        if let Ok((spec, _)) = spec_type_of(expr) {
+            if seen.insert(quote!(#spec).to_string()) {
+                specs.push(spec);
+            }
+        }
+    }
+    specs
+}
+
+/// Statements appending every decorator site's declared config keys' errors to
+/// a `Vec<MissingKeyError>` binding named `__errors`.
+///
+/// This is where a `#[derive(DecoratorBean)]` guard/interceptor's `#[config]`
+/// keys reach **aggregated** startup validation: the sites are known only to
+/// the host (controller / bean), so the host reports them — under its own
+/// registration banner, alongside its own missing keys — instead of the
+/// decorator failing late inside `build_decorator`.
+pub(crate) fn decorator_config_key_stmts<'a>(
+    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    unique_spec_types(site_exprs)
+        .into_iter()
+        .map(|spec| {
+            quote! {
+                __errors.extend(#krate::decorator_config_errors::<#spec>(__config));
+            }
+        })
+        .collect()
+}
+
+/// Every decorator site expression of a `#[routes]` block, in the order the
+/// dep fold visits them. Shared by [`controller_deps_fold`] and the
+/// config-key aggregation so both see exactly the same site set.
+pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
 
     // Controller-level interceptors are wired into HTTP route handlers,
@@ -565,5 +607,10 @@ pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
         exprs.extend(&wm.decorators.pre_auth_guard_fns);
     }
 
-    endpoint_deps_fold(&def.controller_name, exprs)
+    exprs
+}
+
+/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block.
+pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
+    endpoint_deps_fold(&def.controller_name, controller_site_exprs(def))
 }

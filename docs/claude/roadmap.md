@@ -89,25 +89,71 @@ Section, Live}` with live keys out of the per-bean fingerprint (B5) and
 config_keys()` requalified as introspection-only (B6), and a boot-time WARN for
 dead live keys. Reference: `docs/claude/dev-reload-config-semantics.md`.
 
+Shipped 2026-08-13 (the three remaining tech-debt items):
+
+- ~~**`bg_service_derive.rs` / `decorator_bean_derive.rs` emit no
+  `config_keys()`.**~~ Both derives emit them now. The design question ("where
+  does the declaration land for hosts that are not `Bean`s") resolved to *the
+  host that owns the site aggregates*: `DecoratorSpec::config_keys()` folded
+  into `Controller::validate_config` (`#[routes]`), into `Bean::config_keys()`
+  (`#[bean]` intercept sites — those also reach the fingerprint), and into the
+  new `GrpcService::validate_config` (`#[grpc_routes]`);
+  `ServiceComponent::config_keys()` validated at `spawn_service` and, for
+  `#[producer(start)]` outputs, during graph resolution. Shared bridge:
+  `config::validate_declared_keys`. Closes Tasker #682 — a missing decorator
+  `#[config]` key is now part of the aggregated startup report, never a
+  fail-late panic in `build_decorator`.
+- ~~**`#[derive(BackgroundService)]` config/live deps unchecked at compile
+  time.**~~ `ServiceComponent` declares `type Deps` (BREAKING for hand-written
+  impls) and `spawn_service` moved onto the `SpawnService` extension trait
+  (prelude) so the witness is inferred — a service reading an absent bean is a
+  compile error again.
+- **B4 — half-fixed.** The real robustness gap (a watch that *ends* is never
+  restarted, in prod as much as under `r2e dev`) is closed: watch tasks run
+  under `config::supervise_config_watch` — `Err` restarts with capped
+  exponential backoff, `Ok(())` is a documented "done, don't call me again",
+  and the shutdown token is raced at every point of the cycle: before an
+  attempt, **during** the in-flight `watch` future (`biased` select), and
+  during the retry sleep — a provider whose `watch` never resolves cannot hold
+  a graceful drain open. The dev-cycle re-spawn half is
+  **deliberately deferred with a written design** (see
+  `dev-reload-config-semantics.md` § "B4 — watch supervision"): it is not a
+  correctness gap (one carried registry), Subsecond cannot patch a parked
+  future anyway, and a correct re-spawn needs serve-token capture + per-cycle
+  child tokens + provider dedup, testable only by serving across two cycles.
+
+Audit follow-ups shipped 2026-08-13 (review of the above):
+
+- **`#[producer(start)]` bypassed `ServiceComponent::Deps`.** The producer only
+  demanded its own parameters, so a produced service reading an unprovided bean
+  compiled and panicked in `from_context` at startup. `#[producer]` now folds
+  `<Output as ServiceComponent>::Deps` into the producer's `Producer`/
+  `Registrable` `Deps` via `TAppend` — compile error at `build_state()`.
+  Covered by a trybuild fail + pass pair (`cases/executor/…`).
+- **Producer-service and bean config errors are one report.** The service half
+  used to `?` out several statements before the bean keys were checked;
+  `BeanRegistry::validate_all_config` merges required bean keys, required
+  service keys and declared service sections into a single
+  `BeanError::MissingConfigKeys`. Side effect: config errors now precede
+  missing-dependency errors in `resolve()`.
+- **`#[config_section]` no longer fails late on late-built hosts.**
+  `DecoratorSpec::config_sections()` and `ServiceComponent::config_sections()`
+  return `Vec<SectionValidator>` (`SectionValidator::of::<C>(prefix)`, wrapping
+  the same `validate_section::<C>` the controller meta module uses), run by
+  `decorator_config_errors`, `try_spawn_service` and `validate_all_config`. A
+  decorator/service section is now walked in full (missing nested keys, type
+  mismatches, garde) at startup instead of panicking at construction.
+  **Residual gap:** an `#[intercept]` site on a `#[bean]`'s
+  `#[scheduled]`/`#[consumer]` method folds only the spec's `config_keys()`
+  into the host `Bean::config_keys()`; that spec's *sections* are still
+  validated when the decorator slot is filled inside `resolve()` — the same
+  phase as a bean's own `#[config_section]` field, i.e. inside `build_state()`
+  but not part of the aggregated report.
+- **`try_register_grpc_service`** added (non-panicking peer of
+  `try_register_controller`); `register_grpc_service` delegates to it.
+
 Remaining:
 
-- **B4 — `ConfigProvider::watch` starts once per process.** Serve hooks are
-  skipped from cycle 2 on, so a watch task that ends is never restarted under
-  `r2e dev`. Benign today (the one task writes to the one carried registry), but
-  it is a robustness gap, not a design.
-- **`bg_service_derive.rs` / `decorator_bean_derive.rs` emit no `config_keys()`
-  at all.** Background services and decorator beans resolve `#[config]` /
-  `#[config_section]` / `#[live_config]` fields but declare none of them, so
-  they are neither presence-validated nor dev-reload-fingerprinted. Pre-existing;
-  the fix is mechanical (reuse `field_resolver`'s three entry helpers), the
-  question is where the declaration lands for hosts that are not `Bean`s.
-- **`#[derive(BackgroundService)]` config/live deps are unchecked at compile
-  time.** `ServiceComponent` has no `Deps` surface, so a background service with
-  a `#[config]` or `#[live_config]` field fails at runtime inside `ctx.get()`
-  (`R2eConfig` / `LiveConfigRegistry` missing) instead of at registration like
-  every other host. Found by the 2026-07-29 simplify review. Fix likely pairs
-  with the `config_keys()` gap above: give `ServiceComponent` (or its
-  registration path) a deps/validation surface.
 - **Undeclared keys in hand-written beans stay stale on reuse.** A bean reading
   `config.get("x")` without listing `"x"` in `config_keys()` keeps a stable
   fingerprint and is reused with the old value. Documented and intended (declare

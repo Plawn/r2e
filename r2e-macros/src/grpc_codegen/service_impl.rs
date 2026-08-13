@@ -92,6 +92,20 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
         quote! {}
     };
 
+    // Aggregated config validation for the service: the core's own
+    // `#[config]`/`#[config_section]` keys (from the `#[controller]`-generated
+    // meta module) plus every `#[intercept]` spec's declared keys. Reported at
+    // `register_grpc_service()`, the gRPC peer of `register_controller()`.
+    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
+    let mut site_exprs: Vec<&syn::Expr> = Vec::new();
+    if !def.methods.is_empty() {
+        site_exprs.extend(&def.controller_intercepts);
+    }
+    for m in &def.methods {
+        site_exprs.extend(&m.decorators.intercept_fns);
+    }
+    let decorator_config_stmts = crate::codegen::decorators::decorator_config_key_stmts(site_exprs);
+
     // Override the trait's `None` default only when the attribute declared a
     // descriptor set (`#[grpc_routes(..., descriptor = <expr>)]`).
     let descriptor_impl = def.descriptor.as_ref().map(|expr| {
@@ -109,6 +123,15 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
             }
 
             #descriptor_impl
+
+            fn validate_config(
+                __config: &#krate::config::R2eConfig,
+            ) -> Vec<#krate::config::MissingKeyError> {
+                #[allow(unused_mut)]
+                let mut __errors = #meta_mod::validate_config(__config);
+                #(#decorator_config_stmts)*
+                __errors
+            }
 
             fn add_to_routes(
                 __routes: #grpc_krate::tonic::service::Routes,

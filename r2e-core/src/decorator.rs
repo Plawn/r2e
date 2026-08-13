@@ -263,9 +263,86 @@ pub trait DecoratorSpec: Sized {
     /// guard specs.
     const REQUIRES_IDENTITY: bool = false;
 
+    /// The config keys `build` reads, as `(key, type name, kind)` — the
+    /// [`Bean::config_keys`](crate::beans::Bean::config_keys) counterpart for
+    /// decorator beans.
+    ///
+    /// Emitted by `#[derive(DecoratorBean)]` from the struct's `#[config]` /
+    /// `#[config_section]` / `#[live_config]` fields; hand-written specs that
+    /// read config in `build` should declare it too. Default: empty.
+    ///
+    /// # Where the declaration lands
+    ///
+    /// A decorator is not a bean registration, so this list cannot reach
+    /// `BeanRegistry`'s validation the way `Bean::config_keys` does. It is
+    /// aggregated by the **host** instead, at the same place the spec's
+    /// [`Deps`](DecoratorSpec::Deps) are folded:
+    ///
+    /// - a `#[routes]` / `#[grpc_routes]` site folds it into the endpoint's
+    ///   `Controller::validate_config`, so a missing key is reported by the
+    ///   aggregated `register_controller()` config report;
+    /// - a `#[bean]` `#[scheduled]`/`#[consumer]` `#[intercept]` site folds it
+    ///   into the host bean's `Bean::config_keys()`, so it is presence-validated
+    ///   *and* fingerprinted with the bean.
+    ///
+    /// Without this, a missing key surfaced only as a fail-late panic inside
+    /// [`build`](DecoratorSpec::build).
+    ///
+    /// `Section` entries appear here for the host's fingerprint but cannot be
+    /// validated from a type *name* — see [`config_sections`](Self::config_sections).
+    fn config_keys() -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> {
+        Vec::new()
+    }
+
+    /// The `#[config_section]` prefixes `build` reads, as type-aware
+    /// [`SectionValidator`](crate::config::SectionValidator)s.
+    ///
+    /// The section half of [`config_keys`](Self::config_keys): a `Section`
+    /// entry there carries only a prefix and a type name, so the shared
+    /// `(key, type name, kind)` bridge can only skip it. Declaring the section
+    /// here gives the host the full `validate_section::<Ty>` walk instead of a
+    /// panic inside [`build`](DecoratorSpec::build).
+    ///
+    /// Aggregated by [`decorator_config_errors`], i.e. by every `#[routes]` /
+    /// `#[grpc_routes]` host. A `#[bean]` `#[intercept]` site folds only
+    /// `config_keys` into `Bean::config_keys()`, so a section there is still
+    /// validated when the bean builds — the same moment a bean's own
+    /// `#[config_section]` field is, and still inside `build_state`.
+    ///
+    /// Emitted by `#[derive(DecoratorBean)]`. Default: empty.
+    fn config_sections() -> Vec<crate::config::SectionValidator> {
+        Vec::new()
+    }
+
     /// Build the decorator from the resolved graph. Called once per
     /// attribute site, at registration time.
     fn build(self, ctx: &BeanContext) -> Self::Product;
+}
+
+/// Validate one decorator site's declared config: required keys plus every
+/// declared `#[config_section]`.
+///
+/// The runtime half of [`DecoratorSpec::config_keys`] and
+/// [`DecoratorSpec::config_sections`]: `#[routes]` emits one call per unique
+/// site spec type into the controller's
+/// [`validate_config`](crate::Controller::validate_config), so a decorator
+/// bean's missing `#[config]` key — or a missing / ill-typed key inside one of
+/// its `#[config_section]`s — joins the controller's aggregated report at
+/// `register_controller()` instead of panicking later inside
+/// [`build_decorator`].
+pub fn decorator_config_errors<S: DecoratorSpec>(
+    config: &crate::config::R2eConfig,
+) -> Vec<crate::config::MissingKeyError> {
+    let mut errors = crate::config::validate_declared_keys(
+        std::any::type_name::<S>(),
+        &S::config_keys(),
+        config,
+    );
+    errors.extend(crate::config::validate_declared_sections(
+        &S::config_sections(),
+        config,
+    ));
+    errors
 }
 
 /// Opt-in marker for decorators that are their own spec: the attribute

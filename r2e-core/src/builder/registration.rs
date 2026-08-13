@@ -154,6 +154,74 @@ where
     }
 }
 
+/// Spawns a background [`ServiceComponent`], inferring its dependency
+/// witnesses.
+///
+/// A service whose `from_context` pulls a bean that is absent from the
+/// application state is rejected at compile time here (via the
+/// `Deps: AllSatisfied` bound) instead of panicking in `ctx.get()` at startup.
+pub trait SpawnService<T, DepIdx>: Sized
+where
+    T: Clone + Send + Sync + 'static,
+{
+    /// Spawn a background [`ServiceComponent`] that participates in DI.
+    ///
+    /// The service is constructed from the retained bean graph via
+    /// [`ServiceComponent::from_context`] and started in a Tokio task during
+    /// `on_start`. A `CancellationToken` is provided and cancelled
+    /// automatically during shutdown.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .provide(pool)
+    ///     .build_state().await
+    ///     .spawn_service::<MetricsExporter>()
+    ///     .serve("0.0.0.0:3000").await
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if config keys declared by the service (via
+    /// [`ServiceComponent::config_keys`], emitted by
+    /// `#[derive(BackgroundService)]`) are missing from the loaded
+    /// configuration. Use [`try_spawn_service`](Self::try_spawn_service) for a
+    /// non-panicking alternative.
+    fn spawn_service<C>(self) -> Self
+    where
+        C: ServiceComponent,
+        C::Deps: AllSatisfied<T, DepIdx>;
+
+    /// Spawn a [`ServiceComponent`], returning config-validation errors
+    /// instead of panicking.
+    fn try_spawn_service<C>(self) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: ServiceComponent,
+        C::Deps: AllSatisfied<T, DepIdx>;
+}
+
+impl<T, DepIdx> SpawnService<T, DepIdx> for AppBuilder<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn spawn_service<C>(self) -> Self
+    where
+        C: ServiceComponent,
+        C::Deps: AllSatisfied<T, DepIdx>,
+    {
+        self.spawn_service_impl::<C>()
+    }
+
+    fn try_spawn_service<C>(self) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: ServiceComponent,
+        C::Deps: AllSatisfied<T, DepIdx>,
+    {
+        self.try_spawn_service_impl::<C>()
+    }
+}
+
 /// Registers a tuple of [`Controller`]s in one call, inferring all witnesses.
 pub trait RegisterControllers<T, W>: Sized
 where

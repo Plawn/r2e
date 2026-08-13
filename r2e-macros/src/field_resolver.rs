@@ -223,10 +223,28 @@ pub fn copied_config_key_entry(
 ///
 /// Not presence-validated (`is_required()` is false for `Section`): the section
 /// validates itself at construction — `ConfigProperties::from_config` fails and
-/// the generated init panics naming the prefix.
+/// the generated init panics naming the prefix. Hosts that construct *late*
+/// (decorator beans, background services) pair this with a
+/// [`section_validator_entry`] so they can validate at registration instead.
 pub fn section_config_key_entry(krate: &TokenStream2, prefix: &str, ty: &syn::Type) -> TokenStream2 {
     let ty_name = quote!(#ty).to_string();
     quote! { (#prefix, #ty_name, #krate::config::ConfigKeyKind::Section) }
+}
+
+/// The `config_sections()` return type — type-aware section validators, for
+/// hosts whose construction happens too late for "it validates itself at
+/// construction" to count as startup validation.
+pub fn config_sections_ret_ty(krate: &TokenStream2) -> TokenStream2 {
+    quote! { Vec<#krate::config::SectionValidator> }
+}
+
+/// A `config_sections()` entry for a `#[config_section(prefix = "…")]` field.
+///
+/// Carries the section **type**, not just its name, so the host can run the
+/// same `validate_section::<Ty>` walk a controller field gets — missing keys,
+/// nested sections, type mismatches, garde violations.
+pub fn section_validator_entry(krate: &TokenStream2, prefix: &str, ty: &syn::Type) -> TokenStream2 {
+    quote! { #krate::config::SectionValidator::of::<#ty>(#prefix) }
 }
 
 /// A `config_keys()` entry for a **subscribed** `#[live_config("key")]`
