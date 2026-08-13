@@ -485,9 +485,9 @@ The `Cache` interceptor (in `r2e-utils`) resolves the store bean at controller r
 
 ## Rate Limiting (r2e-rate-limit)
 
-`RateLimiter<K>` — generic token-bucket rate limiter keyed by arbitrary type. `RateLimitBackend` trait for pluggable backends (default: `InMemoryRateLimiter`). `RateLimitRegistry` — clonable bean; the `RateLimit`/`PreRateLimit` specs pull it once at controller registration into the built guards.
+`RateLimiter<K>` — generic token-bucket rate limiter keyed by arbitrary type. `RateLimitBackend` trait for pluggable backends (default: `InMemoryRateLimiter`, **single-process**). `RateLimitRegistry` — clonable bean; the `RateLimit`/`PreRateLimit` specs (and their config-resolved twins `ConfiguredRateLimit`/`ConfiguredPreRateLimit`, which additionally depend on `R2eConfig`) pull it once at controller registration into the built guards.
 
-Key kinds: `"global"` (shared bucket), `"user"` (per authenticated user sub), `"ip"` (per X-Forwarded-For).
+Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualified via `module_path!()`) — neither homonymous handlers nor same-named controllers in different modules share a bucket. Kinds: `global` (shared bucket), `user:<sub>` (per authenticated user), `ip:<client-ip>` (leftmost `X-Forwarded-For` entry **that parses as an IpAddr** → `ConnectInfo<SocketAddr>` peer address → `unknown` with a warn-once; a malformed header value counts as absent). `peer_ip_only()` / `trust-forwarded-for: false` ignores the header. Per-user specs set `DecoratorSpec::REQUIRES_IDENTITY = true` (compile error without an identity, 401 at runtime for a `None` optional identity). Zero windows are rejected everywhere (constructor panic; `window-secs: 0` aborts startup), and config keys are read strictly: the default applies only when the key is absent, an invalid value panics at registration. See `docs/book/src/security/rate-limiting.md`.
 
 ## OpenAPI (r2e-openapi)
 

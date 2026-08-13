@@ -64,6 +64,7 @@ fn test_resolve_object_from_path() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params,
         identity: Some(&identity),
     };
@@ -89,6 +90,7 @@ fn test_resolve_object_from_path_missing() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -114,6 +116,7 @@ fn test_resolve_object_from_query() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -140,6 +143,7 @@ fn test_resolve_object_from_header() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -165,6 +169,7 @@ fn test_resolve_object_fixed() {
         controller_name: "AdminController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -190,6 +195,7 @@ fn test_resolve_object_query_missing() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -217,6 +223,7 @@ fn test_resolve_object_rejects_colon_in_path() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params,
         identity: Some(&identity),
     };
@@ -242,6 +249,7 @@ fn test_resolve_object_rejects_colon_in_query() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -268,6 +276,7 @@ fn test_resolve_object_rejects_colon_in_header() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -293,6 +302,7 @@ fn test_resolve_object_fixed_allows_colon() {
         controller_name: "AdminController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: Some(&identity),
     };
@@ -335,6 +345,7 @@ async fn built_guard_allows_when_tuple_present() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params,
         identity: Some(&identity),
     };
@@ -365,6 +376,7 @@ async fn built_guard_forbids_when_tuple_absent() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params,
         identity: Some(&identity),
     };
@@ -393,6 +405,7 @@ async fn built_guard_unauthorized_without_identity() {
         controller_name: "DocumentController",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params,
         identity: None,
     };
@@ -430,6 +443,7 @@ async fn built_guard_forbids_subject_with_reserved_characters() {
             controller_name: "DocumentController",
             headers: &headers,
             uri: &uri,
+            peer_addr: None,
             path_params,
             identity: Some(&identity),
         };

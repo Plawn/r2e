@@ -6059,6 +6059,7 @@ dependencies = [
  "r2e-core",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

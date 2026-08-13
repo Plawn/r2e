@@ -1,5 +1,8 @@
 pub mod guard;
-pub use guard::{PreAuthRateLimitGuard, PreRateLimit, RateLimit, RateLimitGuard, RateLimitKeyKind};
+pub use guard::{
+    ConfiguredPreRateLimit, ConfiguredRateLimit, IpSource, PreAuthRateLimitGuard, PreRateLimit,
+    RateLimit, RateLimitGuard, RateLimitKeyKind,
+};
 
 use dashmap::DashMap;
 use std::hash::Hash;
@@ -13,6 +16,11 @@ struct TokenBucket {
 
 /// Refill tokens based on elapsed time and try to consume one.
 /// Returns `true` if a token was consumed, `false` if rate-limited.
+///
+/// A zero-length `window` would make the refill rate infinite (the bucket would
+/// return to capacity on every call, disabling the limit). Constructors reject
+/// it up front; here the last line of defence is to refill **nothing**, so a
+/// zero window fails closed instead of open.
 #[inline]
 fn refill_and_try_consume(
     tokens: &mut f64,
@@ -22,7 +30,11 @@ fn refill_and_try_consume(
 ) -> bool {
     let now = Instant::now();
     let elapsed = now.duration_since(*last_refill);
-    let refill = (elapsed.as_secs_f64() / window.as_secs_f64()) * max_tokens;
+    let refill = if window.is_zero() {
+        0.0
+    } else {
+        (elapsed.as_secs_f64() / window.as_secs_f64()) * max_tokens
+    };
     *tokens = (*tokens + refill).min(max_tokens);
     *last_refill = now;
 
@@ -46,7 +58,18 @@ pub struct RateLimiter<K> {
 
 impl<K: Eq + Hash + Clone> RateLimiter<K> {
     /// Create a rate limiter that allows `max` requests per `window`.
+    ///
+    /// # Panics
+    ///
+    /// If `window` is zero: a zero-length window refills the bucket to capacity
+    /// on every call, which silently disables the limit.
+    #[track_caller]
     pub fn new(max: u64, window: Duration) -> Self {
+        assert!(
+            !window.is_zero(),
+            "rate limit: `window` must be greater than zero — a zero-length window refills \
+             the bucket on every request, which disables the limit entirely"
+        );
         Self {
             buckets: Arc::new(DashMap::new()),
             max_tokens: max as f64,
@@ -94,8 +117,20 @@ struct ConfiguredBucket {
     last_refill: Instant,
 }
 
-/// In-memory token-bucket backend. Each key gets its own bucket whose
-/// max/window are determined by the first call for that key.
+/// In-memory token-bucket backend. Each key gets its own bucket; when a call
+/// presents a different `max`/`window_secs` than the bucket was created with
+/// (config-resolved budgets, a live config change, two sites sharing a key),
+/// the bucket is re-tuned in place and its token count clamped to the new
+/// maximum — the budget is never silently frozen at the first call.
+///
+/// **Single-process only.** Buckets live in this process's memory, so N
+/// replicas behind a load balancer allow up to N × `max` requests per window.
+/// Implement [`RateLimitBackend`] over a shared store (Redis, …) for a
+/// cluster-wide limit.
+///
+/// A `window_secs` of 0 is rejected by every constructor in this crate; should
+/// one reach the backend anyway (a hand-rolled guard), the bucket simply never
+/// refills — fail closed, never unlimited.
 #[derive(Clone)]
 pub struct InMemoryRateLimiter {
     buckets: Arc<DashMap<String, ConfiguredBucket>>,
@@ -131,6 +166,13 @@ impl RateLimitBackend for InMemoryRateLimiter {
             });
 
         let bucket = entry.value_mut();
+        // Re-tune the bucket when the caller's budget differs from the one it
+        // was created with (config-resolved budgets can change at any time).
+        if bucket.max_tokens != max_tokens {
+            bucket.max_tokens = max_tokens;
+            bucket.tokens = bucket.tokens.min(max_tokens);
+        }
+        bucket.window = window;
         refill_and_try_consume(
             &mut bucket.tokens,
             &mut bucket.last_refill,

@@ -1,3 +1,5 @@
+use std::net::{IpAddr, SocketAddr};
+
 use crate::http::response::Response;
 use crate::http::{HeaderMap, Uri};
 
@@ -151,6 +153,102 @@ impl<'a> PathParams<'a> {
     }
 }
 
+/// Where a resolved client IP came from.
+///
+/// Returned by [`GuardContext::client_ip`] / [`PreAuthGuardContext::client_ip`].
+/// Both variants carry a parsed [`IpAddr`], so `Display` renders the **canonical**
+/// address (no port, IPv6 aliases collapsed) — which is what IP-keyed guards
+/// (rate limiting, allowlists) should use as a bucket key.
+///
+/// **Trust model:** `Forwarded` is *client-controlled input* unless a reverse
+/// proxy **overwrites** `X-Forwarded-For` (a proxy that *appends* leaves the
+/// leftmost entry forgeable). `Peer` is the transport source address — never
+/// forgeable, but it is the proxy's address when the app sits behind one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientIp {
+    /// Leftmost entry of the `X-Forwarded-For` header, parsed and canonicalized.
+    Forwarded(IpAddr),
+    /// Transport peer address (from `ConnectInfo`), port dropped.
+    Peer(IpAddr),
+}
+
+impl ClientIp {
+    /// The address, regardless of where it came from.
+    pub fn ip(self) -> IpAddr {
+        match self {
+            ClientIp::Forwarded(addr) | ClientIp::Peer(addr) => addr,
+        }
+    }
+}
+
+impl std::fmt::Display for ClientIp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.ip())
+    }
+}
+
+/// Parse one `X-Forwarded-For` entry into a canonical [`IpAddr`].
+///
+/// The header is attacker-controlled text: anything that is not a valid address
+/// must be treated as **absent** (so callers fall through to the transport peer
+/// address) rather than used verbatim as an identity — otherwise a client can
+/// mint an unbounded number of rate-limit buckets, and `::1` / `0:0:0:0:0:0:0:1`
+/// / `[::1]:8080` would each get their own.
+///
+/// Accepted forms (whitespace trimmed):
+///
+/// | Input | Result |
+/// |---|---|
+/// | `1.2.3.4` | `1.2.3.4` |
+/// | `1.2.3.4:5678` | `1.2.3.4` (port dropped) |
+/// | `2001:db8::1` | `2001:db8::1` |
+/// | `0:0:0:0:0:0:0:1` | `::1` (canonicalized) |
+/// | `[::1]` / `[::1]:8080` | `::1` |
+/// | `unknown`, `_hidden`, `bob`, `` | `None` |
+pub fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Bare address: `1.2.3.4`, `2001:db8::1`, `0:0:0:0:0:0:0:1`.
+    if let Ok(ip) = raw.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    // With a port: `1.2.3.4:5678`, `[::1]:8080`.
+    if let Ok(addr) = raw.parse::<SocketAddr>() {
+        return Some(addr.ip());
+    }
+    // Bracketed IPv6 without a port: `[::1]`.
+    if let Some(inner) = raw.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        if let Ok(ip) = inner.parse::<IpAddr>() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+/// Leftmost `X-Forwarded-For` entry, if the header is present and non-empty.
+///
+/// Raw, **unvalidated** text — see [`forwarded_ip`] for the parsed form.
+fn forwarded_for(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Leftmost `X-Forwarded-For` entry parsed into a canonical [`IpAddr`].
+///
+/// Only the leftmost entry is considered (the client, when the proxy overwrites
+/// the header). A malformed leftmost entry yields `None` — it is never repaired
+/// by scanning further right, since everything to its right was contributed by
+/// the same untrusted hop.
+fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    forwarded_for(headers).and_then(parse_forwarded_ip)
+}
+
 /// Context available to guards before the handler body runs.
 ///
 /// Generic over the identity type `I` so that guards can access the full
@@ -160,6 +258,10 @@ pub struct GuardContext<'a, I: Identity> {
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
     pub uri: &'a Uri,
+    /// Transport peer address, when the server was started with connection
+    /// info (`serve_auto` / the sharded server do). `None` under `TestApp`'s
+    /// in-process dispatch and for any transport that does not record it.
+    pub peer_addr: Option<SocketAddr>,
     pub path_params: PathParams<'a>,
     pub identity: Option<&'a I>,
 }
@@ -210,6 +312,39 @@ impl<'a, I: Identity> GuardContext<'a, I> {
         self.path_params.parse(name)
     }
 
+    /// Leftmost `X-Forwarded-For` entry, **raw and unvalidated**.
+    ///
+    /// Only trustworthy when a reverse proxy **overwrites** the header, and even
+    /// then it is arbitrary client text. Use [`forwarded_ip`](Self::forwarded_ip)
+    /// (or [`client_ip`](Self::client_ip)) for anything that keys on the value.
+    pub fn forwarded_for(&self) -> Option<&str> {
+        forwarded_for(self.headers)
+    }
+
+    /// Leftmost `X-Forwarded-For` entry parsed into a canonical [`IpAddr`].
+    ///
+    /// `None` when the header is absent, empty, or does not parse as an address
+    /// (see [`parse_forwarded_ip`]).
+    pub fn forwarded_ip(&self) -> Option<IpAddr> {
+        forwarded_ip(self.headers)
+    }
+
+    /// Transport peer IP (port dropped), if the server recorded it.
+    pub fn peer_ip(&self) -> Option<IpAddr> {
+        self.peer_addr.map(|addr| addr.ip())
+    }
+
+    /// The client IP: leftmost **parseable** `X-Forwarded-For` entry when
+    /// present, else the transport peer IP. `None` when neither is available.
+    ///
+    /// A malformed `X-Forwarded-For` never suppresses the peer fallback.
+    /// See [`ClientIp`] for the trust model.
+    pub fn client_ip(&self) -> Option<ClientIp> {
+        self.forwarded_ip()
+            .map(ClientIp::Forwarded)
+            .or_else(|| self.peer_ip().map(ClientIp::Peer))
+    }
+
     /// Convenience accessor for the identity email.
     pub fn identity_email(&self) -> Option<&str> {
         self.identity.and_then(|i| i.email())
@@ -253,6 +388,10 @@ pub struct PreAuthGuardContext<'a> {
     pub controller_name: &'static str,
     pub headers: &'a HeaderMap,
     pub uri: &'a Uri,
+    /// Transport peer address, when the server was started with connection
+    /// info (`serve_auto` / the sharded server do). `None` under `TestApp`'s
+    /// in-process dispatch and for any transport that does not record it.
+    pub peer_addr: Option<SocketAddr>,
     pub path_params: PathParams<'a>,
 }
 
@@ -260,6 +399,39 @@ impl<'a> PreAuthGuardContext<'a> {
     /// The request path.
     pub fn path(&self) -> &str {
         self.uri.path()
+    }
+
+    /// Leftmost `X-Forwarded-For` entry, **raw and unvalidated**.
+    ///
+    /// Only trustworthy when a reverse proxy **overwrites** the header, and even
+    /// then it is arbitrary client text. Use [`forwarded_ip`](Self::forwarded_ip)
+    /// (or [`client_ip`](Self::client_ip)) for anything that keys on the value.
+    pub fn forwarded_for(&self) -> Option<&str> {
+        forwarded_for(self.headers)
+    }
+
+    /// Leftmost `X-Forwarded-For` entry parsed into a canonical [`IpAddr`].
+    ///
+    /// `None` when the header is absent, empty, or does not parse as an address
+    /// (see [`parse_forwarded_ip`]).
+    pub fn forwarded_ip(&self) -> Option<IpAddr> {
+        forwarded_ip(self.headers)
+    }
+
+    /// Transport peer IP (port dropped), if the server recorded it.
+    pub fn peer_ip(&self) -> Option<IpAddr> {
+        self.peer_addr.map(|addr| addr.ip())
+    }
+
+    /// The client IP: leftmost **parseable** `X-Forwarded-For` entry when
+    /// present, else the transport peer IP. `None` when neither is available.
+    ///
+    /// A malformed `X-Forwarded-For` never suppresses the peer fallback.
+    /// See [`ClientIp`] for the trust model.
+    pub fn client_ip(&self) -> Option<ClientIp> {
+        self.forwarded_ip()
+            .map(ClientIp::Forwarded)
+            .or_else(|| self.peer_ip().map(ClientIp::Peer))
     }
 
     /// The request query string, if any.

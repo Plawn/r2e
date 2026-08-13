@@ -95,10 +95,12 @@ pub use crate::controller::Controller as ControllerTrait;
 pub use crate::decorator::{DecoratorSpec, SelfBuilt};
 pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::event_subscriber::EventSubscriber;
-pub use crate::extract::{BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, Via};
+pub use crate::extract::{
+    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr, Via,
+};
 pub use crate::guards::{
-    Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard,
-    PreAuthGuardContext,
+    ClientIp, Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams,
+    PreAuthGuard, PreAuthGuardContext,
 };
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{

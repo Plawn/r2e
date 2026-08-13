@@ -42,6 +42,7 @@ fn make_ctx<'a, I: Identity>(
         controller_name: "TestController",
         headers,
         uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity,
     }

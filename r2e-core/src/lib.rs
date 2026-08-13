@@ -68,11 +68,11 @@ pub use error::{HttpError, HttpErrorExt};
 pub use event_subscriber::EventSubscriber;
 pub use extract::{
     assert_unambiguous_extractor, BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia,
-    Via, ViaAxum, ViaBean, ViaOpt,
+    PeerAddr, Via, ViaAxum, ViaBean, ViaOpt,
 };
 pub use guards::{
-    Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams, PreAuthGuard,
-    PreAuthGuardContext,
+    parse_forwarded_ip, ClientIp, Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam,
+    PathParams, PreAuthGuard, PreAuthGuardContext,
 };
 pub use interceptors::{Cacheable, Interceptor, InterceptorContext};
 pub use late::Late;

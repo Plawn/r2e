@@ -135,8 +135,24 @@ guard's beans are fields, injected at build time.
 - `headers` — request headers (`&HeaderMap`)
 - `uri` — request URI (`&Uri`) with convenience methods `path()` and `query_string()`
 - `path_params` — typed path parameters (`path_param()`, `parse_path_param()`)
+- `peer_addr` — transport peer address (`Option<SocketAddr>`), from
+  `ConnectInfo<SocketAddr>`; `None` under `TestApp`'s in-process dispatch
 - `identity` — optional identity reference (`Option<&'a I>`)
 - Convenience accessors: `identity_sub()`, `identity_email()`, `identity_claims()`
+- Client-IP accessors: `forwarded_for() -> Option<&str>` (leftmost
+  `X-Forwarded-For` entry, **raw/unvalidated** — never key on it),
+  `forwarded_ip() -> Option<IpAddr>` (that entry parsed; `None` when malformed),
+  `peer_ip() -> Option<IpAddr>` (peer address, port stripped),
+  `client_ip() -> Option<ClientIp>` (parsed XFF first, else peer).
+  `ClientIp` is `Forwarded(IpAddr) | Peer(IpAddr)` — it records the provenance
+  so a guard can weigh trust; `ip()`/`Display` give the canonical address.
+  `parse_forwarded_ip(&str) -> Option<IpAddr>` (exported from `r2e_core`) is the
+  shared parser: trims, takes the leftmost entry, accepts bare addresses,
+  `host:port`, and `[v6]`/`[v6]:port`; **anything else is treated as absent**, so
+  junk can neither mint a bucket nor suppress the peer fallback
+
+`PreAuthGuardContext` carries the same fields minus the identity (including
+`peer_addr` and the client-IP accessors).
 
 The `Identity` trait (`r2e-core::Identity`) decouples guards from the
 concrete `AuthenticatedUser` type: `sub()` (required), `email()` /
@@ -159,6 +175,21 @@ concrete `AuthenticatedUser` type: `sub()` (required), `email()` /
   ```
   The app must `.provide(RateLimitRegistry::default())` — checked at compile
   time for app-level controllers.
+  Bucket keys are `<module::path::ControllerName>:<handler>:{global|ip:<ip>|user:<sub>}`
+  (the controller name is `concat!(module_path!(), "::", "Name")`, emitted by
+  `handlers::qualified_controller_name`), so neither homonymous handlers nor
+  same-named controllers in different modules share a bucket. `per_ip` resolves
+  **parsed** XFF → peer address → `unknown` (warn-once); `.peer_ip_only()` keys on
+  the un-forgeable peer address. `RateLimit`/`ConfiguredRateLimit` set
+  `REQUIRES_IDENTITY = true` (compile error where no identity can exist; 401 at
+  runtime for an `Option<..>` identity that is `None` — never a shared
+  `anonymous` bucket). A zero `window_secs` panics at the construction site.
+  `ConfiguredPreRateLimit` / `ConfiguredRateLimit` are the config-resolved
+  variants (`<prefix>.max`, `.window-secs`, `.enabled`, `.trust-forwarded-for`) —
+  **separate spec types**, since their `Deps` adds `R2eConfig`. They read config
+  with `get_opt` (**not** `get_or`): the default applies only when the key is
+  **absent**; present-but-invalid, or `window-secs: 0`, panics from `build`, i.e.
+  aborts startup. Full guide: `docs/book/src/security/rate-limiting.md`.
 - `FgaGuard` (r2e-openfga) — the spec is the `FgaCheck` builder value; the
   guard holds the `OpenFgaRegistry` bean. `FgaCheck` sets
   `REQUIRES_IDENTITY = true`, so applying it where the identity is statically

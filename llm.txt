@@ -982,8 +982,72 @@ use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 
 #[pre_guard(PreRateLimit::global(100, 60))]   // 100 req / 60s, shared bucket (pre-auth)
 #[pre_guard(PreRateLimit::per_ip(10, 60))]    // per IP (pre-auth)
+#[pre_guard(PreRateLimit::per_ip(10, 60).peer_ip_only())] // ignore X-Forwarded-For
 #[guard(RateLimit::per_user(5, 60))]          // per user (post-auth, needs identity)
 ```
+
+`window_secs` must be > 0 — a zero window refills the bucket on every request,
+so every constructor panics on it.
+
+Per-user limits (`RateLimit` / `ConfiguredRateLimit`) set
+`DecoratorSpec::REQUIRES_IDENTITY = true`: putting one on a route that can never
+have an identity (no struct-level `#[inject(identity)]`, no identity param, or
+`#[anonymous]` without an `Option<..>` identity param) is a **compile error**,
+and an `Option<..>` identity that is `None` at runtime gets **401**, never a
+shared "anonymous" bucket.
+
+Bucket keys are `<module::path::ControllerName>:<handler>:{global|ip:<ip>|user:<sub>}`
+— each annotated handler owns its bucket, and the controller name is
+module-qualified, so neither homonymous handlers nor same-named controllers in
+different modules share one.
+
+Client IP for `per_ip`: leftmost `X-Forwarded-For` entry **when it parses as an
+IP address**, else the transport peer address (`ConnectInfo<SocketAddr>`, port
+stripped), else the shared `unknown` bucket (warned once via `tracing::warn!`).
+Accepted entry forms: `1.2.3.4`, `1.2.3.4:5678`, `2001:db8::1`, `[::1]`,
+`[::1]:8080`; anything else (`unknown`, junk, empty) is treated as **absent**, so
+it neither becomes a bucket key nor suppresses the peer fallback. The key uses
+the canonical `IpAddr` `Display` form, so IPv6 aliases share one bucket.
+`X-Forwarded-For` is forgeable unless the proxy **overwrites** it (nginx
+`$remote_addr`, not `$proxy_add_x_forwarded_for`); with no proxy in front use
+`.peer_ip_only()`. Guards can read `ctx.forwarded_for()` (raw `Option<&str>`,
+unvalidated — do not key on it), `ctx.forwarded_ip()` (`Option<IpAddr>`, parsed),
+`ctx.peer_ip()` (`Option<IpAddr>`), `ctx.client_ip()`
+(`Option<ClientIp>`, where `ClientIp` is `Forwarded(IpAddr) | Peer(IpAddr)` with
+`ip()` + `Display`) — on both `GuardContext` and `PreAuthGuardContext`;
+`peer_addr: Option<SocketAddr>` is a public field, `None` under `TestApp`'s
+in-process dispatch. `r2e_core::parse_forwarded_ip(&str) -> Option<IpAddr>` is
+the same parser, for hand-written guards.
+
+Config-tunable budgets — separate spec types (they additionally depend on
+`R2eConfig`), literal args are the fallback defaults:
+
+```rust
+use r2e::r2e_rate_limit::{ConfiguredPreRateLimit, ConfiguredRateLimit};
+
+#[pre_guard(ConfiguredPreRateLimit::per_ip("rate-limit.public").defaults(30, 60))]
+#[pre_guard(ConfiguredPreRateLimit::global("rate-limit.public").defaults(30, 60))]
+#[guard(ConfiguredRateLimit::per_user("rate-limit.api").defaults(5, 60))]
+```
+
+```yaml
+rate-limit:
+  public:
+    max: 30
+    window-secs: 60
+    enabled: true              # false → guard always allows (e.g. test profile)
+    trust-forwarded-for: true  # false → peer address only
+```
+
+The `.defaults(max, window)` values apply **only when a key is absent**. A
+present-but-invalid value (`max: plenty`, `enabled: sure`) or `window-secs: 0`
+**aborts startup** with `invalid configuration for `<prefix>.<key>`` — a
+malformed security budget never silently degrades to the default.
+
+`InMemoryRateLimiter` is single-process: N replicas allow up to N × `max` per
+window. Implement `RateLimitBackend` (`fn try_acquire(&self, key: &str, max: u64,
+window_secs: u64) -> bool`, sync) over a shared store for a cluster-wide limit,
+then `.provide(RateLimitRegistry::new(MyBackend))`.
 
 ### OpenFGA — fine-grained authorization (ReBAC)
 
@@ -2374,6 +2438,7 @@ Alongside `&self`:
 | `Form(data): Form<T>` | URL-encoded form |
 | `HeaderMap` | All request headers |
 | `ConnectInfo(addr): ConnectInfo<SocketAddr>` | Client socket address |
+| `peer: PeerAddr` | `PeerAddr(Option<SocketAddr>)` — infallible `ConnectInfo` read (`None` under in-process `TestApp`); plain param, not `#[inject(request)]` |
 | `SchedulerHandle` | Scheduler control (when `Scheduler` installed) |
 | `req: Request` | Raw request — MUST be the last parameter |
 

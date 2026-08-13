@@ -1,5 +1,8 @@
+use std::net::{IpAddr, SocketAddr};
+
 use r2e_core::guards::{
-    GuardContext, GuardError, Identity, NoIdentity, PathParams, PreAuthGuardContext,
+    parse_forwarded_ip, ClientIp, GuardContext, GuardError, Identity, NoIdentity, PathParams,
+    PreAuthGuardContext,
 };
 use r2e_core::http::{HeaderMap, StatusCode, Uri};
 
@@ -51,6 +54,7 @@ fn make_ctx<'a, I: Identity>(
         controller_name: "TestController",
         headers,
         uri,
+        peer_addr: None,
         path_params,
         identity,
     }
@@ -66,6 +70,7 @@ fn make_pre_auth_ctx<'a>(
         controller_name: "TestController",
         headers,
         uri,
+        peer_addr: None,
         path_params,
     }
 }
@@ -217,6 +222,145 @@ fn guard_context_controller_name() {
     let headers = HeaderMap::new();
     let ctx: GuardContext<'_, NoIdentity> = make_ctx(None, &uri, &headers, PathParams::EMPTY);
     assert_eq!(ctx.controller_name, "TestController");
+}
+
+// ── Client IP resolution (X-Forwarded-For parsing + peer fallback) ──────────
+
+fn ip(s: &str) -> IpAddr {
+    s.parse().unwrap()
+}
+
+fn xff_headers(value: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-forwarded-for", value.parse().unwrap());
+    headers
+}
+
+fn ctx_with<'a>(
+    uri: &'a Uri,
+    headers: &'a HeaderMap,
+    peer_addr: Option<SocketAddr>,
+) -> PreAuthGuardContext<'a> {
+    PreAuthGuardContext {
+        method_name: "test_method",
+        controller_name: "TestController",
+        headers,
+        uri,
+        peer_addr,
+        path_params: PathParams::EMPTY,
+    }
+}
+
+#[test]
+fn parse_forwarded_ip_accepts_bare_addresses() {
+    assert_eq!(parse_forwarded_ip("1.2.3.4"), Some(ip("1.2.3.4")));
+    assert_eq!(parse_forwarded_ip("2001:db8::1"), Some(ip("2001:db8::1")));
+    assert_eq!(parse_forwarded_ip("  1.2.3.4  "), Some(ip("1.2.3.4")));
+}
+
+#[test]
+fn parse_forwarded_ip_strips_ports() {
+    assert_eq!(parse_forwarded_ip("1.2.3.4:5678"), Some(ip("1.2.3.4")));
+    assert_eq!(parse_forwarded_ip("[::1]:8080"), Some(ip("::1")));
+}
+
+#[test]
+fn parse_forwarded_ip_accepts_bracketed_ipv6_without_port() {
+    assert_eq!(parse_forwarded_ip("[2001:db8::1]"), Some(ip("2001:db8::1")));
+}
+
+#[test]
+fn parse_forwarded_ip_canonicalizes_ipv6_aliases() {
+    // Two spellings of the same address must render to one bucket key.
+    let long = parse_forwarded_ip("0:0:0:0:0:0:0:1").unwrap();
+    let short = parse_forwarded_ip("::1").unwrap();
+    assert_eq!(long, short);
+    assert_eq!(long.to_string(), "::1");
+}
+
+#[test]
+fn parse_forwarded_ip_rejects_non_addresses() {
+    for bad in [
+        "",
+        "   ",
+        "unknown",
+        "not-an-ip",
+        "evil'; DROP TABLE users;--",
+        "999.999.999.999",
+        "1.2.3.4.5",
+        "[::1",
+        "1.2.3.4:notaport",
+    ] {
+        assert_eq!(parse_forwarded_ip(bad), None, "must reject {bad:?}");
+    }
+}
+
+#[test]
+fn forwarded_ip_takes_the_leftmost_entry() {
+    let headers = xff_headers("1.2.3.4, 10.0.0.1, 10.0.0.2");
+    let uri = make_uri("/x");
+    let ctx = ctx_with(&uri, &headers, None);
+    assert_eq!(ctx.forwarded_ip(), Some(ip("1.2.3.4")));
+    // The raw accessor still exposes the unvalidated string.
+    assert_eq!(ctx.forwarded_for(), Some("1.2.3.4"));
+}
+
+#[test]
+fn malformed_forwarded_for_falls_back_to_the_peer() {
+    let headers = xff_headers("garbage, 1.2.3.4");
+    let uri = make_uri("/x");
+    let peer: SocketAddr = "10.0.0.7:4444".parse().unwrap();
+    let ctx = ctx_with(&uri, &headers, Some(peer));
+
+    // Never repaired from a later (equally untrusted) entry.
+    assert_eq!(ctx.forwarded_ip(), None);
+    assert_eq!(ctx.client_ip(), Some(ClientIp::Peer(ip("10.0.0.7"))));
+    assert_eq!(ctx.client_ip().unwrap().to_string(), "10.0.0.7");
+}
+
+#[test]
+fn malformed_forwarded_for_without_peer_resolves_to_nothing() {
+    let headers = xff_headers("not-an-ip");
+    let uri = make_uri("/x");
+    let ctx = ctx_with(&uri, &headers, None);
+    assert_eq!(ctx.client_ip(), None);
+}
+
+#[test]
+fn client_ip_prefers_a_parseable_forwarded_entry() {
+    let headers = xff_headers("[::1]:9999");
+    let uri = make_uri("/x");
+    let peer: SocketAddr = "10.0.0.7:4444".parse().unwrap();
+    let ctx = ctx_with(&uri, &headers, Some(peer));
+    assert_eq!(ctx.client_ip(), Some(ClientIp::Forwarded(ip("::1"))));
+    assert_eq!(ctx.client_ip().unwrap().ip(), ip("::1"));
+}
+
+#[test]
+fn peer_ip_drops_the_source_port() {
+    let headers = HeaderMap::new();
+    let uri = make_uri("/x");
+    let ctx = ctx_with(&uri, &headers, Some("10.0.0.7:4444".parse().unwrap()));
+    assert_eq!(ctx.peer_ip(), Some(ip("10.0.0.7")));
+}
+
+#[test]
+fn guard_context_resolves_the_client_ip_too() {
+    // Same resolution on the post-auth context.
+    let headers = xff_headers("bogus");
+    let uri = make_uri("/x");
+    let peer: SocketAddr = "192.0.2.9:1234".parse().unwrap();
+    let ctx: GuardContext<'_, NoIdentity> = GuardContext {
+        method_name: "test_method",
+        controller_name: "TestController",
+        headers: &headers,
+        uri: &uri,
+        peer_addr: Some(peer),
+        path_params: PathParams::EMPTY,
+        identity: None,
+    };
+    assert_eq!(ctx.forwarded_ip(), None);
+    assert_eq!(ctx.client_ip(), Some(ClientIp::Peer(ip("192.0.2.9"))));
 }
 
 #[test]
