@@ -259,6 +259,7 @@ where
                         controller_name: "SpikeController",
                         headers: &headers,
                         uri: &uri,
+                        peer_addr: None,
                         path_params: PathParams::EMPTY,
                         identity: None,
                     };
@@ -319,6 +320,7 @@ async fn decorators_build_from_context_not_state() {
         controller_name: "c",
         headers: &headers,
         uri: &uri,
+        peer_addr: None,
         path_params: PathParams::EMPTY,
         identity: None,
     };

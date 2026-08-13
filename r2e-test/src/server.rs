@@ -23,7 +23,13 @@ impl TestServer {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            serve(listener, router.into_make_service())
+            // Match the production serve paths: install `ConnectInfo<SocketAddr>`
+            // so guards that key on the peer address (per-IP rate limiting) see
+            // a client address in live-TCP tests.
+            serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })

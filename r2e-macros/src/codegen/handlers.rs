@@ -105,6 +105,21 @@ fn handler_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Ident
     format_ident!("__r2e_{}_{}", controller, method)
 }
 
+/// The controller name as seen by guards: **module-qualified**, e.g.
+/// `my_app::admin::UsersController`.
+///
+/// `GuardContext::controller_name` / `PreAuthGuardContext::controller_name` feed
+/// identity-scoped guard state — rate-limit bucket keys above all — so the bare
+/// type identifier is not enough: `public::UsersController::list` and
+/// `admin::UsersController::list` would collide and share one budget. Prefixing
+/// with `module_path!()` (expanded in the controller's own crate and module)
+/// makes the name route-unique at zero macro cost — the whole thing is a
+/// compile-time `&'static str` literal.
+pub(super) fn qualified_controller_name(controller: &syn::Ident) -> TokenStream {
+    let bare = controller.to_string();
+    quote! { ::core::concat!(::core::module_path!(), "::", #bare) }
+}
+
 /// Context for handler generation, containing names and identifiers.
 struct HandlerContext<'a> {
     meta_mod: syn::Ident,
@@ -112,6 +127,9 @@ struct HandlerContext<'a> {
     fn_name: &'a syn::Ident,
     fn_name_str: String,
     controller_name_str: String,
+    /// Module-qualified name expression for guard contexts (see
+    /// [`qualified_controller_name`]).
+    controller_name_q: TokenStream,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -124,6 +142,7 @@ impl<'a> HandlerContext<'a> {
             fn_name,
             fn_name_str: fn_name.to_string(),
             controller_name_str: controller_name.to_string(),
+            controller_name_q: qualified_controller_name(controller_name),
         }
     }
 }
@@ -415,7 +434,7 @@ fn generate_guard_context(
     krate: &TokenStream,
 ) -> TokenStream {
     let fn_name_str = &ctx.fn_name_str;
-    let controller_name_str = &ctx.controller_name_str;
+    let controller_name_str = &ctx.controller_name_q;
     let meta_mod = &ctx.meta_mod;
 
     if let Some(ref id_param) = rm.identity_param {
@@ -433,6 +452,7 @@ fn generate_guard_context(
                 controller_name: #controller_name_str,
                 headers: &__headers,
                 uri: &__uri,
+                peer_addr: __peer_addr.0,
                 path_params: __path_params,
                 identity: #identity_expr,
             };
@@ -448,6 +468,7 @@ fn generate_guard_context(
                 controller_name: #controller_name_str,
                 headers: &__headers,
                 uri: &__uri,
+                peer_addr: __peer_addr.0,
                 path_params: __path_params,
                 identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
             };
@@ -462,6 +483,7 @@ fn generate_guard_context(
                 controller_name: #controller_name_str,
                 headers: &__headers,
                 uri: &__uri,
+                peer_addr: __peer_addr.0,
                 path_params: __path_params,
                 identity: #meta_mod::guard_identity(__ctrl),
             };
@@ -717,6 +739,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
         invocation_prefix_params
             .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        invocation_prefix_params.push(quote! { __peer_addr: #krate::PeerAddr });
     }
     if has_ctrl {
         if let Some(cs) = ctrl_set.as_ref() {
@@ -916,7 +939,8 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let invocation_name = invocation_ident_for(controller_name, fn_name);
 
     let fn_name_str = fn_name.to_string();
-    let controller_name_str = controller_name.to_string();
+    // Guard contexts get the module-qualified name (bucket-key uniqueness).
+    let controller_name_str = qualified_controller_name(controller_name);
 
     // Extra params (excluding &self)
     let extra_params = extract_sig_params(&sm.fn_item.sig);
@@ -993,6 +1017,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
         invocation_prefix_params
             .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        invocation_prefix_params.push(quote! { __peer_addr: #krate::PeerAddr });
         let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
         invocation_prefix_params.push(quote! { __deco: &#deco_ty });
 
@@ -1012,6 +1037,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                     controller_name: #controller_name_str,
                     headers: &__headers,
                     uri: &__uri,
+                    peer_addr: __peer_addr.0,
                     path_params: __path_params,
                     identity: #identity_expr,
                 };
@@ -1024,6 +1050,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                     controller_name: #controller_name_str,
                     headers: &__headers,
                     uri: &__uri,
+                    peer_addr: __peer_addr.0,
                     path_params: __path_params,
                     identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
                 };
@@ -1036,6 +1063,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                     controller_name: #controller_name_str,
                     headers: &__headers,
                     uri: &__uri,
+                    peer_addr: __peer_addr.0,
                     path_params: __path_params,
                     identity: #meta_mod::guard_identity(__ctrl),
                 };
@@ -1094,7 +1122,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     };
 
     let fn_name_str = fn_name.to_string();
-    let controller_name_str = controller_name.to_string();
+    // Guard contexts get the module-qualified name (bucket-key uniqueness).
+    let controller_name_str = qualified_controller_name(controller_name);
 
     // Collect all typed params, excluding WsStream/WebSocket
     let extra_params = extract_sig_params(&wm.fn_item.sig);
@@ -1247,6 +1276,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     controller_name: #controller_name_str,
                     headers: &__headers,
                     uri: &__uri,
+                    peer_addr: __peer_addr.0,
                     path_params: __path_params,
                     identity: #identity_expr,
                 };
@@ -1259,6 +1289,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     __deco: &#deco_ty,
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
+                    __peer_addr: #krate::PeerAddr,
                     __raw_path_params: #krate::http::extract::RawPathParams,
                     __ctrl: &#receiver_ty,
                     #identity_decl
@@ -1273,6 +1304,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     &__deco,
                     __headers,
                     __uri,
+                    __peer_addr,
                     __raw_path_params,
                     __ctrl_for_guard,
                     #identity_call
@@ -1294,6 +1326,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             __deco: ::std::sync::Arc<#deco_ty>,
             __headers: #krate::http::HeaderMap,
             __uri: #krate::http::Uri,
+            __peer_addr: #krate::PeerAddr,
             __raw_path_params: #krate::http::extract::RawPathParams,
         }
     } else {
@@ -1373,9 +1406,11 @@ fn route_axum_params_and_args(
         params.push(quote! { __headers: #krate::http::HeaderMap });
         params.push(quote! { __uri: #krate::http::Uri });
         params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        params.push(quote! { __peer_addr: #krate::PeerAddr });
         args.push(quote! { __headers });
         args.push(quote! { __uri });
         args.push(quote! { __raw_path_params });
+        args.push(quote! { __peer_addr });
     }
 
     let extra_params = extract_handler_params(rm);
@@ -1437,8 +1472,9 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
 
     // Splice __ctrl_deco/__deco/__ctrl into the inner-handler call after the
     // axum-extracted prefix, matching the inner handler's signature:
-    // `(State?, [HeaderMap, Uri, RawPathParams]?, __ctrl_deco?, __deco?, __ctrl, extras...)`.
-    let prefix_len = usize::from(needs_state) + if has_guards { 3 } else { 0 };
+    // `(State?, [HeaderMap, Uri, RawPathParams, PeerAddr]?, __ctrl_deco?, __deco?,
+    //   __ctrl, extras...)`.
+    let prefix_len = usize::from(needs_state) + if has_guards { 4 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     // The method's decorator set is built once here — at wiring time, from
     // the resolved graph — and captured by the closure as one `Arc`. The shared
@@ -1518,9 +1554,11 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
         closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
+        closure_params.push(quote! { __peer_addr: #krate::PeerAddr });
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __raw_path_params });
+        fwd_args.push(quote! { __peer_addr });
     }
     let identity_index = sm.identity_param.as_ref().map(|p| p.index);
     let identity_marker = identity_marker_for(&sm.fn_item.sig.ident);
@@ -1536,7 +1574,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         }
     }
 
-    let prefix_len = if has_guards { 3 } else { 0 };
+    let prefix_len = if has_guards { 4 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     let deco_setup = has_guards.then(|| {
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
@@ -1600,10 +1638,12 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     if has_guards {
         closure_params.push(quote! { __headers: #krate::http::HeaderMap });
         closure_params.push(quote! { __uri: #krate::http::Uri });
+        closure_params.push(quote! { __peer_addr: #krate::PeerAddr });
         closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
         fwd_args.push(quote! { __deco_capture.clone() });
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
+        fwd_args.push(quote! { __peer_addr });
         fwd_args.push(quote! { __raw_path_params });
     }
     let identity_index = wm.identity_param.as_ref().map(|p| p.index);
@@ -1626,7 +1666,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     fwd_args.push(quote! { __ws_upgrade });
 
     let md = data_marker();
-    let prefix_len = if has_guards { 4 } else { 0 };
+    let prefix_len = if has_guards { 5 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
     let deco_setup = has_guards.then(|| {
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);

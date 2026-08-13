@@ -239,17 +239,43 @@ Request → Interceptor::around(&cache, ctx, next)
 
 Rate limiting is a **guard**, not an interceptor — it short-circuits with a 429 before the body runs. The specs live in `r2e-rate-limit` and read a `RateLimitRegistry` bean (provide one, e.g. `.provide(RateLimitRegistry::default())`).
 
-- **Post-authentication, per user** — `#[guard(RateLimit::per_user(max, window_secs))]` (each authenticated subject gets its own bucket; runs after JWT validation).
+- **Post-authentication, per user** — `#[guard(RateLimit::per_user(max, window_secs))]` (each authenticated subject gets its own bucket; runs after JWT validation). Requires an identity: no identity possible on the route → compile error; optional identity missing at runtime → `401`.
 - **Pre-authentication, global** — `#[pre_guard(PreRateLimit::global(max, window_secs))]` (one shared bucket; runs before JWT extraction).
-- **Pre-authentication, per IP** — `#[pre_guard(PreRateLimit::per_ip(max, window_secs))]` (bucket per `X-Forwarded-For` client, first element trimmed, `"unknown"` fallback).
+- **Pre-authentication, per IP** — `#[pre_guard(PreRateLimit::per_ip(max, window_secs))]` (bucket per client IP: leftmost `X-Forwarded-For` entry **that parses as an IP address**, else the transport peer address, else a shared `"unknown"` bucket with a one-time warning; a malformed header value is treated as absent).
+
+Bucket keys are `<module::path::ControllerName>:<handler>:{global|ip:<ip>|user:<sub>}` — every annotated handler owns its bucket, and the controller name is module-qualified, so neither homonymous handlers nor same-named controllers in different modules share one.
+
+`window_secs` must be greater than 0 — a zero-length window refills the bucket on every request, so the constructors panic on it.
 
 ### Syntax
 
 ```rust
 #[pre_guard(PreRateLimit::global(5, 60))]        // 5 req / 60s, global
 #[pre_guard(PreRateLimit::per_ip(5, 60))]        // 5 req / 60s, per IP
+#[pre_guard(PreRateLimit::per_ip(5, 60).peer_ip_only())] // ignore X-Forwarded-For
 #[guard(RateLimit::per_user(5, 60))]             // 5 req / 60s, per user
+
+// Budgets from config (defaults = fallback when the keys are absent):
+#[pre_guard(ConfiguredPreRateLimit::per_ip("rate-limit.public").defaults(30, 60))]
+#[guard(ConfiguredRateLimit::per_user("rate-limit.api").defaults(5, 60))]
 ```
+
+```yaml
+rate-limit:
+  public:
+    max: 30
+    window-secs: 60
+    enabled: true              # false → guard always allows
+    trust-forwarded-for: true  # false → peer address only
+```
+
+The defaults apply **only when a key is absent**: a present-but-invalid value
+(or `window-secs: 0`) aborts startup instead of silently reverting to the
+default budget.
+
+See `docs/book/src/security/rate-limiting.md` for the proxy trust model
+(overwrite vs append `X-Forwarded-For`) and the single-process nature of
+`InMemoryRateLimiter`.
 
 ### Response on rate limit exceeded
 

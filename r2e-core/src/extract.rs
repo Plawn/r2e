@@ -226,6 +226,32 @@ where
 {
 }
 
+/// Infallible extractor for the transport peer address.
+///
+/// Reads `ConnectInfo<SocketAddr>` from the request extensions, which the
+/// server inserts when it is started with connection info (`serve_auto` and the
+/// sharded server both are; the QUIC bridge inserts it too). Yields `None`
+/// instead of a rejection when it is absent — e.g. under `TestApp`'s in-process
+/// dispatch, or behind a service that strips it.
+///
+/// Generated handlers extract this for guarded routes and pass it to
+/// `GuardContext::peer_addr`; hand-written handlers can use it directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerAddr(pub Option<std::net::SocketAddr>);
+
+impl<S: Send + Sync> FromRequestParts<S> for PeerAddr {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(PeerAddr(
+            parts
+                .extensions
+                .get::<crate::http::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0),
+        ))
+    }
+}
+
 /// Standalone axum extractor that clones a bean of type `T` out of an HList
 /// application state.
 ///

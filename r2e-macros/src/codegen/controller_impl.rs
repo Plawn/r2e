@@ -1457,7 +1457,9 @@ fn pre_auth_registration(
         };
     }
 
-    let controller_name_str = name.to_string();
+    // Pre-auth guard contexts get the module-qualified name, like the
+    // post-auth ones (rate-limit bucket keys must be route-unique).
+    let controller_name_str = super::handlers::qualified_controller_name(name);
     let fn_name_str = fn_ident.to_string();
     let controller_name = &def.controller_name;
     let predeco_ctor = format_ident!("__r2e_predeco_{}_{}", controller_name, fn_ident);
@@ -1494,11 +1496,16 @@ fn pre_auth_registration(
                                       __next: #krate::http::middleware::Next| {
                 let __pre_deco = __pre_deco_capture.clone();
                 async move {
+                    let __peer_addr = __req
+                        .extensions()
+                        .get::<#krate::http::ConnectInfo<::std::net::SocketAddr>>()
+                        .map(|__info| __info.0);
                     let __pre_ctx = #krate::PreAuthGuardContext {
                         method_name: #fn_name_str,
                         controller_name: #controller_name_str,
                         headers: __req.headers(),
                         uri: __req.uri(),
+                        peer_addr: __peer_addr,
                         path_params: #krate::PathParams::EMPTY,
                     };
                     #(#pre_auth_checks)*
