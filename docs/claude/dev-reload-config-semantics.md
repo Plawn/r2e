@@ -1,8 +1,10 @@
 # Dev-reload × config semantics
 
 **Status:** **CLOSED — Phases 1, 2 and 3+4 all shipped** (2026-07-29).
-B1, B2, B3 and B5 are fixed, B6 is requalified, and **B4 is the only item left
-open** (carried to `docs/claude/roadmap.md` § W13). Sections Q1–Q7 keep the
+B1, B2, B3 and B5 are fixed, B6 is requalified, and **B4 is half-fixed**
+(2026-08-13: failed watches are now supervised and restarted; the dev-cycle
+re-spawn is deliberately deferred with a written design — see "B4 — watch
+supervision" below). Sections Q1–Q7 keep the
 original Phase-0 analysis with the shipped behavior called out inline, so the
 reasoning that motivated each fix stays readable.
 
@@ -455,7 +457,7 @@ The constraints identified in Phase 0, all respected:
 | **B1** | high | `#[live_config]` values are frozen at cycle-1 boot for the whole dev session: the registry (and its boot snapshot) is pinned, so YAML edits to live keys never reach a slot. | **FIXED (Phase 1)** — the registry is carried in `crate::dev` with one stable identity and `load_config` re-seeds it per cycle (swap boot snapshot, push changed values into materialized unpinned slots). Test `live_config_registry_keeps_one_identity_and_reseeds_across_cycles`. |
 | **B2** | high | Typed `ConfigProperties` / `#[config(section)]` beans are pinned from cycle 1 — a section edit is invisible under `r2e dev` even though the raw `R2eConfig` refreshes. | **FIXED (Phase 1)** — the pinning exemption generalized from "is `R2eConfig`" to "is in `config_derived`", and `LoadableConfig` provides typed sections inside `config_derived_scope`. Test `typed_config_bean_tracks_edits_across_cycles`. |
 | **B3** | medium | On cycles ≥ 2, a **late** `override_config_value` patches and pins the registry that is about to be discarded — silently lost for `#[live_config]` readers (it still reaches `R2eConfig`). | **FIXED (Phase 1)**, for free — `BuilderConfig.live_config` now references the stable instance, so there is no discarded registry to patch. Test `late_override_config_value_reaches_live_readers_and_stays_pinned`. |
-| **B4** | medium | `ConfigProvider::watch` is started exactly once per process; later cycles register a hook that is never drained, and a watch that terminates is never restarted. Its updates *do* stay visible, so this is a restart/robustness gap, not a data-loss one. | **OPEN — the only one left.** Out of scope for Phases 1–3; carried to `docs/claude/roadmap.md` § W13. Still characterized by `characterize_provider_watch_runs_once_but_its_registry_is_the_live_one`. Phase 1 made it *more* benign: the single watcher writes to the one registry everybody reads, and the re-seed's changed-only rule preserves its pushes. |
+| **B4** | medium | `ConfigProvider::watch` is started exactly once per process; later cycles register a hook that is never drained, and a watch that terminates is never restarted. Its updates *do* stay visible, so this is a restart/robustness gap, not a data-loss one. | **HALF-FIXED (2026-08-13).** The *terminates and is never restarted* half is fixed everywhere, dev or prod: watch tasks run under `supervise_config_watch`, which restarts a **failed** watch with capped exponential backoff, treats `Ok(())` as a deliberate end, and cancels the **in-flight** watch future on shutdown (not just the retry sleep). The *one task per process under `r2e dev`* half is deferred by design — see "B4 — watch supervision" below. Still characterized by `characterize_provider_watch_runs_once_but_its_registry_is_the_live_one`. |
 | **B5** | low | Editing a live key rebuilds every bean declaring it (its `config_keys()` fingerprint changes) for no benefit. | **FIXED (Phase 2)** — `config_keys()` entries carry a `ConfigKeyKind`; `Live` keys are excluded from the per-bean fingerprint, so a live-key edit reuses every bean. Test `live_key_edit_pushes_without_rebuilding_copied_key_edit_rebuilds`. |
 | **B6** | low | `ContextConstruct::config_keys()` has no runtime consumer. | **CLOSED / REQUALIFIED (Phase 3)** — kept as declared introspection, not deleted. Its rustdoc now states outright that it takes no part in dev-reload invalidation *and why* (cores are rebuilt from a fresh context every cycle; the whole-config fingerprint guards the only reuse path), and that presence validation runs through `Controller::validate_config`. Do not re-open this as "wire it into the fingerprint" — see Q6. |
 
@@ -543,13 +545,60 @@ rebuilds nothing" is right.
 
 - ~~**`#[config_section]` fields emit no `config_keys()` entry.**~~ **FIXED
   (Phase 3)** — see below.
-- `bg_service_derive.rs` and `decorator_bean_derive.rs` emit no
-  `config_keys()` at all: a background service or decorator bean resolves
-  `#[config]` / `#[config_section]` / `#[live_config]` fields but declares none
-  of them, so none are presence-validated or fingerprinted. Pre-existing, still
-  open, carried to `docs/claude/roadmap.md` § W13. The fix is mechanical (reuse
-  the three `field_resolver` entry helpers); the open question is where the
-  declaration lands for hosts that are not `Bean`s.
+- ~~`bg_service_derive.rs` and `decorator_bean_derive.rs` emit no
+  `config_keys()` at all.~~ **FIXED (2026-08-13)** — both derives now emit the
+  three `field_resolver` entries. The open question ("where does the
+  declaration land for hosts that are not `Bean`s") was answered *the host
+  that owns the site aggregates*:
+  - `DecoratorSpec::config_keys()` (new, defaulted empty) is folded by the
+    host owning the `#[guard]`/`#[intercept]` site — `#[routes]` controllers
+    into `Controller::validate_config`, `#[bean]` impls into
+    `Bean::config_keys()` (so those also reach the dev-reload fingerprint),
+    `#[grpc_routes]` services into the new `GrpcService::validate_config`
+    (called by `register_grpc_service`).
+  - `ServiceComponent::config_keys()` (new, defaulted empty) is validated by
+    the registration path: `spawn_service` for the explicit form,
+    `BeanRegistry::resolve_reusing` for `#[producer(start)]` outputs (their
+    source is drained before resolve, so the keys are recorded at
+    `register_service_source` time).
+  - The shared bridge for hosts that are not registrations is
+    `config::validate_declared_keys(source, declared, config)` — it filters on
+    `kind.is_required()` and reuses `validate_keys`, so `Optional` / `Section`
+    / `Live` keep exactly the semantics they have for beans.
+  Background-service keys are **not** fingerprinted (services are started, not
+  reused) — the declaration buys them aggregated validation; decorator keys
+  folded into a host `Bean::config_keys()` are fingerprinted like the host's
+  own.
+
+- ~~**`#[config_section]` on a decorator or a background service still failed
+  late.**~~ **FIXED (2026-08-13, audit follow-up)** — `validate_declared_keys`
+  filters on `is_required()`, and a `Section` entry is deliberately not
+  required (see below), so declaring the prefix bought those two hosts
+  *nothing*: the section still blew up when the decorator/service was
+  constructed. The kind could not carry the check (`ConfigKeyKind` derives
+  `Hash` and feeds fingerprints; a fn pointer's address is not stable across
+  hot patches), so the validator is declared **beside** the keys:
+
+  | Item | Role |
+  |---|---|
+  | `config::SectionValidator` | `{ prefix, validate: fn(&R2eConfig, Option<&str>) -> Vec<MissingKeyError> }`, built by `SectionValidator::of::<C: ConfigProperties>(prefix)` — the fn slot is `validate_section::<C>`, the same walk the controller `__r2e_meta::validate_config` runs |
+  | `config::validate_declared_sections(&[SectionValidator], &R2eConfig)` | the peer of `validate_declared_keys` |
+  | `DecoratorSpec::config_sections()` / `ServiceComponent::config_sections()` | new, defaulted empty; emitted by `decorator_bean_derive` / `bg_service_derive` from the same `field_resolver` helper (`section_validator_entry`) |
+
+  Run by `decorator_config_errors` (so every `#[guard]`/`#[intercept]` host —
+  `#[routes]` and `#[grpc_routes]` — reports them), by
+  `try_spawn_service_impl`, and by `BeanRegistry::validate_all_config` for
+  `#[producer(start)]` outputs. A decorator/service section is now walked in
+  full at startup: missing nested keys by full key path, type mismatches,
+  garde rules.
+
+  **Residual gap:** an `#[intercept]` site on a `#[bean]`'s
+  `#[scheduled]`/`#[consumer]` method folds only the spec's `config_keys()`
+  into the host `Bean::config_keys()` (that fold exists for the *fingerprint*,
+  which is key-based). The spec's sections are validated when the decorator
+  slot is filled during `resolve()` — the same phase in which a bean's own
+  `#[config_section]` field is validated, still inside `build_state()`, but
+  not part of the aggregated report.
 
 ---
 
@@ -582,7 +631,10 @@ can enumerate the keys to hash. Phase 3 adds a prefix-aware kind instead:
 `is_required()` stays **false** for `Section` on purpose: a section validates
 itself at construction (`ConfigProperties::from_config` errors and the generated
 init panics naming the prefix), so a key-level presence check would be both
-redundant and unable to name what it should check.
+redundant and unable to name what it should check. Hosts whose construction is
+*late* (decorator beans, background services) do not get to rely on that, so
+they declare a `SectionValidator` alongside — see "`#[config_section]` on a
+decorator or a background service" above.
 
 Because `prefix_fingerprint` hashes key *names* as well as values, adding or
 removing a key inside the section moves the digest too — not just editing one.
@@ -615,3 +667,75 @@ predicate *is* the whole logic). Tests: `config/live_config.rs` —
 `a_key_written_at_runtime_is_not_dead`,
 `a_registered_config_provider_silences_the_diagnostic` (the last one drives the
 `load_config` wiring through `AppBuilder`).
+
+---
+
+### B4 — watch supervision (shipped) and the dev-cycle re-spawn (deferred)
+
+B4 was one label over two independent problems. Splitting them is what made it
+tractable.
+
+**Problem 1 — a watch that ends is never restarted. FIXED, everywhere.**
+This was never dev-only: in production too, `on_serve` runs once, so a provider
+whose `watch` future returned `Err` (dropped connection, expired lease) stopped
+feeding the registry for the rest of the process' life, silently. `load_config`
+now spawns `config::supervise_config_watch(provider, ctx, sink)`
+(`config/runtime.rs`) instead of the bare future:
+
+- `Err(_)` → WARN + retry `watch`, capped exponential backoff (1s → 30s
+  doubling; an attempt that ran ≥ 60s is treated as healthy and resets the
+  delay).
+- `Ok(())` → stop. This is now a documented part of the `ConfigProvider::watch`
+  contract: the default impl and one-shot push providers return `Ok(())` and
+  must not be looped; a long-lived watcher returns `Ok(())` only after
+  `ConfigWatchContext::shutdown_token` fires.
+- The shutdown token is raced at **every** point of the cycle: checked before
+  an attempt, raced against the in-flight `watch` future itself (a `biased`
+  `tokio::select!`, so a token already cancelled on entry returns without ever
+  touching the provider), and raced against the retry sleep. Neither a
+  permanently failing provider nor one whose `watch` never resolves (wedged
+  connection, a `watch` that ignores its own shutdown token) can hold up a
+  graceful drain.
+
+Tests (`config/provider.rs`): `failed_watch_is_restarted_until_it_succeeds`,
+`watch_returning_ok_is_not_restarted`, `cancelled_shutdown_stops_the_retry_loop`,
+`cancelled_shutdown_aborts_an_in_flight_watch` (a provider parked on
+`std::future::pending()`), `watch_is_not_started_when_shutdown_already_fired`
+— through `supervise_config_watch_with_backoff` (`#[doc(hidden)] pub`, millisecond
+bounds) so the suite does not sleep for seconds.
+
+**Problem 2 — under `r2e dev`, only cycle 1's watcher ever runs. DEFERRED, by
+design, not by fatigue.** From cycle 2 on, `PreparedApp::run_inner` skips serve
+hooks entirely (`skip_lifecycle`), so each cycle registers a hook nobody drains
+and the cycle-1 task keeps running with the cycle-1 *provider instance*.
+
+Why that is not worth fixing today:
+
+- **It is not a correctness gap.** Since Phase 1 the registry has one stable
+  identity, so cycle 1's sink writes into the instance every later cycle reads,
+  and the re-seed's changed-only rule preserves runtime pushes. Nothing is lost
+  or stale; the surviving symptom is narrow — a provider whose *code or
+  construction arguments* were edited mid-session keeps watching with the old
+  ones.
+- **Subsecond does not help anyway.** A hot patch swaps function bodies at call
+  boundaries; a watcher parked inside a long-lived future keeps executing the
+  old body regardless. Re-spawning would be the *only* way to pick up the edit —
+  and would also, on every unrelated hot patch, tear down a healthy long-lived
+  subscription (Vault lease, Consul blocking query) and re-establish it.
+- **The machinery is disproportionate.** A correct re-spawn needs: the serve
+  shutdown token captured into a `crate::dev` static on the first serve (it does
+  not exist at `load_config` time), a per-cycle child token swapped and cancelled
+  on each cycle, watchers spawned outside `serve_ctx.track()` (so they are
+  no longer part of the drain accounting), and dedup so a cycle that did not
+  change its provider set does not churn. That is new lifecycle state in the
+  hot path, testable only by simulating a serve across cycles — the existing
+  `dev_reload_config.rs` cycles never serve.
+
+**If it is ever taken:** the shape above is the design — `dev::config_watch`
+holding `{ root: OnceLock<CancellationToken>, cycle: Mutex<Option<CancellationToken>> }`,
+`load_config` spawning through the child token when a root token is already
+present (i.e. cycle ≥ 2) instead of registering an `on_serve` hook, cancelling
+the previous child first. Gate it on `hot_reload_loop_active()` so nothing
+changes outside the loop, and add a `provider set fingerprint` so unchanged
+providers keep their task. Do not attempt it without a test that drives a real
+serve across two cycles.

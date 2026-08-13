@@ -646,6 +646,11 @@ b.with_config_provider(VaultConfigProvider::new(...))
 ```
 
 Provider `load` mutates the boot `R2eConfig` before typed config is built.
+`ConfigProvider::watch` is **supervised**: returning `Err(_)` is a broken watch
+(logged, then retried with capped exponential backoff), returning `Ok(())`
+means "done watching, never call me again" (the default impl and one-shot
+providers). A long-lived watcher runs until
+`ConfigWatchContext::shutdown_token()` fires and returns `Ok(())` then.
 Runtime rotations do not mutate app-scoped `#[config]` fields or typed config
 beans; use the automatically provided `LiveConfigRegistry` / `LiveConfig<T>`
 handles for live values. This is plain live/dynamic config (feature flags,
@@ -722,8 +727,15 @@ freshness modes, recorded in its `config_keys()` entry
   `ConfigKeyKind::Required` (presence-validated at startup),
   `ConfigKeyKind::Optional` (an `Option<T>` field; not validated), or
   `ConfigKeyKind::Section` (a `#[config_section(prefix = "p")]` field — the
-  entry's key is the **prefix**, and the section validates itself at
-  construction, so it is not presence-checked either). **All three are
+  entry's key is the **prefix**, so it is not presence-checked either: a
+  section is validated as a whole: a controller/gRPC core walks its own
+  sections in the generated `validate_config` at registration, a bean walks
+  its own when it is constructed inside `build_state()`, and the two hosts
+  that construct *late* declare `SectionValidator`s instead —
+  `DecoratorSpec::config_sections()` (guards/interceptors) and
+  `ServiceComponent::config_sections()` (background services), both run
+  through `validate_declared_sections` by the registration path that owns
+  them). **All three are
   fingerprinted**: under `r2e dev`, editing the key — or, for a section, *any*
   key under its prefix — rebuilds the declaring bean and its dependents.
 - **Subscribed** — `#[live_config]` → `LiveConfig<T>`. The handle binds a
@@ -966,6 +978,19 @@ impl<I: Identity> Guard<I> for ProjectGuard { /* uses self.pool */ }
 // at the site — plain fields in declaration order:
 #[guard(ProjectGuard::spec("viewer"))]
 ```
+
+`#[config]` / `#[config_section]` / `#[live_config]` fields on a decorator bean
+are **declared** (`DecoratorSpec::config_keys()` for keys and
+`DecoratorSpec::config_sections()` for `#[config_section]` fields — a
+`SectionValidator` per field, which walks the whole section: missing nested
+keys, type mismatches, `garde` rules — both emitted by the derive) and
+aggregated by whichever host owns the site — a `#[routes]` controller
+(`Controller::validate_config`, checked at `register_controller`), a `#[bean]`
+impl with `#[intercept]` on `#[scheduled]`/`#[consumer]` methods (folded into
+`Bean::config_keys()`), or a `#[grpc_routes]` service
+(`GrpcService::validate_config`, checked at `register_grpc_service`). A missing
+required key is therefore part of the aggregated startup configuration report
+that names every missing key at once, not a late panic when the guard is built.
 
 ### Pre-auth guards
 
@@ -2083,8 +2108,13 @@ use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
 b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())  // separate port (or multiplexed)
  .build_state().await
- .register_grpc_service::<GreeterService>()       // deps compile-checked here
+ .register_grpc_service::<GreeterService>()       // deps + config keys checked here
 ```
+
+`register_grpc_service` panics on a missing key;
+`try_register_grpc_service::<S>()` (same trait) returns
+`Result<Self, ConfigValidationError>` for callers that want to report the
+failure themselves — the gRPC peer of `try_register_controller`.
 
 ```rust
 #[controller]
@@ -2180,6 +2210,53 @@ The `Scheduler` plugin runs every `#[scheduled]` tick on this pool, so scheduled
 work is drained, bounded, and metered alongside submitted jobs.
 
 Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown.
+
+### Long-running services — `#[derive(BackgroundService)]`
+
+A service component is built from the bean graph and started once, with a
+`CancellationToken` cancelled at shutdown. Fields use the app-scoped injection
+attributes (`#[inject]`, `#[config]`, `#[config_section]`, `#[live_config]`);
+you write `run`, the derive writes `ServiceComponent`:
+
+```rust
+#[derive(BackgroundService)]
+pub struct MetricsExporter {
+    #[inject] pool: SqlitePool,
+    #[config("metrics.interval-secs")] interval: u64,
+}
+
+impl MetricsExporter {
+    async fn run(&self, shutdown: CancellationToken) { /* loop until cancelled */ }
+}
+
+AppBuilder::new()
+    .register::<CreatePool>()
+    .load_config::<RootConfig>()
+    .build_state().await
+    .spawn_service::<MetricsExporter>()    // AFTER build_state (needs the graph)
+    .serve("0.0.0.0:3000").await
+```
+
+`spawn_service` comes from the `SpawnService` extension trait (in the prelude),
+like `register_controller`. The derive declares `ServiceComponent::Deps` (every
+`#[inject]` type, plus `R2eConfig` / `LiveConfigRegistry` when config fields are
+present), so a service reading an absent bean is a **compile error** at
+`spawn_service` instead of a panic at startup; and it declares
+`ServiceComponent::config_keys()` + `ServiceComponent::config_sections()`, so a
+missing required `#[config]` key **and** an incomplete `#[config_section]` are
+reported by aggregated startup validation. `try_spawn_service` returns
+`Result<_, ConfigValidationError>` instead of panicking.
+
+Hand-written `impl ServiceComponent` must supply `type Deps` (use
+`r2e_core::type_list::TNil` when the service reads nothing from the graph) and
+may override `config_keys()` / `config_sections()`.
+
+A `#[producer(start)]` producer runs its output as a service through the same
+trait. `#[producer]` folds `<Output as ServiceComponent>::Deps` into the
+producer's own registration deps, so a service reading a bean the producer
+itself never takes is still a **compile error** at `build_state()`; the
+service's declared keys and sections are validated during `build_state()`,
+merged with the bean graph's own into one `BeanError::MissingConfigKeys`.
 
 ---
 

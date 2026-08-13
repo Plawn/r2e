@@ -427,14 +427,17 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                                     serve_ctx.shutdown_token(),
                                 );
                                 let sink = crate::config::ConfigUpdateSink::new(live);
-                                let handle = crate::rt::spawn(async move {
-                                    if let Err(error) = provider.watch(watch_ctx, sink).await {
-                                        tracing::warn!(
-                                            error = %error,
-                                            "config provider watch stopped with an error"
-                                        );
-                                    }
-                                });
+                                // Supervised: a watch that FAILS is restarted
+                                // with backoff (an `Ok(())` return means the
+                                // provider is done on purpose). Nothing else
+                                // would ever restart it — serve hooks run once
+                                // per process, and are skipped entirely from
+                                // the second `r2e dev` hot-patch cycle on.
+                                let handle = crate::rt::spawn(
+                                    crate::config::supervise_config_watch(
+                                        provider, watch_ctx, sink,
+                                    ),
+                                );
                                 serve_ctx.track(handle);
                             });
                         }

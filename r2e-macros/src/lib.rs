@@ -1098,13 +1098,26 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro for background services — generates
-/// [`ServiceComponent<State>`](r2e_core::ServiceComponent) so the type can
-/// be registered via [`AppBuilder::spawn_service`].
+/// [`ServiceComponent`](r2e_core::ServiceComponent) so the type can be
+/// registered via
+/// [`SpawnService::spawn_service`](r2e_core::SpawnService::spawn_service)
+/// (extension trait, in the prelude) or produced by `#[producer(start)]`.
 ///
 /// Field attributes mirror `#[controller(...)]`:
-/// - `#[inject]` — clone from app state (type must impl `Clone + Send + Sync`)
+/// - `#[inject]` — clone from the bean graph (type must impl `Clone + Send + Sync`)
 /// - `#[config("key")]` — resolve from `R2eConfig`
 /// - `#[config_section(prefix = "...")]` — typed config section
+/// - `#[live_config("key")]` — runtime-updatable `LiveConfig<T>` handle
+///
+/// The derive emits, besides `from_context`/`start`:
+/// - `type Deps` — the type-level list of beans `from_context` pulls
+///   (`R2eConfig` and `LiveConfigRegistry` included when the relevant field
+///   kinds are present). It is compile-checked against the application state
+///   at the registration call site, so a service reading an absent bean is a
+///   compile error rather than a `ctx.get()` panic at startup.
+/// - `config_keys()` — the declared `#[config]` / `#[config_section]` /
+///   `#[live_config]` keys, presence-validated (`Required` only) when the
+///   service is registered.
 ///
 /// The user supplies an async `run(&self, CancellationToken)` method on the
 /// struct; the generated `start` simply forwards to it.
@@ -1115,8 +1128,7 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 /// use r2e::prelude::*;
 /// use tokio_util::sync::CancellationToken;
 ///
-/// #[derive(BackgroundService, Clone)]
-/// #[service(state = Services)]
+/// #[derive(BackgroundService)]
 /// pub struct EmailWorker {
 ///     #[inject] mailer: Mailer,
 ///     #[inject] executor: PoolExecutor,
@@ -1127,7 +1139,7 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 ///     async fn run(&self, shutdown: CancellationToken) { /* loop ... */ }
 /// }
 ///
-/// // Register in builder:
+/// // Register in builder (`SpawnService` comes from the prelude):
 /// app.spawn_service::<EmailWorker>();
 /// ```
 #[proc_macro_derive(BackgroundService, attributes(service, inject, config, live_config, config_section))]

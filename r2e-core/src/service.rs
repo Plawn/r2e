@@ -16,6 +16,8 @@ use tokio_util::sync::CancellationToken;
 /// }
 ///
 /// impl ServiceComponent for MetricsExporter {
+///     type Deps = TCons<SqlitePool, TNil>;
+///
 ///     fn from_context(ctx: &BeanContext) -> Self {
 ///         Self { pool: ctx.get::<SqlitePool>() }
 ///     }
@@ -40,6 +42,59 @@ use tokio_util::sync::CancellationToken;
 ///     .serve("0.0.0.0:3000").await
 /// ```
 pub trait ServiceComponent: Sized + Send + 'static {
+    /// Type-level list ([`TCons`](crate::type_list::TCons) /
+    /// [`TNil`](crate::type_list::TNil)) of the bean types
+    /// [`from_context`](Self::from_context) pulls — including `R2eConfig` when
+    /// the service has `#[config]` fields and `LiveConfigRegistry` when it has
+    /// `#[live_config]` ones.
+    ///
+    /// Checked against the application state at
+    /// [`spawn_service`](crate::builder::SpawnService::spawn_service) via
+    /// [`AllSatisfied`](crate::type_list::AllSatisfied), so a service reading a
+    /// bean that is absent from the graph is a **compile** error at the
+    /// registration call site instead of a `ctx.get()` panic at startup.
+    /// `#[derive(BackgroundService)]` emits it; hand-written impls that build
+    /// from an already-provided value use `TNil`.
+    ///
+    /// The `#[producer(start)]` path has no state type of its own to check
+    /// against, so `#[producer]` folds `<Output as ServiceComponent>::Deps`
+    /// into the producer's own `Producer`/`Registrable` `Deps`: the service's
+    /// beans are demanded at the `.register::<TheProducer>()` call site,
+    /// exactly like the producer function's parameters. A produced service
+    /// reading an absent bean is therefore also a compile error, not a
+    /// `from_context` panic when the task starts.
+    type Deps;
+
+    /// The config keys [`from_context`](Self::from_context) reads, as
+    /// `(key, type name, kind)` — the
+    /// [`Bean::config_keys`](crate::beans::Bean::config_keys) counterpart for
+    /// background services, emitted by `#[derive(BackgroundService)]`.
+    ///
+    /// `Required` entries are presence-validated where the service is
+    /// registered — at [`spawn_service`](crate::builder::SpawnService::spawn_service)
+    /// (aggregated panic naming the service) and, for `#[producer(start)]`
+    /// services, during graph resolution alongside the bean keys. Default:
+    /// empty.
+    ///
+    /// `Section` entries appear here for completeness but cannot be validated
+    /// from a type *name* — see [`config_sections`](Self::config_sections).
+    fn config_keys() -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> {
+        Vec::new()
+    }
+
+    /// The `#[config_section]` prefixes [`from_context`](Self::from_context)
+    /// builds, as type-aware [`SectionValidator`](crate::config::SectionValidator)s.
+    ///
+    /// A background service constructs when its task starts, long after
+    /// startup validation, so a missing section key would surface as a panic
+    /// inside `from_context`. Declaring the sections here lets the same
+    /// registration points that check [`config_keys`](Self::config_keys) run
+    /// the full `validate_section::<Ty>` walk instead. Emitted by
+    /// `#[derive(BackgroundService)]`. Default: empty.
+    fn config_sections() -> Vec<crate::config::SectionValidator> {
+        Vec::new()
+    }
+
     /// Construct from the resolved bean graph.
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 

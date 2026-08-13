@@ -204,6 +204,9 @@ where
     DB: Database,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
+    /// The pool is itself the bean: `from_context` reads it back by type.
+    type Deps = r2e_core::type_list::TCons<Self, r2e_core::type_list::TNil>;
+
     fn from_context(ctx: &BeanContext) -> Self {
         ctx.get::<Self>()
     }

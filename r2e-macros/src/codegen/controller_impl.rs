@@ -31,6 +31,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // `register_controller()` and by `ModuleDepsSatisfied` at
     // `register_module()`.
     let deps_fold = super::decorators::controller_deps_fold(def);
+    // Same site set, config side: a decorator bean's `#[config]` keys are
+    // declared on its `DecoratorSpec` but only the host knows the sites, so the
+    // controller's aggregated `validate_config` reports them at
+    // `register_controller()` — before any `build_decorator` runs.
+    let decorator_config_stmts =
+        super::decorators::decorator_config_key_stmts(super::decorators::controller_site_exprs(def));
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
@@ -230,7 +236,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             fn validate_config(
                 __config: &#krate::config::R2eConfig,
             ) -> Vec<#krate::config::MissingKeyError> {
-                #meta_mod::validate_config(__config)
+                #[allow(unused_mut)]
+                let mut __errors = #meta_mod::validate_config(__config);
+                #(#decorator_config_stmts)*
+                __errors
             }
         }
     }

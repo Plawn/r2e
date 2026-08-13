@@ -1,6 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
 
 use r2e_core::beans::Producer;
 use r2e_core::config::{
@@ -242,4 +246,224 @@ async fn producer_live_config_param_tolerates_missing_key_at_boot() {
     let registry = app.state().get::<LiveConfigRegistry>();
     assert!(registry.set("db.url", "postgres://late"));
     assert_eq!(handle.get().unwrap(), "postgres://late");
+}
+
+// ── Watch supervision ──────────────────────────────────────────────────────
+
+/// Fails `fail_times` times, then pushes its value and returns `Ok(())`.
+struct FlakyWatchProvider {
+    key: &'static str,
+    value: &'static str,
+    attempts: Arc<AtomicUsize>,
+    fail_times: usize,
+}
+
+impl ConfigProvider for FlakyWatchProvider {
+    fn load(
+        &self,
+        _config: &mut R2eConfig,
+        _ctx: ConfigProviderContext<'_>,
+    ) -> Result<(), ConfigError> {
+        Ok(())
+    }
+
+    fn watch(
+        self: Arc<Self>,
+        _ctx: ConfigWatchContext,
+        sink: ConfigUpdateSink,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + 'static>> {
+        Box::pin(async move {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < self.fail_times {
+                return Err(ConfigError::NotFound(self.key.to_string()));
+            }
+            sink.set(self.key, self.value.to_string());
+            Ok(())
+        })
+    }
+}
+
+/// A watch that ERRORS is restarted — otherwise a single transient failure
+/// disables runtime config updates for the life of the process (serve hooks
+/// run once, and `r2e dev` skips them from the second cycle on).
+#[tokio::test]
+async fn failed_watch_is_restarted_until_it_succeeds() {
+    let registry = LiveConfigRegistry::new();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn ConfigProvider> = Arc::new(FlakyWatchProvider {
+        key: "db.url",
+        value: "postgres://recovered",
+        attempts: attempts.clone(),
+        fail_times: 2,
+    });
+
+    let ctx = ConfigWatchContext::new("test", CancellationToken::new());
+    r2e_core::config::supervise_config_watch_with_backoff(
+        provider,
+        ctx,
+        ConfigUpdateSink::new(registry.clone()),
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+    )
+    .await;
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        registry.get::<String>("db.url").unwrap(),
+        "postgres://recovered"
+    );
+}
+
+/// `Ok(())` is a deliberate end: a one-shot provider must NOT be looped.
+#[tokio::test]
+async fn watch_returning_ok_is_not_restarted() {
+    let registry = LiveConfigRegistry::new();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn ConfigProvider> = Arc::new(FlakyWatchProvider {
+        key: "db.url",
+        value: "postgres://once",
+        attempts: attempts.clone(),
+        fail_times: 0,
+    });
+
+    let ctx = ConfigWatchContext::new("test", CancellationToken::new());
+    r2e_core::config::supervise_config_watch_with_backoff(
+        provider,
+        ctx,
+        ConfigUpdateSink::new(registry),
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+    )
+    .await;
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+/// Shutdown wins over the retry backoff — a permanently failing watch must not
+/// keep a graceful drain waiting.
+#[tokio::test]
+async fn cancelled_shutdown_stops_the_retry_loop() {
+    let registry = LiveConfigRegistry::new();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn ConfigProvider> = Arc::new(FlakyWatchProvider {
+        key: "db.url",
+        value: "never",
+        attempts: attempts.clone(),
+        fail_times: usize::MAX,
+    });
+
+    let token = CancellationToken::new();
+    let ctx = ConfigWatchContext::new("test", token.clone());
+    let task = tokio::spawn(r2e_core::config::supervise_config_watch_with_backoff(
+        provider,
+        ctx,
+        ConfigUpdateSink::new(registry),
+        Duration::from_millis(50),
+        Duration::from_millis(50),
+    ));
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    token.cancel();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("supervision must stop as soon as the shutdown token fires")
+        .unwrap();
+    assert!(attempts.load(Ordering::SeqCst) >= 1);
+}
+
+/// A watch that never resolves: the provider is wedged (dead connection, a
+/// `watch` that ignores its own token) rather than failing.
+struct WedgedWatchProvider {
+    entered: Arc<AtomicUsize>,
+}
+
+impl ConfigProvider for WedgedWatchProvider {
+    fn load(
+        &self,
+        _config: &mut R2eConfig,
+        _ctx: ConfigProviderContext<'_>,
+    ) -> Result<(), ConfigError> {
+        Ok(())
+    }
+
+    fn watch(
+        self: Arc<Self>,
+        _ctx: ConfigWatchContext,
+        _sink: ConfigUpdateSink,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + 'static>> {
+        Box::pin(async move {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            std::future::pending().await
+        })
+    }
+}
+
+/// Shutdown wins over the **in-flight watch**, not just over the retry sleep.
+///
+/// The supervisor awaits the provider's future; a provider that never resolves
+/// (and never checks the token it was handed) would otherwise pin the
+/// supervision task open for the whole drain. Racing the watch itself against
+/// the token bounds that to "returns immediately".
+#[tokio::test]
+async fn cancelled_shutdown_aborts_an_in_flight_watch() {
+    let registry = LiveConfigRegistry::new();
+    let entered = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn ConfigProvider> = Arc::new(WedgedWatchProvider {
+        entered: entered.clone(),
+    });
+
+    let token = CancellationToken::new();
+    let ctx = ConfigWatchContext::new("test", token.clone());
+    let task = tokio::spawn(r2e_core::config::supervise_config_watch_with_backoff(
+        provider,
+        ctx,
+        ConfigUpdateSink::new(registry),
+        // Long enough that a pass through the backoff sleep would blow the
+        // timeout below: only cancelling the watch future itself can pass.
+        Duration::from_secs(30),
+        Duration::from_secs(30),
+    ));
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        entered.load(Ordering::SeqCst),
+        1,
+        "the watch must have been entered before cancellation"
+    );
+
+    token.cancel();
+    tokio::time::timeout(Duration::from_millis(500), task)
+        .await
+        .expect("a never-resolving watch must not outlive the shutdown token")
+        .unwrap();
+}
+
+/// A token already cancelled on entry must not touch the provider at all —
+/// the `biased` select checks cancellation before polling the watch.
+#[tokio::test]
+async fn watch_is_not_started_when_shutdown_already_fired() {
+    let registry = LiveConfigRegistry::new();
+    let entered = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn ConfigProvider> = Arc::new(WedgedWatchProvider {
+        entered: entered.clone(),
+    });
+
+    let token = CancellationToken::new();
+    token.cancel();
+    let ctx = ConfigWatchContext::new("test", token);
+
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        r2e_core::config::supervise_config_watch_with_backoff(
+            provider,
+            ctx,
+            ConfigUpdateSink::new(registry),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ),
+    )
+    .await
+    .expect("an already-cancelled token must return immediately");
+
+    assert_eq!(entered.load(Ordering::SeqCst), 0);
 }

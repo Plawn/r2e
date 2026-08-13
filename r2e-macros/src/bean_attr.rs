@@ -352,15 +352,6 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         crate::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
 
     let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
-    let config_keys_fn = if config_key_entries.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn config_keys() -> #config_keys_ret_ty {
-                vec![#(#config_key_entries),*]
-            }
-        }
-    };
 
     // Impl-level `#[intercept(...)]` — applies to every scheduled/consumer
     // method, running BEFORE method-level interceptors (same order as
@@ -528,6 +519,34 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         base_deps_type.clone()
     } else {
         deps_fold_from_base(base_deps_type.clone(), all_intercept_exprs.iter())
+    };
+
+    // Config keys = the constructor's own keys ++ every distinct
+    // `#[intercept]` spec's declared keys. A decorator bean is not a bean
+    // registration, so this host list is where its `#[config]` keys reach both
+    // aggregated startup validation (`BeanRegistry::validate_all_config`) and
+    // the dev-reload fingerprint — editing a key a bean-level interceptor reads
+    // rebuilds the bean that hosts it. Only `config_keys` folds here: a spec's
+    // `#[config_section]` still validates when the bean's decorator slot is
+    // filled, in the same `resolve()` pass that would validate the bean's own
+    // section fields at construction.
+    let decorator_spec_types =
+        crate::codegen::decorators::unique_spec_types(all_intercept_exprs.iter());
+    let decorator_key_stmts: Vec<TokenStream2> = decorator_spec_types
+        .iter()
+        .map(|spec| quote! { __keys.extend(<#spec as #krate::DecoratorSpec>::config_keys()); })
+        .collect();
+    let config_keys_fn = if config_key_entries.is_empty() && decorator_key_stmts.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> #config_keys_ret_ty {
+                #[allow(unused_mut)]
+                let mut __keys: #config_keys_ret_ty = vec![#(#config_key_entries),*];
+                #(#decorator_key_stmts)*
+                __keys
+            }
+        }
     };
 
     // `skip_if` predicates resolve against the impl block's plain methods —

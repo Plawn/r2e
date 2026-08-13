@@ -50,19 +50,21 @@ pub use beans::{
 };
 pub use builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
-    RegisterModule, ServeContext, TaskRegistryHandle,
+    RegisterModule, ServeContext, SpawnService, TaskRegistryHandle,
 };
 pub use config::{
-    deserialize_value, register_section, registered_sections, validate_keys, validate_section,
-    ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
-    ConfigValidationDetail, ConfigValidationError, ConfigValue, ConfigWatchContext,
-    DefaultSecretResolver, FromConfigValue, LiveConfig, LiveConfigReceiver, LiveConfigRegistry,
-    LiveConfigSnapshot, LoadableConfig, MissingKeyError, PluginConfig, PropertyMeta, R2eConfig,
-    RegisteredSection, SecretResolver,
+    deserialize_value, register_section, registered_sections, validate_declared_keys,
+    validate_declared_sections, validate_keys, validate_section, ConfigError, ConfigProperties,
+    ConfigProvider, ConfigProviderContext, ConfigUpdateSink, ConfigValidationDetail,
+    ConfigValidationError, ConfigValue, ConfigWatchContext, DefaultSecretResolver, FromConfigValue,
+    LiveConfig, LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot, LoadableConfig,
+    MissingKeyError, PluginConfig, PropertyMeta, R2eConfig, RegisteredSection, SectionValidator,
+    SecretResolver,
 };
 pub use controller::{ContextConstruct, Controller, EndpointDeps};
 pub use decorator::{
-    BeanDecoFill, Decorate, DecoratorSpec, HasDecoSlot, SelfBuilt, SharedDecoSlot,
+    decorator_config_errors, BeanDecoFill, Decorate, DecoratorSpec, HasDecoSlot, SelfBuilt,
+    SharedDecoSlot,
 };
 pub use error::{HttpError, HttpErrorExt};
 pub use event_subscriber::EventSubscriber;

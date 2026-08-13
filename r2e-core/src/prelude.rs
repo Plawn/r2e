@@ -77,7 +77,7 @@ pub use r2e_macros::ApiError;
 
 pub use crate::builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
-    RegisterModule,
+    RegisterModule, SpawnService,
 };
 pub use crate::lifecycle::StopHandle;
 // NOTE: `BeanAccess` is deliberately NOT in the prelude: its blanket impl puts

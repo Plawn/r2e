@@ -94,6 +94,110 @@ pub fn validate_keys(config: &R2eConfig, keys: &[(&str, &str, &str)]) -> Vec<Mis
         .collect()
 }
 
+/// Presence-validate a host's **declared** `config_keys()` list.
+///
+/// The single shared bridge from a `(key, type name, kind)` declaration to
+/// [`validate_keys`]: only [`ConfigKeyKind::Required`] entries are checked —
+/// `Optional` resolves to `None` when absent, `Section` validates itself at
+/// construction, and `Live` legitimately starts empty (see the
+/// [`ConfigKeyKind`] docs).
+///
+/// Used by the hosts whose declarations are *not* bean registrations and
+/// therefore never reach `BeanRegistry::validate_all_config`: decorator beans
+/// (through [`DecoratorSpec::config_keys`](crate::decorator::DecoratorSpec::config_keys),
+/// aggregated into `Controller::validate_config`) and background services
+/// (through [`ServiceComponent::config_keys`](crate::ServiceComponent::config_keys),
+/// aggregated at `spawn_service` / at graph resolution for `#[producer(start)]`).
+///
+/// `Section` entries carry only a prefix and a type *name*, which is not enough
+/// to walk the section's required keys — those hosts declare their sections a
+/// second time, as [`SectionValidator`]s, and validate them through
+/// [`validate_declared_sections`].
+pub fn validate_declared_keys(
+    source: &str,
+    declared: &[(&'static str, &'static str, super::ConfigKeyKind)],
+    config: &R2eConfig,
+) -> Vec<MissingKeyError> {
+    let required: Vec<(&str, &str, &str)> = declared
+        .iter()
+        .filter(|(_, _, kind)| kind.is_required())
+        .map(|(key, ty_name, _)| (source, *key, *ty_name))
+        .collect();
+    validate_keys(config, &required)
+}
+
+/// A **type-aware** `#[config_section]` declaration: a prefix bound to the
+/// [`validate_section`] instantiation for the section's `ConfigProperties`
+/// type.
+///
+/// A `config_keys()` entry cannot express this: it carries the prefix and the
+/// type's *name*, so the bridge that reads it has no way back to the type and
+/// can only skip `Section` entries (their kind is not
+/// [`is_required`](super::ConfigKeyKind::is_required)). That is fine for beans
+/// and controllers — a bean constructs during `build_state` and a controller's
+/// generated `__r2e_meta::validate_config` calls `validate_section::<Ty>`
+/// directly, both at startup. It is *not* fine for hosts built later: a
+/// decorator bean (built in `build_decorator`, at registration) and a
+/// background service (built in `ServiceComponent::from_context`, when the task
+/// starts) would otherwise only discover a missing section key by panicking.
+///
+/// So those two derives emit their sections **twice**: once in `config_keys()`
+/// as a `Section` entry (which is what a host bean fingerprints for dev-reload)
+/// and once here as a validator the host can actually run. Validation is the
+/// full [`validate_section`] walk — missing required leaves, nested sections,
+/// type mismatches and `garde` violations alike, exactly what a controller
+/// field gets.
+#[derive(Clone, Copy)]
+pub struct SectionValidator {
+    prefix: &'static str,
+    validate: fn(&R2eConfig, Option<&str>) -> Vec<MissingKeyError>,
+}
+
+impl SectionValidator {
+    /// Declare `prefix` as a section of type `C`.
+    #[must_use]
+    pub fn of<C: ConfigProperties>(prefix: &'static str) -> Self {
+        Self {
+            prefix,
+            validate: validate_section::<C>,
+        }
+    }
+
+    /// The declared section prefix.
+    #[must_use]
+    pub fn prefix(&self) -> &'static str {
+        self.prefix
+    }
+
+    /// Run the section's own validation against `config`.
+    #[must_use]
+    pub fn validate(&self, config: &R2eConfig) -> Vec<MissingKeyError> {
+        (self.validate)(config, Some(self.prefix))
+    }
+}
+
+impl std::fmt::Debug for SectionValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SectionValidator")
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Run every declared [`SectionValidator`], flattening the reports.
+///
+/// The section companion of [`validate_declared_keys`] — same hosts, same
+/// aggregation points.
+pub fn validate_declared_sections(
+    sections: &[SectionValidator],
+    config: &R2eConfig,
+) -> Vec<MissingKeyError> {
+    sections
+        .iter()
+        .flat_map(|section| section.validate(config))
+        .collect()
+}
+
 /// Phase-1 missing-key walk for a `ConfigProperties` section.
 ///
 /// Reports every missing required key — the section's own leaves plus, via

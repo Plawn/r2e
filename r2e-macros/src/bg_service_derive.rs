@@ -1,9 +1,10 @@
-//! `#[derive(BackgroundService)]` — generates `impl ServiceComponent<State>`.
+//! `#[derive(BackgroundService)]` — generates `impl ServiceComponent`.
 //!
 //! Mirrors the field resolution of `#[controller(...)]` (struct-level
 //! identity is not supported here — background services have no request
 //! context). The user implements an async `run(&self, CancellationToken)`
-//! method on the struct; the derive wires `from_state` + `start`.
+//! method on the struct; the derive wires `type Deps` + `config_keys` +
+//! `from_context` + `start`.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -78,6 +79,20 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     )?;
 
     let mut field_inits: Vec<TokenStream2> = Vec::new();
+    // The bean types `from_context` pulls — folded into `ServiceComponent::Deps`
+    // so `spawn_service` rejects a service reading an absent bean at compile
+    // time instead of panicking in `ctx.get()`.
+    let mut dep_types: Vec<TokenStream2> = Vec::new();
+    // Declared config keys — presence-validated at `spawn_service` (and at graph
+    // resolution for `#[producer(start)]` services). NOT fingerprinted: a
+    // background service is started, never reused across dev-reload cycles, so
+    // it has no per-registration fingerprint to participate in.
+    let mut config_key_entries: Vec<TokenStream2> = Vec::new();
+    // Type-aware `#[config_section]` declarations. A service constructs when its
+    // task starts, so "the section validates itself at construction" would mean
+    // "it panics at serve time" — these let `spawn_service` / graph resolution
+    // run the real section walk up front.
+    let mut config_section_entries: Vec<TokenStream2> = Vec::new();
     let mut has_any_config = false;
     let mut has_live_config = false;
 
@@ -86,23 +101,36 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             FieldKind::Inject => {
                 let field_name = cf.name;
                 let field_ty = cf.ty;
+                dep_types.push(quote! { #field_ty });
                 field_inits.push(quote! { #field_name: __ctx.get::<#field_ty>() });
             }
             FieldKind::ConfigSection { prefix } => {
+                config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                    &krate, prefix, cf.ty,
+                ));
+                config_section_entries.push(crate::field_resolver::section_validator_entry(
+                    &krate, prefix, cf.ty,
+                ));
                 field_inits.push(config_section_init_panic(
                     cf.name, cf.ty, prefix, &name_str, &krate,
                 ));
                 has_any_config = true;
             }
-            FieldKind::Config { key, .. } => {
+            FieldKind::Config { key, ty_name } => {
                 let is_option = crate::type_utils::is_option_type(cf.ty);
+                config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                    &krate, key, ty_name, is_option,
+                ));
                 field_inits.push(config_init_panic(
                     cf.name, key, &name_str, is_option, &krate,
                 ));
                 has_any_config = true;
             }
-            FieldKind::LiveConfig { key, .. } => {
+            FieldKind::LiveConfig { key, ty_name } => {
                 let field_name = cf.name;
+                config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                    &krate, key, ty_name,
+                ));
                 let expr = crate::field_resolver::live_config_resolve_expr(
                     &quote! { __r2e_live },
                     key,
@@ -114,6 +142,36 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),
         }
     }
+
+    if has_any_config {
+        dep_types.push(quote! { #krate::config::R2eConfig });
+    }
+    if has_live_config {
+        dep_types.push(crate::field_resolver::live_config_registry_ty(&krate));
+    }
+    let deps_type = crate::type_list_gen::build_tcons_type(&dep_types, &krate);
+
+    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_fn = if config_key_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_keys() -> #config_keys_ret_ty {
+                vec![#(#config_key_entries),*]
+            }
+        }
+    };
+
+    let config_sections_ret_ty = crate::field_resolver::config_sections_ret_ty(&krate);
+    let config_sections_fn = if config_section_entries.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn config_sections() -> #config_sections_ret_ty {
+                vec![#(#config_section_entries),*]
+            }
+        }
+    };
 
     let config_prelude = if has_any_config {
         quote! {
@@ -127,6 +185,12 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #krate::ServiceComponent for #name {
+            type Deps = #deps_type;
+
+            #config_keys_fn
+
+            #config_sections_fn
+
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude
                 #live_config_prelude
@@ -148,6 +212,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 fn generate_unit_impl(name: &syn::Ident, krate: &TokenStream2) -> TokenStream2 {
     quote! {
         impl #krate::ServiceComponent for #name {
+            type Deps = #krate::type_list::TNil;
+
             fn from_context(_ctx: &#krate::beans::BeanContext) -> Self { #name }
 
             fn start(

@@ -62,6 +62,30 @@ pub trait GrpcService: 'static {
         None
     }
 
+    /// Validate the config this service reads, in one report:
+    ///
+    /// - the core's own `#[config]` keys (presence) and `#[config_section]`
+    ///   fields (full `validate_section` walk: missing keys, nested sections,
+    ///   type mismatches, garde);
+    /// - every `#[intercept]` spec's
+    ///   [`DecoratorSpec::config_keys`](r2e_core::DecoratorSpec::config_keys)
+    ///   (presence, `Required` only) and
+    ///   [`config_sections`](r2e_core::DecoratorSpec::config_sections) (same
+    ///   full walk).
+    ///
+    /// `Optional` (`Option<T>`) and `Live` (`#[live_config]`) keys are
+    /// deliberately not checked — both may legitimately be absent at boot.
+    ///
+    /// The gRPC peer of [`Controller::validate_config`](r2e_core::Controller::validate_config):
+    /// called by `register_grpc_service`, so a missing key is one aggregated
+    /// report at registration instead of a panic when the core (or a decorator)
+    /// is built. `#[grpc_routes]` generates it; the default reports nothing.
+    fn validate_config(
+        _config: &r2e_core::config::R2eConfig,
+    ) -> Vec<r2e_core::config::MissingKeyError> {
+        Vec::new()
+    }
+
     /// Add this service to the given route collection, constructing it from
     /// the resolved bean graph.
     fn add_to_routes(

@@ -12,13 +12,15 @@ use std::sync::Arc;
 
 pub use registry::{register_section, registered_sections, RegisteredSection};
 pub use runtime::{
-    ConfigProvider, ConfigProviderContext, ConfigUpdateSink, ConfigWatchContext, LiveConfig,
-    LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot,
+    supervise_config_watch, supervise_config_watch_with_backoff, ConfigProvider,
+    ConfigProviderContext, ConfigUpdateSink, ConfigWatchContext, LiveConfig, LiveConfigReceiver,
+    LiveConfigRegistry, LiveConfigSnapshot,
 };
 pub use secrets::{DefaultSecretResolver, SecretResolver};
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{
-    validate_keys, validate_section, validate_section_keys, ConfigValidationError, MissingKeyError,
+    validate_declared_keys, validate_declared_sections, validate_keys, validate_section,
+    validate_section_keys, ConfigValidationError, MissingKeyError, SectionValidator,
 };
 pub use value::{deserialize_value, ConfigValue, FromConfigValue};
 
