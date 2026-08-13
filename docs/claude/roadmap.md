@@ -35,7 +35,8 @@ bridge, proxy/streaming catch-all path, dynamic scheduled tasks, first-class
 multipart, config-derive expressiveness, serve lifecycle / awaited drain,
 auth-required without a phantom identity field, AI-facing DX. Full evidence
 per gap in the Tasker sub-tasks and in this file's git history (`6d880f6`).
-The **AI-facing-DX** sub-task is the one still clearly open.
+**All 8 sub-tasks and the umbrella #635 are CLOSED** (verified 2026-08-13) —
+kept here only as the pointer to the evidence base.
 
 ## W4 — Plugin serve-path e2e audit — OPEN
 
