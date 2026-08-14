@@ -25,6 +25,7 @@ members = [
     "r2e-oidc",
     "r2e-devtools",
     "r2e-static",
+    "r2e-tenant",
     "r2e-http",
     "r2e-cli",
     "r2e-test",
@@ -34,6 +35,7 @@ members = [
     "examples/example-app",
     "examples/example-postgres",
     "examples/example-multi-tenant",
+    "examples/example-multi-tenant-db",
     "examples/example-websocket-chat",
     "examples/example-grpc",
     "examples/example-microservice",
@@ -87,6 +89,7 @@ r2e-grpc-build = { path = "r2e-grpc/build", version = "0.1.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.1.0" }
 r2e-devtools = { path = "r2e-devtools", version = "0.1.0" }
 r2e-static = { path = "r2e-static", version = "0.1.0" }
+r2e-tenant = { path = "r2e-tenant", version = "0.1.0" }
 r2e-http = { path = "r2e-http", version = "0.1.0" }
 r2e-test = { path = "r2e-test", version = "0.1.0" }
 r2e-devservices = { path = "r2e-devservices", version = "0.1.0" }

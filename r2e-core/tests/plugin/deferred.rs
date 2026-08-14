@@ -16,7 +16,7 @@ fn make_deferred_context<'a>(
     serve_hooks: &'a mut Vec<Box<dyn FnOnce(ServeContext) + Send>>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
     async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
-    bean_context: &'a r2e_core::BeanContext,
+    bean_context: &'a std::sync::Arc<r2e_core::BeanContext>,
 ) -> DeferredContext<'a> {
     DeferredContext {
         layers,
@@ -44,7 +44,7 @@ fn deferred_context_add_layer() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
-    let bean_context = r2e_core::BeanContext::empty();
+    let bean_context = std::sync::Arc::new(r2e_core::BeanContext::empty());
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -66,7 +66,7 @@ fn deferred_context_wrap_router_is_separate_from_layers() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
-    let bean_context = r2e_core::BeanContext::empty();
+    let bean_context = std::sync::Arc::new(r2e_core::BeanContext::empty());
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -89,7 +89,7 @@ fn deferred_context_store_data() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
-    let bean_context = r2e_core::BeanContext::empty();
+    let bean_context = std::sync::Arc::new(r2e_core::BeanContext::empty());
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -117,7 +117,7 @@ fn deferred_context_on_serve() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
-    let bean_context = r2e_core::BeanContext::empty();
+    let bean_context = std::sync::Arc::new(r2e_core::BeanContext::empty());
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,
@@ -139,7 +139,7 @@ fn deferred_context_on_shutdown() {
     let mut serve_hooks = Vec::new();
     let mut shutdown_hooks = Vec::new();
     let mut async_shutdown_hooks = Vec::new();
-    let bean_context = r2e_core::BeanContext::empty();
+    let bean_context = std::sync::Arc::new(r2e_core::BeanContext::empty());
     let mut ctx = make_deferred_context(
         &mut layers,
         &mut router_wraps,

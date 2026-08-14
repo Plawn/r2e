@@ -13,7 +13,7 @@ mod ws;
 
 pub use app::{
     json_contains, resolve_path, tokenize_path, PathToken, SameSite, SetCookie, TestApp,
-    TestRequest, TestResponse,
+    TestRequest, TestResponse, TENANT_CLAIM, TENANT_HEADER,
 };
 pub use jwt::{TestJwt, TokenBuilder};
 pub use server::TestServer;

@@ -104,7 +104,7 @@ pub use crate::guards::{
 };
 pub use crate::interceptors::{Interceptor, InterceptorContext};
 pub use crate::managed::{
-    ManagedContext, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,
+    ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,
 };
 pub use crate::module::FeatureModule;
 pub use crate::pagination::{Page, Pageable};
@@ -113,6 +113,7 @@ pub use crate::plugins::{
     AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, NormalizePath,
     Tracing,
 };
+pub use crate::request_head::RequestHead;
 pub use crate::request_id::{RequestId, RequestIdPlugin};
 pub use crate::scheduled_source::ScheduledSource;
 pub use crate::secure_headers::SecureHeaders;

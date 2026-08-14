@@ -161,6 +161,65 @@ Remaining:
   the key, or use `#[config]`); listed here only so it is not "rediscovered" as
   a bug.
 
+## W14 — Multi-tenant bean routing — SHIPPED 2026-08-14
+
+Closes the last root-`todo` item ("avoir une feature pour router différents bean
+en fonction du tenant, type plusieurs DB — infra générique puis implem
+spécifique db"). Crate `r2e-tenant` (feature `tenant`, in `full`) + the
+`tenant` feature on both data backends. Reference: `docs/features/24-tenancy.md`
+(user guide), `docs/claude/subsystems.md` § Multi-tenancy (internals),
+`examples/example-multi-tenant-db` (end-to-end).
+
+Shipped:
+
+- **Generic infra.** `TenantResolver` / `SyncTenantResolver` (SPI #1) with
+  built-ins (`HeaderTenantResolver`, `PathTenantResolver`,
+  `ExtensionTenantResolver`, `FnTenantResolver`); `TenantSource<T>` (SPI #2)
+  with `TenantContext` cascade (`ctx.get::<U>()` resolves U **for the same
+  tenant**, single-flighted, cycle-detected with a named chain);
+  `Tenanted<T>` — single-flight create, no failure caching, bounded negative
+  cache, `create-timeout`, idle/LRU sweep with `dispose`, drain on shutdown,
+  `metrics()`/`stats()`/`evict()`/`invalidate()`/`preload()`.
+- **Compile-checked wiring.** `Tenant<T>` / `TenantId` are `FromRequestPartsVia`
+  + `ViaBean` (never axum `FromRequestParts` — pinned by
+  `assert_unambiguous_extractor` probes), so a missing `Tenancy` / `PerTenant`
+  plugin is a compile error at `register_controllers`, not a 500 on the first
+  request from the first tenant. Compile-fail cases in
+  `r2e-compile-tests/cases/tenancy/fail/`.
+- **DB-specific impl.** `tenant-sqlx` / `tenant-diesel`: `TenantPools<..>`,
+  `PoolSource` (tenant → DSN → pool), `TenantTx` — a `#[managed]` transaction on
+  the requesting tenant's pool needing **no** controller field, because
+  `TenantPool`'s `TxSource::Deps` list `TenantRouter` + `TenantPools<..>`.
+- **`TenantId` parsed, never deserialized** — no `Deserialize` impl, so a value
+  that picks a database/schema/bucket cannot arrive in a request body and skip
+  validation.
+- Config `tenancy.*` (precedence: `PerTenant` builder > file > default),
+  `TenantError` → one status per failure mode (400/404/503/504/500, the
+  request-driven three configurable), `tenancy.enabled: false` boots inert
+  rather than requiring code deletion, test helpers `.as_tenant()` /
+  `.as_tenant_user()`.
+
+Deferred, with the reason (do not re-propose without addressing it):
+
+- **Per-tenant migrations on the request path.** Documented as out of scope in
+  both backends' `tenant` module docs. To be correct it belongs inside the
+  single-flight cell (so N concurrent first requests migrate once), which puts
+  it under `tenancy.create-timeout` — a migration set slower than that budget
+  surfaces as a 504 for whichever tenant triggered it. Until that interaction is
+  designed, tenants migrate from the provisioning path.
+- **B4-style watch re-spawn / distributed negative cache.** The negative cache
+  and the sweep are per-process; a multi-process deployment remembers unknown
+  tenants independently. Fine at `negative-ttl` scale, would need a shared
+  backend to be more.
+- **No `Tenanted` metrics exporter.** `TenantedMetrics` / `TenantStats` are
+  plain data with no `Serialize` and no Prometheus wiring — deliberate (no serde
+  in a bean's public surface); apps expose what they want, as
+  `example-multi-tenant-db`'s `/admin/pools` does in a few lines.
+- **`#[inject(request)]` is still not modeled in OpenAPI**, so `Tenant<T>` /
+  `TenantId` fields do not appear in the spec. Pre-existing gap, not
+  tenancy-specific.
+- **No CLI surface** (`r2e generate` scaffolding for a resolver/source).
+
 ## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed

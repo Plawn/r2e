@@ -40,6 +40,8 @@ fn make_ctx<'a, I: Identity>(
     GuardContext {
         method_name: "test_method",
         controller_name: "TestController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers,
         uri,
         peer_addr: None,

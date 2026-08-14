@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -147,6 +147,7 @@ compile-time checking and framework integration.
 | Pub/sub between components | Channels wired by hand | `EventBus` (`.emit()`) + `#[consumer]` methods |
 | Ask another component for a result | Oneshot channels / shared state | `EventBus` `.request()` / `.respond()` (or a `#[consumer]` with a return value) |
 | Test the app | Re-declaring routers in tests | `#[r2e::test(app = my_app::MyApp)]` — boots the real `App` |
+| A pool/client **per tenant** | A `HashMap<String, Pool>` in shared state | `#[inject(request)] db: Tenant<PgPool>` + `Tenancy`/`PerTenant` plugins (feature `tenant`) |
 
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
 integration for control): 1. `#[any]`/`#[fallback]` controller routes →
@@ -957,10 +958,13 @@ async fn protected(&self) -> Json<Data> { ... }
 #[guard(RequireApiKey("x-api-key"))]
 ```
 
-`GuardContext` provides: `method_name`, `controller_name`, `headers`, `uri`
-(`.path()`, `.query_string()`), `path_params` (`path_param()`,
-`parse_path_param()`), `identity: Option<&I>`, plus `identity_sub()`,
-`identity_email()`, `identity_claims()`. Error helper: `GuardError::forbidden(...)`,
+`GuardContext` provides: `method_name`, `controller_name`, `method`, `headers`,
+`uri` (`.path()`, `.query_string()`), `extensions`, `peer_addr`, `path_params`
+(`path_param()`, `parse_path_param()`), `identity: Option<&I>`, plus
+`identity_sub()`, `identity_email()`, `identity_claims()`, and `head()` (the
+same `RequestHead` view `#[managed]` resources get). Building one by hand (rare
+— outside a request) can use `default_method()` / `no_extensions()`.
+Error helper: `GuardError::forbidden(...)`,
 `GuardError::unauthorized(...)`, `GuardError::new(status, msg)`.
 
 ### Bean-reading guard — `#[derive(DecoratorBean)]`
@@ -1470,6 +1474,64 @@ beans by type: `state.bean::<T>()`), error type `ManagedErr<HttpError>`.
 `#[managed]` is the only transaction attribute (the legacy `#[transactional]`
 body wrapper was removed).
 
+Every `#[managed]` type must also implement `ManagedDeps`, listing the beans
+`acquire()` looks up. There is no blanket impl: `#[routes]` folds each
+`#[managed]` parameter type's `Deps` into the controller's dependency list, so a
+bean that was never provided is a compile error at `register_controller()`
+instead of a 500 on the first request. A resource that reads no bean says
+`type Deps = TNil;`.
+
+`ManagedContext<'_, S>` (passed to `acquire`) carries:
+
+- `state: &S`, `controller: &'static str`, `handler: &'static str`
+- `request: Option<RequestHead<'_>>` — the incoming request head, `Some` on HTTP
+  routes, `None` off-request. Use `context.require_request()?` (uniform 500
+  naming `controller::handler`) rather than unwrapping.
+- `missing_bean(prefix, bean, hint) -> ManagedErr<HttpError>` — uniform
+  "bean not provided" error.
+
+`RequestHead<'a>` is a `Copy` bundle of borrows: fields `method: &Method`,
+`uri: &Uri`, `headers: &HeaderMap`, `extensions: &Extensions`,
+`path_params: PathParams<'a>`, `peer_addr: Option<SocketAddr>`; helpers
+`path()`, `query_string()`, `header(name)`, `path_param(name)`, `host()`
+(`Host` header, else URI authority), `extension::<T>()`. Guards see the same
+view through `GuardContext::head()`.
+
+```rust
+use r2e::{ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedResource, TNil};
+
+pub struct TenantAudit { tenant: String }
+
+impl<S: Send + Sync> ManagedResource<S> for TenantAudit {
+    type Error = ManagedErr<HttpError>;
+
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        let head = context.require_request()?;              // 500 off-request
+        let tenant = head.header("x-tenant")
+            .or_else(|| head.path_param("tenant"))
+            .ok_or_else(|| ManagedErr(HttpError::BadRequest("tenant missing".into())))?;
+        Ok(Self { tenant: tenant.to_string() })
+    }
+
+    async fn finalize(&mut self, _outcome: &ManagedOutcome) -> Result<(), Self::Error> { Ok(()) }
+    fn abort(&mut self) {}
+}
+
+impl ManagedDeps for TenantAudit {
+    type Deps = TNil;                                       // reads no bean
+}
+```
+
+The head is available on every HTTP handler shape (plain, `#[guard]`ed,
+`#[intercept]`ed, and `#[anonymous]` routes on an identity controller). SSE and
+WebSocket handlers do not acquire managed resources.
+
+For `r2e-data-sqlx`/`r2e-data-diesel`, `TxSource` declares which pool bean its
+transactions need — `type Deps` is `TCons<Pool<DB>, TNil>` for `FixedPool`
+(`Tx`) and `TCons<DbPool<DB>, TNil>` for `RotatingPool` (`DbTx`) — and
+`ManagedTx` forwards it (`type Deps = Src::Deps`). Using `Tx` without providing
+the pool no longer compiles.
+
 For rotating credentials/URLs, produce `DbPool<DB>` from a live
 `LiveConfig<String>` and mark the producer `start`:
 
@@ -1514,6 +1576,14 @@ which stays alive (and usable) until its last handle/connection goes away —
 r2d2 pools are never explicitly closed, so there is no closed-pool window and
 no retry. It exposes the same atomic
 `snapshot() -> (Pool<ConnectionManager<Conn>>, u64)`.
+
+Diesel's `TxSource::acquire_pool` is **async** (`fn acquire_pool<S>(&ManagedContext) ->
+impl Future<Output = Result<(Pool<ConnectionManager<Conn>>, Self::Meta), ManagedErr<HttpError>>> + Send`):
+a per-tenant source may have to *create* the tenant's pool there, which is
+network-bound. Custom sources written against the old blocking signature just
+become `async fn`. `TxSource::Meta` is `Clone + Send + Sync + 'static` (was
+`Copy`), and `ManagedTx::meta()` is the generic accessor behind
+`generation()` / `tenant()`.
 
 ```rust
 use r2e_data_diesel::{DbPool, DbTx};
@@ -1956,6 +2026,336 @@ async fn list_paged(&self, Query(pageable): Query<Pageable>) -> JsonResult<Page<
 
 ---
 
+## Multi-Tenancy (per-tenant beans)
+
+Requires feature: `tenant` (crate `r2e-tenant`, re-exported as `r2e::tenant`).
+
+One process, many tenants, each with its **own** pool / client / cache
+namespace — resolved from the request, created on first use, evicted when idle.
+Three pieces:
+
+| Piece | What it is | Who writes it |
+|---|---|---|
+| `TenantResolver` | request → `TenantId` | you, or a built-in (`HeaderTenantResolver`, …) |
+| `TenantSource<T>` | tenant → `T` | you |
+| `Tenanted<T>` | the map holding every tenant's `T` | the framework |
+
+```rust
+use r2e::tenant::{HeaderTenantResolver, PerTenant, Tenancy, Tenant, TenantContext,
+                  TenantId, TenantSource, BoxError, BoxFuture};
+
+// 1. how a tenant gets its pool
+pub struct PoolDirectory { directory: Directory }
+
+impl TenantSource<PgPool> for PoolDirectory {
+    fn create<'a>(&'a self, tenant: &'a TenantId, ctx: &'a TenantContext<'a>)
+        -> BoxFuture<'a, Result<Option<PgPool>, BoxError>> {
+        Box::pin(async move {
+            let Some(url) = self.directory.dsn(tenant).await? else {
+                return Ok(None);            // Ok(None) = unknown tenant → 404
+            };
+            Ok(Some(PgPool::connect(&url).await?))
+        })
+    }
+    // optional: fn dispose(&self, tenant, value) -> BoxFuture<'_, ()>
+}
+
+// 2. wiring: two pre-state plugins
+AppBuilder::new()
+    .provide(HeaderTenantResolver::default())            // x-tenant-id
+    .plugin(Tenancy::resolver::<HeaderTenantResolver>()) // provides TenantRouter
+    .provide(PoolDirectory { directory })
+    .plugin(PerTenant::<PgPool>::from::<PoolDirectory>() // provides Tenanted<PgPool>
+        .max_active(200)
+        .idle_ttl(Duration::from_secs(600)))
+```
+
+Using it is a **request-scoped controller field** (`#[inject(request)]` is a
+field attribute, not a handler-parameter one):
+
+```rust
+#[controller(path = "/orders")]
+struct OrderController {
+    #[inject(request)] db: Tenant<PgPool>,        // this request's tenant's pool
+    #[inject(request)] tenant: TenantId,          // just the id (provisions nothing)
+    // Option<Tenant<T>> / Option<TenantId> = "no tenant" (never "bad tenant")
+}
+
+#[routes]
+impl OrderController {
+    #[get("/")]
+    async fn list(&self) -> JsonResult<Vec<Order>> {
+        Ok(Json(sqlx::query_as("select * from orders").fetch_all(&*self.db).await?))
+    }
+}
+```
+
+`Tenant<T>` derefs to `T` and exposes `.tenant_id()`. Both extractors read beans
+out of the HList state, so **forgetting a plugin is a compile error** at
+`register_controller::<C>()`, not a 500 in production. Neither implements axum's
+`FromRequestParts` (bridge-overlap invariant) — they are `#[inject(request)]`
+fields only. The resolved id is memoized in the request extensions: guards,
+extractors and `#[managed]` resources of one request resolve once.
+
+**Resolvers** (`TenantResolver`, async; `SyncTenantResolver` is the blanket-bridged
+sync form): `HeaderTenantResolver::default()` (`x-tenant-id`) or `::new("x-org")`,
+`PathTenantResolver::new("org")` (path param), `ExtensionTenantResolver::new(|e: &MyClaims| ...)`,
+`FnTenantResolver::new(|req: &RequestHead<'_>| ...)`. `Ok(None)` = "no tenant here";
+what happens then is `tenancy.on-missing`'s call, not the resolver's. A JWT-claim
+or subdomain resolver is ~10 lines of `SyncTenantResolver` — see the `resolver`
+module docs.
+
+**Cascade**: a source receives a `TenantContext` and can build on the *same*
+tenant's other per-tenant resources — `ctx.get::<U>().await?` (lazy,
+single-flighted, cycle-detected, names the chain on a cycle) and
+`ctx.bean::<U>()` for app-scoped beans, plus `ctx.tenant()`.
+
+```yaml
+tenancy:
+  enabled: true          # false → app boots, nothing resolves (inert shells)
+  on-missing: reject     # or `allow` (Option extractors then see None)
+  missing-status: 400    # unknown-status: 404, unavailable-status: 503
+  max-active: 500        # live resources per map, LRU beyond
+  idle-ttl: 15m          # evict + dispose after this idleness (0 = never)
+  create-timeout: 10s    # per `create` call; blowing it is a 504 (0 = none)
+  negative-ttl: 5s       # how long an unknown tenant is remembered (0 = none)
+```
+
+Precedence: `PerTenant` builder > `tenancy.*` file > built-in default.
+Builder: `.max_active(n)`, `.idle_ttl(d)`, `.keep_forever()`, `.create_timeout(d)`,
+`.negative_ttl(d)`, `.eager([ids])` (preload at serve), `.fallback_to_default()`
+(a tenant the source returns `Ok(None)` for gets the app-scoped `T` bean — which
+is never disposed; adds `T` to the plugin's `Deps`).
+
+`TenantError` → status: missing 400 · unknown 404 · unavailable 503 · timeout 504
+· cycle / no-resolver / no-source 500 (wiring bugs). The first three are
+configurable.
+
+Runtime API on the `Tenanted<T>` bean (`#[inject] map: Tenanted<PgPool>`):
+`get(&id).await` (create-or-cached, single-flight), `peek(&id)`, `active()`,
+`stats()`, `metrics()`, `evict(&id).await` (drops and awaits disposal),
+`invalidate(&id)` (drops now, disposes in the background), `sweep().await`,
+`preload(ids).await`, `drain().await` (shutdown, wired automatically). Failures
+are **not** cached; unknown tenants are negative-cached for `negative-ttl`,
+cleared as soon as the tenant becomes known.
+
+### Per-tenant SQLx pools & transactions
+
+Requires feature: `tenant-sqlx` (+ a driver: `sqlx-sqlite` / `sqlx-postgres` /
+`sqlx-mysql`). Database-per-tenant, with the same commit/rollback lifecycle as
+`Tx`, on the requesting tenant's pool.
+
+| Type | What it is |
+|---|---|
+| `TenantPools<DB>` | the bean — alias for `Tenanted<Pool<DB>>` |
+| `PoolSource<DB>` | ready-made `TenantSource<Pool<DB>>`: tenant → DSN → pool |
+| `TenantTx<'_, DB>` | the `#[managed]` transaction on that tenant's pool |
+| `TenantPool<DB>` | its `TxSource` marker (rarely named directly) |
+
+```rust
+use r2e::tenant::{HeaderTenantResolver, PerTenant, Tenancy};
+use r2e::r2e_data_sqlx::{PoolSource, TenantTx};
+use sqlx::{Pool, Postgres};
+
+AppBuilder::new()
+    .provide(HeaderTenantResolver::default())              // x-tenant-id
+    .plugin(Tenancy::resolver::<HeaderTenantResolver>())
+    // tenant → DSN. Ok(None) = unknown tenant (404), Err = directory down (503).
+    .provide(PoolSource::<Postgres>::new(move |tenant| {
+        let master = master.clone();
+        async move {
+            Ok(sqlx::query_scalar("SELECT dsn FROM tenants WHERE slug = $1")
+                .bind(tenant.as_str())
+                .fetch_optional(&master)
+                .await?)
+        }
+    }).max_connections(4))                                 // per tenant!
+    .plugin(PerTenant::<Pool<Postgres>>::from::<PoolSource<Postgres>>()
+        .max_active(200))                                  // caps total connections
+
+#[post("/orders")]
+async fn create(&self, #[managed] tx: &mut TenantTx<'_, Postgres>)
+    -> Result<StatusCode, HttpError> {
+    sqlx::query("INSERT INTO orders(name) VALUES ($1)")
+        .bind("Ada").execute(tx.connection()).await?;
+    tx.tenant();                                // which tenant this ran for
+    Ok(StatusCode::CREATED)                     // commits on that tenant's database
+}
+```
+
+The route declares **nothing** beyond the `#[managed]` parameter: `TenantPool`
+lists `TenantRouter` + `TenantPools<DB>` in its `TxSource::Deps`, so a missing
+`Tenancy` / `PerTenant` plugin is a compile error at `register_controller`. A
+`#[inject(request)] tenant: TenantId` / `Tenant<Pool<DB>>` field is optional —
+when present, the transaction reuses the tenant it already resolved.
+`PoolSource::sync(|tenant| ...)` for a lookup that needs no `.await`;
+`.with_options(PgPoolOptions::new()...)` for full pool control. `dispose` closes
+an evicted tenant's pool. A changed DSN is `pools.invalidate(&tenant)` (no
+`DbPool`-style rotation involved). Per-tenant **migrations are out of scope** —
+run them from your provisioning path, not the request path. In tests:
+`app.post("/orders").as_tenant("acme")` (header) or
+`.as_tenant_user("alice", "acme", &["admin"])` (header + `tenant` JWT claim).
+
+### Per-tenant Diesel pools & transactions
+
+Requires feature: `tenant-diesel` (+ a driver: `diesel-sqlite` /
+`diesel-postgres` / `diesel-mysql`). The same shapes as the SQLx version, over
+r2d2 pools and keyed by the **connection type** (`Conn`), not a `DB` marker.
+
+| Type | What it is |
+|---|---|
+| `TenantPools<Conn>` | the bean — alias for `Tenanted<Pool<ConnectionManager<Conn>>>` |
+| `PoolSource<Conn>` | ready-made `TenantSource<Pool<ConnectionManager<Conn>>>`: tenant → DSN → pool |
+| `TenantTx<Conn>` | the `#[managed]` transaction on that tenant's pool (no lifetime param) |
+| `TenantPool<Conn>` | its `TxSource` marker (rarely named directly) |
+
+```rust
+use r2e::r2e_data_diesel::{PoolSource, TenantTx};
+use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::PgConnection;
+
+// Resolver wiring is identical to the SQLx block above.
+AppBuilder::new()
+    // tenant → DSN. Ok(None) = unknown tenant (404), Err = directory down (503).
+    .provide(PoolSource::<PgConnection>::new(move |tenant| {
+        let master = master.clone();
+        async move { Ok(master.dsn_for(tenant.as_str()).await?) }
+    }).max_connections(4))                                 // per tenant!
+    .plugin(PerTenant::<Pool<ConnectionManager<PgConnection>>>::from::<PoolSource<PgConnection>>()
+        .max_active(200))                                  // caps total connections
+
+#[post("/orders")]
+async fn create(&self, #[managed] tx: &mut TenantTx<PgConnection>)
+    -> Result<StatusCode, HttpError> {
+    tx.run(|c| diesel::insert_into(orders::table).values(&new).execute(c)).await?;
+    tx.tenant();                                // which tenant this ran for
+    Ok(StatusCode::CREATED)                     // commits on that tenant's database
+}
+```
+
+Same compile-time guarantee (`TenantPool` lists `TenantRouter` +
+`TenantPools<Conn>` in its `TxSource::Deps`), same memoized tenant, same
+negative caching, same migrations deferral. Differences from the SQLx source:
+`PoolSource::with_factory(|dsn| ...)` replaces `with_options` (r2d2's `Builder`
+is not clonable), pools are built inside `spawn_blocking`, and there is **no**
+`dispose` — r2d2 pools have no close, so an evicted tenant's pool is released by
+`Drop` once its last handle and connection go away.
+
+### End-to-end (database-per-tenant)
+
+The whole shape in one app: a resolver, the framework's `PoolSource`, a cascaded
+per-tenant client, a fallback resource, and the maps as ops beans. Runnable
+version: `examples/example-multi-tenant-db` (feature `tenant-sqlx`).
+
+```rust
+use r2e::prelude::*;
+use r2e::r2e_data_sqlx::{PoolSource, TenantPools, TenantTx};
+use r2e::tenant::{BoxError, BoxFuture, PerTenant, SyncTenantResolver, Tenancy,
+                  Tenant, TenantContext, TenantId, TenantSource};
+use sqlx::{Pool, Sqlite};
+
+// ── SPI #1: request → tenant ───────────────────────────────────────────────
+#[derive(Clone, Default)]
+pub struct HeaderResolver;
+
+impl SyncTenantResolver for HeaderResolver {
+    fn resolve_sync(&self, req: &RequestHead<'_>) -> Result<Option<TenantId>, HttpError> {
+        match req.header("x-tenant-id") {
+            None => Ok(None),                       // → `tenancy.on-missing` decides
+            Some(raw) => TenantId::parse(raw).map(Some)
+                .map_err(|e| HttpError::bad_request(format!("invalid tenant: {e}"))),
+        }
+    }
+}
+
+// ── SPI #2: a per-tenant client built on the SAME tenant's pool (cascade) ──
+#[derive(Clone)]
+pub struct ApiClient { tenant: TenantId, token: String, db: Pool<Sqlite> }
+
+#[derive(Clone, Default)]
+pub struct ApiClients;
+
+impl TenantSource<ApiClient> for ApiClients {
+    fn create<'a>(&'a self, tenant: &'a TenantId, ctx: &'a TenantContext<'a>)
+        -> BoxFuture<'a, Result<Option<ApiClient>, BoxError>> {
+        Box::pin(async move {
+            let db = ctx.get::<Pool<Sqlite>>().await?;          // this tenant's pool
+            let master = ctx.bean::<MasterDb>().ok_or("MasterDb not provided")?;
+            let Some(token) = master.api_token(tenant.as_str()).await? else {
+                return Ok(None);                                // unknown → 404
+            };
+            Ok(Some(ApiClient { tenant: tenant.clone(), token, db }))
+        })
+    }
+}
+
+// ── Wiring ─────────────────────────────────────────────────────────────────
+impl App for MultiTenantDbApp {
+    type Env = AppEnv;
+
+    async fn setup() -> AppEnv { AppEnv { master: provision().await } }
+
+    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+        let master = env.master.clone();
+        let pool_source = PoolSource::<Sqlite>::new(move |tenant| {
+            let master = master.clone();
+            async move { Ok(master.dsn(tenant.as_str()).await?) }
+        }).max_connections(2);                        // per tenant!
+
+        b.load_config::<()>()
+            .provide(env.master)
+            .provide(HeaderResolver)
+            .plugin(Tenancy::resolver::<HeaderResolver>())
+            .provide(pool_source)
+            .plugin(PerTenant::<Pool<Sqlite>>::from::<PoolSource<Sqlite>>()
+                .max_active(16)                       // 16 × 2 = 32 connections
+                .idle_ttl(Duration::from_secs(300)))
+            .provide(ApiClients)
+            .plugin(PerTenant::<ApiClient>::from::<ApiClients>().max_active(16))
+            .provide(Branding::shared())              // the fallback value
+            .provide(Brandings)
+            .plugin(PerTenant::<Branding>::from::<Brandings>().fallback_to_default())
+            .build_state().await
+            .with(Health)
+            .register_controllers::<(NotesController, ClientController, AdminController)>()
+    }
+}
+
+// ── Using it: no controller names a tenant ─────────────────────────────────
+#[controller(path = "/notes")]
+pub struct NotesController;                           // no fields at all
+
+#[routes]
+impl NotesController {
+    #[get("/")]
+    async fn list(&self, #[managed] tx: &mut TenantTx<'_, Sqlite>)
+        -> Result<Json<Vec<String>>, HttpError> {
+        Ok(Json(sqlx::query_scalar("SELECT body FROM notes")
+            .fetch_all(tx.connection()).await?))
+    }
+}
+
+#[controller(path = "/client")]
+pub struct ClientController {
+    #[inject(request)] client: Tenant<ApiClient>,     // cascaded, per request
+}
+
+#[controller(path = "/admin")]
+pub struct AdminController {
+    #[inject] pools: TenantPools<Sqlite>,             // the map is a plain bean
+}
+```
+
+```bash
+curl -H 'x-tenant-id: acme'   localhost:3000/notes   # acme's own database
+curl -H 'x-tenant-id: globex' localhost:3000/notes   # globex's own database
+curl localhost:3000/notes                            # 400 — no tenant
+curl -H 'x-tenant-id: ghost'  localhost:3000/notes   # 404 — unknown tenant
+curl localhost:3000/admin/pools                      # active / stats / metrics
+```
+
+---
+
 ## OpenAPI
 
 Requires feature: `openapi`. Generates OpenAPI 3.1.0; users add `schemars = "1"`
@@ -2376,7 +2776,11 @@ Explicit form (turbofish TYPE args): `TestApp::boot::<my_app::MyApp>().await`,
 `TestApp::boot_with::<my_app::MyApp>(|b| ...).await`,
 `TestApp::boot_plain::<my_app::MyApp>(|b| ...).await`. Boot forces the `test`
 profile (`application-test.yaml` overlays) and wires a `TestJwt` validator so
-`.as_user(sub, &roles)` mints valid Bearer tokens.
+`.as_user(sub, &roles)` mints valid Bearer tokens. For multi-tenant apps:
+`.as_tenant("acme")` (sets the `x-tenant-id` header; also on `TestSession`
+requests) and `.as_tenant_user("alice", "acme", &["admin"])` (Bearer token with
+a `tenant` claim **and** the header, so header- and claim-based resolvers both
+work). The constants are `r2e_test::{TENANT_HEADER, TENANT_CLAIM}`.
 
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
@@ -2547,7 +2951,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], GrpcServer, OidcServer, Prometheus) |
+| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], GrpcServer, OidcServer, Prometheus, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | pre-state | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
 | `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |

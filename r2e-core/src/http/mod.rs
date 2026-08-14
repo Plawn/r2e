@@ -8,7 +8,7 @@ pub use r2e_http::multipart;
 pub use r2e_http::quic;
 
 pub use r2e_http::{
-    serve, Body, Bytes, ConnectInfo, DefaultBodyLimit, Error, Extension, Form, FromRef,
+    serve, Body, Bytes, ConnectInfo, DefaultBodyLimit, Error, Extension, Extensions, Form, FromRef,
     FromRequest, FromRequestParts, HeaderMap, HeaderName, HeaderValue, Html, IntoResponse, Json,
     ListenerExt, MatchedPath, Method, OptionalFromRequestParts, OriginalUri, Parts, Path, Query,
     RawPathParams, Redirect, Request, Response, Router, Sse, SseEvent, SseKeepAlive, State,

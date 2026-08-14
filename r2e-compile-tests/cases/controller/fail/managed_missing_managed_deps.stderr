@@ -1,0 +1,18 @@
+error[E0277]: `Audit` does not implement `ManagedDeps`
+  --> cases/controller/fail/managed_missing_managed_deps.rs:29:1
+   |
+29 | #[routes]
+   | ^^^^^^^^^ this `#[managed]` type must declare its bean dependencies
+   |
+help: the trait `ManagedDeps` is not implemented for `Audit`
+  --> cases/controller/fail/managed_missing_managed_deps.rs:8:1
+   |
+ 8 | pub struct Audit;
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `ManagedDeps` for `Audit`: `type Deps = TNil;` when `acquire` reads no bean, or `type Deps = TCons<TheBean, TNil>;` listing every bean it looks up
+help: the trait `ManagedDeps` is implemented for `ManagedTx<'a, DB, Src>`
+  --> $WORKSPACE/r2e-data/backends/sqlx/src/tx.rs
+   |
+   | impl<'a, DB: Database, Src: TxSource<DB>> ManagedDeps for ManagedTx<'a, DB, Src> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

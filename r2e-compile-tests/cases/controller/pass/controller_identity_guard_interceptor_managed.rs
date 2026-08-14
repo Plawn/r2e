@@ -2,7 +2,7 @@ use r2e::prelude::*;
 use r2e::r2e_security::{AuthenticatedUser, JwtClaimsValidator};
 use r2e::{
     Guard, GuardContext, HttpError, Interceptor, InterceptorContext, ManagedContext, ManagedErr,
-    ManagedOutcome, ManagedResource,
+    ManagedDeps, ManagedOutcome, ManagedResource,
 };
 use std::future::Future;
 use std::sync::Arc;
@@ -59,6 +59,10 @@ impl<S: Send + Sync> ManagedResource<S> for RequestResource {
     }
 
     fn abort(&mut self) {}
+}
+
+impl ManagedDeps for RequestResource {
+    type Deps = r2e::TNil;
 }
 
 #[controller(path = "/combined")]

@@ -168,6 +168,24 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
         self.bearer(&token)
     }
 
+    /// Authenticate as `sub` and name the tenant, in both the JWT claim and the
+    /// `x-tenant-id` header (see [`TestRequest::as_tenant_user`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (see [`TestApp::test_jwt`]).
+    pub fn as_tenant_user(self, sub: &str, tenant: &str, roles: &[&str]) -> Self {
+        let token = self
+            .session
+            .app
+            .test_jwt()
+            .token_builder(sub)
+            .roles(roles)
+            .claim(crate::TENANT_CLAIM, tenant)
+            .build();
+        self.bearer(&token).as_tenant(tenant)
+    }
+
     /// Send the request and return the response.
     ///
     /// Cookies from the session jar are included automatically.

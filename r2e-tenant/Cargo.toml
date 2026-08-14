@@ -1,0 +1,25 @@
+[package]
+name = "r2e-tenant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["multi-tenant", "tenancy", "saas", "routing"]
+categories = ["web-programming"]
+description = "Multi-tenant bean routing for R2E - per-tenant resource maps, resolvers, and extractors"
+
+[dependencies]
+r2e-core = {workspace = true}
+dashmap = {workspace = true}
+tokio = {workspace = true, features = ["sync", "time", "rt"]}
+tokio-util = {workspace = true}
+tracing = {workspace = true}
+serde = {workspace = true}
+
+[dev-dependencies]
+tokio = {workspace = true, features = ["full"]}
+tower = {workspace = true, features = ["util"]}
+http-body-util = {workspace = true}
+serde_json = {workspace = true}

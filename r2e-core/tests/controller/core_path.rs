@@ -158,6 +158,10 @@ impl<S: Send + Sync> ManagedResource<S> for ManagedToken {
     fn abort(&mut self) {}
 }
 
+impl r2e_core::ManagedDeps for ManagedToken {
+    type Deps = r2e_core::TNil;
+}
+
 #[controller]
 struct ManagedController {
     #[inject]

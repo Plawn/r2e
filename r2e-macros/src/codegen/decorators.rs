@@ -610,7 +610,28 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     exprs
 }
 
-/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block.
+/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block,
+/// plus the [`ManagedDeps`] of every distinct `#[managed]` parameter type.
+///
+/// Managed resources resolve their collaborators dynamically inside `acquire`
+/// (`state.bean::<T>()`), which cannot fail at compile time — folding
+/// `<Ty as ManagedDeps>::Deps` in here is what turns "pool was never provided"
+/// from a runtime 500 into a `register_controller` compile error.
 pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
-    endpoint_deps_fold(&def.controller_name, controller_site_exprs(def))
+    let krate = r2e_core_path();
+    let mut deps = endpoint_deps_fold(&def.controller_name, controller_site_exprs(def));
+    let mut seen = std::collections::HashSet::new();
+    for rm in &def.route_methods {
+        for mp in &rm.managed_params {
+            let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+            if seen.insert(quote!(#ty).to_string()) {
+                deps = quote! {
+                    <#deps as #krate::type_list::TAppend<
+                        <#ty as #krate::ManagedDeps>::Deps,
+                    >>::Output
+                };
+            }
+        }
+    }
+    deps
 }

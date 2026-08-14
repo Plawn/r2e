@@ -1,0 +1,16 @@
+app:
+  name: "example-multi-tenant-db"
+
+# Every knob of the tenancy layer, at its default value. Per-resource overrides
+# live on the `PerTenant` builder in `src/app.rs` and always win over this file.
+tenancy:
+  enabled: true          # false → the app still boots and compiles; nothing resolves
+  on-missing: reject     # or `allow` (Option<Tenant<T>> then yields None)
+  missing-status: 400    # no tenant in the request
+  unknown-status: 404    # the source said `Ok(None)`
+  unavailable-status: 503 # the source said `Err(..)`
+  max-active: 500        # live per-tenant resources per map, LRU beyond
+  idle-ttl: 15m          # evict + dispose after this much idleness
+  create-timeout: 10s    # budget for one `create` call; blowing it is a 504
+  negative-ttl: 5s       # how long an unknown tenant is remembered
+  max-negative: 1024     # cap on remembered unknown tenants

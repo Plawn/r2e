@@ -475,6 +475,94 @@ impl AdminController {
 - CRUD models and queries remain application-owned and use SQLx or Diesel
   directly.
 
+## Multi-tenancy (r2e-tenant)
+
+User-facing guide: `docs/features/24-tenancy.md`. This section is the internals.
+
+**Module map.** `id` (`TenantId`), `resolver` (SPI #1), `source` (SPI #2 +
+`TenantContext`), `map` (`Tenanted<T>`), `router` (`TenantRouter`), `extract`
+(`Tenant<T>` / `TenantId` extractors), `plugin` (`Tenancy`, `PerTenant`),
+`config` (`TenancyConfig`), `error` (`TenantError` → status).
+
+**Two plugins, both `PreStatePlugin`, both two-phase.** `install` provides a
+`Late`-backed *shell* (`TenantRouter::unwired()` / `Tenanted::unwired()`);
+`configure` fills it once the graph holds the resolver / source bean. That split
+is the whole trick: the resolver and the source are ordinary beans with their
+own `#[inject]` dependencies, while the beans controllers *demand*
+(`TenantRouter`, `Tenanted<T>`) exist early enough to be in the state type.
+Resolving through an unfilled shell is `TenantError::NoResolver` /
+`TenantError::NoSource` (500 — a wiring bug that only reachable code paths hit).
+`Tenancy` declares `Deps = (R,)`; `PerTenant` declares `Deps = (Src,)`, and
+`.fallback_to_default()` switches the impl to `Deps = (Src, T)` so the fallback
+bean is compile-checked (the `DefaultFallback` / `NoFallback` marker parameter
+selects which `PreStatePlugin` impl applies).
+
+**`TenantRouter` is the "tenancy is installed" witness.** One bean, one
+`TypeId`, no generics — required by every per-tenant extractor and every
+per-tenant `#[managed]` resource. It owns the resolver, the
+`MissingTenantPolicy`, the configured `TenantStatuses`, and the per-request
+memo: the first component to resolve parks the `TenantId` in
+`parts.extensions`, so extractor + guards + managed resources of one request
+resolve at most once (`TenantRouter::memoized(head)` reads it back).
+
+**Extractors are `FromRequestPartsVia`, never axum's `FromRequestParts`.** Both
+read beans out of the HList state — `TenantRouter` always, plus `Tenanted<T>`
+for `Tenant<T>` — and the `HasBean` index witnesses cannot live on the impl
+(E0207), so they are parked in the `ViaBean` marker: `ViaBean<I>` for
+`TenantId`, `ViaBean<(I, J)>` for `Tenant<T>`. Consequences: a missing plugin
+is a compile error at `register_controllers`; and implementing axum's
+`FromRequestParts` too would make the marker ambiguous — that invariant is
+pinned by `assert_unambiguous_extractor` probes in `tests/tenant/extractor.rs`.
+`Option<Tenant<T>>` / `Option<TenantId>` (via `OptionalFromRequestPartsVia`)
+mean "no tenant", never "bad tenant".
+
+**`Tenanted<T>` invariants** (pinned by `tests/tenant/map.rs`):
+- *Single flight* — the `Arc<Slot<T>>` is cloned out of the `DashMap` **before**
+  any `.await` (a shard guard held across an await would deadlock the map);
+  creation runs inside `slot.cell.get_or_try_init` (`tokio::sync::OnceCell`).
+- *Failures are never cached* — an `Err` removes the empty slot, guarded by
+  `Arc::ptr_eq` so a concurrent retry's fresh slot is not stolen. A flood of
+  made-up ids therefore cannot accumulate slots.
+- *Unknown tenants are cached briefly* — `Ok(None)` is remembered for
+  `negative-ttl` (capped at `max-negative`); any later success clears it.
+- *Creation is bounded* — `create` runs under `create-timeout`; blowing it is a
+  504 and releases every waiter parked on the slot.
+- *Idle resources go away* — `Tenanted<T>` is itself a `ServiceComponent`
+  (`type Deps = TCons<Self, TNil>`) whose `start` loop sweeps: idle eviction,
+  LRU trim to `max-active`, negative purge, each returning a `SweepReport`;
+  shutdown `drain()`s. The `PerTenant` plugin starts it.
+
+**Cascade + cycle detection.** `TenantSource::create` receives a
+`TenantContext` carrying the tenant, an `Arc<BeanContext>`, and a
+`ResolutionChain` — a `Vec<(TypeId, &'static str)>` cloned per hop (a per-tenant
+graph is a handful of types deep, so the copy beats threading a borrow through
+boxed futures). `ctx.get::<U>()` pushes onto the chain and refuses a `TypeId`
+already in it, reporting `TenantError::Cycle` with a path-stripped chain
+(`A -> B -> A`; generic args are kept, so `Pool<Postgres>` and `Pool<Sqlite>`
+stay distinct). `ctx.bean::<U>()` is the app-scoped lookup, `ctx.chain()` the
+diagnostic string.
+
+**`TenantId` has no `Deserialize` impl, deliberately** — it is parsed at the
+edge (`[a-z0-9][a-z0-9._-]{0,62}`, `MAX_TENANT_ID_LEN` = 63) so a value that
+picks a database/schema/bucket cannot arrive inside a request body and skip
+validation. `Serialize` is one-way (returnable, not receivable). `Arc<str>`
+inside.
+
+**Backend integration.** `r2e-data-sqlx` / `r2e-data-diesel` gain `tenant.rs`
+under their own `tenant` feature: `TenantPools<..> = Tenanted<Pool<..>>`,
+`PoolSource` (a `TenantSource` doing tenant → DSN → pool), and a `TenantPool`
+`TxSource` marker whose `Deps` list `TenantRouter` + `TenantPools<..>` — which
+is why `#[managed] tx: &mut TenantTx<..>` needs no controller field and still
+fails to compile without the plugins. The Diesel side has no `dispose` (r2d2
+pools have no close) and builds pools in `spawn_blocking`.
+
+**Tests.** `r2e-tenant/tests/tenant/` — `id`, `resolver`, `map`, `cascade`,
+`extractor`, `plugin`, with shared `fixtures.rs`. Backend tests:
+`r2e-data/backends/{sqlx,diesel}/tests/tx/tenant.rs`. Compile-fail:
+`r2e-compile-tests/cases/tenancy/fail/`. Test helpers: `.as_tenant(id)` /
+`.as_tenant_user(sub, tenant, roles)` on `TestApp` requests and `TestSession`.
+End-to-end example: `examples/example-multi-tenant-db`.
+
 ## Cache (r2e-cache)
 
 `TtlCache<K, V>` — thread-safe TTL cache backed by `DashMap`. Supports get, insert, remove, clear, evict_expired.

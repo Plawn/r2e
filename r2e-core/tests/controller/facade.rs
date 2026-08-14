@@ -527,6 +527,10 @@ impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for Tx
     fn abort(&mut self) {}
 }
 
+impl r2e_core::ManagedDeps for Txn {
+    type Deps = r2e_core::TCons<Arc<Mutex<Vec<bool>>>, r2e_core::TNil>;
+}
+
 #[controller]
 struct ManagedIdentityController {
     #[inject(identity)]
@@ -600,6 +604,10 @@ impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for Fi
     }
 }
 
+impl r2e_core::ManagedDeps for FirstManaged {
+    type Deps = r2e_core::TCons<Arc<Mutex<Vec<&'static str>>>, r2e_core::TNil>;
+}
+
 impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for FailingFinalize {
     type Error = ManagedErr<r2e_core::HttpError>;
 
@@ -619,6 +627,10 @@ impl<S: r2e_core::type_list::BeanLookup + Send + Sync> ManagedResource<S> for Fa
     }
 }
 
+impl r2e_core::ManagedDeps for FailingFinalize {
+    type Deps = r2e_core::TCons<Arc<Mutex<Vec<&'static str>>>, r2e_core::TNil>;
+}
+
 impl<S: Send + Sync> ManagedResource<S> for FailingAcquire {
     type Error = ManagedErr<r2e_core::HttpError>;
 
@@ -631,6 +643,10 @@ impl<S: Send + Sync> ManagedResource<S> for FailingAcquire {
     }
 
     fn abort(&mut self) {}
+}
+
+impl r2e_core::ManagedDeps for FailingAcquire {
+    type Deps = r2e_core::TNil;
 }
 
 #[controller]

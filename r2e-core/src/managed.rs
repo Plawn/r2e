@@ -10,15 +10,22 @@ use crate::http::{
     response::{IntoResponse, Response},
     StatusCode,
 };
+use crate::request_head::RequestHead;
 use crate::HttpError;
 use std::{future::Future, marker::PhantomData};
 
-/// Static and application state made available while acquiring a resource.
+/// Static state, application state, and request head made available while
+/// acquiring a resource.
 #[derive(Debug, Clone, Copy)]
 pub struct ManagedContext<'a, S> {
     pub state: &'a S,
     pub controller: &'static str,
     pub handler: &'static str,
+    /// The incoming request head, when the resource is acquired on an HTTP
+    /// route. `None` for contexts built outside a request (tests, non-HTTP
+    /// adapters) — use [`require_request`](Self::require_request) rather than
+    /// unwrapping.
+    pub request: Option<RequestHead<'a>>,
 }
 
 impl<'a, S> ManagedContext<'a, S> {
@@ -28,7 +35,34 @@ impl<'a, S> ManagedContext<'a, S> {
             state,
             controller,
             handler,
+            request: None,
         }
+    }
+
+    /// Attach the request head. Called by generated handlers; the head is
+    /// extracted once per request and shared by every resource of the route.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn with_request(mut self, head: RequestHead<'a>) -> Self {
+        self.request = Some(head);
+        self
+    }
+
+    /// The request head, or a uniform 500 when this context was not built from
+    /// a request.
+    ///
+    /// A resource that reads the request (a tenant header, a path parameter, a
+    /// correlation id) is only usable on an HTTP route. Every such resource
+    /// fails the same way off-request, so the message shape lives here — the
+    /// same reasoning as [`missing_bean`](Self::missing_bean).
+    pub fn require_request(&self) -> Result<RequestHead<'a>, ManagedErr<HttpError>> {
+        self.request.ok_or_else(|| {
+            ManagedErr(HttpError::internal(format!(
+                "no request context available for {}::{}; this managed resource requires the \
+                 request head and can only be acquired on an HTTP route",
+                self.controller, self.handler,
+            )))
+        })
     }
 
     /// Build the "required bean not found" error for a resource acquired by
@@ -110,6 +144,39 @@ pub trait ManagedResource<S>: Sized + Send {
     /// infallible. Async resources should rely on their own drop-safe abort
     /// primitive here (for example SQLx transaction drop rollback).
     fn abort(&mut self);
+}
+
+/// Compile-time bean dependencies of a `#[managed]` resource type.
+///
+/// [`ManagedResource::acquire`] reads its collaborators dynamically
+/// ([`BeanLookup`](crate::BeanLookup)), which cannot fail at compile time — a
+/// pool that was never provided used to surface as a runtime 500 on the first
+/// request. `ManagedDeps` closes that hole: `#[routes]` folds every
+/// `#[managed]` parameter type's `Deps` into the controller's dependency list,
+/// so a missing bean is a compile error at `register_controller` instead.
+///
+/// There is deliberately **no blanket impl** — a resource that reads no bean
+/// must say so:
+///
+/// ```ignore
+/// impl ManagedDeps for AuditContext {
+///     type Deps = TNil;                        // state-only resource
+/// }
+///
+/// impl<DB: Database> ManagedDeps for MyTx<DB> {
+///     type Deps = TCons<Pool<DB>, TNil>;       // needs the pool bean
+/// }
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `ManagedDeps`",
+    label = "this `#[managed]` type must declare its bean dependencies",
+    note = "implement `ManagedDeps` for `{Self}`: `type Deps = TNil;` when `acquire` reads no bean, \
+            or `type Deps = TCons<TheBean, TNil>;` listing every bean it looks up"
+)]
+pub trait ManagedDeps {
+    /// Type-level list ([`TCons`](crate::TCons)/[`TNil`](crate::TNil)) of the
+    /// bean types [`ManagedResource::acquire`] looks up.
+    type Deps;
 }
 
 /// RAII wrapper used by generated handlers.

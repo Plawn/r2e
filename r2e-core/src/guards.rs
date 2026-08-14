@@ -1,7 +1,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use crate::http::response::Response;
-use crate::http::{HeaderMap, Uri};
+use crate::http::{Extensions, HeaderMap, Method, Uri};
+use crate::request_head::RequestHead;
 
 /// Typed descriptor for a route path parameter.
 ///
@@ -89,8 +90,10 @@ impl Identity for NoIdentity {
 ///
 /// In production, this borrows Axum's `RawPathParams` with zero copy.
 /// For testing, construct via [`PathParams::from_pairs`].
+#[derive(Clone, Copy)]
 pub struct PathParams<'a>(PathParamsInner<'a>);
 
+#[derive(Clone, Copy)]
 enum PathParamsInner<'a> {
     Raw(&'a crate::http::extract::RawPathParams),
     Pairs(&'a [(&'a str, &'a str)]),
@@ -256,8 +259,13 @@ fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
 pub struct GuardContext<'a, I: Identity> {
     pub method_name: &'static str,
     pub controller_name: &'static str,
+    /// The request method.
+    pub method: &'a Method,
     pub headers: &'a HeaderMap,
     pub uri: &'a Uri,
+    /// Request extensions as populated by the layers and extractors that ran
+    /// before the guard.
+    pub extensions: &'a Extensions,
     /// Transport peer address, when the server was started with connection
     /// info (`serve_auto` / the sharded server do). `None` under `TestApp`'s
     /// in-process dispatch and for any transport that does not record it.
@@ -266,7 +274,42 @@ pub struct GuardContext<'a, I: Identity> {
     pub identity: Option<&'a I>,
 }
 
+/// `GET` from a `'static` place, so a hand-built [`GuardContext`] (guard unit
+/// tests, non-HTTP adapters) can fill its `method` field without a local
+/// binding to borrow from.
+#[must_use]
+pub fn default_method() -> &'static Method {
+    static METHOD: Method = Method::GET;
+    &METHOD
+}
+
+/// Empty [`Extensions`] from a `'static` place, for the same reason as
+/// [`default_method`].
+#[must_use]
+pub fn no_extensions() -> &'static Extensions {
+    static EXTENSIONS: std::sync::LazyLock<Extensions> = std::sync::LazyLock::new(Extensions::new);
+    &EXTENSIONS
+}
+
 impl<'a, I: Identity> GuardContext<'a, I> {
+    /// The request head as the shared [`RequestHead`] view.
+    ///
+    /// Lets a guard hand the request to machinery that is not guard-specific —
+    /// the same resolution a `#[managed]` resource performs from
+    /// [`ManagedContext::request`](crate::ManagedContext::request), for
+    /// instance — without duplicating field-by-field plumbing.
+    #[must_use]
+    pub fn head(&self) -> RequestHead<'_> {
+        RequestHead {
+            method: self.method,
+            uri: self.uri,
+            headers: self.headers,
+            extensions: self.extensions,
+            path_params: self.path_params,
+            peer_addr: self.peer_addr,
+        }
+    }
+
     /// Convenience accessor for the identity subject.
     pub fn identity_sub(&self) -> Option<&str> {
         self.identity.map(|i| i.sub())
