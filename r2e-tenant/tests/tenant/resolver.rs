@@ -13,7 +13,8 @@ use r2e_core::request_head::RequestHead;
 use r2e_core::{HttpError, PathParams};
 use r2e_tenant::{
     ExtensionTenantResolver, FnTenantResolver, HeaderTenantResolver, MissingTenantPolicy,
-    PathTenantResolver, SyncTenantResolver, TenantId, TenantResolver, TenantRouter, TenantStatuses,
+    PathTenantResolver, Strict, SyncTenantResolver, TenantId, TenantResolver, TenantRouter,
+    TenantStatuses,
 };
 
 /// A request head built from parts a test cares about.
@@ -44,6 +45,13 @@ impl Head {
 
     fn extension<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
         self.extensions.insert(value);
+        self
+    }
+
+    /// What the `Tenancy` layer does before routing: park the resolve-once
+    /// cell, so every consumer of this head shares one resolver call.
+    fn with_memo(mut self) -> Self {
+        TenantRouter::install_memo(&mut self.extensions);
         self
     }
 
@@ -164,6 +172,38 @@ async fn extension_resolver_projects_what_upstream_already_parsed() {
     assert_eq!(resolve(&resolver, &Head::new("/"), &[]).await.unwrap(), None);
     let bad = Head::new("/").extension(TenantClaim("../x".into()));
     assert_eq!(resolve(&resolver, &bad, &[]).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_strict_extension_resolver_can_reject_a_malformed_claim() {
+    // The other half of the same pattern: a claim that is *present but wrong* is
+    // a client error, not "no tenant". The lenient projection cannot say so, so
+    // `try_new` takes a fallible one.
+    #[derive(Clone)]
+    struct TenantClaim(String);
+
+    let resolver = ExtensionTenantResolver::<TenantClaim, _, Strict>::try_new(
+        |claim: &TenantClaim| {
+            TenantId::parse(&claim.0)
+                .map(Some)
+                .map_err(|err| HttpError::bad_request(format!("bad tenant claim: {err}")))
+        },
+    );
+
+    let good = Head::new("/").extension(TenantClaim("acme".into()));
+    assert_eq!(
+        resolve(&resolver, &good, &[]).await.unwrap().unwrap().as_str(),
+        "acme"
+    );
+
+    // No claim is still "no tenant" — the missing-tenant policy decides, not the
+    // resolver.
+    assert_eq!(resolve(&resolver, &Head::new("/"), &[]).await.unwrap(), None);
+
+    let bad = Head::new("/").extension(TenantClaim("../x".into()));
+    let err = resolve(&resolver, &bad, &[]).await.unwrap_err();
+    assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    assert!(err.to_string().contains("bad tenant claim"), "{err}");
 }
 
 #[tokio::test]
@@ -334,28 +374,171 @@ async fn a_disabled_router_resolves_nothing_without_failing() {
     assert_eq!(router.try_resolve(&request.head(&[])).await.unwrap(), None);
 }
 
+/// A resolver that counts its calls and answers a different tenant every time.
+///
+/// The adversarial shape from the audit: if anything resolves twice in one
+/// request, the two answers disagree and the test can see it.
+#[derive(Clone)]
+struct Alternating {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    answers: Vec<&'static str>,
+}
+
+impl Alternating {
+    fn new(answers: &[&'static str]) -> Self {
+        Self {
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            answers: answers.to_vec(),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl SyncTenantResolver for Alternating {
+    fn resolve_sync(&self, _req: &RequestHead<'_>) -> Result<Option<TenantId>, HttpError> {
+        let nth = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(
+            TenantId::parse(self.answers[nth % self.answers.len()]).unwrap(),
+        ))
+    }
+}
+
 #[tokio::test]
-async fn the_memo_short_circuits_the_resolver() {
-    // Whoever resolved first parked a `TenantId`; the resolver must not run again
-    // — this is what keeps guards, extractors and managed resources consistent.
+async fn the_resolve_once_cell_short_circuits_the_resolver() {
+    // The whole point of the cell: whatever asks — a guard, an extractor, two
+    // `#[managed]` resources — the resolver runs once and everybody gets the
+    // same tenant, even when the resolver itself is not deterministic.
+    let resolver = Alternating::new(&["acme", "globex"]);
     let router = TenantRouter::ready(
-        Arc::new(FnTenantResolver::new(|_: &RequestHead<'_>| {
-            panic!("the resolver must not run when the tenant is memoized")
+        Arc::new(resolver.clone()),
+        MissingTenantPolicy::Reject,
+        TenantStatuses::default(),
+    );
+
+    let request = Head::new("/").with_memo();
+    let head = request.head(&[]);
+    for _ in 0..3 {
+        assert_eq!(
+            router.try_resolve(&head).await.unwrap().unwrap().as_str(),
+            "acme"
+        );
+    }
+    assert_eq!(resolver.calls(), 1, "the resolver must run once per request");
+    assert_eq!(
+        TenantRouter::memoized(&head).map(TenantId::as_str),
+        Some("acme")
+    );
+}
+
+#[tokio::test]
+async fn without_the_cell_every_caller_resolves_for_itself() {
+    // The degraded path (a hand-wired router with no `Tenancy` layer): worth
+    // pinning, because it is exactly what the cell exists to prevent.
+    let resolver = Alternating::new(&["acme", "globex"]);
+    let router = TenantRouter::ready(
+        Arc::new(resolver.clone()),
+        MissingTenantPolicy::Reject,
+        TenantStatuses::default(),
+    );
+
+    let request = Head::new("/");
+    let head = request.head(&[]);
+    assert_eq!(
+        router.try_resolve(&head).await.unwrap().unwrap().as_str(),
+        "acme"
+    );
+    assert_eq!(
+        router.try_resolve(&head).await.unwrap().unwrap().as_str(),
+        "globex"
+    );
+    assert_eq!(resolver.calls(), 2);
+    assert_eq!(TenantRouter::memoized(&head), None);
+}
+
+#[tokio::test]
+async fn a_raw_tenant_id_extension_is_not_the_memo() {
+    // Finding 9: the memo carrier is private. A `TenantId` some middleware parks
+    // in the extensions for its own purposes must NOT override the configured
+    // resolver — a request whose header says `acme` is served as `acme`.
+    let router = TenantRouter::ready(
+        Arc::new(HeaderTenantResolver::default()),
+        MissingTenantPolicy::Reject,
+        TenantStatuses::default(),
+    );
+
+    let request = Head::new("/")
+        .header("x-tenant-id", "acme")
+        .extension(TenantId::parse("attacker").unwrap())
+        .with_memo();
+    let head = request.head(&[]);
+    assert_eq!(
+        router.try_resolve(&head).await.unwrap().unwrap().as_str(),
+        "acme"
+    );
+    assert_eq!(
+        TenantRouter::memoized(&head).map(TenantId::as_str),
+        Some("acme")
+    );
+}
+
+#[tokio::test]
+async fn the_absence_of_a_tenant_is_memoized_too() {
+    // The cell holds the resolver's own answer, `None` included, so a
+    // tenant-less request does not re-run the resolver per consumer either. The
+    // *policy* is applied per call site, which is why the same cell serves an
+    // `Option` extractor and a required one.
+    let resolver = Alternating::new(&["acme"]);
+    let calls = resolver.calls.clone();
+    let router = TenantRouter::ready(
+        Arc::new(FnTenantResolver::new(move |_: &RequestHead<'_>| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(None)
+        })),
+        MissingTenantPolicy::Allow,
+        TenantStatuses::default(),
+    );
+
+    let request = Head::new("/").with_memo();
+    let head = request.head(&[]);
+    assert_eq!(router.try_resolve(&head).await.unwrap(), None);
+    assert_eq!(router.try_resolve(&head).await.unwrap(), None);
+    assert_eq!(resolver.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_resolver_error_is_not_memoized() {
+    // A failing resolve leaves the cell empty: the request is about to end with
+    // that error anyway, and caching it would leak into a retry that shares the
+    // head (there is none today, but the semantics are the honest ones).
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = attempts.clone();
+    let router = TenantRouter::ready(
+        Arc::new(FnTenantResolver::new(move |_: &RequestHead<'_>| {
+            let nth = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if nth == 0 {
+                Err(HttpError::bad_request("boom"))
+            } else {
+                Ok(Some(TenantId::parse("acme").unwrap()))
+            }
         })),
         MissingTenantPolicy::Reject,
         TenantStatuses::default(),
     );
 
-    let request = Head::new("/").extension(TenantId::parse("memoized").unwrap());
+    let request = Head::new("/").with_memo();
     let head = request.head(&[]);
     assert_eq!(
-        router.try_resolve(&head).await.unwrap().unwrap().as_str(),
-        "memoized"
+        router.try_resolve(&head).await.unwrap_err().status(),
+        StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        TenantRouter::memoized(&head).map(TenantId::as_str),
-        Some("memoized")
+        router.try_resolve(&head).await.unwrap().unwrap().as_str(),
+        "acme"
     );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

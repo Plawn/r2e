@@ -65,9 +65,12 @@
 //! then is the deployment's call ([`MissingTenantPolicy`], `tenancy.on-missing`),
 //! not the resolver's. Built-ins cover headers, path parameters, request
 //! extensions and closures; subdomains and JWT claims are a few lines each — see
-//! the [`resolver`] module docs. The resolved id is memoized in the request
-//! extensions, so extractors, guards and `#[managed]` resources of one request
-//! resolve once.
+//! the [`resolver`] module docs. A resolve-once cell, parked in the request by
+//! the [`Tenancy`] layer before routing, is shared by every consumer — so
+//! extractors, guards and `#[managed]` resources of one request see at most one
+//! *successful* resolver call and one answer. An error is not memoized: it goes
+//! back to that caller, and the next resolution attempt in the request tries
+//! again.
 //!
 //! # Configuration
 //!
@@ -112,8 +115,8 @@ pub use id::{InvalidTenantId, TenantId, MAX_TENANT_ID_LEN};
 pub use map::{SweepReport, TenantStats, Tenanted, TenantedMetrics, TenantedSettings};
 pub use plugin::{DefaultFallback, NoFallback, PerTenant, Tenancy};
 pub use resolver::{
-    BoxFuture, ExtensionTenantResolver, FnTenantResolver, HeaderTenantResolver, PathTenantResolver,
-    SyncTenantResolver, TenantResolver,
+    BoxFuture, ExtensionTenantResolver, FnTenantResolver, HeaderTenantResolver, Lenient,
+    PathTenantResolver, Strict, SyncTenantResolver, TenantResolver,
 };
 pub use router::TenantRouter;
 pub use source::{TenantContext, TenantSource};

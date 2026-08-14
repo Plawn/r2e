@@ -150,3 +150,29 @@ fn orders_lexicographically() {
     ids.sort();
     assert_eq!(ids[0].as_str(), "acme");
 }
+
+// ── `from_static` ──────────────────────────────────────────────────────────
+//
+// The literal constructor validates like every other one. A `&'static str` says
+// the value is baked into the binary, not that it is a legal tenant id — and the
+// ids that matter here (`../shared`, `a/b`) are exactly the ones a developer
+// would type into a literal without thinking about the charset.
+
+#[test]
+fn from_static_accepts_a_valid_literal() {
+    let id = TenantId::from_static("acme-eu");
+    assert_eq!(id.as_str(), "acme-eu");
+    assert_eq!(id, TenantId::parse("acme-eu").unwrap());
+}
+
+#[test]
+#[should_panic(expected = "invalid tenant id literal")]
+fn from_static_panics_on_a_traversal_literal() {
+    let _ = TenantId::from_static("../shared");
+}
+
+#[test]
+#[should_panic(expected = "invalid tenant id literal")]
+fn from_static_panics_on_an_empty_literal() {
+    let _ = TenantId::from_static("");
+}

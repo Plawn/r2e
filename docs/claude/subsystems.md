@@ -495,15 +495,22 @@ Resolving through an unfilled shell is `TenantError::NoResolver` /
 `Tenancy` declares `Deps = (R,)`; `PerTenant` declares `Deps = (Src,)`, and
 `.fallback_to_default()` switches the impl to `Deps = (Src, T)` so the fallback
 bean is compile-checked (the `DefaultFallback` / `NoFallback` marker parameter
-selects which `PreStatePlugin` impl applies).
+selects which `PreStatePlugin` impl applies). The fallback is consulted only
+after a resolved tenant's `TenantSource::create` returns `Ok(None)`. A missing
+tenant is rejected by `TenantRouter`, or becomes `None` for an optional
+extractor under the allow policy, before the map is called.
 
 **`TenantRouter` is the "tenancy is installed" witness.** One bean, one
 `TypeId`, no generics — required by every per-tenant extractor and every
 per-tenant `#[managed]` resource. It owns the resolver, the
 `MissingTenantPolicy`, the configured `TenantStatuses`, and the per-request
-memo: the first component to resolve parks the `TenantId` in
-`parts.extensions`, so extractor + guards + managed resources of one request
-resolve at most once (`TenantRouter::memoized(head)` reads it back).
+memo. The `Tenancy` install phase adds a pre-routing layer that parks the
+private `TenantMemo(Arc<OnceCell<Option<TenantId>>>)` in `parts.extensions`;
+guards, extractors and every managed acquisition share the one in-flight/raw
+resolver answer. `None` is memoized before policy application; errors are not.
+A bare `TenantId` extension is never authoritative. `TenantRouter::memoized`
+is a read-only peek, and `TenantRouter::install_memo(&mut Extensions)` is the
+escape hatch for a directly provided/hand-wired router.
 
 **Extractors are `FromRequestPartsVia`, never axum's `FromRequestParts`.** Both
 read beans out of the HList state — `TenantRouter` always, plus `Tenanted<T>`
@@ -514,23 +521,55 @@ is a compile error at `register_controllers`; and implementing axum's
 `FromRequestParts` too would make the marker ambiguous — that invariant is
 pinned by `assert_unambiguous_extractor` probes in `tests/tenant/extractor.rs`.
 `Option<Tenant<T>>` / `Option<TenantId>` (via `OptionalFromRequestPartsVia`)
-mean "no tenant", never "bad tenant".
+mean "no tenant", never "bad tenant". Generated handler heads are snapshotted
+after every ordinary `FromRequestParts` parameter, including parameter-level
+identity, so `ExtensionTenantResolver` works for managed/guard resolution with
+struct- or parameter-level identity. Controller-field tenancy cannot depend on
+a parameter-level identity that populates its extension: controller request
+data is necessarily extracted first, so it fails closed as missing. Use
+struct-level identity plus `#[anonymous]` for public routes in that shape.
 
 **`Tenanted<T>` invariants** (pinned by `tests/tenant/map.rs`):
 - *Single flight* — the `Arc<Slot<T>>` is cloned out of the `DashMap` **before**
   any `.await` (a shard guard held across an await would deadlock the map);
   creation runs inside `slot.cell.get_or_try_init` (`tokio::sync::OnceCell`).
 - *Failures are never cached* — an `Err` removes the empty slot, guarded by
-  `Arc::ptr_eq` so a concurrent retry's fresh slot is not stolen. A flood of
-  made-up ids therefore cannot accumulate slots.
+  `Arc::ptr_eq` so a concurrent retry's fresh slot is not stolen. The same drop
+  guard removes an empty slot when `create` panics or its caller is cancelled.
+  Waiters on an erroring `OnceCell` may retry the initializer one by one because
+  errors are deliberately never cached.
 - *Unknown tenants are cached briefly* — `Ok(None)` is remembered for
-  `negative-ttl` (capped at `max-negative`); any later success clears it.
+  `negative-ttl`; the negative cache is re-checked inside the initializer, so a
+  cold unknown wave makes exactly one source call. Insert-then-bound may exceed
+  `max-negative` transiently under concurrency, but each call trims before it
+  returns. Any later success clears the entry.
 - *Creation is bounded* — `create` runs under `create-timeout`; blowing it is a
   504 and releases every waiter parked on the slot.
 - *Idle resources go away* — `Tenanted<T>` is itself a `ServiceComponent`
   (`type Deps = TCons<Self, TNil>`) whose `start` loop sweeps: idle eviction,
   LRU trim to `max-active`, negative purge, each returning a `SweepReport`;
   shutdown `drain()`s. The `PerTenant` plugin starts it.
+- *Removal is ready-only* — `evict`, `invalidate`, sweeps and drain leave an
+  in-flight creation mapped and return `false` where applicable. Drain latches
+  the map closed and repeats ready snapshots with conditional `remove_if`
+  (`Arc::ptr_eq`) until none remain. An earlier in-flight creation self-disposes
+  its result after observing the latch; later resolutions are 503
+  (`the per-tenant resource map is draining (shutdown)`).
+- *Disposal is gated per cached value* — the source's `dispose` is called at
+  most once even when eviction races drain. `invalidate` means removal plus a
+  detached disposal spawn, not completed disposal; outside Tokio it drops
+  without calling `dispose` and logs at debug.
+- *There are no leases* — `get`, `Tenant<T>` and `into_inner` return clones;
+  eviction can dispose while a request still holds one. Resources must tolerate
+  close-while-cloned, or disable idle eviction/use `keep_forever`.
+- *`max-active` is soft* — completed creations kick a looping detached LRU trim
+  and the periodic sweep reinforces it, but creation has no admission bound.
+  Cold bursts can exceed the cap, so `db max_connections × max_active` is not a
+  hard capacity calculation. Zero is rejected at config load/wiring and by
+  `PerTenant::max_active(0)`; `tenancy.enabled: false` is the off switch.
+
+`TenantedMetrics` and `TenantStats` implement `Serialize`; `TenantStats::idle`
+is emitted as whole-millisecond `idle_ms`.
 
 **Cascade + cycle detection.** `TenantSource::create` receives a
 `TenantContext` carrying the tenant, an `Arc<BeanContext>`, and a
@@ -540,13 +579,17 @@ boxed futures). `ctx.get::<U>()` pushes onto the chain and refuses a `TypeId`
 already in it, reporting `TenantError::Cycle` with a path-stripped chain
 (`A -> B -> A`; generic args are kept, so `Pool<Postgres>` and `Pool<Sqlite>`
 stay distinct). `ctx.bean::<U>()` is the app-scoped lookup, `ctx.chain()` the
-diagnostic string.
+diagnostic string. Detection is per resolution path: two concurrent roots can
+form A-awaits-B / B-awaits-A without sharing a chain and wait until
+`create-timeout` produces 504 (or hang when disabled). Keep the timeout enabled
+in production; a real cycle is a wiring bug sequential resolution exposes.
 
 **`TenantId` has no `Deserialize` impl, deliberately** — it is parsed at the
 edge (`[a-z0-9][a-z0-9._-]{0,62}`, `MAX_TENANT_ID_LEN` = 63) so a value that
 picks a database/schema/bucket cannot arrive inside a request body and skip
 validation. `Serialize` is one-way (returnable, not receivable). `Arc<str>`
-inside.
+inside. `TenantId::from_static(&'static str)` validates the same grammar and
+panics on invalid input; there is no unchecked public constructor.
 
 **Backend integration.** `r2e-data-sqlx` / `r2e-data-diesel` gain `tenant.rs`
 under their own `tenant` feature: `TenantPools<..> = Tenanted<Pool<..>>`,

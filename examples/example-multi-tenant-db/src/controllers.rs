@@ -47,8 +47,9 @@ pub struct NewNote {
 /// Reads and writes on the requesting tenant's database.
 ///
 /// The controller has **no fields**: `TenantTx` resolves the tenant itself
-/// (reusing the request's memoized answer when another extractor already
-/// resolved it), opens or reuses that tenant's pool, and begins a transaction
+/// (through the request's resolve-once cell, so it shares its answer with any
+/// extractor or guard on the route), opens or reuses that tenant's pool, and
+/// begins a transaction
 /// that commits on `Ok` and rolls back on `Err` — the same lifecycle as the
 /// single-tenant `Tx`.
 #[controller(path = "/notes")]
@@ -217,8 +218,9 @@ impl AdminController {
     /// closes the pool, so the connections are released now rather than
     /// whenever the last handle happens to drop.
     ///
-    /// The client is evicted first: it holds a clone of the pool, and evicting
-    /// it first means nothing is left pointing at the pool being closed.
+    /// The client map is evicted first so it no longer caches a clone of the
+    /// pool being closed. Clones already handed to requests are not leased and
+    /// must tolerate the close.
     #[post("/tenants/{tenant}/evict")]
     async fn evict(&self, Path(tenant): Path<String>) -> Result<Json<Value>, HttpError> {
         let tenant = parse_tenant(&tenant)?;
@@ -227,9 +229,10 @@ impl AdminController {
         Ok(Json(json!({ "evicted_client": client, "evicted_pool": pool })))
     }
 
-    /// Forget a tenant's resources **without** disposing of them — the shape
-    /// for "its DSN changed in the directory": the next request rebuilds from
-    /// the new record while in-flight requests finish on the old pool.
+    /// Forget a tenant's ready resources and spawn disposal in the background —
+    /// the shape for "its DSN changed in the directory". The next request
+    /// rebuilds from the new record; clones already handed to requests are not
+    /// leased and must tolerate the close.
     #[post("/tenants/{tenant}/invalidate")]
     async fn invalidate(&self, Path(tenant): Path<String>) -> Result<Json<Value>, HttpError> {
         let tenant = parse_tenant(&tenant)?;
@@ -247,9 +250,8 @@ fn parse_tenant(raw: &str) -> Result<TenantId, HttpError> {
 
 /// `Tenanted<T>`'s introspection, as JSON.
 ///
-/// Hand-rolled because `TenantedMetrics` / `TenantStats` are plain data types
-/// without `Serialize` — deliberate on the framework's side (no serde in the
-/// bean's public surface), a few lines here.
+/// Hand-rolled to keep this example's JSON shape explicit. The framework types
+/// also implement `Serialize` (`TenantStats::idle` becomes `idle_ms`).
 fn map_view<T: Clone + Send + Sync + 'static>(map: &Tenanted<T>) -> Value {
     let metrics = map.metrics();
     json!({

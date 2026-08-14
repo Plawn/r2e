@@ -57,14 +57,32 @@ impl TenantId {
         Ok(Self(Arc::from(raw)))
     }
 
-    /// Build a tenant id **without** validation.
+    /// Build a tenant id from a literal, **panicking** on an invalid one.
     ///
-    /// For code that has already validated the value (a fixture, a value read
-    /// back from a trusted store). Prefer [`parse`](Self::parse) everywhere a
-    /// value can come from a request.
+    /// The ergonomic form for fixtures, `eager([..])` lists and other trusted
+    /// literals, where threading a `Result` through is noise. It still validates:
+    /// there is deliberately no unchecked constructor, because a safe public
+    /// bypass would let a custom resolver hand `../shared` to a source that puts
+    /// `tenant.as_str()` in a file path — the exact boundary this type exists to
+    /// hold. A `'static` string is written by the programmer, so a bad one is a
+    /// bug to fail on, not an error to handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `raw` is not a valid tenant id. Use [`parse`](Self::parse)
+    /// for anything that can come from a request.
+    ///
+    /// ```
+    /// use r2e_tenant::TenantId;
+    ///
+    /// assert_eq!(TenantId::from_static("acme").as_str(), "acme");
+    /// ```
     #[must_use]
-    pub fn from_static_unchecked(raw: &'static str) -> Self {
-        Self(Arc::from(raw))
+    pub fn from_static(raw: &'static str) -> Self {
+        match Self::validate(raw) {
+            Ok(()) => Self(Arc::from(raw)),
+            Err(err) => panic!("invalid tenant id literal {raw:?}: {err}"),
+        }
     }
 
     /// The id as a string slice.

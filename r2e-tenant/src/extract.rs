@@ -52,6 +52,36 @@
 //! disabled) — the shape for a route that serves both a tenant-scoped and a
 //! global view. A tenant that is present but unknown or unavailable is still an
 //! error: `Option` covers "no tenant", never "bad tenant".
+//!
+//! # Ordering: resolvers that read what authentication left behind
+//!
+//! An [`ExtensionTenantResolver`](crate::ExtensionTenantResolver) projects a
+//! claim some earlier extractor parked in `parts.extensions` — the usual "the
+//! tenant is a JWT claim" shape. That only works if the identity extractor runs
+//! **before** the resolver does, and who runs first depends on where the
+//! identity is declared:
+//!
+//! - **Struct-level identity** (`#[inject(identity)]` as a controller field) —
+//!   always fine. Identity and tenancy are both request-scoped controller
+//!   fields, extracted in declaration order by the same generated extractor, and
+//!   the identity field is emitted first.
+//! - **Parameter-level identity** (`#[inject(identity)]` on a handler
+//!   parameter) — fine for handler parameters and `#[managed]` resources: the
+//!   generated closure extracts every parameter, identity included, before it
+//!   snapshots the request head the resolver sees.
+//! - **Controller-field tenancy + parameter-level identity supplying the claim**
+//!   — **unsupported**, and inherently so: a controller's request-scoped fields
+//!   are extracted by a single `FromRequestParts` extractor that necessarily
+//!   runs before the handler's own parameters, so the claim is not in the
+//!   extensions yet and the resolver sees nothing. It fails the way a missing
+//!   tenant fails (the configured `missing-status`, or `None` under
+//!   `on-missing = allow`), not silently with a wrong tenant.
+//!
+//!   Move the identity to the controller struct (and mark the public routes
+//!   `#[anonymous]`) when the tenant comes from the identity. A route needing
+//!   both shapes can keep the field tenancy and add its own
+//!   `#[inject(identity)]` parameter — but the tenant must then come from
+//!   somewhere the request already carries (a header, the path, the host).
 
 use std::ops::Deref;
 

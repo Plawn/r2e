@@ -106,6 +106,16 @@ where
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
     fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+        // The resolve-once cell, installed before routing so that *every*
+        // consumer of the request's tenant shares one resolver call — including
+        // a handler whose only tenancy is a pair of `#[managed]` resources,
+        // which never runs a tenancy extractor and only ever sees a read-only
+        // `RequestHead`. Sugar actions are skipped when `tenancy.enabled` is
+        // false, which is exactly right: a disabled router resolves nothing.
+        ctx.add_layer(|router| {
+            router.layer(r2e_core::http::middleware::from_fn(install_tenant_memo))
+        });
+
         // `tenancy.enabled = false` skips `configure` entirely, so the disabled
         // router has to be built here — an unwired router is a *wiring bug*
         // (500), which is not what turning tenancy off should mean. The app keeps
@@ -139,6 +149,21 @@ where
     }
 }
 
+/// Park the per-request resolve-once cell in the request extensions.
+///
+/// One `Arc` allocation per request for apps that installed tenancy — the price
+/// of a resolver that runs at most once per request on the success path,
+/// whatever the shape of the route. A resolver **error** is not memoized: it is
+/// returned to that caller and retried by the next resolution attempt in the
+/// same request.
+async fn install_tenant_memo(
+    mut request: r2e_core::http::extract::Request,
+    next: r2e_core::http::middleware::Next,
+) -> r2e_core::http::response::Response {
+    TenantRouter::install_memo(request.extensions_mut());
+    next.run(request).await
+}
+
 /// The configured statuses, read key by key — the typed section is not
 /// available at install time (it is loaded for `configure`).
 fn statuses_from_keys(ctx: &PluginInstallContext<'_>) -> TenantStatuses {
@@ -154,8 +179,12 @@ fn statuses_from_keys(ctx: &PluginInstallContext<'_>) -> TenantStatuses {
 /// Marker: no app-scoped fallback (the default).
 pub struct NoFallback;
 
-/// Marker: fall back to the app-scoped `T` bean for tenant-less requests and
-/// unknown tenants.
+/// Marker: fall back to the app-scoped `T` bean when a resolved tenant is
+/// unknown (`TenantSource::create` returns `Ok(None)`).
+///
+/// A request with no tenant never reaches the per-tenant map: `TenantRouter`
+/// rejects it under the required policy, or an optional extractor yields
+/// `None` under the allow policy.
 pub struct DefaultFallback;
 
 /// Installs one per-tenant resource type: provides the [`Tenanted<T>`] bean,
@@ -170,7 +199,7 @@ pub struct DefaultFallback;
 /// // strict: an unknown tenant is a 404
 /// .plugin(PerTenant::<Pool<Postgres>>::from::<TenantPools>())
 ///
-/// // lenient: no tenant / unknown tenant gets the app-scoped default pool
+/// // fallback: an unknown tenant gets the app-scoped default pool
 /// .provide(shared_pool.clone())
 /// .plugin(PerTenant::<Pool<Postgres>>::from::<TenantPools>().fallback_to_default())
 /// ```
@@ -233,8 +262,23 @@ impl<T, Src, F> PerTenant<T, Src, F> {
     /// The knob that keeps a per-tenant pool from becoming
     /// `tenants × pool_size` connections: past the cap, the least recently used
     /// resources are evicted (and disposed).
+    ///
+    /// A **soft** cap: creation is not admission-controlled, so a cold burst can
+    /// briefly exceed it and a background trim brings the map back down. Sizing a
+    /// database's connection limit as `max_connections × max_active` is therefore
+    /// not a hard guarantee.
+    ///
+    /// # Panics
+    ///
+    /// Panics on `max_active(0)` — a cap of zero creates every resource and
+    /// evicts it straight away. Turn tenancy off with `tenancy.enabled: false`.
     #[must_use]
     pub fn max_active(mut self, max: usize) -> Self {
+        assert!(
+            max > 0,
+            "`PerTenant::max_active(0)` is not a way to disable per-tenant resources: \
+             pass at least 1 (or set `tenancy.enabled: false`)"
+        );
         self.max_active = Some(max);
         self
     }
@@ -282,14 +326,18 @@ impl<T, Src, F> PerTenant<T, Src, F> {
         self
     }
 
-    /// Serve the app-scoped `T` bean when the request carries no tenant, or names
-    /// a tenant the source does not know.
+    /// Serve the app-scoped `T` bean when the source does not know a resolved
+    /// tenant (`TenantSource::create` returns `Ok(None)`).
     ///
     /// The migration shape: an app that already has one shared `T` can adopt
-    /// tenancy tenant-by-tenant, with everything not yet migrated landing on the
-    /// old shared resource. It adds `T` to this plugin's dependencies — the
-    /// default must be a real bean. The fallback is app-scoped, so it is never
-    /// cached per tenant and never disposed by eviction.
+    /// tenancy tenant-by-tenant, with every known request whose tenant is not
+    /// yet migrated landing on the old shared resource. A request with no
+    /// tenant is handled by `TenantRouter` before this map is called: it is
+    /// rejected under the required policy or yields `None` from an optional
+    /// extractor under the allow policy. This call adds `T` to the plugin's
+    /// dependencies — the default must be a real bean. The fallback is
+    /// app-scoped, so it is never cached per tenant and never disposed by
+    /// eviction.
     #[must_use]
     pub fn fallback_to_default(self) -> PerTenant<T, Src, DefaultFallback> {
         self.carry_over()

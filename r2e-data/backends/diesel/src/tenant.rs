@@ -50,9 +50,11 @@
 //! `.plugin(PerTenant::<Pool<ConnectionManager<Conn>>>::from::<_>())` is a
 //! **compile error** at `register_controller`, not a 500 on the first request
 //! from the first tenant. A route may, but need not, also carry a
-//! `#[inject(request)] tenant: TenantId` / `Tenant<Pool<..>>` field: when it
-//! does, the tenant resolved by the extractor is memoized in the request
-//! extensions and the transaction reuses it instead of resolving again.
+//! `#[inject(request)] tenant: TenantId` / `Tenant<Pool<..>>` field: the
+//! resolver runs **once per request** either way, through the resolve-once cell
+//! the `Tenancy` layer installs before routing — so two `#[managed]`
+//! transactions on one handler are guaranteed to be the same tenant's, with or
+//! without a tenancy extractor in front of them.
 //!
 //! # Rotating a tenant's DSN
 //!
@@ -133,15 +135,12 @@ where
             )
         })?;
 
-        // The extractors park the resolved tenant in the request extensions, so
-        // a route that also has a `Tenant<T>` / `TenantId` field resolves once.
-        // Falling back to `resolve` rather than caching anything here keeps this
-        // path stateless: header/path resolution is a map lookup, and a resolver
-        // that is genuinely expensive memoizes through the extensions itself.
-        let tenant = match TenantRouter::memoized(&head) {
-            Some(memoized) => memoized.clone(),
-            None => router.resolve(&head).await.map_err(ManagedErr)?,
-        };
+        // `resolve` goes through the request's resolve-once cell (installed by
+        // the `Tenancy` layer before routing), so this is one resolver call per
+        // request no matter how many transactions, extractors and guards ask —
+        // and two `#[managed]` transactions on the same handler can never land
+        // on two different tenants.
+        let tenant = router.resolve(&head).await.map_err(ManagedErr)?;
 
         let pool = pools
             .get(&tenant)
@@ -283,8 +282,10 @@ where
     /// Cap each tenant's pool at `max` connections.
     ///
     /// The knob that keeps per-tenant pooling affordable: `max` here multiplies
-    /// by the number of live tenants, which
-    /// [`PerTenant::max_active`](r2e_tenant::PerTenant::max_active) caps.
+    /// by the number of live tenants. Treat
+    /// [`PerTenant::max_active`](r2e_tenant::PerTenant::max_active) as a soft
+    /// trim target, not a hard connection bound: cold bursts are not
+    /// admission-controlled.
     /// Replaces any previously installed [`with_factory`](Self::with_factory).
     #[must_use]
     pub fn max_connections(self, max: u32) -> Self {

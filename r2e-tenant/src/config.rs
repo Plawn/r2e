@@ -162,10 +162,22 @@ impl TenancyConfig {
     }
 
     /// `max-active`, or the built-in default.
+    ///
+    /// # Panics
+    ///
+    /// Panics at boot on `max-active: 0`. A cap of zero would create every
+    /// tenant's resource and evict it straight away; it is a typo, not a way to
+    /// disable per-tenant resources (that is `tenancy.enabled: false`).
     #[must_use]
     pub fn max_active(&self) -> usize {
-        self.max_active
-            .map_or(DEFAULT_MAX_ACTIVE, |v| usize::try_from(v).unwrap_or(usize::MAX))
+        self.max_active.map_or(DEFAULT_MAX_ACTIVE, |v| {
+            assert!(
+                v > 0,
+                "invalid `tenancy.max-active` value 0: expected at least 1 \
+                 (use `tenancy.enabled: false` to turn tenancy off)"
+            );
+            usize::try_from(v).unwrap_or(usize::MAX)
+        })
     }
 
     /// `idle-ttl`, or the built-in default. `None` = idle eviction disabled.

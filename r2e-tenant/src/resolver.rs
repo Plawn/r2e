@@ -3,8 +3,9 @@
 //! A resolver is a **bean**: register it (`.provide(...)` / `.register::<...>()`)
 //! and name it on the plugin — `Tenancy::resolver::<MyResolver>()`. It runs once
 //! per request, before any per-tenant resource is touched, and its answer is
-//! memoized in `parts.extensions` so guards, extractors and `#[managed]`
-//! resources all see the same tenant.
+//! held in the request's resolve-once cell (installed by the
+//! [`Tenancy`](crate::Tenancy) layer) so guards, extractors and `#[managed]`
+//! resources all see the same tenant — whichever of them asks first.
 //!
 //! Returning `Ok(None)` means "this request carries no tenant" — what happens
 //! then is the deployment's call ([`MissingTenantPolicy`](crate::MissingTenantPolicy)),
@@ -191,45 +192,127 @@ impl SyncTenantResolver for PathTenantResolver {
     }
 }
 
+/// Mode marker: the projection returns `Option<TenantId>` (the default).
+///
+/// A claim that is present but malformed is indistinguishable from an absent
+/// one — both are "no tenant here".
+pub struct Lenient;
+
+/// Mode marker: the projection returns `Result<Option<TenantId>, HttpError>`.
+///
+/// Selected by [`ExtensionTenantResolver::try_new`], so a present-but-malformed
+/// claim can be its own status instead of falling into the missing-tenant policy.
+pub struct Strict;
+
 /// Projects a request extension into a tenant id.
 ///
 /// The bridge for tenants that come from something already parsed upstream —
 /// JWT claims, a session, a gateway-injected struct. See the module docs.
-pub struct ExtensionTenantResolver<T, F> {
+///
+/// Two flavours, picked by the constructor:
+///
+/// ```
+/// use r2e_core::HttpError;
+/// use r2e_tenant::{ExtensionTenantResolver, Strict, TenantId};
+///
+/// #[derive(Clone)]
+/// struct TenantClaim(String);
+///
+/// // lenient: a malformed claim reads as "no tenant" (the `on-missing` policy)
+/// let lenient = ExtensionTenantResolver::<TenantClaim, _>::new(|c: &TenantClaim| {
+///     TenantId::parse(&c.0).ok()
+/// });
+///
+/// // strict: a malformed claim is a 400, an absent one is still "no tenant"
+/// let strict = ExtensionTenantResolver::<TenantClaim, _, Strict>::try_new(|c: &TenantClaim| {
+///     TenantId::parse(&c.0)
+///         .map(Some)
+///         .map_err(|e| HttpError::bad_request(format!("invalid tenant claim: {e}")))
+/// });
+/// ```
+///
+/// The mode is a type parameter, so the strict form is named
+/// `ExtensionTenantResolver<TenantClaim, _, Strict>` when the plugin needs it
+/// spelled out: `Tenancy::resolver::<ExtensionTenantResolver<TenantClaim, _, Strict>>()`.
+pub struct ExtensionTenantResolver<T, F, M = Lenient> {
     project: F,
     _extension: PhantomData<fn() -> T>,
+    _mode: PhantomData<fn() -> M>,
 }
 
-impl<T, F> ExtensionTenantResolver<T, F>
+impl<T, F> ExtensionTenantResolver<T, F, Lenient>
 where
     T: Send + Sync + 'static,
     F: Fn(&T) -> Option<TenantId> + Send + Sync + 'static,
 {
     /// Read extension `T` and project it to a tenant id.
+    ///
+    /// `None` — whether because the extension is absent or because the value in
+    /// it is malformed — is "this request carries no tenant", which the
+    /// deployment's [`MissingTenantPolicy`](crate::MissingTenantPolicy) decides
+    /// what to do with. Use [`try_new`](Self::try_new) when a malformed claim
+    /// must not be able to fall through to a tenant-less view.
     pub fn new(project: F) -> Self {
         Self {
             project,
             _extension: PhantomData,
+            _mode: PhantomData,
         }
     }
 }
 
-impl<T, F: Clone> Clone for ExtensionTenantResolver<T, F> {
+impl<T, F> ExtensionTenantResolver<T, F, Strict>
+where
+    T: Send + Sync + 'static,
+    F: Fn(&T) -> Result<Option<TenantId>, HttpError> + Send + Sync + 'static,
+{
+    /// Read extension `T` and project it, with a status of its own for a
+    /// present-but-malformed value.
+    ///
+    /// The fallible half of the split every resolver makes: `Ok(None)` = no
+    /// tenant in this request (policy decides), `Err` = the request named a
+    /// tenant and got it wrong (the resolver decides — usually a 400). Absent
+    /// extension is still `Ok(None)`; the projection only runs on a value that
+    /// is there.
+    pub fn try_new(project: F) -> Self {
+        Self {
+            project,
+            _extension: PhantomData,
+            _mode: PhantomData,
+        }
+    }
+}
+
+impl<T, F: Clone, M> Clone for ExtensionTenantResolver<T, F, M> {
     fn clone(&self) -> Self {
         Self {
             project: self.project.clone(),
             _extension: PhantomData,
+            _mode: PhantomData,
         }
     }
 }
 
-impl<T, F> SyncTenantResolver for ExtensionTenantResolver<T, F>
+impl<T, F> SyncTenantResolver for ExtensionTenantResolver<T, F, Lenient>
 where
     T: Send + Sync + 'static,
     F: Fn(&T) -> Option<TenantId> + Send + Sync + 'static,
 {
     fn resolve_sync(&self, req: &RequestHead<'_>) -> Result<Option<TenantId>, HttpError> {
         Ok(req.extension::<T>().and_then(|ext| (self.project)(ext)))
+    }
+}
+
+impl<T, F> SyncTenantResolver for ExtensionTenantResolver<T, F, Strict>
+where
+    T: Send + Sync + 'static,
+    F: Fn(&T) -> Result<Option<TenantId>, HttpError> + Send + Sync + 'static,
+{
+    fn resolve_sync(&self, req: &RequestHead<'_>) -> Result<Option<TenantId>, HttpError> {
+        match req.extension::<T>() {
+            None => Ok(None),
+            Some(ext) => (self.project)(ext),
+        }
     }
 }
 

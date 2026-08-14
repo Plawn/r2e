@@ -171,7 +171,9 @@ curl -s localhost:3000/admin/pools
 
 **Evict** disposes: `PoolSource::dispose` closes the pool, releasing the
 connections now rather than whenever the last handle drops. The client is
-evicted first because it holds a clone of the pool.
+evicted first because it holds a clone of the pool. There are no request
+leases: an already-acquired SQLx connection can finish gracefully, but a pool
+clone that has not acquired a connection can receive `PoolClosed`.
 
 ```bash
 curl -X POST localhost:3000/admin/tenants/acme/evict
@@ -188,8 +190,9 @@ curl -H 'x-tenant-id: acme' localhost:3000/notes   # 200, pool recreated
 
 **Invalidate** is the "its DSN changed in the directory" shape: forget the
 resource *synchronously* and close the old pool on a detached task, so the
-caller never waits, in-flight requests finish on the old pool, and the next
-request rebuilds from the new record.
+caller never waits and the next request rebuilds from the new record. `true`
+means disposal was spawned, not completed; clones already handed to requests
+must tolerate the close.
 
 ```bash
 curl -X POST localhost:3000/admin/tenants/globex/invalidate
@@ -219,8 +222,10 @@ set on the `PerTenant` builder in `src/app.rs` wins over the file:
 builder setting  >  tenancy.* (file)  >  built-in default
 ```
 
-This app caps the pools at `.max_active(16)` × `.max_connections(2)` = 32
-connections, with a 5-minute idle TTL.
+This app uses `.max_active(16)` as a soft live-pool trim target and
+`.max_connections(2)` per pool, with a 5-minute idle TTL. Because creation is
+not admission-controlled, 32 connections is a steady-state planning target,
+not a hard burst bound.
 
 ## See also
 

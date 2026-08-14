@@ -505,3 +505,22 @@ async fn a_map_provided_by_hand_needs_no_plugin() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "acme");
 }
+
+#[test]
+#[should_panic(expected = "not a way to disable per-tenant resources")]
+fn a_max_active_of_zero_is_rejected_on_the_builder() {
+    // Nought is a misconfiguration, not an off switch: a cap of zero would open
+    // every resource and evict it on the spot. The builder says so where the
+    // typo is, rather than at the first request.
+    let _ = PerTenant::<Resource>::from::<ScriptedSource>().max_active(0);
+}
+
+#[test]
+#[should_panic(expected = "tenancy.max-active")]
+fn a_max_active_of_zero_is_rejected_in_config() {
+    let config = r2e_tenant::TenancyConfig {
+        max_active: Some(0),
+        ..Default::default()
+    };
+    let _ = config.max_active();
+}

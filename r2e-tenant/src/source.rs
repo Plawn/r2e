@@ -78,9 +78,18 @@ where
     /// The default is a no-op, which is right for values whose `Drop` already
     /// releases everything.
     ///
+    /// **Called at most once per cached value.** Each slot carries a one-shot
+    /// gate, so an eviction racing a drain (or two sweeps) still disposes once;
+    /// an implementation does not have to be idempotent. The gate is taken
+    /// before the call, so a `dispose` that panics or is cancelled mid-await is
+    /// **not** retried — at-most-once is the guarantee, not exactly-once.
+    ///
     /// `value` is a clone of the cached resource: per-tenant resources are
     /// handle types (a pool, a client), and disposing a handle is how the shared
-    /// object behind it gets closed.
+    /// object behind it gets closed. A request that resolved the resource just
+    /// before it was evicted still holds its own clone — there is no lease — so
+    /// disposal should be a *graceful* close (`sqlx`'s `Pool::close()` lets
+    /// checked-out connections finish) rather than an abrupt one.
     fn dispose<'a>(&'a self, tenant: &'a TenantId, value: T) -> BoxFuture<'a, ()> {
         let _ = (tenant, value);
         Box::pin(std::future::ready(()))

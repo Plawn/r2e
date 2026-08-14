@@ -1446,6 +1446,77 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 // controllers. The closure captures the controller `Arc` and forwards the
 // request-extracted parameters to the common hidden handler wrapper.
 
+/// The six request-head parameters, as closure params and as call args.
+///
+/// The order of the two vectors is the SAME — what differs is *where* the
+/// param group is spliced into the closure signature (see
+/// [`assemble_closure_params`]); the args always stay in the fixed
+/// `(State?, HeaderMap, Uri, RawPathParams, PeerAddr, Extensions, Method, …)`
+/// order the inner invocation function declares.
+fn head_params_and_args(krate: &TokenStream) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    (
+        vec![
+            quote! { __headers: #krate::http::HeaderMap },
+            quote! { __uri: #krate::http::Uri },
+            quote! { __raw_path_params: #krate::http::extract::RawPathParams },
+            quote! { __peer_addr: #krate::PeerAddr },
+            quote! { __extensions: #krate::http::Extensions },
+            quote! { __method: #krate::http::Method },
+        ],
+        vec![
+            quote! { __headers },
+            quote! { __uri },
+            quote! { __raw_path_params },
+            quote! { __peer_addr },
+            quote! { __extensions },
+            quote! { __method },
+        ],
+    )
+}
+
+/// Splice the request-head group into the closure signature **after** the
+/// handler's own `FromRequestParts` parameters.
+///
+/// Axum runs extractors in parameter order, and the head group snapshots
+/// `Extensions` **by value**. A param-level `#[inject(identity)]` that parks
+/// something in `parts.extensions` (the documented JWT → tenancy pattern) must
+/// therefore run *before* the snapshot, or the snapshot is stale and everything
+/// reading the request head — guards, `#[managed]` acquisition — never sees the
+/// claim.
+///
+/// The one parameter that cannot move is the trailing one: axum requires the
+/// **last** handler parameter to be `FromRequest` (the body extractor), the
+/// others `FromRequestParts`. So the layout is
+/// `[leading…] [extras except the trailing one] [head…] [trailing extra]`,
+/// with the trailing extra pulled forward when it is the identity (an identity
+/// is always `FromRequestParts`, so nothing is left needing the last slot, and
+/// `Method` — itself `FromRequestParts` — ends the signature instead).
+///
+/// The closure's forwarding args are unaffected: they are named, and their
+/// order stays the fixed one the invocation function expects.
+fn assemble_closure_params(
+    leading: Vec<TokenStream>,
+    extras: Vec<TokenStream>,
+    head: Vec<TokenStream>,
+    trailing_is_movable: bool,
+) -> Vec<TokenStream> {
+    let mut params = leading;
+    if head.is_empty() {
+        params.extend(extras);
+        return params;
+    }
+    let mut extras = extras;
+    let trailing = if trailing_is_movable {
+        None
+    } else {
+        extras.pop()
+    };
+    params.extend(extras);
+    params.extend(head);
+    params.extend(trailing);
+    params
+}
+
 /// Build the Axum-extractable params + matching call args for a closure
 /// wrapping the application-scoped HTTP handler.
 fn route_axum_params_and_args(
@@ -1456,32 +1527,26 @@ fn route_axum_params_and_args(
 ) -> (Vec<TokenStream>, Vec<TokenStream>) {
     let identity_index = rm.identity_param.as_ref().map(|p| p.index);
     let identity_marker = identity_marker_for(&rm.fn_item.sig.ident);
-    let mut params: Vec<TokenStream> = Vec::new();
+    let mut leading: Vec<TokenStream> = Vec::new();
     let mut args: Vec<TokenStream> = Vec::new();
     if needs_state {
-        params.push(quote! {
+        leading.push(quote! {
             #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>
         });
         args.push(quote! { __state });
     }
-    if needs_head {
-        params.push(quote! { __headers: #krate::http::HeaderMap });
-        params.push(quote! { __uri: #krate::http::Uri });
-        params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        params.push(quote! { __peer_addr: #krate::PeerAddr });
-        params.push(quote! { __extensions: #krate::http::Extensions });
-        params.push(quote! { __method: #krate::http::Method });
-        args.push(quote! { __headers });
-        args.push(quote! { __uri });
-        args.push(quote! { __raw_path_params });
-        args.push(quote! { __peer_addr });
-        args.push(quote! { __extensions });
-        args.push(quote! { __method });
-    }
+    let (head_params, head_args) = if needs_head {
+        head_params_and_args(krate)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    args.extend(head_args);
 
     let extra_params = extract_handler_params(rm);
     let managed_indices: std::collections::HashSet<usize> =
         rm.managed_params.iter().map(|mp| mp.index).collect();
+    let mut extras: Vec<TokenStream> = Vec::new();
+    let mut last_is_identity = false;
     for (i, pt) in extra_params
         .iter()
         .filter(|(i, _)| !managed_indices.contains(i))
@@ -1492,13 +1557,16 @@ fn route_axum_params_and_args(
             // Param-level identity: extracted through `FromRequestPartsVia`
             // (bean-backed, witness in the marker) and unwrapped before the
             // invocation call, so the route method keeps the plain type.
-            params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            extras.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
             args.push(quote! { #arg.0 });
+            last_is_identity = true;
         } else {
-            params.push(quote! { #arg: #ty });
+            extras.push(quote! { #arg: #ty });
             args.push(quote! { #arg });
+            last_is_identity = false;
         }
     }
+    let params = assemble_closure_params(leading, extras, head_params, last_is_identity);
     (params, args)
 }
 
@@ -1617,35 +1685,35 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let has_guards = !sm.decorators.guard_fns.is_empty()
         && super::decorators::all_specs_inferable(sm.decorators.guard_fns.iter());
 
-    let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
-    if has_guards {
-        closure_params.push(quote! { __headers: #krate::http::HeaderMap });
-        closure_params.push(quote! { __uri: #krate::http::Uri });
-        closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        closure_params.push(quote! { __peer_addr: #krate::PeerAddr });
-        closure_params.push(quote! { __extensions: #krate::http::Extensions });
-        closure_params.push(quote! { __method: #krate::http::Method });
-        fwd_args.push(quote! { __headers });
-        fwd_args.push(quote! { __uri });
-        fwd_args.push(quote! { __raw_path_params });
-        fwd_args.push(quote! { __peer_addr });
-        fwd_args.push(quote! { __extensions });
-        fwd_args.push(quote! { __method });
-    }
+    let (head_params, head_args) = if has_guards {
+        head_params_and_args(&krate)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    fwd_args.extend(head_args);
     let identity_index = sm.identity_param.as_ref().map(|p| p.index);
     let identity_marker = identity_marker_for(&sm.fn_item.sig.ident);
+    let mut extras: Vec<TokenStream> = Vec::new();
+    let mut last_is_identity = false;
     for (i, pt) in extract_sig_params(&sm.fn_item.sig) {
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
         if Some(i) == identity_index {
-            closure_params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            extras.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
             fwd_args.push(quote! { #arg.0 });
+            last_is_identity = true;
         } else {
-            closure_params.push(quote! { #arg: #ty });
+            extras.push(quote! { #arg: #ty });
             fwd_args.push(quote! { #arg });
+            last_is_identity = false;
         }
     }
+    // Same ordering rule as the ordinary route closure: the head snapshot goes
+    // after the handler's own `FromRequestParts` params (a param identity can
+    // populate the extensions a guard reads), before the trailing one.
+    let closure_params =
+        assemble_closure_params(Vec::new(), extras, head_params, last_is_identity);
 
     let prefix_len = if has_guards { 6 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
@@ -1708,13 +1776,9 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
 
     let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
-    if has_guards {
-        closure_params.push(quote! { __headers: #krate::http::HeaderMap });
-        closure_params.push(quote! { __uri: #krate::http::Uri });
-        closure_params.push(quote! { __peer_addr: #krate::PeerAddr });
-        closure_params.push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        closure_params.push(quote! { __extensions: #krate::http::Extensions });
-        closure_params.push(quote! { __method: #krate::http::Method });
+    // WS keeps its own head order (peer_addr before raw_path_params) — the
+    // inner handler's signature, not something to "fix" here.
+    let head_params: Vec<TokenStream> = if has_guards {
         fwd_args.push(quote! { __deco_capture.clone() });
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
@@ -1722,7 +1786,17 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
         fwd_args.push(quote! { __raw_path_params });
         fwd_args.push(quote! { __extensions });
         fwd_args.push(quote! { __method });
-    }
+        vec![
+            quote! { __headers: #krate::http::HeaderMap },
+            quote! { __uri: #krate::http::Uri },
+            quote! { __peer_addr: #krate::PeerAddr },
+            quote! { __raw_path_params: #krate::http::extract::RawPathParams },
+            quote! { __extensions: #krate::http::Extensions },
+            quote! { __method: #krate::http::Method },
+        ]
+    } else {
+        Vec::new()
+    };
     let identity_index = wm.identity_param.as_ref().map(|p| p.index);
     let identity_marker = identity_marker_for(&wm.fn_item.sig.ident);
     for (i, pt) in extract_sig_params(&wm.fn_item.sig) {
@@ -1739,6 +1813,10 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
             fwd_args.push(quote! { #arg });
         }
     }
+    // The head snapshot lands after every handler param (a param identity may
+    // populate the extensions the guards read) and before the upgrade, which
+    // stays the trailing parameter.
+    closure_params.extend(head_params);
     closure_params.push(quote! { __ws_upgrade: #krate::http::ws::WebSocketUpgrade });
     fwd_args.push(quote! { __ws_upgrade });
 

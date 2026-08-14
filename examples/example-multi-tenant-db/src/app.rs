@@ -62,8 +62,9 @@ impl App for MultiTenantDbApp {
             let master = master.clone();
             async move { Ok(master.dsn(tenant.as_str()).await?) }
         })
-        // Per tenant! The total connection count is this times the number of
-        // live tenants, which `max_active` below caps.
+        // Per tenant! The steady-state connection count is this times the
+        // number of live tenants. `max_active` below is a soft trim target, not
+        // an admission bound for cold bursts.
         .max_connections(2);
 
         b.load_config::<()>()
