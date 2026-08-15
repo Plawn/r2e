@@ -161,6 +161,129 @@ Remaining:
   the key, or use `#[config]`); listed here only so it is not "rediscovered" as
   a bug.
 
+## W14 — Multi-tenant bean routing — SHIPPED 2026-08-14
+
+Closes the last root-`todo` item ("avoir une feature pour router différents bean
+en fonction du tenant, type plusieurs DB — infra générique puis implem
+spécifique db"). Crate `r2e-tenant` (feature `tenant`, in `full`) + the
+`tenant` feature on both data backends. Reference: `docs/features/24-tenancy.md`
+(user guide), `docs/claude/subsystems.md` § Multi-tenancy (internals),
+`examples/example-multi-tenant-db` (end-to-end).
+
+Shipped:
+
+- **Generic infra.** `TenantResolver` / `SyncTenantResolver` (SPI #1) with
+  built-ins (`HeaderTenantResolver`, `PathTenantResolver`,
+  `ExtensionTenantResolver`, `FnTenantResolver`); `TenantSource<T>` (SPI #2)
+  with `TenantContext` cascade (`ctx.get::<U>()` resolves U **for the same
+  tenant**, single-flighted, cycle-detected with a named chain);
+  `Tenanted<T>` — single-flight create, no failure caching, bounded negative
+  cache, `create-timeout`, idle/LRU sweep with `dispose`, drain on shutdown,
+  `metrics()`/`stats()`/`evict()`/`invalidate()`/`preload()`.
+- **Compile-checked wiring.** `Tenant<T>` / `TenantId` are `FromRequestPartsVia`
+  + `ViaBean` (never axum `FromRequestParts` — pinned by
+  `assert_unambiguous_extractor` probes), so a missing `Tenancy` / `PerTenant`
+  plugin is a compile error at `register_controllers`, not a 500 on the first
+  request from the first tenant. Compile-fail cases in
+  `r2e-compile-tests/cases/tenancy/fail/`.
+- **DB-specific impl.** `tenant-sqlx` / `tenant-diesel`: `TenantPools<..>`,
+  `PoolSource` (tenant → DSN → pool), `TenantTx` — a `#[managed]` transaction on
+  the requesting tenant's pool needing **no** controller field, because
+  `TenantPool`'s `TxSource::Deps` list `TenantRouter` + `TenantPools<..>`.
+- **`TenantId` parsed, never deserialized** — no `Deserialize` impl, so a value
+  that picks a database/schema/bucket cannot arrive in a request body and skip
+  validation.
+- Config `tenancy.*` (precedence: `PerTenant` builder > file > default),
+  `TenantError` → one status per failure mode (400/404/503/504/500, the
+  request-driven three configurable), `tenancy.enabled: false` boots inert
+  rather than requiring code deletion, test helpers `.as_tenant()` /
+  `.as_tenant_user()`.
+
+Deferred, with the reason (do not re-propose without addressing it):
+
+- **Per-tenant migrations on the request path.** Documented as out of scope in
+  both backends' `tenant` module docs. To be correct it belongs inside the
+  single-flight cell (so N concurrent first requests migrate once), which puts
+  it under `tenancy.create-timeout` — a migration set slower than that budget
+  surfaces as a 504 for whichever tenant triggered it. Until that interaction is
+  designed, tenants migrate from the provisioning path.
+- **B4-style watch re-spawn / distributed negative cache.** The negative cache
+  and the sweep are per-process; a multi-process deployment remembers unknown
+  tenants independently. Fine at `negative-ttl` scale, would need a shared
+  backend to be more.
+- **No `Tenanted` Prometheus exporter.** `TenantedMetrics` / `TenantStats`
+  implement `Serialize` for admin JSON (`TenantStats::idle` becomes `idle_ms`),
+  but metrics-exporter wiring remains application-owned.
+- **`#[inject(request)]` is still not modeled in OpenAPI**, so `Tenant<T>` /
+  `TenantId` fields do not appear in the spec. Pre-existing gap, not
+  tenancy-specific.
+- **No CLI surface** (`r2e generate` scaffolding for a resolver/source).
+
+### Audit status
+
+An external read-only review of `f41d015` (2026-08-14) is recorded verbatim in
+`docs/claude/w14-tenancy-audit.md`, with its triage/fix status at the top.
+Findings 1/4/9, 2/5/6, 7 and 8 were addressed on 2026-08-14. Finding 3 is an
+accepted, documented limitation: concurrent-root cascade cycles end at
+`create-timeout` (504), or hang when the timeout is disabled.
+
+### Remaining DX frictions observed while building W14
+
+Collected as they were hit, with resolved audit items removed. Ordered by how
+often a user would hit it.
+
+- **`TenantTx` reads differently on the two backends** — `TenantTx<'_, DB>`
+  (sqlx) vs `TenantTx<Conn>` (diesel, no lifetime), because the two `ManagedTx`
+  types differ. The most likely copy-paste error between backends. Same story
+  for `PoolSource::with_options` (sqlx `PoolOptions` is `Clone`) vs
+  `with_factory` (r2d2 `Builder` is not).
+- **`Tenant<T>` only works as a controller field** (`#[inject(request)]`), never
+  as a handler parameter: `#[routes]` accepts only `#[inject(identity)]` on
+  params, and a plain param must implement axum's `FromRequestParts`, which
+  `Tenant<T>` deliberately does not. Mostly-public controllers that want one
+  tenant-aware route must still declare the field. Fixing it means teaching the
+  macro `#[inject(request)]` on params (would also benefit every other
+  request-scoped type).
+- **`TenantId` is `Serialize`-only**, which is right for request bodies but also
+  blocks tests from deserializing a response that contains one. Tests compare
+  strings today. A test-only or feature-gated `Deserialize` would remove that
+  without weakening the "never from a body" property — the property that matters
+  is that *extraction* validates, so a `Deserialize` that goes through `parse`
+  may be acceptable.
+- **`r2e-tenant`'s own tests cannot use `TestApp`** (it lives in `r2e-test`,
+  which depends on the facade → dev-dependency cycle), so they drive
+  `tower::ServiceExt::oneshot` over a built `Router`. Same constraint as
+  `r2e-core`'s controller tests. Consequence: the `TestApp` path for tenancy is
+  covered only from the backend crates and the example.
+- **Evicted diesel pools are not closed**, only dropped — r2d2 has no close, so a
+  tenant's connections linger until in-flight ones finish. `max-active` is a
+  soft trim target, so `max-active × max_connections` is only a steady-state
+  planning target, never a hard burst bound.
+- **`Tenancy::resolver::<R>()` needs a type-state hop** (`Tenancy<()>` →
+  `Tenancy<R>`) because `R` must appear in `Deps`; a plain inherent method on
+  `Tenancy<R>` is E0107. Works, reads slightly oddly. `PerTenant`'s
+  `fallback_to_default()` uses the same trick for a better reason (it adds `T` to
+  `Deps`).
+- **`DevPostgres::create_database(name)` was skipped** — one container backing N
+  tenant databases needs either a SQL client dependency in `r2e-devservices` or
+  container `exec` plumbing. Until then, Docker-based per-tenant tests create
+  their own databases.
+- **Generated handlers now carry `#[allow(clippy::too_many_arguments)]`** because
+  the 6-extractor head prefix pushes them past clippy's threshold; without it
+  every downstream crate using `#[managed]` or `#[guard]` gets a new warning.
+  Hiding a lint in generated code is a smell even when it is the right call.
+
+Accepted limitations and remaining frictions from the external audit:
+
+- **`Tenant<T>::into_inner` / `into_parts` let a request-scoped resource escape**
+  the request with no lease semantics. This is now the documented contract;
+  resource handles must tolerate close-while-cloned.
+- **`max_negative` is global only** — every other bound (`max_active`, TTLs,
+  create timeout) is also a per-resource builder method.
+- **sqlx `PoolSource::new` hands the closure an owned `TenantId`** while
+  `TenantSource::create` receives `&TenantId`; custom directory code pays an
+  avoidable clone/signature mismatch.
+
 ## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed

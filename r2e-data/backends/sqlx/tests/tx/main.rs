@@ -6,3 +6,6 @@ mod support;
 
 #[cfg(feature = "sqlite")]
 mod sqlite;
+
+#[cfg(all(feature = "sqlite", feature = "tenant"))]
+mod tenant;

@@ -29,6 +29,9 @@
 //! | `events-pulsar`   | no  | `r2e-events-pulsar` (Apache Pulsar backend) |
 //! | `events-rabbitmq` | no  | `r2e-events-rabbitmq` (RabbitMQ/AMQP backend) |
 //! | `static`      | no      | `r2e-static` (embedded static file serving + SPA fallback) |
+//! | `tenant`      | no      | `r2e-tenant` (multi-tenant bean routing: `Tenant<T>`, per-tenant resources) |
+//! | `tenant-sqlx` | no      | per-tenant SQLx pools/transactions (`TenantPools`, `TenantTx`, `PoolSource`) |
+//! | `tenant-diesel` | no    | per-tenant Diesel r2d2 pools/transactions (`TenantPools`, `TenantTx`, `PoolSource`) |
 //! | `validation`  | no      | `r2e-core/validation`     |
 //! | `dev-reload`  | no      | `r2e-devtools` (Subsecond hot-patch, **not** in `full`) |
 //! | `full`        | no      | Bundled framework modules; database/event backends, QUIC, and dev reload stay opt-in |
@@ -100,6 +103,19 @@ pub use r2e_grpc;
 
 #[cfg(feature = "static")]
 pub use r2e_static;
+
+#[cfg(feature = "tenant")]
+pub use r2e_tenant;
+
+/// Multi-tenant bean routing: [`Tenant<T>`](r2e_tenant::Tenant) extractors,
+/// resolvers, per-tenant resource maps, and the two plugins.
+///
+/// The readable alias for `r2e::r2e_tenant` — `use r2e::tenant::{PerTenant,
+/// Tenancy, Tenant};`.
+#[cfg(feature = "tenant")]
+pub mod tenant {
+    pub use r2e_tenant::*;
+}
 
 #[cfg(feature = "observability")]
 pub use r2e_observability;

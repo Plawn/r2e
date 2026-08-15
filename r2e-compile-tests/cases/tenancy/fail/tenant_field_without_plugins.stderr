@@ -1,0 +1,78 @@
+error[E0277]: `Tenant<Pool>` cannot be extracted from a request against this application state
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:36:9
+   |
+36 | /         AppBuilder::new()
+37 | |             .build_state()
+38 | |             .await
+39 | |             .register_controller::<OrderController>()
+   | |_____________________________________________________^ the trait `FromRequestPartsVia<HNil, _>` is not implemented for `Tenant<Pool>`
+   |
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is implemented for `Tenant<T>`
+  --> $WORKSPACE/r2e-tenant/src/extract.rs
+   |
+   | / impl<S, T, I, J> FromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
+   | | where
+   | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |     T: Clone + Send + Sync + 'static,
+   | |     I: Send + Sync,
+   | |     J: Send + Sync,
+   | |___________________^
+note: required for `__R2eRequestData_OrderController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
+   |
+19 | #[controller(path = "/orders")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `OrderController` to implement `Controller<HNil, ((_,),)>`
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
+   |
+25 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+26 | impl OrderController {
+   |      ^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Tenant<Pool>` cannot be extracted from a request against this application state
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:39:36
+   |
+39 |             .register_controller::<OrderController>()
+   |              -------------------   ^^^^^^^^^^^^^^^ the trait `FromRequestPartsVia<HNil, _>` is not implemented for `Tenant<Pool>`
+   |              |
+   |              required by a bound introduced by this call
+   |
+   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
+help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is implemented for `Tenant<T>`
+  --> $WORKSPACE/r2e-tenant/src/extract.rs
+   |
+   | / impl<S, T, I, J> FromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
+   | | where
+   | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |     T: Clone + Send + Sync + 'static,
+   | |     I: Send + Sync,
+   | |     J: Send + Sync,
+   | |___________________^
+note: required for `__R2eRequestData_OrderController<(_,)>` to implement `FromRequestParts<HNil>`
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
+   |
+19 | #[controller(path = "/orders")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `OrderController` to implement `Controller<HNil, ((_,),)>`
+  --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
+   |
+25 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
+26 | impl OrderController {
+   |      ^^^^^^^^^^^^^^^
+note: required by a bound in `register_controller`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_controller<C>(self) -> Self
+   |        ------------------- required by a bound in this associated function
+   |     where
+   |         C: Controller<T, W>,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `RegisterController::register_controller`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

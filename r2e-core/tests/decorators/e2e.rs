@@ -257,6 +257,8 @@ where
                     let guard_ctx = GuardContext::<NoIdentity> {
                         method_name: "list",
                         controller_name: "SpikeController",
+                        method: r2e_core::default_method(),
+                        extensions: r2e_core::no_extensions(),
                         headers: &headers,
                         uri: &uri,
                         peer_addr: None,
@@ -318,6 +320,8 @@ async fn decorators_build_from_context_not_state() {
     let guard_ctx = GuardContext::<NoIdentity> {
         method_name: "m",
         controller_name: "c",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,

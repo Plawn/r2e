@@ -2575,6 +2575,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-multi-tenant-db"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "r2e-test",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "example-oidc"
 version = "0.1.0"
 dependencies = [
@@ -5667,6 +5681,7 @@ dependencies = [
  "r2e-scheduler",
  "r2e-security",
  "r2e-static",
+ "r2e-tenant",
  "r2e-utils",
 ]
 
@@ -5709,6 +5724,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tokio-util",
  "tonic",
@@ -5754,9 +5770,12 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "diesel",
+ "http-body-util",
  "r2e-core",
+ "r2e-tenant",
  "tokio",
  "tokio-util",
+ "tower",
 ]
 
 [[package]]
@@ -5767,10 +5786,13 @@ dependencies = [
  "async-stream",
  "futures-core",
  "futures-util",
+ "http-body-util",
  "r2e-core",
+ "r2e-tenant",
  "sqlx",
  "tokio",
  "tokio-util",
+ "tower",
 ]
 
 [[package]]
@@ -6103,6 +6125,21 @@ dependencies = [
  "rust-embed",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "r2e-tenant"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "http-body-util",
+ "r2e-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

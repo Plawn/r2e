@@ -1,5 +1,6 @@
 use r2e_core::{
-    BeanLookup, HttpError, ManagedContext, ManagedErr, ManagedOutcome, ManagedResource,
+    BeanLookup, HttpError, ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome,
+    ManagedResource, TCons, TNil,
 };
 use sqlx::{Database, Pool, Transaction};
 use std::future::Future;
@@ -24,15 +25,26 @@ use crate::DbPool;
 /// the transaction actually ran on.
 pub trait TxSource<DB: Database> {
     /// Per-transaction metadata captured at begin time: the rotating-pool
-    /// generation for [`RotatingPool`], `()` for a fixed pool.
-    type Meta: Copy + Send + Sync + 'static;
+    /// generation for [`RotatingPool`], the resolved tenant for
+    /// [`TenantPool`](crate::TenantPool), `()` for a fixed pool.
+    ///
+    /// `Clone`, not `Copy`: a per-tenant transaction records its
+    /// [`TenantId`](https://docs.rs/r2e-tenant) — an `Arc<str>` newtype — and
+    /// nothing in the lifecycle needs the metadata to be trivially copyable.
+    type Meta: Clone + Send + Sync + 'static;
+
+    /// Type-level list ([`TCons`]/[`TNil`]) of the beans `begin` looks up.
+    ///
+    /// Surfaced on [`ManagedTx`] through [`ManagedDeps`], so a `#[managed]`
+    /// transaction whose pool bean was never provided is a compile error at
+    /// `register_controller` instead of a 500 on the first request.
+    type Deps;
 
     /// Resolve the source bean from the request state and begin a transaction
     /// on it, returning it with the metadata to store on it.
     fn begin<S>(
         context: &ManagedContext<'_, S>,
-    ) -> impl Future<Output = Result<(Transaction<'static, DB>, Self::Meta), ManagedErr<HttpError>>>
-           + Send
+    ) -> impl Future<Output = Result<(Transaction<'static, DB>, Self::Meta), ManagedErr<HttpError>>> + Send
     where
         S: BeanLookup + Send + Sync;
 }
@@ -69,13 +81,23 @@ impl<'a, DB: Database, Src: TxSource<DB>> ManagedTx<'a, DB, Src> {
             .as_mut()
             .expect("managed SQLx transaction has already been finalized")
     }
+
+    /// The metadata the [`TxSource`] recorded when it began this transaction.
+    ///
+    /// Sources expose it under a domain name — [`generation`](ManagedTx::generation)
+    /// on a rotating-pool transaction, `tenant()` on a per-tenant one — and this
+    /// is the generic accessor those are written on top of.
+    #[must_use]
+    pub fn meta(&self) -> &Src::Meta {
+        &self.meta
+    }
 }
 
 impl<'a, DB: Database> ManagedTx<'a, DB, RotatingPool<DB>> {
     /// The [`DbPool`] generation this transaction was begun on.
     #[must_use]
     pub fn generation(&self) -> u64 {
-        self.meta
+        *self.meta()
     }
 }
 
@@ -95,6 +117,10 @@ impl<'a, DB: Database, Src: TxSource<DB>> DerefMut for ManagedTx<'a, DB, Src> {
             .as_mut()
             .expect("managed SQLx transaction has already been finalized")
     }
+}
+
+impl<'a, DB: Database, Src: TxSource<DB>> ManagedDeps for ManagedTx<'a, DB, Src> {
+    type Deps = Src::Deps;
 }
 
 impl<S, DB, Src> ManagedResource<S> for ManagedTx<'static, DB, Src>
@@ -136,6 +162,7 @@ pub struct FixedPool<DB>(PhantomData<fn() -> DB>);
 
 impl<DB: Database> TxSource<DB> for FixedPool<DB> {
     type Meta = ();
+    type Deps = TCons<Pool<DB>, TNil>;
 
     async fn begin<S>(
         context: &ManagedContext<'_, S>,
@@ -160,6 +187,7 @@ pub struct RotatingPool<DB>(PhantomData<fn() -> DB>);
 
 impl<DB: Database> TxSource<DB> for RotatingPool<DB> {
     type Meta = u64;
+    type Deps = TCons<DbPool<DB>, TNil>;
 
     async fn begin<S>(
         context: &ManagedContext<'_, S>,

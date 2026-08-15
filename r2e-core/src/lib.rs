@@ -25,6 +25,7 @@ pub mod params;
 pub mod plugin;
 pub mod plugins;
 pub mod prelude;
+pub mod request_head;
 pub mod request_id;
 pub mod rt;
 pub mod scheduled_source;
@@ -58,8 +59,8 @@ pub use config::{
     ConfigProvider, ConfigProviderContext, ConfigUpdateSink, ConfigValidationDetail,
     ConfigValidationError, ConfigValue, ConfigWatchContext, DefaultSecretResolver, FromConfigValue,
     LiveConfig, LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot, LoadableConfig,
-    MissingKeyError, PluginConfig, PropertyMeta, R2eConfig, RegisteredSection, SectionValidator,
-    SecretResolver,
+    MissingKeyError, PluginConfig, PropertyMeta, R2eConfig, RegisteredSection, SecretResolver,
+    SectionValidator,
 };
 pub use controller::{ContextConstruct, Controller, EndpointDeps};
 pub use decorator::{
@@ -73,8 +74,8 @@ pub use extract::{
     PeerAddr, Via, ViaAxum, ViaBean, ViaOpt,
 };
 pub use guards::{
-    parse_forwarded_ip, ClientIp, Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam,
-    PathParams, PreAuthGuard, PreAuthGuardContext,
+    default_method, no_extensions, parse_forwarded_ip, ClientIp, Guard, GuardContext, GuardError,
+    Identity, NoIdentity, PathParam, PathParams, PreAuthGuard, PreAuthGuardContext,
 };
 pub use interceptors::{Cacheable, Interceptor, InterceptorContext};
 pub use late::Late;
@@ -82,8 +83,8 @@ pub use layers::{default_cors, default_trace, init_tracing, init_tracing_with_co
 pub use lazy::Lazy;
 pub use lifecycle::{LifecycleController, StopHandle};
 pub use managed::{
-    record_managed_finalize_error, ManagedContext, ManagedErr, ManagedGuard, ManagedOutcome,
-    ManagedOutcomeKind, ManagedResource,
+    record_managed_finalize_error, ManagedContext, ManagedDeps, ManagedErr, ManagedGuard,
+    ManagedOutcome, ManagedOutcomeKind, ManagedResource,
 };
 pub use meta::MetaRegistry;
 pub use module::FeatureModule;
@@ -93,6 +94,7 @@ pub use plugin::{
     RawPreStatePlugin,
 };
 pub use plugins::{AdvancedHealth, ConfiguredTracing};
+pub use request_head::RequestHead;
 pub use request_id::{RequestId, RequestIdPlugin};
 pub use scheduled_source::ScheduledSource;
 pub use secure_headers::SecureHeaders;

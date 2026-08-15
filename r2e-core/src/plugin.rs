@@ -881,7 +881,7 @@ pub struct DeferredContext<'a> {
     /// plugin's post-state [`configure`](crate::PreStatePlugin::configure)
     /// `Deps` resolution.
     #[doc(hidden)]
-    pub bean_context: &'a crate::beans::BeanContext,
+    pub bean_context: &'a std::sync::Arc<crate::beans::BeanContext>,
     /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any. Deferred
     /// actions run inside `build_state()`, which always follows `load_config` /
     /// `with_config`, so this backs a plugin's post-state typed-`Config` loading
@@ -901,6 +901,17 @@ impl DeferredContext<'_> {
     /// hook resolves its `Deps`.
     pub fn bean_context(&self) -> &crate::beans::BeanContext {
         self.bean_context
+    }
+
+    /// A **retainable** handle on the resolved bean graph.
+    ///
+    /// [`bean_context`](Self::bean_context) is a borrow, and
+    /// `BeanContext::clone()` deliberately keeps only the shared base (it drops
+    /// the overlay of factory-built beans). A plugin that must hand the graph to
+    /// something outliving `configure` — a lazy per-tenant source, a resource
+    /// factory — takes this handle instead, which keeps the *whole* graph alive.
+    pub fn bean_context_handle(&self) -> std::sync::Arc<crate::beans::BeanContext> {
+        std::sync::Arc::clone(self.bean_context)
     }
 
     /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any.

@@ -12,6 +12,19 @@ use serde_json::Value;
 use std::sync::OnceLock;
 use tower::util::ServiceExt;
 
+// ─── Tenancy ───
+
+/// The header [`TestRequest::as_tenant`] sets — the default
+/// `HeaderTenantResolver` header.
+///
+/// A plain string on purpose: naming a tenant in a test request costs one header
+/// and one claim, so `r2e-test` stays free of any dependency on `r2e-tenant`.
+pub const TENANT_HEADER: &str = "x-tenant-id";
+
+/// The JWT claim [`TestRequest::as_tenant_user`] mints the tenant into — the
+/// claim a JWT-based resolver reads.
+pub const TENANT_CLAIM: &str = "tenant";
+
 // ─── Shared request building ───
 
 /// Common request fields shared between `TestRequest` and `SessionRequest`.
@@ -162,6 +175,16 @@ macro_rules! impl_request_builders {
                 .headers
                 .insert(name, value.as_ref().parse().unwrap());
             self
+        }
+
+        /// Send this request as tenant `tenant`, through the
+        /// [`TENANT_HEADER`](crate::TENANT_HEADER) header (`x-tenant-id`) — the
+        /// tenancy counterpart of [`bearer`](Self::bearer).
+        ///
+        /// Pairs with a header-based resolver; for a resolver that reads the
+        /// tenant off the identity, use `as_tenant_user`, which sets both.
+        pub fn as_tenant(self, tenant: &str) -> Self {
+            self.header(crate::TENANT_HEADER, tenant)
         }
 
         /// Set the request body as JSON. Also sets Content-Type to `application/json`.
@@ -450,6 +473,28 @@ impl<'a> TestRequest<'a> {
     pub fn as_user(self, sub: &str, roles: &[&str]) -> Self {
         let token = self.app.test_jwt().token(sub, roles);
         self.bearer(&token)
+    }
+
+    /// Authenticate as `sub` **and** name the tenant, both ways at once: the
+    /// Bearer token carries a [`TENANT_CLAIM`](crate::TENANT_CLAIM) claim and
+    /// the request carries the [`TENANT_HEADER`](crate::TENANT_HEADER) header.
+    ///
+    /// Setting both is deliberate — a test written this way passes whether the
+    /// app resolves its tenant from the header or from the identity, so
+    /// swapping resolvers does not rewrite the test suite.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the app has no `TestJwt` (see [`TestApp::test_jwt`]).
+    pub fn as_tenant_user(self, sub: &str, tenant: &str, roles: &[&str]) -> Self {
+        let token = self
+            .app
+            .test_jwt()
+            .token_builder(sub)
+            .roles(roles)
+            .claim(crate::TENANT_CLAIM, tenant)
+            .build();
+        self.bearer(&token).as_tenant(tenant)
     }
 
     /// Send the request and return the response.

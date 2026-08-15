@@ -75,6 +75,8 @@ fn named_guard_ctx<'a>(
     GuardContext {
         method_name,
         controller_name,
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers,
         uri,
         peer_addr: None,

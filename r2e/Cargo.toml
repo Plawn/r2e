@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static"]
+full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static", "tenant"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -26,6 +26,10 @@ sqlx-mysql = ["data-sqlx", "r2e-data-sqlx/mysql"]
 diesel-sqlite = ["data-diesel", "r2e-data-diesel/sqlite"]
 diesel-postgres = ["data-diesel", "r2e-data-diesel/postgres"]
 diesel-mysql = ["data-diesel", "r2e-data-diesel/mysql"]
+# Per-tenant SQLx pools/transactions: r2e-tenant + the sqlx backend's tenant impl.
+tenant-sqlx = ["tenant", "data-sqlx", "r2e-data-sqlx/tenant"]
+# Per-tenant Diesel pools/transactions: r2e-tenant + the diesel backend's tenant impl.
+tenant-diesel = ["tenant", "data-diesel", "r2e-data-diesel/tenant"]
 # Compatibility aliases. Prefer backend-qualified driver features above.
 sqlite = ["sqlx-sqlite"]
 postgres = ["sqlx-postgres"]
@@ -46,6 +50,7 @@ observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc"]
 grpc-reflection = ["grpc", "r2e-grpc/reflection"]
 static = ["dep:r2e-static"]
+tenant = ["dep:r2e-tenant"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
 # NOTE: quic is intentionally NOT in `full` — pulls heavy crypto deps (quinn, rustls, h3)
@@ -71,6 +76,7 @@ r2e-prometheus = {workspace = true, optional = true}
 r2e-openfga = {workspace = true, optional = true}
 r2e-grpc = {workspace = true, optional = true}
 r2e-static = {workspace = true, optional = true}
+r2e-tenant = {workspace = true, optional = true}
 r2e-observability = {workspace = true, optional = true}
 r2e-events-iggy = {workspace = true, optional = true}
 r2e-events-kafka = {workspace = true, optional = true}

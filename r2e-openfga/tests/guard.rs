@@ -62,6 +62,8 @@ fn test_resolve_object_from_path() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -88,6 +90,8 @@ fn test_resolve_object_from_path_missing() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -114,6 +118,8 @@ fn test_resolve_object_from_query() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -141,6 +147,8 @@ fn test_resolve_object_from_header() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -167,6 +175,8 @@ fn test_resolve_object_fixed() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "AdminController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -193,6 +203,8 @@ fn test_resolve_object_query_missing() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -221,6 +233,8 @@ fn test_resolve_object_rejects_colon_in_path() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -247,6 +261,8 @@ fn test_resolve_object_rejects_colon_in_query() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -274,6 +290,8 @@ fn test_resolve_object_rejects_colon_in_header() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -300,6 +318,8 @@ fn test_resolve_object_fixed_allows_colon() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "AdminController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -343,6 +363,8 @@ async fn built_guard_allows_when_tuple_present() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -374,6 +396,8 @@ async fn built_guard_forbids_when_tuple_absent() {
     let ctx = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -403,6 +427,8 @@ async fn built_guard_unauthorized_without_identity() {
     let ctx: GuardContext<'_, TestIdentity> = GuardContext {
         method_name: "get",
         controller_name: "DocumentController",
+        method: r2e_core::default_method(),
+        extensions: r2e_core::no_extensions(),
         headers: &headers,
         uri: &uri,
         peer_addr: None,
@@ -441,6 +467,8 @@ async fn built_guard_forbids_subject_with_reserved_characters() {
         let ctx = GuardContext {
             method_name: "get",
             controller_name: "DocumentController",
+            method: r2e_core::default_method(),
+            extensions: r2e_core::no_extensions(),
             headers: &headers,
             uri: &uri,
             peer_addr: None,

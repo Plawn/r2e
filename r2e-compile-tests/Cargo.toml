@@ -15,8 +15,10 @@ prost = {workspace = true}
 r2e-grpc-build = {workspace = true}
 
 [dev-dependencies]
-r2e = {workspace = true, features = ["full"]}
+# `tenant-sqlx` (+ a driver) so the per-tenant transaction cases compile.
+r2e = {workspace = true, features = ["full", "tenant-sqlx", "sqlx-sqlite"]}
 r2e-test = {workspace = true}
+sqlx = {workspace = true, features = ["sqlite"]}
 bytes = {workspace = true}
 schemars = {workspace = true}
 serde = {workspace = true}

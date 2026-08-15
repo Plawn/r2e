@@ -1,5 +1,17 @@
 # example-multi-tenant
 
+**Row-level tenancy.** One shared database, rows tagged with a tenant column,
+isolation enforced by a custom guard reading the tenant off the JWT identity.
+No framework tenancy layer involved — this is the model you reach for when
+every tenant's data lives in the same tables.
+
+For the other model — one database *per tenant*, resolved from the request and
+provisioned on first use by the `tenant` feature (`Tenant<T>`, `Tenanted<T>`,
+`TenantTx`) — see
+[`examples/example-multi-tenant-db`](../example-multi-tenant-db/README.md), and
+[`docs/features/24-tenancy.md`](../../docs/features/24-tenancy.md) for the
+guide covering both.
+
 Tenant isolation via JWT claims and custom guards, demonstrating:
 
 - Custom identity type (`TenantUser`) via `FromValidatedJwtClaims` + `impl_claims_identity_extractor!`

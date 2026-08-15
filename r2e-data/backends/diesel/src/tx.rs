@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
@@ -5,7 +6,8 @@ use diesel::connection::TransactionManager;
 use diesel::r2d2::{ConnectionManager, Pool, PooledConnection, R2D2Connection};
 use diesel::Connection;
 use r2e_core::{
-    BeanLookup, HttpError, ManagedContext, ManagedErr, ManagedOutcome, ManagedResource,
+    BeanLookup, HttpError, ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome,
+    ManagedResource, TCons, TNil,
 };
 
 use crate::DbPool;
@@ -28,14 +30,35 @@ where
     Conn: Connection + R2D2Connection + 'static,
 {
     /// Per-transaction metadata captured at begin time: the rotating-pool
-    /// generation for [`RotatingPool`], `()` for a fixed pool.
-    type Meta: Copy + Send + Sync + 'static;
+    /// generation for [`RotatingPool`], the resolved tenant for
+    /// [`TenantPool`](crate::TenantPool), `()` for a fixed pool.
+    ///
+    /// `Clone`, not `Copy`: a per-tenant transaction records its
+    /// [`TenantId`](https://docs.rs/r2e-tenant) — an `Arc<str>` newtype — and
+    /// nothing in the lifecycle needs the metadata to be trivially copyable.
+    type Meta: Clone + Send + Sync + 'static;
+
+    /// Type-level list ([`TCons`]/[`TNil`]) of the beans `acquire_pool` looks
+    /// up.
+    ///
+    /// Surfaced on [`ManagedTx`] through [`ManagedDeps`], so a `#[managed]`
+    /// transaction whose pool bean was never provided is a compile error at
+    /// `register_controller` instead of a 500 on the first request.
+    type Deps;
 
     /// Resolve the source bean from the request state and return the pool to
     /// check a connection out of plus the metadata to store on the transaction.
+    ///
+    /// Asynchronous even though the fixed and rotating sources answer from an
+    /// in-memory bean: a per-tenant source may have to *create* the tenant's
+    /// pool here, which is network-bound. The caller
+    /// ([`ManagedResource::acquire`]) is already async, so the sources that
+    /// need nothing from the await simply never yield.
     fn acquire_pool<S>(
         context: &ManagedContext<'_, S>,
-    ) -> Result<(Pool<ConnectionManager<Conn>>, Self::Meta), ManagedErr<HttpError>>
+    ) -> impl Future<
+        Output = Result<(Pool<ConnectionManager<Conn>>, Self::Meta), ManagedErr<HttpError>>,
+    > + Send
     where
         S: BeanLookup + Send + Sync;
 }
@@ -101,6 +124,17 @@ where
             .1
             .map_err(|error| HttpError::internal(error.to_string()))
     }
+
+    /// The metadata the [`TxSource`] recorded when it acquired this
+    /// transaction's pool.
+    ///
+    /// Sources expose it under a domain name — [`generation`](ManagedTx::generation)
+    /// on a rotating-pool transaction, `tenant()` on a per-tenant one — and this
+    /// is the generic accessor those are written on top of.
+    #[must_use]
+    pub fn meta(&self) -> &Src::Meta {
+        &self.meta
+    }
 }
 
 impl<Conn> ManagedTx<Conn, RotatingPool<Conn>>
@@ -110,7 +144,7 @@ where
     /// The [`DbPool`] generation this transaction was begun on.
     #[must_use]
     pub fn generation(&self) -> u64 {
-        self.meta
+        *self.meta()
     }
 }
 
@@ -142,6 +176,14 @@ where
     }
 }
 
+impl<Conn, Src> ManagedDeps for ManagedTx<Conn, Src>
+where
+    Conn: Connection + R2D2Connection + 'static,
+    Src: TxSource<Conn>,
+{
+    type Deps = Src::Deps;
+}
+
 impl<S, Conn, Src> ManagedResource<S> for ManagedTx<Conn, Src>
 where
     S: BeanLookup + Send + Sync,
@@ -151,7 +193,7 @@ where
     type Error = ManagedErr<HttpError>;
 
     async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error> {
-        let (pool, meta) = Src::acquire_pool(&context)?;
+        let (pool, meta) = Src::acquire_pool(&context).await?;
         let connection = run_blocking(move || {
             let mut connection = pool.get().map_err(|error| error.to_string())?;
             <Conn::TransactionManager as TransactionManager<Conn>>::begin_transaction(
@@ -202,8 +244,9 @@ where
     Conn: Connection + R2D2Connection + 'static,
 {
     type Meta = ();
+    type Deps = TCons<Pool<ConnectionManager<Conn>>, TNil>;
 
-    fn acquire_pool<S>(
+    async fn acquire_pool<S>(
         context: &ManagedContext<'_, S>,
     ) -> Result<(Pool<ConnectionManager<Conn>>, ()), ManagedErr<HttpError>>
     where
@@ -231,8 +274,9 @@ where
     Conn: Connection + R2D2Connection + Send + 'static,
 {
     type Meta = u64;
+    type Deps = TCons<DbPool<Conn>, TNil>;
 
-    fn acquire_pool<S>(
+    async fn acquire_pool<S>(
         context: &ManagedContext<'_, S>,
     ) -> Result<(Pool<ConnectionManager<Conn>>, u64), ManagedErr<HttpError>>
     where

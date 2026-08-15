@@ -188,9 +188,56 @@ The `#[managed]` attribute enables automatic lifecycle management for resources 
 pub trait ManagedResource<S>: Sized + Send {
     type Error: Into<Response>;
 
-    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error>;
-    async fn finalize(&mut self, outcome: &ManagedOutcome) -> Result<(), Self::Error>;
+    fn acquire(
+        context: ManagedContext<'_, S>,
+    ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
+    fn finalize(
+        &mut self,
+        outcome: &ManagedOutcome,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn abort(&mut self);
+}
+
+pub trait ManagedDeps {
+    type Deps;
+}
+```
+
+Every managed type must implement `ManagedDeps`. Its type-level list names the
+beans that `acquire` looks up, so missing beans fail at controller registration.
+There is no blanket implementation; a request/state-only resource declares
+`TNil` explicitly:
+
+```rust
+use r2e_core::{
+    HttpError, ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome,
+    ManagedResource, TNil,
+};
+
+struct TenantAudit {
+    tenant: String,
+}
+
+impl<S: Send + Sync> ManagedResource<S> for TenantAudit {
+    type Error = ManagedErr<HttpError>;
+
+    async fn acquire(context: ManagedContext<'_, S>) -> Result<Self, Self::Error> {
+        let head = context.require_request()?;
+        let tenant = head
+            .header("x-tenant")
+            .ok_or_else(|| ManagedErr(HttpError::bad_request("tenant missing")))?;
+        Ok(Self { tenant: tenant.to_owned() })
+    }
+
+    async fn finalize(&mut self, _outcome: &ManagedOutcome) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn abort(&mut self) {}
+}
+
+impl ManagedDeps for TenantAudit {
+    type Deps = TNil; // acquire reads no bean
 }
 ```
 
