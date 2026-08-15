@@ -2486,10 +2486,11 @@ Docker creates (image, env, labels, cmd, mounts, port mappings, device
 requests, network, …), each folded the way Docker resolves it — keyed fields
 keep the effective value, set-like fields are sorted, ordered fields stay in
 order — so two specs that differ in any of them get two containers;
-`with_discriminator("...")` appends to that key for the rest: what
-testcontainers keeps private (ulimits, the host-config closure), the contents
-of a file copied by path, and anything applied after start (seeded data, or
-exec hooks the image runs itself).
+`with_discriminator("...")` appends to that key for the rest: ulimits
+(testcontainers keeps them private) and the host-config closure (no stable
+representation to fingerprint), the contents of a file copied by path, and
+anything applied after start (seeded data, or exec hooks the image runs
+itself).
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

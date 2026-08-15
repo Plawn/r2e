@@ -115,16 +115,18 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// - *Resolved by key* — env vars, labels, hosts, port mappings: folded
     ///   into a map first, so it is the **effective** value that counts (an
     ///   overridden env var, the last host port bound to a container port).
-    /// - *Set-like* — exposed ports, mounts, capabilities, security options:
-    ///   sorted, so declaration order alone never splits a container.
-    /// - *Ordered* — command, copied files, device requests: digested in order,
-    ///   because Docker applies them in order.
+    /// - *Set-like* — exposed ports, mounts, capabilities: sorted, so
+    ///   declaration order alone never splits a container.
+    /// - *Ordered* — command, copied files, device requests, security options:
+    ///   digested in order, because Docker applies them in order and a later
+    ///   one can override an earlier one.
     ///
     /// What it cannot see, all of it grounds for
     /// [`with_discriminator`](Self::with_discriminator):
     ///
-    /// - values testcontainers keeps private — ulimits, the host-config
-    ///   modifier closure (a closure's effect cannot be fingerprinted at all);
+    /// - ulimits, which testcontainers keeps private, and the host-config
+    ///   modifier — that one is readable, but a closure's effect has no stable
+    ///   representation to fingerprint;
     /// - the *contents* of a file copied by path (only the path is visible from
     ///   here — a fixture edited in place keeps its identity);
     /// - anything applied *after* start: seeded data, and the exec hooks an
@@ -206,7 +208,10 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         configuration.field("userns", optional(request.userns_mode()));
         configuration.list("cap_add", sorted(capabilities(request.cap_add())));
         configuration.list("cap_drop", sorted(capabilities(request.cap_drop())));
-        configuration.list("security", sorted(capabilities(request.security_opts())));
+        // Ordered as well: Docker parses security options in sequence and a
+        // later one overwrites an earlier one with the same name, so
+        // `no-new-privileges=true` then `=false` is not the reverse pair.
+        configuration.list("security", capabilities(request.security_opts()));
         // Ordered too, despite looking set-like: Docker keeps the vector and
         // applies each request in turn to the same OCI spec — the NVIDIA
         // handler appends to `NVIDIA_VISIBLE_DEVICES` per request — so two
@@ -328,8 +333,12 @@ impl DevService {
     /// Panics if Docker is unavailable or the container fails to start.
     pub async fn start<I: Image + 'static>(spec: DevServiceSpec<I>) -> Self {
         ryuk::ensure_lease().await;
+        // `Never` overrides whatever the spec asked for: testcontainers skips
+        // removal on drop for the reusing directives, which would leave this
+        // container behind — and the handle is the only thing scoping it.
         let request =
-            common::label_isolated((spec.request)(), &spec.service, &spec.configuration());
+            common::label_isolated((spec.request)(), &spec.service, &spec.configuration())
+                .with_reuse(ReuseDirective::Never);
         let container = request.start().await.unwrap_or_else(|error| {
             panic!(
                 "failed to start the {} dev service — is Docker running?: {error}",

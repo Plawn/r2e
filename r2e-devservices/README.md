@@ -117,11 +117,12 @@ to declare — that is all `PostgresSpec` does. Each field is folded the way
 Docker resolves it: values keyed by name (env vars, labels, port mappings) keep
 the *effective* value, set-like fields (exposed ports, capabilities) are sorted
 so declaration order alone never splits a container, and ordered fields
-(command, device requests) are read in order because Docker applies them in
-order.
+(command, device requests, security options) are read in order because Docker
+applies them in order — a later security option overrides an earlier one.
 
-What stays outside the key: what testcontainers keeps private (ulimits, the
-host-config modifier closure), the *contents* of a file copied by path (only the
+What stays outside the key: ulimits, which testcontainers keeps private, and the
+host-config modifier, whose closure has no stable representation to fingerprint;
+the *contents* of a file copied by path (only the
 path is visible — a fixture edited in place keeps its identity), and anything
 applied after start — seeded data, and the exec hooks an `Image` runs itself.
 Append to the key for those:

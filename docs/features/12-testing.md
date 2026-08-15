@@ -566,9 +566,10 @@ image, env vars, labels, command, mounts, port mappings, device requests,
 network, … — each folded the way Docker resolves it (keyed fields keep the
 effective value, set-like fields are sorted, ordered fields stay in order), so
 anything that changes the container separates it. Only what stays outside the
-request needs help: ulimits and the host-config closure (testcontainers keeps
-them private), the contents of a file copied by path, and anything applied after
-start — seeded data, or exec hooks the image runs itself.
+request needs help: ulimits (testcontainers keeps them private) and the
+host-config closure (no stable representation to fingerprint), the contents of a
+file copied by path, and anything applied after start — seeded data, or exec
+hooks the image runs itself.
 
 ```rust
 DevServiceSpec::new("clickhouse", request)

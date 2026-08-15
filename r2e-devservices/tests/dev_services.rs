@@ -371,6 +371,28 @@ fn identity_covers_device_requests() {
     );
 }
 
+/// Docker parses security options in sequence and a later one overrides an
+/// earlier one of the same name, so the reversed pair is a different container.
+#[test]
+fn identity_keeps_the_order_of_security_options() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn opts(first: &'static str, second: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("security", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_security_opt(first)
+                .with_security_opt(second)
+        })
+    }
+
+    // The last one wins: `NoNewPrivs: 0` one way round, `1` the other.
+    assert_ne!(
+        opts("no-new-privileges=true", "no-new-privileges=false").configuration(),
+        opts("no-new-privileges=false", "no-new-privileges=true").configuration()
+    );
+}
+
 /// A field explicitly set to nothing is not the same request as one never set:
 /// collapsing them would put both on one container.
 #[test]

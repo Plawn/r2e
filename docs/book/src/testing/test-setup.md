@@ -251,10 +251,10 @@ feature enabled through your `[dev-dependencies]`
 Sharing is keyed on the request — the fields that shape the container Docker
 creates: image, env vars, labels, command, mounts, port mappings, device
 requests, network — so two specs that differ anywhere get two containers.
-`with_discriminator` appends to that key for what stays outside it: ulimits and
-the host-config closure (testcontainers keeps them private), the contents of a
-file copied by path, and anything applied after start — seeded data, or exec
-hooks the image runs itself.
+`with_discriminator` appends to that key for what stays outside it: ulimits
+(testcontainers keeps them private) and the host-config closure (no stable
+representation to fingerprint), the contents of a file copied by path, and
+anything applied after start — seeded data, or exec hooks the image runs itself.
 
 ## Running tests
 
