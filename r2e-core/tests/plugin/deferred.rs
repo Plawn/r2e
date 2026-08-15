@@ -1,10 +1,93 @@
-//! Raw `DeferredContext` / `DeferredAction` mechanics.
+//! Raw `DeferredContext` / `DeferredAction` mechanics, plus the two-orders
+//! contract: builds execute in topological order, effects apply in install
+//! order.
 
 use std::any::Any;
 use std::collections::HashMap;
 
 use r2e_core::builder::ServeContext;
-use r2e_core::plugin::{AsyncShutdownHook, DeferredAction, DeferredContext};
+use r2e_core::plugin::{
+    AsyncShutdownHook, DeferredAction, DeferredContext, PluginBuildContext, PluginBuildError,
+    PreStatePlugin,
+};
+use r2e_core::AppBuilder;
+
+use crate::fixtures::{Alpha, Beta, EventLog};
+
+// ── Two orders: topo builds, install-order effects ──────────────────────────
+
+/// Installed FIRST but depends on `ProducerPlugin`'s bean — so its build runs
+/// SECOND (topological order), while its effects still apply FIRST (install
+/// order).
+struct ConsumerPlugin {
+    log: EventLog,
+}
+
+impl PreStatePlugin for ConsumerPlugin {
+    type Provided = (Beta,);
+    type Deps = (Alpha,);
+    type Config = ();
+
+    async fn build(
+        self,
+        (_alpha,): (Alpha,),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Beta,), PluginBuildError> {
+        self.log.push("build-consumer");
+        let log = self.log.clone();
+        ctx.after_build(move |_dctx| log.push("effect-consumer"));
+        Ok((Beta("consumer".into()),))
+    }
+}
+
+/// Installed SECOND, provides the bean the first plugin depends on.
+struct ProducerPlugin {
+    log: EventLog,
+}
+
+impl PreStatePlugin for ProducerPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type Config = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        self.log.push("build-producer");
+        let log = self.log.clone();
+        ctx.after_build(move |_dctx| log.push("effect-producer"));
+        Ok((Alpha(1),))
+    }
+}
+
+#[r2e_core::test]
+async fn builds_run_in_topo_order_effects_apply_in_install_order() {
+    let log = EventLog::default();
+    let _app = AppBuilder::new()
+        .plugin(ConsumerPlugin { log: log.clone() })
+        .plugin(ProducerPlugin { log: log.clone() })
+        .build_state()
+        .await;
+
+    assert_eq!(
+        log.entries(),
+        vec![
+            // Builds: producer before consumer (topological order — consumer
+            // depends on producer's Alpha despite being installed first).
+            "build-producer",
+            "build-consumer",
+            // Effects: consumer before producer (install order).
+            "effect-consumer",
+            "effect-producer",
+        ]
+    );
+}
+
+// ── Raw DeferredContext mechanics ────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(

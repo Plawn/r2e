@@ -1,39 +1,49 @@
-//! `PluginInstallContext` sugar: layers, stored data, serve/shutdown hooks.
+//! `PluginSetupContext` — the rare pre-graph escape hatch: buffered sugar,
+//! explicit `add_deferred`, and the documented per-plugin action ordering
+//! `[explicit…, setup-sugar, build-effects]`.
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{plugin_action_name, DeferredAction, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{
+    plugin_action_name, DeferredAction, PluginBuildContext, PluginBuildError, PluginSetupContext,
+    PreStatePlugin,
+};
 use r2e_core::AppBuilder;
 
-use crate::fixtures::{StoredData, SugarMarker};
+use crate::fixtures::{EventLog, StoredData, SugarMarker};
 use crate::support::send_get as get_route;
 
-// ── PluginInstallContext sugar (Phase 2) ────────────────────────────────────
+/// A plugin that reaches only for the buffered setup sugar — no
+/// `DeferredAction`, no build effects.
+struct SugarSetupPlugin;
 
-/// A plugin that reaches only for the buffered sugar surface — no
-/// `DeferredAction` in sight.
-struct SugarBuildPlugin;
-
-impl PreStatePlugin for SugarBuildPlugin {
+impl PreStatePlugin for SugarSetupPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
         ctx.store_data(StoredData(42));
         ctx.add_layer(|router| router.route("/sugar", get(|| async { "sugar-ok" })));
         ctx.wrap_router(|router| router.route("/wrapped", get(|| async { "wrapped-ok" })));
-        (SugarMarker,)
+    }
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(SugarMarker,), PluginBuildError> {
+        Ok((SugarMarker,))
     }
 }
 
 #[r2e_core::test]
-async fn sugar_add_layer_store_data_land_and_execute() {
+async fn setup_sugar_layers_and_data_land_and_execute() {
     let app = AppBuilder::new()
-        .plugin(SugarBuildPlugin)
+        .plugin(SugarSetupPlugin)
         .build_state()
         .await;
 
@@ -50,21 +60,9 @@ async fn sugar_add_layer_store_data_land_and_execute() {
     assert_eq!(body, "wrapped-ok");
 }
 
-#[derive(Clone, Default)]
-struct EventLog(Arc<Mutex<Vec<&'static str>>>);
-
-impl EventLog {
-    fn push(&self, event: &'static str) {
-        self.0.lock().unwrap().push(event);
-    }
-    fn entries(&self) -> Vec<&'static str> {
-        self.0.lock().unwrap().clone()
-    }
-}
-
-/// Exercises every serve/shutdown sugar method AND an explicit `add_deferred`
-/// escape hatch, so the documented ordering rule (explicit actions run before
-/// the single buffered sugar action) is observable end-to-end.
+/// Exercises all three per-plugin action slots — explicit `add_deferred`,
+/// setup sugar, and build effects — so the documented ordering
+/// `[explicit…, setup-sugar, build-effects]` is observable end-to-end.
 struct EveryHookPlugin {
     log: EventLog,
 }
@@ -74,7 +72,7 @@ impl PreStatePlugin for EveryHookPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
         let log = self.log.clone();
 
         // Escape hatch: explicit actions run BEFORE the buffered sugar action.
@@ -87,18 +85,28 @@ impl PreStatePlugin for EveryHookPlugin {
 
         // Sugar hooks — plain closures, no boxing.
         let l_ss = log.clone();
-        ctx.on_serve(move |_sc| l_ss.push("sugar-serve"));
+        ctx.on_serve(move |_sc| l_ss.push("setup-serve"));
         let l_ssh = log.clone();
-        ctx.on_shutdown(move || l_ssh.push("sugar-shutdown"));
-        let l_sa = log.clone();
-        ctx.on_shutdown_async(move || async move { l_sa.push("sugar-async-shutdown") });
+        ctx.on_shutdown(move || l_ssh.push("setup-shutdown"));
+        let l_sa = log;
+        ctx.on_shutdown_async(move || async move { l_sa.push("setup-async-shutdown") });
+    }
 
-        (SugarMarker,)
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(SugarMarker,), PluginBuildError> {
+        // Build effects land in the third slot, after setup's actions.
+        let l_bs = self.log.clone();
+        ctx.on_serve(move |_sc| l_bs.push("build-serve"));
+        Ok((SugarMarker,))
     }
 }
 
 #[tokio::test]
-async fn sugar_serve_and_shutdown_hooks_execute_after_explicit() {
+async fn setup_actions_execute_in_documented_order() {
     let log = EventLog::default();
     let app = AppBuilder::new()
         .plugin(EveryHookPlugin { log: log.clone() })
@@ -126,32 +134,21 @@ async fn sugar_serve_and_shutdown_hooks_execute_after_explicit() {
     assert!(result.is_ok(), "run() returned an error: {result:?}");
 
     let entries = log.entries();
+    let pos = |e: &str| entries.iter().position(|x| *x == e);
 
-    // Serve hooks executed; the explicit action ran before the sugar action.
-    let es = entries.iter().position(|e| *e == "explicit-serve");
-    let ss = entries.iter().position(|e| *e == "sugar-serve");
-    assert!(
-        es.is_some() && ss.is_some(),
-        "both serve hooks ran: {entries:?}"
-    );
-    assert!(
-        es < ss,
-        "explicit action runs before sugar action: {entries:?}"
-    );
+    // Serve hooks executed in slot order: explicit → setup sugar → build.
+    let es = pos("explicit-serve").expect("explicit serve hook ran");
+    let ss = pos("setup-serve").expect("setup sugar serve hook ran");
+    let bs = pos("build-serve").expect("build-effect serve hook ran");
+    assert!(es < ss, "explicit before setup sugar: {entries:?}");
+    assert!(ss < bs, "setup sugar before build effects: {entries:?}");
 
     // Shutdown hooks (sync + async) executed; explicit before sugar.
-    let esh = entries.iter().position(|e| *e == "explicit-shutdown");
-    let ssh = entries.iter().position(|e| *e == "sugar-shutdown");
+    let esh = pos("explicit-shutdown").expect("explicit shutdown ran");
+    let ssh = pos("setup-shutdown").expect("setup shutdown ran");
+    assert!(esh < ssh, "explicit shutdown before setup shutdown: {entries:?}");
     assert!(
-        esh.is_some() && ssh.is_some(),
-        "both shutdown hooks ran: {entries:?}"
-    );
-    assert!(
-        esh < ssh,
-        "explicit shutdown runs before sugar shutdown: {entries:?}"
-    );
-    assert!(
-        entries.contains(&"sugar-async-shutdown"),
+        entries.contains(&"setup-async-shutdown"),
         "async shutdown hook ran: {entries:?}"
     );
 }
@@ -159,7 +156,7 @@ async fn sugar_serve_and_shutdown_hooks_execute_after_explicit() {
 #[test]
 fn plugin_action_name_trims_to_last_segment() {
     // A path-qualified type collapses to its final segment…
-    assert_eq!(plugin_action_name::<SugarBuildPlugin>(), "SugarBuildPlugin");
+    assert_eq!(plugin_action_name::<SugarSetupPlugin>(), "SugarSetupPlugin");
     // …and a primitive with no path is returned as-is.
     assert_eq!(plugin_action_name::<u32>(), "u32");
 }

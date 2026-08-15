@@ -1,7 +1,70 @@
-//! Tests for `Late<T>` — the shareable write-once cell plugins use to finish
-//! a provided bean after `build_state()`.
+//! `GraphHandle` — the deferred-fill handle on the resolved graph — and
+//! `Late<T>`, the underlying write-once cell (kept as an escape hatch).
 
-use r2e_core::Late;
+use r2e_core::plugin::{GraphHandle, PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::type_list::BeanAccess;
+use r2e_core::{AppBuilder, Late};
+
+use crate::fixtures::Alpha;
+
+// ── GraphHandle ──────────────────────────────────────────────────────────────
+
+/// A plugin-provided bean holding the `GraphHandle` its build captured, plus
+/// what the handle looked like DURING build (must be empty — deps come
+/// through `Deps`, the handle is for after-boot resolution).
+#[derive(Clone)]
+struct HandleHolder {
+    handle: GraphHandle,
+    empty_during_build: bool,
+}
+
+struct GraphCapturePlugin;
+
+impl PreStatePlugin for GraphCapturePlugin {
+    type Provided = (HandleHolder,);
+    type Deps = ();
+    type Config = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(HandleHolder,), PluginBuildError> {
+        let handle = ctx.graph();
+        Ok((HandleHolder {
+            empty_during_build: handle.get().is_none(),
+            handle,
+        },))
+    }
+}
+
+#[r2e_core::test]
+async fn graph_handle_fills_after_build_state() {
+    let app = AppBuilder::new()
+        .plugin(GraphCapturePlugin)
+        .provide(Alpha(21))
+        .build_state()
+        .await;
+
+    let holder = app.state().get::<HandleHolder>();
+    // During build the graph did not exist yet…
+    assert!(holder.empty_during_build, "handle is empty during build");
+    // …after build_state the same handle sees the full resolved graph.
+    assert!(holder.handle.get().is_some(), "handle filled after resolve");
+    assert_eq!(holder.handle.bean::<Alpha>(), Some(Alpha(21)));
+    // Missing beans resolve to None, not a panic.
+    assert_eq!(holder.handle.bean::<String>(), None);
+}
+
+#[test]
+fn default_graph_handle_is_empty() {
+    let handle = GraphHandle::default();
+    assert!(handle.get().is_none());
+    assert_eq!(handle.bean::<Alpha>(), None);
+}
+
+// ── Late<T> (escape hatch) ───────────────────────────────────────────────────
 
 #[test]
 fn empty_cell_reads_none() {
@@ -26,8 +89,8 @@ fn first_fill_wins() {
 
 #[test]
 fn clones_share_storage() {
-    // The bean-graph contract: clones are handed out BEFORE the fill, and a
-    // fill through any handle must be visible to all of them.
+    // Clones are handed out BEFORE the fill, and a fill through any handle
+    // must be visible to all of them.
     let shell: Late<u32> = Late::new();
     let handed_out = shell.clone();
     assert!(handed_out.get().is_none());
@@ -59,7 +122,7 @@ fn expect_on_empty_cell_panics_with_guidance() {
     assert!(msg.contains("grpc backend"), "names the value: {msg}");
     assert!(msg.contains("u32"), "names the type: {msg}");
     assert!(
-        msg.contains("build_state"),
+        msg.contains("before it was filled"),
         "points at the lifecycle: {msg}"
     );
 }

@@ -1,14 +1,12 @@
-//! Typed plugin `Config` / `CONFIG_PREFIX` loading.
+//! Typed plugin `Config` / `CONFIG_PREFIX` loading, delivered to `build`.
 
 use std::sync::{Arc, Mutex};
 
-use r2e_core::plugin::{DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 use r2e_core::AppBuilder;
 
-// ── Typed plugin Config (Phase 4) ────────────────────────────────────────────
-
 /// An all-optional config section, so its presence — not any required key —
-/// drives whether `configure` gets `Some`.
+/// drives whether `build` gets `Some`.
 #[derive(r2e_core::prelude::ConfigProperties, Clone, Debug, Default, PartialEq)]
 struct DemoConfig {
     name: Option<String>,
@@ -16,12 +14,15 @@ struct DemoConfig {
 }
 
 /// A config section with a **required** field, used to exercise validation.
+/// The field is only ever read by the derived validator — boot fails before
+/// any test code could touch it.
 #[derive(r2e_core::prelude::ConfigProperties, Clone, Debug)]
 struct StrictConfig {
+    #[allow(dead_code)]
     port: i64,
 }
 
-/// Records the `Option<Config>` its `configure` receives, so tests can assert on
+/// Records the `Option<Config>` its `build` receives, so tests can assert on
 /// the presence/values the framework delivered.
 struct ConfigReadingPlugin {
     sink: Arc<Mutex<Option<Option<DemoConfig>>>>,
@@ -33,20 +34,18 @@ impl PreStatePlugin for ConfigReadingPlugin {
     type Config = DemoConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
-
-    fn configure(
+    async fn build(
         self,
-        _p: &(),
-        (): (),
+        _deps: (),
         config: Option<DemoConfig>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(), PluginBuildError> {
         *self.sink.lock().unwrap() = Some(config);
+        Ok(())
     }
 }
 
-/// A plugin whose `configure` must never run because validation panics first.
+/// A plugin whose `build` must never run because validation panics first.
 struct StrictConfigPlugin;
 
 impl PreStatePlugin for StrictConfigPlugin {
@@ -55,15 +54,13 @@ impl PreStatePlugin for StrictConfigPlugin {
     type Config = StrictConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
-
-    fn configure(
+    async fn build(
         self,
-        _p: &(),
-        (): (),
+        _deps: (),
         _config: Option<StrictConfig>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(), PluginBuildError> {
+        Ok(())
     }
 }
 
@@ -78,12 +75,36 @@ async fn plugin_config_loaded_from_present_section() {
         .build_state()
         .await;
 
-    let received = sink.lock().unwrap().clone().expect("configure ran");
+    let received = sink.lock().unwrap().clone().expect("build ran");
     assert_eq!(
         received,
         Some(DemoConfig {
             name: Some("hello".into()),
             count: Some(5),
+        })
+    );
+}
+
+#[r2e_core::test]
+async fn plugin_installed_before_load_config_still_gets_config() {
+    // Order-independence: `.plugin()` BEFORE `load_config` reads the same
+    // config — `R2eConfig` is a graph bean available to every build factory,
+    // so install/config ordering no longer matters.
+    let sink = Arc::new(Mutex::new(None));
+    let config = r2e_core::R2eConfig::from_yaml_str("demo:\n  count: 9\n").unwrap();
+    let _app = AppBuilder::new()
+        .plugin(ConfigReadingPlugin { sink: sink.clone() })
+        .override_config(config)
+        .load_config::<()>()
+        .build_state()
+        .await;
+
+    let received = sink.lock().unwrap().clone().expect("build ran");
+    assert_eq!(
+        received,
+        Some(DemoConfig {
+            name: None,
+            count: Some(9),
         })
     );
 }
@@ -109,8 +130,8 @@ async fn plugin_config_absent_section_is_none() {
 
 #[r2e_core::test]
 async fn plugin_config_no_config_loaded_is_none() {
-    // No `load_config` / `with_config` at all → None (the stringly escape hatch
-    // is unavailable too, but typed Config degrades gracefully to None).
+    // No `load_config` / `with_config` at all → None (typed Config degrades
+    // gracefully; `ctx.config_raw()` would be None too).
     let sink = Arc::new(Mutex::new(None));
     let _app = AppBuilder::new()
         .plugin(ConfigReadingPlugin { sink: sink.clone() })

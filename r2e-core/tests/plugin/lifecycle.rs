@@ -1,59 +1,62 @@
-//! Post-construct / pre-destroy on plugin-provided beans.
+//! Plugin build failure (`Err` aborts boot) and pre-destroy on
+//! plugin-provided beans.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use r2e_core::plugin::{PluginInstallContext, PreStatePlugin};
-use r2e_core::{AppBuilder, PostConstruct, PreDestroy};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin};
+use r2e_core::{AppBuilder, BeanError, PreDestroy};
 
-// ── Provided-bean lifecycle: plugin post-construct / pre-destroy (Phase 5) ──
+use crate::fixtures::Alpha;
 
-type LifecycleLog = Arc<Mutex<Vec<&'static str>>>;
+// ── Fallible build ───────────────────────────────────────────────────────────
 
-/// A plugin-provided bean opting into a post-construct hook.
-#[derive(Clone)]
-struct InitBean {
-    log: LifecycleLog,
-}
+/// A plugin whose `build` fails — e.g. a backend it must connect to is down.
+struct FailingPlugin;
 
-impl PostConstruct for InitBean {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
-        Box::pin(async move {
-            self.log.lock().unwrap().push("bean-post-construct");
-            Ok(())
-        })
-    }
-}
-
-/// Provides `InitBean` and opts it into a post-construct hook via the install
-/// context.
-struct PostConstructPlugin {
-    log: LifecycleLog,
-}
-
-impl PreStatePlugin for PostConstructPlugin {
-    type Provided = (InitBean,);
+impl PreStatePlugin for FailingPlugin {
+    type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (InitBean,) {
-        ctx.run_post_construct::<InitBean>();
-        (InitBean {
-            log: self.log.clone(),
-        },)
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        Err("backend unreachable".into())
     }
 }
 
 #[r2e_core::test]
-async fn plugin_run_post_construct_fires_at_build_state() {
-    let log: LifecycleLog = Arc::new(Mutex::new(Vec::new()));
-    let _app = AppBuilder::new()
-        .plugin(PostConstructPlugin { log: log.clone() })
-        .build_state()
-        .await;
+async fn build_err_aborts_boot_with_plugin_build_error() {
+    let result = AppBuilder::new().plugin(FailingPlugin).try_build_state().await;
 
-    assert_eq!(*log.lock().unwrap(), vec!["bean-post-construct"]);
+    let err = result.err().expect("boot must fail");
+    match &err {
+        BeanError::PluginBuild { plugin, source } => {
+            assert_eq!(*plugin, "FailingPlugin");
+            assert_eq!(source.to_string(), "backend unreachable");
+        }
+        other => panic!("expected PluginBuild, got: {other:?}"),
+    }
+    // The Display form names the plugin and carries the cause.
+    let msg = err.to_string();
+    assert!(msg.contains("FailingPlugin"), "names the plugin: {msg}");
+    assert!(msg.contains("backend unreachable"), "carries the cause: {msg}");
 }
+
+#[r2e_core::test]
+#[should_panic(expected = "FailingPlugin")]
+async fn build_err_panics_through_build_state() {
+    // The panicking variant surfaces the same error.
+    let _app = AppBuilder::new().plugin(FailingPlugin).build_state().await;
+}
+
+// ── Pre-destroy on plugin-provided beans ────────────────────────────────────
+
+type LifecycleLog = Arc<Mutex<Vec<&'static str>>>;
 
 /// A plugin-provided bean with a disposal hook.
 #[derive(Clone)]
@@ -69,8 +72,9 @@ impl PreDestroy for DisposeBean {
     }
 }
 
-/// Provides `DisposeBean`, opts it into disposal, and also registers a plugin
-/// async shutdown hook so we can observe the documented ordering.
+/// Provides `DisposeBean`, opts it into disposal in `setup` (the lifecycle
+/// registrar is the setup context's remaining job), and registers a plugin
+/// async shutdown hook from `build` so we can observe the documented ordering.
 struct DisposePlugin {
     log: LifecycleLog,
 }
@@ -80,7 +84,16 @@ impl PreStatePlugin for DisposePlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (DisposeBean,) {
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
+        ctx.run_pre_destroy::<DisposeBean>();
+    }
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(DisposeBean,), PluginBuildError> {
         let log = self.log.clone();
         ctx.on_shutdown_async(move || {
             let log = log.clone();
@@ -88,10 +101,9 @@ impl PreStatePlugin for DisposePlugin {
                 log.lock().unwrap().push("plugin-async-shutdown");
             }
         });
-        ctx.run_pre_destroy::<DisposeBean>();
-        (DisposeBean {
+        Ok((DisposeBean {
             log: self.log.clone(),
-        },)
+        },))
     }
 }
 

@@ -259,7 +259,7 @@ pub trait PostConstruct: Send + Sync + 'static {
 /// resolved graph** (override included), and runs as part of the async
 /// shutdown phase — see
 /// [`AppBuilder::provide_with_pre_destroy`](crate::AppBuilder::provide_with_pre_destroy)
-/// and [`PluginInstallContext::run_pre_destroy`](crate::PluginInstallContext::run_pre_destroy)
+/// and [`PluginSetupContext::run_pre_destroy`](crate::PluginSetupContext::run_pre_destroy)
 /// for the invocation order.
 pub trait PreDestroy: Clone + Send + Sync + 'static {
     fn pre_destroy(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
@@ -654,6 +654,13 @@ pub struct BeanRegistry {
     /// Whether `provide` calls should currently be recorded as config-derived.
     /// Set only for the duration of a [`config_derived_scope`](Self::config_derived_scope).
     in_config_derived_scope: bool,
+    /// The deferred-fill handle on the graph this registry will resolve.
+    /// Plugin group factories capture clones of it
+    /// ([`PluginBuildContext::graph`](crate::plugin::PluginBuildContext::graph));
+    /// the builder fills it right after `resolve()` produces the final
+    /// `Arc<BeanContext>`. Fresh per registry, so each dev-reload cycle's
+    /// plugins see that cycle's graph.
+    graph_handle: crate::plugin::GraphHandle,
 }
 
 struct BeanRegistration {
@@ -680,6 +687,14 @@ struct BeanRegistration {
     /// The dev-reload partial rebuild uses it to carry unchanged instances
     /// across hot-patch cycles instead of re-running the factory.
     reuse_clone: ReuseCloneFn,
+    /// When `true`, this registration is never reused across dev-reload
+    /// cycles: its factory re-runs every cycle, and its presence forces graph
+    /// resolution even on a same-fingerprint cache hit. Plugin group and
+    /// projection nodes are volatile — a plugin's `build` carries side
+    /// effects (connections, effect registration) that must re-run per cycle,
+    /// matching the previous fresh-install-per-cycle semantics.
+    #[cfg_attr(not(feature = "dev-reload"), allow(dead_code))]
+    volatile: bool,
 }
 
 /// Monomorphized eager-clone hook stored per registration (a plain fn
@@ -691,6 +706,14 @@ fn reuse_clone_of<T: Clone + Send + Sync + 'static>(
 ) -> Option<Box<dyn Any + Send + Sync>> {
     ctx.try_get_eager::<T>()
         .map(|b| Box::new(b) as Box<dyn Any + Send + Sync>)
+}
+
+/// Reuse stub for volatile registrations (plugin nodes): never reused, so the
+/// hook is never consulted — but the field is a plain fn pointer and needs a
+/// value. Returning `None` keeps any accidental call safe (treated as "cannot
+/// reuse, rebuild").
+fn reuse_clone_none(_ctx: &BeanContext) -> Option<Box<dyn Any + Send + Sync>> {
+    None
 }
 
 /// Instructions for a dev-reload partial rebuild: which beans of the
@@ -860,7 +883,21 @@ impl BeanRegistry {
                 TypeId::of::<crate::config::LiveConfigRegistry>(),
             ]),
             in_config_derived_scope: false,
+            graph_handle: crate::plugin::GraphHandle::new(),
         }
+    }
+
+    /// The deferred-fill graph handle tied to this registry. The builder
+    /// grabs it before `resolve()` consumes the registry and fills it once
+    /// the resolved context is wrapped in its final `Arc`.
+    pub fn graph_handle(&self) -> crate::plugin::GraphHandle {
+        self.graph_handle.clone()
+    }
+
+    /// Whether a provided instance of this `TypeId` is pinned
+    /// (see [`pin_provide`](Self::pin_provide)).
+    pub fn is_pinned(&self, type_id: &TypeId) -> bool {
+        self.pinned.contains(type_id)
     }
 
     /// Run `f` with every `provide` inside it recorded as **config-derived**.
@@ -915,10 +952,15 @@ impl BeanRegistry {
     /// Decorator slots are one-shot and must be rebuilt/refilled every cycle.
     /// Pre-destroy hooks are materialized from the fresh registry during
     /// resolution; the cached context no longer owns them after the previous
-    /// builder drained them into its shutdown sequence.
+    /// builder drained them into its shutdown sequence. Volatile registrations
+    /// (plugin nodes) must re-run their factories every cycle — their builds
+    /// carry side effects (connections, effect registration) the cached state
+    /// does not capture.
     #[cfg(feature = "dev-reload")]
     pub(crate) fn requires_resolution_on_cache_hit(&self) -> bool {
-        !self.deco_fills.is_empty() || !self.disposers.is_empty()
+        !self.deco_fills.is_empty()
+            || !self.disposers.is_empty()
+            || self.beans.iter().any(|b| b.volatile)
     }
 
     /// Register a (sync) bean type for automatic construction.
@@ -973,6 +1015,7 @@ impl BeanRegistry {
                 post_construct: None,
                 overridable,
                 reuse_clone: reuse_clone_of::<T>,
+                volatile: false,
             });
         }
         T::after_register(self);
@@ -1026,6 +1069,7 @@ impl BeanRegistry {
                 post_construct: None,
                 overridable,
                 reuse_clone: reuse_clone_of::<T>,
+                volatile: false,
             });
         }
         T::after_register(self);
@@ -1304,6 +1348,7 @@ impl BeanRegistry {
             post_construct: None,
             overridable: false,
             reuse_clone: reuse_clone_of::<T>,
+            volatile: false,
         });
     }
 
@@ -1340,9 +1385,110 @@ impl BeanRegistry {
             post_construct: None,
             overridable,
             reuse_clone: reuse_clone_of::<P::Output>,
+            volatile: false,
         });
         P::after_register(self);
         self
+    }
+
+    /// Register a [`PreStatePlugin`](crate::PreStatePlugin) as bean-graph
+    /// nodes: one **group node** running the plugin's `build` (yielding the
+    /// whole `Provided` tuple as a hidden `PluginOut<Pl>` bean), plus one
+    /// **projection node** per `Provided` element cloning its slot out of the
+    /// group. Called by the blanket `RawPreStatePlugin` impl at `.plugin()`
+    /// time; the caller has already handled the all-pinned skip.
+    ///
+    /// Projections register **strict** (`overridable: false`): colliding with
+    /// an app `.provide()`/`.register()` of the same type — or installing the
+    /// same plugin twice — is a `DuplicateBean` error at `build_state()`. A
+    /// type pinned via [`pin_provide`](Self::pin_provide) *before* install
+    /// keeps its override (the projection is skipped); the group still runs.
+    ///
+    /// All plugin nodes are volatile: rebuilt every dev-reload cycle, and
+    /// forcing resolution on a same-fingerprint cache hit.
+    pub(crate) fn register_plugin_group<Pl: crate::PreStatePlugin>(
+        &mut self,
+        plugin: Pl,
+        effects: crate::plugin::EffectsSlot,
+    ) {
+        use crate::plugin::{plugin_action_name, PluginOut};
+        use crate::type_list::{PluginDeps, PluginProvisions};
+
+        let name = plugin_action_name::<Pl>();
+        let graph_handle = self.graph_handle.clone();
+        let base_version = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            type_name::<Pl>().hash(&mut hasher);
+            hasher.finish() ^ Pl::BUILD_VERSION
+        };
+
+        // Group node: deps = the plugin's declared `Deps` (real topo edges).
+        // `R2eConfig` needs no edge — `load_config` provides it as a value,
+        // available to every factory before construction starts.
+        self.beans.push(BeanRegistration {
+            type_id: TypeId::of::<PluginOut<Pl>>(),
+            type_name: type_name::<PluginOut<Pl>>(),
+            dependencies: <Pl::Deps as PluginDeps>::dependencies(),
+            config_keys: vec![],
+            build_version: base_version,
+            factory: Box::new(move |ctx| {
+                Box::pin(async move {
+                    let config = ctx.try_get::<crate::config::R2eConfig>();
+                    let enabled =
+                        crate::plugin::plugin_config_enabled(config.as_ref(), Pl::CONFIG_PREFIX);
+                    let typed = crate::plugin::load_plugin_config_from::<Pl>(config.as_ref(), name);
+                    let deps = <Pl::Deps as PluginDeps>::resolve_from_context(&ctx);
+                    let mut bctx =
+                        crate::plugin::PluginBuildContext::new(enabled, graph_handle, config);
+                    let provided = plugin.build(deps, typed, &mut bctx).await.map_err(
+                        |source| BeanError::PluginBuild {
+                            plugin: name,
+                            source,
+                        },
+                    )?;
+                    effects.fill(bctx.into_effects());
+                    let boxed: Box<dyn Any + Send + Sync> = Box::new(PluginOut::<Pl>(provided));
+                    Ok((ctx, boxed))
+                })
+            }),
+            post_construct: None,
+            overridable: false,
+            reuse_clone: reuse_clone_none,
+            volatile: true,
+        });
+
+        // Projection nodes: one per `Provided` element, cloning slot `i` out
+        // of the group tuple. Skipped for pinned types (override wins).
+        for (i, (tid, tname)) in <Pl::Provided as PluginProvisions>::element_ids()
+            .into_iter()
+            .enumerate()
+        {
+            if self.pinned.contains(&tid) {
+                continue;
+            }
+            self.beans.push(BeanRegistration {
+                type_id: tid,
+                type_name: tname,
+                dependencies: vec![(
+                    TypeId::of::<PluginOut<Pl>>(),
+                    type_name::<PluginOut<Pl>>(),
+                )],
+                config_keys: vec![],
+                build_version: base_version.wrapping_add(1 + i as u64),
+                factory: Box::new(move |ctx| {
+                    Box::pin(async move {
+                        let out = ctx.get::<PluginOut<Pl>>();
+                        Ok((ctx, out.0.clone_element(i)))
+                    })
+                }),
+                post_construct: None,
+                overridable: false,
+                reuse_clone: reuse_clone_none,
+                volatile: true,
+            });
+        }
     }
 
     /// Compute the graph fingerprint without constructing any beans.
@@ -1498,7 +1644,12 @@ impl BeanRegistry {
         let mut pinned_provided: HashSet<TypeId> = HashSet::new();
         if let Some(plan) = &reuse {
             for reg in &self.beans {
-                if plan.unchanged.contains(&reg.type_id) && !forced_rebuild.contains(&reg.type_id) {
+                // Volatile registrations (plugin nodes) are never carried
+                // over: their factories re-run every cycle by design.
+                if plan.unchanged.contains(&reg.type_id)
+                    && !forced_rebuild.contains(&reg.type_id)
+                    && !reg.volatile
+                {
                     if let Some(inst) = (reg.reuse_clone)(&plan.old_ctx) {
                         reused_instances.insert(reg.type_id, inst);
                     }
