@@ -2421,9 +2421,9 @@ test process and removes the containers after the final process exits
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
 
 `DevPostgres` and `DevRedis` also take a full image (repository + tag), and
-`DevPostgres` takes credentials. Everything in the spec is part of the
-container's identity, so each distinct spec gets its own shared container,
-reused across test binaries:
+`DevPostgres` takes credentials. Both are part of the container's identity, so
+two specs differing in either get their own shared container, reused across test
+binaries:
 
 ```rust
 use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
@@ -2487,10 +2487,11 @@ requests, network, …), each folded the way Docker resolves it — keyed fields
 keep the effective value, set-like fields are sorted, ordered fields stay in
 order — so two specs that differ in any of them get two containers;
 `with_discriminator("...")` appends to that key for the rest: ulimits
-(testcontainers keeps them private) and the host-config closure (no stable
-representation to fingerprint), the contents of a file copied by path, and
+(testcontainers keeps them private), the contents of a file copied by path, and
 anything applied after start (seeded data, or exec hooks the image runs
-itself).
+itself). A host-config modifier is refused rather than guessed — `shared`
+panics on a spec that sets one without a discriminator, since its effect is a
+closure the identity cannot read.
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

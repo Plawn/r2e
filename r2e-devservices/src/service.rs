@@ -124,9 +124,11 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// What it cannot see, all of it grounds for
     /// [`with_discriminator`](Self::with_discriminator):
     ///
-    /// - ulimits, which testcontainers keeps private, and the host-config
-    ///   modifier — that one is readable, but a closure's effect has no stable
-    ///   representation to fingerprint;
+    /// - ulimits, which testcontainers keeps private;
+    /// - what a host-config modifier *does* — only whether one is set is
+    ///   readable, a closure's effect has no representation to fingerprint. The
+    ///   shared path therefore refuses a modifier without a discriminator
+    ///   rather than merge two containers it cannot tell apart;
     /// - the *contents* of a file copied by path (only the path is visible from
     ///   here — a fixture edited in place keeps its identity);
     /// - anything applied *after* start: seeded data, and the exec hooks an
@@ -137,6 +139,25 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// change how long we wait, not what runs. Host-port exposures are not
     /// encoded either — testcontainers rejects them outright for reusable
     /// containers, and the shared path always asks for reuse.
+    /// Refuse to share a container whose shape the identity cannot describe.
+    ///
+    /// A host-config modifier rewrites the Docker configuration from a closure:
+    /// two specs capping memory at 64 MiB and at 128 MiB are indistinguishable
+    /// from here, and would land on one container — the exact failure the
+    /// derived identity exists to prevent. Only the *presence* of a modifier is
+    /// readable, so the discriminator is where the caller says what it does.
+    /// [`start`](DevService::start) is unaffected: nothing is shared there.
+    fn ensure_shareable(&self) {
+        assert!(
+            self.discriminator.is_some() || (self.request)().host_config_modifier().is_none(),
+            "the {} dev service sets a host-config modifier, and the sharing identity cannot \
+             read what it does — two different modifiers would share one container. Describe \
+             it with .with_discriminator(\"...\"), or use DevService::start for an isolated \
+             container.",
+            self.service
+        );
+    }
+
     #[doc(hidden)]
     pub fn configuration(&self) -> String {
         let request = (self.request)();
@@ -201,6 +222,9 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         configuration.field("platform", optional(request.platform().as_deref()));
         configuration.field("workdir", optional(request.working_dir()));
         configuration.field("user", optional(request.user()));
+        // Only whether one is set: the closure's effect is unreadable, which is
+        // why the shared path refuses a modifier without a discriminator.
+        configuration.field("modifier", debug(request.host_config_modifier().is_some()));
         configuration.field("privileged", debug(request.privileged()));
         configuration.field("readonly", debug(request.readonly_rootfs()));
         configuration.field("shm", debug(request.shm_size()));
@@ -356,8 +380,13 @@ impl DevService {
     ///
     /// # Panics
     ///
-    /// Panics if Docker is unavailable or the container fails to start.
+    /// Panics if Docker is unavailable, if the container fails to start, or if
+    /// the spec sets a host-config modifier without a
+    /// [`discriminator`](DevServiceSpec::with_discriminator) — see
+    /// [`configuration`](DevServiceSpec::configuration).
     pub async fn shared<I: Image + 'static>(spec: DevServiceSpec<I>) -> &'static Self {
+        spec.ensure_shareable();
+
         // One cell per (service, configuration), leaked to hand out `&'static`
         // for the process's lifetime — the container lives as long as the cell
         // that owns it. A single registry serves every service because the

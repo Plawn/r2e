@@ -195,8 +195,9 @@ containers must survive for post-mortem inspection.
 
 ### Choosing the image and credentials
 
-`shared_with` / `start_with` take a spec, and everything in it is part of the
-container's identity — each distinct spec gets its own shared container:
+`shared_with` / `start_with` take a spec, and the image and credentials are part
+of the container's identity — two specs differing in either get two shared
+containers:
 
 ```rust
 use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
@@ -252,9 +253,10 @@ Sharing is keyed on the request — the fields that shape the container Docker
 creates: image, env vars, labels, command, mounts, port mappings, device
 requests, network — so two specs that differ anywhere get two containers.
 `with_discriminator` appends to that key for what stays outside it: ulimits
-(testcontainers keeps them private) and the host-config closure (no stable
-representation to fingerprint), the contents of a file copied by path, and
+(testcontainers keeps them private), the contents of a file copied by path, and
 anything applied after start — seeded data, or exec hooks the image runs itself.
+A host-config modifier is refused rather than guessed: `shared` panics on a spec
+that sets one without a discriminator, since its effect is a closure.
 
 ## Running tests
 

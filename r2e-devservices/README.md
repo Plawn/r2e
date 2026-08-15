@@ -120,8 +120,11 @@ so declaration order alone never splits a container, and ordered fields
 (command, device requests, security options) are read in order because Docker
 applies them in order — a later security option overrides an earlier one.
 
-What stays outside the key: ulimits, which testcontainers keeps private, and the
-host-config modifier, whose closure has no stable representation to fingerprint;
+A host-config modifier is refused rather than guessed: its presence is visible
+but its effect is a closure, so `shared` panics on a spec that sets one without
+a discriminator. (`start` is unaffected — nothing is shared there.)
+
+What else stays outside the key: ulimits, which testcontainers keeps private;
 the *contents* of a file copied by path (only the
 path is visible — a fixture edited in place keeps its identity), and anything
 applied after start — seeded data, and the exec hooks an `Image` runs itself.

@@ -371,6 +371,23 @@ fn identity_covers_device_requests() {
     );
 }
 
+/// The identity can see *that* a host-config modifier is set, never what it
+/// does — so sharing has to be refused rather than guessed.
+#[tokio::test]
+#[should_panic(expected = "host-config modifier")]
+async fn a_host_config_modifier_cannot_be_shared_without_a_discriminator() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    let spec = DevServiceSpec::new("modifier", || {
+        GenericImage::new("vendor/server", "1")
+            .with_host_config_modifier(|host| host.memory = Some(64 * 1024 * 1024))
+    });
+
+    // Panics before it ever reaches Docker.
+    DevService::shared(spec).await;
+}
+
 /// Docker parses security options in sequence and a later one overrides an
 /// earlier one of the same name, so the reversed pair is a different container.
 #[test]
