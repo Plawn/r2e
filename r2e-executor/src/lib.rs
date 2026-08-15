@@ -315,6 +315,11 @@ impl PoolExecutor {
         }
     }
 
+    /// The pool's concurrency cap, as resolved from [`ExecutorConfig`].
+    pub fn max_concurrent(&self) -> u64 {
+        self.inner.max_concurrent
+    }
+
     /// True once [`shutdown`](Self::shutdown) has been called.
     pub fn is_shut_down(&self) -> bool {
         self.inner.shutdown.is_cancelled()

@@ -4,7 +4,7 @@
 //! `build_state()`.
 
 use r2e::prelude::*;
-use r2e::{PluginInstallContext, PreStatePlugin};
+use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 #[derive(Clone)]
 pub struct MyBean;
@@ -17,8 +17,13 @@ impl PreStatePlugin for MyPreStatePlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyBean,) {
-        (MyBean,)
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        Ok((MyBean,))
     }
 }
 

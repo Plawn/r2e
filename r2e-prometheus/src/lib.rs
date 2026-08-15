@@ -64,7 +64,8 @@ pub use prometheus;
 use handler::metrics_handler;
 use r2e_core::http::routing::get;
 use r2e_core::prelude::ConfigProperties;
-use r2e_core::{DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
+use r2e_core::PreStatePlugin;
 
 /// Typed configuration for the [`Prometheus`] plugin, read from the
 /// `prometheus.*` YAML section.
@@ -237,21 +238,12 @@ impl PreStatePlugin for Prometheus {
     type Config = PrometheusConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("prometheus");
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        // All config-dependent work (metric init, custom collectors, the layer
-        // and route) is deferred to `configure`, where file config is
-        // guaranteed loaded. The injectable handle delegates to the global
-        // registry that `configure` initializes.
-        (PrometheusRegistry,)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        _provided: &Self::Provided,
-        (): (),
-        config: Option<PrometheusConfig>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
+        _deps: Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         let Prometheus {
             endpoint,
             namespace,
@@ -264,11 +256,11 @@ impl PreStatePlugin for Prometheus {
 
         // Initialize the global metrics singleton with the merged config.
         if is_initialized() {
-            // Something (e.g. a provided-bean post_construct, which runs before
-            // deferred actions) touched the lazily-default-initialized registry
-            // first — the merged config below is then a no-op for metric setup.
+            // Something (e.g. a provided-bean post_construct running earlier in
+            // the graph) touched the lazily-default-initialized registry first —
+            // the merged config below is then a no-op for metric setup.
             tracing::warn!(
-                "Prometheus metrics were initialized before the plugin's configure step; \
+                "Prometheus metrics were initialized before the plugin's build step; \
                  builder/file configuration (namespace, buckets) may not have been applied"
             );
         }
@@ -276,15 +268,17 @@ impl PreStatePlugin for Prometheus {
         for collector in collectors {
             m.registry
                 .register(collector)
-                .expect("Failed to register custom Prometheus collector");
+                .map_err(|e| format!("Failed to register custom Prometheus collector: {e}"))?;
         }
 
         // Install the /metrics route + tracking layer post-state.
-        ctx.add_layer(Box::new(move |router| {
+        ctx.add_layer(move |router| {
             router
                 .route(&endpoint, get(metrics_handler))
                 .layer(PrometheusLayer::new(metrics_config))
-        }));
+        });
+
+        Ok((PrometheusRegistry,))
     }
 }
 

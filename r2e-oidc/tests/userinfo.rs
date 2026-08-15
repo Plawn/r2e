@@ -3,7 +3,7 @@ use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-fn build_app() -> Router {
+async fn build_app() -> Router {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "password123",
@@ -23,7 +23,8 @@ fn build_app() -> Router {
 
     r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build()
 }
 
@@ -51,7 +52,7 @@ async fn get_token(app: &Router) -> String {
 
 #[r2e_core::test]
 async fn userinfo_success() {
-    let app = build_app();
+    let app = build_app().await;
     let token = get_token(&app).await;
 
     let req = Request::get("/userinfo")
@@ -70,7 +71,7 @@ async fn userinfo_success() {
 
 #[r2e_core::test]
 async fn userinfo_missing_auth_header() {
-    let app = build_app();
+    let app = build_app().await;
 
     let req = Request::get("/userinfo").body(Body::empty()).unwrap();
 
@@ -80,7 +81,7 @@ async fn userinfo_missing_auth_header() {
 
 #[r2e_core::test]
 async fn userinfo_invalid_token() {
-    let app = build_app();
+    let app = build_app().await;
 
     let req = Request::get("/userinfo")
         .header("authorization", "Bearer invalid.token.here")
@@ -94,7 +95,7 @@ async fn userinfo_invalid_token() {
 
 #[r2e_core::test]
 async fn userinfo_accepts_case_insensitive_bearer_scheme() {
-    let app = build_app();
+    let app = build_app().await;
     let token = get_token(&app).await;
 
     let req = Request::get("/userinfo")
@@ -108,7 +109,7 @@ async fn userinfo_accepts_case_insensitive_bearer_scheme() {
 
 #[r2e_core::test]
 async fn userinfo_supports_post() {
-    let app = build_app();
+    let app = build_app().await;
     let token = get_token(&app).await;
 
     let req = Request::post("/userinfo")

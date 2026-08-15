@@ -31,7 +31,8 @@ async fn token_validates_with_claims_validator() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     // 1. Get a token.
@@ -86,7 +87,8 @@ async fn client_credentials_grant() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -126,7 +128,8 @@ async fn client_credentials_grant_with_basic_auth() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -163,7 +166,8 @@ async fn userinfo_rejects_client_credentials_token() {
         .with_client_registry(clients);
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -207,7 +211,8 @@ async fn client_credentials_invalid_secret() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -242,7 +247,8 @@ async fn client_credentials_not_configured() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -280,7 +286,8 @@ async fn base_path_routing() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     // Token endpoint should be at /auth/oauth/token.

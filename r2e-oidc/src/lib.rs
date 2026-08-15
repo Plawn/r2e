@@ -67,7 +67,8 @@ use std::sync::Arc;
 
 use r2e_core::http::routing::{get, post};
 use r2e_core::http::Router;
-use r2e_core::{PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
+use r2e_core::PreStatePlugin;
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
@@ -262,14 +263,19 @@ impl PreStatePlugin for OidcRuntime {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
-        // `install` takes `&mut self`; the layer closure needs owned values, so
-        // clone cheap runtime state for each install cycle.
-        let oidc_state = self.state.clone();
-        let base_path = self.base_path.clone();
-        ctx.add_layer(move |router| router.merge(oidc_routes(oidc_state, &base_path)));
-
-        (self.claims_validator.clone(),)
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        let OidcRuntime {
+            state,
+            claims_validator,
+            base_path,
+        } = self;
+        ctx.add_layer(move |router| router.merge(oidc_routes(state, &base_path)));
+        Ok((claims_validator,))
     }
 }
 
@@ -278,11 +284,16 @@ impl PreStatePlugin for OidcServer {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (Arc<JwtClaimsValidator>,) {
-        // Take ownership out of `&mut self` (OidcServer: Default) to build the
-        // runtime, then delegate to its `install`.
-        let mut runtime = std::mem::take(self).build();
-        runtime.install(ctx)
+    async fn build(
+        self,
+        deps: Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        // Build the runtime, then delegate to its plugin `build` (fully
+        // qualified: `OidcServer::build` is the inherent builder method).
+        let runtime = self.try_build()?;
+        PreStatePlugin::build(runtime, deps, config, ctx).await
     }
 }
 

@@ -115,7 +115,11 @@ impl App for ExampleApp {
             OpenFgaRegistry::new(mock)
         };
 
-        b.plugin(Scheduler)
+        // Plugin `build`s run inside `build_state()` with config guaranteed
+        // loaded — the order between `.plugin()` and `.load_config()` doesn't
+        // matter (e.g. `executor.*` applies regardless).
+        b.load_config::<controllers::config_controller::RootConfig>()
+            .plugin(Scheduler)
             .plugin(Executor)
             .plugin(
                 Prometheus::builder()
@@ -125,7 +129,6 @@ impl App for ExampleApp {
                     .exclude_path("/metrics")
                     .build(),
             )
-            .load_config::<controllers::config_controller::RootConfig>()
             .provide(env.event_bus)
             .provide(env.pool)
             .provide(env.claims_validator)

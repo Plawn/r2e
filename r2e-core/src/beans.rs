@@ -1442,7 +1442,11 @@ impl BeanRegistry {
                     let deps = <Pl::Deps as PluginDeps>::resolve_from_context(&ctx);
                     let mut bctx =
                         crate::plugin::PluginBuildContext::new(enabled, graph_handle, config);
-                    let provided = plugin.build(deps, typed, &mut bctx).await.map_err(
+                    // Fully qualified so a plugin's own inherent `build` method
+                    // (e.g. a builder-style `fn build(self)`) can't shadow it.
+                    let provided = crate::plugin::PreStatePlugin::build(plugin, deps, typed, &mut bctx)
+                        .await
+                        .map_err(
                         |source| BeanError::PluginBuild {
                             plugin: name,
                             source,

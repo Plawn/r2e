@@ -5,7 +5,7 @@
 //! missing-dependency diagnostic.
 
 use r2e::prelude::*;
-use r2e::{PluginInstallContext, PreStatePlugin};
+use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 #[derive(Clone)]
 pub struct MissingBean;
@@ -18,7 +18,14 @@ impl PreStatePlugin for NeedsBean {
     type Deps = (MissingBean,);
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        Ok(())
+    }
 }
 
 fn main() {

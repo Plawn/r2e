@@ -27,7 +27,8 @@ use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::ConfigProperties;
-use r2e_core::{AppBuilder, BeanContext, DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
+use r2e_core::{AppBuilder, BeanContext, PreStatePlugin};
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 
 /// Handle to the scheduler runtime.
@@ -404,76 +405,66 @@ impl PreStatePlugin for Scheduler {
     type Config = SchedulerConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("scheduler");
 
-    fn install(
-        &mut self,
-        ctx: &mut PluginInstallContext<'_>,
-    ) -> (CancellationToken, ScheduledJobRegistry) {
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
+        // The task registry must exist while controllers/beans register their
+        // `#[scheduled]` methods, even when `scheduler.enabled = false` (tasks
+        // are collected but never started then) — so it is stored here, not as
+        // an enabled-gated build effect.
+        ctx.store_data(TaskRegistryHandle::new());
+    }
+
+    async fn build(
+        self,
+        (shared_executor,): Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         let token = CancellationToken::new();
         let job_registry = ScheduledJobRegistry::new();
 
         // Runtime command channel: sender lives on the handle (extension),
-        // receiver is stashed for `configure` to thread into the driver.
+        // receiver moves straight into the serve hook below.
         let (handle, commands) = SchedulerHandle::channel(token.clone());
-        let task_registry = TaskRegistryHandle::new();
-        let cancel_for_stopper = token.clone();
 
         // Add the layer that provides SchedulerHandle via extension.
         ctx.add_layer(move |router| router.layer(r2e_core::http::Extension(handle)));
 
-        // Store the task registry for use during controller registration.
-        ctx.store_data(task_registry);
-        // Hand the command receiver to `configure` (picked up via take_data).
-        ctx.store_data(commands);
-
         // Register shutdown hook.
+        let cancel_for_stopper = token.clone();
         ctx.on_shutdown(move || {
             cancel_for_stopper.cancel();
         });
 
-        (token, job_registry)
-    }
-
-    fn configure(
-        self,
-        (token, job_registry): &(CancellationToken, ScheduledJobRegistry),
-        (shared_executor,): (PoolExecutor,),
-        config: Option<SchedulerConfig>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        let token = token.clone();
-        let job_registry = job_registry.clone();
-        // Pick up the command receiver stored at install; fall back to a
-        // disconnected handle if it's somehow absent (keeps the driver inert).
-        let commands = ctx
-            .take_data::<SchedulerCommands>()
-            .unwrap_or_else(SchedulerCommands::disconnected);
-
         // Resolve which pool ticks run on. Dedicated mode builds a private pool
         // and registers its own graceful drain.
-        let executor = resolve_executor(config, shared_executor, ctx);
+        let executor = resolve_executor(config, shared_executor, ctx)?;
 
         // Register a serve hook to start scheduled tasks. Drains only
         // scheduler-owned tasks from the shared registry so hooks for
         // other subsystems don't see them.
+        let start_token = token.clone();
+        let start_registry = job_registry.clone();
         ctx.on_serve(move |serve_ctx| {
             let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
-            start_scheduled_tasks(tasks, token, job_registry, executor, commands);
+            start_scheduled_tasks(tasks, start_token, start_registry, executor, commands);
         });
+
+        Ok((token, job_registry))
     }
 }
 
 /// Resolve the [`PoolExecutor`] scheduled ticks run on from the `scheduler.*`
 /// config: the shared pool (default) or a private, dedicated pool.
 ///
-/// An unrecognized `executor` value panics at boot, consistent with plugin
+/// An unrecognized `executor` value fails the boot, consistent with plugin
 /// config validation style.
 fn resolve_executor(
     config: Option<SchedulerConfig>,
     shared: PoolExecutor,
-    ctx: &mut DeferredContext<'_>,
-) -> PoolExecutor {
+    ctx: &mut PluginBuildContext,
+) -> Result<PoolExecutor, PluginBuildError> {
     let config = config.unwrap_or_default();
-    match config.executor.as_deref() {
+    Ok(match config.executor.as_deref() {
         None | Some("shared") => shared,
         Some("dedicated") => {
             let defaults = ExecutorConfig::default();
@@ -495,10 +486,13 @@ fn resolve_executor(
             });
             pool
         }
-        Some(other) => panic!(
-            "Invalid `scheduler.executor` value {other:?}: expected \"shared\" or \"dedicated\""
-        ),
-    }
+        Some(other) => {
+            return Err(format!(
+                "Invalid `scheduler.executor` value {other:?}: expected \"shared\" or \"dedicated\""
+            )
+            .into())
+        }
+    })
 }
 
 /// Extension trait for `AppBuilder` to register scheduled tasks dynamically —
