@@ -50,9 +50,8 @@
 //! reported as [`TenantError::Cycle`] naming the chain.
 
 use std::any::{type_name, TypeId};
-use std::sync::Arc;
 
-use r2e_core::BeanContext;
+use r2e_core::plugin::GraphHandle;
 
 use crate::error::{BoxError, TenantError};
 use crate::map::Tenanted;
@@ -104,19 +103,15 @@ where
 /// - [`bean`](Self::bean) — plain app-scoped beans out of the graph.
 pub struct TenantContext<'a> {
     tenant: &'a TenantId,
-    beans: Arc<BeanContext>,
+    graph: GraphHandle,
     chain: ResolutionChain,
 }
 
 impl<'a> TenantContext<'a> {
-    pub(crate) fn new(
-        tenant: &'a TenantId,
-        beans: Arc<BeanContext>,
-        chain: ResolutionChain,
-    ) -> Self {
+    pub(crate) fn new(tenant: &'a TenantId, graph: GraphHandle, chain: ResolutionChain) -> Self {
         Self {
             tenant,
-            beans,
+            graph,
             chain,
         }
     }
@@ -139,8 +134,8 @@ impl<'a> TenantContext<'a> {
             return Err(TenantError::Cycle(self.chain.describe_with::<U>()));
         }
         let map = self
-            .beans
-            .try_get::<Tenanted<U>>()
+            .graph
+            .bean::<Tenanted<U>>()
             .ok_or(TenantError::NoSource(type_name::<U>()))?;
         map.resolve(self.tenant, self.chain.push::<U>()).await
     }
@@ -152,7 +147,7 @@ impl<'a> TenantContext<'a> {
     /// a [`ManagedResource`](r2e_core::ManagedResource).
     #[must_use]
     pub fn bean<U: Clone + Send + Sync + 'static>(&self) -> Option<U> {
-        self.beans.try_get::<U>()
+        self.graph.bean::<U>()
     }
 
     /// The resolution chain that led here, most recent last (`"A -> B"`).

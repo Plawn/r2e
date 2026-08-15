@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use r2e_core::http::{Router, StatusCode};
 use r2e_core::prelude::*;
-use r2e_core::BeanContext;
 use r2e_tenant::{
     HeaderTenantResolver, MissingTenantPolicy, Tenant, TenantId, TenantRouter, TenantStatuses,
     Tenanted, TenantedSettings,
@@ -96,7 +95,7 @@ async fn app(
 ) -> Router {
     let map = Tenanted::new(
         Arc::new(source),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         TenantedSettings {
             statuses,
             ..TenantedSettings::default()
@@ -314,7 +313,7 @@ async fn the_resolver_runs_once_per_request() {
 
     let map = Tenanted::new(
         Arc::new(ScriptedSource::new()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         TenantedSettings::default(),
         None,
     );

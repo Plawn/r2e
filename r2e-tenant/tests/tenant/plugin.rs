@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::*;
-use r2e_core::{AppBuilder, BeanContext, R2eConfig};
+use r2e_core::{AppBuilder, R2eConfig};
 use r2e_tenant::{
     BoxError, BoxFuture, HeaderTenantResolver, MissingTenantPolicy, PerTenant, Tenancy, Tenant,
     TenantContext, TenantId, TenantRouter, TenantSource, TenantStatuses, Tenanted,
@@ -62,7 +62,7 @@ fn config(yaml: &str) -> R2eConfig {
 // ── Tenancy ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn the_tenancy_plugin_fills_the_router_shell() {
+async fn the_tenancy_plugin_builds_a_wired_router() {
     let builder = AppBuilder::new()
         .provide(HeaderTenantResolver::default())
         .plugin(Tenancy::resolver::<HeaderTenantResolver>())
@@ -72,7 +72,7 @@ async fn the_tenancy_plugin_fills_the_router_shell() {
     let router = builder.bean_context().get::<TenantRouter>();
     assert!(
         router.is_enabled(),
-        "install provides an unwired shell; configure must wire it"
+        "build resolves the resolver bean and wires the router in one step"
     );
     assert_eq!(router.policy(), MissingTenantPolicy::Reject, "fail closed");
     assert_eq!(router.statuses(), TenantStatuses::default());
@@ -370,9 +370,9 @@ async fn eager_tenants_are_accepted_and_do_not_block_boot() {
 #[tokio::test]
 async fn per_tenant_resources_cascade_through_the_plugins() {
     // Two `PerTenant` plugins, one source reading the other's map out of the
-    // graph. This is the reason the map retains an `Arc<BeanContext>`: a plain
-    // `BeanContext::clone()` would drop the overlay and the inner map could go
-    // missing at runtime.
+    // graph. This is the reason the map retains a `GraphHandle` on the resolved
+    // graph: at request time it must see every sibling map, whatever order the
+    // plugins were built in.
     #[derive(Clone, Debug)]
     struct Report {
         from: String,
@@ -485,7 +485,7 @@ async fn a_map_provided_by_hand_needs_no_plugin() {
     // is a complete wiring for an app that builds its own state.
     let map = Tenanted::new(
         Arc::new(ScriptedSource::new()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         r2e_tenant::TenantedSettings::default(),
         None,
     );

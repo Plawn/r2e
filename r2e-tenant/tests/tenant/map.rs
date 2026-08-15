@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_core::http::StatusCode;
-use r2e_core::BeanContext;
 use r2e_tenant::{TenantError, TenantId, Tenanted, TenantedSettings};
 
 use crate::fixtures::{map_with, tid, wait_for, Behaviour, Gate, Resource, ScriptedSource};
@@ -364,8 +363,34 @@ async fn preload_creates_up_front_and_reports_failures() {
 }
 
 #[tokio::test]
-async fn an_unwired_map_names_the_missing_plugin() {
-    let map: Tenanted<Resource> = Tenanted::unwired();
+async fn a_cascade_to_a_type_without_a_map_names_the_missing_plugin() {
+    // The source asks the cascade for a type no `PerTenant` plugin provides a
+    // map for: the failure must name the plugin to add, not panic or 503.
+    #[derive(Clone, Debug)]
+    struct Derived;
+
+    #[derive(Clone)]
+    struct Cascading;
+
+    impl r2e_tenant::TenantSource<Derived> for Cascading {
+        fn create<'a>(
+            &'a self,
+            _tenant: &'a TenantId,
+            ctx: &'a r2e_tenant::TenantContext<'a>,
+        ) -> r2e_tenant::BoxFuture<'a, Result<Option<Derived>, r2e_tenant::BoxError>> {
+            Box::pin(async move {
+                let _ = ctx.get::<Resource>().await?;
+                Ok(Some(Derived))
+            })
+        }
+    }
+
+    let map: Tenanted<Derived> = Tenanted::new(
+        Arc::new(Cascading),
+        r2e_core::plugin::GraphHandle::default(),
+        settings(),
+        None,
+    );
 
     let err = map.get(&tid("acme")).await.unwrap_err();
     assert!(matches!(err, TenantError::NoSource(_)), "{err:?}");
@@ -389,7 +414,7 @@ async fn fallback_default_serves_unknown_tenants_and_is_never_disposed() {
     };
     let map = Tenanted::new(
         Arc::new(source.clone()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         settings(),
         Some(shared.clone()),
     );

@@ -350,20 +350,6 @@ async fn the_missing_status_is_configurable() {
 }
 
 #[tokio::test]
-async fn an_unwired_router_is_a_500_naming_the_plugin() {
-    let router = TenantRouter::unwired();
-    assert!(!router.is_enabled());
-
-    let request = Head::new("/").header("x-tenant-id", "acme");
-    let err = router.try_resolve(&request.head(&[])).await.unwrap_err();
-    assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(
-        err.to_string().contains("Tenancy"),
-        "the message must name the plugin to install: {err}"
-    );
-}
-
-#[tokio::test]
 async fn a_disabled_router_resolves_nothing_without_failing() {
     // `tenancy.enabled = false`: the app boots and `Option` extractors see `None`.
     let router = TenantRouter::disabled(TenantStatuses::default());

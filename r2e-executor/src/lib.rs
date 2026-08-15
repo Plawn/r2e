@@ -47,8 +47,7 @@ use std::time::Duration;
 use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use r2e_core::config::ConfigProperties;
-use r2e_core::plugin::{PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 pub use r2e_core::rt::{JobHandle, JoinError};
 
@@ -355,29 +354,25 @@ impl PoolExecutor {
 
 /// Plugin that builds a [`PoolExecutor`] from `R2eConfig` and provides it as a bean.
 ///
-/// Reads the `executor.*` section. Falls back to [`ExecutorConfig::default`] when
-/// no config is loaded or the section is absent.
-///
-/// Install with `.plugin(Executor)` **before** `build_state()`.
+/// Reads the `executor.*` section (typed, validated at boot). Falls back to
+/// [`ExecutorConfig::default`] when no config is loaded or the section is
+/// absent. Install with `.plugin(Executor)` — position relative to
+/// `load_config()` does not matter.
 pub struct Executor;
 
 impl PreStatePlugin for Executor {
     type Provided = (PoolExecutor,);
     type Deps = ();
-    type Config = ();
+    type Config = ExecutorConfig;
+    const CONFIG_PREFIX: Option<&'static str> = Some("executor");
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (PoolExecutor,) {
-        let config = ctx
-            .config()
-            .map(|c| ExecutorConfig::from_config(c, Some("executor")))
-            .transpose()
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Invalid executor config; using defaults");
-                None
-            })
-            .unwrap_or_default();
-
-        let executor = PoolExecutor::new(config);
+    async fn build(
+        self,
+        _deps: (),
+        config: Option<ExecutorConfig>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(PoolExecutor,), PluginBuildError> {
+        let executor = PoolExecutor::new(config.unwrap_or_default());
         let shutdown_handle = executor.clone();
 
         ctx.on_shutdown_async(move || async move {
@@ -389,6 +384,6 @@ impl PreStatePlugin for Executor {
             let _ = shutdown_handle.shutdown_graceful(timeout).await;
         });
 
-        (executor,)
+        Ok((executor,))
     }
 }

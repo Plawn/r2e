@@ -150,7 +150,8 @@ use std::time::{Duration, Instant};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use r2e_core::type_list::{TCons, TNil};
-use r2e_core::{BeanContext, Late};
+use r2e_core::plugin::GraphHandle;
+use r2e_core::BeanContext;
 use tokio::sync::{Notify, OnceCell};
 use tokio_util::sync::CancellationToken;
 
@@ -235,7 +236,7 @@ impl<T> Clone for Tenanted<T> {
 struct Inner<T> {
     slots: DashMap<TenantId, Arc<Slot<T>>>,
     negative: DashMap<TenantId, u64>,
-    wiring: Late<Wiring<T>>,
+    wiring: Wiring<T>,
     /// Time base for the millisecond stamps on slots and negative entries.
     started: Instant,
     /// Bumped by every removal, so a creation that started before one can tell.
@@ -300,7 +301,10 @@ impl<T> Slot<T> {
 
 struct Wiring<T> {
     source: Arc<dyn TenantSource<T>>,
-    beans: Arc<BeanContext>,
+    /// The resolved bean graph, filled by the framework after `build_state()`
+    /// (or by the embedder). Backs [`TenantContext::bean`] and the cascade,
+    /// both of which only run at request time — after the fill.
+    graph: GraphHandle,
     settings: TenantedSettings,
     /// The app-scoped default, when `fallback_to_default()` was asked for.
     fallback: Option<T>,
@@ -393,16 +397,44 @@ impl<T> Tenanted<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// An unwired map — what [`PerTenant::install`](crate::PerTenant) provides
-    /// before the source bean exists. Resolving through it fails with
-    /// [`TenantError::NoSource`].
+    /// A wired map.
+    ///
+    /// The [`PerTenant`](crate::PerTenant) plugin is the normal way to get one
+    /// (its `build` calls this with the graph handle the framework fills after
+    /// `build_state()`); this constructor is for tests and for embedding the
+    /// map in something else. `graph` backs [`TenantContext::bean`] and the
+    /// cascade — pass [`GraphHandle::default()`] when the source needs
+    /// neither, or fill your own handle once your `BeanContext` exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `settings.max_active` is `0`. A cap of zero would create
+    /// every resource and immediately evict it; it is a misconfiguration, not a
+    /// way to disable the map.
     #[must_use]
-    pub fn unwired() -> Self {
+    pub fn new(
+        source: Arc<dyn TenantSource<T>>,
+        graph: GraphHandle,
+        settings: TenantedSettings,
+        fallback: Option<T>,
+    ) -> Self {
+        assert!(
+            settings.max_active > 0,
+            "`max-active` must be at least 1 for `Tenanted<{}>`: a cap of 0 would create every \
+             resource and evict it straight away. Use `PerTenant::max_active(n)` / \
+             `tenancy.max-active: n` with n >= 1.",
+            std::any::type_name::<T>()
+        );
         Self {
             inner: Arc::new(Inner {
                 slots: DashMap::new(),
                 negative: DashMap::new(),
-                wiring: Late::new(),
+                wiring: Wiring {
+                    source,
+                    graph,
+                    settings,
+                    fallback,
+                },
                 started: Instant::now(),
                 epoch: AtomicU64::new(0),
                 trimming: AtomicBool::new(false),
@@ -412,63 +444,6 @@ where
                 counters: Counters::default(),
             }),
         }
-    }
-
-    /// A wired map.
-    ///
-    /// The [`PerTenant`](crate::PerTenant) plugin is the normal way to get one;
-    /// this constructor is for tests and for embedding the map in something else.
-    /// `beans` backs [`TenantContext::bean`] and the cascade — pass
-    /// `Arc::new(BeanContext::empty())` when the source needs neither.
-    #[must_use]
-    pub fn new(
-        source: Arc<dyn TenantSource<T>>,
-        beans: Arc<BeanContext>,
-        settings: TenantedSettings,
-        fallback: Option<T>,
-    ) -> Self {
-        let map = Self::unwired();
-        map.wire(source, beans, settings, fallback);
-        map
-    }
-
-    /// Fill an unwired map, returning `false` if it was already wired.
-    ///
-    /// The other half of the install/configure split: [`unwired`](Self::unwired)
-    /// puts the bean in the state early (so controllers compile against it), and
-    /// this fills in the source once the graph exists. Every clone of the map
-    /// shares one interior, so wiring any handle wires the bean the state holds.
-    /// The [`PerTenant`](crate::PerTenant) plugin does this for you; call it
-    /// directly only when embedding a map outside the builder.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `settings.max_active` is `0`. A cap of zero would create
-    /// every resource and immediately evict it; it is a misconfiguration, not a
-    /// way to disable the map.
-    pub fn wire(
-        &self,
-        source: Arc<dyn TenantSource<T>>,
-        beans: Arc<BeanContext>,
-        settings: TenantedSettings,
-        fallback: Option<T>,
-    ) -> bool {
-        assert!(
-            settings.max_active > 0,
-            "`max-active` must be at least 1 for `Tenanted<{}>`: a cap of 0 would create every \
-             resource and evict it straight away. Use `PerTenant::max_active(n)` / \
-             `tenancy.max-active: n` with n >= 1.",
-            std::any::type_name::<T>()
-        );
-        self.inner
-            .wiring
-            .fill(Wiring {
-                source,
-                beans,
-                settings,
-                fallback,
-            })
-            .is_ok()
     }
 
     /// The resource for `tenant`, creating it on first use.
@@ -542,13 +517,10 @@ where
         self.settings().statuses
     }
 
-    /// The effective settings (defaults while unwired).
+    /// The effective settings.
     #[must_use]
     pub fn settings(&self) -> TenantedSettings {
-        self.inner
-            .wiring
-            .get()
-            .map_or_else(TenantedSettings::default, |w| w.settings)
+        self.inner.wiring.settings
     }
 
     /// Drop a tenant's resource and **await** its disposal.
@@ -1019,9 +991,7 @@ where
         tenant: &TenantId,
         chain: ResolutionChain,
     ) -> Result<T, TenantError> {
-        let Some(wiring) = self.inner.wiring.get() else {
-            return Err(TenantError::NoSource(std::any::type_name::<T>()));
-        };
+        let wiring = &self.inner.wiring;
 
         // Admission is **double-checked**, and the order of the three steps is
         // the whole point. This first read MUST stay ahead of `Pending::new`:
@@ -1133,7 +1103,7 @@ where
                     if self.negative_hit(tenant, &wiring.settings) {
                         return Err(CreateFailure::Unknown);
                     }
-                    let ctx = TenantContext::new(tenant, Arc::clone(&wiring.beans), chain);
+                    let ctx = TenantContext::new(tenant, wiring.graph.clone(), chain);
                     let creating = wiring.source.create(tenant, &ctx);
                     let created = match wiring.settings.create_timeout {
                         Some(budget) => match tokio::time::timeout(budget, creating).await {
@@ -1638,12 +1608,11 @@ where
     /// critical section, so `drain` cannot observe the slot leave the map before
     /// the work is counted, and it is only discharged by being dropped.
     ///
-    /// Slots with nothing in them (an initialization that never completed) and a
-    /// map with no wiring report `None`: there is nothing to hand to a source,
-    /// and pretending otherwise would leave a caller owing an await that cannot
-    /// do anything.
+    /// Slots with nothing in them (an initialization that never completed)
+    /// report `None`: there is nothing to hand to a source, and pretending
+    /// otherwise would leave a caller owing an await that cannot do anything.
     fn commit_dispose(&self, slot: &Slot<T>) -> Option<DisposalDebt<T>> {
-        if self.inner.wiring.get().is_none() || slot.cell.get().is_none() {
+        if slot.cell.get().is_none() {
             return None;
         }
         slot.disposed
@@ -1659,14 +1628,11 @@ where
     /// or this future is dropped mid-await.
     async fn run_committed_dispose(&self, tenant: &TenantId, slot: &Slot<T>, debt: DisposalDebt<T>) {
         let _debt = debt;
-        let Some(wiring) = self.inner.wiring.get() else {
-            return;
-        };
         let Some(value) = slot.cell.get() else {
             return;
         };
         self.inner.counters.disposed.fetch_add(1, Ordering::Relaxed);
-        wiring.source.dispose(tenant, value.clone()).await;
+        self.inner.wiring.source.dispose(tenant, value.clone()).await;
     }
 
     fn now_millis(&self) -> u64 {
@@ -2115,7 +2081,6 @@ impl<T> std::fmt::Debug for Tenanted<T> {
         f.debug_struct("Tenanted")
             .field("resource", &std::any::type_name::<T>())
             .field("slots", &self.inner.slots.len())
-            .field("wired", &self.inner.wiring.get().is_some())
             .finish()
     }
 }

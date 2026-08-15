@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use r2e_core::plugin::GraphHandle;
 use r2e_core::{BeanContext, BeanRegistry};
 use r2e_tenant::{
     BoxError, BoxFuture, TenantContext, TenantError, TenantId, TenantSource, Tenanted,
@@ -124,22 +125,20 @@ impl TenantSource<Top> for TopSource {
     }
 }
 
-/// Builds a bean graph of per-tenant maps the way the plugin does: unwired shells
-/// go into the graph first (so every map can see every other), then each is wired
-/// against the resolved context.
-/// Deferred `Tenanted::wire` call, run once the graph has resolved.
-type Wiring = Box<dyn FnOnce(&Arc<BeanContext>)>;
-
+/// Builds a bean graph of per-tenant maps the way the plugin does: every map is
+/// constructed whole against one shared [`GraphHandle`], and the handle is
+/// filled once the graph has resolved — so every map can see every other at
+/// request time.
 struct Graph {
     registry: BeanRegistry,
-    wirings: Vec<Wiring>,
+    handle: GraphHandle,
 }
 
 impl Graph {
     fn new() -> Self {
         Self {
             registry: BeanRegistry::new(),
-            wirings: Vec::new(),
+            handle: GraphHandle::default(),
         }
     }
 
@@ -155,25 +154,20 @@ impl Graph {
         T: Clone + Send + Sync + 'static,
         S: TenantSource<T>,
     {
-        let map: Tenanted<T> = Tenanted::unwired();
-        self.registry.provide(map.clone());
-        self.wirings.push(Box::new(move |ctx| {
-            map.wire(
-                Arc::new(source),
-                Arc::clone(ctx),
-                TenantedSettings::default(),
-                None,
-            );
-        }));
+        let map: Tenanted<T> = Tenanted::new(
+            Arc::new(source),
+            self.handle.clone(),
+            TenantedSettings::default(),
+            None,
+        );
+        self.registry.provide(map);
         self
     }
 
     async fn build(self) -> Arc<BeanContext> {
-        let Self { registry, wirings } = self;
+        let Self { registry, handle } = self;
         let context = Arc::new(registry.resolve().await.expect("graph resolves"));
-        for wire in wirings {
-            wire(&context);
-        }
+        handle.fill(Arc::clone(&context));
         context
     }
 }

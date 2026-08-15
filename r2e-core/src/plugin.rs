@@ -719,7 +719,12 @@ impl GraphHandle {
     /// Fill the handle with the resolved graph. First write wins; later calls
     /// are ignored (relevant across dev-reload cycles, where the registry —
     /// and thus the handle — is fresh per cycle anyway).
-    pub(crate) fn fill(&self, ctx: std::sync::Arc<crate::beans::BeanContext>) {
+    ///
+    /// The builder does this for you after `build_state()`. It is public for
+    /// embedders that build a `BeanContext` by hand (tests, hand-wired
+    /// per-tenant maps) and need to satisfy an API that takes a `GraphHandle`:
+    /// start from [`GraphHandle::default`], hand out clones, fill once.
+    pub fn fill(&self, ctx: std::sync::Arc<crate::beans::BeanContext>) {
         let _ = self.0.fill(ctx);
     }
 
