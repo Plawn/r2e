@@ -20,23 +20,27 @@ const MODE_LABEL: &str = "dev.r2e.devservices.mode";
 /// Disable Ryuk and automatic garbage collection for post-mortem inspection.
 pub(crate) const KEEP_ENV: &str = "R2E_DEVSERVICES_KEEP";
 
+/// How long a container may sit in Docker's `created` state before [`cleanup`]
+/// treats it as a leftover rather than a peer's start in progress.
+const STARTING_GRACE_SECS: i64 = 120;
+
 /// Stable identity attached to a cross-process shared container.
 pub(crate) struct SharedIdentity {
-    service: &'static str,
+    service: String,
     name: String,
     fingerprint: String,
 }
 
 impl SharedIdentity {
     /// Build an identity from every input that affects the service configuration.
-    pub(crate) fn new(service: &'static str, configuration: &str) -> Self {
+    pub(crate) fn new(service: &str, configuration: &str) -> Self {
         let fingerprint = fingerprint(configuration);
         let name = format!(
             "r2e-devservices-{}-{service}-{fingerprint}",
             session_scope()
         );
         Self {
-            service,
+            service: service.to_string(),
             name,
             fingerprint,
         }
@@ -48,14 +52,14 @@ impl SharedIdentity {
 
     /// Add the labels used for reuse matching, Ryuk, and fallback cleanup.
     pub(crate) fn label<I: Image>(&self, request: ContainerRequest<I>) -> ContainerRequest<I> {
-        managed_labels(request, self.service, &self.fingerprint, "shared")
+        managed_labels(request, &self.service, &self.fingerprint, "shared")
     }
 }
 
 /// Label an isolated container so Ryuk can reap it after an abnormal exit.
 pub(crate) fn label_isolated<I: Image>(
     request: ContainerRequest<I>,
-    service: &'static str,
+    service: &str,
     configuration: &str,
 ) -> ContainerRequest<I> {
     managed_labels(request, service, &fingerprint(configuration), "isolated")
@@ -63,7 +67,7 @@ pub(crate) fn label_isolated<I: Image>(
 
 fn managed_labels<I: Image>(
     request: ContainerRequest<I>,
-    service: &'static str,
+    service: &str,
     configuration: &str,
     mode: &'static str,
 ) -> ContainerRequest<I> {
@@ -113,7 +117,7 @@ where
     loop {
         match make().start().await {
             Ok(container) => return container,
-            Err(error) if is_name_conflict(&error) && Instant::now() < deadline => {
+            Err(error) if is_contention(&error) && Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
             Err(error) => {
@@ -123,8 +127,14 @@ where
     }
 }
 
-fn is_name_conflict(error: &TestcontainersError) -> bool {
-    matches!(
+/// Is this failure another process racing us on the same shared container?
+///
+/// Two shapes, both transient: Docker refusing the duplicate name (409 on
+/// create), and the container we just created disappearing under us because a
+/// peer's [`cleanup`] reclaimed it — which surfaces from the readiness wait,
+/// not from create, hence the message match.
+fn is_contention(error: &TestcontainersError) -> bool {
+    if matches!(
         error,
         TestcontainersError::Client(ClientError::CreateContainer(
             testcontainers::bollard::errors::Error::DockerResponseServerError {
@@ -132,7 +142,11 @@ fn is_name_conflict(error: &TestcontainersError) -> bool {
                 ..
             }
         ))
-    )
+    ) {
+        return true;
+    }
+    let message = error.to_string();
+    message.contains("dead or marked for removal") || message.contains("No such container")
 }
 
 /// Fallback cleanup for resources left behind before Ryuk was available.
@@ -151,7 +165,7 @@ pub(crate) async fn cleanup(identity: &SharedIdentity) {
         "label".to_string(),
         vec![
             format!("{MANAGED_LABEL}=true"),
-            format!("{SERVICE_LABEL}={}", identity.service),
+            format!("{SERVICE_LABEL}={}", identity.service.as_str()),
         ],
     )]);
     let options = ListContainersOptionsBuilder::new()
@@ -179,12 +193,23 @@ pub(crate) async fn cleanup(identity: &SharedIdentity) {
                 .iter()
                 .any(|name| name.trim_start_matches('/') == identity.name)
         });
-        let active = matches!(
-            container.state,
-            Some(ContainerSummaryStateEnum::RUNNING | ContainerSummaryStateEnum::RESTARTING)
-        );
+        // A container is worth keeping only while it is serving or on its way
+        // there: running, restarting, or freshly `created` — that last one
+        // belongs to a peer process racing us on the same shared container, and
+        // removing it would break *its* start, not ours. Everything else
+        // (exited, dead, paused, removing, an unreported state, a `created`
+        // nobody has started within the grace period) is a leftover we reclaim.
+        let starting = matches!(container.state, Some(ContainerSummaryStateEnum::CREATED))
+            && container
+                .created
+                .is_some_and(|created| unix_now().saturating_sub(created) <= STARTING_GRACE_SECS);
+        let live = starting
+            || matches!(
+                container.state,
+                Some(ContainerSummaryStateEnum::RUNNING | ContainerSummaryStateEnum::RESTARTING)
+            );
 
-        if !active || legacy || (same_scope && same_configuration && !current_name) {
+        if !live || legacy || (same_scope && same_configuration && !current_name) {
             let _ = docker
                 .remove_container(id, Some(remove_options.clone()))
                 .await;
@@ -192,13 +217,23 @@ pub(crate) async fn cleanup(identity: &SharedIdentity) {
     }
 }
 
-/// Wait until the published service port accepts a connection.
+/// Wait until the published service port serves connections.
+///
+/// A plain connect is not enough: Docker's port proxy binds the host port as
+/// soon as the container starts, so it accepts — then hangs up — while the
+/// service inside is still booting (Postgres' `initdb` phase, for one). The
+/// probe therefore holds the connection briefly: a service that is up leaves
+/// it open waiting for a client request, the proxy's stand-in closes it.
+///
+/// This is what makes a *reused* container safe to hand out — testcontainers
+/// applies no wait strategy on reuse, it returns the running container as is.
 pub(crate) async fn wait_tcp_ready(host: &str, port: u16, what: &str) {
     let host = host.to_string();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let probe_host = host.clone();
         let reachable = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
             use std::net::{TcpStream, ToSocketAddrs};
 
             (probe_host.as_str(), port)
@@ -206,7 +241,30 @@ pub(crate) async fn wait_tcp_ready(host: &str, port: u16, what: &str) {
                 .ok()
                 .into_iter()
                 .flatten()
-                .any(|address| TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok())
+                .any(|address| {
+                    let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+                    else {
+                        return false;
+                    };
+                    if stream
+                        .set_read_timeout(Some(Duration::from_millis(250)))
+                        .is_err()
+                    {
+                        return false;
+                    }
+                    let mut probe = [0_u8; 1];
+                    match (&stream).read(&mut probe) {
+                        // Hung up on us: nothing is listening behind the proxy.
+                        Ok(0) => false,
+                        // A banner (Redis sends none, but some services do).
+                        Ok(_) => true,
+                        // Silence: the service is up and waiting for a request.
+                        Err(error) => matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ),
+                    }
+                })
         })
         .await
         .unwrap_or(false);
@@ -221,12 +279,23 @@ pub(crate) async fn wait_tcp_ready(host: &str, port: u16, what: &str) {
     }
 }
 
-fn fingerprint(value: &str) -> String {
-    format!("{:016x}", fnv1a(value.as_bytes()))
+/// Wall-clock seconds since the epoch, matching Docker's `created` field.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
+fn fingerprint(value: &str) -> String {
+    format!("{:016x}", fnv1a(FNV_OFFSET, value.as_bytes()))
+}
+
+/// The FNV-1a starting state, exposed so a digest can be folded in several
+/// chunks (see `service::digest`).
+pub(crate) const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+
+pub(crate) fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);

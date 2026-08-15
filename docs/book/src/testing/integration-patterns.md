@@ -143,7 +143,9 @@ async fn users_are_listed(app: TestApp, #[inject] pool: sqlx::SqlitePool) {
 
 For a real Postgres/Redis container instead of an in-memory database, use
 `r2e-devservices` (`DevPostgres::shared()`) via `TestApp::boot_with` — see
-[Test Setup](./test-setup.md#dev-services-containerized-infrastructure).
+[Test Setup](./test-setup.md#dev-services-containerized-infrastructure). Any
+other service (ClickHouse, Kafka, your own image) goes through `DevService`,
+described in the same section.
 
 ## Testing rate limiting
 

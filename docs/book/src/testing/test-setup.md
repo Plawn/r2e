@@ -166,7 +166,7 @@ config.set("app.name", ConfigValue::String("test-app".into()));
 ## Dev services (containerized infrastructure)
 
 When a test needs real infrastructure, `r2e-devservices` starts Docker
-containers on demand (features `postgres`, `redis`):
+containers on demand (features `postgres`, `redis`, `openfga`):
 
 ```rust
 use r2e_devservices::DevPostgres;
@@ -192,6 +192,74 @@ handle-scoped container, also labelled so Ryuk can clean it after a crash or
 Ryuk requires a local Docker Unix socket. Override its host path with
 `R2E_DEVSERVICES_DOCKER_SOCKET`; use `R2E_DEVSERVICES_KEEP=1` only when the
 containers must survive for post-mortem inspection.
+
+### Choosing the image and credentials
+
+`shared_with` / `start_with` take a spec, and the image and credentials are part
+of the container's identity — two specs differing in either get two shared
+containers:
+
+```rust
+use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
+
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await; // url → postgres://app:s3cret@localhost:32771/appdb
+```
+
+Defaults are `postgres:16-alpine` (`postgres`/`postgres`, database `postgres`)
+and `redis:7-alpine`. A Postgres image must speak Postgres on 5432 and honour
+`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`.
+
+### Any other service
+
+`DevService` is the generic form behind those wrappers, available without a
+feature flag: any testcontainers `Image` — a `testcontainers-modules` one, a
+`GenericImage`, or your own — gets the same labelling, Ryuk reaping and
+cross-process sharing.
+
+```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+use r2e_devservices::{DevService, DevServiceSpec};
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+```
+
+`testcontainers` and `testcontainers_modules` are re-exported so the spec builds
+against the versions this crate uses; a ready-made module image needs its own
+feature enabled through your `[dev-dependencies]`
+(`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }`).
+`with_port` resolves a port the image exposes rather than publishing one. The
+closure must build the same request every time: it runs again for the sharing
+key and on every start attempt, and `shared` compares each attempt against that
+key rather than start a container the name does not describe.
+
+Sharing is keyed on the request — the fields that shape the container Docker
+creates: image, env vars, labels, command, mounts, port mappings, device
+requests, network — so two specs that differ anywhere get two containers.
+`with_discriminator` appends to that key for what stays outside it: ulimits
+(testcontainers keeps them private), the contents of a file copied by path, and
+anything applied after start — seeded data, or exec hooks the image runs itself.
+A host-config modifier is refused rather than guessed: `shared` panics on a spec
+that sets one without a discriminator, since its effect is a closure.
 
 ## Running tests
 

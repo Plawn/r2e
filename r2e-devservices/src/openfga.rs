@@ -1,12 +1,10 @@
 use std::time::Duration;
 
 use testcontainers::core::wait::HttpWaitStrategy;
-use testcontainers::core::{ContainerRequest, IntoContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt, ReuseDirective};
-use tokio::sync::OnceCell;
+use testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers::{GenericImage, ImageExt};
 
-use crate::{common, ryuk};
+use crate::service::{DevService, DevServiceSpec};
 
 /// Default image tag. Pinned so the shared-container fingerprint stays stable
 /// across runs (an unpinned `latest` would silently change the identity).
@@ -39,11 +37,23 @@ const GRPC_PORT: u16 = 8081;
 /// [`write_model`]: Self::write_model
 /// [`write_tuples`]: Self::write_tuples
 pub struct DevOpenFga {
-    /// Owns an isolated container, or references the reusable shared container.
-    _container: ContainerAsync<GenericImage>,
+    /// The isolated container this handle owns. `None` on the shared path:
+    /// there the container belongs to the process-wide registry and outlives
+    /// every handle, so the handle is a cheap copy of the endpoints.
+    _container: Option<DevService>,
     http_url: String,
     grpc_url: String,
     client: reqwest::Client,
+}
+
+/// Identity and request of the OpenFGA container.
+///
+/// A different OpenFGA image is out of scope here — build a [`DevService`]
+/// directly for that.
+fn spec() -> DevServiceSpec<GenericImage> {
+    DevServiceSpec::new("openfga", || base_image().with_cmd(["run"]))
+        .with_port(HTTP_PORT)
+        .with_port(GRPC_PORT)
 }
 
 /// Base image: `openfga/openfga` running `run`, both ports exposed, ready once
@@ -66,20 +76,10 @@ impl DevOpenFga {
     ///
     /// Panics if Docker is unavailable or the container fails to start.
     pub async fn start() -> Self {
-        ryuk::ensure_lease().await;
-        let configuration =
-            format!("image=openfga/openfga:{DEFAULT_TAG};http={HTTP_PORT};grpc={GRPC_PORT}");
-        let request =
-            common::label_isolated(base_image().with_cmd(["run"]), "openfga", &configuration);
-        Self::from_request(request).await
-    }
-
-    async fn from_request(request: ContainerRequest<GenericImage>) -> Self {
-        let container = request
-            .start()
-            .await
-            .expect("failed to start the OpenFGA dev service — is Docker running?");
-        Self::from_container(container).await
+        let service = DevService::start(spec()).await;
+        let mut handle = Self::describe(&service);
+        handle._container = Some(service);
+        handle
     }
 
     /// The cross-process shared OpenFGA container, started on first use.
@@ -87,49 +87,20 @@ impl DevOpenFga {
     /// Tests sharing the container must not assume an empty server — create a
     /// dedicated store per test with [`create_store`](Self::create_store), or
     /// use [`start`](Self::start) for a private container.
-    pub async fn shared() -> &'static Self {
-        static SHARED: OnceCell<DevOpenFga> = OnceCell::const_new();
-        SHARED.get_or_init(Self::start_shared).await
+    ///
+    /// The *container* is shared; the returned handle is a cheap owned copy of
+    /// its endpoints, so dropping it stops nothing.
+    pub async fn shared() -> Self {
+        Self::describe(DevService::shared(spec()).await)
     }
 
-    async fn start_shared() -> Self {
-        ryuk::ensure_lease().await;
-        let configuration =
-            format!("image=openfga/openfga:{DEFAULT_TAG};http={HTTP_PORT};grpc={GRPC_PORT}");
-        let identity = common::SharedIdentity::new("openfga", &configuration);
-        common::cleanup(&identity).await;
-
-        let container = common::start_with_retry("OpenFGA", || {
-            identity.label(
-                base_image()
-                    .with_cmd(["run"])
-                    .with_container_name(identity.name())
-                    .with_reuse(ReuseDirective::Always),
-            )
-        })
-        .await;
-        Self::from_container(container).await
-    }
-
-    async fn from_container(container: ContainerAsync<GenericImage>) -> Self {
-        let host = container
-            .get_host()
-            .await
-            .expect("failed to resolve the OpenFGA container host")
-            .to_string();
-        let http_port = container
-            .get_host_port_ipv4(HTTP_PORT)
-            .await
-            .expect("failed to resolve the mapped OpenFGA HTTP port");
-        let grpc_port = container
-            .get_host_port_ipv4(GRPC_PORT)
-            .await
-            .expect("failed to resolve the mapped OpenFGA gRPC port");
-        common::wait_tcp_ready(&host, grpc_port, "OpenFGA (gRPC)").await;
+    /// The endpoints of a running container, without owning it.
+    fn describe(service: &DevService) -> Self {
+        let host = service.host();
         Self {
-            _container: container,
-            http_url: format!("http://{host}:{http_port}"),
-            grpc_url: format!("http://{host}:{grpc_port}"),
+            _container: None,
+            http_url: format!("http://{host}:{}", service.port(HTTP_PORT)),
+            grpc_url: format!("http://{host}:{}", service.port(GRPC_PORT)),
             client: reqwest::Client::new(),
         }
     }

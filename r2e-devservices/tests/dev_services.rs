@@ -41,6 +41,155 @@ async fn postgres_dev_service_starts_and_listens() {
     assert_eq!(pg.url(), again.url());
 }
 
+/// A non-default image (`pgvector/pgvector`) is usable, extension included.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_runs_a_custom_image() {
+    use r2e_devservices::{DevPostgres, PostgresImage};
+
+    let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+    assert_reachable(pg.url());
+
+    let pool = sqlx::PgPool::connect(pg.url())
+        .await
+        .expect("cannot connect to the pgvector dev service");
+    // `IF NOT EXISTS` is not atomic: concurrent test processes on the shared
+    // container can both pass the check and one loses on the catalog's unique
+    // index. Only a real failure to install the extension matters here.
+    if let Err(error) = sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+        .execute(&pool)
+        .await
+    {
+        let duplicate = error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| code == "23505");
+        assert!(
+            duplicate,
+            "the vector extension is not available in this image: {error}"
+        );
+    }
+
+    let installed: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+            .fetch_one(&pool)
+            .await
+            .expect("cannot read pg_extension");
+    assert!(installed, "vector extension missing after CREATE EXTENSION");
+}
+
+/// One shared container per image: same image reuses, different images don't.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_shares_one_container_per_image() {
+    use r2e_devservices::{DevPostgres, PostgresImage};
+
+    let default = DevPostgres::shared().await;
+    let default_again = DevPostgres::shared_with(PostgresImage::default()).await;
+    assert_eq!(
+        default.url(),
+        default_again.url(),
+        "the default image must not start a second container"
+    );
+
+    let vector = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+    let vector_again =
+        DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+    assert_eq!(
+        vector.url(),
+        vector_again.url(),
+        "the same image must be reused"
+    );
+    assert_ne!(
+        default.url(),
+        vector.url(),
+        "two images must yield two distinct containers"
+    );
+}
+
+/// Credentials are parameterizable, and the URL follows them.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_takes_custom_credentials() {
+    use r2e_devservices::{DevPostgres, PostgresSpec};
+
+    let pg = DevPostgres::shared_with(
+        PostgresSpec::default()
+            .with_user("app")
+            .with_password("s3cret")
+            .with_database("appdb"),
+    )
+    .await;
+    assert!(
+        pg.url().starts_with("postgres://app:s3cret@"),
+        "url must carry the configured credentials: {}",
+        pg.url()
+    );
+    assert!(pg.url().ends_with("/appdb"), "url: {}", pg.url());
+
+    let pool = sqlx::PgPool::connect(pg.url())
+        .await
+        .expect("cannot connect with the configured credentials");
+    let (user, database): (String, String) =
+        sqlx::query_as("SELECT current_user, current_database()")
+            .fetch_one(&pool)
+            .await
+            .expect("cannot read the session identity");
+    assert_eq!(user, "app");
+    assert_eq!(database, "appdb");
+
+    // Credentials are part of the identity: the default spec is a separate
+    // container, not this one.
+    let default = DevPostgres::shared().await;
+    assert_ne!(default.port(), pg.port());
+}
+
+/// A service R2E knows nothing about, defined entirely on the user's side.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn user_defined_dev_service_joins_the_session() {
+    use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    fn valkey(tag: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("valkey", move || {
+            GenericImage::new("valkey/valkey", tag)
+                .with_exposed_port(6379.tcp())
+                .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+                .with_cmd(["valkey-server"])
+        })
+        .with_port(6379)
+    }
+
+    let valkey8 = DevService::shared(valkey("8-alpine")).await;
+    assert_reachable(&format!("redis://{}", valkey8.endpoint(6379)));
+
+    // Same spec ⇒ same container; a different image ⇒ its own container.
+    let again = DevService::shared(valkey("8-alpine")).await;
+    assert_eq!(valkey8.port(6379), again.port(6379));
+
+    let valkey7 = DevService::shared(valkey("7-alpine")).await;
+    assert_ne!(valkey8.port(6379), valkey7.port(6379));
+}
+
+/// A non-default Redis-compatible image (`valkey/valkey`).
+#[cfg(feature = "redis")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn redis_dev_service_runs_a_custom_image() {
+    use r2e_devservices::{DevRedis, RedisImage};
+
+    let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+    assert_reachable(valkey.url());
+
+    let default = DevRedis::shared().await;
+    assert_ne!(default.port(), valkey.port());
+}
+
 #[cfg(feature = "redis")]
 #[tokio::test]
 #[ignore = "requires Docker"]
@@ -48,4 +197,378 @@ async fn redis_dev_service_starts_and_listens() {
     let redis = r2e_devservices::DevRedis::shared().await;
     assert!(redis.url().starts_with("redis://"));
     assert_reachable(redis.url());
+}
+
+// ---------------------------------------------------------------------------
+// Sharing identity. No Docker: the identity is derived from the spec alone.
+// ---------------------------------------------------------------------------
+
+/// A spec whose request differs only in one env var — everything a naive
+/// image+ports identity would miss.
+fn tuned(
+    setting: &'static str,
+) -> r2e_devservices::DevServiceSpec<r2e_devservices::testcontainers::GenericImage> {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+
+    r2e_devservices::DevServiceSpec::new("tuned", move || {
+        GenericImage::new("vendor/server", "1")
+            .with_exposed_port(8080.tcp())
+            .with_env_var("MODE", setting)
+    })
+    .with_port(8080)
+}
+
+#[test]
+fn identity_is_stable_for_the_same_spec() {
+    assert_eq!(tuned("a").configuration(), tuned("a").configuration());
+}
+
+#[test]
+fn identity_separates_requests_the_image_reference_cannot_tell_apart() {
+    assert_ne!(tuned("a").configuration(), tuned("b").configuration());
+}
+
+/// Delimiter-bearing values must not be able to imitate a field boundary and
+/// make two different requests fingerprint the same.
+#[test]
+fn identity_is_injective_under_delimiters_in_values() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn credentials(user: &'static str, password: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("credentials", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_env_var("USER", user)
+                .with_env_var("PASSWORD", password)
+        })
+    }
+
+    assert_ne!(
+        credentials("alice;password=x", "y").configuration(),
+        credentials("alice", "x;password=y").configuration()
+    );
+}
+
+#[test]
+fn the_discriminator_splits_otherwise_identical_specs() {
+    assert_ne!(
+        tuned("a").configuration(),
+        tuned("a").with_discriminator("seeded").configuration()
+    );
+    assert_eq!(
+        tuned("a").with_discriminator("seeded").configuration(),
+        tuned("a").with_discriminator("seeded").configuration()
+    );
+}
+
+/// The declared ports are part of the identity, and declaring them in another
+/// order is the same declaration.
+#[test]
+fn identity_covers_declared_ports_regardless_of_order() {
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    let spec = || DevServiceSpec::new("ports", || GenericImage::new("vendor/server", "1").into());
+    assert_eq!(
+        spec().with_port(8080).with_port(9090).configuration(),
+        spec().with_port(9090).with_port(8080).configuration()
+    );
+    assert_ne!(
+        spec().configuration(),
+        spec().with_port(8080).configuration()
+    );
+}
+
+/// Port mappings reach Docker as a map keyed by container port, so a repeated
+/// container port keeps the last host port — and two requests that bind it to
+/// different host ports cannot share a container, whatever their order.
+#[test]
+fn identity_follows_the_effective_host_port_of_a_remapped_container_port() {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn remapped(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("remapped", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(first, 80.tcp())
+                .with_mapped_port(second, 80.tcp())
+        })
+    }
+
+    // Both map container port 80, to 9090 and to 8080 respectively.
+    assert_ne!(
+        remapped(8080, 9090).configuration(),
+        remapped(9090, 8080).configuration()
+    );
+
+    fn distinct(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("distinct", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(first, 80.tcp())
+                .with_mapped_port(second, 443.tcp())
+        })
+    }
+
+    // Distinct container ports: the declaration order is irrelevant.
+    assert_eq!(
+        distinct(8080, 8443).configuration(),
+        DevServiceSpec::new("distinct", || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(8443, 443.tcp())
+                .with_mapped_port(8080, 80.tcp())
+        })
+        .configuration()
+    );
+    assert_ne!(
+        distinct(8080, 8443).configuration(),
+        distinct(8081, 8443).configuration()
+    );
+}
+
+/// GPU reservations change what the container can do, so they cannot alias.
+#[test]
+fn identity_covers_device_requests() {
+    use r2e_devservices::testcontainers::bollard::models::DeviceRequest;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn gpus(count: i64) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("gpus", move || {
+            GenericImage::new("vendor/server", "1").with_device_requests(vec![DeviceRequest {
+                driver: Some("nvidia".into()),
+                count: Some(count),
+                capabilities: Some(vec![vec!["gpu".into()]]),
+                ..DeviceRequest::default()
+            }])
+        })
+    }
+
+    assert_eq!(gpus(1).configuration(), gpus(1).configuration());
+    assert_ne!(gpus(1).configuration(), gpus(2).configuration());
+
+    // Docker keeps the vector and applies each request in turn to the same OCI
+    // spec, so a reversal is a different container, not a reordered set.
+    fn reserved(first: &'static str, second: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("reserved", move || {
+            GenericImage::new("vendor/server", "1").with_device_requests(vec![
+                DeviceRequest {
+                    device_ids: Some(vec![first.into()]),
+                    ..DeviceRequest::default()
+                },
+                DeviceRequest {
+                    device_ids: Some(vec![second.into()]),
+                    ..DeviceRequest::default()
+                },
+            ])
+        })
+    }
+
+    assert_ne!(
+        reserved("GPU-A", "GPU-B").configuration(),
+        reserved("GPU-B", "GPU-A").configuration()
+    );
+}
+
+/// The identity can see *that* a host-config modifier is set, never what it
+/// does — so sharing has to be refused rather than guessed.
+#[tokio::test]
+#[should_panic(expected = "host-config modifier")]
+async fn a_host_config_modifier_cannot_be_shared_without_a_discriminator() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    let spec = DevServiceSpec::new("modifier", || {
+        GenericImage::new("vendor/server", "1")
+            .with_host_config_modifier(|host| host.memory = Some(64 * 1024 * 1024))
+    });
+
+    // Panics before it ever reaches Docker.
+    DevService::shared(spec).await;
+}
+
+/// A blank discriminator would satisfy the modifier guard while adding nothing
+/// to the key — two different modifiers back on one container.
+#[test]
+#[should_panic(expected = "blank discriminator")]
+fn a_blank_discriminator_is_rejected() {
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    DevServiceSpec::new("blank", || GenericImage::new("vendor/server", "1").into())
+        .with_discriminator("   ");
+}
+
+/// The guard reads the request that is about to start, not a fresh one — a
+/// factory can hand out a bare request first and a modified one afterwards.
+#[tokio::test]
+#[should_panic(expected = "host-config modifier")]
+async fn a_modifier_appearing_on_a_later_build_is_caught_too() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    static BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+    let spec = DevServiceSpec::new("late-modifier", || {
+        let image = GenericImage::new("vendor/server", "1");
+        if BUILDS.fetch_add(1, Ordering::SeqCst) == 0 {
+            image.into()
+        } else {
+            image.with_host_config_modifier(|host| host.memory = Some(64 * 1024 * 1024))
+        }
+    });
+
+    DevService::shared(spec).await;
+}
+
+/// Docker parses security options in sequence and a later one overrides an
+/// earlier one of the same name, so the reversed pair is a different container.
+#[test]
+fn identity_keeps_the_order_of_security_options() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn opts(first: &'static str, second: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("security", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_security_opt(first)
+                .with_security_opt(second)
+        })
+    }
+
+    // The last one wins: `NoNewPrivs: 0` one way round, `1` the other.
+    assert_ne!(
+        opts("no-new-privileges=true", "no-new-privileges=false").configuration(),
+        opts("no-new-privileges=false", "no-new-privileges=true").configuration()
+    );
+}
+
+/// A field explicitly set to nothing is not the same request as one never set:
+/// collapsing them would put both on one container.
+#[test]
+fn identity_separates_an_unset_field_from_an_empty_one() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn hostname(hostname: Option<&'static str>) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("hostname", move || {
+            let image = GenericImage::new("vendor/server", "1");
+            match hostname {
+                Some(hostname) => image.with_hostname(hostname),
+                None => image.into(),
+            }
+        })
+    }
+
+    assert_ne!(
+        hostname(None).configuration(),
+        hostname(Some("")).configuration()
+    );
+    assert_ne!(
+        hostname(Some("")).configuration(),
+        hostname(Some("node")).configuration()
+    );
+}
+
+/// Ports Docker holds as a set must not split a container on declaration order
+/// — a spec building them from an unordered collection would otherwise start
+/// one container per process.
+#[test]
+fn identity_ignores_the_order_of_exposed_ports() {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    fn exposing(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("exposed", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_exposed_port(first.tcp())
+                .with_exposed_port(second.tcp())
+                .into()
+        })
+    }
+
+    assert_eq!(
+        exposing(8123, 9000).configuration(),
+        exposing(9000, 8123).configuration()
+    );
+    assert_ne!(
+        exposing(8123, 9000).configuration(),
+        exposing(8123, 9001).configuration()
+    );
+}
+
+/// Labels are part of the container's configuration — two requests differing
+/// only there are two containers.
+#[test]
+fn identity_covers_request_labels() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn labelled(routing: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("labelled", move || {
+            GenericImage::new("vendor/server", "1").with_label("routing", routing)
+        })
+    }
+
+    assert_eq!(labelled("a").configuration(), labelled("a").configuration());
+    assert_ne!(labelled("a").configuration(), labelled("b").configuration());
+}
+
+/// An `Image` ships its own env vars and the request may override them; Docker
+/// keeps the last value. Two requests holding the same *pairs* in the opposite
+/// precedence run with opposite values, so they cannot share a container.
+#[test]
+fn identity_follows_the_effective_value_of_an_overridden_env_var() {
+    use std::borrow::Cow;
+
+    use r2e_devservices::testcontainers::core::{ContainerRequest, WaitFor};
+    use r2e_devservices::testcontainers::{Image, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    #[derive(Debug)]
+    struct EnvImage {
+        value: &'static str,
+    }
+
+    impl Image for EnvImage {
+        fn name(&self) -> &str {
+            "vendor/server"
+        }
+
+        fn tag(&self) -> &str {
+            "1"
+        }
+
+        fn ready_conditions(&self) -> Vec<WaitFor> {
+            Vec::new()
+        }
+
+        fn env_vars(
+            &self,
+        ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+            [("MODE", self.value)]
+        }
+    }
+
+    fn overridden(image: &'static str, request: &'static str) -> DevServiceSpec<EnvImage> {
+        DevServiceSpec::new("env-precedence", move || {
+            ContainerRequest::from(EnvImage { value: image }).with_env_var("MODE", request)
+        })
+    }
+
+    // Both run with MODE=b and MODE=a respectively — same pairs, opposite
+    // effective values.
+    assert_ne!(
+        overridden("a", "b").configuration(),
+        overridden("b", "a").configuration()
+    );
+    // The image's own value is shadowed, so it does not split containers.
+    assert_eq!(
+        overridden("a", "same").configuration(),
+        overridden("b", "same").configuration()
+    );
 }

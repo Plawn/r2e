@@ -2420,6 +2420,82 @@ test process and removes the containers after the final process exits
 (10-second reconnection grace by default). `start()` / `start_with_tag(tag)`
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
 
+`DevPostgres` and `DevRedis` also take a full image (repository + tag), and
+`DevPostgres` takes credentials. Both are part of the container's identity, so
+two specs differing in either get their own shared container, reused across test
+binaries:
+
+```rust
+use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
+
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+// isolated equivalent: DevPostgres::start_with(...)
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await; // url → postgres://app:s3cret@localhost:32771/appdb
+
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+```
+
+`PostgresSpec::default()` is `postgres:16-alpine` with `postgres`/`postgres` on
+database `postgres` (a `PostgresImage` converts into a spec), and
+`RedisImage::default()` is `redis:7-alpine`, so `shared()` / `start()` /
+`start_with_tag(tag)` are unchanged. A Postgres image must speak Postgres on
+5432 and honour `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`.
+
+**Any other service.** `DevService` is the generic form behind all of these:
+it gives any testcontainers `Image` the same labelling, Ryuk reaping and
+cross-process sharing, with no feature flag. `testcontainers` and
+`testcontainers_modules` are re-exported so the spec builds against matching
+versions:
+
+```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+use r2e_devservices::{DevService, DevServiceSpec};
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+// DevService::start(spec) for an isolated container
+```
+
+A ready-made `testcontainers_modules` image (`ClickHouse`, `Kafka`, `Mongo`, …)
+works the same way, but each sits behind its own feature: add
+`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }` to
+your own `[dev-dependencies]` and Cargo unifies it with the re-export.
+
+The closure builds the request on demand (`ContainerRequest` is not `Clone`
+and a contended start is retried) and must be deterministic — it is called
+again for the identity and on each start attempt, and the shared path panics
+rather than start a container its name does not describe. `with_port` resolves
+a port the *image*
+exposes (`with_exposed_port` / `Image::expose_ports` / `EXPOSE`) — it does not
+publish one. Sharing is keyed on the request fields that shape the container
+Docker creates (image, env, labels, cmd, mounts, port mappings, device
+requests, network, …), each folded the way Docker resolves it — keyed fields
+keep the effective value, set-like fields are sorted, ordered fields stay in
+order — so two specs that differ in any of them get two containers;
+`with_discriminator("...")` appends to that key for the rest: ulimits
+(testcontainers keeps them private), the contents of a file copied by path, and
+anything applied after start (seeded data, or exec hooks the image runs
+itself). A host-config modifier is refused rather than guessed — `shared`
+panics on a spec that sets one without a discriminator, since its effect is a
+closure the identity cannot read.
+
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the
 container — the plugin creates the store and applies the model at boot; seed
