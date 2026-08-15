@@ -248,10 +248,10 @@ feature enabled through your `[dev-dependencies]`
 (`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }`).
 `with_port` resolves a port the image exposes rather than publishing one.
 
-Sharing is keyed on the whole request — image, env vars, command, mounts,
-network — so two specs that differ anywhere get two containers.
+Sharing is keyed on the whole request — image, env vars, labels, command,
+mounts, network — so two specs that differ anywhere get two containers.
 `with_discriminator` appends to that key for what the request cannot carry,
-such as data seeded after start.
+such as data seeded after start or the contents of a file copied by path.
 
 ## Running tests
 

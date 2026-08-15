@@ -561,9 +561,10 @@ start is retried. `with_port` resolves a port the image exposes; it does not
 publish one.
 
 Two specs share a container when their identity matches, and that identity is
-derived from the whole request — image, env vars, command, mounts, network, …
-— so anything that changes the container separates it. Only what the request
-cannot express (data seeded after start) needs help:
+derived from the whole request — image, env vars, labels, command, mounts,
+network, … — so anything that changes the container separates it. Only what
+the request cannot express (data seeded after start, the contents of a file
+copied by path) needs help:
 
 ```rust
 DevServiceSpec::new("clickhouse", request)

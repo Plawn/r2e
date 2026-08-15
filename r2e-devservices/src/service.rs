@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use testcontainers::core::ContainerRequest;
@@ -102,46 +102,60 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// Fingerprinted into the container name and the
     /// `dev.r2e.devservices.config` label: same string ⇒ same shared container.
     /// It covers the image type and reference, the declared ports, and every
-    /// request field testcontainers exposes — env vars, command, entrypoint,
-    /// mounts, copied files, network, user, and the rest — so two requests that
-    /// differ in any of them get two containers.
+    /// request field testcontainers exposes — env vars, labels, command,
+    /// entrypoint, mounts, copied files, network, user, and the rest — so two
+    /// requests that differ in any of them get two containers. Fields Docker
+    /// treats as a set (exposed ports, capabilities) are sorted first, so
+    /// declaring them in another order still shares one container.
     ///
     /// What it cannot see: values testcontainers keeps private (ulimits, the
-    /// host-config modifier closure) and anything applied *after* start (seeded
-    /// data). Separate those with
-    /// [`with_discriminator`](Self::with_discriminator).
+    /// host-config modifier closure), the *contents* of a file copied by path
+    /// (only the path is visible from here — a fixture edited in place keeps
+    /// its identity), and anything applied *after* start (seeded data).
+    /// Separate those with [`with_discriminator`](Self::with_discriminator).
     #[doc(hidden)]
     pub fn configuration(&self) -> String {
         let request = (self.request)();
         let mut ports = self.ports.clone();
         ports.sort_unstable();
-        // Some `Image` impls hold their env vars in a `HashMap` (the Postgres
-        // module does), so the iteration order is not stable across processes:
-        // sort before digesting or the same spec fingerprints differently in
-        // two test binaries.
-        let mut env: Vec<String> = request
+        // `env_vars()` yields the image's variables first and the request's
+        // second, and Docker keeps the last value for a name. Folding in that
+        // order therefore records the *effective* environment: sorting the
+        // flattened `name=value` pairs instead would give `MODE=a` overridden
+        // by `MODE=b` the same identity as the reverse, which run differently.
+        // The map also settles the order — some `Image` impls hold their
+        // variables in a `HashMap` (the Postgres module does), so the same spec
+        // would otherwise fingerprint differently in two test binaries.
+        let env: BTreeMap<String, String> = request
             .env_vars()
-            .map(|(name, value)| format!("{name}={value}"))
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
             .collect();
-        env.sort();
 
         let mut configuration = Configuration::default();
         configuration.field("type", std::any::type_name::<I>());
         configuration.field("image", request.descriptor());
         configuration.list("port", ports.iter().map(u16::to_string));
-        configuration.list("expose", request.expose_ports().iter().map(debug));
-        configuration.list("map", request.ports().into_iter().flatten().map(debug));
-        configuration.field("entrypoint", request.entrypoint().unwrap_or_default());
-        configuration.list("cmd", request.cmd());
-        configuration.list("env", env);
+        // Set-like on Docker's side: sorted, so two requests that declare the
+        // same ports or capabilities in a different order share a container.
+        configuration.list("expose", sorted(request.expose_ports().iter().map(debug)));
         configuration.list(
-            "host",
-            request
-                .hosts()
-                .map(|(name, host)| format!("{name}={host:?}")),
+            "map",
+            sorted(request.ports().into_iter().flatten().map(debug)),
         );
-        configuration.list("mount", request.mounts().map(debug));
-        configuration.list("copy", request.copy_to_sources().map(debug));
+        configuration.field("entrypoint", request.entrypoint().unwrap_or_default());
+        // Ordered, unlike the above: argv and copy order both change the result.
+        configuration.list("cmd", request.cmd());
+        configuration.pairs("env", &env);
+        configuration.pairs("label", request.labels());
+        configuration.pairs(
+            "host",
+            &request
+                .hosts()
+                .map(|(name, host)| (name.into_owned(), debug(host)))
+                .collect(),
+        );
+        configuration.list("mount", sorted(request.mounts().map(debug)));
+        configuration.list("copy", request.copy_to_sources().map(digest));
         configuration.field("network", request.network().clone().unwrap_or_default());
         configuration.field("hostname", request.hostname().unwrap_or_default());
         configuration.field("platform", request.platform().clone().unwrap_or_default());
@@ -152,9 +166,9 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         configuration.field("shm", debug(request.shm_size()));
         configuration.field("cgroupns", debug(request.cgroupns_mode()));
         configuration.field("userns", request.userns_mode().unwrap_or_default());
-        configuration.field("cap_add", debug(request.cap_add()));
-        configuration.field("cap_drop", debug(request.cap_drop()));
-        configuration.field("security", debug(request.security_opts()));
+        configuration.list("cap_add", sorted(capabilities(request.cap_add())));
+        configuration.list("cap_drop", sorted(capabilities(request.cap_drop())));
+        configuration.list("security", sorted(capabilities(request.security_opts())));
         configuration.field("health", debug(request.health_check()));
         configuration.field("stdin", debug(request.open_stdin()));
         configuration.field("extra", self.discriminator.as_deref().unwrap_or_default());
@@ -164,6 +178,39 @@ impl<I: Image + 'static> DevServiceSpec<I> {
 
 fn debug(value: impl std::fmt::Debug) -> String {
     format!("{value:?}")
+}
+
+fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values: Vec<String> = values.into_iter().collect();
+    values.sort();
+    values
+}
+
+fn capabilities(values: Option<&Vec<String>>) -> impl Iterator<Item = String> + '_ {
+    values.into_iter().flatten().cloned()
+}
+
+/// The `Debug` form of a value, folded into a fixed-size digest.
+///
+/// For values that can be arbitrarily large — a `CopyToContainer` carrying an
+/// in-memory asset prints every byte as a decimal number — materializing that
+/// form would cost several times the asset itself, twice over once the nested
+/// encoding copies it again.
+fn digest(value: impl std::fmt::Debug) -> String {
+    use std::fmt::Write;
+
+    struct Digest(u64);
+
+    impl Write for Digest {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0 = common::fnv1a(self.0, text.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut digest = Digest(common::FNV_OFFSET);
+    let _ = write!(digest, "{value:?}");
+    format!("{:016x}", digest.0)
 }
 
 /// An injective encoding of the fields identifying a container.
@@ -184,6 +231,17 @@ impl Configuration {
     fn list<S: AsRef<str>>(&mut self, key: &str, values: impl IntoIterator<Item = S>) {
         let mut encoded = Configuration::default();
         for value in values {
+            encoded.field("", value);
+        }
+        self.field(key, encoded.0);
+    }
+
+    /// Both halves of an entry are length-prefixed on their own, so a name
+    /// holding an `=` cannot be read as a shorter name and a longer value.
+    fn pairs(&mut self, key: &str, entries: &BTreeMap<String, String>) {
+        let mut encoded = Configuration::default();
+        for (name, value) in entries {
+            encoded.field("", name);
             encoded.field("", value);
         }
         self.field(key, encoded.0);

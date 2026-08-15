@@ -2482,9 +2482,10 @@ The closure builds the request on demand (`ContainerRequest` is not `Clone`
 and a contended start is retried). `with_port` resolves a port the *image*
 exposes (`with_exposed_port` / `Image::expose_ports` / `EXPOSE`) — it does not
 publish one. Sharing is keyed on everything the request carries (image, env,
-cmd, mounts, network, …), so two specs that differ in any of them get two
-containers; `with_discriminator("...")` appends to that key for what the
-request cannot express (data seeded after start).
+labels, cmd, mounts, network, …), so two specs that differ in any of them get
+two containers; `with_discriminator("...")` appends to that key for what the
+request cannot express (data seeded after start, the contents of a file copied
+by path).
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

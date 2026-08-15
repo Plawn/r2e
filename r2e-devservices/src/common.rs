@@ -288,11 +288,14 @@ fn unix_now() -> i64 {
 }
 
 fn fingerprint(value: &str) -> String {
-    format!("{:016x}", fnv1a(value.as_bytes()))
+    format!("{:016x}", fnv1a(FNV_OFFSET, value.as_bytes()))
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
+/// The FNV-1a starting state, exposed so a digest can be folded in several
+/// chunks (see `service::digest`).
+pub(crate) const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+
+pub(crate) fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);

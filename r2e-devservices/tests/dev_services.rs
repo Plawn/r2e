@@ -266,8 +266,116 @@ fn the_discriminator_splits_otherwise_identical_specs() {
 /// order is the same declaration.
 #[test]
 fn identity_covers_declared_ports_regardless_of_order() {
-    let one = tuned("a").with_port(9090);
-    let other = tuned("a").with_port(9090);
-    assert_eq!(one.configuration(), other.configuration());
-    assert_ne!(tuned("a").configuration(), one.configuration());
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    let spec = || DevServiceSpec::new("ports", || GenericImage::new("vendor/server", "1").into());
+    assert_eq!(
+        spec().with_port(8080).with_port(9090).configuration(),
+        spec().with_port(9090).with_port(8080).configuration()
+    );
+    assert_ne!(
+        spec().configuration(),
+        spec().with_port(8080).configuration()
+    );
+}
+
+/// Ports Docker holds as a set must not split a container on declaration order
+/// — a spec building them from an unordered collection would otherwise start
+/// one container per process.
+#[test]
+fn identity_ignores_the_order_of_exposed_ports() {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    fn exposing(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("exposed", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_exposed_port(first.tcp())
+                .with_exposed_port(second.tcp())
+                .into()
+        })
+    }
+
+    assert_eq!(
+        exposing(8123, 9000).configuration(),
+        exposing(9000, 8123).configuration()
+    );
+    assert_ne!(
+        exposing(8123, 9000).configuration(),
+        exposing(8123, 9001).configuration()
+    );
+}
+
+/// Labels are part of the container's configuration — two requests differing
+/// only there are two containers.
+#[test]
+fn identity_covers_request_labels() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn labelled(routing: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("labelled", move || {
+            GenericImage::new("vendor/server", "1").with_label("routing", routing)
+        })
+    }
+
+    assert_eq!(labelled("a").configuration(), labelled("a").configuration());
+    assert_ne!(labelled("a").configuration(), labelled("b").configuration());
+}
+
+/// An `Image` ships its own env vars and the request may override them; Docker
+/// keeps the last value. Two requests holding the same *pairs* in the opposite
+/// precedence run with opposite values, so they cannot share a container.
+#[test]
+fn identity_follows_the_effective_value_of_an_overridden_env_var() {
+    use std::borrow::Cow;
+
+    use r2e_devservices::testcontainers::core::{ContainerRequest, WaitFor};
+    use r2e_devservices::testcontainers::{Image, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    #[derive(Debug)]
+    struct EnvImage {
+        value: &'static str,
+    }
+
+    impl Image for EnvImage {
+        fn name(&self) -> &str {
+            "vendor/server"
+        }
+
+        fn tag(&self) -> &str {
+            "1"
+        }
+
+        fn ready_conditions(&self) -> Vec<WaitFor> {
+            Vec::new()
+        }
+
+        fn env_vars(
+            &self,
+        ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+            [("MODE", self.value)]
+        }
+    }
+
+    fn overridden(image: &'static str, request: &'static str) -> DevServiceSpec<EnvImage> {
+        DevServiceSpec::new("env-precedence", move || {
+            ContainerRequest::from(EnvImage { value: image }).with_env_var("MODE", request)
+        })
+    }
+
+    // Both run with MODE=b and MODE=a respectively — same pairs, opposite
+    // effective values.
+    assert_ne!(
+        overridden("a", "b").configuration(),
+        overridden("b", "a").configuration()
+    );
+    // The image's own value is shadowed, so it does not split containers.
+    assert_eq!(
+        overridden("a", "same").configuration(),
+        overridden("b", "same").configuration()
+    );
 }
