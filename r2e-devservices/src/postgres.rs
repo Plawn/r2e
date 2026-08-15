@@ -134,8 +134,8 @@ impl PostgresSpec {
 
     /// The password to set (`POSTGRES_PASSWORD`).
     ///
-    /// It lands verbatim in [`url`](DevPostgres::url), so keep it URL-safe —
-    /// `@`, `/` and `:` would produce an unparseable connection string.
+    /// Any password works: it reaches the container verbatim and is
+    /// percent-encoded in [`url`](DevPostgres::url).
     pub fn with_password(mut self, password: impl Into<String>) -> Self {
         self.password = password.into();
         self
@@ -159,12 +159,8 @@ impl PostgresSpec {
             password,
             database,
         } = self.clone();
-        // Kept byte-identical to the pre-parameterization string for the
-        // default spec, so existing shared containers stay valid.
-        let configuration = format!(
-            "image={};port={CONTAINER_PORT};user={user};password={password};database={database}",
-            image.reference()
-        );
+        // No explicit discriminator: the credentials reach the container as
+        // `POSTGRES_*` env vars, which the derived identity already covers.
         DevServiceSpec::new("postgres", move || {
             Postgres::default()
                 .with_user(&user)
@@ -174,7 +170,6 @@ impl PostgresSpec {
                 .with_tag(&image.tag)
         })
         .with_port(CONTAINER_PORT)
-        .with_configuration(configuration)
     }
 }
 
@@ -247,14 +242,17 @@ impl DevPostgres {
             _container: None,
             url: format!(
                 "postgres://{}:{}@{host}:{port}/{}",
-                spec.user, spec.password, spec.database
+                encoded(&spec.user),
+                encoded(&spec.password),
+                encoded(&spec.database)
             ),
             host,
             port,
         }
     }
 
-    /// Connection URL: `postgres://{user}:{password}@{host}:{port}/{database}`.
+    /// Connection URL: `postgres://{user}:{password}@{host}:{port}/{database}`,
+    /// with the credentials percent-encoded so any value round-trips.
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -268,4 +266,22 @@ impl DevPostgres {
     pub fn port(&self) -> u16 {
         self.port
     }
+}
+
+/// Percent-encode a credential for the connection URL.
+///
+/// Everything outside RFC 3986's unreserved set is escaped, so a password
+/// holding `@`, `/` or `:` — legal for Postgres — still yields a URL that
+/// parses back to the value the container was initialized with.
+fn encoded(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }

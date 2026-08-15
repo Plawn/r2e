@@ -38,16 +38,27 @@
 //! R2E ships no wrapper for is a few lines on your side:
 //!
 //! ```ignore
+//! use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+//! use r2e_devservices::testcontainers::{GenericImage, ImageExt};
 //! use r2e_devservices::{DevService, DevServiceSpec};
-//! use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
 //!
-//! let spec = DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123);
+//! let spec = DevServiceSpec::new("clickhouse", || {
+//!     GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+//!         .with_exposed_port(8123.tcp())
+//!         .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+//!         .into()
+//! })
+//! .with_port(8123);
+//!
 //! let clickhouse = DevService::shared(spec).await;
 //! let url = format!("http://{}", clickhouse.endpoint(8123));
 //! ```
 //!
 //! `DevPostgres` and friends are thin wrappers over exactly this — they add a
-//! typed URL, nothing more.
+//! typed URL, nothing more. Two specs share a container when their whole
+//! request matches (image, env, command, mounts, …), so nothing has to be
+//! declared for a different image or different credentials to get a container
+//! of their own.
 //!
 //! Feature flags: `postgres`, `redis`, `openfga`.
 

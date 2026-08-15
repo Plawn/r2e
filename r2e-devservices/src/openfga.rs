@@ -48,16 +48,12 @@ pub struct DevOpenFga {
 
 /// Identity and request of the OpenFGA container.
 ///
-/// The configuration string is kept byte-identical to the pre-`DevService`
-/// one so existing shared containers stay valid. A different OpenFGA image
-/// is out of scope here — build a [`DevService`] directly for that.
+/// A different OpenFGA image is out of scope here — build a [`DevService`]
+/// directly for that.
 fn spec() -> DevServiceSpec<GenericImage> {
     DevServiceSpec::new("openfga", || base_image().with_cmd(["run"]))
         .with_port(HTTP_PORT)
         .with_port(GRPC_PORT)
-        .with_configuration(format!(
-            "image=openfga/openfga:{DEFAULT_TAG};http={HTTP_PORT};grpc={GRPC_PORT}"
-        ))
 }
 
 /// Base image: `openfga/openfga` running `run`, both ports exposed, ready once

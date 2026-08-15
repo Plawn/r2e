@@ -225,20 +225,33 @@ feature flag: any testcontainers `Image` — a `testcontainers-modules` one, a
 cross-process sharing.
 
 ```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
 use r2e_devservices::{DevService, DevServiceSpec};
-use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
 
 let clickhouse = DevService::shared(
-    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
 )
 .await;
 let url = format!("http://{}", clickhouse.endpoint(8123));
 ```
 
 `testcontainers` and `testcontainers_modules` are re-exported so the spec builds
-against the versions this crate uses. Sharing is keyed on a configuration string
-derived from the image and declared ports; `with_configuration` replaces it when
-something else must separate two containers (credentials, env vars, a command).
+against the versions this crate uses; a ready-made module image needs its own
+feature enabled through your `[dev-dependencies]`
+(`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }`).
+`with_port` resolves a port the image exposes rather than publishing one.
+
+Sharing is keyed on the whole request — image, env vars, command, mounts,
+network — so two specs that differ anywhere get two containers.
+`with_discriminator` appends to that key for what the request cannot carry,
+such as data seeded after start.
 
 ## Running tests
 

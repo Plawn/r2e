@@ -534,11 +534,18 @@ one, a `GenericImage`, or your own — gets the same labelling, reaping and
 cross-process sharing:
 
 ```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
 use r2e_devservices::{DevService, DevServiceSpec};
-use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
 
 let clickhouse = DevService::shared(
-    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
 )
 .await;
 let url = format!("http://{}", clickhouse.endpoint(8123));
@@ -546,17 +553,22 @@ let url = format!("http://{}", clickhouse.endpoint(8123));
 
 `testcontainers` and `testcontainers_modules` are re-exported so the spec builds
 against the versions this crate uses (a mismatched one yields a different
-`ContainerRequest` type and will not compile). The closure builds the request on
-demand, since a contended start is retried.
+`ContainerRequest` type and will not compile). A ready-made module image
+(`ClickHouse`, `Kafka`, …) needs its own feature enabled through your
+`[dev-dependencies]`: `testcontainers-modules = { version = "0.15", features =
+["clickhouse"] }`. The closure builds the request on demand, since a contended
+start is retried. `with_port` resolves a port the image exposes; it does not
+publish one.
 
-Two specs share a container when their configuration strings match; the default
-is derived from the image and declared ports. Use `with_configuration` when
-something else must separate two containers:
+Two specs share a container when their identity matches, and that identity is
+derived from the whole request — image, env vars, command, mounts, network, …
+— so anything that changes the container separates it. Only what the request
+cannot express (data seeded after start) needs help:
 
 ```rust
-DevServiceSpec::new("clickhouse", move || image_for(&user))
+DevServiceSpec::new("clickhouse", request)
     .with_port(8123)
-    .with_configuration(format!("image=clickhouse:25;port=8123;user={user}"))
+    .with_discriminator("seeded-fixtures-v2")
 ```
 
 `R2E_DEVSERVICES_KEEP=1` disables reaping for post-mortem inspection; the

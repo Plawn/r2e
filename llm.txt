@@ -2455,21 +2455,36 @@ cross-process sharing, with no feature flag. `testcontainers` and
 versions:
 
 ```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
 use r2e_devservices::{DevService, DevServiceSpec};
-use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
 
 let clickhouse = DevService::shared(
-    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
 )
 .await;
 let url = format!("http://{}", clickhouse.endpoint(8123));
 // DevService::start(spec) for an isolated container
 ```
 
+A ready-made `testcontainers_modules` image (`ClickHouse`, `Kafka`, `Mongo`, …)
+works the same way, but each sits behind its own feature: add
+`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }` to
+your own `[dev-dependencies]` and Cargo unifies it with the re-export.
+
 The closure builds the request on demand (`ContainerRequest` is not `Clone`
-and a contended start is retried). Sharing is keyed on a configuration string
-derived from the image and declared ports; `with_configuration("...")` replaces
-it when something else must separate two containers (credentials, env, cmd).
+and a contended start is retried). `with_port` resolves a port the *image*
+exposes (`with_exposed_port` / `Image::expose_ports` / `EXPOSE`) — it does not
+publish one. Sharing is keyed on everything the request carries (image, env,
+cmd, mounts, network, …), so two specs that differ in any of them get two
+containers; `with_discriminator("...")` appends to that key for what the
+request cannot express (data seeded after start).
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

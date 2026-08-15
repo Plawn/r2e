@@ -193,20 +193,23 @@ pub(crate) async fn cleanup(identity: &SharedIdentity) {
                 .iter()
                 .any(|name| name.trim_start_matches('/') == identity.name)
         });
-        // Reclaim a container that is done (a stopped leftover), or one still
-        // in `created` long enough that nobody is plausibly starting it. A
-        // fresh `created` belongs to a peer process racing us on the same
-        // shared container — removing it would break *its* start, not ours.
-        let finished = matches!(
-            container.state,
-            Some(ContainerSummaryStateEnum::EXITED | ContainerSummaryStateEnum::DEAD)
-        );
-        let abandoned = matches!(container.state, Some(ContainerSummaryStateEnum::CREATED))
+        // A container is worth keeping only while it is serving or on its way
+        // there: running, restarting, or freshly `created` — that last one
+        // belongs to a peer process racing us on the same shared container, and
+        // removing it would break *its* start, not ours. Everything else
+        // (exited, dead, paused, removing, an unreported state, a `created`
+        // nobody has started within the grace period) is a leftover we reclaim.
+        let starting = matches!(container.state, Some(ContainerSummaryStateEnum::CREATED))
             && container
                 .created
-                .is_some_and(|created| unix_now().saturating_sub(created) > STARTING_GRACE_SECS);
+                .is_some_and(|created| unix_now().saturating_sub(created) <= STARTING_GRACE_SECS);
+        let live = starting
+            || matches!(
+                container.state,
+                Some(ContainerSummaryStateEnum::RUNNING | ContainerSummaryStateEnum::RESTARTING)
+            );
 
-        if finished || abandoned || legacy || (same_scope && same_configuration && !current_name) {
+        if !live || legacy || (same_scope && same_configuration && !current_name) {
             let _ = docker
                 .remove_container(id, Some(remove_options.clone()))
                 .await;

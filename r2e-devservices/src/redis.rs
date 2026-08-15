@@ -71,14 +71,10 @@ impl RedisImage {
 
     fn service_spec(&self) -> DevServiceSpec<Redis> {
         let image = self.clone();
-        // Kept byte-identical to the pre-parameterization string for the
-        // default image, so existing shared containers stay valid.
-        let configuration = format!("image={};port={CONTAINER_PORT}", image.reference());
         DevServiceSpec::new("redis", move || {
             Redis::default().with_name(&image.name).with_tag(&image.tag)
         })
         .with_port(CONTAINER_PORT)
-        .with_configuration(configuration)
     }
 }
 

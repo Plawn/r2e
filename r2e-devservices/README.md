@@ -8,16 +8,13 @@ Starts Docker containers (via testcontainers) for databases and services needed 
 
 ## Usage
 
-Via the facade crate:
-
 ```toml
-[dependencies]
-r2e = { version = "0.1", features = ["devservices"] }
-
-# Or directly:
 [dev-dependencies]
 r2e-devservices = { version = "0.1", features = ["postgres"] }
 ```
+
+The crate is not re-exported through the `r2e` facade: dev services belong to
+`[dev-dependencies]`, never to the binary.
 
 ### PostgreSQL
 
@@ -45,6 +42,7 @@ container:
 use r2e_devservices::{DevPostgres, PostgresImage, PostgresSpec};
 
 let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+let pool = sqlx::PgPool::connect(pg.url()).await?;
 sqlx::query("CREATE EXTENSION IF NOT EXISTS vector").execute(&pool).await?;
 
 let app_db = DevPostgres::shared_with(
@@ -81,11 +79,18 @@ testcontainers `Image` the same labelling, Ryuk reaping and cross-process
 sharing. A service R2E ships no wrapper for lives entirely on your side:
 
 ```rust
+use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
 use r2e_devservices::{DevService, DevServiceSpec};
-use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
 
 let clickhouse = DevService::shared(
-    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
 )
 .await;
 let url = format!("http://{}", clickhouse.endpoint(8123));
@@ -94,17 +99,26 @@ let url = format!("http://{}", clickhouse.endpoint(8123));
 `testcontainers` and `testcontainers_modules` are re-exported so your spec
 builds against the exact versions this crate uses — a mismatched one produces
 a different `ContainerRequest` type and will not compile. `GenericImage` and
-your own `Image` impls work the same way.
+your own `Image` impls work the same way. The ready-made module images
+(`ClickHouse`, `Kafka`, `Mongo`, …) each sit behind their own feature: add
+`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }` to
+your own `[dev-dependencies]` and Cargo unifies it with the re-export.
 
-Two specs share a container when their *configuration string* matches. It is
-derived from the image and declared ports; use `with_configuration` when
-something else must separate two containers (env vars, a command, credentials
-— which is exactly what `PostgresSpec` does):
+`with_port` resolves a port the *image* exposes (`with_exposed_port`,
+`Image::expose_ports`, or an `EXPOSE` in the Dockerfile) — testcontainers
+publishes those on random host ports; declaring one here does not add one.
+
+Two specs share a container when their identity matches, and that identity is
+derived from the request itself: image, env vars, command, entrypoint, mounts,
+copied files, network, user, declared ports. So a different image *or*
+different credentials get their own container with nothing to declare — that
+is all `PostgresSpec` does. For what the request cannot express (data seeded
+after start, an ulimit, a host-config closure), append to the key:
 
 ```rust
-DevServiceSpec::new("clickhouse", move || image_for(&user))
+DevServiceSpec::new("clickhouse", request)
     .with_port(8123)
-    .with_configuration(format!("image=clickhouse:25;port=8123;user={user}"))
+    .with_discriminator("seeded-fixtures-v2")
 ```
 
 ## Lifecycle

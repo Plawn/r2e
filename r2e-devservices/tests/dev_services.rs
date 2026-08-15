@@ -198,3 +198,76 @@ async fn redis_dev_service_starts_and_listens() {
     assert!(redis.url().starts_with("redis://"));
     assert_reachable(redis.url());
 }
+
+// ---------------------------------------------------------------------------
+// Sharing identity. No Docker: the identity is derived from the spec alone.
+// ---------------------------------------------------------------------------
+
+/// A spec whose request differs only in one env var — everything a naive
+/// image+ports identity would miss.
+fn tuned(
+    setting: &'static str,
+) -> r2e_devservices::DevServiceSpec<r2e_devservices::testcontainers::GenericImage> {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+
+    r2e_devservices::DevServiceSpec::new("tuned", move || {
+        GenericImage::new("vendor/server", "1")
+            .with_exposed_port(8080.tcp())
+            .with_env_var("MODE", setting)
+    })
+    .with_port(8080)
+}
+
+#[test]
+fn identity_is_stable_for_the_same_spec() {
+    assert_eq!(tuned("a").configuration(), tuned("a").configuration());
+}
+
+#[test]
+fn identity_separates_requests_the_image_reference_cannot_tell_apart() {
+    assert_ne!(tuned("a").configuration(), tuned("b").configuration());
+}
+
+/// Delimiter-bearing values must not be able to imitate a field boundary and
+/// make two different requests fingerprint the same.
+#[test]
+fn identity_is_injective_under_delimiters_in_values() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn credentials(user: &'static str, password: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("credentials", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_env_var("USER", user)
+                .with_env_var("PASSWORD", password)
+        })
+    }
+
+    assert_ne!(
+        credentials("alice;password=x", "y").configuration(),
+        credentials("alice", "x;password=y").configuration()
+    );
+}
+
+#[test]
+fn the_discriminator_splits_otherwise_identical_specs() {
+    assert_ne!(
+        tuned("a").configuration(),
+        tuned("a").with_discriminator("seeded").configuration()
+    );
+    assert_eq!(
+        tuned("a").with_discriminator("seeded").configuration(),
+        tuned("a").with_discriminator("seeded").configuration()
+    );
+}
+
+/// The declared ports are part of the identity, and declaring them in another
+/// order is the same declaration.
+#[test]
+fn identity_covers_declared_ports_regardless_of_order() {
+    let one = tuned("a").with_port(9090);
+    let other = tuned("a").with_port(9090);
+    assert_eq!(one.configuration(), other.configuration());
+    assert_ne!(tuned("a").configuration(), one.configuration());
+}
