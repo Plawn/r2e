@@ -2420,20 +2420,56 @@ test process and removes the containers after the final process exits
 (10-second reconnection grace by default). `start()` / `start_with_tag(tag)`
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
 
-`DevPostgres` also takes a full image (repository + tag), for distributions
-shipping extra extensions. The image is part of the container's identity, so
-each image gets its own shared container, reused across test binaries:
+`DevPostgres` and `DevRedis` also take a full image (repository + tag), and
+`DevPostgres` takes credentials. Everything in the spec is part of the
+container's identity, so each distinct spec gets its own shared container,
+reused across test binaries:
 
 ```rust
-use r2e_devservices::{DevPostgres, PostgresImage};
+use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
 
-let pg = DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
-// isolated equivalent: DevPostgres::start_with_image(...)
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+// isolated equivalent: DevPostgres::start_with(...)
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await; // url → postgres://app:s3cret@localhost:32771/appdb
+
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
 ```
 
-`PostgresImage::default()` is `postgres:16-alpine`, so `shared()` / `start()` /
-`start_with_tag(tag)` are unchanged. The image must keep the official one's
-defaults (credentials `postgres`/`postgres`, database `postgres`, port 5432).
+`PostgresSpec::default()` is `postgres:16-alpine` with `postgres`/`postgres` on
+database `postgres` (a `PostgresImage` converts into a spec), and
+`RedisImage::default()` is `redis:7-alpine`, so `shared()` / `start()` /
+`start_with_tag(tag)` are unchanged. A Postgres image must speak Postgres on
+5432 and honour `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`.
+
+**Any other service.** `DevService` is the generic form behind all of these:
+it gives any testcontainers `Image` the same labelling, Ryuk reaping and
+cross-process sharing, with no feature flag. `testcontainers` and
+`testcontainers_modules` are re-exported so the spec builds against matching
+versions:
+
+```rust
+use r2e_devservices::{DevService, DevServiceSpec};
+use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+// DevService::start(spec) for an isolated container
+```
+
+The closure builds the request on demand (`ContainerRequest` is not `Clone`
+and a contended start is retried). Sharing is keyed on a configuration string
+derived from the image and declared ports; `with_configuration("...")` replaces
+it when something else must separate two containers (credentials, env, cmd).
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

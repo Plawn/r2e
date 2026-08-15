@@ -48,16 +48,28 @@ async fn postgres_dev_service_starts_and_listens() {
 async fn postgres_dev_service_runs_a_custom_image() {
     use r2e_devservices::{DevPostgres, PostgresImage};
 
-    let pg = DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+    let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
     assert_reachable(pg.url());
 
     let pool = sqlx::PgPool::connect(pg.url())
         .await
         .expect("cannot connect to the pgvector dev service");
-    sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+    // `IF NOT EXISTS` is not atomic: concurrent test processes on the shared
+    // container can both pass the check and one loses on the catalog's unique
+    // index. Only a real failure to install the extension matters here.
+    if let Err(error) = sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
         .execute(&pool)
         .await
-        .expect("the vector extension is not available in this image");
+    {
+        let duplicate = error
+            .as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| code == "23505");
+        assert!(
+            duplicate,
+            "the vector extension is not available in this image: {error}"
+        );
+    }
 
     let installed: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
@@ -75,17 +87,16 @@ async fn postgres_dev_service_shares_one_container_per_image() {
     use r2e_devservices::{DevPostgres, PostgresImage};
 
     let default = DevPostgres::shared().await;
-    let default_again = DevPostgres::shared_with_image(PostgresImage::default()).await;
+    let default_again = DevPostgres::shared_with(PostgresImage::default()).await;
     assert_eq!(
         default.url(),
         default_again.url(),
         "the default image must not start a second container"
     );
 
-    let vector =
-        DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+    let vector = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
     let vector_again =
-        DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+        DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
     assert_eq!(
         vector.url(),
         vector_again.url(),
@@ -96,6 +107,87 @@ async fn postgres_dev_service_shares_one_container_per_image() {
         vector.url(),
         "two images must yield two distinct containers"
     );
+}
+
+/// Credentials are parameterizable, and the URL follows them.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_takes_custom_credentials() {
+    use r2e_devservices::{DevPostgres, PostgresSpec};
+
+    let pg = DevPostgres::shared_with(
+        PostgresSpec::default()
+            .with_user("app")
+            .with_password("s3cret")
+            .with_database("appdb"),
+    )
+    .await;
+    assert!(
+        pg.url().starts_with("postgres://app:s3cret@"),
+        "url must carry the configured credentials: {}",
+        pg.url()
+    );
+    assert!(pg.url().ends_with("/appdb"), "url: {}", pg.url());
+
+    let pool = sqlx::PgPool::connect(pg.url())
+        .await
+        .expect("cannot connect with the configured credentials");
+    let (user, database): (String, String) =
+        sqlx::query_as("SELECT current_user, current_database()")
+            .fetch_one(&pool)
+            .await
+            .expect("cannot read the session identity");
+    assert_eq!(user, "app");
+    assert_eq!(database, "appdb");
+
+    // Credentials are part of the identity: the default spec is a separate
+    // container, not this one.
+    let default = DevPostgres::shared().await;
+    assert_ne!(default.port(), pg.port());
+}
+
+/// A service R2E knows nothing about, defined entirely on the user's side.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn user_defined_dev_service_joins_the_session() {
+    use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    fn valkey(tag: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("valkey", move || {
+            GenericImage::new("valkey/valkey", tag)
+                .with_exposed_port(6379.tcp())
+                .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+                .with_cmd(["valkey-server"])
+        })
+        .with_port(6379)
+    }
+
+    let valkey8 = DevService::shared(valkey("8-alpine")).await;
+    assert_reachable(&format!("redis://{}", valkey8.endpoint(6379)));
+
+    // Same spec ⇒ same container; a different image ⇒ its own container.
+    let again = DevService::shared(valkey("8-alpine")).await;
+    assert_eq!(valkey8.port(6379), again.port(6379));
+
+    let valkey7 = DevService::shared(valkey("7-alpine")).await;
+    assert_ne!(valkey8.port(6379), valkey7.port(6379));
+}
+
+/// A non-default Redis-compatible image (`valkey/valkey`).
+#[cfg(feature = "redis")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn redis_dev_service_runs_a_custom_image() {
+    use r2e_devservices::{DevRedis, RedisImage};
+
+    let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+    assert_reachable(valkey.url());
+
+    let default = DevRedis::shared().await;
+    assert_ne!(default.port(), valkey.port());
 }
 
 #[cfg(feature = "redis")]

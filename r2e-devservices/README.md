@@ -37,27 +37,74 @@ async fn users_are_persisted() {
 ```
 
 A different image (repository *and* tag) works too — useful for distributions
-that ship extra extensions. The image is part of the container's identity, so
-each image gets its own shared container:
+that ship extra extensions — as do custom credentials. Everything in the spec
+is part of the container's identity, so each distinct spec gets its own shared
+container:
 
 ```rust
-use r2e_devservices::{DevPostgres, PostgresImage};
+use r2e_devservices::{DevPostgres, PostgresImage, PostgresSpec};
 
-let pg = DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
 sqlx::query("CREATE EXTENSION IF NOT EXISTS vector").execute(&pool).await?;
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await;
+// app_db.url() → "postgres://app:s3cret@localhost:32771/appdb"
 ```
 
-`PostgresImage::default()` is `postgres:16-alpine`. The image must keep the
-official one's defaults: credentials `postgres`/`postgres`, database
-`postgres`, port 5432. `start_with_image` is the isolated counterpart.
+`PostgresSpec::default()` is `postgres:16-alpine` with `postgres`/`postgres`
+on database `postgres`; a `PostgresImage` converts into a spec, so either can
+be passed. The image must speak Postgres on port 5432 and honour the official
+image's `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` variables.
+`start_with` is the isolated counterpart.
 
 ### Redis
 
 ```rust
-use r2e_devservices::DevRedis;
+use r2e_devservices::{DevRedis, RedisImage};
 
 let redis = DevRedis::shared().await;
 // redis.url() → "redis://localhost:32789"
+
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+```
+
+### Any other service
+
+`DevService` is the generic form of all of the above: it gives any
+testcontainers `Image` the same labelling, Ryuk reaping and cross-process
+sharing. A service R2E ships no wrapper for lives entirely on your side:
+
+```rust
+use r2e_devservices::{DevService, DevServiceSpec};
+use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+```
+
+`testcontainers` and `testcontainers_modules` are re-exported so your spec
+builds against the exact versions this crate uses — a mismatched one produces
+a different `ContainerRequest` type and will not compile. `GenericImage` and
+your own `Image` impls work the same way.
+
+Two specs share a container when their *configuration string* matches. It is
+derived from the image and declared ports; use `with_configuration` when
+something else must separate two containers (env vars, a command, credentials
+— which is exactly what `PostgresSpec` does):
+
+```rust
+DevServiceSpec::new("clickhouse", move || image_for(&user))
+    .with_port(8123)
+    .with_configuration(format!("image=clickhouse:25;port=8123;user={user}"))
 ```
 
 ## Lifecycle
@@ -88,6 +135,7 @@ supported by the embedded Ryuk integration.
 
 | Feature | Description |
 |---------|-------------|
+| *(none)* | `DevService` / `DevServiceSpec` — any image, always available |
 | `postgres` | `DevPostgres` — containerized PostgreSQL |
 | `redis` | `DevRedis` — containerized Redis |
 | `openfga` | `DevOpenFga` — containerized OpenFGA (exposes `grpc_endpoint()` / `http_endpoint()`) |
