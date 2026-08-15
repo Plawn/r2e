@@ -166,7 +166,7 @@ config.set("app.name", ConfigValue::String("test-app".into()));
 ## Dev services (containerized infrastructure)
 
 When a test needs real infrastructure, `r2e-devservices` starts Docker
-containers on demand (features `postgres`, `redis`):
+containers on demand (features `postgres`, `redis`, `openfga`):
 
 ```rust
 use r2e_devservices::DevPostgres;
@@ -192,6 +192,53 @@ handle-scoped container, also labelled so Ryuk can clean it after a crash or
 Ryuk requires a local Docker Unix socket. Override its host path with
 `R2E_DEVSERVICES_DOCKER_SOCKET`; use `R2E_DEVSERVICES_KEEP=1` only when the
 containers must survive for post-mortem inspection.
+
+### Choosing the image and credentials
+
+`shared_with` / `start_with` take a spec, and everything in it is part of the
+container's identity — each distinct spec gets its own shared container:
+
+```rust
+use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
+
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await; // url → postgres://app:s3cret@localhost:32771/appdb
+```
+
+Defaults are `postgres:16-alpine` (`postgres`/`postgres`, database `postgres`)
+and `redis:7-alpine`. A Postgres image must speak Postgres on 5432 and honour
+`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`.
+
+### Any other service
+
+`DevService` is the generic form behind those wrappers, available without a
+feature flag: any testcontainers `Image` — a `testcontainers-modules` one, a
+`GenericImage`, or your own — gets the same labelling, Ryuk reaping and
+cross-process sharing.
+
+```rust
+use r2e_devservices::{DevService, DevServiceSpec};
+use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+```
+
+`testcontainers` and `testcontainers_modules` are re-exported so the spec builds
+against the versions this crate uses. Sharing is keyed on a configuration string
+derived from the image and declared ports; `with_configuration` replaces it when
+something else must separate two containers (credentials, env vars, a command).
 
 ## Running tests
 

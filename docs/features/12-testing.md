@@ -473,6 +473,95 @@ Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
 - **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch.
 - **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.
 
+## Dev Services (real infrastructure)
+
+When a test needs a real database or broker rather than a mock, `r2e-devservices`
+(features `postgres`, `redis`, `openfga`) starts it in Docker and hands back the
+URL to inject into the test config:
+
+```rust
+use r2e_devservices::DevPostgres;
+
+#[tokio::test]
+async fn users_are_persisted() {
+    let pg = DevPostgres::shared().await;
+    let app = TestApp::boot_with::<my_app::MyApp>(|b| {
+        b.override_config_value("app.database.url", pg.url())
+    })
+    .await;
+    // ...
+}
+```
+
+`shared()` reuses one container across every test process of the workspace
+session (a Ryuk reaper removes it after the last one exits); `start()` gives an
+isolated container tied to the returned handle. Tests on a shared container must
+not assume exclusive state — namespace per test (a dedicated schema, a unique
+store name) or take `start()`.
+
+### Choosing the image and credentials
+
+`shared_with` / `start_with` take a spec. Everything in it is part of the
+container's identity, so each distinct spec gets its own shared container:
+
+```rust
+use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
+
+// A distribution shipping extra extensions.
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+
+// Custom credentials — the URL follows them.
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await;
+
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+```
+
+Defaults are `postgres:16-alpine` (`postgres`/`postgres`, database `postgres`)
+and `redis:7-alpine`. A Postgres image must speak Postgres on 5432 and honour
+`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`.
+
+### Any other service
+
+`DevService` is the generic form the wrappers above are built on, available
+without any feature flag. Any testcontainers `Image` — a `testcontainers-modules`
+one, a `GenericImage`, or your own — gets the same labelling, reaping and
+cross-process sharing:
+
+```rust
+use r2e_devservices::{DevService, DevServiceSpec};
+use r2e_devservices::testcontainers_modules::clickhouse::ClickHouse;
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || ClickHouse::default().into()).with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+```
+
+`testcontainers` and `testcontainers_modules` are re-exported so the spec builds
+against the versions this crate uses (a mismatched one yields a different
+`ContainerRequest` type and will not compile). The closure builds the request on
+demand, since a contended start is retried.
+
+Two specs share a container when their configuration strings match; the default
+is derived from the image and declared ports. Use `with_configuration` when
+something else must separate two containers:
+
+```rust
+DevServiceSpec::new("clickhouse", move || image_for(&user))
+    .with_port(8123)
+    .with_configuration(format!("image=clickhouse:25;port=8123;user={user}"))
+```
+
+`R2E_DEVSERVICES_KEEP=1` disables reaping for post-mortem inspection; the
+remaining knobs are documented in `r2e-devservices/README.md`.
+
 ## Running Tests
 
 ```bash

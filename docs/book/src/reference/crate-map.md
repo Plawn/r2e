@@ -13,7 +13,7 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 | `r2e-core` | Core runtime for R2E web framework - AppBuilder, plugins, guards, and dependency injection |
 | `r2e-data-diesel` | Cancellation-safe managed Diesel transactions |
 | `r2e-data-sqlx` | Cancellation-safe managed SQLx transactions |
-| `r2e-devservices` | Dev services for R2E tests — containerized Postgres/Redis started on demand and wired into the test config |
+| `r2e-devservices` | Dev services for R2E tests — containerized Postgres/Redis/OpenFGA started on demand and wired into the test config, plus `DevService` for any other image |
 | `r2e-devtools` | Subsecond hot-reload integration for R2E |
 | `r2e-events-iggy` | Apache Iggy event bus backend for R2E — persistent distributed event streaming |
 | `r2e-events-kafka` | Apache Kafka event bus backend for R2E — distributed event streaming |
