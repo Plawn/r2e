@@ -101,21 +101,40 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     ///
     /// Fingerprinted into the container name and the
     /// `dev.r2e.devservices.config` label: same string ⇒ same shared container.
-    /// It covers the image type and reference, the declared ports, and every
-    /// request field testcontainers exposes — env vars, labels, command,
-    /// entrypoint, mounts, copied files, port mappings, devices, network, user,
-    /// and the rest — so two requests that differ in any of them get two
-    /// containers. Fields Docker resolves by key (env vars, labels, port
-    /// mappings) are folded the way Docker folds them, so it is the *effective*
-    /// value that counts; fields it treats as a set (exposed ports,
-    /// capabilities, devices) are sorted, so declaration order alone never
-    /// splits a container.
+    /// It covers the image type and reference, the declared ports, and the
+    /// request fields that shape the container Docker creates — env vars,
+    /// labels, command, entrypoint, mounts, copied files, port mappings, device
+    /// requests, hosts, network, platform, user, namespaces, capabilities,
+    /// security options, health check — so two requests differing in any of
+    /// them get two containers.
     ///
-    /// What it cannot see: values testcontainers keeps private (ulimits, the
-    /// host-config modifier closure), the *contents* of a file copied by path
-    /// (only the path is visible from here — a fixture edited in place keeps
-    /// its identity), and anything applied *after* start (seeded data).
-    /// Separate those with [`with_discriminator`](Self::with_discriminator).
+    /// Each field is folded the way Docker resolves it, because merging two
+    /// different requests onto one container is a bug while splitting two
+    /// identical ones is only waste:
+    ///
+    /// - *Resolved by key* — env vars, labels, hosts, port mappings: folded
+    ///   into a map first, so it is the **effective** value that counts (an
+    ///   overridden env var, the last host port bound to a container port).
+    /// - *Set-like* — exposed ports, mounts, capabilities, security options:
+    ///   sorted, so declaration order alone never splits a container.
+    /// - *Ordered* — command, copied files, device requests: digested in order,
+    ///   because Docker applies them in order.
+    ///
+    /// What it cannot see, all of it grounds for
+    /// [`with_discriminator`](Self::with_discriminator):
+    ///
+    /// - values testcontainers keeps private — ulimits, the host-config
+    ///   modifier closure (a closure's effect cannot be fingerprinted at all);
+    /// - the *contents* of a file copied by path (only the path is visible from
+    ///   here — a fixture edited in place keeps its identity);
+    /// - anything applied *after* start: seeded data, and the exec hooks an
+    ///   `Image` runs itself (`exec_before_ready`, `exec_after_start`), which
+    ///   two same-typed images can drive from internal state invisible here.
+    ///
+    /// Deliberately excluded: readiness conditions and the startup timeout
+    /// change how long we wait, not what runs. Host-port exposures are not
+    /// encoded either — testcontainers rejects them outright for reusable
+    /// containers, and the shared path always asks for reuse.
     #[doc(hidden)]
     pub fn configuration(&self) -> String {
         let request = (self.request)();
@@ -161,7 +180,7 @@ impl<I: Image + 'static> DevServiceSpec<I> {
                 })
                 .collect(),
         );
-        configuration.field("entrypoint", request.entrypoint().unwrap_or_default());
+        configuration.field("entrypoint", optional(request.entrypoint()));
         // Ordered, unlike the above: argv and copy order both change the result.
         configuration.list("cmd", request.cmd());
         configuration.pairs("env", &env);
@@ -175,22 +194,26 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         );
         configuration.list("mount", sorted(request.mounts().map(debug)));
         configuration.list("copy", request.copy_to_sources().map(digest));
-        configuration.field("network", request.network().clone().unwrap_or_default());
-        configuration.field("hostname", request.hostname().unwrap_or_default());
-        configuration.field("platform", request.platform().clone().unwrap_or_default());
-        configuration.field("workdir", request.working_dir().unwrap_or_default());
-        configuration.field("user", request.user().unwrap_or_default());
+        configuration.field("network", optional(request.network().as_deref()));
+        configuration.field("hostname", optional(request.hostname()));
+        configuration.field("platform", optional(request.platform().as_deref()));
+        configuration.field("workdir", optional(request.working_dir()));
+        configuration.field("user", optional(request.user()));
         configuration.field("privileged", debug(request.privileged()));
         configuration.field("readonly", debug(request.readonly_rootfs()));
         configuration.field("shm", debug(request.shm_size()));
         configuration.field("cgroupns", debug(request.cgroupns_mode()));
-        configuration.field("userns", request.userns_mode().unwrap_or_default());
+        configuration.field("userns", optional(request.userns_mode()));
         configuration.list("cap_add", sorted(capabilities(request.cap_add())));
         configuration.list("cap_drop", sorted(capabilities(request.cap_drop())));
         configuration.list("security", sorted(capabilities(request.security_opts())));
+        // Ordered too, despite looking set-like: Docker keeps the vector and
+        // applies each request in turn to the same OCI spec — the NVIDIA
+        // handler appends to `NVIDIA_VISIBLE_DEVICES` per request — so two
+        // orders can produce two different containers.
         configuration.list(
             "device",
-            sorted(request.device_requests().into_iter().flatten().map(digest)),
+            request.device_requests().into_iter().flatten().map(digest),
         );
         configuration.field("health", debug(request.health_check()));
         configuration.field("stdin", debug(request.open_stdin()));
@@ -213,12 +236,24 @@ fn capabilities(values: Option<&Vec<String>>) -> impl Iterator<Item = String> + 
     values.into_iter().flatten().cloned()
 }
 
+/// An optional string, encoded so that `None` and `Some("")` stay apart.
+///
+/// Docker normalizes most empty values back to unset, so telling them apart
+/// usually splits two containers that would have run the same — waste, and
+/// waste is the safe direction here. Collapsing them with `unwrap_or_default`
+/// would instead put a request that sets a field to nothing and one that never
+/// set it on the same container, and break the encoding's injectivity.
+fn optional(value: Option<&str>) -> String {
+    value.map(|value| format!("+{value}")).unwrap_or_default()
+}
+
 /// The `Debug` form of a value, folded into a fixed-size digest.
 ///
 /// For values that can be arbitrarily large — a `CopyToContainer` carrying an
 /// in-memory asset prints every byte as a decimal number — materializing that
 /// form would cost several times the asset itself, twice over once the nested
-/// encoding copies it again.
+/// encoding copies it again. Folding to 64 bits admits collisions in principle;
+/// the identity is fingerprinted to the same width anyway.
 fn digest(value: impl std::fmt::Debug) -> String {
     use std::fmt::Write;
 

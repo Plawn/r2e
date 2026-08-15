@@ -109,19 +109,22 @@ your own `[dev-dependencies]` and Cargo unifies it with the re-export.
 publishes those on random host ports; declaring one here does not add one.
 
 Two specs share a container when their identity matches, and that identity is
-derived from the request itself — every field testcontainers exposes: image,
-env vars, labels, command, entrypoint, mounts, copied files, port mappings,
-devices, network, user, declared ports. So a different image *or* different
-credentials get their own container with nothing to declare — that is all
-`PostgresSpec` does. Values Docker resolves by key (env vars, port mappings)
-are folded the way Docker folds them, so the *effective* value is what counts;
-fields it treats as a set (exposed ports, capabilities) are sorted, so
-declaration order alone never splits a container in two.
+derived from the request itself — the fields that shape the container Docker
+creates: image, env vars, labels, command, entrypoint, mounts, copied files,
+port mappings, device requests, hosts, network, user, declared ports. So a
+different image *or* different credentials get their own container with nothing
+to declare — that is all `PostgresSpec` does. Each field is folded the way
+Docker resolves it: values keyed by name (env vars, labels, port mappings) keep
+the *effective* value, set-like fields (exposed ports, capabilities) are sorted
+so declaration order alone never splits a container, and ordered fields
+(command, device requests) are read in order because Docker applies them in
+order.
 
-Three things stay outside the key: what testcontainers keeps private (ulimits,
-the host-config modifier closure), the *contents* of a file copied by path
-(only the path is visible — a fixture edited in place keeps its identity), and
-anything applied after start. Append to the key for those:
+What stays outside the key: what testcontainers keeps private (ulimits, the
+host-config modifier closure), the *contents* of a file copied by path (only the
+path is visible — a fixture edited in place keeps its identity), and anything
+applied after start — seeded data, and the exec hooks an `Image` runs itself.
+Append to the key for those:
 
 ```rust
 DevServiceSpec::new("clickhouse", request)

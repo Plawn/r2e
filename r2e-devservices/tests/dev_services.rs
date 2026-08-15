@@ -347,6 +347,55 @@ fn identity_covers_device_requests() {
 
     assert_eq!(gpus(1).configuration(), gpus(1).configuration());
     assert_ne!(gpus(1).configuration(), gpus(2).configuration());
+
+    // Docker keeps the vector and applies each request in turn to the same OCI
+    // spec, so a reversal is a different container, not a reordered set.
+    fn reserved(first: &'static str, second: &'static str) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("reserved", move || {
+            GenericImage::new("vendor/server", "1").with_device_requests(vec![
+                DeviceRequest {
+                    device_ids: Some(vec![first.into()]),
+                    ..DeviceRequest::default()
+                },
+                DeviceRequest {
+                    device_ids: Some(vec![second.into()]),
+                    ..DeviceRequest::default()
+                },
+            ])
+        })
+    }
+
+    assert_ne!(
+        reserved("GPU-A", "GPU-B").configuration(),
+        reserved("GPU-B", "GPU-A").configuration()
+    );
+}
+
+/// A field explicitly set to nothing is not the same request as one never set:
+/// collapsing them would put both on one container.
+#[test]
+fn identity_separates_an_unset_field_from_an_empty_one() {
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn hostname(hostname: Option<&'static str>) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("hostname", move || {
+            let image = GenericImage::new("vendor/server", "1");
+            match hostname {
+                Some(hostname) => image.with_hostname(hostname),
+                None => image.into(),
+            }
+        })
+    }
+
+    assert_ne!(
+        hostname(None).configuration(),
+        hostname(Some("")).configuration()
+    );
+    assert_ne!(
+        hostname(Some("")).configuration(),
+        hostname(Some("node")).configuration()
+    );
 }
 
 /// Ports Docker holds as a set must not split a container on declaration order
