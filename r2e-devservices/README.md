@@ -96,6 +96,10 @@ let clickhouse = DevService::shared(
 let url = format!("http://{}", clickhouse.endpoint(8123));
 ```
 
+The closure must build the same request every time: it runs again for the
+identity and on every start attempt, and the shared path compares each attempt
+against the identity rather than start a container that name does not describe.
+
 `testcontainers` and `testcontainers_modules` are re-exported so your spec
 builds against the exact versions this crate uses — a mismatched one produces
 a different `ContainerRequest` type and will not compile. `GenericImage` and

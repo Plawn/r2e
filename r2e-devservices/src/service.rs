@@ -99,8 +99,21 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     ///
     /// It is appended to the derived identity, never replaces it: this can only
     /// ever split containers, never merge two different ones.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a blank discriminator. It is the caller's description of what
+    /// the identity cannot read, and a blank one describes nothing while still
+    /// satisfying the checks that ask for one.
     pub fn with_discriminator(mut self, discriminator: impl Into<String>) -> Self {
-        self.discriminator = Some(discriminator.into());
+        let discriminator = discriminator.into();
+        assert!(
+            !discriminator.trim().is_empty(),
+            "the {} dev service was given a blank discriminator — it is what tells two \
+             containers apart when the request cannot, so it has to say something",
+            self.service
+        );
+        self.discriminator = Some(discriminator);
         self
     }
 
@@ -150,7 +163,10 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// The request factory is invoked again on every start attempt, and each
     /// result is re-derived and compared against this one: a factory that does
     /// not build the same request every time is rejected rather than allowed to
-    /// start a container its identity does not describe.
+    /// start a container its identity does not describe. That comparison only
+    /// sees what this string sees, so a factory varying an opaque field — an
+    /// ulimit, what a modifier closure does — still slips through; the
+    /// determinism requirement is the contract, the check is a backstop.
     #[doc(hidden)]
     pub fn configuration(&self) -> String {
         self.configuration_of(&(self.request)())
@@ -265,7 +281,7 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         );
         configuration.field("health", debug(request.health_check()));
         configuration.field("stdin", debug(request.open_stdin()));
-        configuration.field("extra", self.discriminator.as_deref().unwrap_or_default());
+        configuration.field("extra", optional(self.discriminator.as_deref()));
         configuration.0
     }
 }

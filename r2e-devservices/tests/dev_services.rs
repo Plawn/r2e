@@ -388,6 +388,18 @@ async fn a_host_config_modifier_cannot_be_shared_without_a_discriminator() {
     DevService::shared(spec).await;
 }
 
+/// A blank discriminator would satisfy the modifier guard while adding nothing
+/// to the key — two different modifiers back on one container.
+#[test]
+#[should_panic(expected = "blank discriminator")]
+fn a_blank_discriminator_is_rejected() {
+    use r2e_devservices::testcontainers::GenericImage;
+    use r2e_devservices::DevServiceSpec;
+
+    DevServiceSpec::new("blank", || GenericImage::new("vendor/server", "1").into())
+        .with_discriminator("   ");
+}
+
 /// The guard reads the request that is about to start, not a fresh one — a
 /// factory can hand out a bare request first and a modified one afterwards.
 #[tokio::test]
