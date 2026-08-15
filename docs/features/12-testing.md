@@ -556,9 +556,11 @@ against the versions this crate uses (a mismatched one yields a different
 `ContainerRequest` type and will not compile). A ready-made module image
 (`ClickHouse`, `Kafka`, …) needs its own feature enabled through your
 `[dev-dependencies]`: `testcontainers-modules = { version = "0.15", features =
-["clickhouse"] }`. The closure builds the request on demand, since a contended
-start is retried. `with_port` resolves a port the image exposes; it does not
-publish one.
+["clickhouse"] }`. The closure must be deterministic — it is called again for
+the identity and on each start attempt, and the shared path panics rather than
+start a container its name does not describe. It builds the request on demand
+because `ContainerRequest` is not `Clone` and a contended start is retried.
+`with_port` resolves a port the image exposes; it does not publish one.
 
 Two specs share a container when their identity matches, and that identity is
 derived from the request — the fields that shape the container Docker creates:

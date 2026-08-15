@@ -2479,7 +2479,10 @@ works the same way, but each sits behind its own feature: add
 your own `[dev-dependencies]` and Cargo unifies it with the re-export.
 
 The closure builds the request on demand (`ContainerRequest` is not `Clone`
-and a contended start is retried). `with_port` resolves a port the *image*
+and a contended start is retried) and must be deterministic — it is called
+again for the identity and on each start attempt, and the shared path panics
+rather than start a container its name does not describe. `with_port` resolves
+a port the *image*
 exposes (`with_exposed_port` / `Image::expose_ports` / `EXPOSE`) — it does not
 publish one. Sharing is keyed on the request fields that shape the container
 Docker creates (image, env, labels, cmd, mounts, port mappings, device

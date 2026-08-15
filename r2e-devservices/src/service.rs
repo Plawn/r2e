@@ -35,7 +35,8 @@ use crate::{common, ryuk};
 /// ```
 ///
 /// The request is built by a closure rather than passed by value because
-/// `ContainerRequest` is not `Clone` and a contended start is retried.
+/// `ContainerRequest` is not `Clone` and a contended start is retried — so the
+/// closure must build the same request every time (see [`new`](Self::new)).
 pub struct DevServiceSpec<I: Image> {
     service: String,
     ports: Vec<u16>,
@@ -49,6 +50,12 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     ///
     /// The name separates services from each other in the shared-container
     /// registry and in the fallback cleanup — keep it stable and distinct.
+    ///
+    /// `request` must be **deterministic**: it is called again for the identity
+    /// and on every start attempt, and a container is only ever as described as
+    /// the request the identity was derived from. The shared path re-derives
+    /// each attempt and panics on a mismatch rather than start a container its
+    /// name does not describe.
     pub fn new(
         service: impl Into<String>,
         request: impl Fn() -> ContainerRequest<I> + Send + Sync + 'static,
@@ -139,6 +146,16 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// change how long we wait, not what runs. Host-port exposures are not
     /// encoded either — testcontainers rejects them outright for reusable
     /// containers, and the shared path always asks for reuse.
+    ///
+    /// The request factory is invoked again on every start attempt, and each
+    /// result is re-derived and compared against this one: a factory that does
+    /// not build the same request every time is rejected rather than allowed to
+    /// start a container its identity does not describe.
+    #[doc(hidden)]
+    pub fn configuration(&self) -> String {
+        self.configuration_of(&(self.request)())
+    }
+
     /// Refuse to share a container whose shape the identity cannot describe.
     ///
     /// A host-config modifier rewrites the Docker configuration from a closure:
@@ -147,9 +164,13 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// derived identity exists to prevent. Only the *presence* of a modifier is
     /// readable, so the discriminator is where the caller says what it does.
     /// [`start`](DevService::start) is unaffected: nothing is shared there.
-    fn ensure_shareable(&self) {
+    ///
+    /// Checked against the request about to start, not a fresh one: a factory
+    /// returning a bare request first and a modified one later would otherwise
+    /// walk past a check made on the first.
+    fn ensure_shareable(&self, request: &ContainerRequest<I>) {
         assert!(
-            self.discriminator.is_some() || (self.request)().host_config_modifier().is_none(),
+            self.discriminator.is_some() || request.host_config_modifier().is_none(),
             "the {} dev service sets a host-config modifier, and the sharing identity cannot \
              read what it does — two different modifiers would share one container. Describe \
              it with .with_discriminator(\"...\"), or use DevService::start for an isolated \
@@ -158,9 +179,7 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         );
     }
 
-    #[doc(hidden)]
-    pub fn configuration(&self) -> String {
-        let request = (self.request)();
+    fn configuration_of(&self, request: &ContainerRequest<I>) -> String {
         let mut ports = self.ports.clone();
         ports.sort_unstable();
         // `env_vars()` yields the image's variables first and the request's
@@ -360,9 +379,13 @@ impl DevService {
         // `Never` overrides whatever the spec asked for: testcontainers skips
         // removal on drop for the reusing directives, which would leave this
         // container behind — and the handle is the only thing scoping it.
-        let request =
-            common::label_isolated((spec.request)(), &spec.service, &spec.configuration())
-                .with_reuse(ReuseDirective::Never);
+        // Labelled from the request that starts, not from a second one the
+        // factory might build differently — nothing is shared here, but the
+        // label should still describe this container.
+        let built = (spec.request)();
+        let configuration = spec.configuration_of(&built);
+        let request = common::label_isolated(built, &spec.service, &configuration)
+            .with_reuse(ReuseDirective::Never);
         let container = request.start().await.unwrap_or_else(|error| {
             panic!(
                 "failed to start the {} dev service — is Docker running?: {error}",
@@ -385,8 +408,6 @@ impl DevService {
     /// [`discriminator`](DevServiceSpec::with_discriminator) — see
     /// [`configuration`](DevServiceSpec::configuration).
     pub async fn shared<I: Image + 'static>(spec: DevServiceSpec<I>) -> &'static Self {
-        spec.ensure_shareable();
-
         // One cell per (service, configuration), leaked to hand out `&'static`
         // for the process's lifetime — the container lives as long as the cell
         // that owns it. A single registry serves every service because the
@@ -394,7 +415,10 @@ impl DevService {
         static SHARED: OnceLock<Mutex<HashMap<String, &'static OnceCell<DevService>>>> =
             OnceLock::new();
 
-        let identity = common::SharedIdentity::new(&spec.service, &spec.configuration());
+        let configuration = spec.configuration();
+        spec.ensure_shareable(&(spec.request)());
+
+        let identity = common::SharedIdentity::new(&spec.service, &configuration);
         let cell = {
             let mut cells = SHARED
                 .get_or_init(Mutex::default)
@@ -404,20 +428,35 @@ impl DevService {
                 .entry(identity.name().to_string())
                 .or_insert_with(|| Box::leak(Box::new(OnceCell::const_new())))
         };
-        cell.get_or_init(|| Self::start_shared(spec, identity))
+        cell.get_or_init(|| Self::start_shared(spec, identity, configuration))
             .await
     }
 
     async fn start_shared<I: Image + 'static>(
         spec: DevServiceSpec<I>,
         identity: common::SharedIdentity,
+        configuration: String,
     ) -> Self {
         ryuk::ensure_lease().await;
         common::cleanup(&identity).await;
 
         let container = common::start_with_retry(&spec.service, || {
+            // The factory runs again per attempt, so the request that starts is
+            // not the one the identity was taken from. Re-deriving here is what
+            // makes the identity a promise about the container that actually
+            // runs: a factory alternating between two requests would otherwise
+            // start the second under the first one's name.
+            let request = (spec.request)();
+            spec.ensure_shareable(&request);
+            assert_eq!(
+                spec.configuration_of(&request),
+                configuration,
+                "the {} dev service's request factory built a different container on a later \
+                 call — it is invoked again on every start attempt and must be deterministic",
+                spec.service
+            );
             identity.label(
-                (spec.request)()
+                request
                     .with_container_name(identity.name())
                     .with_reuse(ReuseDirective::Always),
             )

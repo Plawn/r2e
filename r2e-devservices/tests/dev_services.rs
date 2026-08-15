@@ -388,6 +388,30 @@ async fn a_host_config_modifier_cannot_be_shared_without_a_discriminator() {
     DevService::shared(spec).await;
 }
 
+/// The guard reads the request that is about to start, not a fresh one — a
+/// factory can hand out a bare request first and a modified one afterwards.
+#[tokio::test]
+#[should_panic(expected = "host-config modifier")]
+async fn a_modifier_appearing_on_a_later_build_is_caught_too() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    static BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+    let spec = DevServiceSpec::new("late-modifier", || {
+        let image = GenericImage::new("vendor/server", "1");
+        if BUILDS.fetch_add(1, Ordering::SeqCst) == 0 {
+            image.into()
+        } else {
+            image.with_host_config_modifier(|host| host.memory = Some(64 * 1024 * 1024))
+        }
+    });
+
+    DevService::shared(spec).await;
+}
+
 /// Docker parses security options in sequence and a later one overrides an
 /// earlier one of the same name, so the reversed pair is a different container.
 #[test]
