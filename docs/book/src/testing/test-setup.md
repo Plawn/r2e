@@ -247,7 +247,10 @@ let url = format!("http://{}", clickhouse.endpoint(8123));
 against the versions this crate uses; a ready-made module image needs its own
 feature enabled through your `[dev-dependencies]`
 (`testcontainers-modules = { version = "0.15", features = ["clickhouse"] }`).
-`with_port` resolves a port the image exposes rather than publishing one.
+`with_port` resolves a port the image exposes rather than publishing one. The
+closure must build the same request every time: it runs again for the sharing
+key and on every start attempt, and `shared` compares each attempt against that
+key rather than start a container the name does not describe.
 
 Sharing is keyed on the request — the fields that shape the container Docker
 creates: image, env vars, labels, command, mounts, port mappings, device
