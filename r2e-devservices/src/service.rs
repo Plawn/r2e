@@ -103,10 +103,13 @@ impl<I: Image + 'static> DevServiceSpec<I> {
     /// `dev.r2e.devservices.config` label: same string ⇒ same shared container.
     /// It covers the image type and reference, the declared ports, and every
     /// request field testcontainers exposes — env vars, labels, command,
-    /// entrypoint, mounts, copied files, network, user, and the rest — so two
-    /// requests that differ in any of them get two containers. Fields Docker
-    /// treats as a set (exposed ports, capabilities) are sorted first, so
-    /// declaring them in another order still shares one container.
+    /// entrypoint, mounts, copied files, port mappings, devices, network, user,
+    /// and the rest — so two requests that differ in any of them get two
+    /// containers. Fields Docker resolves by key (env vars, labels, port
+    /// mappings) are folded the way Docker folds them, so it is the *effective*
+    /// value that counts; fields it treats as a set (exposed ports,
+    /// capabilities, devices) are sorted, so declaration order alone never
+    /// splits a container.
     ///
     /// What it cannot see: values testcontainers keeps private (ulimits, the
     /// host-config modifier closure), the *contents* of a file copied by path
@@ -138,9 +141,25 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         // Set-like on Docker's side: sorted, so two requests that declare the
         // same ports or capabilities in a different order share a container.
         configuration.list("expose", sorted(request.expose_ports().iter().map(debug)));
-        configuration.list(
+        // Port mappings are keyed by container port on the way to Docker
+        // (`port_bindings` is a map), so a repeated container port keeps its
+        // last host port. Folding the same way records the binding that will
+        // actually apply; sorting the mappings whole would give
+        // `[8080→80, 9090→80]` and its reverse — which bind different host
+        // ports — the same identity.
+        configuration.pairs(
             "map",
-            sorted(request.ports().into_iter().flatten().map(debug)),
+            &request
+                .ports()
+                .into_iter()
+                .flatten()
+                .map(|mapping| {
+                    (
+                        debug(mapping.container_port()),
+                        mapping.host_port().to_string(),
+                    )
+                })
+                .collect(),
         );
         configuration.field("entrypoint", request.entrypoint().unwrap_or_default());
         // Ordered, unlike the above: argv and copy order both change the result.
@@ -169,6 +188,10 @@ impl<I: Image + 'static> DevServiceSpec<I> {
         configuration.list("cap_add", sorted(capabilities(request.cap_add())));
         configuration.list("cap_drop", sorted(capabilities(request.cap_drop())));
         configuration.list("security", sorted(capabilities(request.security_opts())));
+        configuration.list(
+            "device",
+            sorted(request.device_requests().into_iter().flatten().map(digest)),
+        );
         configuration.field("health", debug(request.health_check()));
         configuration.field("stdin", debug(request.open_stdin()));
         configuration.field("extra", self.discriminator.as_deref().unwrap_or_default());

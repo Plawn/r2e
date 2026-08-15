@@ -17,7 +17,15 @@ redis = ["testcontainers-modules/redis"]
 openfga = ["testcontainers/http_wait", "dep:reqwest", "dep:serde_json"]
 
 [dependencies]
-testcontainers = { workspace = true, features = ["reusable-containers"] }
+# `device-requests` is enabled unconditionally, not passed through a feature of
+# our own: it gates `ContainerRequest::device_requests()`, which the sharing
+# identity has to read. Behind a feature, a user enabling it on their own
+# `testcontainers` dependency would get requests whose GPU reservations are
+# invisible to the identity — two different containers sharing one.
+testcontainers = { workspace = true, features = [
+    "reusable-containers",
+    "device-requests",
+] }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 reqwest = { workspace = true, features = ["json", "rustls"], optional = true }

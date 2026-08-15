@@ -280,6 +280,75 @@ fn identity_covers_declared_ports_regardless_of_order() {
     );
 }
 
+/// Port mappings reach Docker as a map keyed by container port, so a repeated
+/// container port keeps the last host port — and two requests that bind it to
+/// different host ports cannot share a container, whatever their order.
+#[test]
+fn identity_follows_the_effective_host_port_of_a_remapped_container_port() {
+    use r2e_devservices::testcontainers::core::IntoContainerPort;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn remapped(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("remapped", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(first, 80.tcp())
+                .with_mapped_port(second, 80.tcp())
+        })
+    }
+
+    // Both map container port 80, to 9090 and to 8080 respectively.
+    assert_ne!(
+        remapped(8080, 9090).configuration(),
+        remapped(9090, 8080).configuration()
+    );
+
+    fn distinct(first: u16, second: u16) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("distinct", move || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(first, 80.tcp())
+                .with_mapped_port(second, 443.tcp())
+        })
+    }
+
+    // Distinct container ports: the declaration order is irrelevant.
+    assert_eq!(
+        distinct(8080, 8443).configuration(),
+        DevServiceSpec::new("distinct", || {
+            GenericImage::new("vendor/server", "1")
+                .with_mapped_port(8443, 443.tcp())
+                .with_mapped_port(8080, 80.tcp())
+        })
+        .configuration()
+    );
+    assert_ne!(
+        distinct(8080, 8443).configuration(),
+        distinct(8081, 8443).configuration()
+    );
+}
+
+/// GPU reservations change what the container can do, so they cannot alias.
+#[test]
+fn identity_covers_device_requests() {
+    use r2e_devservices::testcontainers::bollard::models::DeviceRequest;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::DevServiceSpec;
+
+    fn gpus(count: i64) -> DevServiceSpec<GenericImage> {
+        DevServiceSpec::new("gpus", move || {
+            GenericImage::new("vendor/server", "1").with_device_requests(vec![DeviceRequest {
+                driver: Some("nvidia".into()),
+                count: Some(count),
+                capabilities: Some(vec![vec!["gpu".into()]]),
+                ..DeviceRequest::default()
+            }])
+        })
+    }
+
+    assert_eq!(gpus(1).configuration(), gpus(1).configuration());
+    assert_ne!(gpus(1).configuration(), gpus(2).configuration());
+}
+
 /// Ports Docker holds as a set must not split a container on declaration order
 /// — a spec building them from an unordered collection would otherwise start
 /// one container per process.

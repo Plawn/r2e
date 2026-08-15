@@ -2481,11 +2481,12 @@ your own `[dev-dependencies]` and Cargo unifies it with the re-export.
 The closure builds the request on demand (`ContainerRequest` is not `Clone`
 and a contended start is retried). `with_port` resolves a port the *image*
 exposes (`with_exposed_port` / `Image::expose_ports` / `EXPOSE`) — it does not
-publish one. Sharing is keyed on everything the request carries (image, env,
-labels, cmd, mounts, network, …), so two specs that differ in any of them get
-two containers; `with_discriminator("...")` appends to that key for what the
-request cannot express (data seeded after start, the contents of a file copied
-by path).
+publish one. Sharing is keyed on every request field testcontainers exposes
+(image, env, labels, cmd, mounts, devices, network, …), so two specs that
+differ in any of them get two containers; `with_discriminator("...")` appends
+to that key for the rest — what testcontainers keeps private (ulimits, the
+host-config closure), the contents of a file copied by path, and data seeded
+after start.
 
 `DevOpenFga` (feature `openfga`) runs `openfga/openfga` with the in-memory
 datastore. With the `OpenFga` plugin, a test only points the app at the

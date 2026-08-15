@@ -109,14 +109,19 @@ your own `[dev-dependencies]` and Cargo unifies it with the re-export.
 publishes those on random host ports; declaring one here does not add one.
 
 Two specs share a container when their identity matches, and that identity is
-derived from the request itself: image, env vars (in override order, so the
-*effective* value counts), labels, command, entrypoint, mounts, copied files,
-network, user, declared ports. So a different image *or* different credentials
-get their own container with nothing to declare — that is all `PostgresSpec`
-does. Fields Docker treats as a set (exposed ports, capabilities) are sorted
-first, so declaration order never splits a container in two. For what the
-request cannot express (data seeded after start, the contents of a file copied
-by path, an ulimit, a host-config closure), append to the key:
+derived from the request itself — every field testcontainers exposes: image,
+env vars, labels, command, entrypoint, mounts, copied files, port mappings,
+devices, network, user, declared ports. So a different image *or* different
+credentials get their own container with nothing to declare — that is all
+`PostgresSpec` does. Values Docker resolves by key (env vars, port mappings)
+are folded the way Docker folds them, so the *effective* value is what counts;
+fields it treats as a set (exposed ports, capabilities) are sorted, so
+declaration order alone never splits a container in two.
+
+Three things stay outside the key: what testcontainers keeps private (ulimits,
+the host-config modifier closure), the *contents* of a file copied by path
+(only the path is visible — a fixture edited in place keeps its identity), and
+anything applied after start. Append to the key for those:
 
 ```rust
 DevServiceSpec::new("clickhouse", request)
