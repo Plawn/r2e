@@ -382,9 +382,9 @@ fields, and `#[controller]` fields.
 
 ```rust
 let built = AppBuilder::new()
-    .plugin(Executor)                     // required by Scheduler (ticks run on the pool)
-    .plugin(Scheduler)                    // pre-state plugins FIRST
     .load_config::<RootConfig>()          // YAML + env; auto-registers config sections as beans
+    .plugin(Executor)                     // required by Scheduler (ticks run on the pool)
+    .plugin(Scheduler)                    // order vs load_config/provide/register doesn't matter
     .provide(LocalEventBus::new())        // provide constructed values
     .provide(Arc::new(claims_validator))
     .register::<CreatePool>()             // producer → registers SqlitePool
@@ -418,32 +418,44 @@ impl ChatService {
 For conditional plugins/layers (no provision-list change) use
 `.when(cond, |b| b.with(...))` with `config_flag("key")` / `profile_is("prod")`.
 
-### Writing a pre-state plugin — one `Deps` list, resolved post-state
+### Writing a pre-state plugin — one async fallible `build()`
+
+A pre-state plugin IS one async, fallible factory for its `Provided` tuple:
+`build` runs inside `build_state()` as a node of the bean graph, after `Deps`
+(real topological edges, delivered by value), with typed config guaranteed
+loaded. There is no `install`/`configure` split and no shell/fill dance.
 
 ```rust
 impl PreStatePlugin for MyPlugin {
-    type Provided = (MyHandle,);          // tuple of beans deposited at install
+    type Provided = (MyHandle,);          // tuple of beans; each becomes its own bean
     type Deps = (DbPool,);                // ANY bean (.provide()-d or .register()-ed),
                                           // verified at build_state(), order-independent
     type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        (MyHandle::new(),)                // NO deps here — install runs pre-graph
-    }
-
-    fn configure(self, (handle,): &Self::Provided, (pool,): Self::Deps,
-                 _config: Option<()>, _ctx: &mut DeferredContext<'_>) {
-        handle.bind(pool);                // deps arrive by value, post-state
+    async fn build(self, (pool,): Self::Deps, _config: Option<()>,
+                   ctx: &mut PluginBuildContext)
+        -> Result<Self::Provided, PluginBuildError> {
+        let handle = MyHandle::connect(pool).await?;   // async + fallible: Err aborts boot
+        let h = handle.clone();
+        ctx.on_shutdown_async(move || async move { h.drain().await });
+        Ok((handle,))
     }
 }
 ```
 
-A provided bean that must be BUILT from a dep starts as a shell over
-`r2e::Late<T>` (write-once, Arc-shared, clones see the fill; not in the
-prelude): fill it synchronously in `configure`, or asynchronously by
-registering the fill as a post-construct (`ctx.run_post_construct::<Bean>()`
-in `install` — awaited inside `build_state()`). `late.get()` is `None` only
-before boot; `late.expect("what")` panics with lifecycle guidance.
+`PluginBuildContext`: `enabled()` (the `<prefix>.enabled` gate — build ALWAYS
+runs, return a cheap disabled variant when false; effects are dropped),
+`graph() -> GraphHandle` (handle on the final resolved graph, for request-time
+lookups), `config_raw()`, `add_layer`, `wrap_router`, `store_data`, `on_serve`,
+`on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
+hatch). Effects apply in plugin INSTALL order; builds run in dependency order.
+Rare pre-graph needs (store_data other subsystems read even when disabled,
+`run_pre_destroy`) go in the optional `fn setup(&mut self, &mut
+PluginSetupContext)`. Plugin beans register strictly: same-type app bean or a
+double install = `DuplicateBean` at boot; in tests, `override_bean` each
+provided type BEFORE `.plugin()` (pinning all of them skips `build`).
+`r2e::Late<T>` (write-once, Arc-shared cell) remains only as an escape hatch
+for genuinely post-boot fills.
 
 ### `#[post_construct]` — lifecycle hooks
 
@@ -560,11 +572,11 @@ performs around your `build`.
 
 ```rust
 AppBuilder::new()
-    // ── Pre-state ──
+    // ── Pre-state (order among plugin/load_config/provide/register doesn't matter) ──
+    .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
     .plugin(Executor)                           // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-    .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
     .provide(bean)                              // constructed values
     .register::<CreatePool>()                   // beans / producers (one unified method)
     .when(dev_mode, |b| b.with(DevReload))      // conditional Self→Self assembly
@@ -1100,8 +1112,8 @@ use r2e::r2e_openfga::OpenFga;
 
 r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
-b.load_config::<()>()                       // config MUST be loaded first
-    .plugin(OpenFga::model(authz::MODEL))   // pre-state, before build_state()
+b.load_config::<()>()
+    .plugin(OpenFga::model(authz::MODEL))   // pre-state; order vs load_config doesn't matter
     .build_state().await
     .register_controller::<DocumentController>()
 ```
@@ -1136,10 +1148,9 @@ model → pin the resolved `model_id` on every subsequent check.
 This closes the schema-first chain: compile time checks code ↔ checked-in
 `.fga` (via `model!`); the plugin checks checked-in `.fga` ↔ live store at
 boot. `OpenFgaHandle` (bean) exposes `store_id()`, `model_id()`, and
-`backend()` (the connected `GrpcBackend`, raw-client escape hatch).
-Install AFTER `load_config()`/`with_config()` (panics with guidance
-otherwise). `openfga.enabled: false` skips the boot sequence (checks then
-fail closed).
+`backend()` (the connected `GrpcBackend`, raw-client escape hatch; panics when
+disabled — `try_backend()` is the non-panicking form). `openfga.enabled: false`
+skips the boot sequence (checks then fail closed with `OpenFgaError::Disabled`).
 
 **Manual setup (escape hatch — dynamic models / custom wiring).** Provide the
 beans yourself; the store/model must already exist:

@@ -284,6 +284,40 @@ Accepted limitations and remaining frictions from the external audit:
   `TenantSource::create` receives `&TenantId`; custom directory code pays an
   avoidable clone/signature mismatch.
 
+## W15 — Factory-first plugins — SHIPPED 2026-08-15
+
+`PreStatePlugin` fully integrated into DI: a plugin IS one async fallible
+factory for its `Provided` tuple, executed inside `build_state()` as a bean
+graph node (topologically after `Deps`, config guaranteed loaded).
+`install`/`configure` deleted; optional `setup()` remains the rare pre-graph
+hook. Reference: `docs/claude/plugins.md` (authoritative, fully rewritten).
+
+Shipped:
+
+- **New trait surface**: `build(self, deps, config, &mut PluginBuildContext)
+  -> Result<Provided, PluginBuildError>`; `Err` → `BeanError::PluginBuild`.
+  `PluginInstallContext` → `PluginSetupContext` (loses `config()`/
+  `config_get`/`run_post_construct`). `GraphHandle` (Late-backed handle on the
+  final `Arc<BeanContext>`) for post-boot resolution (used by `Tenanted<T>`).
+- **Two orders, documented**: build execution = topo order; effect application
+  (`add_layer`/`wrap_router`/`on_serve`/…) = install order. Effects dropped
+  when `<prefix>.enabled=false`; `build` always runs (return a disabled
+  variant). Config section parsed even when disabled.
+- **Strict registration**: plugin beans collide with app `.provide()` or a
+  double install → `DuplicateBean` at boot. Pin-before-install wins;
+  all-pinned skips `build` entirely; partial pin still runs it.
+- **All 10 in-tree plugins migrated.** OpenFga is the flagship: `Late<GrpcBackend>`,
+  `LazyBackend`, `PostConstruct` boot smuggle, `NotReady` (→ `Disabled`), and
+  the "install after load_config" panic all deleted. Tenancy/PerTenant build
+  directly wired (no `unwired()`/`wire()`). Executor now honors `executor.*`
+  regardless of `.plugin()`/`load_config()` order (killed the example-app
+  latent bug; assertion test in example-app/tests/app_test.rs).
+- `Late<T>` remains public as a de-emphasized escape hatch.
+
+Deferred: per-plugin effect caching under dev-reload (volatile nodes rebuild
+every hot-patch cycle — matches the old fresh-install-per-cycle semantics);
+Prometheus keeps its global recorder (separate workstream).
+
 ## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed

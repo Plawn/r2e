@@ -484,14 +484,15 @@ User-facing guide: `docs/features/24-tenancy.md`. This section is the internals.
 (`Tenant<T>` / `TenantId` extractors), `plugin` (`Tenancy`, `PerTenant`),
 `config` (`TenancyConfig`), `error` (`TenantError` → status).
 
-**Two plugins, both `PreStatePlugin`, both two-phase.** `install` provides a
-`Late`-backed *shell* (`TenantRouter::unwired()` / `Tenanted::unwired()`);
-`configure` fills it once the graph holds the resolver / source bean. That split
-is the whole trick: the resolver and the source are ordinary beans with their
-own `#[inject]` dependencies, while the beans controllers *demand*
-(`TenantRouter`, `Tenanted<T>`) exist early enough to be in the state type.
-Resolving through an unfilled shell is `TenantError::NoResolver` /
-`TenantError::NoSource` (500 — a wiring bug that only reachable code paths hit).
+**Two plugins, both `PreStatePlugin`, both factory-first.** Each plugin's
+`build` runs inside `build_state()` with the resolver / source bean already
+constructed (`Deps` is a real topo edge), so `TenantRouter` and `Tenanted<T>`
+are built **directly wired** — no shell/fill. When `tenancy.enabled: false`,
+`Tenancy` builds `TenantRouter::disabled(statuses)`; `PerTenant` still builds
+a normal `Tenanted<T>` map, but its effects (sweeper, drain hook, eager
+preload) are dropped — a disabled router routes nothing into the map anyway. `TenantError::NoSource` (500)
+remains for the true wiring bug: injecting `Tenant<T>` for a `T` whose
+`PerTenant` plugin was never installed.
 `Tenancy` declares `Deps = (R,)`; `PerTenant` declares `Deps = (Src,)`, and
 `.fallback_to_default()` switches the impl to `Deps = (Src, T)` so the fallback
 bean is compile-checked (the `DefaultFallback` / `NoFallback` marker parameter

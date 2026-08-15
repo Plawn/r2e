@@ -231,8 +231,9 @@ AppBuilder::new()
 Both hooks read the bean from the resolved graph by type (a pinned test
 override is honoured); a failing post-construct fails `build_state()` with
 `BeanError::PostConstruct`; disposers run in reverse registration order during
-shutdown. Plugins opt their `Provided` beans in the same way via
-`ctx.run_post_construct::<T>()` / `ctx.run_pre_destroy::<T>()`.
+shutdown. Plugins initialize their `Provided` beans inline (their `build` is
+async and fallible) and opt into disposal via `ctx.run_pre_destroy::<T>()` in
+`setup`.
 
 ## Reading beans from state
 

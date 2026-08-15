@@ -620,7 +620,7 @@ is no trait detection on stable):
 | Hook trait | `PostConstruct` | `PreDestroy` (`fn pre_destroy(&self) -> Pin<Box<dyn Future<Output=()> + Send>>`) |
 | Factory bean (`#[bean]`) / controller | `#[post_construct]` method | `#[pre_destroy]` method (see above) |
 | Plain `.provide()` | `AppBuilder::provide_with_post_construct(value)` | `AppBuilder::provide_with_pre_destroy(value)` |
-| Plugin `Provided` bean | `ctx.run_post_construct::<T>()` in `install` | `ctx.run_pre_destroy::<T>()` in `install` |
+| Plugin `Provided` bean | n/a — `build` is async + fallible, initialize inline | `ctx.run_pre_destroy::<T>()` in `setup` |
 | Registry primitive | `BeanRegistry::register_provided_post_construct::<T>()` | `BeanRegistry::register_pre_destroy::<T>()` |
 
 The `#[pre_destroy]` attribute (factory beans + controllers) generates the

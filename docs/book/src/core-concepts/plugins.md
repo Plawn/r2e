@@ -74,9 +74,10 @@ prometheus:
   enabled: false
 ```
 
-The default is `true`. A disabled plugin skips its post-state wiring (routes,
-layers, serve/shutdown hooks, and its `configure` step), but **its provided beans
-still exist** — anything injecting them keeps working. See
+The default is `true`. A disabled plugin drops its wiring effects (routes,
+layers, serve/shutdown hooks), but **its provided beans still exist** —
+`build` runs with `ctx.enabled() == false` and returns a disabled variant, so
+anything injecting the beans keeps working. See
 [Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
 for the full semantics.
 
@@ -141,14 +142,15 @@ impl Plugin for MyPlugin {
 `should_be_last()` (default `false`) marks plugins that must be the outermost
 layer — the builder warns if anything is installed after one.
 
-### Pre-state plugins (simple path)
+### Pre-state plugins
 
-Implement `PreStatePlugin` for plugins that provide beans. `Provided` is a
-**tuple** of beans — `(A,)` for one, `(A, B)` for several, `()` for none — and
-`install` returns that tuple. No builder generics needed:
+A pre-state plugin **is one async, fallible factory** for the beans it
+provides: `build` runs inside `build_state()` as a node of the bean graph.
+`Provided` is a **tuple** of beans — `(A,)` for one, `(A, B)` for several,
+`()` for none — and `build` returns it. No builder generics needed:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 
 pub struct MyPreStatePlugin;
 
@@ -157,52 +159,51 @@ impl PreStatePlugin for MyPreStatePlugin {
     type Deps = ();          // no dependencies on other beans
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyConfig,) {
-        (MyConfig::default(),)
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(MyConfig,), PluginBuildError> {
+        Ok((MyConfig::default(),))
     }
 }
 ```
 
-Every impl declares `type Deps` — set it to `()` unless the plugin consumes
-an application bean (see
-[Consuming application beans](#consuming-application-beans)).
+`build` may await (connect to a backend, run migrations…) and may fail — an
+`Err` aborts startup with an error naming the plugin. Every impl declares
+`type Deps`; set it to `()` unless the plugin consumes an application bean.
 
 ### Consuming application beans
 
-A pre-state plugin has a **two-stage lifecycle**: `install` (before
-`build_state()`) and `configure` (after it). `install` runs pre-state and never
-sees resolved beans. `Deps` is the plugin's single dependency list: it is
-appended to the builder's requirement list and verified against the **final**
-provision list at `build_state()` — nothing is checked at the `.plugin()` call
-site, so the order between `.plugin()`, `.provide()`, and `.register()` calls
-does not matter. `Deps` can name **any** bean — provided, factory-built
-(`.register::<T>()`), or provided by another plugin. A missing dep is a guided
-compile error ("missing `.provide::<X>()` or `.register::<X>()`"). The resolved
-beans are passed **by value** to `configure`:
+`Deps` names the beans the plugin builds from. They are **real edges in the
+bean graph**: constructed before `build` runs and handed to it by value. Any
+bean qualifies — `.provide()`-d, factory-built (`.register::<T>()`), or
+provided by another plugin. `Deps` is verified against the **final** provision
+list at `build_state()`, so the order between `.plugin()`, `.provide()`, and
+`.register()` calls does not matter; a missing dep is a guided compile error
+("missing `.provide::<X>()` or `.register::<X>()`").
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 
 pub struct MetricsExporter;
 
 impl PreStatePlugin for MetricsExporter {
     type Provided = (ExporterHandle,);
-    type Deps = (MetricsRegistry,);   // factory-built is fine — resolved post-state
+    type Deps = (MetricsRegistry,);   // factory-built is fine
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
-        (ExporterHandle::new(),)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (handle,): &(ExporterHandle,),
-        (registry,): Self::Deps,
+        (registry,): (MetricsRegistry,),
         _config: Option<()>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        let handle = handle.clone();
-        ctx.on_serve(move |_sc| handle.bind(registry));
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(ExporterHandle,), PluginBuildError> {
+        let handle = ExporterHandle::connect().await?;
+        let h = handle.clone();
+        ctx.on_serve(move |_sc| h.bind(registry));
+        Ok((handle,))
     }
 }
 
@@ -214,75 +215,51 @@ AppBuilder::new()
     .build_state().await
 ```
 
-`configure` gets a borrowed copy of the plugin's `Provided`, the resolved
-`Deps` (by value), and a `DeferredContext` (same surface as deferred actions).
-Its default is a no-op.
+Because deps arrive before `build`, a provided bean that depends on another
+bean is constructed **directly** — there is no shell/fill pattern anymore.
+(`r2e::Late<T>` still exists as an escape hatch for genuinely post-boot
+fills.)
 
-**Provided bean needs a dep?** `install` cannot construct it (deps are not
-resolved yet). Provide a **shell** over `r2e::Late<T>` — a `Clone`, Arc-shared,
-first-write-wins write-once cell — and fill it post-state: sync via
-`late.fill(value)` in `configure`, or async via
-`ctx.run_post_construct::<Bean>()` (awaited inside `build_state()`). Read with
-`Late::get() -> Option<&T>` or `Late::expect("what")`. See
-[Custom Plugins](../advanced/custom-plugins.md#compile-time-dependency-checking)
-for a worked example.
+### Effects: layers, hooks, plugin data
 
-### Deferred actions
-
-For plugins that need to perform setup after state construction, call the
-context's sugar methods directly — pass plain closures, no `Box`, no
-`DeferredAction`:
+Side effects are registered on the `PluginBuildContext` during `build` — plain
+closures, no `Box`:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
-
-impl PreStatePlugin for MyPlugin {
-    type Provided = (MyToken,);
-    type Deps = ();
-    type Config = ();
-
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
-        let token = MyToken::new();
-        let t = token.clone();
-        ctx.add_layer(|router| router);
-        ctx.on_serve(|_serve_ctx| { /* run when server starts */ });
-        ctx.on_shutdown(move || { t.cancel(); });
-        (token,)
-    }
+async fn build(
+    self,
+    _deps: (),
+    _config: Option<()>,
+    ctx: &mut PluginBuildContext,
+) -> Result<(MyToken,), PluginBuildError> {
+    let token = MyToken::new();
+    let t = token.clone();
+    ctx.add_layer(|router| router);              // Tower layer
+    ctx.on_serve(|_serve_ctx| { /* server starting */ });
+    ctx.on_shutdown(move || { t.cancel(); });
+    Ok((token,))
 }
 ```
 
-`PluginInstallContext` provides:
-- `add_layer()` — add a Tower layer
-- `wrap_router()` — add an outermost transport-level router transform
-- `store_data()` — store data in the builder
-- `on_serve()` — register a serve hook
-- `on_shutdown()` / `on_shutdown_async()` — register a shutdown hook
+`PluginBuildContext` provides:
+- `enabled()` — the `<prefix>.enabled` config gate (default `true`)
+- `graph()` — a `GraphHandle` on the final resolved graph (fills at the end of `build_state()`)
+- `config_raw()` — the loaded `R2eConfig`, if any
+- `add_layer()` / `wrap_router()` — router layers / outermost router transform
+- `store_data()` — type-keyed plugin data for post-state coordination
+- `on_serve()` / `on_shutdown()` / `on_shutdown_async()` — lifecycle hooks
+- `after_build()` — boot-time escape hatch with full-graph access
 
-These calls are buffered and flushed as a single deferred action after
-`build_state()`. For advanced control, `ctx.add_deferred(DeferredAction::new(..))`
-is the low-level escape hatch (it runs before the buffered sugar action).
+Effects are buffered and applied after the graph resolves, **in plugin install
+order** (builds themselves run in dependency order) — and dropped entirely
+when the plugin is disabled via `<prefix>.enabled: false` (while `build` still
+runs, so the beans exist; check `ctx.enabled()` and return a cheap disabled
+variant).
 
-### Multiple provided beans
-
-To provide **multiple** beans, widen the `Provided` tuple and return all of
-them — still on the simple `PreStatePlugin` path, no builder generics:
-
-```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
-
-pub struct MultiProvider;
-
-impl PreStatePlugin for MultiProvider {
-    type Provided = (TokenA, TokenB);
-    type Deps = ();
-    type Config = ();
-
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (TokenA, TokenB) {
-        (TokenA::new(), TokenB::new())
-    }
-}
-```
+There is also a rare pre-graph hook, `fn setup(&mut self, &mut
+PluginSetupContext)` (default no-op), for the few things that must happen at
+`.plugin()` time — e.g. `store_data` that other subsystems read even when the
+plugin is disabled.
 
 The lower-level `RawPreStatePlugin` trait (`#[doc(hidden)]`, HList-based) still
 backs `.plugin()` via a blanket impl, but you only need to implement it directly

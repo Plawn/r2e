@@ -962,8 +962,12 @@ impl<P, R> AppBuilder<NoState, P, R, TNil> {
     ///
     /// **Controllers are not supported on this path**: controller cores are
     /// constructed from the bean context, which is empty here — registering a
-    /// controller with `#[inject]` fields panics at startup. Use it only for
-    /// plugin/raw-router apps (`register_routes`, `merge_router`).
+    /// controller with `#[inject]` fields panics at startup.
+    /// **Pre-state plugins don't run either**: their `build` executes as a
+    /// bean-graph node inside `build_state()`, so on this path their beans,
+    /// layers, and routes never materialize. Use it only for raw-router apps
+    /// (`register_routes`, `merge_router`); an app with no beans that needs
+    /// plugins should call `.build_state().await` (state = empty HList).
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
         AppBuilder::<S>::from_pre(
             self.shared,
