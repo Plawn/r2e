@@ -25,3 +25,4 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+sqlx = { workspace = true, features = ["postgres"] }

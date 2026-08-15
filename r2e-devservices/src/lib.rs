@@ -24,6 +24,10 @@
 //! Set `R2E_DEVSERVICES_KEEP=1` to disable reaping for post-mortem inspection.
 //! [`start()`](DevPostgres::start) gives an isolated container whose normal
 //! lifetime follows the returned handle, with Ryuk as a crash-safe fallback.
+//! Both paths accept a custom image — [`PostgresImage`] for
+//! [`start_with_image`](DevPostgres::start_with_image) /
+//! [`shared_with_image`](DevPostgres::shared_with_image), one shared container
+//! per image.
 //!
 //! Feature flags: `postgres`, `redis`, `openfga`.
 
@@ -35,7 +39,7 @@ mod ryuk;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "postgres")]
-pub use postgres::DevPostgres;
+pub use postgres::{DevPostgres, PostgresImage};
 
 #[cfg(feature = "redis")]
 mod redis;

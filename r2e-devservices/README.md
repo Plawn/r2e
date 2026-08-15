@@ -36,6 +36,21 @@ async fn users_are_persisted() {
 }
 ```
 
+A different image (repository *and* tag) works too — useful for distributions
+that ship extra extensions. The image is part of the container's identity, so
+each image gets its own shared container:
+
+```rust
+use r2e_devservices::{DevPostgres, PostgresImage};
+
+let pg = DevPostgres::shared_with_image(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+sqlx::query("CREATE EXTENSION IF NOT EXISTS vector").execute(&pool).await?;
+```
+
+`PostgresImage::default()` is `postgres:16-alpine`. The image must keep the
+official one's defaults: credentials `postgres`/`postgres`, database
+`postgres`, port 5432. `start_with_image` is the isolated counterpart.
+
 ### Redis
 
 ```rust
