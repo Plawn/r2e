@@ -470,12 +470,18 @@ impl BeanContext {
 
 /// Async factory: takes BeanContext by value (to avoid lifetime issues with
 /// async captures), returns the context back along with the constructed bean.
+/// Fallible: a plugin `build` node surfaces its error as
+/// [`BeanError::PluginBuild`]; ordinary bean factories are infallible and
+/// always return `Ok`.
 type Factory = Box<
     dyn FnOnce(
             BeanContext,
-        )
-            -> Pin<Box<dyn Future<Output = (BeanContext, Box<dyn Any + Send + Sync>)> + Send>>
-        + Send,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<(BeanContext, Box<dyn Any + Send + Sync>), BeanError>>
+                    + Send,
+            >,
+        > + Send,
 >;
 
 /// A post-construct callback that runs after all beans are resolved.
@@ -777,6 +783,11 @@ pub enum BeanError {
     MissingConfigKeys(crate::config::ConfigValidationError),
     /// A post-construct hook failed.
     PostConstruct(String),
+    /// A plugin's `build` returned an error; startup is aborted.
+    PluginBuild {
+        plugin: &'static str,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 impl fmt::Display for BeanError {
@@ -809,11 +820,21 @@ impl fmt::Display for BeanError {
             BeanError::PostConstruct(msg) => {
                 write!(f, "Post-construct hook failed: {}", msg)
             }
+            BeanError::PluginBuild { plugin, source } => {
+                write!(f, "Plugin '{}' failed to build: {}", plugin, source)
+            }
         }
     }
 }
 
-impl std::error::Error for BeanError {}
+impl std::error::Error for BeanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BeanError::PluginBuild { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl BeanRegistry {
     /// Create a new, empty registry.
@@ -946,7 +967,7 @@ impl BeanRegistry {
                     Box::pin(async move {
                         let bean = T::build(&ctx);
                         let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
-                        (ctx, boxed)
+                        Ok((ctx, boxed))
                     })
                 }),
                 post_construct: None,
@@ -999,7 +1020,7 @@ impl BeanRegistry {
                     Box::pin(async move {
                         let bean = T::build(&ctx).await;
                         let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
-                        (ctx, boxed)
+                        Ok((ctx, boxed))
                     })
                 }),
                 post_construct: None,
@@ -1277,7 +1298,7 @@ impl BeanRegistry {
                     let config = ctx.get::<crate::config::R2eConfig>();
                     let bean = factory(&config);
                     let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
-                    (ctx, boxed)
+                    Ok((ctx, boxed))
                 })
             }),
             post_construct: None,
@@ -1313,7 +1334,7 @@ impl BeanRegistry {
                 Box::pin(async move {
                     let output = P::produce(&ctx).await;
                     let boxed: Box<dyn Any + Send + Sync> = Box::new(output);
-                    (ctx, boxed)
+                    Ok((ctx, boxed))
                 })
             }),
             post_construct: None,
@@ -1579,7 +1600,7 @@ impl BeanRegistry {
 
             // Construct beans in order (async)
             Self::construct_beans_in_order(self.beans, sorted_order, entries, reused_instances)
-                .await
+                .await?
         };
 
         // Fill bean decorator slots from the fully-resolved graph, BEFORE any
@@ -2111,7 +2132,7 @@ impl BeanRegistry {
         sorted_order: Vec<usize>,
         entries: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
         mut reused_instances: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    ) -> BeanContext {
+    ) -> Result<BeanContext, BeanError> {
         let mut bean_data: Vec<Option<(TypeId, Factory)>> = beans
             .into_iter()
             .map(|r| Some((r.type_id, r.factory)))
@@ -2128,11 +2149,11 @@ impl BeanRegistry {
                 ctx = ctx.with_new_entry(type_id, inst);
                 continue;
             }
-            let (returned_ctx, bean_value) = factory(ctx).await;
+            let (returned_ctx, bean_value) = factory(ctx).await?;
             ctx = returned_ctx.with_new_entry(type_id, bean_value);
         }
 
-        ctx
+        Ok(ctx)
     }
 }
 
