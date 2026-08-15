@@ -39,9 +39,9 @@ Almost the entire plugin is uncovered. The existing `plugin_provides_fga_client`
 | `boot_resolve_model_verify_matches` | Verify mode, model matches → Ok (L505-513) |
 | `boot_resolve_model_verify_pinned` | Verify mode with `model_id` → ReadAuthorizationModel by id (L476-501) |
 | `boot_resolve_model_verify_mismatch` | Verify mode, model differs → BootError with diff (L575-591) |
-| `lazy_backend_not_ready` | `LazyBackend` before boot → `NotReady` error (L604+) |
+| `disabled_backend_fails_closed` | `DisabledBackend` → `Disabled` error (plugin disabled) |
 | `disabled_plugin_skips_boot` | `enabled: false` → no post_construct, checks fail closed (L188-195) |
-| `invalid_model_json_panics_at_install` | Bad model JSON → install-time panic (L200-202) |
+| `invalid_model_json_fails_boot` | Bad model JSON → build_state error (boot compiles the model) |
 
 **Blocker**: All boot paths require a real or mocked gRPC `OpenFgaServiceClient<Channel>`. Either:
 - Use `r2e-devservices` `DevOpenFga` container (integration test)
@@ -207,7 +207,7 @@ The `validate_config()` function is pure — it panics on bad input without I/O.
 | `validate_config_stores_defaults` | L245-253 |
 | `validate_config_accepts_store_id_only` | L230 |
 | `validate_config_accepts_store_name_only` | L231 |
-| `invalid_model_json_panics_at_install` | L200-202 |
+| `invalid_model_json_fails_boot` | boot() |
 
 **Blocker**: `validate_config` is private. Needs `#[doc(hidden)] pub` or a test helper, or test via `OpenFga::model().install()` with crafted config.
 
@@ -255,7 +255,7 @@ Use `r2e-devservices` `DevOpenFga` — real server, tests the actual gRPC wire f
 | `boot_resolve_model_verify_mismatch` | verify mode, model differs → BootError (L575-591) |
 | `boot_resolve_model_verify_pinned` | verify + model_id → ReadAuthorizationModel by id (L476-501) |
 | `disabled_plugin_skips_boot` | enabled=false, no connection attempt (L188-195) |
-| `lazy_backend_not_ready_before_boot` | LazyBackend.check/write before boot → NotReady (L604+) |
+| `disabled_backend_fails_closed` | DisabledBackend.check/write → Disabled (plugin disabled) |
 | `grpc_check_roundtrip` | GrpcBackend::check() → CheckRequest → response (L211-237) |
 | `grpc_write_tuple_roundtrip` | GrpcBackend::write_tuple() (L240-268) |
 | `grpc_delete_tuple_roundtrip` | GrpcBackend::delete_tuple() (L271-299) |
