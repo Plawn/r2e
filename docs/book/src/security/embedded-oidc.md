@@ -9,7 +9,7 @@ It is not a full browser-facing OpenID Connect Provider: it does not implement a
 Enable the `oidc` feature:
 
 ```toml
-r2e = { version = "0.1", features = ["security", "oidc"] }
+r2e = { version = "0.3", features = ["security", "oidc"] }
 ```
 
 ## Quick start

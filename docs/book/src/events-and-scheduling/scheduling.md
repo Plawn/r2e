@@ -7,7 +7,7 @@ R2E provides declarative background task scheduling with interval, cron, and del
 Enable the scheduler feature and install the `Scheduler` plugin:
 
 ```toml
-r2e = { version = "0.1", features = ["scheduler"] }   # pulls in "executor"
+r2e = { version = "0.3", features = ["scheduler"] }   # pulls in "executor"
 ```
 
 ```rust

@@ -7,7 +7,7 @@ R2E provides first-class gRPC support with the same developer experience as HTTP
 Enable the gRPC feature:
 
 ```toml
-r2e = { version = "0.1", features = ["grpc"] }
+r2e = { version = "0.3", features = ["grpc"] }
 ```
 
 Add the runtime proto crates and the R2E build helper that compiles your protos:
@@ -19,7 +19,7 @@ tonic-prost = "0.14"
 prost = "0.14"
 
 [build-dependencies]
-r2e-grpc-build = "0.1"
+r2e-grpc-build = "0.3"
 ```
 
 ## Defining a proto file
@@ -273,7 +273,7 @@ This requires the `reflection` feature on `r2e-grpc` (`grpc-reflection` on the `
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["grpc", "grpc-reflection"] }
+r2e = { version = "0.3", features = ["grpc", "grpc-reflection"] }
 ```
 
 With reflection enabled, clients can discover services without the proto file:

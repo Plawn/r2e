@@ -11,7 +11,7 @@ Enable one driver and add SQLx for its query API:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["sqlx-postgres"] }
+r2e = { version = "0.3", features = ["sqlx-postgres"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres"] }
 ```
 
@@ -59,7 +59,7 @@ Enable the matching Diesel backend:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["diesel-postgres"] }
+r2e = { version = "0.3", features = ["diesel-postgres"] }
 diesel = { version = "2", features = ["postgres", "r2d2"] }
 ```
 

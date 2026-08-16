@@ -9,7 +9,7 @@ Custom backends (Kafka, Redis, NATS) can implement the `EventBus` trait for remo
 Enable the events feature:
 
 ```toml
-r2e = { version = "0.1", features = ["events"] }
+r2e = { version = "0.3", features = ["events"] }
 ```
 
 ## Defining events
