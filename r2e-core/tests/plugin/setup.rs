@@ -141,7 +141,7 @@ async fn setup_actions_execute_in_documented_order() {
     let stop = prepared.stop_handle();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await

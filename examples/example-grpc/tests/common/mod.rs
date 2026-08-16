@@ -43,7 +43,7 @@ pub async fn connect_channel(port: u16) -> tonic::transport::Channel {
 /// drain on the separate-port transport.
 pub async fn stop_and_await_clean(
     stop: r2e::prelude::StopHandle,
-    server: tokio::task::JoinHandle<Result<(), String>>,
+    server: r2e::rt::JobHandle<Result<(), String>>,
 ) {
     stop.stop();
     let result = tokio::time::timeout(Duration::from_secs(5), server)

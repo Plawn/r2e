@@ -104,7 +104,7 @@ async fn reflection_lists_services_on_separate_port() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{http_port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+    let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     let channel = connect_channel(grpc_port).await;
     assert_list_services(channel.clone()).await;
@@ -169,7 +169,7 @@ async fn reflection_lists_services_multiplexed() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+    let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     let channel = connect_channel(port).await;
     assert_list_services(channel).await;

@@ -60,7 +60,7 @@ impl ClientRegistry {
         hash_str: String,
         client_secret: String,
     ) -> Result<bool, UserStoreError> {
-        tokio::task::spawn_blocking(move || verify_secret(&hash_str, &client_secret))
+        r2e_core::rt::spawn_blocking(move || verify_secret(&hash_str, &client_secret))
             .await
             .map_err(|e| {
                 UserStoreError::new(format!("client secret verification task failed: {e}"))

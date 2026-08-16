@@ -442,7 +442,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .await
         .prepare("127.0.0.1:0");
     let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let first_server = tokio::spawn(async move {
+    let first_server = r2e_core::rt::spawn(async move {
         first
             .run_with_listener(first_listener)
             .await
@@ -459,7 +459,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .prepare("127.0.0.1:0");
     let stop = second.stop_handle();
     let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let second_server = tokio::spawn(async move {
+    let second_server = r2e_core::rt::spawn(async move {
         second
             .run_with_listener(second_listener)
             .await

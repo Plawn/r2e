@@ -188,7 +188,7 @@ async fn serve_then_stop<S: Clone + Send + Sync + 'static>(app: r2e_core::AppBui
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await

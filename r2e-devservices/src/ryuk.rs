@@ -67,6 +67,10 @@ async fn start() -> RyukLease {
         }
         .await;
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "r2e-devservices has no r2e-core dependency; this blocking probe is runtime-neutral test plumbing"
+        )]
         let attempt_error = if let Some((host, port)) = endpoint {
             let filter = filter.clone();
             match tokio::task::spawn_blocking(move || {

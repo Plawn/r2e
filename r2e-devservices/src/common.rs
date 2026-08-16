@@ -232,6 +232,10 @@ pub(crate) async fn wait_tcp_ready(host: &str, port: u16, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let probe_host = host.clone();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "r2e-devservices has no r2e-core dependency; this blocking probe is runtime-neutral test plumbing"
+        )]
         let reachable = tokio::task::spawn_blocking(move || {
             use std::io::Read;
             use std::net::{TcpStream, ToSocketAddrs};

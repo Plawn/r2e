@@ -113,7 +113,7 @@ where
         let mut connection = self.connection.take().ok_or_else(|| {
             HttpError::internal("managed Diesel transaction has already been finalized")
         })?;
-        let joined = tokio::task::spawn_blocking(move || {
+        let joined = r2e_core::rt::spawn_blocking(move || {
             let result = operation(&mut connection);
             (connection, result)
         })
@@ -303,7 +303,7 @@ where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    r2e_core::rt::spawn_blocking(operation)
         .await
         .map_err(|error| ManagedErr(HttpError::internal(format!("Diesel task failed: {error}"))))?
         .map_err(|error| ManagedErr(HttpError::internal(error)))

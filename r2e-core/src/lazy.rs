@@ -135,6 +135,10 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
 /// that circularly re-touches the bean being resolved on this thread
 /// deadlocks instead of panicking with a cycle trace. Same-thread detection
 /// on the main runtime is unaffected (this helper is never used there).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "deliberate placement on the captured boot-runtime handle — rt::spawn would land on the (wrong) current runtime"
+)]
 fn resolve_on<T>(handle: &tokio::runtime::Handle, factory: LazyFactory<T>, runtime_desc: &str) -> T
 where
     T: Send + 'static,

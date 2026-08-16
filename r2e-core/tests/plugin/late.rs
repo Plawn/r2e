@@ -321,7 +321,7 @@ async fn a_tracked_drain_task_still_reaches_the_graph_after_the_router_is_gone()
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
+    let server = r2e_core::rt::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     stop.stop();
     assert!(
@@ -400,7 +400,7 @@ async fn a_task_abandoned_by_the_grace_period_still_owns_its_graph() {
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
+    let server = r2e_core::rt::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     stop.stop();
     assert!(

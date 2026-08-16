@@ -354,7 +354,7 @@ async fn cancelled_shutdown_stops_the_retry_loop() {
 
     let token = CancellationToken::new();
     let ctx = ConfigWatchContext::new("test", token.clone());
-    let task = tokio::spawn(r2e_core::config::supervise_config_watch_with_backoff(
+    let task = r2e_core::rt::spawn(r2e_core::config::supervise_config_watch_with_backoff(
         provider,
         ctx,
         ConfigUpdateSink::new(registry),
@@ -414,7 +414,7 @@ async fn cancelled_shutdown_aborts_an_in_flight_watch() {
 
     let token = CancellationToken::new();
     let ctx = ConfigWatchContext::new("test", token.clone());
-    let task = tokio::spawn(r2e_core::config::supervise_config_watch_with_backoff(
+    let task = r2e_core::rt::spawn(r2e_core::config::supervise_config_watch_with_backoff(
         provider,
         ctx,
         ConfigUpdateSink::new(registry),

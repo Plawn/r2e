@@ -339,7 +339,7 @@ where
             // whose database is unreachable surfaces as 503/504 here instead of
             // stalling the first query.
             let factory = Arc::clone(&self.factory);
-            let pool = tokio::task::spawn_blocking(move || factory(dsn))
+            let pool = r2e_core::rt::spawn_blocking(move || factory(dsn))
                 .await
                 .map_err(|error| {
                     Box::new(PoolError(format!("pool build task failed: {error}"))) as BoxError

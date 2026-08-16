@@ -199,7 +199,7 @@ impl UserStore for InMemoryUserStore {
         let password = password.to_string();
         async move {
             // Run argon2 verification in a blocking task to avoid blocking the async runtime.
-            let matches = tokio::task::spawn_blocking(move || verify_secret(&hash_str, &password))
+            let matches = r2e_core::rt::spawn_blocking(move || verify_secret(&hash_str, &password))
                 .await
                 .map_err(|e| {
                     UserStoreError::new(format!("password verification task failed: {e}"))
@@ -234,7 +234,7 @@ impl UserStore for InMemoryUserStore {
                 None => (None, dummy_hash),
             };
 
-            let matches = tokio::task::spawn_blocking(move || verify_secret(&hash_str, &password))
+            let matches = r2e_core::rt::spawn_blocking(move || verify_secret(&hash_str, &password))
                 .await
                 .map_err(|e| {
                     UserStoreError::new(format!("password verification task failed: {e}"))

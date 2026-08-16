@@ -107,7 +107,7 @@ async fn a_panicking_tick_factory_disables_its_job_without_killing_the_driver() 
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),

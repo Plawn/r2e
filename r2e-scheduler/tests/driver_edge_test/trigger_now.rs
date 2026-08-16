@@ -32,7 +32,7 @@ async fn trigger_now_against_a_closed_pool_stops_the_driver() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         pool.clone(),
@@ -84,7 +84,7 @@ async fn a_trigger_now_factory_panic_leaves_the_cadence_deadline_alone() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),

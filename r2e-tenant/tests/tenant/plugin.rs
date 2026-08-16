@@ -539,7 +539,7 @@ where
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
+    let server = r2e_core::rt::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
     tokio::time::sleep(Duration::from_millis(50)).await;
     f().await;
     stop.stop();

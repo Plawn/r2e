@@ -24,7 +24,7 @@ async fn bean_context_clone_shares_lazy_slots() {
     let snapshot = ctx.clone();
 
     // Resolve through the clone; the original must see the cached value.
-    let (ctx, snapshot) = tokio::spawn(async move {
+    let (ctx, snapshot) = r2e_core::rt::spawn(async move {
         assert_eq!(snapshot.get::<LazyCounter>().n, 5);
         assert_eq!(ctx.get::<LazyCounter>().n, 5);
         (ctx, snapshot)

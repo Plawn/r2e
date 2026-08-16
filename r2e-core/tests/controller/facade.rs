@@ -59,7 +59,7 @@ async fn concurrent_identities_are_isolated() {
     let mut handles = Vec::new();
     for i in 0..N {
         let router = router.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(r2e_core::rt::spawn(async move {
             let user = format!("user-{i}");
             let (status, body) = req(router, "/who", Some(&user), None).await;
             assert_eq!(status, StatusCode::OK);
@@ -106,7 +106,7 @@ async fn request_scope_field_is_isolated() {
     let mut handles = Vec::new();
     for i in 0..N {
         let router = router.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(r2e_core::rt::spawn(async move {
             let tenant = format!("tenant-{i}");
             let (status, body) = req(router, "/tenant", None, Some(&tenant)).await;
             assert_eq!(status, StatusCode::OK);

@@ -51,7 +51,7 @@ async fn lazy_bean_constructed_on_first_get_only() {
     );
 
     // Lazy first-touch uses `block_in_place`, which needs a worker thread.
-    let ctx = tokio::spawn(async move {
+    let ctx = r2e_core::rt::spawn(async move {
         assert_eq!(ctx.get::<LazyCounter>().n, 5);
         assert_eq!(ctx.get::<LazyCounter>().n, 5);
         ctx
@@ -96,7 +96,7 @@ async fn lazy_to_lazy_dependency_resolves_on_first_get() {
     let ctx = reg.resolve().await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    let outer = tokio::spawn(async move { ctx.get::<LazyOuter>() })
+    let outer = r2e_core::rt::spawn(async move { ctx.get::<LazyOuter>() })
         .await
         .unwrap();
     assert_eq!(outer.inner_n, 5);
@@ -126,7 +126,7 @@ async fn lazy_async_bean_resolves_on_first_get() {
     reg.register_async::<LazyAsyncThing>();
     let ctx = reg.resolve().await.unwrap();
 
-    let thing = tokio::spawn(async move { ctx.get::<LazyAsyncThing>() })
+    let thing = r2e_core::rt::spawn(async move { ctx.get::<LazyAsyncThing>() })
         .await
         .unwrap();
     assert_eq!(thing.n, 9);
@@ -209,7 +209,7 @@ async fn lazy_default_superseded_by_later_registration() {
     reg.register::<LazyCounter>();
     let ctx = reg.resolve().await.unwrap();
 
-    let n = tokio::spawn(async move { ctx.get::<LazyCounter>().n })
+    let n = r2e_core::rt::spawn(async move { ctx.get::<LazyCounter>().n })
         .await
         .unwrap();
     assert_eq!(n, 5);

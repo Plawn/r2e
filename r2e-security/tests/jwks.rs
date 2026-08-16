@@ -10,10 +10,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TEST_JWKS: &str = r#"{"keys":[{"kid":"test-key","kty":"RSA","alg":"RS256","use":"sig","key_ops":["verify"],"n":"AQ","e":"AQAB"}]}"#;
 
-async fn serve_jwks_once() -> (String, tokio::task::JoinHandle<()>) {
+async fn serve_jwks_once() -> (String, r2e_core::rt::JobHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut request = [0_u8; 1024];
         let _ = stream.read(&mut request).await.unwrap();

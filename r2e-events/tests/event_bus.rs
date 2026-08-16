@@ -378,7 +378,7 @@ async fn test_concurrent_subscribes() {
     for _ in 0..10 {
         let bus = bus.clone();
         let c = counter.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(r2e_core::rt::spawn(async move {
             bus.subscribe(move |_: EventEnvelope<TestEvent>| {
                 let c = c.clone();
                 async move {
@@ -716,7 +716,7 @@ async fn test_stress_concurrent_emit() {
     let mut handles = Vec::new();
     for _ in 0..10 {
         let bus = bus.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(r2e_core::rt::spawn(async move {
             for _ in 0..10 {
                 emit_and_drain(&bus, TestEvent { value: 1 }).await;
             }

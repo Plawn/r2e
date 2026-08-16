@@ -118,7 +118,7 @@ async fn plugin_pre_destroy_runs_on_shutdown_after_plugin_hooks() {
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -192,7 +192,7 @@ async fn a_panicking_shutdown_hook_does_not_swallow_the_next_one() {
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await

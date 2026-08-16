@@ -242,6 +242,11 @@ async fn handle_h3_connection(
         match h3_conn.accept().await {
             Ok(Some(resolver)) => {
                 let router = router.clone();
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "r2e-http sits below r2e-core and cannot call rt::spawn; \
+                              per-request H3 streams belong on the current (data-plane) runtime anyway"
+                )]
                 tokio::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {

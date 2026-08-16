@@ -94,7 +94,7 @@ async fn executor_rejection_still_awaits_the_tick_already_in_flight() {
     let pool = test_pool();
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         CancellationToken::new(),
         pool.clone(),
@@ -165,7 +165,7 @@ async fn a_command_issued_from_a_tick_during_shutdown_does_not_deadlock() {
 
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -225,7 +225,7 @@ async fn a_command_queued_before_cancellation_cannot_start_a_tick() {
         for _ in 0..4 {
             let h = handle.clone();
             let entered = entered.clone();
-            triggers.push(tokio::spawn(async move {
+            triggers.push(r2e_core::rt::spawn(async move {
                 entered.fetch_add(1, Ordering::SeqCst);
                 h.trigger_now("idle_job").await
             }));
@@ -240,7 +240,7 @@ async fn a_command_queued_before_cancellation_cannot_start_a_tick() {
 
         let boxed: Box<dyn ScheduledTask> = Box::new(task);
         let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-        let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+        let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
             jobs,
             cancel.clone(),
             test_pool(),

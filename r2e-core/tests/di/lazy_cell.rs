@@ -56,7 +56,7 @@ async fn lazy_clone_shares_cell() {
 #[r2e_core::test]
 async fn resolve_lazy_factory_on_multi_thread_runtime() {
     // Run on a real worker thread: `block_in_place` requires one.
-    let value = tokio::spawn(async {
+    let value = r2e_core::rt::spawn(async {
         r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 5u32 })))
     })
     .await
@@ -131,7 +131,7 @@ fn resolve_lazy_factory_falls_back_on_current_thread_runtime() {
 /// identifies where a control-plane-resolved factory actually ran.
 fn single_worker_id(rt: &tokio::runtime::Runtime) -> std::thread::ThreadId {
     rt.block_on(async {
-        tokio::spawn(async { std::thread::current().id() })
+        r2e_core::rt::spawn(async { std::thread::current().id() })
             .await
             .unwrap()
     })
@@ -242,7 +242,7 @@ async fn circular_lazy_dependency_panics_with_cycle_trace() {
     // first-touch time.
     let ctx = reg.resolve().await.unwrap();
 
-    let err = tokio::spawn(async move {
+    let err = r2e_core::rt::spawn(async move {
         let _ = ctx.get::<CycleLazyA>();
     })
     .await

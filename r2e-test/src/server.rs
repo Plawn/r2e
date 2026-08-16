@@ -22,7 +22,7 @@ impl TestServer {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-        tokio::spawn(async move {
+        r2e_core::rt::spawn(async move {
             // Match the production serve paths: install `ConnectInfo<SocketAddr>`
             // so guards that key on the peer address (per-IP rate limiting) see
             // a client address in live-TCP tests.

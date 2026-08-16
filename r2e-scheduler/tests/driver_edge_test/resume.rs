@@ -51,7 +51,7 @@ async fn resume_revives_a_factory_disabled_skip_job() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -137,7 +137,7 @@ async fn pause_then_resume_does_not_double_arm() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -214,7 +214,7 @@ async fn a_concurrent_factory_panic_keeps_the_deadline_it_already_armed() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -297,7 +297,7 @@ async fn resume_reports_false_when_the_schedule_can_never_fire_again() {
     );
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -377,7 +377,7 @@ async fn resume_reports_false_when_the_in_flight_tick_is_the_last_occurrence() {
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -447,7 +447,7 @@ async fn resume_reports_true_while_a_healthy_skip_tick_is_in_flight() {
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),

@@ -29,7 +29,7 @@ async fn next_run_is_none_while_a_skip_tick_holds_the_job_off_the_clock() {
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -103,7 +103,7 @@ async fn a_pool_closed_submission_leaves_no_deadline_published() {
     let (_handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         pool,
@@ -145,7 +145,7 @@ async fn a_stopped_driver_publishes_no_deadline_for_any_job() {
     let (_handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),

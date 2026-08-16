@@ -24,7 +24,7 @@ async fn rotating_pool_swaps_to_updated_live_config_url() {
     let token = CancellationToken::new();
     let service = pool.clone();
     let service_token = token.clone();
-    let handle = tokio::spawn(async move {
+    let handle = r2e_core::rt::spawn(async move {
         service.start(service_token).await;
     });
 

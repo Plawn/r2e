@@ -30,7 +30,7 @@ async fn cron_pinned_to_the_past_never_arms() {
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -88,7 +88,7 @@ async fn cron_exhausts_after_its_single_occurrence() {
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
@@ -160,7 +160,7 @@ async fn an_unrepresentable_initial_delay_leaves_the_job_unarmed() {
     .into_iter()
     .map(|t| t.into_job())
     .collect();
-    let driver = tokio::spawn(r2e_scheduler::jobs_driver(
+    let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
         cancel.clone(),
         test_pool(),
