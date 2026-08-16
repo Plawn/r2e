@@ -1,5 +1,5 @@
-//! Tests for the `OpenFga` plugin: install-time config validation (offline)
-//! and the boot-time store/model lifecycle (against a real OpenFGA server via
+//! Tests for the `OpenFga` plugin: boot-time config validation (offline)
+//! and the store/model lifecycle (against a real OpenFGA server via
 //! `DevOpenFga` — requires Docker, `#[ignore]`d by default):
 //!
 //! ```bash
@@ -60,32 +60,36 @@ fn unique_store(tag: &str) -> String {
     )
 }
 
-// ── Install-time config validation (offline) ───────────────────────────
+// ── Boot-time config validation (offline) ──────────────────────────────
 
 #[r2e_core::test]
 #[should_panic(expected = "openfga.endpoint")]
-async fn install_panics_without_endpoint() {
+async fn boot_fails_without_endpoint() {
     let config = R2eConfig::from_yaml_str("openfga:\n  store: \"x\"\n").unwrap();
     let _ = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
-        .plugin(OpenFga::model(authz::MODEL));
+        .plugin(OpenFga::model(authz::MODEL))
+        .build_state()
+        .await;
 }
 
 #[r2e_core::test]
 #[should_panic(expected = "openfga.store")]
-async fn install_panics_without_store() {
+async fn boot_fails_without_store() {
     let config =
         R2eConfig::from_yaml_str("openfga:\n  endpoint: \"http://localhost:1\"\n").unwrap();
     let _ = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
-        .plugin(OpenFga::model(authz::MODEL));
+        .plugin(OpenFga::model(authz::MODEL))
+        .build_state()
+        .await;
 }
 
 #[r2e_core::test]
 #[should_panic(expected = "verify mode")]
-async fn install_panics_on_model_id_in_apply_mode() {
+async fn boot_fails_on_model_id_in_apply_mode() {
     let config = R2eConfig::from_yaml_str(
         "openfga:\n  endpoint: \"http://localhost:1\"\n  store: \"x\"\n  model_id: \"m\"\n",
     )
@@ -93,13 +97,24 @@ async fn install_panics_on_model_id_in_apply_mode() {
     let _ = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
-        .plugin(OpenFga::model(authz::MODEL));
+        .plugin(OpenFga::model(authz::MODEL))
+        .build_state()
+        .await;
 }
 
+/// `.plugin()` before `load_config()` is fine: `build` runs inside
+/// `build_state()`, after the graph made `R2eConfig` available.
 #[r2e_core::test]
-#[should_panic(expected = "load_config")]
-async fn install_panics_without_loaded_config() {
-    let _ = AppBuilder::new().plugin(OpenFga::model(authz::MODEL));
+async fn plugin_before_load_config_still_reads_config() {
+    let config = R2eConfig::from_yaml_str("openfga:\n  enabled: false\n").unwrap();
+    let app = AppBuilder::new()
+        .override_config(config)
+        .plugin(OpenFga::model(authz::MODEL))
+        .load_config::<()>()
+        .build_state()
+        .await;
+    let handle = app.state().get::<OpenFgaHandle>();
+    assert!(handle.try_backend().is_none(), "enabled: false was honored");
 }
 
 /// `enabled: false` is a complete off-switch: no connection, no config
@@ -123,7 +138,7 @@ async fn disabled_plugin_boots_offline_and_fails_closed() {
         .check("user:alice", "viewer", "document:readme")
         .await
         .expect_err("disabled plugin must fail closed");
-    assert!(matches!(err, r2e_openfga::OpenFgaError::NotReady));
+    assert!(matches!(err, r2e_openfga::OpenFgaError::Disabled));
 }
 
 // ── Boot lifecycle (Docker) ────────────────────────────────────────────

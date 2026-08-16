@@ -8,7 +8,7 @@ R2E auto-generates an OpenAPI 3.1.0 specification from your controller route met
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["openapi"] }
+r2e = { version = "0.3", features = ["openapi"] }
 ```
 
 **2. Add schemars for request/response schemas:**

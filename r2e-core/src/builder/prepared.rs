@@ -16,6 +16,19 @@ use super::*;
 pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) router: crate::http::Router,
     pub(super) state: T,
+    /// A strong reference to the resolved bean graph, held for the WHOLE
+    /// serving lifecycle — see [`run_inner`](Self::run_inner).
+    ///
+    /// The router's [`GraphKeepAlive`](crate::layers::GraphKeepAlive) layer
+    /// only covers what is derived from the router (request futures, response
+    /// bodies), and the router is dropped the moment the serve future
+    /// completes — i.e. *before* tracked handles are awaited and before the
+    /// shutdown hooks run. Tracked tasks (separate-port gRPC drain,
+    /// `spawn_service`, QUIC endpoint drain) carry their own `Arc`; this field
+    /// covers the rest of the shutdown phase (`on_stop` hooks, in-flight
+    /// WebSocket sessions) so nothing there observes a dead
+    /// [`GraphHandle`](crate::plugin::GraphHandle).
+    pub(super) graph: Arc<crate::beans::BeanContext>,
     pub(super) addr: String,
     pub(super) startup_hooks: Vec<StartupHook<T>>,
     pub(super) shutdown_hooks: Vec<ShutdownHook<T>>,
@@ -215,6 +228,52 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         mut self,
         strategy: ServeStrategy,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // ── Serve-scope graph ownership ─────────────────────────────────────
+        // The graph has three owners, each covering what the others cannot.
+        // NOT a chain of trust in one exit path — every owner stands alone:
+        //
+        //   1. the router's `GraphKeepAlive` layer — request futures and
+        //      response bodies (they outlive the service value, and the body
+        //      outlives the head);
+        //   2. each TRACKED TASK — `ServeContext::track`, `spawn_service`, the
+        //      scheduler driver and the QUIC drain all spawn through
+        //      `ServiceHandles::spawn_owning`, which moves an `Arc` INTO the
+        //      task. Every exit this function controls cancels the token and
+        //      joins those handles (normal shutdown below, and both aborts via
+        //      `abort_started_work`), but the join is still best-effort: an
+        //      elapsed `shutdown_grace_period` drops the join futures, and a
+        //      dropped `run()` future (an `r2e dev` hot patch) joins nothing at
+        //      all. Ownership inside the task is what makes those paths sound;
+        //   3. this local — moved out of `self` so one named binding, not an
+        //      incidental struct field, governs the lifetime. It spans the
+        //      whole normal lifecycle: serve future, tracked-handle join, user
+        //      shutdown hooks. It is the belt over (1)/(2): whatever the
+        //      shutdown phase itself touches (`on_stop` hooks resolving through
+        //      a `GraphHandle`, an in-flight WebSocket session) sees a live
+        //      graph until `run()` returns.
+        //
+        // MUST: work that is neither derived from the router nor spawned
+        // through the tracked lane is outside all three owners. Two known
+        // classes, both bean-owned rather than serve-hook-owned: per-emit
+        // event-bus handler dispatch (`LocalEventBus`/backend pollers spawn
+        // their own tasks) and `PoolExecutor` jobs submitted directly. Both
+        // capture their state strongly; only a body resolving through a
+        // `GraphHandle` can observe `None`, and only after the last owner is
+        // gone.
+        //
+        // Residual window, derived — not assumed: a WebSocket session still
+        // running AFTER `run()` returns. On upgrade, hyper's
+        // `UpgradeableConnection::poll` hands the IO to the upgrade and
+        // immediately returns `Ready(Ok(()))`, so the connection counts as
+        // finished and axum's `on_upgrade` task (detached `tokio::spawn`, empty
+        // 101 body) is watched by neither graceful shutdown nor the tracked
+        // set. In a normal binary that window closes immediately (the runtime
+        // is dropped right after `run()`, taking detached tasks with it); an
+        // embedder that keeps the runtime alive past `run()` must resolve what
+        // a session needs BEFORE its socket loop. See `docs/claude/plugins.md`
+        // § "The graph outlives the router".
+        let serve_scope_graph = self.graph;
+
         #[cfg(feature = "dev-reload")]
         let skip_lifecycle = crate::dev::is_lifecycle_initialized();
         #[cfg(not(feature = "dev-reload"))]
@@ -223,7 +282,29 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // Cancelled when graceful shutdown begins (after drain hooks). Serve
         // hooks receive it via `ServeContext`; the HTTP/QUIC/sharded serving
         // paths observe it as their graceful-shutdown signal.
-        let cancel_token = CancellationToken::new();
+        //
+        // Not a fresh token: this is the app's shutdown ROOT, get-or-inserted
+        // time (`ShutdownRoot` in `plugin_data`) because `spawn_service` has to
+        // derive its per-service child tokens from it before serving starts.
+        // Cancelling here therefore reaches every service task as well.
+        let cancel_token = shutdown_root(&mut self.plugin_data);
+
+        // Cancel-on-any-exit, armed BEFORE the serve hooks that spawn tracked
+        // tasks. A tracked task is *supposed* to stop when this token fires
+        // (that is the contract `ServeContext::shutdown_token` states), so any
+        // path that leaves `run_inner` without firing it strands the task
+        // forever — it keeps its port, and since round 4 it also keeps the
+        // graph alive. The two known aborts (startup-hook `Err`, serve error)
+        // cancel explicitly below so they can also DRAIN; this guard is the
+        // belt that keeps the invariant true for any future early return —
+        // including a panic unwinding out of a hook.
+        let _boot_cancel_guard = cancel_token.clone().drop_guard();
+
+        // Plugin sync shutdown hooks cancel the private tokens handed to
+        // `spawn_service` tasks, so both the normal shutdown future and the
+        // abort paths need them — and neither may run them twice. A run-once
+        // cell shared by both is the whole mechanism.
+        let plugin_shutdown_hooks = PluginShutdownCell::new(self.plugin_shutdown_hooks);
 
         // Get-or-insert the shared post-drain handle collector BEFORE serve
         // hooks run: hooks `track()` into it via `ServeContext`, and it must
@@ -270,14 +351,31 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     tasks: task_registry.clone(),
                     shutdown: cancel_token.clone(),
                     handles: service_handles.clone(),
+                    graph: Arc::clone(&serve_scope_graph),
                 });
             }
 
-            // Run startup hooks
+            // Run startup hooks. They run AFTER the serve hooks, so by now
+            // tracked tasks may already be listening on ports and holding the
+            // graph; an `Err` here must therefore not just return — it has to
+            // wind that work down first (cancel + drain, below).
+            let mut startup_error = None;
             for hook in self.startup_hooks {
-                hook(self.state.clone())
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+                if let Err(e) = hook(self.state.clone()).await {
+                    startup_error = Some(e);
+                    break;
+                }
+            }
+            if let Some(e) = startup_error {
+                abort_started_work(
+                    &cancel_token,
+                    &plugin_shutdown_hooks,
+                    &service_handles,
+                    self.shutdown_grace_period,
+                    "startup hook failed",
+                )
+                .await;
+                return Err(e);
             }
 
             #[cfg(feature = "dev-reload")]
@@ -300,7 +398,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // cycle must therefore retain its shutdown hooks even when startup
         // lifecycle was skipped; otherwise the first no-op patch permanently
         // loses every `#[pre_destroy]` disposer.
-        let plugin_shutdown_hooks = self.plugin_shutdown_hooks;
+        let plugin_hooks_for_shutdown = plugin_shutdown_hooks.clone();
         let async_shutdown_hooks = self.async_shutdown_hooks;
         let drain_hooks = self.drain_hooks;
         let state_for_drain = self.state.clone();
@@ -308,11 +406,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
         // Spawn the QUIC/HTTP3 endpoint (if configured) before the TCP server.
         // In dev-reload mode, the endpoint is cached so the UDP socket
-        // survives across hot-patches without port conflicts. The task handle
-        // joins the tracked set (like gRPC / spawn_service), so the QUIC drain
-        // is awaited in the shutdown phase, bounded by `shutdown_grace_period`.
+        // survives across hot-patches without port conflicts. It is spawned
+        // through the tracked set (like gRPC / spawn_service), so the QUIC
+        // drain is awaited in the shutdown phase — bounded by
+        // `shutdown_grace_period` — and the task owns the graph while it runs.
         #[cfg(feature = "quic")]
-        if let Some(quic_handle) =
+        if let Some(quic_task) =
             self.quic_server_config
                 .take()
                 .and_then(|(addr, server_config)| {
@@ -332,7 +431,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         Ok(endpoint) => {
                             #[cfg(not(feature = "dev-reload"))]
                             let ep_for_close = endpoint.clone();
-                            Some(crate::rt::spawn(async move {
+                            Some(async move {
                                 if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
                                     router,
                                     endpoint,
@@ -347,7 +446,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                                     ep_for_close.close(0u32.into(), b"shutdown");
                                     ep_for_close.wait_idle().await;
                                 }
-                            }))
+                            })
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to bind QUIC endpoint");
@@ -356,7 +455,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     }
                 })
         {
-            service_handles.push(quic_handle);
+            service_handles.spawn_owning(Arc::clone(&serve_scope_graph), quic_task);
         }
 
         let cancel_for_shutdown = cancel_token.clone();
@@ -376,9 +475,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             for hook in drain_hooks {
                 hook(state_for_drain.clone()).await;
             }
-            for hook in plugin_shutdown_hooks {
-                hook();
-            }
+            plugin_hooks_for_shutdown.fire();
             // Ordered async shutdown: plugin async hooks, then controller
             // `#[pre_destroy]` hooks, then bean `#[pre_destroy]` disposers
             // (assembled in that order at build time).
@@ -391,7 +488,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // ── Serve (single-listener or sharded) ──────────────────────────────
         // Only this middle section differs between strategies; the lifecycle
         // start above and the shutdown phase below are shared.
-        let serve_result: Result<(), Box<dyn std::error::Error>> = match strategy {
+        // `Send + Sync` on purpose: the value stays live across the abort
+        // `await` below, so a bare `dyn Error` would make `run()` a non-Send
+        // future. Every arm's error already is Send + Sync; the widening to
+        // `Box<dyn Error>` happens on return.
+        let serve_result: Result<(), Box<dyn std::error::Error + Send + Sync>> = match strategy {
             ServeStrategy::Single(listener) => {
                 info!(addr = %self.addr, "R2E server listening");
                 let svc = self
@@ -409,12 +510,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     )
                     .with_graceful_shutdown(shutdown_future)
                     .await
-                    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
                 } else {
                     crate::http::serve(listener, svc)
                         .with_graceful_shutdown(shutdown_future)
                         .await
-                        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
                 }
             }
             #[cfg(all(
@@ -468,7 +569,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 shutdown_handle.abort();
 
                 match join {
-                    Ok(res) => res.map_err(|e| -> Box<dyn std::error::Error> { e }),
+                    Ok(res) => res,
                     Err(e) => Err(format!("sharded serve task failed: {e}").into()),
                 }
             }
@@ -478,29 +579,32 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             )))]
             ServeStrategy::Sharded { .. } => Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into()),
         };
-        serve_result?;
+        // A serve error is the second abort path: the shutdown future was
+        // dropped mid-`select!` (or aborted, in the sharded path), so the user
+        // drain hooks and the async disposers never ran — but the tracked tasks
+        // it was supposed to stop are running. Same treatment as an aborted
+        // startup: signal, then drain, then return the error.
+        if let Err(e) = serve_result {
+            abort_started_work(
+                &cancel_token,
+                &plugin_shutdown_hooks,
+                &service_handles,
+                self.shutdown_grace_period,
+                "serve failed",
+            )
+            .await;
+            return Err(e);
+        }
 
         // After HTTP drain completes: await tracked JobHandles (spawn_service
         // tasks, serve-hook tasks registered via `ServeContext::track` such
-        // as the gRPC server drain, and the QUIC endpoint drain), then run
-        // user shutdown hooks. Both phases together are bounded by
-        // `shutdown_grace_period` if set.
+        // as the gRPC server drain, the scheduler driver, and the QUIC endpoint
+        // drain), then run user shutdown hooks. Both phases together are
+        // bounded by `shutdown_grace_period` if set.
         let state_for_shutdown = self.state.clone();
         let shutdown_hooks = self.shutdown_hooks;
         let shutdown_phase = async move {
-            let handles = service_handles.drain();
-            if !handles.is_empty() {
-                tracing::info!(count = handles.len(), "Awaiting background tasks to finish");
-                for h in handles {
-                    if let Err(e) = h.await {
-                        if e.is_panic() {
-                            tracing::warn!(error = %e, "background task panicked");
-                        } else if !e.is_cancelled() {
-                            tracing::warn!(error = %e, "background task join error");
-                        }
-                    }
-                }
-            }
+            drain_tracked_handles(&service_handles).await;
 
             for hook in shutdown_hooks {
                 hook(state_for_shutdown.clone()).await;
@@ -518,7 +622,143 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             shutdown_phase.await;
         }
 
+        // Explicit end of the serve-scope ownership window. Note what this
+        // does NOT claim: that everything detached has finished. Tasks the
+        // grace period abandoned may still be running — they carry their own
+        // `Arc` (`ServiceHandles::spawn_owning`), so this drop is not the last
+        // one and the graph lives until the last of them ends.
+        drop(serve_scope_graph);
+
         info!("R2E server stopped");
         Ok(())
     }
+}
+
+/// Run-once holder for the plugin *sync* shutdown hooks.
+///
+/// Those hooks are pure signals: they cancel the per-service tokens handed to
+/// `spawn_service` tasks (see [`AppBuilder::spawn_service`]) *early* — before
+/// the HTTP drain — which is the ordering guarantee the docs make. They are no
+/// longer what keeps those tasks from being stranded: since the per-service
+/// token is a child of the app shutdown root (see `ShutdownRoot`), cancelling
+/// the root reaches them even when no hook runs at all.
+///
+/// Both the normal shutdown future and the abort paths of `run_inner` fire the
+/// cell, and a `FnOnce` cannot be run twice, so the list lives behind a shared
+/// `Option` and each hook is taken out of it exactly once.
+#[derive(Clone)]
+pub(super) struct PluginShutdownCell(Arc<Mutex<Option<SyncShutdownHooks>>>);
+
+/// The plugin sync shutdown hooks, as `PreparedApp` receives them.
+type SyncShutdownHooks = Vec<Box<dyn FnOnce() + Send>>;
+
+impl PluginShutdownCell {
+    fn new(hooks: SyncShutdownHooks) -> Self {
+        Self(Arc::new(Mutex::new(Some(hooks))))
+    }
+
+    /// Run the hooks if nobody has yet. Subsequent calls are no-ops.
+    ///
+    /// Two failure modes are handled explicitly, because a shutdown signal that
+    /// silently stops halfway strands background tasks forever:
+    ///
+    /// - hooks are taken ONE AT A TIME, not as a whole vector: if a hook panics
+    ///   (or this call unwinds for any other reason) the ones not yet run stay
+    ///   in the cell, so a later `fire()` — the abort path, or the drop-guard
+    ///   ordering below — still delivers them;
+    /// - each hook runs inside `catch_unwind`, so one bad plugin cannot stop
+    ///   the rest of the list from being signalled.
+    fn pop(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        // The lock is released before running a hook: a hook is user/plugin
+        // code and must never observe (or deadlock on) this mutex.
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        // Front-first: registration order is the documented firing order.
+        match guard.as_mut() {
+            Some(hooks) if !hooks.is_empty() => Some(hooks.remove(0)),
+            _ => None,
+        }
+    }
+
+    fn fire(&self) {
+        while let Some(hook) = self.pop() {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)) {
+                // The default panic hook already printed the location; repeat
+                // the message here so the shutdown log alone says which hook.
+                let msg = payload
+                    .downcast_ref::<&'static str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("<non-string panic payload>");
+                tracing::error!(panic = %msg, "plugin shutdown hook panicked; continuing shutdown");
+            }
+        }
+        // Mark the cell as spent so a later `fire()` is a cheap no-op.
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// Await every tracked task handle, logging join failures.
+///
+/// The tracked set is the union of `spawn_service` tasks, `ServeContext::track`
+/// tasks (gRPC server drain, scheduler driver, tenant sweeper, …) and the QUIC
+/// endpoint drain. Callers bound this by `shutdown_grace_period`; it never
+/// bounds itself.
+async fn drain_tracked_handles(handles: &ServiceHandles) {
+    let handles = handles.drain();
+    if handles.is_empty() {
+        return;
+    }
+    tracing::info!(count = handles.len(), "Awaiting background tasks to finish");
+    for h in handles {
+        if let Err(e) = h.await {
+            if e.is_panic() {
+                tracing::warn!(error = %e, "background task panicked");
+            } else if !e.is_cancelled() {
+                tracing::warn!(error = %e, "background task join error");
+            }
+        }
+    }
+}
+
+/// Wind down work already started by the serve hooks when the boot aborts.
+///
+/// Called on the two error exits of `run_inner` that happen after serve hooks
+/// ran (a startup hook returning `Err`, and a serve error). Order mirrors the
+/// normal shutdown: signal first (app token, then the plugin hooks that cancel
+/// `spawn_service`'s private tokens), then await the tracked handles under the
+/// same `shutdown_grace_period` policy.
+///
+/// What it deliberately does NOT run: user `on_drain`/`on_stop` hooks and the
+/// async disposers (`#[pre_destroy]`, plugin `on_shutdown_async`). Those are
+/// the shutdown of a *running* app; on an aborted boot the app never served,
+/// and firing them would hand user code a half-initialized world. The caller
+/// still returns the original error, which is what aborts the process.
+async fn abort_started_work(
+    cancel: &CancellationToken,
+    plugin_hooks: &PluginShutdownCell,
+    handles: &ServiceHandles,
+    grace: Option<Duration>,
+    reason: &'static str,
+) {
+    cancel.cancel();
+    plugin_hooks.fire();
+
+    // MUST: nothing here awaits work that is not in `handles`. A task detached
+    // with a bare `rt::spawn` (rather than `ServeContext::track`) is invisible
+    // to this drain — that is why every in-tree plugin routes serve-time work
+    // through `track`.
+    let drain = drain_tracked_handles(handles);
+    match grace {
+        Some(grace) => {
+            if crate::rt::timeout(grace, drain).await.is_err() {
+                tracing::warn!(
+                    reason,
+                    grace_secs = grace.as_secs(),
+                    "Aborting boot: grace period elapsed before background tasks finished"
+                );
+            }
+        }
+        None => drain.await,
+    }
+    tracing::warn!(reason, "R2E boot aborted; background tasks wound down");
 }

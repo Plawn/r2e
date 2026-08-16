@@ -1,2 +1,9 @@
 app:
   greeting: "Hello from the test profile!"
+
+# Proof that plugin config is honored regardless of `.plugin()` /
+# `load_config()` ordering: the Executor plugin's `build` runs inside
+# `build_state()` with config already loaded, so this section applies
+# (see `executor_plugin_honors_config` in tests/app_test.rs).
+executor:
+  max-concurrent: 7

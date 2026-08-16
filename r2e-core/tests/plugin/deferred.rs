@@ -1,10 +1,93 @@
-//! Raw `DeferredContext` / `DeferredAction` mechanics.
+//! Raw `DeferredContext` / `DeferredAction` mechanics, plus the two-orders
+//! contract: builds execute in topological order, effects apply in install
+//! order.
 
 use std::any::Any;
 use std::collections::HashMap;
 
 use r2e_core::builder::ServeContext;
-use r2e_core::plugin::{AsyncShutdownHook, DeferredAction, DeferredContext};
+use r2e_core::plugin::{
+    AsyncShutdownHook, DeferredAction, DeferredContext, PluginBuildContext, PluginBuildError,
+    PreStatePlugin,
+};
+use r2e_core::AppBuilder;
+
+use crate::fixtures::{Alpha, Beta, EventLog};
+
+// ── Two orders: topo builds, install-order effects ──────────────────────────
+
+/// Installed FIRST but depends on `ProducerPlugin`'s bean — so its build runs
+/// SECOND (topological order), while its effects still apply FIRST (install
+/// order).
+struct ConsumerPlugin {
+    log: EventLog,
+}
+
+impl PreStatePlugin for ConsumerPlugin {
+    type Provided = (Beta,);
+    type Deps = (Alpha,);
+    type Config = ();
+
+    async fn build(
+        self,
+        (_alpha,): (Alpha,),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Beta,), PluginBuildError> {
+        self.log.push("build-consumer");
+        let log = self.log.clone();
+        ctx.after_build(move |_dctx| log.push("effect-consumer"));
+        Ok((Beta("consumer".into()),))
+    }
+}
+
+/// Installed SECOND, provides the bean the first plugin depends on.
+struct ProducerPlugin {
+    log: EventLog,
+}
+
+impl PreStatePlugin for ProducerPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type Config = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        self.log.push("build-producer");
+        let log = self.log.clone();
+        ctx.after_build(move |_dctx| log.push("effect-producer"));
+        Ok((Alpha(1),))
+    }
+}
+
+#[r2e_core::test]
+async fn builds_run_in_topo_order_effects_apply_in_install_order() {
+    let log = EventLog::default();
+    let _app = AppBuilder::new()
+        .plugin(ConsumerPlugin { log: log.clone() })
+        .plugin(ProducerPlugin { log: log.clone() })
+        .build_state()
+        .await;
+
+    assert_eq!(
+        log.entries(),
+        vec![
+            // Builds: producer before consumer (topological order — consumer
+            // depends on producer's Alpha despite being installed first).
+            "build-producer",
+            "build-consumer",
+            // Effects: consumer before producer (install order).
+            "effect-consumer",
+            "effect-producer",
+        ]
+    );
+}
+
+// ── Raw DeferredContext mechanics ────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
@@ -151,4 +234,65 @@ fn deferred_context_on_shutdown() {
     );
     ctx.on_shutdown(|| {});
     assert_eq!(shutdown_hooks.len(), 1);
+}
+
+// ── The `with_state` graph-bypass path ──────────────────────────────────────
+
+/// A plugin with both slots filled: a setup datum (a plain deferred action)
+/// and a build that provides a bean plus a route.
+struct BypassedPlugin;
+
+impl PreStatePlugin for BypassedPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type Config = ();
+
+    fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
+        ctx.store_data(crate::fixtures::SetupData(3));
+    }
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        ctx.store_data(crate::fixtures::StoredData(9));
+        ctx.add_layer(|router| {
+            router.route(
+                "/bypassed",
+                r2e_core::http::routing::get(|| async { "never-mounted" }),
+            )
+        });
+        Ok((Alpha(1),))
+    }
+}
+
+#[r2e_core::test]
+async fn with_state_bypasses_plugin_builds_without_panicking() {
+    // `with_state` throws the bean registry away and runs the deferred actions
+    // against an empty graph, so the plugin's group node never runs and its
+    // effects slot stays empty. That is a documented no-op — NOT an assertion
+    // failure (a `debug_assert!(false)` here panicked every debug build that
+    // combined `.plugin()` with `.with_state()`).
+    let app = AppBuilder::new().plugin(BypassedPlugin).with_state(());
+
+    // The setup datum is a plain deferred action: it runs on this path.
+    assert_eq!(
+        app.get_plugin_data::<crate::fixtures::SetupData>()
+            .map(|d| d.0),
+        Some(3),
+        "setup actions still run — they are not graph nodes"
+    );
+    // Everything `build` would have produced is absent: build never ran.
+    assert!(
+        app.get_plugin_data::<crate::fixtures::StoredData>().is_none(),
+        "build effects must not apply when build never ran"
+    );
+    let (status, _) = crate::support::send_get(app.build(), "/bypassed").await;
+    assert_eq!(
+        status,
+        r2e_core::http::StatusCode::NOT_FOUND,
+        "the plugin's route never materializes on the with_state path"
+    );
 }

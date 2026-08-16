@@ -1,6 +1,10 @@
 use colored::Colorize;
 use std::path::Path;
 
+/// Version requirement written for every R2E dependency `r2e add` inserts.
+/// Keep in step with `[workspace.package] version` at the repo root.
+const R2E_DEP_VERSION: &str = "0.3";
+
 const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("security", "r2e-security"),
     ("data-sqlx", "r2e-data-sqlx"),
@@ -19,7 +23,7 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
 /// Add an R2E extension crate to the project's `Cargo.toml`.
 ///
 /// Looks up `extension` in the known extensions map, parses `Cargo.toml`
-/// with `toml_edit`, and inserts the dependency with version `"0.1"`.
+/// with `toml_edit`, and inserts the dependency with version [`R2E_DEP_VERSION`].
 ///
 /// Returns an error if:
 /// - `Cargo.toml` does not exist
@@ -69,7 +73,7 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Add the dependency as a simple version string
-    deps.insert(crate_name, toml_edit::value("0.1"));
+    deps.insert(crate_name, toml_edit::value(R2E_DEP_VERSION));
 
     // Add companion dependencies for extensions that require them
     if extension == "openapi" && !deps.contains_key("schemars") {
@@ -147,7 +151,7 @@ fn scaffold_grpc(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else if !deps.contains_key("r2e-grpc") {
-        deps.insert("r2e-grpc", toml_edit::value("0.1"));
+        deps.insert("r2e-grpc", toml_edit::value(R2E_DEP_VERSION));
         println!(
             "{} Added {} to Cargo.toml dependencies",
             "✓".green(),
@@ -174,7 +178,7 @@ fn scaffold_grpc(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("build-dependencies is not a table")?;
     if !build_deps.contains_key("r2e-grpc-build") {
         let item = if r2e_git_source.is_empty() {
-            toml_edit::value("0.1")
+            toml_edit::value(R2E_DEP_VERSION)
         } else {
             let mut t = toml_edit::InlineTable::new();
             for (key, value) in &r2e_git_source {
@@ -258,13 +262,13 @@ fn scaffold_grpc(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Add `feature` to a dependency item's `features` array, converting a bare
-/// version string (`r2e = "0.1"`) into an inline table first. Returns true
+/// version string (`r2e = "0.3"`) into an inline table first. Returns true
 /// if the feature was added, false if it was already present.
 fn add_dep_feature(
     item: &mut toml_edit::Item,
     feature: &str,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    // Normalize `r2e = "0.1"` to `r2e = { version = "0.1" }`.
+    // Normalize `r2e = "0.3"` to `r2e = { version = "0.3" }`.
     if let Some(version) = item.as_str().map(str::to_string) {
         let mut t = toml_edit::InlineTable::new();
         t.insert("version", version.into());

@@ -601,9 +601,9 @@ Two extensions do more than a plain dependency insert:
 **Example:**
 
 ```bash
-r2e add security      # adds r2e-security = "0.1"
-r2e add data-sqlx     # adds r2e-data-sqlx = "0.1"
-r2e add test          # adds r2e-test = "0.1"
+r2e add security      # adds r2e-security = "0.3"
+r2e add data-sqlx     # adds r2e-data-sqlx = "0.3"
+r2e add test          # adds r2e-test = "0.3"
 ```
 
 ---

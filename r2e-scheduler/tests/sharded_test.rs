@@ -113,7 +113,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
 
     assert_eq!(app.workers().unwrap(), Some(2));
 
-    let server = tokio::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
+    let server = r2e_core::rt::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
 
     // Wait until the sharded server accepts connections.
     let mut ready = false;

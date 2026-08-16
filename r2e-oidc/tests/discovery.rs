@@ -3,7 +3,7 @@ use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-fn build_app() -> Router {
+async fn build_app() -> Router {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "pass",
@@ -21,11 +21,12 @@ fn build_app() -> Router {
 
     r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build()
 }
 
-fn build_app_with_base_path() -> Router {
+async fn build_app_with_base_path() -> Router {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "pass",
@@ -44,7 +45,8 @@ fn build_app_with_base_path() -> Router {
 
     r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build()
 }
 
@@ -55,7 +57,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 
 #[r2e_core::test]
 async fn discovery_document() {
-    let app = build_app();
+    let app = build_app().await;
     let req = Request::get("/.well-known/openid-configuration")
         .body(Body::empty())
         .unwrap();
@@ -85,7 +87,7 @@ async fn discovery_document() {
 
 #[r2e_core::test]
 async fn discovery_document_with_base_path() {
-    let app = build_app_with_base_path();
+    let app = build_app_with_base_path().await;
     let req = Request::get("/auth/.well-known/openid-configuration")
         .body(Body::empty())
         .unwrap();

@@ -3,7 +3,7 @@ use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-fn build_app() -> Router {
+async fn build_app() -> Router {
     let users = InMemoryUserStore::new()
         .add_user(
             "alice",
@@ -33,7 +33,8 @@ fn build_app() -> Router {
 
     r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build()
 }
 
@@ -53,7 +54,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 
 #[r2e_core::test]
 async fn password_grant_success() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request(
             "grant_type=password&username=alice&password=password123",
@@ -70,7 +71,7 @@ async fn password_grant_success() {
 
 #[r2e_core::test]
 async fn password_grant_invalid_password() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request(
             "grant_type=password&username=alice&password=wrong",
@@ -85,7 +86,7 @@ async fn password_grant_invalid_password() {
 
 #[r2e_core::test]
 async fn password_grant_unknown_user() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request(
             "grant_type=password&username=nobody&password=pass",
@@ -100,7 +101,7 @@ async fn password_grant_unknown_user() {
 
 #[r2e_core::test]
 async fn unsupported_grant_type() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request("grant_type=authorization_code&code=abc"))
         .await
@@ -113,7 +114,7 @@ async fn unsupported_grant_type() {
 
 #[r2e_core::test]
 async fn missing_grant_type() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request("username=alice&password=password123"))
         .await
@@ -126,7 +127,7 @@ async fn missing_grant_type() {
 
 #[r2e_core::test]
 async fn missing_username() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request("grant_type=password&password=abc"))
         .await
@@ -139,7 +140,7 @@ async fn missing_username() {
 
 #[r2e_core::test]
 async fn missing_password() {
-    let app = build_app();
+    let app = build_app().await;
     let resp = app
         .oneshot(token_request("grant_type=password&username=alice"))
         .await
@@ -163,7 +164,8 @@ async fn password_grant_disabled_by_default() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(OidcServer::new().with_user_store(users))
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let resp = app

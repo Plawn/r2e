@@ -1,4 +1,8 @@
 #![cfg(feature = "quic")]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "r2e-http sits below r2e-core and cannot call rt::spawn"
+)]
 
 use std::sync::Arc;
 

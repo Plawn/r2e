@@ -34,7 +34,7 @@ Enable the gRPC feature (`grpc-reflection` too if you want `grpcurl list`
 to work out of the box):
 
 ```toml
-r2e = { version = "0.1", features = ["grpc", "grpc-reflection"] }
+r2e = { version = "0.3", features = ["grpc", "grpc-reflection"] }
 ```
 
 Add the runtime dependencies the generated proto code references, and the
@@ -47,7 +47,7 @@ tonic-prost = "~0.14"
 prost = "~0.14"
 
 [build-dependencies]
-r2e-grpc-build = "0.1"
+r2e-grpc-build = "0.3"
 ```
 
 ### 2. Defining a Proto File
@@ -309,7 +309,7 @@ This requires the `reflection` feature on `r2e-grpc` (`grpc-reflection` on the `
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["grpc", "grpc-reflection"] }
+r2e = { version = "0.3", features = ["grpc", "grpc-reflection"] }
 ```
 
 With reflection enabled, clients can discover services without the proto file:

@@ -7,7 +7,7 @@ R2E provides token-bucket rate limiting with three key strategies: global, per-I
 Enable the rate-limit feature:
 
 ```toml
-r2e = { version = "0.1", features = ["rate-limit"] }
+r2e = { version = "0.3", features = ["rate-limit"] }
 ```
 
 Provide a `RateLimitRegistry` as a bean. There is no hand-written state struct —

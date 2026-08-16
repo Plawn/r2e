@@ -4,7 +4,7 @@
 //! one of the plugin's internal handle types.
 
 use r2e::prelude::*;
-use r2e::{PluginInstallContext, PreStatePlugin};
+use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 #[derive(Clone)]
 pub struct PluginBean;
@@ -16,8 +16,13 @@ impl PreStatePlugin for MarkerPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (PluginBean,) {
-        (PluginBean,)
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        Ok((PluginBean,))
     }
 }
 

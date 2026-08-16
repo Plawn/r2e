@@ -35,7 +35,7 @@ WebSocket types live in `r2e-core` but are gated behind the `ws` feature. Enable
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["ws"] }
+r2e = { version = "0.3", features = ["ws"] }
 ```
 
 ```rust

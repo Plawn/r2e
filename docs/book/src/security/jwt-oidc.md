@@ -7,7 +7,7 @@ R2E provides JWT-based authentication with support for both static keys and JWKS
 Enable the security feature:
 
 ```toml
-r2e = { version = "0.1", features = ["security"] }
+r2e = { version = "0.3", features = ["security"] }
 ```
 
 ## Configuring the validator

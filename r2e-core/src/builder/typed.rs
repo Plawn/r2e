@@ -30,7 +30,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        let token = CancellationToken::new();
+        // A CHILD of the app shutdown root, not a fresh token. The sync
+        // shutdown hook below cancels it early in the normal shutdown sequence
+        // (before the HTTP drain, as documented), and cancelling the root
+        // reaches it too — which is what covers the paths where no hook runs at
+        // all: a panic unwinding out of `run_inner`, or the `run()` future
+        // being dropped under an `r2e dev` hot patch. Liveness must not depend
+        // on a hook firing.
+        let token = shutdown_root(&mut self.shared.plugin_data).child_token();
         let shutdown_token = token.clone();
 
         // Get-or-insert the shared ServiceHandles collector in plugin_data so
@@ -44,9 +51,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
 
+        // The service task owns the graph while it runs: `spawn_service` tasks
+        // are only *best-effort* awaited (an elapsed `shutdown_grace_period`,
+        // or a dropped `run()` future under `r2e dev`, leaves them detached and
+        // running), and a `BackgroundService` resolving through a `GraphHandle`
+        // must not see a dead graph on those paths.
+        let graph = Arc::clone(&self.bean_context);
         self = self.on_start(move |_state| async move {
-            let join = crate::rt::spawn(run(token));
-            handles.push(join);
+            handles.spawn_owning(graph, run(token));
             Ok(())
         });
         self.plugin_shutdown_hooks.push(Box::new(move || {
@@ -817,6 +829,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = wrap(app);
         }
 
+        // Hand the resolved bean graph to the router — OUTERMOST, so it covers
+        // every route the assembly produced: controller routes, routes a plugin
+        // mounted through `add_layer` (added *after* the state layer, so an
+        // earlier install point would miss them), and whatever a transport wrap
+        // dispatches to. Beans reach the graph through a WEAK `GraphHandle` (a
+        // strong one would be a cycle that never frees anything — one leaked
+        // graph per dev-reload cycle), so the router is what keeps it alive: the
+        // `Arc` rides each request future and its response body, so a
+        // `GraphHandle` inside a bean resolves for as long as anything derived
+        // from this router is in flight, and the whole graph drops once nothing
+        // is. Pure pass-through — see `layers::GraphKeepAlive`.
+        app = app.layer(crate::layers::graph_keep_alive(Arc::clone(
+            &self.bean_context,
+        )));
+
         // Assemble the single ordered async-shutdown list, drained back-to-front
         // of the shutdown sequence: plugin async hooks, then controller
         // `#[pre_destroy]` hooks, then bean `#[pre_destroy]` disposers — so a
@@ -926,6 +953,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .or_else(|| this.bean_context.try_get::<StopHandle>())
             .unwrap_or_default();
 
+        // Serve-scope graph ownership: `PreparedApp` holds a strong reference
+        // for the whole serving lifecycle, because the router (and its
+        // `GraphKeepAlive` layer) is dropped as soon as the serve future
+        // completes — before tracked handles and shutdown hooks run. See
+        // `PreparedApp::graph`.
+        let graph = Arc::clone(&this.bean_context);
+
         let BuiltApp {
             router,
             startup_hooks,
@@ -951,6 +985,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         PreparedApp {
             router,
             state,
+            graph,
             addr: addr.to_string(),
             startup_hooks,
             shutdown_hooks,

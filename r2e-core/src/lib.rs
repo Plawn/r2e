@@ -90,8 +90,8 @@ pub use meta::MetaRegistry;
 pub use module::FeatureModule;
 pub use pagination::{Page, Pageable};
 pub use plugin::{
-    DeferredAction, DeferredContext, Plugin, PluginInstallContext, PreStatePlugin,
-    RawPreStatePlugin,
+    DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
+    PluginSetupContext, PreStatePlugin, RawPreStatePlugin,
 };
 pub use plugins::{AdvancedHealth, ConfiguredTracing};
 pub use request_head::RequestHead;

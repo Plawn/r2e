@@ -59,14 +59,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         &mut self.shared.bean_registry
     }
 
-    /// Access the loaded config (for internal use by the blanket PreStatePlugin impl).
-    ///
-    /// Named differently from [`AppBuilder<T>::r2e_config()`] to avoid a method
-    /// resolution conflict when `T = NoState`.
-    pub(crate) fn r2e_config_ref(&self) -> Option<&crate::config::R2eConfig> {
-        self.shared.config.as_ref()
-    }
-
     /// Reconstruct the builder with updated type-level tracking parameters.
     ///
     /// Since `P` and `R` are phantom types used only for compile-time bean graph
@@ -433,12 +425,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                                 // would ever restart it — serve hooks run once
                                 // per process, and are skipped entirely from
                                 // the second `r2e dev` hot-patch cycle on.
-                                let handle = crate::rt::spawn(
-                                    crate::config::supervise_config_watch(
-                                        provider, watch_ctx, sink,
-                                    ),
-                                );
-                                serve_ctx.track(handle);
+                                serve_ctx.track(crate::config::supervise_config_watch(
+                                    provider, watch_ctx, sink,
+                                ));
                             });
                         }
                     },
@@ -630,13 +619,18 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self
     }
 
-    /// Install a pre-state plugin that provides beans and optionally defers setup.
+    /// Install a pre-state plugin that provides beans to the graph.
     ///
-    /// Accepts any [`PreStatePlugin`](crate::PreStatePlugin) (simple, single-provision)
-    /// or [`RawPreStatePlugin`] (advanced, multi-provision). Pre-state plugins run
-    /// before `build_state()` is called. They can:
-    /// - Provide bean instances to the bean registry
-    /// - Register deferred actions (like scheduler setup) that execute after state resolution
+    /// Accepts any [`PreStatePlugin`](crate::PreStatePlugin) (the normal
+    /// authoring surface) or [`RawPreStatePlugin`] (rare, full builder
+    /// access). A `PreStatePlugin`'s [`build`](crate::PreStatePlugin::build)
+    /// runs **inside** `build_state()` as a node of the bean graph:
+    /// dependencies arrive constructed, config arrives loaded, and each
+    /// element of its `Provided` tuple becomes an ordinary bean.
+    ///
+    /// **Call order does not matter**: `.plugin()` before or after
+    /// `load_config()` / `.provide()` / `.register()` behaves identically —
+    /// everything is resolved together at `build_state()`.
     ///
     /// # Example
     ///
@@ -645,7 +639,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// use r2e_executor::Executor;
     ///
     /// AppBuilder::new()
-    ///     .plugin(Scheduler)  // Provides CancellationToken + ScheduledJobRegistry
+    ///     .plugin(Scheduler)  // Deps = (PoolExecutor,) — built after Executor
     ///     .plugin(Executor)   // Scheduler runs ticks on the shared pool
     ///     .build_state()
     ///     .await
@@ -682,9 +676,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Add a deferred action to be executed after state resolution.
     ///
     /// This is the low-level escape hatch. [`PreStatePlugin`] implementations
-    /// usually reach for the sugar methods on [`PluginInstallContext`]
-    /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) instead — those buffer
-    /// plain closures and are flushed into a single deferred action.
+    /// usually reach for the effect sugar on
+    /// [`PluginBuildContext`](crate::plugin::PluginBuildContext)
+    /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) from inside `build`
+    /// instead.
     ///
     /// # Example (sugar — preferred)
     ///
@@ -692,14 +687,20 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// impl PreStatePlugin for MyPlugin {
     ///     type Provided = (MyToken,);
     ///     type Deps = ();
+    ///     type Config = ();
     ///
-    ///     fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (MyToken,) {
+    ///     async fn build(
+    ///         self,
+    ///         _deps: (),
+    ///         _config: Option<()>,
+    ///         ctx: &mut PluginBuildContext,
+    ///     ) -> Result<(MyToken,), PluginBuildError> {
     ///         let token = MyToken::new();
     ///         let handle = MyHandle::new(token.clone());
     ///
     ///         ctx.add_layer(move |router| router.layer(Extension(handle)));
     ///         ctx.on_shutdown(|| { /* cleanup */ });
-    ///         (token,)
+    ///         Ok((token,))
     ///     }
     /// }
     /// ```
@@ -826,6 +827,15 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let scheduled_sources = registry.take_scheduled_sources();
         let event_subscribers = registry.take_event_subscribers();
         let service_sources = registry.take_service_sources();
+        // Grab the deferred-fill graph handle before `resolve()` consumes the
+        // registry; filled on every **successful** exit path below, right after
+        // the resolved context lands in its final `Arc`. Plugin build factories
+        // (and any bean holding a `GraphHandle`) then see the completed graph.
+        // A failing path returns through `?` before its fill, so a handle held
+        // by the caller of a failed boot stays empty. The handle takes a WEAK
+        // reference: the graph is owned by the assembled app (see
+        // `layers::graph_keep_alive`), never by the beans inside it.
+        let graph_handle = registry.graph_handle();
 
         // Only inside the actual Subsecond hot-patch loop (`r2e::launch!`
         // marks it) do the process-global dev-reload caches engage. Merely
@@ -852,6 +862,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
+                    graph_handle.fill(&cached_ctx);
                     // Bean scheduled tasks and subscriptions are re-collected
                     // against the cached graph: the task registry and consumer
                     // registrations are fresh per build (plugins re-install),
@@ -910,6 +921,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
             let ctx = Arc::new(ctx);
+            graph_handle.fill(&ctx);
 
             crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
             crate::dev::cache_ctx(&ctx);
@@ -927,9 +939,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let mut ctx = registry.resolve().await?;
         self.shared.bean_disposers = ctx.take_disposers();
         let state = <P as BuildHList>::build_hlist(&ctx);
+        let ctx = Arc::new(ctx);
+        graph_handle.fill(&ctx);
 
         Ok(Mods::register_controllers(
-            AppBuilder::from_pre(self.shared, state, Arc::new(ctx))
+            AppBuilder::from_pre(self.shared, state, ctx)
                 .collect_service_sources(service_sources)
                 .collect_bean_scheduled_tasks(scheduled_sources)
                 .collect_bean_subscribers(event_subscribers),
@@ -949,8 +963,18 @@ impl<P, R> AppBuilder<NoState, P, R, TNil> {
     ///
     /// **Controllers are not supported on this path**: controller cores are
     /// constructed from the bean context, which is empty here — registering a
-    /// controller with `#[inject]` fields panics at startup. Use it only for
-    /// plugin/raw-router apps (`register_routes`, `merge_router`).
+    /// controller with `#[inject]` fields panics at startup.
+    /// **Pre-state plugins don't run either**: their `build` executes as a
+    /// bean-graph node inside `build_state()`, so on this path everything
+    /// `build` would have produced — beans, layers, routes, serve hooks, data
+    /// stored from the *build* context — never materializes, cleanup hooks
+    /// included (nothing was built to clean up). What *does* still run is
+    /// whatever `setup` deposited (`store_data`, `add_deferred`): those are
+    /// plain deferred actions, and this path executes deferred actions against
+    /// the empty graph, so setup-stored data IS present. A plugin's effect
+    /// action finds its slot empty and logs a `debug!` no-op. Use it only for raw-router apps
+    /// (`register_routes`, `merge_router`); an app with no beans that needs
+    /// plugins should call `.build_state().await` (state = empty HList).
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
         AppBuilder::<S>::from_pre(
             self.shared,

@@ -1,7 +1,7 @@
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> cases/plugins/fail/plugin_deps_missing.rs:29:14
+  --> cases/plugins/fail/plugin_deps_missing.rs:36:14
    |
-29 |             .build_state()
+36 |             .build_state()
    |              ^^^^^^^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
@@ -30,12 +30,12 @@ note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P
    |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
 
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> cases/plugins/fail/plugin_deps_missing.rs:26:9
+  --> cases/plugins/fail/plugin_deps_missing.rs:33:9
    |
-26 | /         AppBuilder::new()
-27 | |             .plugin(NeedsBean)
-28 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
-29 | |             .build_state()
+33 | /         AppBuilder::new()
+34 | |             .plugin(NeedsBean)
+35 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
+36 | |             .build_state()
    | |__________________________^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`
@@ -64,9 +64,9 @@ note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P
    |            ^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
 
 error[E0277]: type `MissingBean` was not provided to the AppBuilder
-  --> cases/plugins/fail/plugin_deps_missing.rs:30:14
+  --> cases/plugins/fail/plugin_deps_missing.rs:37:14
    |
-30 |             .await
+37 |             .await
    |              ^^^^^ missing `.provide::<MissingBean>()` or `.register::<MissingBean>()`
    |
    = help: the trait `Contains<MissingBean, _>` is not implemented for `TNil`

@@ -410,26 +410,36 @@ where
 ///     type Provided = (MyThing,);
 ///     type Deps = (DbPool, CancellationToken);
 ///
-///     fn configure(
+///     async fn build(
 ///         self,
-///         (thing,): &(MyThing,),
 ///         (pool, token): (DbPool, CancellationToken),
 ///         _config: Option<()>,
-///         _ctx: &mut DeferredContext<'_>,
-///     ) { /* wire `thing` up with `pool`/`token` */ }
+///         _ctx: &mut PluginBuildContext,
+///     ) -> Result<(MyThing,), PluginBuildError> {
+///         Ok((MyThing::new(pool, token),))
+///     }
 /// }
 /// ```
 pub trait PluginDeps: Send {
     /// The type-level list representation of these dependencies.
     type AsList;
 
-    /// Resolve all dependency values from the fully materialized
-    /// [`BeanContext`](crate::beans::BeanContext).
+    /// The runtime `(TypeId, type name)` pairs of these dependencies.
     ///
-    /// Used for [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): it runs
-    /// after `build_state()` (backing the plugin's `configure` call), so every
-    /// bean — `.provide()`-d, `.register()`-ed (factory-built), or produced by
-    /// another plugin — is available.
+    /// Used as the plugin build node's edges in the bean graph's topological
+    /// sort — the plugin's [`build`](crate::PreStatePlugin::build) runs only
+    /// after every dependency is constructed. Generated from the tuple shape,
+    /// so it can never drift from [`resolve_from_context`](Self::resolve_from_context).
+    fn dependencies() -> Vec<(std::any::TypeId, &'static str)>;
+
+    /// Resolve all dependency values from the (partially or fully)
+    /// materialized [`BeanContext`](crate::beans::BeanContext).
+    ///
+    /// Used for [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): the
+    /// plugin's build node is topologically ordered after its dependencies,
+    /// so every one of them — `.provide()`-d, `.register()`-ed
+    /// (factory-built), or produced by another plugin — is available when
+    /// this runs.
     ///
     /// # Panics
     ///
@@ -443,6 +453,10 @@ pub trait PluginDeps: Send {
 impl PluginDeps for () {
     type AsList = TNil;
 
+    fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
+        Vec::new()
+    }
+
     fn resolve_from_context(_ctx: &crate::beans::BeanContext) -> Self {}
 }
 
@@ -453,6 +467,12 @@ macro_rules! impl_plugin_deps {
             $($T: Clone + Send + Sync + 'static),+
         {
             type AsList = impl_plugin_deps!(@list $($T),+);
+
+            fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
+                vec![$(
+                    (std::any::TypeId::of::<$T>(), std::any::type_name::<$T>()),
+                )+]
+            }
 
             fn resolve_from_context(ctx: &crate::beans::BeanContext) -> Self {
                 ($(
@@ -484,13 +504,17 @@ impl_plugin_deps!(A, B, C, D, E, F, G, H);
 // ── Plugin provision mapping ─────────────────────────────────────────────
 
 /// Maps a concrete tuple of provided bean types to a type-level list and
-/// deposits each element's value into the bean registry.
+/// exposes its elements for per-type projection into the bean graph.
 ///
 /// This is the mirror image of [`PluginDeps`]: where `PluginDeps` *reads*
-/// dependency values out of the registry, `PluginProvisions` *writes* the
-/// beans a [`PreStatePlugin`](crate::PreStatePlugin) produces into it. It
-/// bridges the plugin's [`Provided`](crate::PreStatePlugin::Provided) tuple to
-/// the type-level provision list (`TCons`/`TNil`) tracked on the builder.
+/// dependency values out of the graph, `PluginProvisions` describes the beans
+/// a [`PreStatePlugin`](crate::PreStatePlugin) produces. The plugin's
+/// [`build`](crate::PreStatePlugin::build) runs as one graph node yielding the
+/// whole tuple; each element is then projected out as its own bean via
+/// [`element_ids`](Self::element_ids) + [`clone_element`](Self::clone_element).
+/// It also bridges the plugin's [`Provided`](crate::PreStatePlugin::Provided)
+/// tuple to the type-level provision list (`TCons`/`TNil`) tracked on the
+/// builder.
 ///
 /// # Arity Implementations
 ///
@@ -514,37 +538,43 @@ impl_plugin_deps!(A, B, C, D, E, F, G, H);
     label = "the `Provided` type must be a tuple of provided beans",
     note = "write `type Provided = (MyBean,)` for a single bean, `(A, B)` for several, or `()` for none — a bare `type Provided = MyBean` is not supported"
 )]
-pub trait PluginProvisions: Send {
+pub trait PluginProvisions: Clone + Send + Sync + 'static {
     /// The type-level list representation of these provided beans.
     type AsList;
 
-    /// Deposit every provided bean value into the bean registry.
+    /// The runtime `(TypeId, type name)` pairs of the tuple's elements, in
+    /// tuple order.
     ///
-    /// This performs value-level insertion only (the same path as
-    /// [`AppBuilder::provide`](crate::AppBuilder::provide)); the type-level
-    /// list is updated separately by the caller via a single
-    /// `with_updated_types()` phantom cast. Pinned overrides (used by test
-    /// harnesses) are respected because insertion goes through
-    /// [`BeanRegistry::provide`](crate::beans::BeanRegistry::provide).
-    fn provide_all(self, registry: &mut crate::beans::BeanRegistry);
+    /// Each pair becomes one **projection node** in the bean graph: a bean
+    /// registered under the element's `TypeId` whose factory clones the
+    /// element out of the plugin's build output. Also used by the blanket
+    /// [`RawPreStatePlugin`](crate::plugin::RawPreStatePlugin) impl to detect
+    /// when every provided type is pinned by a test override (the whole
+    /// plugin build is then skipped).
+    fn element_ids() -> Vec<(std::any::TypeId, &'static str)>;
 
-    /// Clone every provided bean into a fresh tuple of the same shape.
+    /// Clone the element at `idx` (tuple order, matching
+    /// [`element_ids`](Self::element_ids)) into a type-erased box holding the
+    /// element's concrete type.
     ///
-    /// Used by the blanket [`RawPreStatePlugin`](crate::plugin::RawPreStatePlugin)
-    /// impl to keep a copy of the provided beans for the post-state
-    /// [`configure`](crate::PreStatePlugin::configure) call, since
-    /// [`provide_all`](Self::provide_all) consumes the original by depositing
-    /// it into the registry.
-    fn clone_all(&self) -> Self;
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of range — callers iterate `element_ids()`, so
+    /// this never happens.
+    fn clone_element(&self, idx: usize) -> Box<dyn std::any::Any + Send + Sync>;
 }
 
-// Arity 0 — a plugin that provides no beans (only deferred actions).
+// Arity 0 — a plugin that provides no beans (only effects).
 impl PluginProvisions for () {
     type AsList = TNil;
 
-    fn provide_all(self, _registry: &mut crate::beans::BeanRegistry) {}
+    fn element_ids() -> Vec<(std::any::TypeId, &'static str)> {
+        Vec::new()
+    }
 
-    fn clone_all(&self) -> Self {}
+    fn clone_element(&self, idx: usize) -> Box<dyn std::any::Any + Send + Sync> {
+        panic!("PluginProvisions::clone_element({idx}) on an empty `Provided` tuple")
+    }
 }
 
 macro_rules! impl_plugin_provisions {
@@ -555,12 +585,20 @@ macro_rules! impl_plugin_provisions {
         {
             type AsList = impl_plugin_provisions!(@list $($T),+);
 
-            fn provide_all(self, registry: &mut crate::beans::BeanRegistry) {
-                $( registry.provide(self.$idx); )+
+            fn element_ids() -> Vec<(std::any::TypeId, &'static str)> {
+                vec![$(
+                    (std::any::TypeId::of::<$T>(), std::any::type_name::<$T>()),
+                )+]
             }
 
-            fn clone_all(&self) -> Self {
-                ($( self.$idx.clone(), )+)
+            fn clone_element(&self, idx: usize) -> Box<dyn std::any::Any + Send + Sync> {
+                match idx {
+                    $( $idx => Box::new(self.$idx.clone()), )+
+                    _ => panic!(
+                        "PluginProvisions::clone_element({idx}) out of range for `{}`",
+                        std::any::type_name::<Self>()
+                    ),
+                }
             }
         }
     };

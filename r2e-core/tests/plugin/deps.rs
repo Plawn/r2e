@@ -1,33 +1,17 @@
-//! `Deps` resolution and the `configure` hook.
+//! `Deps` resolution: dependencies arrive fully constructed before `build`,
+//! as real topological edges in the bean graph.
 
-use std::sync::{Arc, Mutex};
+use std::any::TypeId;
 
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, Registrable};
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, TNil};
-use std::any::TypeId;
 
-use crate::fixtures::{Alpha, StoredData, SugarMarker};
+use crate::fixtures::{Alpha, Beta, StoredData};
 use crate::support::send_get as get_route;
-
-// ── Deps + configure ──────────────────────────────────────────
-
-/// A shared sink the `configure` hook writes into, so the test can observe
-/// which `Deps` value it received.
-#[derive(Clone, Default)]
-struct ConfigureLog(Arc<Mutex<Vec<u32>>>);
-
-impl ConfigureLog {
-    fn push(&self, value: u32) {
-        self.0.lock().unwrap().push(value);
-    }
-    fn values(&self) -> Vec<u32> {
-        self.0.lock().unwrap().clone()
-    }
-}
 
 /// A **factory-built** bean: constructed by the bean graph, never handed to
 /// `.provide()`. Its `build` stamps a recognizable value so a test can tell the
@@ -53,87 +37,65 @@ impl Registrable for FactoryBean {
     }
 }
 
-/// `Deps = (Alpha,)` where `Alpha` is `.provide()`-d after the plugin.
-struct LateProvidedPlugin {
-    log: ConfigureLog,
-}
+/// `Deps = (Alpha,)` — echoes the dependency it received into its own
+/// provided bean, so tests can assert on the exact value `build` saw.
+struct AlphaEcho;
 
-impl PreStatePlugin for LateProvidedPlugin {
-    type Provided = (ConfigureLog,);
+impl PreStatePlugin for AlphaEcho {
+    type Provided = (Beta,);
     type Deps = (Alpha,);
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
-        (self.log.clone(),)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (log,): &(ConfigureLog,),
         (alpha,): (Alpha,),
         _config: Option<()>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
-        log.push(alpha.0);
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(Beta,), PluginBuildError> {
+        Ok((Beta(format!("alpha-{}", alpha.0)),))
     }
 }
 
 #[r2e_core::test]
-async fn late_deps_resolves_provided_bean_in_configure() {
-    let log = ConfigureLog::default();
+async fn deps_resolve_bean_provided_after_the_plugin() {
     // `Alpha` is provided AFTER `.plugin()` — `Deps` is not checked at the
     // call site, only against the final provision list at `build_state()`.
-    let _app = AppBuilder::new()
-        .plugin(LateProvidedPlugin { log: log.clone() })
+    let app = AppBuilder::new()
+        .plugin(AlphaEcho)
         .provide(Alpha(7))
         .build_state()
         .await;
-    assert_eq!(
-        log.values(),
-        vec![7],
-        "configure received the provided Alpha"
-    );
+    assert_eq!(app.state().get::<Beta>(), Beta("alpha-7".into()));
 }
 
-/// THE acceptance test's plugin: `Deps = (FactoryBean,)` — a bean that only
-/// the graph can build, registered *after* this plugin.
-struct LateFactoryPlugin {
-    log: ConfigureLog,
-}
+/// `Deps = (FactoryBean,)` — a bean only the graph can build, registered
+/// *after* this plugin.
+struct FactoryEcho;
 
-impl PreStatePlugin for LateFactoryPlugin {
-    type Provided = (ConfigureLog,);
+impl PreStatePlugin for FactoryEcho {
+    type Provided = (Beta,);
     type Deps = (FactoryBean,);
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ConfigureLog,) {
-        (self.log.clone(),)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (log,): &(ConfigureLog,),
         (fb,): (FactoryBean,),
         _config: Option<()>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
-        log.push(fb.0);
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(Beta,), PluginBuildError> {
+        Ok((Beta(format!("factory-{}", fb.0)),))
     }
 }
 
 #[r2e_core::test]
-async fn late_deps_resolves_factory_built_bean_registered_after_plugin() {
-    let log = ConfigureLog::default();
-    // `FactoryBean` is `.register()`-ed AFTER the plugin. Under the old `Deps`
-    // machinery this would panic at runtime ("registered but not materialized");
-    // as a `Deps` it resolves from the fully built graph in `configure`.
+async fn deps_resolve_factory_built_bean_registered_after_plugin() {
     let app = AppBuilder::new()
-        .plugin(LateFactoryPlugin { log: log.clone() })
+        .plugin(FactoryEcho)
         .register::<FactoryBean>()
         .build_state()
         .await;
-    // configure saw the factory-built instance (build() stamped 99).
-    assert_eq!(log.values(), vec![99]);
+    // build saw the factory-built instance (build() stamped 99)…
+    assert_eq!(app.state().get::<Beta>(), Beta("factory-99".into()));
     // …and the same bean is a normal member of the resolved graph.
     assert_eq!(
         app.bean_context().as_ref().get::<FactoryBean>(),
@@ -141,7 +103,7 @@ async fn late_deps_resolves_factory_built_bean_registered_after_plugin() {
     );
 }
 
-/// The "producer" side of the cross-plugin case: provides `Alpha` at install.
+/// The "producer" side of the cross-plugin case: provides `Alpha` from build.
 struct AlphaProviderPlugin;
 
 impl PreStatePlugin for AlphaProviderPlugin {
@@ -149,120 +111,121 @@ impl PreStatePlugin for AlphaProviderPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha,) {
-        (Alpha(11),)
-    }
-}
-
-#[r2e_core::test]
-async fn late_deps_resolves_bean_provided_by_another_plugin() {
-    // Producer installed first.
-    let log = ConfigureLog::default();
-    let _app = AppBuilder::new()
-        .plugin(AlphaProviderPlugin)
-        .plugin(LateProvidedPlugin { log: log.clone() })
-        .build_state()
-        .await;
-    assert_eq!(
-        log.values(),
-        vec![11],
-        "consumer configure saw producer's Alpha"
-    );
-
-    // Consumer installed first: `Deps` binds against the final graph, not
-    // install order, so the result is identical.
-    let log = ConfigureLog::default();
-    let _app = AppBuilder::new()
-        .plugin(LateProvidedPlugin { log: log.clone() })
-        .plugin(AlphaProviderPlugin)
-        .build_state()
-        .await;
-    assert_eq!(log.values(), vec![11], "install order must not matter");
-}
-
-/// Records, in `configure`, both the `provided` argument (the plugin's own
-/// instance) and the graph's view of the same bean (via `Deps`) — the
-/// pin-override contract documented on `PreStatePlugin::configure`.
-struct PinContractPlugin {
-    log: ConfigureLog,
-}
-
-impl PreStatePlugin for PinContractPlugin {
-    type Provided = (Alpha, ConfigureLog);
-    type Deps = (Alpha,);
-    type Config = ();
-
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (Alpha, ConfigureLog) {
-        (Alpha(11), self.log.clone())
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (own_alpha, log): &(Alpha, ConfigureLog),
-        (graph_alpha,): (Alpha,),
+        _deps: (),
         _config: Option<()>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
-        log.push(own_alpha.0);
-        log.push(graph_alpha.0);
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        Ok((Alpha(11),))
     }
 }
 
 #[r2e_core::test]
-async fn configure_provided_arg_keeps_own_instance_under_pin_override() {
-    let log = ConfigureLog::default();
+async fn deps_resolve_bean_provided_by_another_plugin_in_either_order() {
+    // Producer installed first.
     let app = AppBuilder::new()
-        // Pin an override BEFORE the plugin installs, as a test harness would.
-        .override_bean(Alpha(99))
-        .plugin(PinContractPlugin { log: log.clone() })
+        .plugin(AlphaProviderPlugin)
+        .plugin(AlphaEcho)
         .build_state()
         .await;
-    // The state and the graph hold the pinned override…
-    assert_eq!(app.state().get::<Alpha>(), Alpha(99));
-    // …while configure's `provided` arg keeps the plugin's own instance (11)
-    // and its `Deps` view reflects the override (99).
-    assert_eq!(log.values(), vec![11, 99]);
+    assert_eq!(app.state().get::<Beta>(), Beta("alpha-11".into()));
+
+    // Consumer installed first: builds run in topological order, not install
+    // order, so the result is identical.
+    let app = AppBuilder::new()
+        .plugin(AlphaEcho)
+        .plugin(AlphaProviderPlugin)
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<Beta>(), Beta("alpha-11".into()));
 }
 
-/// `configure` reaching for the `DeferredContext` surface (store_data + a layer).
-struct LateConfigureCtxPlugin;
+#[r2e_core::test]
+async fn deps_see_pinned_override_not_the_producing_plugin() {
+    // The factory-first contract: EVERYTHING reads the graph. Pinning Alpha
+    // replaces the producer plugin's bean, and every consumer — plugin `Deps`
+    // included — sees the override.
+    let app = AppBuilder::new()
+        .override_bean(Alpha(99))
+        .plugin(AlphaProviderPlugin) // all-pinned → its build is skipped
+        .plugin(AlphaEcho)
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<Alpha>(), Alpha(99));
+    assert_eq!(app.state().get::<Beta>(), Beta("alpha-99".into()));
+}
 
-impl PreStatePlugin for LateConfigureCtxPlugin {
-    type Provided = (SugarMarker,);
+/// The reverse edge: an ordinary `.register()`-ed bean depending on a
+/// plugin-provided bean. Its factory reads `Alpha` from the graph, so the
+/// plugin's build must have run first.
+#[derive(Clone, Debug, PartialEq)]
+struct NeedsAlpha(u32);
+
+impl Bean for NeedsAlpha {
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<Alpha>(), "Alpha")]
+    }
+    fn build(ctx: &BeanContext) -> Self {
+        NeedsAlpha(ctx.get::<Alpha>().0 + 1)
+    }
+}
+
+impl Registrable for NeedsAlpha {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
+#[r2e_core::test]
+async fn registered_bean_can_depend_on_plugin_provided_bean() {
+    let app = AppBuilder::new()
+        .register::<NeedsAlpha>()
+        .plugin(AlphaProviderPlugin)
+        .build_state()
+        .await;
+    assert_eq!(app.state().get::<NeedsAlpha>(), NeedsAlpha(12));
+}
+
+/// `build` reaching for the effect surface (store_data + a layer) with values
+/// computed from its deps.
+struct EffectfulEcho;
+
+impl PreStatePlugin for EffectfulEcho {
+    type Provided = ();
     type Deps = (Alpha,);
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (SugarMarker,) {
-        (SugarMarker,)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        _p: &(SugarMarker,),
         (alpha,): (Alpha,),
         _config: Option<()>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(), PluginBuildError> {
         let v = alpha.0;
         ctx.store_data(StoredData(v));
-        ctx.add_layer(Box::new(move |router| {
+        ctx.add_layer(move |router| {
             router.route("/late", get(move || async move { format!("late-{v}") }))
-        }));
+        });
+        Ok(())
     }
 }
 
 #[r2e_core::test]
-async fn configure_can_use_deferred_context() {
+async fn build_effects_can_use_dep_values() {
     let app = AppBuilder::new()
-        .plugin(LateConfigureCtxPlugin)
+        .plugin(EffectfulEcho)
         .provide(Alpha(5))
         .build_state()
         .await;
 
-    // `store_data` from configure landed in plugin_data.
+    // `store_data` from build landed in plugin_data.
     assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(5));
 
-    // …and the layer configure added produced a reachable route.
+    // …and the layer build added produced a reachable route.
     let router = app.build();
     let (status, body) = get_route(router, "/late").await;
     assert_eq!(status, StatusCode::OK);

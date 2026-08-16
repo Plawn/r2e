@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-r2e-test = "0.1"
+r2e-test = "0.3"
 tokio = { version = "1", features = ["full"] }
 ```
 

@@ -520,7 +520,7 @@ async fn characterize_provider_watch_runs_once_but_its_registry_is_the_live_one(
             let prepared = app.prepare("127.0.0.1:0");
             let stop = prepared.stop_handle();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let server = tokio::spawn(async move {
+            let server = r2e_core::rt::spawn(async move {
                 let _ = prepared.run_with_listener(listener).await;
             });
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;

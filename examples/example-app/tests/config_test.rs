@@ -71,7 +71,7 @@ fn make_config_with_option(option_value: Option<&str>) -> R2eConfig {
     let mut config = R2eConfig::empty();
     config.set("app.name", ConfigValue::String("MyApp".into()));
     config.set("app.port", ConfigValue::Integer(8080));
-    config.set("app.rate", ConfigValue::Float(3.14));
+    config.set("app.rate", ConfigValue::Float(3.25));
     config.set("app.debug", ConfigValue::Bool(true));
     // Option<String> field: set it if provided, use Null otherwise.
     // The validation still requires the key to exist, but Null → None at runtime.
@@ -133,7 +133,7 @@ async fn test_config_f64_injection() {
     let resp = app.get("/config/f64").bearer(&token).send().await;
     resp.assert_ok();
     let rate: f64 = resp.json();
-    assert!((rate - 3.14).abs() < f64::EPSILON);
+    assert!((rate - 3.25).abs() < f64::EPSILON);
 }
 
 #[r2e::test]

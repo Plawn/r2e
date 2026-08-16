@@ -39,6 +39,10 @@ dashmap = {workspace = true}
 arc-swap = "1"
 bytes = {workspace = true}
 futures-core = {workspace = true}
+# `layers::GraphKeepAlive` wraps the response body so the bean graph outlives it
+# (the wrapper forwards `size_hint`, so Content-Length survives).
+http-body = {workspace = true}
+pin-project-lite = {workspace = true}
 
 [target.'cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))))'.dependencies]
 socket2 = {workspace = true}

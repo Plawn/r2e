@@ -8,7 +8,8 @@
 //!
 //! # What it does
 //!
-//! During `build_state()` (before the app serves; a failure aborts startup):
+//! The plugin's `build` runs as a node of the bean graph, inside
+//! `build_state()` (before the app serves; a failure aborts startup):
 //!
 //! 1. Connects to the OpenFGA gRPC endpoint (`openfga.endpoint`).
 //! 2. Resolves the store: by explicit `openfga.store_id`, or by name
@@ -38,7 +39,7 @@
 //! r2e_openfga::model!(pub mod authz = "fga/model.fga");
 //!
 //! b.load_config::<()>()
-//!     .plugin(OpenFga::model(authz::MODEL))
+//!     .plugin(OpenFga::model(authz::MODEL))   // order vs load_config doesn't matter
 //!     .build_state()
 //!     .await
 //! ```
@@ -52,12 +53,8 @@
 //!   # model_id: "01H..."                # verify mode: pin + verify this version
 //!   # enabled: false                    # full off-switch (checks fail closed)
 //! ```
-//!
-//! The plugin must be installed **after** `load_config()` / `with_config()`.
 
 use std::sync::Arc;
-
-use r2e_core::Late;
 
 use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
 use openfga_rs::tonic::transport::Channel;
@@ -66,8 +63,8 @@ use openfga_rs::{
     ReadAuthorizationModelRequest, ReadAuthorizationModelsRequest, Store,
     WriteAuthorizationModelRequest,
 };
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 use r2e_core::prelude::ConfigProperties;
-use r2e_core::{PluginInstallContext, PostConstruct, PreStatePlugin};
 
 use crate::backend::{connect_client, request_with_token, GrpcBackend, OpenFgaBackend};
 use crate::client::FgaClient;
@@ -85,13 +82,16 @@ fn boot_err(msg: String) -> BootError {
 /// Configuration for the [`OpenFga`] plugin, under the `openfga` prefix.
 ///
 /// All fields are optional at the type level so file config can be partial;
-/// [`OpenFga`] validates the combination at install time (`endpoint` plus one
-/// of `store` / `store_id` are required).
+/// [`OpenFga`] validates the combination during `build_state()` (`endpoint`
+/// plus one of `store` / `store_id` are required).
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct OpenFgaPluginConfig {
     /// `false` disables the plugin: no connection, no store/model resolution,
-    /// no config validation — the beans still exist and every check fails
-    /// closed with [`OpenFgaError::NotReady`]. Default: true.
+    /// and no *semantic* validation of the combination (`endpoint` plus one of
+    /// `store`/`store_id`, the `model_id`/`apply_model` pairing) — the section
+    /// is still parsed and type-checked like any other, so a malformed value
+    /// still fails startup. The beans still exist and every check fails closed
+    /// with [`OpenFgaError::Disabled`]. Default: true.
     pub enabled: Option<bool>,
     /// OpenFGA **gRPC** endpoint, e.g. `http://localhost:8081`. Required.
     pub endpoint: Option<String>,
@@ -157,91 +157,105 @@ impl PreStatePlugin for OpenFga {
     type Deps = ();
     type Config = OpenFgaPluginConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("openfga");
+    /// `build` is pure bean construction — the three `Provided` beans are the
+    /// plugin's entire output, no routes, layers or hooks — and it costs a gRPC
+    /// connection plus store/model resolution. A test that pins all three has
+    /// replaced the plugin, so skipping the boot is exactly right.
+    const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        let config = ctx.config().unwrap_or_else(|| {
-            panic!(
-                "the OpenFga plugin reads `openfga.*` at install time — call \
-                 `load_config()`/`with_config()` before `.plugin(OpenFga::model(...))`"
-            )
-        });
-        let cfg = <OpenFgaPluginConfig as r2e_core::PluginConfig>::plugin_load(config, "openfga")
-            .unwrap_or_else(|e| panic!("invalid `openfga.*` configuration: {e}"));
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        let cfg = config.unwrap_or_default();
+        let cache_enabled = cfg.cache_enabled.unwrap_or(true);
+        let cache_ttl_secs = cfg.cache_ttl_secs.unwrap_or(60);
 
-        let enabled = cfg.enabled.unwrap_or(true);
-
-        let slot: Late<GrpcBackend> = Late::new();
-        let lazy = LazyBackend { slot: slot.clone() };
-        let registry = if cfg.cache_enabled.unwrap_or(true) {
-            OpenFgaRegistry::with_cache(lazy, cfg.cache_ttl_secs.unwrap_or(60))
-        } else {
-            OpenFgaRegistry::new(lazy)
-        };
-        let client = FgaClient::new(registry.clone());
-
-        // Disabled: no connection, no store/model resolution — and no config
-        // validation, so `enabled: false` alone is a complete off-switch. The
-        // backend slot stays empty and every check fails closed (`NotReady`).
-        if !enabled {
+        // Disabled: no connection, no store/model resolution, and none of the
+        // *semantic* config checks below (endpoint + store/store_id, the
+        // model_id/apply_model pairing), so `enabled: false` alone is enough to
+        // boot with a half-filled `openfga:` section. The section itself is
+        // still parsed and type-checked by the config layer before `build`
+        // runs — a malformed value fails startup either way. The beans still
+        // exist; every check fails closed (`Disabled`).
+        if !ctx.enabled() {
             tracing::warn!(
                 "OpenFga plugin disabled via `openfga.enabled = false`; \
                  no store/model resolution — FGA checks will fail closed"
             );
+            let registry = build_registry(DisabledBackend, cache_enabled, cache_ttl_secs);
+            let client = FgaClient::new(registry.clone());
             let handle = OpenFgaHandle {
-                inner: Arc::new(HandleInner { boot: None, slot }),
+                inner: Arc::new(HandleInner { backend: None }),
             };
-            return (registry, client, handle);
+            return Ok((registry, client, handle));
         }
 
-        let settings = validate_config(cfg);
+        let settings = validate_config(cfg)?;
 
-        // Fail on an unparsable model at install (deterministic), not at boot.
-        if let Err(e) = compile_model(self.model_json) {
-            panic!("OpenFga::model(...) received an invalid authorization model: {e}");
-        }
+        // Connect + resolve the store + apply/verify the model, inline —
+        // an error aborts `build_state()` naming this plugin.
+        let backend = boot(&settings, self.model_json).await?;
 
+        let registry = build_registry(backend.clone(), cache_enabled, cache_ttl_secs);
+        let client = FgaClient::new(registry.clone());
         let handle = OpenFgaHandle {
             inner: Arc::new(HandleInner {
-                boot: Some((settings, self.model_json)),
-                slot,
+                backend: Some(backend),
             }),
         };
-
-        // The boot sequence (connect + store/model resolution) runs as this
-        // bean's post-construct, inside `build_state()`.
-        ctx.run_post_construct::<OpenFgaHandle>();
-
-        (registry, client, handle)
+        Ok((registry, client, handle))
     }
 }
 
-/// Turn the raw config section into validated [`BootSettings`], panicking at
-/// install (= startup) with an actionable message on an invalid combination.
-fn validate_config(cfg: OpenFgaPluginConfig) -> BootSettings {
+fn build_registry(
+    backend: impl OpenFgaBackend,
+    cache_enabled: bool,
+    cache_ttl_secs: u64,
+) -> OpenFgaRegistry {
+    if cache_enabled {
+        OpenFgaRegistry::with_cache(backend, cache_ttl_secs)
+    } else {
+        OpenFgaRegistry::new(backend)
+    }
+}
+
+/// Turn the raw config section into validated [`BootSettings`], failing the
+/// boot with an actionable message on an invalid combination.
+fn validate_config(cfg: OpenFgaPluginConfig) -> Result<BootSettings, BootError> {
     let endpoint = match cfg.endpoint {
         Some(e) if !e.is_empty() => e,
-        _ => panic!(
-            "the OpenFga plugin requires `openfga.endpoint` (the OpenFGA gRPC endpoint, \
-             e.g. \"http://localhost:8081\")"
-        ),
+        _ => {
+            return Err(boot_err(
+                "the OpenFga plugin requires `openfga.endpoint` (the OpenFGA gRPC endpoint, \
+                 e.g. \"http://localhost:8081\")"
+                    .into(),
+            ))
+        }
     };
     let store = match (cfg.store_id, cfg.store) {
         (Some(id), _) if !id.is_empty() => StoreSelector::Id(id),
         (_, Some(name)) if !name.is_empty() => StoreSelector::Name(name),
-        _ => panic!(
-            "the OpenFga plugin requires `openfga.store` (a store name to look up or \
-             create) or `openfga.store_id` (an existing store id)"
-        ),
+        _ => {
+            return Err(boot_err(
+                "the OpenFga plugin requires `openfga.store` (a store name to look up or \
+                 create) or `openfga.store_id` (an existing store id)"
+                    .into(),
+            ))
+        }
     };
     let apply_model = cfg.apply_model.unwrap_or(true);
     if apply_model && cfg.model_id.is_some() {
-        panic!(
+        return Err(boot_err(
             "`openfga.model_id` is only meaningful in verify mode — set \
              `openfga.apply_model: false` to pin a model version, or drop `model_id` \
              and let apply mode resolve it"
-        );
+                .into(),
+        ));
     }
-    BootSettings {
+    Ok(BootSettings {
         endpoint,
         store,
         apply_model,
@@ -249,7 +263,7 @@ fn validate_config(cfg: OpenFgaPluginConfig) -> BootSettings {
         api_token: cfg.api_token,
         connect_timeout_secs: cfg.connect_timeout_secs.unwrap_or(10),
         request_timeout_secs: cfg.request_timeout_secs.unwrap_or(5),
-    }
+    })
 }
 
 // ── OpenFgaHandle ──────────────────────────────────────────────────────
@@ -257,32 +271,30 @@ fn validate_config(cfg: OpenFgaPluginConfig) -> BootSettings {
 /// Handle to the plugin-managed OpenFGA connection: the resolved
 /// `store_id` / pinned `model_id`, and the raw [`GrpcBackend`] escape hatch.
 ///
-/// Provided as a bean by [`OpenFga`]; fully resolved once `build_state()`
-/// returns (its post-construct runs the boot sequence).
+/// Provided as a bean by [`OpenFga`]; the boot sequence runs inside the
+/// plugin's `build`, so the handle is fully resolved by construction.
 #[derive(Clone)]
 pub struct OpenFgaHandle {
     inner: Arc<HandleInner>,
 }
 
 struct HandleInner {
-    /// `None` when the plugin is disabled (`openfga.enabled: false`) — the
-    /// post-construct is not registered then, and the slot stays empty.
-    boot: Option<(BootSettings, &'static str)>,
-    slot: Late<GrpcBackend>,
+    /// `None` when the plugin is disabled (`openfga.enabled: false`).
+    backend: Option<GrpcBackend>,
 }
 
 impl OpenFgaHandle {
-    /// The connected backend. Panics before the boot sequence has run —
-    /// only reachable when the plugin was disabled (`openfga.enabled: false`)
-    /// or the handle escaped `build_state()`.
+    /// The connected backend. Panics when the plugin is disabled
+    /// (`openfga.enabled: false`) — the only state without a backend.
     pub fn backend(&self) -> GrpcBackend {
-        self.try_backend()
-            .unwrap_or_else(|| panic!("OpenFgaHandle used before the OpenFga boot sequence ran"))
+        self.try_backend().unwrap_or_else(|| {
+            panic!("the OpenFga plugin is disabled (`openfga.enabled: false`) — no backend")
+        })
     }
 
-    /// The connected backend, `None` before the boot sequence has run.
+    /// The connected backend, `None` when the plugin is disabled.
     pub fn try_backend(&self) -> Option<GrpcBackend> {
-        self.inner.slot.get().cloned()
+        self.inner.backend.clone()
     }
 
     /// The resolved store id.
@@ -296,22 +308,6 @@ impl OpenFgaHandle {
             .model_id()
             .expect("OpenFga boot always pins a model id")
             .to_string()
-    }
-}
-
-impl PostConstruct for OpenFgaHandle {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
-        Box::pin(async move {
-            let Some((settings, model_json)) = &self.inner.boot else {
-                return Ok(());
-            };
-            if self.inner.slot.get().is_some() {
-                return Ok(());
-            }
-            let backend = boot(settings, model_json).await?;
-            let _ = self.inner.slot.fill(backend);
-            Ok(())
-        })
     }
 }
 
@@ -590,54 +586,42 @@ fn verify(
     }
 }
 
-// ── LazyBackend ────────────────────────────────────────────────────────
+// ── DisabledBackend ────────────────────────────────────────────────────
 
-/// Backend registered at install time, wired to the real [`GrpcBackend`] by
-/// the boot sequence. Every operation before that returns
-/// [`OpenFgaError::NotReady`] (unreachable in a normal boot: post-construct
-/// runs inside `build_state()`, before the app serves).
+/// Fail-closed backend behind the beans when the plugin is disabled
+/// (`openfga.enabled: false`): every operation returns
+/// [`OpenFgaError::Disabled`].
 #[derive(Clone)]
-struct LazyBackend {
-    slot: Late<GrpcBackend>,
-}
+struct DisabledBackend;
 
-impl OpenFgaBackend for LazyBackend {
+impl OpenFgaBackend for DisabledBackend {
     fn check(
         &self,
-        user: &str,
-        relation: &str,
-        object: &str,
+        _user: &str,
+        _relation: &str,
+        _object: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, OpenFgaError>> + Send + '_>>
     {
-        match self.slot.get() {
-            Some(backend) => backend.check(user, relation, object),
-            None => Box::pin(async { Err(OpenFgaError::NotReady) }),
-        }
+        Box::pin(async { Err(OpenFgaError::Disabled) })
     }
 
     fn write_tuple(
         &self,
-        user: &str,
-        relation: &str,
-        object: &str,
+        _user: &str,
+        _relation: &str,
+        _object: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), OpenFgaError>> + Send + '_>>
     {
-        match self.slot.get() {
-            Some(backend) => backend.write_tuple(user, relation, object),
-            None => Box::pin(async { Err(OpenFgaError::NotReady) }),
-        }
+        Box::pin(async { Err(OpenFgaError::Disabled) })
     }
 
     fn delete_tuple(
         &self,
-        user: &str,
-        relation: &str,
-        object: &str,
+        _user: &str,
+        _relation: &str,
+        _object: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), OpenFgaError>> + Send + '_>>
     {
-        match self.slot.get() {
-            Some(backend) => backend.delete_tuple(user, relation, object),
-            None => Box::pin(async { Err(OpenFgaError::NotReady) }),
-        }
+        Box::pin(async { Err(OpenFgaError::Disabled) })
     }
 }

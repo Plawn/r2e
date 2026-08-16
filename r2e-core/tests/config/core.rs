@@ -42,12 +42,12 @@ fn test_get_opt() {
 fn test_type_conversions() {
     let mut config = R2eConfig::empty();
     config.set("int_val", ConfigValue::Integer(42));
-    config.set("float_val", ConfigValue::Float(3.14));
+    config.set("float_val", ConfigValue::Float(3.25));
     config.set("bool_val", ConfigValue::Bool(true));
     config.set("null_val", ConfigValue::Null);
 
     assert_eq!(config.get::<i64>("int_val").unwrap(), 42);
-    assert_eq!(config.get::<f64>("float_val").unwrap(), 3.14);
+    assert_eq!(config.get::<f64>("float_val").unwrap(), 3.25);
     assert!(config.get::<bool>("bool_val").unwrap());
     assert_eq!(config.get::<String>("int_val").unwrap(), "42");
     assert!(config.get::<Option<String>>("null_val").unwrap().is_none());

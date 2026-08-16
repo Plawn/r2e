@@ -179,7 +179,7 @@ mod integration {
         // SIGINT once the assertions are done so the worker threads exit and
         // `run()` returns cleanly (aborting the future would leak the worker
         // OS threads and hang the test binary at exit).
-        let server = tokio::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
+        let server = r2e_core::rt::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
 
         // Wait until the server is accepting connections.
         let mut ready = false;

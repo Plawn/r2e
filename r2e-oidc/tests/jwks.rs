@@ -3,7 +3,7 @@ use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-fn build_app() -> Router {
+async fn build_app() -> Router {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "pass",
@@ -17,7 +17,8 @@ fn build_app() -> Router {
 
     r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build()
 }
 
@@ -28,7 +29,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 
 #[r2e_core::test]
 async fn jwks_endpoint() {
-    let app = build_app();
+    let app = build_app().await;
     let req = Request::get("/.well-known/jwks.json")
         .body(Body::empty())
         .unwrap();

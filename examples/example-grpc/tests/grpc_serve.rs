@@ -123,7 +123,7 @@ async fn serve_starts_grpc_on_separate_port() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{http_port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+    let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     let mut client = connect_client(grpc_port).await;
 
@@ -164,7 +164,7 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
 
     let prepared = app.prepare(&format!("127.0.0.1:{port}"));
     let stop = prepared.stop_handle();
-    let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+    let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 
     // gRPC on the HTTP port (content-type routed, h2c prior knowledge).
     let mut client = connect_client(port).await;

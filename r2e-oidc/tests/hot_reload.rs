@@ -35,7 +35,8 @@ async fn token_survives_hot_reload() {
     // --- First hot-patch cycle ---
     let app1 = r2e_core::AppBuilder::new()
         .plugin(oidc.clone())
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -56,7 +57,8 @@ async fn token_survives_hot_reload() {
     // --- Second hot-patch cycle (same runtime, new AppBuilder) ---
     let app2 = r2e_core::AppBuilder::new()
         .plugin(oidc.clone())
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     // The token from the first cycle must still be accepted.

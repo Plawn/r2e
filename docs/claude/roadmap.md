@@ -284,6 +284,112 @@ Accepted limitations and remaining frictions from the external audit:
   `TenantSource::create` receives `&TenantId`; custom directory code pays an
   avoidable clone/signature mismatch.
 
+## W15 — Factory-first plugins — SHIPPED 2026-08-15
+
+`PreStatePlugin` fully integrated into DI: a plugin IS one async fallible
+factory for its `Provided` tuple, executed inside `build_state()` as a bean
+graph node (topologically after `Deps`, config guaranteed loaded).
+`install`/`configure` deleted; optional `setup()` remains the rare pre-graph
+hook. Reference: `docs/claude/plugins.md` (authoritative, fully rewritten).
+
+Shipped:
+
+- **New trait surface**: `build(self, deps, config, &mut PluginBuildContext)
+  -> Result<Provided, PluginBuildError>`; `Err` → `BeanError::PluginBuild`.
+  `PluginInstallContext` → `PluginSetupContext` (loses `config()`/
+  `config_get`/`run_post_construct`). `GraphHandle` (Late-backed handle on the
+  final `Arc<BeanContext>`) for post-boot resolution (used by `Tenanted<T>`).
+- **Two orders, documented**: build execution = topo order; effect application
+  (`add_layer`/`wrap_router`/`on_serve`/…) = install order. `<prefix>.enabled=
+  false` drops the **surface** lane only (layers, routes, serve hooks); the
+  **cleanup** lane (`on_shutdown`/`on_shutdown_async`) still applies, so a
+  plugin disposes of whatever its `build` constructed. `build` always runs
+  (return a disabled variant). Config section parsed even when disabled.
+- **Strict registration**: plugin beans collide with app `.provide()` or a
+  double install → `DuplicateBean` at boot. Pin-before-install wins;
+  all-pinned skips `build` only for a plugin that opts in with
+  `const SKIP_BUILD_WHEN_ALL_PINNED: bool = true` (default `false` — effects
+  are not beans and cannot be pinned); partial pin always runs it, and the
+  effects then resolve their beans from the graph, not from what `build` made.
+- **All 10 in-tree plugins migrated.** OpenFga is the flagship: `Late<GrpcBackend>`,
+  `LazyBackend`, `PostConstruct` boot smuggle, `NotReady` (→ `Disabled`), and
+  the "install after load_config" panic all deleted. Tenancy/PerTenant build
+  directly wired (no `unwired()`/`wire()`). Executor now honors `executor.*`
+  regardless of `.plugin()`/`load_config()` order (killed the example-app
+  latent bug; assertion test in example-app/tests/app_test.rs).
+- `Late<T>` remains public as a de-emphasized escape hatch.
+
+Post-audit hardening (same branch): setup context lost every surface-effect
+*sugar* — no `add_layer`/`wrap_router`/`on_serve`/shutdown hooks, so a disabled
+plugin can no longer mount a route through sugar; the raw `add_deferred` escape
+hatch remains and is documented as unconditional (it hands out the full
+`DeferredContext`, which the framework cannot gate — that is the caveat, not an
+oversight); the router's graph `Arc` now rides the request future *and* the
+response body (tower's `oneshot` drops the service before the first poll, hyper
+drops the head while the body streams); **tracked work owns the graph while it
+runs** — `ServeContext::track` now takes the *future* (breaking; it spawns and
+wraps) and `spawn_service` / the scheduler driver / the QUIC drain go through
+the same `ServiceHandles::spawn_owning`, so an elapsed `shutdown_grace_period`
+or a dropped `run()` future (hot patch) — the paths where nothing joins the
+handle — still leave the task with a live graph — plus **`run()` now cancels the
+shutdown token and drains the tracked handles on the abort paths too** (a
+startup-hook `Err`, a serve error: `prepared.rs::abort_started_work`), so a task
+that waits on the token is no longer stranded with its port and its graph; plus
+`PreparedApp` holds a strong `Arc` for the whole serving lifecycle (shutdown
+hooks, in-flight WebSocket sessions);
+`with_state(())` + `.plugin()` is a documented `debug!`
+no-op instead of a `debug_assert`; shutdown hooks split off from the surface
+lane so a disabled plugin still disposes; Prometheus no longer installs the
+global recorder when disabled; Scheduler **and** PerTenant effects resolve their
+beans from the graph at apply time (partial pins); dev-reload seeds
+`forced_rebuild` with volatile (plugin) nodes so their dependents cannot keep a
+previous cycle's instance.
+
+Residual (accepted caveat): a WebSocket session is not part of graceful drain —
+on upgrade hyper's `UpgradeableConnection` hands the IO off and returns
+`Ready(Ok(()))`, so the connection counts as finished and axum's detached
+`on_upgrade` task is unwatched. Sessions keep graph access for the whole of
+`run()` (the serve-scope `Arc`), but a session still alive *after* `run()`
+returns has none. In a normal binary the runtime is dropped right after, taking
+those tasks with it; an embedder that keeps the runtime alive past `run()` must
+resolve what a session needs before its socket loop. Rejected fix: inserting the
+`Arc` into request extensions so the generated `on_upgrade` closure could
+capture it — a boxed insert on *every* request to serve the WS-only case.
+
+Deferred: per-plugin effect caching under dev-reload (volatile nodes rebuild
+every hot-patch cycle — matches the old fresh-install-per-cycle semantics);
+Prometheus keeps its global recorder when enabled (separate workstream).
+
+Known dev-reload gaps (diagnosed, not fixed — `r2e dev` only, all pre-existing):
+
+1. **Startup lifecycle is skipped once initialized** (`builder/prepared.rs`,
+   the `if !skip_lifecycle` block). Deliberate for consumer subscriptions and
+   serve hooks (re-running them would double-subscribe), but it also means a
+   controller `#[post_construct]` never re-runs although controller cores are
+   rebuilt every cycle, and anything a patch *adds* (a new `#[consumer]`, a new
+   `#[scheduled]`, a new startup hook) never starts until a full restart.
+   Tractable next step: hoist the controller `#[post_construct]` loop out of the
+   guard; the additive case needs a diff of registrations between cycles.
+2. **The dropped server future runs no shutdown sequence** (dioxus-devtools
+   drops it on patch). Plugin `on_shutdown*`, drain hooks and `#[pre_destroy]`
+   never fire between cycles, and the future's `drop_guard` cancels that cycle's
+   `cancel_token`, so anything keyed off `ServeContext::shutdown_token()` (the
+   live-config watch supervisor, tracked tasks) dies without being restarted.
+   Since the app token exists before serving (lazily created and memoized in
+   `plugin_data`) and every framework token is a `child_token()` of it, this now
+   covers serve-scope work uniformly —
+   `spawn_service` background services and the scheduler driver (which relays
+   the app token onto its own) stop on a patch too, where previously they
+   survived because only a shutdown hook cancelled them. Deliberate: a stranded
+   task from cycle N-1 is worse than a stopped one, and item 1 already says
+   nothing serve-scope restarts in later cycles.
+3. Consequence of (2) plus the correct graph release: cycle N-1's tracked tasks
+   are cancelled but joined by nobody, so each holds its own cycle's graph until
+   it returns; once the last one does, cycle N-1's graph is really dropped and
+   any instance carried over that still points at it reads empty. Item 1 of the
+   volatile fix above closes the plugin-bean shape of this; a bean carrying a
+   raw `GraphHandle` obtained by other means is still exposed.
+
 ## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed

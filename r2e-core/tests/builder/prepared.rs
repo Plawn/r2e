@@ -26,7 +26,7 @@ impl EventLog {
 
 /// Await the spawned `run()` task and assert it terminated cleanly (within
 /// the deadline, without panicking, returning `Ok`).
-async fn await_clean_stop(server: tokio::task::JoinHandle<Result<(), String>>) {
+async fn await_clean_stop(server: r2e_core::rt::JobHandle<Result<(), String>>) {
     let result = tokio::time::timeout(Duration::from_secs(5), server)
         .await
         .expect("server did not stop within 5s")
@@ -42,7 +42,7 @@ async fn stop_handle_stops_run_gracefully() {
     assert!(!stop.is_stopped());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -66,7 +66,7 @@ async fn with_stop_handle_wires_a_user_created_handle() {
     assert!(!prepared.stop_handle().is_stopped());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -88,7 +88,7 @@ async fn stop_handle_bean_is_wired_automatically() {
     let prepared = app.prepare("127.0.0.1:0");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -131,7 +131,7 @@ async fn drain_sequence_finishes_in_flight_requests_and_orders_hooks() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -195,7 +195,7 @@ async fn provide_with_pre_destroy_runs_disposer_on_graceful_shutdown() {
     let prepared = app.prepare("127.0.0.1:0");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await

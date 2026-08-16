@@ -6,7 +6,7 @@ R2E validates request bodies automatically using the `garde` crate. If a type de
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full"] }
+r2e = { version = "0.3", features = ["full"] }
 garde = { version = "0.23", features = ["derive", "email"] }
 ```
 

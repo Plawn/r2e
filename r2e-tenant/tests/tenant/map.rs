@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_core::http::StatusCode;
-use r2e_core::BeanContext;
 use r2e_tenant::{TenantError, TenantId, Tenanted, TenantedSettings};
 
 use crate::fixtures::{map_with, tid, wait_for, Behaviour, Gate, Resource, ScriptedSource};
@@ -75,7 +74,7 @@ async fn concurrent_first_requests_create_once() {
     for _ in 0..50 {
         let map = map.clone();
         let acme = acme.clone();
-        tasks.push(tokio::spawn(async move { map.get(&acme).await }));
+        tasks.push(r2e_core::rt::spawn(async move { map.get(&acme).await }));
     }
 
     let mut resources = Vec::new();
@@ -238,7 +237,7 @@ async fn timeout_releases_every_waiter() {
     for _ in 0..5 {
         let map = map.clone();
         let acme = acme.clone();
-        tasks.push(tokio::spawn(async move { map.get(&acme).await }));
+        tasks.push(r2e_core::rt::spawn(async move { map.get(&acme).await }));
     }
     for task in tasks {
         // Whoever wins the cell hits the timeout; the others retry and hit it
@@ -364,8 +363,34 @@ async fn preload_creates_up_front_and_reports_failures() {
 }
 
 #[tokio::test]
-async fn an_unwired_map_names_the_missing_plugin() {
-    let map: Tenanted<Resource> = Tenanted::unwired();
+async fn a_cascade_to_a_type_without_a_map_names_the_missing_plugin() {
+    // The source asks the cascade for a type no `PerTenant` plugin provides a
+    // map for: the failure must name the plugin to add, not panic or 503.
+    #[derive(Clone, Debug)]
+    struct Derived;
+
+    #[derive(Clone)]
+    struct Cascading;
+
+    impl r2e_tenant::TenantSource<Derived> for Cascading {
+        fn create<'a>(
+            &'a self,
+            _tenant: &'a TenantId,
+            ctx: &'a r2e_tenant::TenantContext<'a>,
+        ) -> r2e_tenant::BoxFuture<'a, Result<Option<Derived>, r2e_tenant::BoxError>> {
+            Box::pin(async move {
+                let _ = ctx.get::<Resource>().await?;
+                Ok(Some(Derived))
+            })
+        }
+    }
+
+    let map: Tenanted<Derived> = Tenanted::new(
+        Arc::new(Cascading),
+        r2e_core::plugin::GraphHandle::default(),
+        settings(),
+        None,
+    );
 
     let err = map.get(&tid("acme")).await.unwrap_err();
     assert!(matches!(err, TenantError::NoSource(_)), "{err:?}");
@@ -389,7 +414,7 @@ async fn fallback_default_serves_unknown_tenants_and_is_never_disposed() {
     };
     let map = Tenanted::new(
         Arc::new(source.clone()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         settings(),
         Some(shared.clone()),
     );
@@ -427,7 +452,7 @@ async fn eviction_leaves_an_in_flight_creation_in_the_map() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -464,7 +489,7 @@ async fn drain_disposes_a_creation_that_lands_after_shutdown_started() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -473,7 +498,7 @@ async fn drain_disposes_a_creation_that_lands_after_shutdown_started() {
     // Shutdown starts while the pool is still being opened. `drain` counts the
     // resolution as in-flight work, so it does not return while a value it will
     // have to close is still being built.
-    let draining = tokio::spawn({
+    let draining = r2e_core::rt::spawn({
         let map = map.clone();
         async move { map.drain().await }
     });
@@ -539,10 +564,10 @@ async fn concurrent_evict_and_drain_dispose_each_value_once() {
         .iter()
         .map(|tenant| {
             let (map, tenant) = (map.clone(), tid(tenant));
-            tokio::spawn(async move { map.evict(&tenant).await })
+            r2e_core::rt::spawn(async move { map.evict(&tenant).await })
         })
         .collect();
-    let draining = tokio::spawn({
+    let draining = r2e_core::rt::spawn({
         let map = map.clone();
         async move { map.drain().await }
     });
@@ -595,7 +620,7 @@ async fn a_panicking_create_leaves_no_slot_behind() {
     );
     let hostile = tid("hostile");
 
-    let panicked = tokio::spawn({
+    let panicked = r2e_core::rt::spawn({
         let (map, hostile) = (map.clone(), hostile.clone());
         async move { map.get(&hostile).await }
     })
@@ -620,7 +645,7 @@ async fn a_cancelled_creation_leaves_no_slot_behind() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -677,7 +702,7 @@ async fn a_cancelled_waiter_leaves_the_running_creation_mapped() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -685,7 +710,7 @@ async fn a_cancelled_waiter_leaves_the_running_creation_mapped() {
 
     // A second request for the same cold tenant: single flight parks it on the
     // cell instead of starting a creation of its own.
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -732,12 +757,12 @@ async fn a_waiter_that_retries_after_a_failure_owns_its_value() {
     );
     let acme = tid("acme");
 
-    let failing = tokio::spawn({
+    let failing = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     gate.wait_started().await;
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -782,12 +807,12 @@ async fn a_waiter_reattaches_the_slot_a_cancelled_creation_detached() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     gate.wait_started().await;
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -834,12 +859,12 @@ async fn an_orphaned_creation_is_disposed_and_nothing_leaks() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     gate.wait_started().await;
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -851,7 +876,7 @@ async fn an_orphaned_creation_is_disposed_and_nothing_leaks() {
 
     // A brand-new request arrives while the waiter is still creating in the
     // detached cell: it installs a *different* slot under the same key.
-    let fresh = tokio::spawn({
+    let fresh = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -945,12 +970,12 @@ async fn a_detached_unknown_verdict_is_never_remembered() {
     let acme = tid("acme");
 
     // A creation parks in the source; a second request queues on its cell.
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     first.wait_started().await;
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1026,12 +1051,12 @@ async fn a_stale_verdict_never_aborts_a_fresh_creation_in_flight() {
     // Detach a cell: a creation parks, a waiter queues behind it, the creation's
     // client hangs up, and the waiter inherits the initializer — walking into a
     // directory that answers "not provisioned", slowly.
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     first.wait_started().await;
-    let stale = tokio::spawn({
+    let stale = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1047,7 +1072,7 @@ async fn a_stale_verdict_never_aborts_a_fresh_creation_in_flight() {
     // The tenant *is* provisioned, and a fresh request starts building it. Its
     // slot is in the map and still empty when the stale verdict lands.
     source.set("acme", Behaviour::Gated(fresh.clone()));
-    let live = tokio::spawn({
+    let live = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1286,7 +1311,7 @@ async fn drain_waits_for_a_disposal_it_does_not_own() {
     closing.wait_started().await;
     assert_eq!(map.peek(&acme), None, "drain has nothing left to walk");
 
-    let draining = tokio::spawn({
+    let draining = r2e_core::rt::spawn({
         let map = map.clone();
         async move { map.drain().await }
     });
@@ -1328,7 +1353,7 @@ async fn a_flood_of_post_shutdown_requests_cannot_starve_the_drain() {
     let mut streams = Vec::new();
     for _ in 0..4 {
         let (map, acme, stop, hot) = (map.clone(), acme.clone(), stop.clone(), hot.clone());
-        streams.push(tokio::spawn(async move {
+        streams.push(r2e_core::rt::spawn(async move {
             let mut rejected = 0usize;
             while !stop.load(Ordering::Relaxed) {
                 if let Err(err) = map.get(&acme).await {
@@ -1420,12 +1445,12 @@ async fn an_invalidate_fences_a_creation_that_started_before_it() {
 
     // Detach a cell: a creation parks, a waiter queues behind it, the creation's
     // client hangs up. The waiter inherits the cell with no slot in the map.
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     first.wait_started().await;
-    let detached = tokio::spawn({
+    let detached = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1485,12 +1510,12 @@ async fn an_invalidate_fences_an_unknown_verdict_from_before_it() {
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     first.wait_started().await;
-    let detached = tokio::spawn({
+    let detached = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1534,12 +1559,12 @@ async fn a_detached_creation_landing_during_a_drain_is_disposed_not_reattached()
     );
     let acme = tid("acme");
 
-    let creating = tokio::spawn({
+    let creating = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
     gate.wait_started().await;
-    let waiter = tokio::spawn({
+    let waiter = r2e_core::rt::spawn({
         let (map, acme) = (map.clone(), acme.clone());
         async move { map.get(&acme).await }
     });
@@ -1551,7 +1576,7 @@ async fn a_detached_creation_landing_during_a_drain_is_disposed_not_reattached()
     // Shutdown starts while the waiter is creating in the *detached* cell — the
     // one shape a walk of the map cannot see. The waiter is counted in-flight,
     // so `drain` waits for it, and for the orphan disposal it spawns.
-    let draining = tokio::spawn({
+    let draining = r2e_core::rt::spawn({
         let map = map.clone();
         async move { map.drain().await }
     });
@@ -1604,7 +1629,7 @@ async fn an_unknown_cold_wave_asks_the_directory_once() {
     let mut tasks = Vec::new();
     for _ in 0..50 {
         let (map, ghost) = (map.clone(), ghost.clone());
-        tasks.push(tokio::spawn(async move { map.get(&ghost).await }));
+        tasks.push(r2e_core::rt::spawn(async move { map.get(&ghost).await }));
     }
     for task in tasks {
         let err = task.await.unwrap().unwrap_err();
@@ -1652,7 +1677,7 @@ async fn a_concurrent_unknown_flood_stays_bounded() {
     let mut tasks = Vec::new();
     for worker in 0..16 {
         let map = map.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(r2e_core::rt::spawn(async move {
             for n in 0..25 {
                 let ghost = tid(&format!("ghost-{worker}-{n}"));
                 assert!(map.get(&ghost).await.is_err());
@@ -1725,7 +1750,7 @@ async fn a_cold_burst_settles_back_under_max_active() {
     let mut tasks = Vec::new();
     for n in 0..40 {
         let map = map.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(r2e_core::rt::spawn(async move {
             map.get(&tid(&format!("tenant-{n}"))).await
         }));
     }
@@ -1770,7 +1795,7 @@ async fn a_simultaneous_wave_of_completions_still_converges() {
     let mut tasks = Vec::new();
     for n in 0..12 {
         let map = map.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(r2e_core::rt::spawn(async move {
             map.get(&tid(&format!("tenant-{n}"))).await
         }));
     }

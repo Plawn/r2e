@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::*;
-use r2e_core::{AppBuilder, BeanContext, R2eConfig};
+use r2e_core::{AppBuilder, R2eConfig};
 use r2e_tenant::{
     BoxError, BoxFuture, HeaderTenantResolver, MissingTenantPolicy, PerTenant, Tenancy, Tenant,
     TenantContext, TenantId, TenantRouter, TenantSource, TenantStatuses, Tenanted,
@@ -62,7 +62,7 @@ fn config(yaml: &str) -> R2eConfig {
 // ── Tenancy ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn the_tenancy_plugin_fills_the_router_shell() {
+async fn the_tenancy_plugin_builds_a_wired_router() {
     let builder = AppBuilder::new()
         .provide(HeaderTenantResolver::default())
         .plugin(Tenancy::resolver::<HeaderTenantResolver>())
@@ -72,7 +72,7 @@ async fn the_tenancy_plugin_fills_the_router_shell() {
     let router = builder.bean_context().get::<TenantRouter>();
     assert!(
         router.is_enabled(),
-        "install provides an unwired shell; configure must wire it"
+        "build resolves the resolver bean and wires the router in one step"
     );
     assert_eq!(router.policy(), MissingTenantPolicy::Reject, "fail closed");
     assert_eq!(router.statuses(), TenantStatuses::default());
@@ -370,9 +370,9 @@ async fn eager_tenants_are_accepted_and_do_not_block_boot() {
 #[tokio::test]
 async fn per_tenant_resources_cascade_through_the_plugins() {
     // Two `PerTenant` plugins, one source reading the other's map out of the
-    // graph. This is the reason the map retains an `Arc<BeanContext>`: a plain
-    // `BeanContext::clone()` would drop the overlay and the inner map could go
-    // missing at runtime.
+    // graph. This is the reason the map retains a `GraphHandle` on the resolved
+    // graph: at request time it must see every sibling map, whatever order the
+    // plugins were built in.
     #[derive(Clone, Debug)]
     struct Report {
         from: String,
@@ -485,7 +485,7 @@ async fn a_map_provided_by_hand_needs_no_plugin() {
     // is a complete wiring for an app that builds its own state.
     let map = Tenanted::new(
         Arc::new(ScriptedSource::new()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         r2e_tenant::TenantedSettings::default(),
         None,
     );
@@ -523,4 +523,116 @@ fn a_max_active_of_zero_is_rejected_in_config() {
         ..Default::default()
     };
     let _ = config.max_active();
+}
+
+// ── Partial pins: the effects must groom the map the GRAPH exposes ───────────
+
+/// Serve on an ephemeral port until `f` says stop; returns once `run()` did.
+///
+/// The plugin's sweeper, preload and drain only exist on a real serve path, so
+/// these two tests boot a server rather than a router.
+async fn serve_while<F, Fut>(app: r2e_core::AppBuilder<impl Clone + Send + Sync + 'static>, f: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let prepared = app.prepare("127.0.0.1:0");
+    let stop = prepared.stop_handle();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = r2e_core::rt::spawn(async move { prepared.run_with_listener(listener).await.is_ok() });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    f().await;
+    stop.stop();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server did not stop within 5s")
+            .expect("server task panicked"),
+        "run() returned an error"
+    );
+}
+
+/// A `Tenanted<Resource>` built by hand, the way a test pins one.
+fn hand_built_map(source: &ScriptedSource) -> Tenanted<Resource> {
+    Tenanted::new(
+        Arc::new(source.clone()),
+        r2e_core::plugin::GraphHandle::default(),
+        r2e_tenant::TenantedSettings::default(),
+        None,
+    )
+}
+
+#[tokio::test]
+async fn the_shutdown_drain_closes_the_pinned_map_not_the_built_one() {
+    // Pinning `Tenanted<T>` skips the plugin's projection but still runs its
+    // build: requests get the PINNED map while `build` holds another one. An
+    // effect that captured its own map would drain an instance nothing can
+    // reach and leave every pinned connection open at shutdown.
+    //
+    // `tenancy.enabled: false` isolates the cleanup lane: the sweeper and the
+    // preload are surface effects and are dropped, so the only thing that can
+    // dispose here is the shutdown drain.
+    let pinned_source = ScriptedSource::new();
+    let pinned = hand_built_map(&pinned_source);
+    pinned.get(&tid("acme")).await.expect("the pinned map works");
+
+    let app = AppBuilder::new()
+        .override_config(config("tenancy:\n  enabled: false\n"))
+        .load_config::<()>()
+        .override_bean(pinned.clone())
+        .provide(ScriptedSource::new())
+        .plugin(PerTenant::<Resource>::from::<ScriptedSource>())
+        .build_state()
+        .await;
+
+    serve_while(app, || async {}).await;
+
+    assert_eq!(
+        pinned_source.sorted_disposals(),
+        vec!["acme".to_string()],
+        "the shutdown drain must close the map the graph exposes (the pinned \
+         one), not the invisible map the plugin's build made"
+    );
+    assert!(
+        pinned.peek(&tid("acme")).is_none(),
+        "and the pinned map is empty afterwards"
+    );
+}
+
+#[tokio::test]
+async fn the_eager_preload_warms_the_pinned_map_not_the_built_one() {
+    // The surface lane of the same rule (sweeper + preload are registered
+    // together, from one `after_build` that resolves `Tenanted<T>` once): the
+    // warm-up must land in the served map, or the first request pays the
+    // creation cost the preload was supposed to have paid.
+    let pinned_source = ScriptedSource::new();
+    let pinned = hand_built_map(&pinned_source);
+
+    let built_source = ScriptedSource::new();
+    let app = AppBuilder::new()
+        .override_bean(pinned.clone())
+        .provide(built_source.clone())
+        .plugin(PerTenant::<Resource>::from::<ScriptedSource>().eager([tid("acme")]))
+        .build_state()
+        .await;
+
+    let probe = pinned.clone();
+    serve_while(app, || async move {
+        assert!(
+            probe.peek(&tid("acme")).is_some(),
+            "the eager preload must warm the pinned map the requests will use"
+        );
+    })
+    .await;
+
+    assert_eq!(
+        pinned_source.creates(),
+        1,
+        "the preload ran against the pinned map's source"
+    );
+    assert_eq!(
+        built_source.creates(),
+        0,
+        "and never against the invisible map the build constructed"
+    );
 }

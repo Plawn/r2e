@@ -1,6 +1,6 @@
 # Custom Plugins
 
-Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin`, which provides beans before `build_state()`).
+Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (`Plugin`) and pre-state (`PreStatePlugin`, which provides beans built inside `build_state()`).
 
 ## Post-state plugins
 
@@ -59,12 +59,15 @@ built-in `NormalizePath` plugin is instead applied at build time as a
 pre-routing rewrite wrapping the whole router, which is why it has no
 ordering constraint.
 
-## Pre-state plugins (simple path)
+## Pre-state plugins
 
-Install before `build_state()` with `.plugin(plugin)`. Implement `PreStatePlugin` — no builder generics needed:
+Install before `build_state()` with `.plugin(plugin)`. A pre-state plugin **is
+one async, fallible factory** for the beans it provides: its `build` method
+runs *inside* `build_state()`, as a node of the bean graph — exactly like a
+`#[bean]` constructor. No builder generics needed:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 
 pub struct MyPlugin {
     config: MyPluginConfig,
@@ -76,135 +79,67 @@ impl PreStatePlugin for MyPlugin {
     type Deps = ();        // no dependencies on other beans (see "Consuming application beans")
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyPluginConfig,) {
-        // `install` takes `&mut self`, so move the owned field out with `take`.
-        (std::mem::take(&mut self.config),)
+    async fn build(
+        self,              // by value — owned fields move straight into the beans
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut PluginBuildContext,
+    ) -> Result<(MyPluginConfig,), PluginBuildError> {
+        Ok((self.config,))
     }
 }
 ```
 
-Every `PreStatePlugin` must declare `type Deps` and `type Config` — set them to `()` unless the
-plugin consumes an application bean (see
+`build` may await (connect to a backend, run migrations, …) and may fail: an
+`Err` (any `Box<dyn Error + Send + Sync>`) aborts startup with an error naming
+the plugin. Every `PreStatePlugin` must declare `type Deps` and `type Config`
+— set them to `()` unless the plugin consumes an application bean (see
 [Consuming application beans](#consuming-application-beans)) or reads a typed
 config section (see [Typed configuration](#typed-configuration)).
 
-### Compile-time dependency checking
-
-Plugins declare typed dependencies via `Deps` — a single list, appended to the
-builder's requirement list and verified against the **final** provision list at
-`build_state()`. Nothing is checked at the `.plugin()` call site, so the order
-between `.plugin()`, `.provide()`, and `.register()` calls does not matter, and
-`Deps` can name **any** bean — provided, factory-built (`.register::<T>()`), or
-provided by another plugin. The resolved beans arrive **by value** in
-`configure` — `install` never sees them.
-
-When a *provided* bean itself needs a dep, `install` cannot construct it (the
-graph does not exist yet). Provide a **shell** over `r2e::Late<T>` — a `Clone`,
-Arc-shared, first-write-wins write-once cell — and fill it in `configure`:
-
-```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext, Late};
-use tokio_util::sync::CancellationToken;
-
-#[derive(Clone)]
-pub struct MyService {
-    inner: Late<(DbPool, CancellationToken)>,
-}
-
-pub struct MyPlugin;
-
-impl PreStatePlugin for MyPlugin {
-    type Provided = (MyService,);
-    type Deps = (DbPool, CancellationToken);
-    type Config = ();
-
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (MyService,) {
-        // Pre-state: deps are not resolved yet — return a shell.
-        (MyService { inner: Late::new() },)
-    }
-
-    fn configure(
-        self,
-        (service,): &(MyService,),
-        (pool, token): Self::Deps,      // resolved from the final graph, by value
-        _config: Option<()>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
-        let _ = service.inner.fill((pool, token));   // first write wins
-    }
-}
-```
-
-The cell is filled before `build_state()` returns, so application code reading
-the bean after boot never observes it empty (`Late::get() -> Option<&T>`,
-`Late::expect("what")`). For an **async** fill, register it as a bean
-post-construct via `ctx.run_post_construct::<Bean>()` at install — it runs (and
-is awaited) inside `build_state()`; this is how the `OpenFga` plugin boots.
-`Late` is not in the prelude — import `r2e::Late` explicitly.
-
-```rust
-// ✅ Order-independent: deps may be provided before or after the plugin
-AppBuilder::new()
-    .plugin(MyPlugin)           // DbPool not provided yet — fine
-    .plugin(Executor)           // required by Scheduler (ticks run on the pool)
-    .plugin(Scheduler)          // provides CancellationToken
-    .provide(pool)              // provides DbPool
-    .build_state().await
-
-// ❌ Compile error at `build_state()`: DbPool never provided — guided error
-//    "missing `.provide::<DbPool>()` or `.register::<DbPool>()`"
-AppBuilder::new()
-    .plugin(MyPlugin)
-    .plugin(Executor)
-    .plugin(Scheduler)
-    .build_state().await
-```
-
 ## Consuming application beans
 
-`install` runs before the bean graph exists, so it never sees resolved beans.
-The beans a plugin depends on are declared in `Deps` and delivered to the
-second stage of the plugin's lifecycle:
+Declare the beans a plugin needs in `Deps`. They are **real edges in the bean
+graph**: the framework constructs them first (in topological order) and hands
+them to `build` **by value**, already resolved.
 
 ```text
-  .plugin(Me)              build_state()             (serve)
-       │                        │                       │
-       ▼                        ▼                       ▼
-    install()      ─────►  [bean graph built]  ─►  configure(Deps)
+  .plugin(Me)                    build_state()                       (serve)
+       │                              │                                 │
+       ▼                              ▼                                 ▼
+  [node queued]     ─►   deps built ─► build(deps, config)  ─►   on_serve hooks
 ```
 
-Declare the beans you need in `Deps`, and read them in `configure`. `Deps` is
-appended to the builder's requirement list and verified against the **final**
-provision list at `build_state()` — so the dependency may even be registered
-*after* your `.plugin()` call:
+`Deps` can name **any** bean — provided (`.provide()`), factory-built
+(`.register::<T>()`), or provided by another plugin. It is appended to the
+builder's requirement list and verified against the **final** provision list
+at `build_state()` — nothing is checked at the `.plugin()` call site, so the
+order between `.plugin()`, `.provide()`, and `.register()` calls does not
+matter. A missing dep is a guided compile error ("missing `.provide::<X>()`
+or `.register::<X>()`").
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 
 pub struct MetricsExporter;
 
 impl PreStatePlugin for MetricsExporter {
     type Provided = (ExporterHandle,);
     // `MetricsRegistry` is a factory-built bean (`.register::<MetricsRegistry>()`)
-    // — fine: `Deps` resolve from the materialized graph, after `build_state()`.
+    // — fine: it is constructed before this plugin's `build` runs.
     type Deps = (MetricsRegistry,);
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> (ExporterHandle,) {
-        (ExporterHandle::new(),)
-    }
-
-    // Runs after `build_state()`, with the whole bean graph materialized.
-    // Consumes `self`, and receives the loaded typed `Config` (here `()`).
-    fn configure(
+    async fn build(
         self,
-        (handle,): &(ExporterHandle,),
-        (registry,): Self::Deps,
+        (registry,): (MetricsRegistry,),
         _config: Option<()>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        let handle = handle.clone();
-        ctx.on_serve(move |_sc| handle.bind(registry));
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(ExporterHandle,), PluginBuildError> {
+        let handle = ExporterHandle::connect().await?;   // async + fallible: just do it
+        let h = handle.clone();
+        ctx.on_serve(move |_sc| h.bind(registry));
+        Ok((handle,))
     }
 }
 ```
@@ -216,45 +151,32 @@ AppBuilder::new()
     .plugin(MetricsExporter)
     .register::<MetricsRegistry>()
     .build_state().await
-```
 
-`configure` consumes the plugin instance (`self`) — so it can merge programmatic
-builder settings with file config — and receives a borrowed copy of the plugin's
-`Provided` beans, the resolved `Deps` (by value), the loaded typed `Config`
-(`Option<Self::Config>`, see [Typed configuration](#typed-configuration)), and a
-`DeferredContext` — the same post-state surface as deferred actions (`add_layer`,
-`store_data`, `on_serve`, `on_shutdown`, …). Its default is a no-op, so plugins
-with `type Deps = ()` and `type Config = ()` never need to write it.
-
-> **`install` takes `&mut self`.** So the instance survives into `configure`
-> (which takes `self` by value). If `install` needs to move an owned field out,
-> use `std::mem::take` or `.clone()`, or just leave the field for `configure`.
-
-**Decision rule:** need a bean for the plugin's own wiring → name it in `Deps`
-and use it in `configure`. Need a bean *inside a bean the plugin provides* →
-provide a `Late<T>` shell at install and fill it in `configure` (sync) or via
-`ctx.run_post_construct::<Bean>()` (async), as shown in
-[Compile-time dependency checking](#compile-time-dependency-checking).
-
-Usage:
-
-```rust
+// ❌ Compile error at `build_state()`: MetricsRegistry never provided —
+//    guided error "missing `.provide::<MetricsRegistry>()` or
+//    `.register::<MetricsRegistry>()`"
 AppBuilder::new()
-    .plugin(MyPlugin { config: MyPluginConfig::default() })
-    .build_state()
-    .await
-    // ...
+    .plugin(MetricsExporter)
+    .build_state().await
 ```
+
+Because deps arrive *before* `build` runs, a provided bean that depends on
+another bean is constructed **directly** — there is no shell/fill dance.
+(`r2e::Late<T>` — a `Clone`, Arc-shared, first-write-wins write-once cell —
+still exists as an escape hatch for values that genuinely cannot exist until
+after the whole graph is resolved; the framework's own `GraphHandle` is built
+on it.)
 
 ## Typed configuration
 
 A plugin can declare a typed config section — the same `#[derive(ConfigProperties)]`
 machinery controllers use for `#[config(section)]`. The framework loads and
-**validates** that section and hands it to `configure` as `Option<Self::Config>`.
-`config_get` on `PluginInstallContext` stays as the stringly, low-level fallback.
+**validates** that section before calling `build`, and hands it over as
+`Option<Self::Config>`. For raw, stringly access there is
+`ctx.config_raw() -> Option<&R2eConfig>`.
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext, DeferredContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 use r2e::prelude::ConfigProperties;
 
 #[derive(ConfigProperties, Clone, Debug, Default)]
@@ -271,20 +193,18 @@ impl PreStatePlugin for Metrics {
     type Config = MetricsCfg;                           // typed section
     const CONFIG_PREFIX: Option<&'static str> = Some("metrics");   // metrics.* in YAML
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) {}
-
-    fn configure(
+    async fn build(
         self,
-        _p: &(),
-        (): (),
+        _deps: (),
         config: Option<MetricsCfg>,      // loaded + validated file config
-        ctx: &mut DeferredContext<'_>,
-    ) {
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(), PluginBuildError> {
         // Precedence: builder setting (self) > file config > default.
         let endpoint = self.endpoint
             .or_else(|| config.and_then(|c| c.endpoint))
             .unwrap_or_else(|| "/metrics".into());
-        ctx.add_layer(Box::new(move |router| router /* mount `endpoint` */));
+        ctx.add_layer(move |router| router /* mount `endpoint` */);
+        Ok(())
     }
 }
 ```
@@ -292,63 +212,67 @@ impl PreStatePlugin for Metrics {
 Rules for the delivered `config`:
 
 - **`Config = ()`** (the default surface) — no config; `CONFIG_PREFIX` stays
-  `None`; `configure` gets `None`.
-- **Presence-based (optional section).** `configure` gets `Some(cfg)` only when
+  `None`; `build` gets `None`.
+- **Presence-based (optional section).** `build` gets `Some(cfg)` only when
   `CONFIG_PREFIX` is `Some(prefix)`, config was loaded (`load_config`, or an
   `override_config` test stash consumed by it), **and** at least one key lives
-  under `prefix`. No config
-  loaded, or an absent section → `None`. This mirrors a controller's
-  `Option<Section>`.
+  under `prefix`. No config loaded, or an absent section → `None`. This
+  mirrors a controller's `Option<Section>`.
 - **Validation.** A present-but-malformed section (missing required key, wrong
-  type) **panics at boot** — during `build_state()` — with the same
-  missing-key / type-mismatch report a controller `#[config]` mismatch produces,
-  naming the plugin and section. The precedence is: **builder setting > file
-  config > default**.
+  type) is a **boot error** — during `build_state()` — with the same
+  missing-key / type-mismatch report a controller `#[config]` mismatch
+  produces, naming the plugin and section. The section is parsed even when the
+  plugin is disabled (`<prefix>.enabled: false`), so it is always structurally
+  validated. The precedence is: **builder setting > file config > default**.
 
-`CONFIG_PREFIX` is an associated const with a default (`None`), so a plugin that
-reads no config writes only `type Config = ();`. Config is delivered at
-`configure` time (never at `install`) because that is the first point where
-`R2eConfig` is guaranteed loaded — `load_config` always precedes `build_state()`,
-whereas `.plugin()` calls may run before it.
+`CONFIG_PREFIX` is an associated const with a default (`None`), so a plugin
+that reads no config writes only `type Config = ();`. Because `build` runs
+inside `build_state()`, config is **guaranteed loaded** there — the order
+between `.plugin()` and `load_config()` does not matter.
 
 ## Enabling and disabling a plugin from config
 
 Any plugin with a `CONFIG_PREFIX` gets an on/off switch for free: the boolean key
-`<prefix>.enabled` (default **true**) controls whether the plugin's **post-state
-effects** run. Set it to `false` to turn the plugin off without touching code:
+`<prefix>.enabled` (default **true**). Set it to `false` to turn the plugin off
+without touching code:
 
 ```yaml
 prometheus:
   enabled: false      # no /metrics route, no tracking layer
 ```
 
-When disabled, the plugin's sugar (layers, `store_data`, serve/shutdown hooks),
-its explicit deferred actions, **and** its `configure` are all skipped. What
-does **not** change:
+When disabled:
 
-- **Its provided beans still exist.** The provision list is fixed at compile
-  time, so a disabled plugin never removes its beans — anything injecting them
-  keeps working. Disabling gates the plugin's *wiring*, not its beans.
-- **`install` still runs** (it happens pre-state, before config is guaranteed
-  loaded). Keep `install` cheap and put config-dependent work in `configure` or
-  sugar so "disabled" is genuinely inert — this is why the built-in plugins
-  defer their routes/layers to `configure`.
-- **Lifecycle hooks still run.** `run_post_construct` / `run_pre_destroy` for
-  provided beans fire regardless, because those beans are real and may be
-  injected elsewhere.
+- **`build` still runs** — the provision list is fixed at compile time, so the
+  provided beans must exist. Check `ctx.enabled()` and return a cheap,
+  *disabled* variant of your beans (e.g. OpenFga returns a fail-closed
+  backend; the Scheduler starts no driver task). Anything injecting the beans
+  keeps compiling and running.
+- **Surface effects are dropped** — layers, `wrap_router`, `store_data`,
+  `on_serve`, `after_build`. Disabling gates the plugin's *wiring*, not its
+  beans.
+- **Cleanup effects still run** — `on_shutdown` and `on_shutdown_async`.
+  `build` ran, so whatever it constructed still has to be released; dropping
+  its disposal would leak exactly what a disabled plugin built. Keep those
+  hooks to disposal only.
+- **`pre_destroy` hooks still run** (`run_pre_destroy` registered in `setup`)
+  — the beans are real and may be injected elsewhere.
+
+Making the beans *inert* is the plugin's job: check `ctx.enabled()` before any
+process-global side effect inside `build` itself, not just around the effects
+(Prometheus, for example, returns early so the global metrics recorder is never
+installed).
 
 Plugins with no `CONFIG_PREFIX`, and apps that never load config, are always
 enabled (the flag defaults to on).
 
-## Deferred actions
+## Effects: layers, hooks, plugin data
 
-For plugins that need to set up infrastructure after state is built but during serve:
-
-Call the sugar methods on `PluginInstallContext` directly — plain closures, no
-`Box`, no `DeferredAction`:
+Side effects are registered on the `PluginBuildContext` during `build` — plain
+closures, no `Box`, no `DeferredAction`:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyPlugin;
@@ -358,14 +282,19 @@ impl PreStatePlugin for MyPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(CancellationToken,), PluginBuildError> {
         let token = CancellationToken::new();
         let t = token.clone();
 
         // Add a Tower layer
         ctx.add_layer(|router| router.layer(r2e::http::Extension("my-plugin-data")));
 
-        // Store data for later access
+        // Store data for later access (app.get_plugin_data::<T>())
         ctx.store_data(MyPluginHandle::new());
 
         // Hook into server lifecycle
@@ -378,34 +307,66 @@ impl PreStatePlugin for MyPlugin {
             tracing::info!("Plugin shutting down");
         });
 
-        (token,)
+        Ok((token,))
     }
 }
 ```
 
-### `PluginInstallContext` post-state methods
+### `PluginBuildContext` methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
+| `enabled` | `(&self) -> bool` | The `<prefix>.enabled` config gate (default `true`) |
+| `graph` | `(&self) -> GraphHandle` | Cloneable **weak** handle on the **final** resolved graph (fills at the end of a successful `build_state()`; reads `Some` for the app's whole life *and* for any tracked task that outlives it, since the router, every tracked task and the serving scope each hold the graph independently — it reads `None` only once the last of those owners is gone) |
+| `config_raw` | `(&self) -> Option<&R2eConfig>` | The loaded raw config, if any |
 | `add_layer` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add a Tower layer to the router |
 | `wrap_router` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add an outermost transport-level router transform |
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | Store a value keyed by type for later retrieval |
 | `on_serve` | `<F: FnOnce(ServeContext) + Send + 'static>(&mut self, F)` | Run when the server starts listening |
 | `on_shutdown` | `<F: FnOnce() + Send + 'static>(&mut self, F)` | Run during graceful shutdown |
 | `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | Run (and await) during graceful shutdown |
+| `after_build` | `<F: FnOnce(&mut DeferredContext) + Send + 'static>(&mut self, F)` | Boot-time escape hatch with full-graph access |
 
-These calls are buffered and flushed as a single deferred action after
-`build_state()`, named after the plugin type. For advanced control,
-`ctx.add_deferred(DeferredAction::new(name, |dctx| { .. }))` is the low-level
-escape hatch — its actions run before the buffered sugar action.
+Effects are buffered and applied after the graph resolves, **in plugin install
+order** (`.plugin(A)` before `.plugin(B)` ⇒ A's layers apply before B's, even
+if B's `build` executed first because of dependencies) — and the surface ones
+are dropped when the plugin is disabled (shutdown hooks are not; see above).
+
+When an effect needs one of the plugin's own provided beans, resolve it from the
+graph at apply time — `ctx.after_build(|dctx| { let x =
+dctx.bean_context().try_get::<X>(); … })` — instead of capturing the value
+`build` just made. A test that pins only *some* of the provisions with
+`override_bean` still runs `build`, and the graph then exposes the pinned bean
+while your captured one is invisible to everyone else.
+
+### `setup()` — rare pre-graph hook
+
+`fn setup(&mut self, ctx: &mut PluginSetupContext)` (default no-op) runs once
+at `.plugin()` time, before the graph — and possibly before config — exists.
+Use it only for things other pre-state code must observe: `store_data` that
+must exist even when the plugin is disabled, `run_pre_destroy::<B>()`
+lifecycle registrars, or low-level `ctx.add_deferred(DeferredAction::new(..))`
+actions. Everything else belongs in `build`.
+
+Setup actions are **never** gated on `<prefix>.enabled` — which is why the setup
+context carries no surface-effect sugar: there is no `add_layer`,
+`wrap_router`, `on_serve` or shutdown hook on `PluginSetupContext`, and reaching
+for one is a compile error. So a disabled plugin cannot mount a route *by
+accident*.
+
+`add_deferred` is the deliberate hole: it hands you a full `DeferredContext`,
+which the framework cannot gate for you, so a route mounted from there is
+mounted whether the plugin is enabled or not. That is the price of the escape
+hatch — if what you register should disappear under `enabled = false`, register
+it from `build` instead.
 
 ## Multiple provided beans
 
 A `PreStatePlugin` can provide **several** beans — just make `Provided` a longer
-tuple and return all of them. No builder generics, no `with_updated_types()`:
+tuple and return all of them. Each element becomes its own bean in the graph:
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 use tokio_util::sync::CancellationToken;
 
 pub struct MyMultiPlugin;
@@ -416,7 +377,12 @@ impl PreStatePlugin for MyMultiPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (CancellationToken, MyRegistry) {
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(CancellationToken, MyRegistry), PluginBuildError> {
         let token = CancellationToken::new();
         let registry = MyRegistry::new();
 
@@ -426,13 +392,24 @@ impl PreStatePlugin for MyMultiPlugin {
             tracing::info!("Shutting down");
         });
 
-        (token, registry)
+        Ok((token, registry))
     }
 }
 ```
 
 Both beans are then injectable by type (`#[inject] token: CancellationToken`,
 `#[inject] registry: MyRegistry`).
+
+Note that plugin-provided beans register **strictly**: an app
+`.provide()`/`.register()` of the same type — or installing the same plugin
+twice — is a `DuplicateBean` error at boot. In tests, pin an override
+**before** `.plugin()` with `override_bean`: the pin wins for that type and
+`build` still runs, so the plugin's routes, layers and hooks stay in place
+(they are not beans, and no pin can replace them). A plugin whose `build` is
+pure bean construction *and* expensive — a connection, a container, key
+generation — can opt out with `const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;`,
+and then pinning *every* provided type skips `build` entirely. To silence a
+plugin that carries effects, disable it with `<prefix>.enabled = false`.
 
 ### Escape hatch: `RawPreStatePlugin`
 
@@ -493,7 +470,7 @@ AppBuilder::new()
 A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.
 
 ```rust
-use r2e::{PreStatePlugin, PluginInstallContext};
+use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 
@@ -507,10 +484,15 @@ impl PreStatePlugin for HealthChecker {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (CancellationToken,) {
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(CancellationToken,), PluginBuildError> {
         let token = CancellationToken::new();
         let interval = self.interval;
-        let url = std::mem::take(&mut self.url);
+        let url = self.url;
         let t = token.clone();
         let t2 = token.clone();
 
@@ -539,7 +521,7 @@ impl PreStatePlugin for HealthChecker {
             t.cancel();
         });
 
-        (token,)
+        Ok((token,))
     }
 }
 ```

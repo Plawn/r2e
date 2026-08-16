@@ -20,11 +20,10 @@ pub enum OpenFgaError {
     /// The backend does not implement this operation (only `check` is
     /// required by [`OpenFgaBackend`](crate::backend::OpenFgaBackend)).
     Unsupported(&'static str),
-    /// The [`OpenFga`](crate::plugin::OpenFga) plugin's backend was used
-    /// before its boot sequence (connect + store/model resolution) completed.
-    /// Requests cannot observe this state — the boot runs inside
-    /// `build_state()`, before the app serves.
-    NotReady,
+    /// The [`OpenFga`](crate::plugin::OpenFga) plugin is disabled
+    /// (`openfga.enabled: false`) — no backend was connected, and every
+    /// check fails closed with this error.
+    Disabled,
 }
 
 impl fmt::Display for OpenFgaError {
@@ -41,10 +40,10 @@ impl fmt::Display for OpenFgaError {
             OpenFgaError::Unsupported(op) => {
                 write!(f, "OpenFGA backend does not support '{}'", op)
             }
-            OpenFgaError::NotReady => {
+            OpenFgaError::Disabled => {
                 write!(
                     f,
-                    "OpenFGA backend is not ready (boot sequence not finished)"
+                    "OpenFGA is disabled (`openfga.enabled: false`); checks fail closed"
                 )
             }
         }

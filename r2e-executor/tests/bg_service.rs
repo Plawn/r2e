@@ -45,7 +45,7 @@ async fn derive_background_service_runs_until_cancelled() {
 
     let worker = Worker::from_context(&ctx);
     let token = CancellationToken::new();
-    let task = tokio::spawn(worker.start(token.clone()));
+    let task = r2e_core::rt::spawn(worker.start(token.clone()));
 
     tokio::time::sleep(Duration::from_millis(80)).await;
     token.cancel();

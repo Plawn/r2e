@@ -123,7 +123,7 @@ type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
 /// - [`shutdown_token`](Self::shutdown_token) — cancelled when graceful
 ///   shutdown begins (after drain hooks), while in-flight HTTP requests are
 ///   still finishing. Use it to stop accepting new work.
-/// - [`track`](Self::track) — register a spawned task whose completion is
+/// - [`track`](Self::track) — spawn a task whose completion is
 ///   awaited after the HTTP drain, before user shutdown hooks (bounded by
 ///   [`AppBuilder::shutdown_grace_period`]). Track any server-like task that
 ///   drains on the shutdown token so the process doesn't exit mid-drain.
@@ -131,6 +131,9 @@ pub struct ServeContext {
     tasks: TaskRegistryHandle,
     shutdown: CancellationToken,
     handles: ServiceHandles,
+    /// The resolved bean graph, cloned into every task `track` spawns — see
+    /// [`ServeContext::track`].
+    graph: Arc<crate::beans::BeanContext>,
 }
 
 impl ServeContext {
@@ -144,9 +147,30 @@ impl ServeContext {
         self.shutdown.clone()
     }
 
-    /// Track a task handle to be awaited after the HTTP drain completes.
-    pub fn track(&self, handle: crate::rt::JobHandle<()>) {
-        self.handles.push(handle);
+    /// Spawn a tracked task: its completion is awaited after the HTTP drain
+    /// completes, before user shutdown hooks.
+    ///
+    /// **Every task a serve hook starts belongs here** — a bare `rt::spawn` is
+    /// neither cancelled, nor awaited, nor graph-owning.
+    ///
+    /// The task is expected to stop when
+    /// [`shutdown_token`](Self::shutdown_token) fires: `run()` cancels it and
+    /// then joins the tracked handles on every exit it controls — the normal
+    /// shutdown *and* an aborted boot (a startup hook returning `Err` after
+    /// this hook ran, a serve error) — bounded by `shutdown_grace_period` when
+    /// one is configured.
+    ///
+    /// Takes the **future**, not a `JobHandle`, on purpose: the task is
+    /// wrapped so it owns a strong reference to the bean graph for its whole
+    /// lifetime, which makes `GraphHandle` resolution inside it sound even on
+    /// the exits where nothing joins it (the grace period elapsing, or the
+    /// whole `run()` future being dropped by an `r2e dev` hot patch). A
+    /// pre-spawned handle could not be given that ownership after the fact.
+    pub fn track<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.handles.spawn_owning(Arc::clone(&self.graph), fut);
     }
 }
 
@@ -158,6 +182,27 @@ impl ServeContext {
 struct ServiceHandles(Arc<Mutex<Vec<crate::rt::JobHandle<()>>>>);
 
 impl ServiceHandles {
+    /// Spawn `fut` as a tracked task that **owns the bean graph while it
+    /// runs**.
+    ///
+    /// The single constructor for tracked work (`ServeContext::track`,
+    /// `spawn_service`, the QUIC endpoint drain), so the ownership rule holds
+    /// by construction: awaiting the handle is best-effort — abandoned when
+    /// `shutdown_grace_period` elapses, and skipped entirely when the `run()`
+    /// future itself is dropped — but the graph reference travels *inside* the
+    /// task and is released only when the task itself ends.
+    fn spawn_owning<F>(&self, graph: Arc<crate::beans::BeanContext>, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.push(crate::rt::spawn(async move {
+            // Named binding: lives until the end of this block, i.e. until the
+            // wrapped future has completed.
+            let _graph_keepalive = graph;
+            fut.await;
+        }));
+    }
+
     fn push(&self, handle: crate::rt::JobHandle<()>) {
         self.0.lock().unwrap().push(handle);
     }
@@ -165,6 +210,36 @@ impl ServiceHandles {
     fn drain(&self) -> Vec<crate::rt::JobHandle<()>> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
+}
+
+/// The app-scope shutdown token, created **lazily** by whichever comes first
+/// (a `register_service` call or `run_inner`), memoized in
+/// `plugin_data` so `run_inner` and everything registered before it agree on
+/// one root.
+///
+/// Serving cancels this token on every exit — including the uncontrolled ones,
+/// where a `DropGuard` fires it (a panic unwinding out of `run_inner`, or the
+/// whole `run()` future being dropped by an `r2e dev` hot patch). That is only
+/// worth anything if the token a task waits on is *reachable* from here, which
+/// is why [`AppBuilder::register_service`] mints its per-service token as a
+/// `child_token()` of this one instead of a fresh, disconnected token: a child
+/// can be cancelled on its own (the plugin sync shutdown hooks still do that,
+/// early in the shutdown sequence) **and** is cancelled with its parent.
+#[derive(Clone)]
+struct ShutdownRoot(CancellationToken);
+
+/// Get-or-insert the one [`ShutdownRoot`] for this app.
+///
+/// Called from `register_service` (build time, first writer) and from
+/// `run_inner` (serve time), which is why it is a free function over the
+/// `plugin_data` map both phases own.
+fn shutdown_root(data: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> CancellationToken {
+    data.entry(TypeId::of::<ShutdownRoot>())
+        .or_insert_with(|| Box::new(ShutdownRoot(CancellationToken::new())))
+        .downcast_ref::<ShutdownRoot>()
+        .expect("ShutdownRoot type mismatch in plugin_data")
+        .0
+        .clone()
 }
 
 /// Resolve the active profile: forced (`with_profile`) > `R2E_PROFILE` env >

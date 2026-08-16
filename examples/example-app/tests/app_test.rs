@@ -123,6 +123,18 @@ async fn beans_are_injectable_into_tests(app: TestApp, #[inject] users: UserServ
     assert_eq!(users.count().await, 3);
 }
 
+// ── Plugin config: `executor.*` is honored regardless of install order ──
+
+#[r2e::test(app = example_app::ExampleApp)]
+async fn executor_plugin_honors_config(app: TestApp, #[inject] executor: r2e::r2e_executor::PoolExecutor) {
+    // application-test.yaml sets `executor.max-concurrent: 7`. The plugin's
+    // `build` runs inside `build_state()` with config guaranteed loaded, so
+    // the section applies even though the app calls `.plugin(Executor)`
+    // wherever it likes relative to `load_config()`.
+    let _ = &app;
+    assert_eq!(executor.max_concurrent(), 7);
+}
+
 // ── @TestProfile: application-test.yaml + per-test config overrides ─────
 
 #[r2e::test(app = example_app::ExampleApp)]

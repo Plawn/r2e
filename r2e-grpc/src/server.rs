@@ -1,4 +1,5 @@
-use r2e_core::{PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
+use r2e_core::PreStatePlugin;
 
 use crate::multiplex::MultiplexService;
 use crate::registry::{GrpcServiceRegistry, RegisteredServices};
@@ -115,11 +116,16 @@ impl PreStatePlugin for GrpcServer {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (GrpcMarker,) {
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         let registry = GrpcServiceRegistry::new();
-        let transport = self.transport.clone();
+        let transport = self.transport;
         #[cfg(feature = "reflection")]
-        let reflection = self.reflection.clone();
+        let reflection = self.reflection;
 
         // Store the registry for register_grpc_service to find.
         ctx.store_data(registry.clone());
@@ -145,7 +151,7 @@ impl PreStatePlugin for GrpcServer {
                     let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
                     let cancel = serve_ctx.shutdown_token();
-                    let handle = r2e_core::rt::spawn(async move {
+                    serve_ctx.track(async move {
                         // Bind explicitly (instead of tonic's internal bind)
                         // so the resolved address — including an OS-assigned
                         // port for `:0` — is logged.
@@ -179,7 +185,6 @@ impl PreStatePlugin for GrpcServer {
                         }
                         tracing::debug!("gRPC server stopped");
                     });
-                    serve_ctx.track(handle);
                 });
             }
             GrpcTransport::Multiplexed => {
@@ -217,7 +222,7 @@ impl PreStatePlugin for GrpcServer {
             }
         }
 
-        (GrpcMarker,)
+        Ok((GrpcMarker,))
     }
 }
 

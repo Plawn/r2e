@@ -108,7 +108,9 @@ pub use crate::managed::{
 };
 pub use crate::module::FeatureModule;
 pub use crate::pagination::{Page, Pageable};
-pub use crate::plugin::Plugin;
+pub use crate::plugin::{
+    GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin,
+};
 pub use crate::plugins::{
     AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, NormalizePath,
     Tracing,

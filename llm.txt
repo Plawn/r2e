@@ -382,9 +382,9 @@ fields, and `#[controller]` fields.
 
 ```rust
 let built = AppBuilder::new()
-    .plugin(Executor)                     // required by Scheduler (ticks run on the pool)
-    .plugin(Scheduler)                    // pre-state plugins FIRST
     .load_config::<RootConfig>()          // YAML + env; auto-registers config sections as beans
+    .plugin(Executor)                     // required by Scheduler (ticks run on the pool)
+    .plugin(Scheduler)                    // order vs load_config/provide/register doesn't matter
     .provide(LocalEventBus::new())        // provide constructed values
     .provide(Arc::new(claims_validator))
     .register::<CreatePool>()             // producer → registers SqlitePool
@@ -418,32 +418,98 @@ impl ChatService {
 For conditional plugins/layers (no provision-list change) use
 `.when(cond, |b| b.with(...))` with `config_flag("key")` / `profile_is("prod")`.
 
-### Writing a pre-state plugin — one `Deps` list, resolved post-state
+### Writing a pre-state plugin — one async fallible `build()`
+
+A pre-state plugin IS one async, fallible factory for its `Provided` tuple:
+`build` runs inside `build_state()` as a node of the bean graph, after `Deps`
+(real topological edges, delivered by value), with typed config guaranteed
+loaded. There is no `install`/`configure` split and no shell/fill dance.
 
 ```rust
 impl PreStatePlugin for MyPlugin {
-    type Provided = (MyHandle,);          // tuple of beans deposited at install
+    type Provided = (MyHandle,);          // tuple of beans; each becomes its own bean
     type Deps = (DbPool,);                // ANY bean (.provide()-d or .register()-ed),
                                           // verified at build_state(), order-independent
     type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        (MyHandle::new(),)                // NO deps here — install runs pre-graph
-    }
-
-    fn configure(self, (handle,): &Self::Provided, (pool,): Self::Deps,
-                 _config: Option<()>, _ctx: &mut DeferredContext<'_>) {
-        handle.bind(pool);                // deps arrive by value, post-state
+    async fn build(self, (pool,): Self::Deps, _config: Option<()>,
+                   ctx: &mut PluginBuildContext)
+        -> Result<Self::Provided, PluginBuildError> {
+        let handle = MyHandle::connect(pool).await?;   // async + fallible: Err aborts boot
+        let h = handle.clone();
+        ctx.on_shutdown_async(move || async move { h.drain().await });
+        Ok((handle,))
     }
 }
 ```
 
-A provided bean that must be BUILT from a dep starts as a shell over
-`r2e::Late<T>` (write-once, Arc-shared, clones see the fill; not in the
-prelude): fill it synchronously in `configure`, or asynchronously by
-registering the fill as a post-construct (`ctx.run_post_construct::<Bean>()`
-in `install` — awaited inside `build_state()`). `late.get()` is `None` only
-before boot; `late.expect("what")` panics with lifecycle guidance.
+`PluginBuildContext`: `enabled()` (the `<prefix>.enabled` gate — build ALWAYS
+runs, return a cheap INERT disabled variant when false, checking the gate before
+any global side effect; the gate is decided once here, not re-read later),
+`graph() -> GraphHandle` (handle on the final resolved graph, for request-time
+lookups), `config_raw()`, `add_layer`, `wrap_router`, `store_data`, `on_serve`,
+`on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
+hatch). Effects apply in plugin INSTALL order; builds run in dependency order.
+Disabling drops the **surface** effects (`add_layer`, `wrap_router`, `on_serve`,
+`store_data`, `after_build`) but NOT the cleanup ones (`on_shutdown`,
+`on_shutdown_async`): `build` ran, so what it constructed must still be
+released. An effect that needs one of the plugin's own beans should resolve it
+from the graph at apply time (`after_build(|dctx| dctx.bean_context()
+.try_get::<X>())`) instead of capturing what `build` made — otherwise a test
+that pins only *some* provisions leaves the effect talking to an instance the
+graph does not expose. Rare pre-graph needs (store_data other subsystems read
+even when disabled, `run_pre_destroy`, raw `add_deferred`) go in the optional
+`fn setup(&mut self, &mut PluginSetupContext)` — setup actions are NEVER gated
+on `<prefix>.enabled` (that is why a disabled Scheduler still collects
+`#[scheduled]` tasks), which is exactly why `PluginSetupContext` has no surface
+*sugar*: no `add_layer`, no `wrap_router`, no serve/shutdown hooks (using one is
+a compile error). `add_deferred` remains as the raw, explicitly **unconditional**
+escape hatch — it hands you the whole `DeferredContext`, so what you do there
+runs even when the plugin is disabled; put anything that should disappear under
+`enabled = false` in `build`. Plugin beans register strictly: same-type app
+bean or a double install = `DuplicateBean` at boot; in tests, `override_bean`
+each provided type BEFORE `.plugin()` — the pins win per type and `build` still
+runs, so the plugin's routes/layers/hooks stay mounted. A plugin whose `build`
+is pure bean construction (no effects) and expensive may opt out with
+`const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;` (default `false`; `OpenFga`
+sets it) — then pinning every provided type skips `build` entirely. To silence
+an effect-carrying plugin in a test, set `<prefix>.enabled = false`.
+
+`GraphHandle` holds a **weak** reference to the resolved `BeanContext` (it
+usually lives inside that same graph, so a strong one would leak it). It is
+filled on every *successful* `build_state()`. Three independent owners keep it
+alive: (1) the assembled router — the strong reference rides each request future
+AND its response body, so the graph outlives every in-flight request even when
+the router itself was already dropped (`router.oneshot(req)` hands the service
+to the future before polling it); (2) **every tracked task** — `ServeContext::
+track`, `spawn_service`, the scheduler driver and the QUIC drain move an `Arc`
+*into* the task, which is what makes them sound on the paths where nothing joins
+the handle (an elapsed `shutdown_grace_period`, a dropped `run()` future under
+`r2e dev` — where they are still cancelled, since every framework shutdown token
+is a child of the app one, or relayed from it as the scheduler's is); (3) when
+serving, `PreparedApp` itself for the whole of `run()`,
+which covers the shutdown phase (`on_stop`, `#[pre_destroy]`). Serve-time work
+must therefore be started through `track`, never a bare `rt::spawn`:
+
+```rust
+dctx.on_serve(move |serve_ctx| {
+    let shutdown = serve_ctx.shutdown_token();
+    serve_ctx.track(async move { my_server(shutdown).await; });  // future, not a handle
+});
+```
+
+`run()` cancels the shutdown token and drains those handles on every exit it
+controls, including an aborted boot (a startup hook returning `Err`, a serve
+error) — user `on_drain`/`on_stop` hooks and `#[pre_destroy]` disposers do not
+run on that abort path. The
+one gap: a WebSocket session is detached from the connection (hyper completes an
+upgraded connection immediately) and is not awaited by drain, so a session still
+running after `run()` returns has no graph — resolve what it needs before the
+socket loop. `get()`/`bean::<B>()` return `Some` for the app's lifetime and
+`None` after it and everything in flight are gone (or after a failed boot) —
+never a panic.
+`r2e::Late<T>` (write-once, Arc-shared cell) remains only as an escape hatch
+for genuinely post-boot fills.
 
 ### `#[post_construct]` — lifecycle hooks
 
@@ -560,11 +626,11 @@ performs around your `build`.
 
 ```rust
 AppBuilder::new()
-    // ── Pre-state ──
+    // ── Pre-state (order among plugin/load_config/provide/register doesn't matter) ──
+    .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
     .plugin(Executor)                           // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
-    .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
     .provide(bean)                              // constructed values
     .register::<CreatePool>()                   // beans / producers (one unified method)
     .when(dev_mode, |b| b.with(DevReload))      // conditional Self→Self assembly
@@ -1100,8 +1166,8 @@ use r2e::r2e_openfga::OpenFga;
 
 r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
-b.load_config::<()>()                       // config MUST be loaded first
-    .plugin(OpenFga::model(authz::MODEL))   // pre-state, before build_state()
+b.load_config::<()>()
+    .plugin(OpenFga::model(authz::MODEL))   // pre-state; order vs load_config doesn't matter
     .build_state().await
     .register_controller::<DocumentController>()
 ```
@@ -1136,10 +1202,9 @@ model → pin the resolved `model_id` on every subsequent check.
 This closes the schema-first chain: compile time checks code ↔ checked-in
 `.fga` (via `model!`); the plugin checks checked-in `.fga` ↔ live store at
 boot. `OpenFgaHandle` (bean) exposes `store_id()`, `model_id()`, and
-`backend()` (the connected `GrpcBackend`, raw-client escape hatch).
-Install AFTER `load_config()`/`with_config()` (panics with guidance
-otherwise). `openfga.enabled: false` skips the boot sequence (checks then
-fail closed).
+`backend()` (the connected `GrpcBackend`, raw-client escape hatch; panics when
+disabled — `try_backend()` is the non-panicking form). `openfga.enabled: false`
+skips the boot sequence (checks then fail closed with `OpenFgaError::Disabled`).
 
 **Manual setup (escape hatch — dynamic models / custom wiring).** Provide the
 beans yourself; the store/model must already exist:
@@ -1748,8 +1813,12 @@ b.plugin(Executor)                          // provides PoolExecutor (Scheduler 
 
 All schedules are driven by a single driver task backed by a min-heap of next-fire
 times (not one Tokio task per schedule). Each tick runs as a pool job
-(`executor.submit(...)`); a job is re-armed only when its own tick completes, so a task
-never overlaps with itself (non-overlap preserved) while different jobs still run
+(`executor.submit(...)`); when a job is re-armed is its overlap policy: `Skip` (default)
+re-arms only when its own tick completes, so a task never overlaps with itself
+(non-overlap preserved, and `next_run` reads `None` while its tick runs — it is `Some`
+only while a live driver holds a deadline, so it also reads `None` for every job once
+the driver stops), while
+`Concurrent` re-arms at fire time, before the tick is built. Different jobs always run
 concurrently. Consequences: in-flight ticks drain on shutdown (bounded by
 `executor.shutdown-timeout`), a panicking tick is contained/logged and the driver keeps
 running, and scheduled work is globally bounded by `executor.max-concurrent` and shows up
@@ -1899,15 +1968,27 @@ dedicated mode. An unknown `executor` value panics at boot.
 Introspection: `#[inject] jobs: ScheduledJobRegistry` → `jobs.list_jobs()` /
 `jobs.job(name)`. `ScheduledJobInfo` carries live stats: `last_run` /
 `next_run` (`chrono::DateTime<Utc>`), `last_duration`, `run_count`,
-`skip_count` (ticks suppressed by a `skip_if` predicate), `panic_count`,
+`skip_count` (ticks suppressed by a `skip_if` predicate), `panic_count` (tick
+bodies that panicked, plus tick-factory panics — those also auto-pause the job,
+since construction fails identically on every fire; `resume` re-enables it),
 `paused`.
 
 Runtime control — `SchedulerHandle` (extract as a handler param, or
 `SchedulerHandle::channel(token)` when driving `start_jobs` manually):
 `pause(name).await` / `resume(name).await` (a paused job advances cadence but
-never fires) / `trigger_now(name).await` (fire once out of band, allowed even
-when paused; `false` for a `skip` job already in flight). Each returns `bool`
-(`false` = unknown job / no driver).
+never fires; `resume` replies `true` iff the job can fire again as far as the driver
+can tell then — it keeps an already-armed deadline, reports the schedule's next
+occurrence when a tick in flight will re-arm it, else re-arms from now (interval:
+now+period, cron: next slot); a schedule that can never fire again stays unarmed and
+`resume` replies `false`) / `trigger_now(name).await` (fire once out of band, allowed even
+when paused; `false` for a `skip` job already in flight). Each returns `bool`, and
+`false` means one of: unknown name; shutdown started / no driver (every
+command refuses once the driver is cancelled — including one already queued, so a
+command issued from a tick body during shutdown is a no-op, never a deadlock); for
+`trigger_now`, a `skip` job already in flight, a closed executor pool (answered
+first, then the driver stops), or a tick factory that panicked (contained; the job
+is disabled); for `resume`, a spent/overflowed schedule. `pause` adds no case of
+its own.
 `ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
 from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
 Interval variants carry a `PositiveDuration` (a `Duration` guaranteed non-zero;
@@ -2752,7 +2833,14 @@ AppBuilder::new()
 ```
 
 `spawn_service` comes from the `SpawnService` extension trait (in the prelude),
-like `register_controller`. The derive declares `ServiceComponent::Deps` (every
+like `register_controller`. Each service gets its own `CancellationToken`,
+minted as a **child of the app shutdown token** (itself created lazily on the
+first `register_service`/`run()` and shared through `plugin_data`): the normal
+shutdown sequence
+cancels it early (before the HTTP drain) through a plugin shutdown hook, and the
+exits that run no hook — a panic, or `r2e dev` dropping the `run()` future —
+still reach it when the app token's drop guard fires. Services must observe
+their token; the join at shutdown is bounded only by `shutdown_grace_period`. The derive declares `ServiceComponent::Deps` (every
 `#[inject]` type, plus `R2eConfig` / `LiveConfigRegistry` when config fields are
 present), so a service reading an absent bean is a **compile error** at
 `spawn_service` instead of a panic at startup; and it declares

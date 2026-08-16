@@ -75,6 +75,13 @@ impl JoinError {
     pub fn is_cancelled(&self) -> bool {
         self.0.is_cancelled()
     }
+
+    /// Consumes the error, returning the panic payload of the task.
+    ///
+    /// Panics if the task did not panic — check [`JoinError::is_panic`] first.
+    pub fn into_panic(self) -> Box<dyn std::any::Any + Send + 'static> {
+        self.0.into_panic()
+    }
 }
 
 impl std::fmt::Debug for JoinError {
@@ -149,6 +156,10 @@ impl std::error::Error for Elapsed {}
 /// Spawn an async task on the runtime, returning a [`JobHandle<T>`].
 ///
 /// Equivalent to `tokio::spawn`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 pub fn spawn<F, T>(future: F) -> JobHandle<T>
 where
     F: Future<Output = T> + Send + 'static,
@@ -203,6 +214,10 @@ pub fn current_handle() -> tokio::runtime::Handle {
 /// onto that runtime — keeping background work off the HTTP worker runtimes.
 /// When no handle is registered (the default, non-sharded path), this is
 /// byte-for-byte equivalent to [`spawn`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 pub fn spawn_ctl<F, T>(future: F) -> JobHandle<T>
 where
     F: Future<Output = T> + Send + 'static,
@@ -218,6 +233,10 @@ where
 /// [`JobHandle<T>`].
 ///
 /// Equivalent to `tokio::task::spawn_blocking`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 pub fn spawn_blocking<F, T>(f: F) -> JobHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,

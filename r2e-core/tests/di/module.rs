@@ -343,8 +343,13 @@ impl r2e_core::PreStatePlugin for MarkerPlugin {
     type Deps = ();
     type Config = ();
 
-    fn install(&mut self, _ctx: &mut r2e_core::plugin::PluginInstallContext<'_>) -> (PluginBean,) {
-        (PluginBean(7),)
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut r2e_core::plugin::PluginBuildContext,
+    ) -> Result<(PluginBean,), r2e_core::plugin::PluginBuildError> {
+        Ok((PluginBean(7),))
     }
 }
 

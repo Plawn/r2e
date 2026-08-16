@@ -51,7 +51,7 @@ resolver = "2"
 openfga-rs = { path = "vendor/openfga-rs" }
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/plawn/r2e"
@@ -62,37 +62,37 @@ categories = ["web-programming::http-server", "asynchronous"]
 
 [workspace.dependencies]
 # Internal crates
-r2e = { path = "r2e", version = "0.1.0" }
-r2e-core = { path = "r2e-core", version = "0.1.0" }
-r2e-macros = { path = "r2e-macros", version = "0.1.0" }
-r2e-security = { path = "r2e-security", version = "0.1.0" }
-r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.1.0" }
-r2e-data-diesel = { path = "r2e-data/backends/diesel", version = "0.1.0" }
-r2e-events = { path = "r2e-events", version = "0.1.0" }
-r2e-events-iggy = { path = "r2e-events/backends/iggy", version = "0.1.0" }
-r2e-events-kafka = { path = "r2e-events/backends/kafka", version = "0.1.0" }
-r2e-events-pulsar = { path = "r2e-events/backends/pulsar", version = "0.1.0" }
-r2e-events-rabbitmq = { path = "r2e-events/backends/rabbitmq", version = "0.1.0" }
-r2e-scheduler = { path = "r2e-scheduler", version = "0.1.0" }
-r2e-executor = { path = "r2e-executor", version = "0.1.0" }
-r2e-cache = { path = "r2e-cache", version = "0.1.0" }
-r2e-rate-limit = { path = "r2e-rate-limit", version = "0.1.0" }
-r2e-utils = { path = "r2e-utils", version = "0.1.0" }
-r2e-openapi = { path = "r2e-openapi", version = "0.1.0" }
-r2e-prometheus = { path = "r2e-prometheus", version = "0.1.0" }
-r2e-observability = { path = "r2e-observability", version = "0.1.0" }
-r2e-openfga = { path = "r2e-openfga", version = "0.1.0" }
-r2e-openfga-model = { path = "r2e-openfga/model", version = "0.1.0" }
-r2e-openfga-macros = { path = "r2e-openfga/macros", version = "0.1.0" }
-r2e-grpc = { path = "r2e-grpc", version = "0.1.0" }
-r2e-grpc-build = { path = "r2e-grpc/build", version = "0.1.0" }
-r2e-oidc = { path = "r2e-oidc", version = "0.1.0" }
-r2e-devtools = { path = "r2e-devtools", version = "0.1.0" }
-r2e-static = { path = "r2e-static", version = "0.1.0" }
-r2e-tenant = { path = "r2e-tenant", version = "0.1.0" }
-r2e-http = { path = "r2e-http", version = "0.1.0" }
-r2e-test = { path = "r2e-test", version = "0.1.0" }
-r2e-devservices = { path = "r2e-devservices", version = "0.1.0" }
+r2e = { path = "r2e", version = "0.3.0" }
+r2e-core = { path = "r2e-core", version = "0.3.0" }
+r2e-macros = { path = "r2e-macros", version = "0.3.0" }
+r2e-security = { path = "r2e-security", version = "0.3.0" }
+r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.3.0" }
+r2e-data-diesel = { path = "r2e-data/backends/diesel", version = "0.3.0" }
+r2e-events = { path = "r2e-events", version = "0.3.0" }
+r2e-events-iggy = { path = "r2e-events/backends/iggy", version = "0.3.0" }
+r2e-events-kafka = { path = "r2e-events/backends/kafka", version = "0.3.0" }
+r2e-events-pulsar = { path = "r2e-events/backends/pulsar", version = "0.3.0" }
+r2e-events-rabbitmq = { path = "r2e-events/backends/rabbitmq", version = "0.3.0" }
+r2e-scheduler = { path = "r2e-scheduler", version = "0.3.0" }
+r2e-executor = { path = "r2e-executor", version = "0.3.0" }
+r2e-cache = { path = "r2e-cache", version = "0.3.0" }
+r2e-rate-limit = { path = "r2e-rate-limit", version = "0.3.0" }
+r2e-utils = { path = "r2e-utils", version = "0.3.0" }
+r2e-openapi = { path = "r2e-openapi", version = "0.3.0" }
+r2e-prometheus = { path = "r2e-prometheus", version = "0.3.0" }
+r2e-observability = { path = "r2e-observability", version = "0.3.0" }
+r2e-openfga = { path = "r2e-openfga", version = "0.3.0" }
+r2e-openfga-model = { path = "r2e-openfga/model", version = "0.3.0" }
+r2e-openfga-macros = { path = "r2e-openfga/macros", version = "0.3.0" }
+r2e-grpc = { path = "r2e-grpc", version = "0.3.0" }
+r2e-grpc-build = { path = "r2e-grpc/build", version = "0.3.0" }
+r2e-oidc = { path = "r2e-oidc", version = "0.3.0" }
+r2e-devtools = { path = "r2e-devtools", version = "0.3.0" }
+r2e-static = { path = "r2e-static", version = "0.3.0" }
+r2e-tenant = { path = "r2e-tenant", version = "0.3.0" }
+r2e-http = { path = "r2e-http", version = "0.3.0" }
+r2e-test = { path = "r2e-test", version = "0.3.0" }
+r2e-devservices = { path = "r2e-devservices", version = "0.3.0" }
 
 # Core
 tokio = { version = "1" }

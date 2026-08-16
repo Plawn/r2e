@@ -11,7 +11,7 @@ Add R2E and its common dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full"] }
+r2e = { version = "0.3", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -22,7 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 The `"full"` feature enables all R2E sub-crates (security, events, scheduler, data, cache, rate-limit, openapi, utils). You can also pick individual features:
 
 ```toml
-r2e = { version = "0.1", features = ["security", "data", "openapi"] }
+r2e = { version = "0.3", features = ["security", "data", "openapi"] }
 ```
 
 ### Available features

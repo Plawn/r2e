@@ -18,7 +18,7 @@ use std::sync::Arc;
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::{Extensions, Parts};
 use r2e_core::request_head::RequestHead;
-use r2e_core::{HttpError, Late};
+use r2e_core::HttpError;
 
 use crate::config::{MissingTenantPolicy, TenancyConfig};
 use crate::error::{TenantError, TenantStatuses};
@@ -27,11 +27,12 @@ use crate::TenantId;
 
 /// Resolves the tenant of a request, according to the deployment's policy.
 ///
-/// Provided by the [`Tenancy`](crate::Tenancy) plugin as a [`Late`] shell and
-/// filled in its `configure` phase.
+/// Built whole by the [`Tenancy`](crate::Tenancy) plugin's `build` — either
+/// [`ready`](Self::ready) (resolver wired) or [`disabled`](Self::disabled)
+/// (`tenancy.enabled: false`). There is no unwired state.
 #[derive(Clone)]
 pub struct TenantRouter {
-    mode: Late<Mode>,
+    mode: Arc<Mode>,
 }
 
 /// The per-request resolve-once cell.
@@ -84,23 +85,15 @@ enum Mode {
 }
 
 impl TenantRouter {
-    /// An unwired router — what [`Tenancy::install`](crate::Tenancy) provides
-    /// before the resolver bean exists. Resolving through it is a 500 naming the
-    /// missing plugin wiring.
-    #[must_use]
-    pub fn unwired() -> Self {
-        Self { mode: Late::new() }
-    }
-
     /// A router that resolves nothing (`tenancy.enabled = false`).
     #[must_use]
     pub fn disabled(statuses: TenantStatuses) -> Self {
-        let router = Self::unwired();
-        let _ = router.mode.fill(Mode::Disabled { statuses });
-        router
+        Self {
+            mode: Arc::new(Mode::Disabled { statuses }),
+        }
     }
 
-    /// A wired router. Used by the plugin's `configure`; also the entry point
+    /// A wired router. Used by the plugin's `build`; also the entry point
     /// for tests that build a router without the builder.
     ///
     /// Providing one of these instead of installing
@@ -113,54 +106,43 @@ impl TenantRouter {
         policy: MissingTenantPolicy,
         statuses: TenantStatuses,
     ) -> Self {
-        let router = Self::unwired();
-        let _ = router.mode.fill(Mode::Ready {
-            resolver,
-            policy,
-            statuses,
-        });
-        router
-    }
-
-    /// Fill an unwired shell. Returns `false` if it was already filled.
-    pub(crate) fn wire(
-        &self,
-        resolver: Arc<dyn TenantResolver>,
-        config: &TenancyConfig,
-    ) -> bool {
-        self.mode
-            .fill(Mode::Ready {
+        Self {
+            mode: Arc::new(Mode::Ready {
                 resolver,
-                policy: config.policy(),
-                statuses: config.statuses(),
-            })
-            .is_ok()
-    }
-
-    /// The configured statuses (defaults on an unwired router).
-    #[must_use]
-    pub fn statuses(&self) -> TenantStatuses {
-        match self.mode.get() {
-            Some(Mode::Ready { statuses, .. } | Mode::Disabled { statuses }) => *statuses,
-            None => TenantStatuses::default(),
+                policy,
+                statuses,
+            }),
         }
     }
 
-    /// The missing-tenant policy. A disabled or unwired router reports
+    /// A wired router with policy and statuses read from `config`.
+    pub(crate) fn from_config(resolver: Arc<dyn TenantResolver>, config: &TenancyConfig) -> Self {
+        Self::ready(resolver, config.policy(), config.statuses())
+    }
+
+    /// The configured statuses.
+    #[must_use]
+    pub fn statuses(&self) -> TenantStatuses {
+        match &*self.mode {
+            Mode::Ready { statuses, .. } | Mode::Disabled { statuses } => *statuses,
+        }
+    }
+
+    /// The missing-tenant policy. A disabled router reports
     /// [`MissingTenantPolicy::Allow`]: `Option` extractors yield `None` rather
     /// than failing a whole app that deliberately turned tenancy off.
     #[must_use]
     pub fn policy(&self) -> MissingTenantPolicy {
-        match self.mode.get() {
-            Some(Mode::Ready { policy, .. }) => *policy,
-            Some(Mode::Disabled { .. }) | None => MissingTenantPolicy::Allow,
+        match &*self.mode {
+            Mode::Ready { policy, .. } => *policy,
+            Mode::Disabled { .. } => MissingTenantPolicy::Allow,
         }
     }
 
     /// Whether a resolver is wired (`tenancy.enabled != false`).
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        matches!(self.mode.get(), Some(Mode::Ready { .. }))
+        matches!(&*self.mode, Mode::Ready { .. })
     }
 
     /// Install the per-request resolve-once cell into `extensions`.
@@ -208,10 +190,9 @@ impl TenantRouter {
     /// (a hand-built head in a test, a hand-rolled router) it degrades to
     /// resolving per call.
     async fn resolve_raw(&self, head: &RequestHead<'_>) -> Result<Option<TenantId>, HttpError> {
-        match self.mode.get() {
-            None => Err(TenantError::NoResolver.into_http_error(TenantStatuses::default())),
-            Some(Mode::Disabled { .. }) => Ok(None),
-            Some(Mode::Ready { resolver, .. }) => match head.extension::<TenantMemo>() {
+        match &*self.mode {
+            Mode::Disabled { .. } => Ok(None),
+            Mode::Ready { resolver, .. } => match head.extension::<TenantMemo>() {
                 Some(memo) => memo.resolve_once(|| resolver.resolve(head)).await,
                 None => resolver.resolve(head).await,
             },
@@ -297,10 +278,9 @@ impl TenantRouter {
 
 impl std::fmt::Debug for TenantRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = match self.mode.get() {
-            None => "unwired",
-            Some(Mode::Disabled { .. }) => "disabled",
-            Some(Mode::Ready { .. }) => "ready",
+        let state = match &*self.mode {
+            Mode::Disabled { .. } => "disabled",
+            Mode::Ready { .. } => "ready",
         };
         f.debug_struct("TenantRouter").field("state", &state).finish()
     }

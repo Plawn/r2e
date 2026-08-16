@@ -1,0 +1,288 @@
+use super::{BeanContext, BeanRegistry};
+use crate::config::ConfigKeyKind;
+use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
+
+// ── Traits ──────────────────────────────────────────────────────────────────
+
+/// Marker trait for types that can be auto-constructed from a [`BeanContext`].
+///
+/// Implement this trait (or use `#[derive(Bean)]` / `#[bean]`) to declare
+/// a type as a bean that the [`BeanRegistry`] can resolve automatically.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as a Bean",
+    label = "this type is not a bean",
+    note = "add `#[derive(Bean)]` to your type or implement the `Bean` trait manually"
+)]
+pub trait Bean: Clone + Send + Sync + 'static {
+    /// Type-level list of dependency types required to construct this bean.
+    ///
+    /// Generated automatically by `#[bean]` and `#[derive(Bean)]`.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
+
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to construct this bean.
+    ///
+    /// `Option<T>` fields are **hard** dependencies on `Option<T>` (the
+    /// whole type, not `T`). A producer must register an `Option<T>` value
+    /// in the context for this bean to resolve. See the module docs for
+    /// the conditional-bean pattern using `#[producer] -> Option<T>`.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Returns the config keys referenced by this bean as
+    /// `(key, type_name, kind)` triples.
+    ///
+    /// Used by [`BeanRegistry::resolve`] to validate config presence and, under
+    /// `dev-reload`, to fingerprint the config values a bean depends on. The
+    /// [`ConfigKeyKind`] decides both:
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required`, [`Optional`](ConfigKeyKind::Optional) and
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted (editing any
+    /// of them rebuilds the bean under `r2e dev`); and
+    /// [`Live`](ConfigKeyKind::Live) keys — `#[live_config]` — are neither:
+    /// they are pushed into the bean's `LiveConfig` handle instead. A `Section`
+    /// entry's key is a dotted **prefix** (`#[config_section(prefix = "…")]`),
+    /// so the whole subtree under it is fingerprinted. The default
+    /// implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        Vec::new()
+    }
+
+    /// When `true`, construction is deferred until first injection.
+    /// Set by `#[bean(lazy)]`.
+    ///
+    /// Lazy beans are **not** constructed during `build_state()`. Instead,
+    /// a lazy slot is placed in the context and the bean is built on the
+    /// first `get::<Self>()` call (construct-on-first-injection, like
+    /// Quarkus CDI).
+    ///
+    /// **Runtime note:** lazy resolution needs a Tokio multi-thread runtime.
+    /// Enable the `lazy-fallback-runtime` feature to allow a fallback runtime
+    /// when none is available (or when running on a current-thread runtime).
+    ///
+    /// Consumers use `Self` directly — no wrapper type needed.
+    /// Register with `.register::<T>()`
+    /// as usual; the builder auto-detects the `LAZY` flag.
+    const LAZY: bool = false;
+
+    /// A version stamp derived from the constructor's source tokens.
+    ///
+    /// The `#[bean]` and `#[derive(Bean)]` macros hash the constructor body /
+    /// struct fields at compile time, so a code change automatically bumps this
+    /// value. Used by the dev-reload granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your constructor.
+    /// If you implement `Bean` manually and want hot-reload to pick up changes,
+    /// override this constant and bump it whenever you modify the `build` logic:
+    ///
+    /// ```ignore
+    /// impl Bean for MyService {
+    ///     const BUILD_VERSION: u64 = 2; // bump when build() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
+
+    /// Construct the bean from a fully resolved context.
+    fn build(ctx: &BeanContext) -> Self;
+
+    /// Called after registration to allow post-processing (e.g., registering
+    /// post-construct hooks). The default is a no-op.
+    fn after_register(_registry: &mut BeanRegistry) {}
+}
+
+/// Trait for beans that require async initialization (e.g. DB pools, HTTP clients).
+///
+/// Use `#[bean]` on an `impl` block with an `async fn new(...)` constructor,
+/// or implement this trait manually. Register with `.register::<T>()`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as an AsyncBean",
+    label = "this type is not an async bean",
+    note = "add `#[bean]` to your impl block with an `async fn` constructor, or implement `AsyncBean` manually"
+)]
+pub trait AsyncBean: Clone + Send + Sync + 'static {
+    /// Type-level list of dependency types required to construct this bean.
+    ///
+    /// Generated automatically by `#[bean]` on async constructors.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
+
+    /// When `true`, construction is deferred until first injection.
+    /// Set by `#[bean(lazy)]`. See [`Bean::LAZY`] for details.
+    const LAZY: bool = false;
+
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to construct this bean.
+    ///
+    /// `Option<T>` fields are **hard** dependencies on `Option<T>` (the
+    /// whole type, not `T`). A producer must register an `Option<T>` value
+    /// in the context for this bean to resolve.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Returns the config keys referenced by this bean as
+    /// `(key, type_name, kind)` triples. Only
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required` + [`Optional`](ConfigKeyKind::Optional) +
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted under
+    /// `dev-reload` (a `Section` key is a dotted **prefix**, and covers the
+    /// whole subtree under it), [`Live`](ConfigKeyKind::Live) keys are not. The
+    /// default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        Vec::new()
+    }
+
+    /// A version stamp derived from the constructor's source tokens.
+    ///
+    /// The `#[bean]` macro hashes the async constructor body at compile time,
+    /// so a code change automatically bumps this value. Used by the dev-reload
+    /// granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your constructor.
+    /// Override this constant and bump it when you modify `build` logic:
+    ///
+    /// ```ignore
+    /// impl AsyncBean for MyPool {
+    ///     const BUILD_VERSION: u64 = 3; // bump when build() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
+
+    /// Construct the bean asynchronously from a fully resolved context.
+    fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
+
+    /// Called after registration to allow post-processing (e.g., registering
+    /// post-construct hooks). The default is a no-op.
+    fn after_register(_registry: &mut BeanRegistry) {}
+}
+
+/// Trait for producer functions that create types you don't own
+/// (e.g. `SqlitePool`, third-party clients).
+///
+/// Use the `#[producer]` attribute macro on a free function to generate
+/// this implementation automatically. Register with `.register::<P>()`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not registered as a Producer",
+    label = "this type is not a producer",
+    note = "add `#[producer]` to a free function that returns the desired type"
+)]
+pub trait Producer: Send + 'static {
+    /// The type this producer creates.
+    type Output: Clone + Send + Sync + 'static;
+
+    /// Type-level list of dependency types required to produce the output.
+    ///
+    /// Generated automatically by `#[producer]`.
+    /// For manual impls without dependencies, use `type Deps = TNil;`.
+    type Deps;
+
+    /// Returns the [`TypeId`]s and type names of all dependencies needed
+    /// to produce the output.
+    ///
+    /// `Option<T>` parameters are **hard** dependencies on `Option<T>`.
+    fn dependencies() -> Vec<(TypeId, &'static str)>;
+
+    /// Returns the config keys referenced by this producer as
+    /// `(key, type_name, kind)` triples. Only
+    /// [`Required`](ConfigKeyKind::Required) keys are presence-validated;
+    /// `Required` + [`Optional`](ConfigKeyKind::Optional) +
+    /// [`Section`](ConfigKeyKind::Section) keys are fingerprinted under
+    /// `dev-reload` (a `Section` key is a dotted **prefix**, and covers the
+    /// whole subtree under it), [`Live`](ConfigKeyKind::Live) keys are not. The
+    /// default implementation returns an empty list.
+    fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
+        Vec::new()
+    }
+
+    /// A version stamp derived from the producer function's source tokens.
+    ///
+    /// The `#[producer]` macro hashes the function body at compile time,
+    /// so a code change automatically bumps this value. Used by the dev-reload
+    /// granular bean cache to detect code changes.
+    ///
+    /// **Manual implementations:** The default value is `0`, which means the
+    /// dev-reload system will **not** detect code changes in your producer.
+    /// Override this constant and bump it when you modify `produce` logic:
+    ///
+    /// ```ignore
+    /// impl Producer for MyProducer {
+    ///     const BUILD_VERSION: u64 = 1; // bump when produce() changes
+    ///     // ...
+    /// }
+    /// ```
+    const BUILD_VERSION: u64 = 0;
+
+    /// Produce the output from a fully resolved context.
+    ///
+    /// To express conditional availability (a bean that may or may not be
+    /// present depending on config), declare `type Output = Option<T>` and
+    /// return `Some(...)` / `None`. The whole `Option<T>` is registered as
+    /// a bean — consumers inject `Option<T>` as a hard dependency.
+    fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
+
+    /// Called after registration to allow post-processing.
+    fn after_register(_registry: &mut BeanRegistry) {}
+}
+
+/// Lifecycle hook called after all beans have been constructed.
+///
+/// Implement this trait (typically via `#[post_construct]` on a `#[bean]`
+/// method) to run initialization logic that requires the fully assembled bean.
+/// Per-bean fingerprint entries — `(type id, type name, fingerprint)` — used
+/// by the dev-reload graph cache to log which beans changed.
+#[cfg(feature = "dev-reload")]
+pub type BeanFingerprints = Vec<(TypeId, &'static str, u64)>;
+
+/// `Clone` is **not** a supertrait: a bean's post-construct hook is registered
+/// via [`BeanRegistry::register_post_construct`] /
+/// [`register_provided_post_construct`](BeanRegistry::register_provided_post_construct)
+/// (which pull the bean by value from the graph, so they bound `Clone` there),
+/// while a controller core — which is not `Clone` — impls this trait too and is
+/// run from its own `Arc` at startup.
+pub trait PostConstruct: Send + Sync + 'static {
+    fn post_construct(&self) -> crate::lifecycle::LifecycleFuture<'_>;
+}
+
+/// Disposal hook, the symmetric counterpart of [`PostConstruct`].
+///
+/// Implement this trait to run cleanup logic (close pools, flush buffers,
+/// cancel background work) during the server's graceful-shutdown sequence.
+/// A `PreDestroy` hook is invoked against the bean **as it lives in the
+/// resolved graph** (override included), and runs as part of the async
+/// shutdown phase — see
+/// [`AppBuilder::provide_with_pre_destroy`](crate::AppBuilder::provide_with_pre_destroy)
+/// and [`PluginSetupContext::run_pre_destroy`](crate::PluginSetupContext::run_pre_destroy)
+/// for the invocation order.
+pub trait PreDestroy: Clone + Send + Sync + 'static {
+    fn pre_destroy(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+/// Unified registration entry point for beans, async beans, and producers.
+///
+/// Implemented automatically by `#[bean]`, `#[derive(Bean)]`, and `#[producer]`
+/// as an inherent per-type impl (never a blanket impl, to avoid overlap). It
+/// lets [`AppBuilder::register`](crate::AppBuilder::register) register any of
+/// the three registration kinds through a single method:
+///
+/// - `#[bean]` (sync) / `#[derive(Bean)]` → `Provided = Self`,
+///   `Deps = <Self as Bean>::Deps`.
+/// - `#[bean]` (async) → `Provided = Self`, `Deps = <Self as AsyncBean>::Deps`.
+/// - `#[producer]` → `Provided = <Self as Producer>::Output`,
+///   `Deps = <Self as Producer>::Deps`.
+pub trait Registrable {
+    /// The type made available in the [`BeanContext`] once registered.
+    ///
+    /// For beans this is `Self`; for producers it is the producer's `Output`.
+    /// Tracked in the builder's compile-time provision list.
+    type Provided: Clone + Send + Sync + 'static;
+
+    /// The type-level list of dependency types required to construct the value.
+    type Deps;
+
+    /// Register this type into the given [`BeanRegistry`].
+    fn register_into(registry: &mut BeanRegistry);
+}

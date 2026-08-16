@@ -1,184 +1,129 @@
-//! Full serve lifecycle: the scheduler's `on_serve` hook starts tasks and, in
-//! dedicated-pool mode, its `on_shutdown_async` hook drains the private pool on
-//! graceful stop. Driven with `StopHandle` (no OS signal).
+//! The scheduler under the *serving* lifecycle: who owns the driver, and what
+//! happens to a tick that is still running when the boot aborts.
+//!
+//! The plugin starts the driver from its serve hook, and serve hooks run BEFORE
+//! the fallible startup hooks — so a `.on_start(...)` returning `Err` is the
+//! sharpest test of the ownership model: it aborts a boot that already has
+//! scheduled work in flight.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
-use r2e_core::config::R2eConfig;
-use r2e_core::http::routing::get;
-use r2e_core::http::Router;
 use r2e_core::AppBuilder;
 use r2e_executor::Executor;
-use r2e_scheduler::{ScheduleConfig, ScheduledTask, ScheduledTaskDef, Scheduler};
+use r2e_scheduler::{
+    PositiveDuration, ScheduleConfig, ScheduledTask, ScheduledTaskDef, Scheduler,
+};
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    drop(l);
-    port
+/// A bean the scheduled tick resolves *through the graph*, the way a
+/// `#[scheduled]` method on a tenant-aware bean does.
+#[derive(Clone)]
+struct Alpha(u32);
+
+/// What a tick captures: a weak handle to the graph (this is exactly what a
+/// `GraphHandle` holds), plus the places it reports to.
+#[derive(Clone)]
+struct TickState {
+    graph: std::sync::Weak<r2e_core::beans::BeanContext>,
+    observations: Arc<Mutex<Vec<String>>>,
+    started: Arc<AtomicUsize>,
 }
 
-fn counting_task(
-    name: &str,
-    schedule: ScheduleConfig,
-    counter: Arc<AtomicUsize>,
-) -> Box<dyn std::any::Any + Send> {
-    let def = ScheduledTaskDef::new(name, schedule, counter, |c: Arc<AtomicUsize>| async move {
-        c.fetch_add(1, Ordering::SeqCst);
-    });
-    let trait_obj: Box<dyn ScheduledTask> = Box::new(def);
+fn boxed_task(task: ScheduledTaskDef<TickState>) -> Box<dyn std::any::Any + Send> {
+    let trait_obj: Box<dyn ScheduledTask> = Box::new(task);
     Box::new(trait_obj)
 }
 
-// ── Dedicated pool: serve starts tasks, stop drains the private pool ─────────
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn dedicated_pool_serve_starts_tasks_and_drains_on_stop() {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    // Dedicated pool with a non-zero graceful timeout (exercises the async
-    // shutdown drain's `shutdown_graceful` arm).
-    let yaml = format!(
-        "server:\n  port: {port}\nscheduler:\n  executor: dedicated\n  shutdown-timeout: 2s\n"
-    );
-    let config = R2eConfig::from_yaml_str(&yaml).unwrap();
-
-    let counter = Arc::new(AtomicUsize::new(0));
-
-    let app = AppBuilder::new()
-        .override_config(config)
-        .load_config::<()>()
-        .plugin(Scheduler)
-        .plugin(Executor)
-        .build_state()
-        .await;
-
-    let registry = app
-        .get_plugin_data::<TaskRegistryHandle>()
-        .expect("scheduler registry should exist");
-    registry.add_boxed_for::<ScheduledTaskMarker>(vec![counting_task(
-        "served",
-        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
-        counter.clone(),
-    )]);
-
-    let app = app
-        .register_routes(Router::new().route("/ping", get(|| async { "pong" })))
-        .prepare(&addr);
-    let stop = app.stop_handle();
-    let server = tokio::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
-
-    // The serve hook must have started the task on the dedicated pool.
-    let mut ticked = false;
-    for _ in 0..100 {
-        if counter.load(Ordering::SeqCst) >= 1 {
-            ticked = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(ticked, "scheduled task did not tick under serve");
-
-    // Graceful stop: drives the dedicated pool's on_shutdown_async drain.
-    stop.stop();
-    match tokio::time::timeout(Duration::from_secs(10), server).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => panic!("server returned error: {e}"),
-        Ok(Err(join_err)) => panic!("server task join error: {join_err}"),
-        Err(_) => panic!("server did not shut down within 10s of stop()"),
+/// A slow tick: it starts, sleeps well past the moment the boot aborts, and
+/// only then resolves the bean — so what it observes is the state of the graph
+/// *after* `run_inner` decided to give up.
+fn slow_probing_task(state: TickState) -> ScheduledTaskDef<TickState> {
+    ScheduledTaskDef {
+        overlap: r2e_scheduler::OverlapPolicy::Skip,
+        skip: None,
+        name: "probe".to_string(),
+        schedule: ScheduleConfig::Interval(PositiveDuration::from_millis(20).unwrap()),
+        state,
+        task: Box::new(|s| {
+            Box::pin(async move {
+                s.started.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let observed = match s.graph.upgrade().and_then(|g| g.try_get::<Alpha>()) {
+                    Some(Alpha(v)) => format!("alive-{v}"),
+                    None => "gone".to_string(),
+                };
+                s.observations.lock().unwrap().push(observed);
+            })
+        }),
     }
 }
 
-// ── Dedicated pool with a zero graceful timeout drains immediately ───────────
+#[tokio::test]
+async fn an_aborted_boot_winds_the_scheduler_down_before_run_returns() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(AtomicUsize::new(0));
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn dedicated_pool_zero_timeout_drains_immediately_on_stop() {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    // shutdown-timeout: 0s exercises the immediate `shutdown()` drain arm.
-    let yaml = format!(
-        "server:\n  port: {port}\nscheduler:\n  executor: dedicated\n  shutdown-timeout: 0s\n"
+    let app = AppBuilder::new()
+        .plugin(Scheduler)
+        .plugin(Executor)
+        .provide(Alpha(21))
+        .build_state()
+        .await;
+
+    let state = TickState {
+        graph: Arc::downgrade(app.bean_context()),
+        observations: observations.clone(),
+        started: started.clone(),
+    };
+    app.get_plugin_data::<TaskRegistryHandle>()
+        .expect("the Scheduler plugin stores a task registry")
+        .add_boxed_for::<ScheduledTaskMarker>(vec![boxed_task(slow_probing_task(state))]);
+
+    // Give the first tick time to fire (20ms cadence) and be in flight, then
+    // abort the boot.
+    let app = app.on_start(|_state| async {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        Err::<(), Box<dyn std::error::Error + Send + Sync>>("startup hook says no".into())
+    });
+
+    let weak = Arc::downgrade(app.bean_context());
+    let prepared = app.prepare("127.0.0.1:0");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let err = tokio::time::timeout(Duration::from_secs(10), prepared.run_with_listener(listener))
+        .await
+        .expect("run() must return: the aborted boot cancels the scheduler")
+        .expect_err("the failing startup hook must abort the boot");
+    assert!(
+        err.to_string().contains("startup hook says no"),
+        "unexpected error: {err}"
     );
-    let config = R2eConfig::from_yaml_str(&yaml).unwrap();
 
-    let counter = Arc::new(AtomicUsize::new(0));
+    // Read the observations with NO sleep in between: everything the scheduler
+    // still had running must be finished by the time `run()` returns, because
+    // the driver is a tracked task (it owns the graph and is joined on the
+    // abort path) and it waits out its in-flight ticks before completing.
+    assert!(
+        started.load(Ordering::SeqCst) >= 1,
+        "the test is meaningless unless a tick was in flight when the boot aborted"
+    );
+    let observed = observations.lock().unwrap().clone();
+    assert_eq!(
+        observed.len(),
+        started.load(Ordering::SeqCst),
+        "every tick that started must have finished before run() returned, got {observed:?}"
+    );
+    assert!(
+        observed.iter().all(|o| o == "alive-21"),
+        "a tick running through an aborted boot must still resolve its beans \
+         through the graph, got {observed:?}"
+    );
 
-    let app = AppBuilder::new()
-        .override_config(config)
-        .load_config::<()>()
-        .plugin(Scheduler)
-        .plugin(Executor)
-        .build_state()
-        .await;
-
-    let registry = app
-        .get_plugin_data::<TaskRegistryHandle>()
-        .expect("scheduler registry should exist");
-    registry.add_boxed_for::<ScheduledTaskMarker>(vec![counting_task(
-        "served_zero",
-        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
-        counter.clone(),
-    )]);
-
-    let app = app
-        .register_routes(Router::new().route("/ping", get(|| async { "pong" })))
-        .prepare(&addr);
-    let stop = app.stop_handle();
-    let server = tokio::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
-
-    let mut ticked = false;
-    for _ in 0..100 {
-        if counter.load(Ordering::SeqCst) >= 1 {
-            ticked = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(ticked, "scheduled task did not tick under serve");
-
-    stop.stop();
-    match tokio::time::timeout(Duration::from_secs(10), server).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => panic!("server returned error: {e}"),
-        Ok(Err(join_err)) => panic!("server task join error: {join_err}"),
-        Err(_) => panic!("server did not shut down within 10s of stop()"),
-    }
-}
-
-// ── No scheduled tasks: the serve hook returns early ─────────────────────────
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn serve_with_no_scheduled_tasks_boots_and_stops_cleanly() {
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    let config = R2eConfig::from_yaml_str(&format!("server:\n  port: {port}\n")).unwrap();
-
-    let app = AppBuilder::new()
-        .override_config(config)
-        .load_config::<()>()
-        .plugin(Scheduler)
-        .plugin(Executor)
-        .build_state()
-        .await;
-
-    // No tasks registered: the serve hook calls into task startup and returns
-    // early because the extracted task list is empty.
-    let app = app
-        .register_routes(Router::new().route("/ping", get(|| async { "pong" })))
-        .prepare(&addr);
-    let stop = app.stop_handle();
-    let server = tokio::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
-
-    // Give the serve hook a chance to run, then stop.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    stop.stop();
-    match tokio::time::timeout(Duration::from_secs(10), server).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => panic!("server returned error: {e}"),
-        Ok(Err(join_err)) => panic!("server task join error: {join_err}"),
-        Err(_) => panic!("server did not shut down within 10s of stop()"),
-    }
+    // …and once it is over, the scheduler holds nothing: no driver task, no
+    // graph.
+    assert!(
+        weak.upgrade().is_none(),
+        "the wound-down scheduler must not pin the graph"
+    );
 }

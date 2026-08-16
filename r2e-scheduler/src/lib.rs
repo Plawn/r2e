@@ -7,7 +7,7 @@ mod driver;
 mod duration;
 mod types;
 
-pub use driver::{start_jobs, SchedulerCommands};
+pub use driver::{jobs_driver, start_jobs, SchedulerCommands};
 pub use duration::{parse_duration, PositiveDuration};
 pub use types::{
     extract_tasks, OverlapPolicy, ScheduleConfig, ScheduleParseError, ScheduledJob,
@@ -27,7 +27,8 @@ use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::ConfigProperties;
-use r2e_core::{AppBuilder, BeanContext, DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
+use r2e_core::{AppBuilder, BeanContext, PreStatePlugin};
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 
 /// Handle to the scheduler runtime.
@@ -106,9 +107,13 @@ impl SchedulerHandle {
     }
 
     /// Pause a scheduled job by name. A paused job keeps advancing its cadence
-    /// but never fires until [`resume`](Self::resume)d.
+    /// but never fires until [`resume`](Self::resume)d — so an ordinary
+    /// pause → resume costs the job no fire beyond the ones it slept through,
+    /// and never doubles its cadence.
     ///
-    /// Returns `false` if the job is unknown or this handle has no driver.
+    /// Returns `false` if the job is unknown, this handle has no driver, or
+    /// the scheduler is shutting down (see the note on
+    /// [`trigger_now`](Self::trigger_now)).
     pub async fn pause(&self, name: &str) -> bool {
         self.send(|reply| Command::Pause {
             name: name.to_string(),
@@ -117,8 +122,42 @@ impl SchedulerHandle {
         .await
     }
 
-    /// Resume a paused job by name. Returns `false` if the job is unknown or
-    /// this handle has no driver.
+    /// Resume a paused job by name.
+    ///
+    /// # The resume contract
+    ///
+    /// A paused job — by `pause`, or disabled by a tick-factory panic — never
+    /// fires. `resume` replies `true` **iff the job can fire again, as far as
+    /// the driver can tell when the command is handled**: it keeps its
+    /// already-scheduled deadline when one is still armed; when one of its
+    /// ticks is in flight and due to re-arm the job on completion, it reports
+    /// whether the schedule still yields a next occurrence; otherwise it
+    /// re-arms from now (interval: now + period; cron: the next matching slot)
+    /// and reports the outcome. A schedule that can never fire again — spent or
+    /// overflowed — stays unarmed and `resume` replies `false`.
+    ///
+    /// The in-flight answer is a snapshot, not a promise: a cron's final slot
+    /// can pass between the reply and the tick's completion, and the job then
+    /// ends unarmed with `next_run: None`. No implementation can rule that out
+    /// — but the *end state* is always honest, and
+    /// [`ScheduledJobInfo::next_run`] is the authority on it.
+    ///
+    /// Which side a factory panic lands on depends on where it happened, and
+    /// the contract covers both without the caller having to know:
+    /// [`OverlapPolicy::Concurrent`] and `trigger_now` panic without touching
+    /// the cadence, so the job keeps whatever deadline it holds *if any* — the
+    /// `Concurrent` one was pushed before the tick was built and is kept and
+    /// honoured, while a `trigger_now` on a job that holds none (spent,
+    /// overflowed, or a `Skip` job with its deadline in flight) is re-armed
+    /// from now like any other unarmed job. [`OverlapPolicy::Skip`] panics with
+    /// its deadline already consumed, so the job is re-armed one full period
+    /// from the resume.
+    ///
+    /// `false` therefore means "no revival": either the name is unknown, this
+    /// handle has no driver, the scheduler is shutting down (see the note on
+    /// [`trigger_now`](Self::trigger_now)), or the schedule is spent — in the
+    /// last case the paused flag is still cleared, there is simply nothing left
+    /// to fire.
     pub async fn resume(&self, name: &str) -> bool {
         self.send(|reply| Command::Resume {
             name: name.to_string(),
@@ -130,8 +169,24 @@ impl SchedulerHandle {
     /// Fire a job once, immediately and out of band — allowed even when the job
     /// is paused. The out-of-band tick does not disturb the regular schedule.
     ///
-    /// Returns `false` if the job is unknown, this handle has no driver, or the
-    /// job uses [`OverlapPolicy::Skip`] and a tick is already in flight.
+    /// Returns `false` whenever no tick was started — the job is unknown, this
+    /// handle has no driver, the scheduler is shutting down (see below), the job
+    /// uses [`OverlapPolicy::Skip`] and a tick is already in flight, the
+    /// executor pool is closed (the driver answers first, then stops: nothing
+    /// can run again), or the tick factory panicked (contained, and the job is
+    /// disabled exactly as it would be on a cadence fire).
+    ///
+    /// # Once shutdown has started
+    ///
+    /// Every runtime command returns `false` from the moment the driver is
+    /// cancelled, including a command that was already queued when cancellation
+    /// happened: the driver polls cancellation with priority (`biased` select)
+    /// and refuses any command it still dequeues afterwards, then closes the
+    /// command channel before draining its in-flight ticks. So commands resolve
+    /// immediately instead of blocking on a driver that will never answer, and
+    /// `trigger_now` can never start a tick once shutdown began. Calling any of
+    /// them from *inside* a tick body during shutdown is therefore safe: a
+    /// no-op, never a deadlock.
     pub async fn trigger_now(&self, name: &str) -> bool {
         self.send(|reply| Command::TriggerNow {
             name: name.to_string(),
@@ -185,8 +240,27 @@ pub struct ScheduledJobInfo {
     pub last_run: Option<chrono::DateTime<chrono::Utc>>,
     /// Wall duration of the most recent completed tick (submit → completion).
     pub last_duration: Option<Duration>,
-    /// Wall-clock time the job is next expected to fire, or `None` when the
-    /// schedule is exhausted (a spent cron).
+    /// The deadline the job currently holds, as wall-clock time — `Some` **iff
+    /// a live driver holds one for it**. That is the invariant this field
+    /// carries, and it is about the deadline, not about the fire: for a
+    /// **paused** job the value is when the job *would* fire were it resumed;
+    /// the cadence keeps advancing on the heap and each of those deadlines is
+    /// re-armed instead of submitted, so the instant shown is real even though
+    /// the fire is skipped.
+    ///
+    /// `None` means the job holds no deadline: a spent cron, a next fire that
+    /// is not representable on the monotonic clock (an absurd interval or
+    /// initial delay — logged at `WARN`), a job disabled by a tick-factory
+    /// panic that consumed its deadline, an [`OverlapPolicy::Skip`] job **while
+    /// its tick runs** (the deadline that fired is spent; the job is re-armed,
+    /// and a fresh `next_run` published, when the tick completes), a deadline
+    /// consumed by a submission that never ran (the pool was closed), **and
+    /// every job once the driver has stopped** — cancelled or stopped by a
+    /// closed pool, the driver clears every published deadline on its way out,
+    /// because nothing is left that could fire one. A job with a *recomputable*
+    /// schedule is revived by [`SchedulerHandle::resume`] (which re-arms it
+    /// from now); one whose schedule is spent stays `None` and `resume` reports
+    /// `false`.
     pub next_run: Option<chrono::DateTime<chrono::Utc>>,
     /// Number of ticks whose body actually ran (scheduled and trigger-now).
     /// Ticks suppressed by a skip predicate count in [`skip_count`](Self::skip_count) instead.
@@ -194,9 +268,20 @@ pub struct ScheduledJobInfo {
     /// Number of ticks suppressed by the job's skip predicate
     /// (`#[scheduled(skip_if = "...")]` / [`ScheduledTaskDef::with_skip_if`]).
     pub skip_count: u64,
-    /// Number of ticks that panicked (contained by the pool).
+    /// Number of panics attributed to this job: tick *bodies* that panicked
+    /// (contained by the pool) plus tick *factory* panics — the user closure
+    /// raising while the driver builds the tick, which also disables the job
+    /// (see [`paused`](Self::paused)).
     pub panic_count: u64,
-    /// Whether the job is currently paused.
+    /// Whether the job is currently paused: explicitly via
+    /// [`SchedulerHandle::pause`], or automatically because its tick factory
+    /// panicked (a construction failure repeats on every fire, so the driver
+    /// disables the job instead of looping on it). Either way the job never
+    /// fires while this is set, and [`SchedulerHandle::resume`] is the way
+    /// back — keeping the deadline the job still holds, or re-arming it from
+    /// now when it holds none. Pair this with
+    /// [`next_run`](Self::next_run): `paused` + `next_run: None` is a job that
+    /// is both stopped and off the clock.
     pub paused: bool,
 }
 
@@ -253,19 +338,19 @@ impl ScheduledJobRegistry {
 
     /// Register a job in the registry.
     pub fn register(&self, info: ScheduledJobInfo) {
-        self.inner.lock().unwrap().push(info);
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).push(info);
     }
 
     /// List all registered jobs (a snapshot of their current stats).
     pub fn list_jobs(&self) -> Vec<ScheduledJobInfo> {
-        self.inner.lock().unwrap().clone()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Snapshot of a single job by name.
     pub fn job(&self, name: &str) -> Option<ScheduledJobInfo> {
         self.inner
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .find(|i| i.name == name)
             .cloned()
@@ -273,7 +358,7 @@ impl ScheduledJobRegistry {
 
     /// Insert a bare entry for `name` if none exists yet (idempotent).
     pub(crate) fn upsert(&self, name: &str, schedule: &str) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !g.iter().any(|i| i.name == name) {
             g.push(ScheduledJobInfo::new(name, schedule));
         }
@@ -283,7 +368,7 @@ impl ScheduledJobRegistry {
     /// driver to keep runtime stats current.
     #[doc(hidden)] // pub for tests only; not part of the public API
     pub fn update_job(&self, name: &str, f: impl FnOnce(&mut ScheduledJobInfo)) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(info) = g.iter_mut().find(|i| i.name == name) {
             f(info);
         }
@@ -316,8 +401,8 @@ impl Default for ScheduledJobRegistry {
 /// somewhere in the builder chain. This is enforced at compile time via the
 /// plugin's `Deps`: a missing `PoolExecutor` is a guided compile error at
 /// `build_state()`, not a runtime failure. Running ticks on the pool also means
-/// a panicking tick is contained in its pool job — the schedule loop logs and
-/// keeps ticking instead of dying.
+/// a panicking tick body is contained in its pool job — the driver logs it and
+/// keeps ticking every job instead of dying.
 ///
 /// # Example
 ///
@@ -404,76 +489,109 @@ impl PreStatePlugin for Scheduler {
     type Config = SchedulerConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("scheduler");
 
-    fn install(
-        &mut self,
-        ctx: &mut PluginInstallContext<'_>,
-    ) -> (CancellationToken, ScheduledJobRegistry) {
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
+        // The task registry must exist while controllers/beans register their
+        // `#[scheduled]` methods, even when `scheduler.enabled = false` (tasks
+        // are collected but never started then) — so it is stored here, not as
+        // an enabled-gated build effect.
+        ctx.store_data(TaskRegistryHandle::new());
+    }
+
+    async fn build(
+        self,
+        (shared_executor,): Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         let token = CancellationToken::new();
         let job_registry = ScheduledJobRegistry::new();
 
-        // Runtime command channel: sender lives on the handle (extension),
-        // receiver is stashed for `configure` to thread into the driver.
-        let (handle, commands) = SchedulerHandle::channel(token.clone());
-        let task_registry = TaskRegistryHandle::new();
-        let cancel_for_stopper = token.clone();
-
-        // Add the layer that provides SchedulerHandle via extension.
-        ctx.add_layer(move |router| router.layer(r2e_core::http::Extension(handle)));
-
-        // Store the task registry for use during controller registration.
-        ctx.store_data(task_registry);
-        // Hand the command receiver to `configure` (picked up via take_data).
-        ctx.store_data(commands);
-
-        // Register shutdown hook.
-        ctx.on_shutdown(move || {
-            cancel_for_stopper.cancel();
-        });
-
-        (token, job_registry)
-    }
-
-    fn configure(
-        self,
-        (token, job_registry): &(CancellationToken, ScheduledJobRegistry),
-        (shared_executor,): (PoolExecutor,),
-        config: Option<SchedulerConfig>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        let token = token.clone();
-        let job_registry = job_registry.clone();
-        // Pick up the command receiver stored at install; fall back to a
-        // disconnected handle if it's somehow absent (keeps the driver inert).
-        let commands = ctx
-            .take_data::<SchedulerCommands>()
-            .unwrap_or_else(SchedulerCommands::disconnected);
-
         // Resolve which pool ticks run on. Dedicated mode builds a private pool
-        // and registers its own graceful drain.
-        let executor = resolve_executor(config, shared_executor, ctx);
+        // and registers its own graceful drain — that drain intentionally
+        // captures the pool it just built (nothing else owns it; it is not a
+        // bean, so there is no graph copy to prefer).
+        let executor = resolve_executor(config, shared_executor, ctx)?;
 
-        // Register a serve hook to start scheduled tasks. Drains only
-        // scheduler-owned tasks from the shared registry so hooks for
-        // other subsystems don't see them.
-        ctx.on_serve(move |serve_ctx| {
-            let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
-            start_scheduled_tasks(tasks, token, job_registry, executor, commands);
+        // Cleanup lane: cancelling the scheduler is disposal, not surface, so it
+        // survives `scheduler.enabled = false`. It resolves the token through
+        // the graph handle for the same reason the serve hook does (below) — a
+        // pinned `CancellationToken` is the one the app can observe.
+        let graph = ctx.graph();
+        let built_token = token.clone();
+        ctx.on_shutdown(move || {
+            graph
+                .bean::<CancellationToken>()
+                .unwrap_or(built_token)
+                .cancel();
         });
+
+        // Surface lane: the handle extension and the driver start. Both are
+        // registered from `after_build` so the token and registry they use are
+        // the ones the GRAPH exposes, not the instances this `build` just made.
+        // Under a partial pin (`override_bean(ScheduledJobRegistry::new())` in a
+        // test) the plugin still runs and still provides its own values, but the
+        // graph — and therefore every reader — sees the pinned ones; a captured
+        // instance would leave the driver writing job stats nobody can read.
+        // Falling back to the built value keeps this total: `try_get` can only
+        // miss if the projection was dropped, in which case ours is all there is.
+        let fallback_token = token.clone();
+        let fallback_registry = job_registry.clone();
+        ctx.after_build(move |dctx| {
+            let token = dctx
+                .bean_context()
+                .try_get::<CancellationToken>()
+                .unwrap_or(fallback_token);
+            let registry = dctx
+                .bean_context()
+                .try_get::<ScheduledJobRegistry>()
+                .unwrap_or(fallback_registry);
+
+            // Runtime command channel: sender lives on the handle (extension),
+            // receiver moves straight into the serve hook. Built here so the
+            // handle's token is the same one the driver waits on.
+            let (handle, commands) = SchedulerHandle::channel(token.clone());
+            dctx.add_layer(Box::new(move |router| {
+                router.layer(r2e_core::http::Extension(handle))
+            }));
+
+            // Start scheduled tasks at serve time. Drains only scheduler-owned
+            // tasks from the shared registry so hooks for other subsystems
+            // don't see them. The driver goes through `ServeContext::track`,
+            // never a bare spawn: tracked tasks own a clone of the bean graph
+            // while they run (so a tick resolving a `GraphHandle` always sees a
+            // live graph) and the framework cancels + drains them on every exit
+            // path, including a boot aborted by a later startup hook.
+            dctx.on_serve(move |serve_ctx| {
+                let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
+                if let Some(driver) = scheduled_tasks_driver(
+                    tasks,
+                    token,
+                    serve_ctx.shutdown_token(),
+                    registry,
+                    executor,
+                    commands,
+                ) {
+                    serve_ctx.track(driver);
+                }
+            });
+        });
+
+        Ok((token, job_registry))
     }
 }
 
 /// Resolve the [`PoolExecutor`] scheduled ticks run on from the `scheduler.*`
 /// config: the shared pool (default) or a private, dedicated pool.
 ///
-/// An unrecognized `executor` value panics at boot, consistent with plugin
+/// An unrecognized `executor` value fails the boot, consistent with plugin
 /// config validation style.
 fn resolve_executor(
     config: Option<SchedulerConfig>,
     shared: PoolExecutor,
-    ctx: &mut DeferredContext<'_>,
-) -> PoolExecutor {
+    ctx: &mut PluginBuildContext,
+) -> Result<PoolExecutor, PluginBuildError> {
     let config = config.unwrap_or_default();
-    match config.executor.as_deref() {
+    Ok(match config.executor.as_deref() {
         None | Some("shared") => shared,
         Some("dedicated") => {
             let defaults = ExecutorConfig::default();
@@ -495,10 +613,13 @@ fn resolve_executor(
             });
             pool
         }
-        Some(other) => panic!(
-            "Invalid `scheduler.executor` value {other:?}: expected \"shared\" or \"dedicated\""
-        ),
-    }
+        Some(other) => {
+            return Err(format!(
+                "Invalid `scheduler.executor` value {other:?}: expected \"shared\" or \"dedicated\""
+            )
+            .into())
+        }
+    })
 }
 
 /// Extension trait for `AppBuilder` to register scheduled tasks dynamically —
@@ -674,11 +795,12 @@ pub(crate) fn format_schedule(config: &ScheduleConfig) -> String {
     }
 }
 
-/// Start scheduled tasks from boxed task definitions.
+/// Build the driver future for the scheduled tasks collected at registration.
 ///
-/// This function is called by the builder's serve() method. It receives:
+/// This function is called from the plugin's serve hook. It receives:
 /// - `boxed_tasks`: Type-erased task definitions (Vec<Box<dyn Any + Send>>)
-/// - `token`: The cancellation token
+/// - `token`: The scheduler's own cancellation token (the bean)
+/// - `app_shutdown`: The app shutdown token, relayed into `token` (see below)
 /// - `job_registry`: Registry to populate with job metadata
 /// - `executor`: The shared pool each tick body is submitted to
 ///
@@ -686,19 +808,24 @@ pub(crate) fn format_schedule(config: &ScheduleConfig) -> String {
 /// no state parameter is needed here. The function extracts tasks by
 /// downcasting to `Box<dyn ScheduledTask>`, populates the job registry with
 /// metadata (read before conversion), converts every task into a
-/// [`ScheduledJob`], and hands them to a single driver task via
-/// [`start_jobs`] — all schedules share one driver backed by a min-heap of
-/// next-fire times, not one Tokio task per schedule.
-fn start_scheduled_tasks(
+/// [`ScheduledJob`], and folds them into ONE [`jobs_driver`] future — all
+/// schedules share a single driver backed by a min-heap of next-fire times,
+/// not one Tokio task per schedule.
+///
+/// Returns `None` when there is nothing to schedule, so the caller tracks a
+/// task only when one is warranted (an empty driver would still hold the graph
+/// alive until shutdown).
+fn scheduled_tasks_driver(
     boxed_tasks: Vec<Box<dyn Any + Send>>,
     token: CancellationToken,
+    app_shutdown: CancellationToken,
     job_registry: ScheduledJobRegistry,
     executor: PoolExecutor,
     commands: SchedulerCommands,
-) {
+) -> Option<impl Future<Output = ()> + Send + 'static> {
     let tasks = extract_tasks(boxed_tasks);
     if tasks.is_empty() {
-        return;
+        return None;
     }
 
     // Populate the job registry with task metadata before conversion. The
@@ -716,5 +843,35 @@ fn start_scheduled_tasks(
     let count = tasks.len();
     tracing::info!(count, "Starting scheduled tasks");
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
-    start_jobs(jobs, token, executor, job_registry, commands);
+    let driver = jobs_driver(jobs, token.clone(), executor, job_registry, commands);
+
+    // Two independent signals must stop this driver, so the wrapper relays one
+    // into the other:
+    //
+    // - the scheduler's OWN token (a bean: the plugin's sync shutdown hook
+    //   cancels it early in the shutdown sequence, and application code can
+    //   cancel it directly). It is what `jobs_driver` waits on;
+    // - the APP shutdown token, cancelled on every exit of `run()` — including
+    //   the ones no hook survives: a panic unwinding out of the serving
+    //   lifecycle, or the whole `run()` future being dropped by an `r2e dev`
+    //   hot patch. Without the relay the driver would keep ticking (and keep
+    //   the previous cycle's bean graph alive) with nobody left to stop it.
+    //
+    // The relay branch is disarmed after it fires: `cancelled()` stays ready
+    // forever, and the driver still has to be polled to completion while it
+    // drains its in-flight ticks.
+    Some(async move {
+        let driver = driver;
+        tokio::pin!(driver);
+        let mut relayed = false;
+        loop {
+            tokio::select! {
+                _ = &mut driver => break,
+                _ = app_shutdown.cancelled(), if !relayed => {
+                    relayed = true;
+                    token.cancel();
+                }
+            }
+        }
+    })
 }

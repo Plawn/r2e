@@ -47,8 +47,7 @@ use std::time::Duration;
 use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use r2e_core::config::ConfigProperties;
-use r2e_core::plugin::{PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 pub use r2e_core::rt::{JobHandle, JoinError};
 
@@ -316,6 +315,11 @@ impl PoolExecutor {
         }
     }
 
+    /// The pool's concurrency cap, as resolved from [`ExecutorConfig`].
+    pub fn max_concurrent(&self) -> u64 {
+        self.inner.max_concurrent
+    }
+
     /// True once [`shutdown`](Self::shutdown) has been called.
     pub fn is_shut_down(&self) -> bool {
         self.inner.shutdown.is_cancelled()
@@ -355,29 +359,53 @@ impl PoolExecutor {
 
 /// Plugin that builds a [`PoolExecutor`] from `R2eConfig` and provides it as a bean.
 ///
-/// Reads the `executor.*` section. Falls back to [`ExecutorConfig::default`] when
-/// no config is loaded or the section is absent.
+/// Reads the `executor.*` section (typed, validated at boot). Falls back to
+/// [`ExecutorConfig::default`] when no config is loaded or the section is
+/// absent. Install with `.plugin(Executor)` — position relative to
+/// `load_config()` does not matter.
 ///
-/// Install with `.plugin(Executor)` **before** `build_state()`.
+/// # `executor.enabled = false` is not an off-switch
+///
+/// The pool is a hard dependency: `#[async_exec]`, `#[derive(BackgroundService)]`
+/// and the `Scheduler` plugin all take `PoolExecutor` through `Deps`, so the bean
+/// must exist whether or not the plugin is "enabled". Disabling it therefore only
+/// drops the plugin's *surface* effects — and this plugin has none: its single
+/// effect is the graceful drain, which is a cleanup hook and survives the gate by
+/// design (see `PreStatePlugin` § Disabled plugins).
+///
+/// What `enabled = false` buys you is nothing but a log line, so the build logs a
+/// warning instead of silently pretending the pool went away. A pool that is never
+/// submitted to is already inert — construction only allocates a semaphore and a
+/// few counters; tasks are spawned per `submit`. To bound it instead, set
+/// `executor.max-concurrent`.
 pub struct Executor;
 
 impl PreStatePlugin for Executor {
     type Provided = (PoolExecutor,);
     type Deps = ();
-    type Config = ();
+    type Config = ExecutorConfig;
+    const CONFIG_PREFIX: Option<&'static str> = Some("executor");
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> (PoolExecutor,) {
-        let config = ctx
-            .config()
-            .map(|c| ExecutorConfig::from_config(c, Some("executor")))
-            .transpose()
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Invalid executor config; using defaults");
-                None
-            })
-            .unwrap_or_default();
-
-        let executor = PoolExecutor::new(config);
+    async fn build(
+        self,
+        _deps: (),
+        config: Option<ExecutorConfig>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(PoolExecutor,), PluginBuildError> {
+        if !ctx.enabled() {
+            // The pool bean is still built: it is a compile-time `Deps` of
+            // `#[async_exec]`, `BackgroundService` and `Scheduler`, so it cannot
+            // be withheld. Say so rather than let `enabled = false` read as an
+            // off-switch. The drain hook below is cleanup, not surface, and runs
+            // either way.
+            tracing::warn!(
+                "`executor.enabled = false` does not remove the pool — `PoolExecutor` is a \
+                 required dependency of `#[async_exec]`, `#[derive(BackgroundService)]` and the \
+                 Scheduler. The pool is built (inert until submitted to) and still drains on \
+                 shutdown; use `executor.max-concurrent` to bound it."
+            );
+        }
+        let executor = PoolExecutor::new(config.unwrap_or_default());
         let shutdown_handle = executor.clone();
 
         ctx.on_shutdown_async(move || async move {
@@ -389,6 +417,6 @@ impl PreStatePlugin for Executor {
             let _ = shutdown_handle.shutdown_graceful(timeout).await;
         });
 
-        (executor,)
+        Ok((executor,))
     }
 }

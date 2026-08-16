@@ -31,7 +31,8 @@ async fn token_validates_with_claims_validator() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     // 1. Get a token.
@@ -86,7 +87,8 @@ async fn client_credentials_grant() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -126,7 +128,8 @@ async fn client_credentials_grant_with_basic_auth() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -163,7 +166,8 @@ async fn userinfo_rejects_client_credentials_token() {
         .with_client_registry(clients);
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -207,7 +211,8 @@ async fn client_credentials_invalid_secret() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -242,7 +247,8 @@ async fn client_credentials_not_configured() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     let req = Request::builder()
@@ -280,7 +286,8 @@ async fn base_path_routing() {
 
     let app = r2e_core::AppBuilder::new()
         .plugin(oidc)
-        .with_state(())
+        .build_state()
+        .await
         .build();
 
     // Token endpoint should be at /auth/oauth/token.
@@ -303,4 +310,74 @@ async fn base_path_routing() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// Pinning the ONE bean the OIDC plugin provides must not unmount its routes.
+///
+/// `Arc<JwtClaimsValidator>` is the whole of `OidcServer::Provided`, and every
+/// harness that stubs authentication pins exactly that (`TestApp` does). The
+/// plugin's real output — `/oauth/token`, discovery, JWKS, `/userinfo` — is a
+/// build **effect**, which no bean pin can stand in for. Hence
+/// `SKIP_BUILD_WHEN_ALL_PINNED` defaults to `false`: OIDC never opts in.
+#[r2e_core::test]
+async fn pinning_the_validator_keeps_the_oidc_routes() {
+    use r2e_core::type_list::BeanAccess;
+    use r2e_security::{JwtClaimsValidator, SecurityConfig};
+    use std::sync::Arc;
+
+    let mock = Arc::new(JwtClaimsValidator::new_with_static_key(
+        jsonwebtoken::DecodingKey::from_secret(b"mock-key"),
+        SecurityConfig::new("local", "http://mock", "mock-app"),
+    ));
+
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "password123",
+        OidcUser {
+            sub: "user-1".into(),
+            ..Default::default()
+        },
+    );
+    let oidc = OidcServer::new()
+        .enable_password_grant_for_development()
+        .with_user_store(users);
+
+    let app = r2e_core::AppBuilder::new()
+        .override_bean(Arc::clone(&mock))
+        .plugin(oidc)
+        .build_state()
+        .await;
+
+    // The pin wins for the bean itself…
+    assert!(
+        Arc::ptr_eq(&app.state().get::<Arc<JwtClaimsValidator>>(), &mock),
+        "the pinned validator must win over the plugin's own"
+    );
+
+    // …and the routes are still there: the build ran despite the full pin.
+    let router = app.build();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/oauth/token")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "grant_type=password&username=alice&password=password123",
+        ))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/oauth/token must still be mounted when the validator is pinned"
+    );
+
+    let resp = router
+        .oneshot(
+            Request::get("/.well-known/openid-configuration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "discovery still mounted");
 }

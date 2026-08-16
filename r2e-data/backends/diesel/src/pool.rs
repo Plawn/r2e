@@ -242,7 +242,7 @@ where
     Conn: Connection + R2D2Connection + 'static,
 {
     let factory = Arc::clone(factory);
-    tokio::task::spawn_blocking(move || factory(url))
+    r2e_core::rt::spawn_blocking(move || factory(url))
         .await
         .map_err(|error| PoolError(format!("pool build task failed: {error}")))?
 }

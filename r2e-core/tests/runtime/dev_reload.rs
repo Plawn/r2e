@@ -442,7 +442,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .await
         .prepare("127.0.0.1:0");
     let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let first_server = tokio::spawn(async move {
+    let first_server = r2e_core::rt::spawn(async move {
         first
             .run_with_listener(first_listener)
             .await
@@ -459,7 +459,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .prepare("127.0.0.1:0");
     let stop = second.stop_handle();
     let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let second_server = tokio::spawn(async move {
+    let second_server = r2e_core::rt::spawn(async move {
         second
             .run_with_listener(second_listener)
             .await
@@ -472,4 +472,124 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .expect("replacement server task panicked");
     assert!(result.is_ok(), "replacement server failed: {result:?}");
     assert_eq!(DISPOSES.load(Ordering::SeqCst), 1);
+}
+
+// ── Plugin beans across cycles ───────────────────────────────────────────────
+
+static PLUGIN_BUILDS: AtomicU32 = AtomicU32::new(0);
+static USES_PLUGIN_BUILDS: AtomicU32 = AtomicU32::new(0);
+
+/// A plugin provision. `identity` makes "the same instance" observable —
+/// a rebuilt plugin hands out a NEW `Arc`.
+#[derive(Clone)]
+struct PluginBean {
+    identity: Arc<()>,
+}
+
+struct CountingPlugin;
+
+impl r2e_core::PreStatePlugin for CountingPlugin {
+    type Provided = (PluginBean,);
+    type Deps = ();
+    type Config = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut r2e_core::plugin::PluginBuildContext,
+    ) -> Result<(PluginBean,), r2e_core::plugin::PluginBuildError> {
+        PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
+        Ok((PluginBean {
+            identity: Arc::new(()),
+        },))
+    }
+}
+
+/// An ordinary bean depending on a plugin provision — the split-brain victim.
+#[derive(Clone)]
+struct UsesPlugin {
+    inner: PluginBean,
+}
+
+impl Bean for UsesPlugin {
+    type Deps = TCons<PluginBean, TNil>;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![(TypeId::of::<PluginBean>(), "PluginBean")]
+    }
+    fn build(ctx: &BeanContext) -> Self {
+        USES_PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
+        Self { inner: ctx.get() }
+    }
+}
+
+impl Registrable for UsesPlugin {
+    type Provided = Self;
+    type Deps = TCons<PluginBean, TNil>;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
+#[r2e_core::test]
+async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
+    // Plugin nodes are `volatile`: their factory re-runs on EVERY cycle,
+    // fingerprint or not (a patched plugin body must take effect, and the
+    // effects have to be re-registered on the fresh router). A dependent that
+    // is reused therefore keeps a clone of the previous cycle's provision while
+    // the context exposes a brand new one — split-brain. In production shapes
+    // that is a service holding a `Tenanted<T>` whose `GraphHandle` points at
+    // the graph that was just dropped: every tenant lookup fails `NoSource`.
+    let _serial = crate::dev_serial::dev_serial();
+    r2e_core::invalidate_state_cache();
+    r2e_core::dev::mark_hot_reload_loop();
+    PLUGIN_BUILDS.store(0, Ordering::SeqCst);
+    USES_PLUGIN_BUILDS.store(0, Ordering::SeqCst);
+
+    let app1 = AppBuilder::new()
+        .plugin(CountingPlugin)
+        .register::<UsesPlugin>()
+        .build_state()
+        .await;
+    let state1 = app1.state().clone();
+    assert_eq!(PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
+    assert_eq!(USES_PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
+    assert!(Arc::ptr_eq(
+        &state1.get::<PluginBean>().identity,
+        &state1.get::<UsesPlugin>().inner.identity,
+    ));
+
+    // Cycle 2: identical fingerprint — the plugin still re-runs.
+    let app2 = AppBuilder::new()
+        .plugin(CountingPlugin)
+        .register::<UsesPlugin>()
+        .build_state()
+        .await;
+    let state2 = app2.state().clone();
+
+    assert_eq!(
+        PLUGIN_BUILDS.load(Ordering::SeqCst),
+        2,
+        "a volatile plugin node re-runs every cycle"
+    );
+    assert!(
+        !Arc::ptr_eq(
+            &state1.get::<PluginBean>().identity,
+            &state2.get::<PluginBean>().identity,
+        ),
+        "cycle 2 exposes a fresh provision"
+    );
+    assert_eq!(
+        USES_PLUGIN_BUILDS.load(Ordering::SeqCst),
+        2,
+        "the dependent must rebuild with the plugin bean it captured"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &state2.get::<PluginBean>().identity,
+            &state2.get::<UsesPlugin>().inner.identity,
+        ),
+        "the dependent is holding the PREVIOUS cycle's plugin bean while the \
+         graph exposes a new one"
+    );
 }

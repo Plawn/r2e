@@ -50,9 +50,8 @@
 //! reported as [`TenantError::Cycle`] naming the chain.
 
 use std::any::{type_name, TypeId};
-use std::sync::Arc;
 
-use r2e_core::BeanContext;
+use r2e_core::plugin::GraphHandle;
 
 use crate::error::{BoxError, TenantError};
 use crate::map::Tenanted;
@@ -104,19 +103,15 @@ where
 /// - [`bean`](Self::bean) — plain app-scoped beans out of the graph.
 pub struct TenantContext<'a> {
     tenant: &'a TenantId,
-    beans: Arc<BeanContext>,
+    graph: GraphHandle,
     chain: ResolutionChain,
 }
 
 impl<'a> TenantContext<'a> {
-    pub(crate) fn new(
-        tenant: &'a TenantId,
-        beans: Arc<BeanContext>,
-        chain: ResolutionChain,
-    ) -> Self {
+    pub(crate) fn new(tenant: &'a TenantId, graph: GraphHandle, chain: ResolutionChain) -> Self {
         Self {
             tenant,
-            beans,
+            graph,
             chain,
         }
     }
@@ -134,13 +129,40 @@ impl<'a> TenantContext<'a> {
     /// [`TenantError::NoSource`] when no `PerTenant<U, _>` plugin is installed,
     /// and with [`TenantError::Cycle`] when this would re-enter a type already
     /// being created for this tenant.
+    ///
+    /// The graph is reached through a weak [`GraphHandle`]; a graph already
+    /// dropped reads the same as a missing map (`NoSource`). In a served app
+    /// that window is not reachable from a handler: the router owns the graph
+    /// and hands a strong reference to every request future and response body
+    /// it starts, so a request cannot outlive it. Nor is it reachable from
+    /// tracked work — `ServeContext::track`, `spawn_service`, the scheduler
+    /// driver and the QUIC drain each move a strong reference INTO the task, so
+    /// a sweeper, a scheduled tick, a gRPC drain or a preload resolves even on
+    /// the paths where nothing joins it (an elapsed `shutdown_grace_period`, a
+    /// dropped `run()` future). Those tasks are still *asked* to stop on those
+    /// paths — every framework shutdown token is a child of the app token (or,
+    /// like the scheduler's, explicitly relayed from it), and that token's drop
+    /// guard fires even when no shutdown hook runs — so the window is bounded
+    /// by how promptly a task observes cancellation.
+    /// `PreparedApp` holds one more for the whole of `run()`, covering the
+    /// shutdown phase itself.
+    ///
+    /// It IS reachable in three situations — a source kept alive by hand after
+    /// the app was dropped; a WebSocket session still running after `run()`
+    /// returned (upgraded connections are detached from graceful drain, so
+    /// resolve what a session needs before its socket loop); and a `r2e dev`
+    /// hot patch, where the previous cycle's graph is released without shutdown
+    /// hooks once its cancelled tracked tasks have ended (a bean carried over
+    /// from that cycle would read `NoSource`; the
+    /// partial-rebuild pass avoids it by rebuilding every dependent of a plugin
+    /// bean, see `docs/claude/plugins.md`).
     pub async fn get<U: Clone + Send + Sync + 'static>(&self) -> Result<U, TenantError> {
         if self.chain.contains(TypeId::of::<U>()) {
             return Err(TenantError::Cycle(self.chain.describe_with::<U>()));
         }
         let map = self
-            .beans
-            .try_get::<Tenanted<U>>()
+            .graph
+            .bean::<Tenanted<U>>()
             .ok_or(TenantError::NoSource(type_name::<U>()))?;
         map.resolve(self.tenant, self.chain.push::<U>()).await
     }
@@ -152,7 +174,7 @@ impl<'a> TenantContext<'a> {
     /// a [`ManagedResource`](r2e_core::ManagedResource).
     #[must_use]
     pub fn bean<U: Clone + Send + Sync + 'static>(&self) -> Option<U> {
-        self.beans.try_get::<U>()
+        self.graph.bean::<U>()
     }
 
     /// The resolution chain that led here, most recent last (`"A -> B"`).

@@ -1,0 +1,16 @@
+# Task placement must go through `r2e_core::rt` so the control-plane /
+# data-plane split holds under sharded serving (`server.workers`, see
+# docs/features/19-sharded-serving.md). Raw tokio spawns land on whatever
+# runtime is current — on a sharded worker thread that is the wrong one.
+# The only exemptions are the `#[expect]`-marked wrappers in r2e-core/src/rt.rs.
+#
+# Runtime-neutral primitives (tokio::sync, tokio::time, select!) are NOT
+# denied: they place no task, so control-plane routing does not concern them.
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "use r2e_core::rt::spawn (or rt::spawn_ctl for control-plane work)" },
+    { path = "tokio::task::spawn", reason = "use r2e_core::rt::spawn (or rt::spawn_ctl for control-plane work)" },
+    { path = "tokio::task::spawn_blocking", reason = "use r2e_core::rt::spawn_blocking" },
+    { path = "tokio::task::spawn_local", reason = "no r2e_core::rt equivalent — spawn_local breaks the Send contract sharded serving relies on" },
+    { path = "tokio::runtime::Handle::spawn", reason = "use r2e_core::rt::spawn_ctl" },
+    { path = "tokio::runtime::Handle::spawn_blocking", reason = "use r2e_core::rt::spawn_blocking" },
+]

@@ -106,9 +106,9 @@ While most applications should use the `r2e` facade, you can depend on individua
 
 ```toml
 [dependencies]
-r2e-core = "0.1"
-r2e-macros = "0.1"
-r2e-security = "0.1"
+r2e-core = "0.3"
+r2e-macros = "0.3"
+r2e-security = "0.3"
 ```
 
 The proc macros use `proc-macro-crate` for dynamic path detection — they check for `r2e` first, then fall back to `r2e-core`. This means generated code uses `::r2e::` paths when using the facade, or `::r2e_core::` when using crates directly.

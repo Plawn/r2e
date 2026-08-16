@@ -14,18 +14,18 @@
 //!     .await
 //! ```
 //!
-//! Both are `PreStatePlugin`s that provide a [`Late`](r2e_core::Late)-backed
-//! shell at install time and fill it in `configure`, once the graph holds the
-//! resolver / source bean. That split is what lets the resolver and the source be
-//! ordinary beans — with their own `#[inject]` dependencies — while the beans that
-//! controllers demand (`TenantRouter`, `Tenanted<T>`) exist early enough to be in
-//! the state type.
+//! Both are `PreStatePlugin`s whose `build` runs inside `build_state()` as a
+//! graph node: the resolver / source bean is resolved first (a declared
+//! `Deps`), the typed `tenancy.*` config is guaranteed loaded, and the
+//! provided bean ([`TenantRouter`], [`Tenanted<T>`]) is built whole — no shell,
+//! no late fill. The resolver and the source stay ordinary beans with their own
+//! `#[inject]` dependencies.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use r2e_core::plugin::{DeferredContext, PluginInstallContext, PreStatePlugin};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
 
 use crate::config::TenancyConfig;
 use crate::error::TenantStatuses;
@@ -105,37 +105,22 @@ where
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
-    fn install(&mut self, ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
+    async fn build(
+        self,
+        (resolver,): Self::Deps,
+        config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         // The resolve-once cell, installed before routing so that *every*
         // consumer of the request's tenant shares one resolver call — including
         // a handler whose only tenancy is a pair of `#[managed]` resources,
         // which never runs a tenancy extractor and only ever sees a read-only
-        // `RequestHead`. Sugar actions are skipped when `tenancy.enabled` is
+        // `RequestHead`. Build effects are dropped when `tenancy.enabled` is
         // false, which is exactly right: a disabled router resolves nothing.
         ctx.add_layer(|router| {
             router.layer(r2e_core::http::middleware::from_fn(install_tenant_memo))
         });
 
-        // `tenancy.enabled = false` skips `configure` entirely, so the disabled
-        // router has to be built here — an unwired router is a *wiring bug*
-        // (500), which is not what turning tenancy off should mean. The app keeps
-        // compiling and booting; nothing resolves.
-        if ctx.config_get::<bool>("tenancy.enabled") == Some(false) {
-            let statuses = self
-                .statuses_override
-                .unwrap_or_else(|| statuses_from_keys(ctx));
-            return (TenantRouter::disabled(statuses),);
-        }
-        (TenantRouter::unwired(),)
-    }
-
-    fn configure(
-        self,
-        (router,): &Self::Provided,
-        (resolver,): Self::Deps,
-        config: Option<Self::Config>,
-        _ctx: &mut DeferredContext<'_>,
-    ) {
         let mut config = config.unwrap_or_default();
         if let Some(policy) = self.policy_override {
             config.on_missing = Some(policy.as_str().to_string());
@@ -145,7 +130,13 @@ where
             config.unknown_status = Some(u64::from(statuses.unknown.as_u16()));
             config.unavailable_status = Some(u64::from(statuses.unavailable.as_u16()));
         }
-        router.wire(Arc::new(resolver), &config);
+
+        // `tenancy.enabled = false` still provides the bean — the app keeps
+        // compiling and booting; nothing resolves.
+        if !ctx.enabled() {
+            return Ok((TenantRouter::disabled(config.statuses()),));
+        }
+        Ok((TenantRouter::from_config(Arc::new(resolver), &config),))
     }
 }
 
@@ -162,18 +153,6 @@ async fn install_tenant_memo(
 ) -> r2e_core::http::response::Response {
     TenantRouter::install_memo(request.extensions_mut());
     next.run(request).await
-}
-
-/// The configured statuses, read key by key — the typed section is not
-/// available at install time (it is loaded for `configure`).
-fn statuses_from_keys(ctx: &PluginInstallContext<'_>) -> TenantStatuses {
-    let config = TenancyConfig {
-        missing_status: ctx.config_get::<u64>("tenancy.missing-status"),
-        unknown_status: ctx.config_get::<u64>("tenancy.unknown-status"),
-        unavailable_status: ctx.config_get::<u64>("tenancy.unavailable-status"),
-        ..TenancyConfig::default()
-    };
-    config.statuses()
 }
 
 /// Marker: no app-scoped fallback (the default).
@@ -367,51 +346,102 @@ impl<T, Src, F> PerTenant<T, Src, F>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// Shared tail of both `configure` impls: fill the map, start the sweeper,
+    /// Shared tail of both `build` impls: construct the map, start the sweeper,
     /// hook shutdown, warm up the eager tenants.
-    fn wire(
+    ///
+    /// The sweeper and the warm-up are surface effects, dropped when
+    /// `tenancy.enabled` is false — a disabled router routes nothing into the
+    /// map anyway, and the map itself is inert until something asks it for a
+    /// tenant. The shutdown drain is *not* a surface effect and survives the
+    /// gate: it disposes of what this build constructed, whatever the flag says.
+    ///
+    /// All three act on the `Tenanted<T>` the **graph** exposes, resolved when
+    /// they run, not on the map this function returns — the two differ as soon
+    /// as a test pins its own map (see the comment inside).
+    fn build_map(
         self,
-        map: &Tenanted<T>,
         source: Arc<dyn TenantSource<T>>,
         fallback: Option<T>,
         config: Option<TenancyConfig>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
+        ctx: &mut PluginBuildContext,
+    ) -> Tenanted<T> {
         let settings = self.settings(config.as_ref());
-        map.wire(source, ctx.bean_context_handle(), settings, fallback);
+        let map = Tenanted::new(source, ctx.graph(), settings, fallback);
+
+        // ── Resolve, don't capture ──────────────────────────────────────────
+        // A test (or a migration step) may pin its own map with
+        // `.override_bean(Tenanted::<T>::…)`. The projection out of this
+        // plugin's build is then skipped while the group still builds, so
+        // requests observe the PINNED map — and a sweeper, preload or drain
+        // closed over `map` would groom an instance nothing can reach: the
+        // served map would never be swept and never be drained, silently.
+        // Every effect below therefore asks the graph for `Tenanted<T>` at the
+        // moment it runs, exactly like the Scheduler's registry/token.
+        //
+        // The fallback to the map this build made is defensive, not a path we
+        // know of: it covers a graph MISS — the plugin built a map but the
+        // graph exposes no `Tenanted<T>` (a future projection-less install
+        // shape, or a graph that never materialized). It is explicitly NOT
+        // about `with_state`: that path never runs a pre-state plugin at all,
+        // so `build_map` is not reached. Grooming the built map on a miss is
+        // strictly better than grooming nothing.
 
         // The sweeper: one task per map, cancelled by the app's shutdown token,
         // and awaited at shutdown so a drain actually closes what it opened.
-        let sweeper = map.clone();
-        ctx.on_serve(move |sctx| {
-            let token = sctx.shutdown_token();
-            sctx.track(r2e_core::rt::spawn(async move {
-                r2e_core::service::ServiceComponent::start(sweeper, token).await;
-            }));
+        // Registered through `after_build` (still a surface effect, still
+        // dropped when `tenancy.enabled` is false) so the graph is available.
+        let sweeper_fallback = map.clone();
+        let warming_fallback = map.clone();
+        let eager = self.eager;
+        ctx.after_build(move |dctx| {
+            let sweeper = dctx
+                .bean_context()
+                .try_get::<Tenanted<T>>()
+                .unwrap_or(sweeper_fallback);
+            dctx.on_serve(move |sctx| {
+                let token = sctx.shutdown_token();
+                sctx.track(async move {
+                    r2e_core::service::ServiceComponent::start(sweeper, token).await;
+                });
+            });
+
+            if !eager.is_empty() {
+                let warming = dctx
+                    .bean_context()
+                    .try_get::<Tenanted<T>>()
+                    .unwrap_or(warming_fallback);
+                dctx.on_serve(move |sctx| {
+                    sctx.track(async move {
+                        for (tenant, err) in warming.preload(eager).await {
+                            tracing::warn!(
+                                %tenant,
+                                error = %err,
+                                resource = std::any::type_name::<T>(),
+                                "eager per-tenant resource creation failed; it will be retried on first request"
+                            );
+                        }
+                    });
+                });
+            }
         });
 
         // Belt and braces: the sweeper drains on cancellation, but an app that
         // never serves (tests, `build_with_consumers`) still gets its resources
-        // released when the shutdown hooks run.
-        let draining = map.clone();
-        ctx.on_shutdown_async(move || async move { draining.drain().await });
+        // released when the shutdown hooks run. Cleanup is not a surface
+        // effect, so it stays on `on_shutdown_async` (it survives the enabled
+        // gate) and reaches the graph through the weak `GraphHandle` — alive
+        // at that point, since shutdown hooks run inside the serving scope.
+        let drain_fallback = map.clone();
+        let drain_graph = ctx.graph();
+        ctx.on_shutdown_async(move || async move {
+            drain_graph
+                .bean::<Tenanted<T>>()
+                .unwrap_or(drain_fallback)
+                .drain()
+                .await;
+        });
 
-        if !self.eager.is_empty() {
-            let warming = map.clone();
-            let tenants = self.eager;
-            ctx.on_serve(move |sctx| {
-                sctx.track(r2e_core::rt::spawn(async move {
-                    for (tenant, err) in warming.preload(tenants).await {
-                        tracing::warn!(
-                            %tenant,
-                            error = %err,
-                            resource = std::any::type_name::<T>(),
-                            "eager per-tenant resource creation failed; it will be retried on first request"
-                        );
-                    }
-                }));
-            });
-        }
+        map
     }
 }
 
@@ -426,18 +456,13 @@ where
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        (Tenanted::unwired(),)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (map,): &Self::Provided,
         (source,): Self::Deps,
         config: Option<Self::Config>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        self.wire(map, Arc::new(source), None, config, ctx);
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        Ok((self.build_map(Arc::new(source), None, config, ctx),))
     }
 }
 
@@ -453,17 +478,12 @@ where
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
-    fn install(&mut self, _ctx: &mut PluginInstallContext<'_>) -> Self::Provided {
-        (Tenanted::unwired(),)
-    }
-
-    fn configure(
+    async fn build(
         self,
-        (map,): &Self::Provided,
         (source, default): Self::Deps,
         config: Option<Self::Config>,
-        ctx: &mut DeferredContext<'_>,
-    ) {
-        self.wire(map, Arc::new(source), Some(default), config, ctx);
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
+        Ok((self.build_map(Arc::new(source), Some(default), config, ctx),))
     }
 }

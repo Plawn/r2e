@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use r2e_core::http::{Body, Request, Response, Router, StatusCode};
-use r2e_core::BeanContext;
 use r2e_tenant::{BoxError, BoxFuture, TenantContext, TenantId, TenantSource, Tenanted};
 use tower::ServiceExt;
 
@@ -314,7 +313,7 @@ pub fn map_with(
 ) -> (Tenanted<Resource>, ScriptedSource) {
     let map = Tenanted::new(
         Arc::new(source.clone()),
-        Arc::new(BeanContext::empty()),
+        r2e_core::plugin::GraphHandle::default(),
         settings,
         None,
     );

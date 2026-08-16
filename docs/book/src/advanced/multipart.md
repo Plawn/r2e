@@ -8,7 +8,7 @@ Enable the `multipart` feature (included in `full`):
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["multipart"] }
+r2e = { version = "0.3", features = ["multipart"] }
 ```
 
 All multipart types are available through the prelude:

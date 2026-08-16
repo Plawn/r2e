@@ -29,7 +29,7 @@ A post-state plugin that registers a meta consumer for `RouteInfo`, builds the s
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["openapi"] }
+r2e = { version = "0.3", features = ["openapi"] }
 schemars = "1"
 ```
 

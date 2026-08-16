@@ -42,7 +42,7 @@ async fn producer_start_runs_output_as_tracked_service() {
     let prepared = app.prepare("127.0.0.1:0");
     let stop = prepared.stop_handle();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let server = tokio::spawn(async move {
+    let server = r2e_core::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
             .await
@@ -318,4 +318,72 @@ async fn present_service_config_section_passes_spawn_service() {
         .try_spawn_service::<SectionService>()
         .expect("the section is complete");
     let _ = app.build();
+}
+
+// ── A dropped `run()` future still stops the service ────────────────────────
+//
+// `spawn_service` tasks wait on the token they were handed, and the plugin sync
+// shutdown hook that cancels it runs only on the exits `run_inner` controls. A
+// dropped `run()` future — exactly what an `r2e dev` hot patch does to the
+// previous cycle — runs no hook at all, so a service that only ever saw a
+// private token would keep running (and, since round 4, keep the bean graph
+// alive) with nothing left able to stop it. The token is therefore a CHILD of
+// the app shutdown root, which the run future's drop guard cancels.
+
+static DROP_STARTED: AtomicUsize = AtomicUsize::new(0);
+static DROP_STOPPED: AtomicUsize = AtomicUsize::new(0);
+
+struct DropProbeService;
+
+impl ServiceComponent for DropProbeService {
+    type Deps = r2e_core::type_list::TNil;
+
+    fn from_context(_ctx: &BeanContext) -> Self {
+        DropProbeService
+    }
+
+    async fn start(self, shutdown: CancellationToken) {
+        DROP_STARTED.fetch_add(1, Ordering::SeqCst);
+        shutdown.cancelled().await;
+        DROP_STOPPED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_run_future_stops_a_spawn_service_task() {
+    DROP_STARTED.store(0, Ordering::SeqCst);
+    DROP_STOPPED.store(0, Ordering::SeqCst);
+
+    let app = AppBuilder::new()
+        .build_state()
+        .await
+        .spawn_service::<DropProbeService>();
+    let prepared = app.prepare("127.0.0.1:0");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+    // Own the future here rather than spawning it: dropping it below is the
+    // hot-patch shape, deterministic and with no abort() in between.
+    let mut server = Box::pin(prepared.run_with_listener(listener));
+    tokio::select! {
+        r = &mut server => panic!("the server returned before the service started: {r:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    assert_eq!(
+        DROP_STARTED.load(Ordering::SeqCst),
+        1,
+        "the service must be running before the future is dropped"
+    );
+
+    drop(server);
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while DROP_STOPPED.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect(
+        "dropping the run() future must cancel the service token: no shutdown \
+         hook runs on that path, so the token has to be a child of the app root",
+    );
 }

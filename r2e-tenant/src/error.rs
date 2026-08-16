@@ -11,8 +11,7 @@
 //! | [`Unavailable`](TenantError::Unavailable) | 503 | provisioned, but its resource could not be built (retryable) |
 //! | [`Timeout`](TenantError::Timeout) | 504 | creating the resource took too long |
 //! | [`Cycle`](TenantError::Cycle) | 500 | per-tenant resources depend on each other in a loop (a bug) |
-//! | [`NoResolver`](TenantError::NoResolver) | 500 | the `Tenancy` plugin was never configured (a bug) |
-//! | [`NoSource`](TenantError::NoSource) | 500 | the `PerTenant` plugin for that type was never configured (a bug) |
+//! | [`NoSource`](TenantError::NoSource) | 500 | the `PerTenant` plugin for that type was never installed (a bug) |
 //!
 //! The three request-driven statuses are configurable
 //! ([`TenancyConfig`](crate::TenancyConfig): `missing-status`,
@@ -53,9 +52,8 @@ pub enum TenantError {
     /// Per-tenant resources form a dependency cycle. Carries the chain, most
     /// recent last: `A -> B -> A`.
     Cycle(String),
-    /// The `Tenancy` plugin never ran its `configure` phase — no resolver.
-    NoResolver,
-    /// No `PerTenant` plugin configured the map for this resource type.
+    /// No `PerTenant` plugin provides a map for this resource type (the
+    /// cascade asked for a type that is not per-tenant).
     NoSource(&'static str),
 }
 
@@ -73,7 +71,7 @@ impl TenantError {
     pub fn tenant(&self) -> Option<&TenantId> {
         match self {
             Self::Unknown(t) | Self::Timeout(t) | Self::Unavailable { tenant: t, .. } => Some(t),
-            Self::Unresolved | Self::Cycle(_) | Self::NoResolver | Self::NoSource(_) => None,
+            Self::Unresolved | Self::Cycle(_) | Self::NoSource(_) => None,
         }
     }
 
@@ -81,7 +79,7 @@ impl TenantError {
     /// or a downstream outage (the 500 rows of the table in the module docs).
     #[must_use]
     pub fn is_bug(&self) -> bool {
-        matches!(self, Self::Cycle(_) | Self::NoResolver | Self::NoSource(_))
+        matches!(self, Self::Cycle(_) | Self::NoSource(_))
     }
 
     /// Map to an [`HttpError`] with the deployment's configured statuses.
@@ -93,7 +91,7 @@ impl TenantError {
             Self::Unknown(_) => HttpError::from_status(statuses.unknown, message),
             Self::Unavailable { .. } => HttpError::from_status(statuses.unavailable, message),
             Self::Timeout(_) => HttpError::from_status(StatusCode::GATEWAY_TIMEOUT, message),
-            Self::Cycle(_) | Self::NoResolver | Self::NoSource(_) => HttpError::internal(message),
+            Self::Cycle(_) | Self::NoSource(_) => HttpError::internal(message),
         }
     }
 }
@@ -110,10 +108,6 @@ impl fmt::Display for TenantError {
                 write!(f, "timed out creating the resource for tenant `{tenant}`")
             }
             Self::Cycle(chain) => write!(f, "per-tenant resource dependency cycle: {chain}"),
-            Self::NoResolver => f.write_str(
-                "tenancy is not configured: install the `Tenancy` plugin \
-                 (`.plugin(Tenancy::resolver::<MyResolver>())`)",
-            ),
             Self::NoSource(ty) => write!(
                 f,
                 "no per-tenant source for `{ty}`: install the `PerTenant` plugin \
