@@ -138,10 +138,11 @@ Six fields: `second minute hour day_of_month month day_of_week`
 1. `Scheduler` plugin creates a `CancellationToken` and defers setup
 2. `build_state()` provides the token to the bean graph and verifies the `PoolExecutor` dependency (`Scheduler::Deps`)
 3. `register_controller::<ScheduledJobs>()` collects scheduled task definitions
-4. `serve()` starts each schedule loop; every tick body is submitted to the shared `PoolExecutor` and the loop awaits it before the next tick
-5. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled and in-flight ticks drain via the pool (`executor.shutdown-timeout`)
+4. `serve()` starts **one** driver task for all schedules: a min-heap of next-fire times. The driver sleeps until the earliest deadline, then submits every due tick to the shared `PoolExecutor` and goes back to sleep — there is no task, and no loop, per schedule
+5. Re-arming depends on the job's overlap policy: `Concurrent` schedules the next fire *before* submitting the tick (ticks may overlap), `Skip` (the default) re-arms only when its own tick completes, so a slow tick silently skips the cadence fires it overran
+6. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled: the driver stops arming, waits out the ticks already in flight, and they drain via the pool (`executor.shutdown-timeout`)
 
-Because ticks run as pool jobs, a panicking tick is contained and logged (its schedule loop keeps running), scheduled work is bounded by `executor.max-concurrent`, and it appears in `ExecutorMetrics`.
+Because ticks run as pool jobs, a panicking tick body is contained and logged (the driver and every other job keep running), scheduled work is bounded by `executor.max-concurrent`, and it appears in `ExecutorMetrics`. A panic while *constructing* a tick — the closure body before its first `await` — is caught by the driver itself and disables that one job (see the contract below).
 
 ## Error handling in scheduled tasks
 
@@ -195,9 +196,9 @@ impl AdminController {
 | `is_cancelled()` | `bool` | Check if the scheduler has been cancelled |
 | `cancel()` | `()` | Cancel the scheduler and all running tasks |
 | `token()` | `CancellationToken` | Get the underlying `CancellationToken` |
-| `pause(name).await` | `bool` | Pause a job by name (keeps advancing its cadence but never fires). `false` if unknown |
-| `resume(name).await` | `bool` | Resume a paused job by name. `false` if unknown |
-| `trigger_now(name).await` | `bool` | Fire a job once, immediately and out of band (allowed even when paused). `false` if unknown or a `skip`-overlap tick is already in flight |
+| `pause(name).await` | `bool` | Pause a job by name (keeps advancing its cadence but never fires). `false` if the name is unknown, or the scheduler is shutting down / has no driver |
+| `resume(name).await` | `bool` | Resume a paused job by name; `true` iff the job can fire again (see the resume contract below). `false` if the name is unknown, the schedule can never fire again (spent cron, overflowed interval), or the scheduler is shutting down / has no driver |
+| `trigger_now(name).await` | `bool` | Fire a job once, immediately and out of band (allowed even when paused). `false` if the name is unknown, a `skip`-overlap tick is already in flight, the executor pool is closed (answered first, then the driver stops), the tick factory panicked (contained; the job is disabled), or the scheduler is shutting down / has no driver (a `trigger_now` can never start a tick once shutdown began) |
 
 > **Note:** `SchedulerHandle` requires the `Scheduler` plugin to be installed. If it is missing, extraction returns a `500 Internal Server Error` with a descriptive message.
 
@@ -236,11 +237,45 @@ The metadata (`name`, `schedule`) is fixed at registration; the remaining fields
 | `schedule` | `String` | Human-readable schedule description | `"every 30s"`, `"every 60s (delay 10s)"`, `"cron: 0 */5 * * * *"` |
 | `last_run` | `Option<DateTime<Utc>>` | Wall-clock time the job most recently fired | `None` until first run |
 | `last_duration` | `Option<Duration>` | Wall duration of the most recent completed tick | |
-| `next_run` | `Option<DateTime<Utc>>` | Wall-clock time the job is next expected to fire (`None` for a spent cron) | |
+| `next_run` | `Option<DateTime<Utc>>` | The deadline the job currently holds — `Some` iff a live driver holds one (for a *paused* job, when it *would* fire were it resumed: the cadence advances, the fire is skipped). `None` whenever it holds no deadline: a spent cron, a next fire that overflows the monotonic clock (an absurd interval or `initial_delay`, logged at `WARN`), a job disabled by a tick-factory panic that consumed its deadline, a `Skip` job while its tick is running, a deadline consumed by a submission that never ran, and every job once the driver has stopped | |
 | `run_count` | `u64` | Number of ticks whose body actually ran | `42` |
 | `skip_count` | `u64` | Number of ticks suppressed by the job's `skip_if` predicate | `3` |
-| `panic_count` | `u64` | Number of ticks that panicked (contained by the pool) | `0` |
-| `paused` | `bool` | Whether the job is currently paused | `false` |
+| `panic_count` | `u64` | Ticks whose **body** panicked (contained by the pool, schedule untouched) plus tick **factory** panics — the user closure raising while the driver builds the tick, which also disables the job | `0` |
+| `paused` | `bool` | Whether the job is currently paused: explicitly, or automatically after a tick-factory panic | `false` |
+
+A tick-factory panic disables the job because a construction failure repeats on
+every fire: the job is paused, `panic_count` goes up, and other jobs — and the
+driver itself — keep running. `resume` is the way back, under one contract that
+holds on every path:
+
+> A paused job — by `pause`, or disabled by a tick-factory panic — never fires.
+> `resume` replies `true` **iff the job can fire again, as far as the driver can
+> tell when the command is handled**: it keeps its already-scheduled deadline
+> when one is still armed; when one of its ticks is in flight and due to re-arm
+> the job on completion, it reports whether the schedule still yields a next
+> occurrence; otherwise it re-arms from now (interval: now + period; cron: the
+> next matching slot) and reports the outcome. A schedule that can never fire
+> again — spent or overflowed — stays unarmed and `resume` replies `false`.
+
+So an ordinary pause → resume never double-fires a job (the cadence kept
+advancing, the deadline is still there), a `Concurrent` job disabled by a
+factory panic resumes onto the deadline it had already scheduled, a `Skip` job
+disabled the same way is re-armed one period from the resume, and a job pinned
+to a cron with no upcoming occurrence answers `false`.
+
+The in-flight case is the one place the reply is a *snapshot* rather than a
+guarantee: a cron's final slot can pass between the reply and the tick's
+completion, leaving the job unarmed after a `true`. No implementation can
+promise the future here — but the end state is always honest, and `next_run` is
+the authority on it: it is `Some` **exactly** when a live driver holds a deadline
+for the job. Read it as the deadline, not as the fire — a **paused** job keeps
+publishing the instant it *would* fire were it resumed, because its cadence goes
+on advancing and each deadline is re-armed instead of submitted. It reads `None`
+the whole time a `Skip` tick runs (the deadline that fired is spent; completion
+publishes the next one), for a spent or unrepresentable schedule, for a deadline
+consumed by a submission that never ran — and for every job once the driver has
+stopped, cancelled or halted by a closed pool: the driver clears what it
+published on the way out, because nothing is left that could fire it.
 
 ### ScheduledJobRegistry methods
 

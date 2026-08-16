@@ -87,8 +87,11 @@ fn boot_err(msg: String) -> BootError {
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct OpenFgaPluginConfig {
     /// `false` disables the plugin: no connection, no store/model resolution,
-    /// no config validation — the beans still exist and every check fails
-    /// closed with [`OpenFgaError::Disabled`]. Default: true.
+    /// and no *semantic* validation of the combination (`endpoint` plus one of
+    /// `store`/`store_id`, the `model_id`/`apply_model` pairing) — the section
+    /// is still parsed and type-checked like any other, so a malformed value
+    /// still fails startup. The beans still exist and every check fails closed
+    /// with [`OpenFgaError::Disabled`]. Default: true.
     pub enabled: Option<bool>,
     /// OpenFGA **gRPC** endpoint, e.g. `http://localhost:8081`. Required.
     pub endpoint: Option<String>,
@@ -154,6 +157,11 @@ impl PreStatePlugin for OpenFga {
     type Deps = ();
     type Config = OpenFgaPluginConfig;
     const CONFIG_PREFIX: Option<&'static str> = Some("openfga");
+    /// `build` is pure bean construction — the three `Provided` beans are the
+    /// plugin's entire output, no routes, layers or hooks — and it costs a gRPC
+    /// connection plus store/model resolution. A test that pins all three has
+    /// replaced the plugin, so skipping the boot is exactly right.
+    const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;
 
     async fn build(
         self,
@@ -165,9 +173,13 @@ impl PreStatePlugin for OpenFga {
         let cache_enabled = cfg.cache_enabled.unwrap_or(true);
         let cache_ttl_secs = cfg.cache_ttl_secs.unwrap_or(60);
 
-        // Disabled: no connection, no store/model resolution — and no config
-        // validation, so `enabled: false` alone is a complete off-switch. The
-        // beans still exist; every check fails closed (`Disabled`).
+        // Disabled: no connection, no store/model resolution, and none of the
+        // *semantic* config checks below (endpoint + store/store_id, the
+        // model_id/apply_model pairing), so `enabled: false` alone is enough to
+        // boot with a half-filled `openfga:` section. The section itself is
+        // still parsed and type-checked by the config layer before `build`
+        // runs — a malformed value fails startup either way. The beans still
+        // exist; every check fails closed (`Disabled`).
         if !ctx.enabled() {
             tracing::warn!(
                 "OpenFga plugin disabled via `openfga.enabled = false`; \

@@ -24,6 +24,10 @@ pub struct SugarMarker;
 /// Data deposited via `ctx.store_data` sugar.
 pub struct StoredData(pub u32);
 
+/// Data deposited from `setup()` (as opposed to `build`), so a test can tell
+/// the two action slots apart.
+pub struct SetupData(pub u32);
+
 /// A shared flag a plugin's `build` flips, so tests can prove whether `build`
 /// ran at all (all-pinned skip) — or ran despite an empty `Provided` tuple.
 #[derive(Clone, Default)]

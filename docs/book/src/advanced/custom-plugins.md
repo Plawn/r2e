@@ -248,11 +248,20 @@ When disabled:
   *disabled* variant of your beans (e.g. OpenFga returns a fail-closed
   backend; the Scheduler starts no driver task). Anything injecting the beans
   keeps compiling and running.
-- **Every effect registered on the context is dropped** — layers,
-  `wrap_router`, `store_data`, serve/shutdown hooks, `after_build`. Disabling
-  gates the plugin's *wiring*, not its beans.
+- **Surface effects are dropped** — layers, `wrap_router`, `store_data`,
+  `on_serve`, `after_build`. Disabling gates the plugin's *wiring*, not its
+  beans.
+- **Cleanup effects still run** — `on_shutdown` and `on_shutdown_async`.
+  `build` ran, so whatever it constructed still has to be released; dropping
+  its disposal would leak exactly what a disabled plugin built. Keep those
+  hooks to disposal only.
 - **`pre_destroy` hooks still run** (`run_pre_destroy` registered in `setup`)
   — the beans are real and may be injected elsewhere.
+
+Making the beans *inert* is the plugin's job: check `ctx.enabled()` before any
+process-global side effect inside `build` itself, not just around the effects
+(Prometheus, for example, returns early so the global metrics recorder is never
+installed).
 
 Plugins with no `CONFIG_PREFIX`, and apps that never load config, are always
 enabled (the flag defaults to on).
@@ -308,7 +317,7 @@ impl PreStatePlugin for MyPlugin {
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `enabled` | `(&self) -> bool` | The `<prefix>.enabled` config gate (default `true`) |
-| `graph` | `(&self) -> GraphHandle` | Cloneable handle on the **final** resolved graph (fills at the end of `build_state()`; for request-time bean lookups) |
+| `graph` | `(&self) -> GraphHandle` | Cloneable **weak** handle on the **final** resolved graph (fills at the end of a successful `build_state()`; reads `Some` for the app's whole life *and* for any tracked task that outlives it, since the router, every tracked task and the serving scope each hold the graph independently — it reads `None` only once the last of those owners is gone) |
 | `config_raw` | `(&self) -> Option<&R2eConfig>` | The loaded raw config, if any |
 | `add_layer` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add a Tower layer to the router |
 | `wrap_router` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | Add an outermost transport-level router transform |
@@ -320,8 +329,15 @@ impl PreStatePlugin for MyPlugin {
 
 Effects are buffered and applied after the graph resolves, **in plugin install
 order** (`.plugin(A)` before `.plugin(B)` ⇒ A's layers apply before B's, even
-if B's `build` executed first because of dependencies) — and dropped when the
-plugin is disabled.
+if B's `build` executed first because of dependencies) — and the surface ones
+are dropped when the plugin is disabled (shutdown hooks are not; see above).
+
+When an effect needs one of the plugin's own provided beans, resolve it from the
+graph at apply time — `ctx.after_build(|dctx| { let x =
+dctx.bean_context().try_get::<X>(); … })` — instead of capturing the value
+`build` just made. A test that pins only *some* of the provisions with
+`override_bean` still runs `build`, and the graph then exposes the pinned bean
+while your captured one is invisible to everyone else.
 
 ### `setup()` — rare pre-graph hook
 
@@ -331,6 +347,18 @@ Use it only for things other pre-state code must observe: `store_data` that
 must exist even when the plugin is disabled, `run_pre_destroy::<B>()`
 lifecycle registrars, or low-level `ctx.add_deferred(DeferredAction::new(..))`
 actions. Everything else belongs in `build`.
+
+Setup actions are **never** gated on `<prefix>.enabled` — which is why the setup
+context carries no surface-effect sugar: there is no `add_layer`,
+`wrap_router`, `on_serve` or shutdown hook on `PluginSetupContext`, and reaching
+for one is a compile error. So a disabled plugin cannot mount a route *by
+accident*.
+
+`add_deferred` is the deliberate hole: it hands you a full `DeferredContext`,
+which the framework cannot gate for you, so a route mounted from there is
+mounted whether the plugin is enabled or not. That is the price of the escape
+hatch — if what you register should disappear under `enabled = false`, register
+it from `build` instead.
 
 ## Multiple provided beans
 
@@ -375,8 +403,13 @@ Both beans are then injectable by type (`#[inject] token: CancellationToken`,
 Note that plugin-provided beans register **strictly**: an app
 `.provide()`/`.register()` of the same type — or installing the same plugin
 twice — is a `DuplicateBean` error at boot. In tests, pin an override
-**before** `.plugin()` with `override_bean` (pinning *every* provided type
-skips `build` entirely).
+**before** `.plugin()` with `override_bean`: the pin wins for that type and
+`build` still runs, so the plugin's routes, layers and hooks stay in place
+(they are not beans, and no pin can replace them). A plugin whose `build` is
+pure bean construction *and* expensive — a connection, a container, key
+generation — can opt out with `const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;`,
+and then pinning *every* provided type skips `build` entirely. To silence a
+plugin that carries effects, disable it with `<prefix>.enabled = false`.
 
 ### Escape hatch: `RawPreStatePlugin`
 

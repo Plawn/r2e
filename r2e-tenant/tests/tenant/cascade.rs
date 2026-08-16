@@ -167,7 +167,10 @@ impl Graph {
     async fn build(self) -> Arc<BeanContext> {
         let Self { registry, handle } = self;
         let context = Arc::new(registry.resolve().await.expect("graph resolves"));
-        handle.fill(Arc::clone(&context));
+        // The handle only borrows: it downgrades to a `Weak`, so the returned
+        // `Arc` is what keeps this hand-wired graph alive (in a real app that
+        // owner is the router).
+        handle.fill(&context);
         context
     }
 }

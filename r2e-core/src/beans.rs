@@ -1452,7 +1452,12 @@ impl BeanRegistry {
                             source,
                         },
                     )?;
-                    effects.fill(bctx.into_effects());
+                    // The `enabled` decision travels WITH the effects: it was
+                    // taken here, from the graph's `R2eConfig`, and the
+                    // install-order action must not recompute it from the
+                    // builder's own config (they can disagree — a pinned
+                    // `R2eConfig` bean).
+                    effects.fill(enabled, bctx.into_effects());
                     let boxed: Box<dyn Any + Send + Sync> = Box::new(PluginOut::<Pl>(provided));
                     Ok((ctx, boxed))
                 })
@@ -1619,6 +1624,22 @@ impl BeanRegistry {
         // rebuild, otherwise the new context would expose a fresh target while
         // a reused dependent still held a clone of the previous instance.
         let mut forced_rebuild = deco_targets.clone();
+        // Same argument for volatile registrations (the plugin group node and
+        // its per-provision projections): their factories re-run every cycle by
+        // design, so the new context exposes a FRESH plugin bean while any
+        // dependent reused from cycle N-1 still holds a clone of the previous
+        // one — split-brain, e.g. a service holding a `Tenanted<T>` whose
+        // `GraphHandle` points at the dropped cycle-N-1 graph (`NoSource` at
+        // request time). Seeding them here lets the closure loop below carry
+        // the rebuild to every transitive dependent. Cost: those dependents lose
+        // their in-memory state on each hot patch, which is the same trade the
+        // deco-target rule already makes, and dev-only.
+        forced_rebuild.extend(
+            self.beans
+                .iter()
+                .filter(|reg| reg.volatile)
+                .map(|reg| reg.type_id),
+        );
         loop {
             let mut grew = false;
             for (type_id, dependencies) in self

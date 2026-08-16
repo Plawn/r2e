@@ -152,6 +152,16 @@ impl PrometheusRegistry {
 /// for dependency injection. The `/metrics` endpoint and tracking middleware
 /// are installed via a deferred action after state resolution.
 ///
+/// # `prometheus.enabled = false`
+///
+/// `build` returns immediately with the (still required) `PrometheusRegistry`
+/// bean and does **not** call `init_metrics`: the process-global metrics
+/// registry stays untouched and no collector — including the builder's
+/// `register(..)` list — is installed. The effect gate alone would not have
+/// covered this, since `init_metrics` runs inside `build`, not in an effect.
+/// The bean remains usable (its accessors lazily default-initialize the global
+/// on first *use*), so injecting it anywhere keeps compiling and running.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -253,6 +263,22 @@ impl PreStatePlugin for Prometheus {
         } = self;
         let (endpoint, metrics_config) =
             resolve_config(endpoint, namespace, buckets, exclude_paths, config);
+
+        // `build` runs even when the plugin is disabled (the `PrometheusRegistry`
+        // bean is in the compile-time provision list), but its *side effects*
+        // must not: initializing the global `METRICS` singleton is a
+        // process-wide, one-shot write, and registering custom collectors into
+        // it is permanent. With `prometheus.enabled = false` the global is left
+        // untouched — `metrics()` lazily default-initializes for anyone who
+        // injects the bean, and nothing is exported (the endpoint and tracking
+        // layer are enabled-gated effects anyway).
+        if !ctx.enabled() {
+            tracing::info!(
+                "Prometheus plugin disabled via `prometheus.enabled = false`; \
+                 the global metrics registry is left untouched and no collector is registered"
+            );
+            return Ok((PrometheusRegistry,));
+        }
 
         // Initialize the global metrics singleton with the merged config.
         if is_initialized() {

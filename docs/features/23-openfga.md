@@ -178,7 +178,7 @@ The `FgaCheck` guard pulls the `OpenFgaRegistry` bean itself (compile-checked de
 
 ## Testing
 
-- **Unit / no server** — back the registry with `MockBackend` (direct tuple lookup) and pin it: `builder.override_bean(OpenFgaRegistry::new(mock))`.
+- **Unit / no server** — back the registry with `MockBackend` (direct tuple lookup) and pin it: `builder.override_bean(OpenFgaRegistry::new(mock))`. `OpenFga` sets `SKIP_BUILD_WHEN_ALL_PINNED = true` (its `build` is pure bean construction), so pinning **all three** provided beans — `OpenFgaRegistry`, `FgaClient`, `OpenFgaHandle` — skips the gRPC boot entirely. Pin only some of them and the plugin still boots (it needs an endpoint); `openfga.enabled: false` is the other way to keep it offline.
 - **Integration** — `DevOpenFga` (r2e-devservices, feature `openfga`) runs a real server via testcontainers; the plugin does the store/model bootstrap, so a test only injects the endpoint (plus a unique store name for isolation on the session-shared container) and seeds tuples through the typed client:
 
 ```rust

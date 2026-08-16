@@ -347,9 +347,17 @@ where
     T: Clone + Send + Sync + 'static,
 {
     /// Shared tail of both `build` impls: construct the map, start the sweeper,
-    /// hook shutdown, warm up the eager tenants (the latter three as build
-    /// effects, dropped when `tenancy.enabled` is false — a disabled router
-    /// routes nothing into the map anyway).
+    /// hook shutdown, warm up the eager tenants.
+    ///
+    /// The sweeper and the warm-up are surface effects, dropped when
+    /// `tenancy.enabled` is false — a disabled router routes nothing into the
+    /// map anyway, and the map itself is inert until something asks it for a
+    /// tenant. The shutdown drain is *not* a surface effect and survives the
+    /// gate: it disposes of what this build constructed, whatever the flag says.
+    ///
+    /// All three act on the `Tenanted<T>` the **graph** exposes, resolved when
+    /// they run, not on the map this function returns — the two differ as soon
+    /// as a test pins its own map (see the comment inside).
     fn build_map(
         self,
         source: Arc<dyn TenantSource<T>>,
@@ -360,38 +368,78 @@ where
         let settings = self.settings(config.as_ref());
         let map = Tenanted::new(source, ctx.graph(), settings, fallback);
 
+        // ── Resolve, don't capture ──────────────────────────────────────────
+        // A test (or a migration step) may pin its own map with
+        // `.override_bean(Tenanted::<T>::…)`. The projection out of this
+        // plugin's build is then skipped while the group still builds, so
+        // requests observe the PINNED map — and a sweeper, preload or drain
+        // closed over `map` would groom an instance nothing can reach: the
+        // served map would never be swept and never be drained, silently.
+        // Every effect below therefore asks the graph for `Tenanted<T>` at the
+        // moment it runs, exactly like the Scheduler's registry/token.
+        //
+        // The fallback to the map this build made is defensive, not a path we
+        // know of: it covers a graph MISS — the plugin built a map but the
+        // graph exposes no `Tenanted<T>` (a future projection-less install
+        // shape, or a graph that never materialized). It is explicitly NOT
+        // about `with_state`: that path never runs a pre-state plugin at all,
+        // so `build_map` is not reached. Grooming the built map on a miss is
+        // strictly better than grooming nothing.
+
         // The sweeper: one task per map, cancelled by the app's shutdown token,
         // and awaited at shutdown so a drain actually closes what it opened.
-        let sweeper = map.clone();
-        ctx.on_serve(move |sctx| {
-            let token = sctx.shutdown_token();
-            sctx.track(r2e_core::rt::spawn(async move {
-                r2e_core::service::ServiceComponent::start(sweeper, token).await;
-            }));
+        // Registered through `after_build` (still a surface effect, still
+        // dropped when `tenancy.enabled` is false) so the graph is available.
+        let sweeper_fallback = map.clone();
+        let warming_fallback = map.clone();
+        let eager = self.eager;
+        ctx.after_build(move |dctx| {
+            let sweeper = dctx
+                .bean_context()
+                .try_get::<Tenanted<T>>()
+                .unwrap_or(sweeper_fallback);
+            dctx.on_serve(move |sctx| {
+                let token = sctx.shutdown_token();
+                sctx.track(async move {
+                    r2e_core::service::ServiceComponent::start(sweeper, token).await;
+                });
+            });
+
+            if !eager.is_empty() {
+                let warming = dctx
+                    .bean_context()
+                    .try_get::<Tenanted<T>>()
+                    .unwrap_or(warming_fallback);
+                dctx.on_serve(move |sctx| {
+                    sctx.track(async move {
+                        for (tenant, err) in warming.preload(eager).await {
+                            tracing::warn!(
+                                %tenant,
+                                error = %err,
+                                resource = std::any::type_name::<T>(),
+                                "eager per-tenant resource creation failed; it will be retried on first request"
+                            );
+                        }
+                    });
+                });
+            }
         });
 
         // Belt and braces: the sweeper drains on cancellation, but an app that
         // never serves (tests, `build_with_consumers`) still gets its resources
-        // released when the shutdown hooks run.
-        let draining = map.clone();
-        ctx.on_shutdown_async(move || async move { draining.drain().await });
-
-        if !self.eager.is_empty() {
-            let warming = map.clone();
-            let tenants = self.eager;
-            ctx.on_serve(move |sctx| {
-                sctx.track(r2e_core::rt::spawn(async move {
-                    for (tenant, err) in warming.preload(tenants).await {
-                        tracing::warn!(
-                            %tenant,
-                            error = %err,
-                            resource = std::any::type_name::<T>(),
-                            "eager per-tenant resource creation failed; it will be retried on first request"
-                        );
-                    }
-                }));
-            });
-        }
+        // released when the shutdown hooks run. Cleanup is not a surface
+        // effect, so it stays on `on_shutdown_async` (it survives the enabled
+        // gate) and reaches the graph through the weak `GraphHandle` — alive
+        // at that point, since shutdown hooks run inside the serving scope.
+        let drain_fallback = map.clone();
+        let drain_graph = ctx.graph();
+        ctx.on_shutdown_async(move || async move {
+            drain_graph
+                .bean::<Tenanted<T>>()
+                .unwrap_or(drain_fallback)
+                .drain()
+                .await;
+        });
 
         map
     }

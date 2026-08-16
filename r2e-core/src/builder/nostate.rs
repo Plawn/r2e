@@ -425,12 +425,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                                 // would ever restart it — serve hooks run once
                                 // per process, and are skipped entirely from
                                 // the second `r2e dev` hot-patch cycle on.
-                                let handle = crate::rt::spawn(
-                                    crate::config::supervise_config_watch(
-                                        provider, watch_ctx, sink,
-                                    ),
-                                );
-                                serve_ctx.track(handle);
+                                serve_ctx.track(crate::config::supervise_config_watch(
+                                    provider, watch_ctx, sink,
+                                ));
                             });
                         }
                     },
@@ -831,9 +828,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let event_subscribers = registry.take_event_subscribers();
         let service_sources = registry.take_service_sources();
         // Grab the deferred-fill graph handle before `resolve()` consumes the
-        // registry; filled on every exit path below, right after the resolved
-        // context lands in its final `Arc`. Plugin build factories (and any
-        // bean holding a `GraphHandle`) then see the completed graph.
+        // registry; filled on every **successful** exit path below, right after
+        // the resolved context lands in its final `Arc`. Plugin build factories
+        // (and any bean holding a `GraphHandle`) then see the completed graph.
+        // A failing path returns through `?` before its fill, so a handle held
+        // by the caller of a failed boot stays empty. The handle takes a WEAK
+        // reference: the graph is owned by the assembled app (see
+        // `layers::graph_keep_alive`), never by the beans inside it.
         let graph_handle = registry.graph_handle();
 
         // Only inside the actual Subsecond hot-patch loop (`r2e::launch!`
@@ -861,7 +862,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
-                    graph_handle.fill(Arc::clone(&cached_ctx));
+                    graph_handle.fill(&cached_ctx);
                     // Bean scheduled tasks and subscriptions are re-collected
                     // against the cached graph: the task registry and consumer
                     // registrations are fresh per build (plugins re-install),
@@ -920,7 +921,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             self.shared.bean_disposers = ctx.take_disposers();
             let state = <P as BuildHList>::build_hlist(&ctx);
             let ctx = Arc::new(ctx);
-            graph_handle.fill(Arc::clone(&ctx));
+            graph_handle.fill(&ctx);
 
             crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
             crate::dev::cache_ctx(&ctx);
@@ -939,7 +940,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.shared.bean_disposers = ctx.take_disposers();
         let state = <P as BuildHList>::build_hlist(&ctx);
         let ctx = Arc::new(ctx);
-        graph_handle.fill(Arc::clone(&ctx));
+        graph_handle.fill(&ctx);
 
         Ok(Mods::register_controllers(
             AppBuilder::from_pre(self.shared, state, ctx)
@@ -964,8 +965,14 @@ impl<P, R> AppBuilder<NoState, P, R, TNil> {
     /// constructed from the bean context, which is empty here — registering a
     /// controller with `#[inject]` fields panics at startup.
     /// **Pre-state plugins don't run either**: their `build` executes as a
-    /// bean-graph node inside `build_state()`, so on this path their beans,
-    /// layers, and routes never materialize. Use it only for raw-router apps
+    /// bean-graph node inside `build_state()`, so on this path everything
+    /// `build` would have produced — beans, layers, routes, serve hooks, data
+    /// stored from the *build* context — never materializes, cleanup hooks
+    /// included (nothing was built to clean up). What *does* still run is
+    /// whatever `setup` deposited (`store_data`, `add_deferred`): those are
+    /// plain deferred actions, and this path executes deferred actions against
+    /// the empty graph, so setup-stored data IS present. A plugin's effect
+    /// action finds its slot empty and logs a `debug!` no-op. Use it only for raw-router apps
     /// (`register_routes`, `merge_router`); an app with no beans that needs
     /// plugins should call `.build_state().await` (state = empty HList).
     pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {

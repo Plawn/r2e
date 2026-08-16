@@ -18,7 +18,7 @@ Give the server a real shutdown contract, without hand-rolled drain plumbing:
 On OS signal **or** `StopHandle::stop()`:
 
 1. **`on_drain` hooks** are awaited, in registration order. The server is still accepting and serving normally.
-2. **Plugin shutdown hooks** fire (sync — cancel tokens for scheduler/`spawn_service` tasks), then **plugin async shutdown hooks** are awaited (e.g. executor graceful drain).
+2. **Plugin shutdown hooks** fire (sync — cancel tokens for scheduler/`spawn_service` tasks), then **plugin async shutdown hooks** are awaited (e.g. executor graceful drain). Sync hooks run in registration order, one at a time and each panic-isolated, so one bad hook cannot silence the rest. They control *when* background work stops (early, before the HTTP drain), not *whether*: every framework shutdown token is either a child of the app shutdown token (`spawn_service`'s per-service token) or explicitly relayed from it (the scheduler driver, whose token is a plugin bean), so an abnormal exit that runs no hook at all (a panic, or an `r2e dev` hot patch dropping the `run()` future) still cancels them through that token's drop guard.
 3. The shared shutdown token is cancelled: the HTTP listener stops accepting; in-flight requests finish. Tracked server tasks (gRPC, QUIC) observe the same token and drain **concurrently**.
 4. After the HTTP drain: tracked task handles (`spawn_service`, `ServeContext::track`) are awaited, then **`on_stop` hooks** run. Both bounded together by `shutdown_grace_period` if set.
 5. `run()` / `serve()` / `serve_auto()` resolves `Ok(())`.
@@ -102,18 +102,21 @@ Signature mirrors `on_stop`: `FnOnce(T) -> Future<Output = ()>`, awaited in regi
 dctx.on_serve(move |serve_ctx| {
     let tasks = serve_ctx.task_registry().take_of::<MyMarker>();   // shared task registry
     let shutdown = serve_ctx.shutdown_token();                     // cancelled at step 3 above
-    let handle = r2e_core::rt::spawn(async move {
+    serve_ctx.track(async move {                                   // spawned + drain awaited at step 4
         my_server(shutdown).await;                                 // drain on cancellation
     });
-    serve_ctx.track(handle);                                       // drain awaited at step 4
 });
 ```
 
 - `task_registry()` — the shared `TaskRegistryHandle` (scheduled tasks, tagged subsystem tasks).
 - `shutdown_token()` — the app shutdown `CancellationToken`; cancelled when the graceful drain begins.
-- `track(handle)` — the handle joins the post-drain await set (same pool as `spawn_service` handles), bounded by `shutdown_grace_period`.
+- `track(fut)` — spawns `fut` and joins the post-drain await set (same pool as `spawn_service` handles), bounded by `shutdown_grace_period`.
 
-**Track any server-like task that drains on the shutdown token.** An untracked task may be killed mid-drain when the process exits.
+It takes the **future**, not a `JobHandle` (breaking — pass the `async` block instead of `rt::spawn(...)`): the task is wrapped so it owns a strong reference to the bean graph for its whole lifetime. That matters because the await set is best-effort — an elapsed `shutdown_grace_period` drops the join futures, and a dropped `run()` future (an `r2e dev` hot patch) joins nothing at all — so a task that resolves beans through a `GraphHandle` must carry the graph itself, which a pre-spawned handle cannot be given after the fact.
+
+**Every task the serve hooks start must go through `track`** — that is how in-tree plugins run the gRPC listener, the scheduler driver, the live-config watch supervisor and the tenant sweeper. A bare `rt::spawn` is outside the model twice over: nothing cancels it, nothing waits for it, and it does not keep the graph alive. (`r2e_scheduler::start_jobs` is the documented exception: a standalone driver for tests, whose lifetime you own through its cancellation token.)
+
+**A boot that aborts winds tracked work down too.** If a startup hook returns `Err` (they run *after* the serve hooks) or serving itself fails, `run()` cancels the shutdown token, fires the plugin cancel hooks, and awaits the tracked handles — bounded by `shutdown_grace_period` when set — before returning the error. So a tracked task that waits on the token is never left holding a port. User `on_drain`/`on_stop` hooks and `#[pre_destroy]` disposers do **not** run on that path: the app never served.
 
 ### gRPC drain
 
@@ -124,7 +127,7 @@ dctx.on_serve(move |serve_ctx| {
 - **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics.
 - **QUIC**: the HTTP/3 endpoint drains on the same token; its task handle joins the tracked set, so the QUIC drain is awaited in step 4 and bounded by `shutdown_grace_period`.
 - **`shutdown_grace_period`**: bounds step 4 (tracked handles + `on_stop` hooks). Without one, shutdown waits indefinitely for tracked drains — a client holding a server-streaming gRPC call open holds the (grace-boundable) tracked drain, and an open HTTP SSE/streaming response holds the HTTP drain itself (step 3, never grace-bounded — same as plain axum). `on_drain` hooks are **not** bounded by it — they run before the drain begins.
-- **dev-reload**: plugin shutdown hooks are skipped on hot-reload re-entry (unchanged); `on_drain`/`on_stop` user hooks always run (same rule as `on_stop` had before).
+- **dev-reload**: a hot patch **drops** the previous `run()` future instead of stopping it, so no shutdown sequence runs for that cycle at all — no `on_drain`, no plugin `on_shutdown*`, no `on_stop`, no `#[pre_destroy]`. What does happen is cancellation: the dropped future's guard cancels that cycle's shutdown token, and every token derived from it (each `spawn_service` task, the relayed scheduler driver) is cancelled with it, so the cycle's background work stops even though nothing joins it. Hooks registered on re-entry are likewise skipped for cycles ≥ 2 (serve/startup lifecycle runs once). The full sequence above applies to a real stop: signal, `StopHandle::stop()`, or `r2e dev` exiting.
 
 ## Files
 

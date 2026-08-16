@@ -304,6 +304,11 @@ struct Wiring<T> {
     /// The resolved bean graph, filled by the framework after `build_state()`
     /// (or by the embedder). Backs [`TenantContext::bean`] and the cascade,
     /// both of which only run at request time — after the fill.
+    ///
+    /// The handle is **weak** (this map lives *in* the graph it points at, so
+    /// a strong one would be a self-sustaining cycle); the router owns the
+    /// graph, so it is alive for every request that can reach us and gone only
+    /// after the app is dropped.
     graph: GraphHandle,
     settings: TenantedSettings,
     /// The app-scoped default, when `fallback_to_default()` was asked for.

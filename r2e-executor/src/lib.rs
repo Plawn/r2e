@@ -363,6 +363,21 @@ impl PoolExecutor {
 /// [`ExecutorConfig::default`] when no config is loaded or the section is
 /// absent. Install with `.plugin(Executor)` — position relative to
 /// `load_config()` does not matter.
+///
+/// # `executor.enabled = false` is not an off-switch
+///
+/// The pool is a hard dependency: `#[async_exec]`, `#[derive(BackgroundService)]`
+/// and the `Scheduler` plugin all take `PoolExecutor` through `Deps`, so the bean
+/// must exist whether or not the plugin is "enabled". Disabling it therefore only
+/// drops the plugin's *surface* effects — and this plugin has none: its single
+/// effect is the graceful drain, which is a cleanup hook and survives the gate by
+/// design (see `PreStatePlugin` § Disabled plugins).
+///
+/// What `enabled = false` buys you is nothing but a log line, so the build logs a
+/// warning instead of silently pretending the pool went away. A pool that is never
+/// submitted to is already inert — construction only allocates a semaphore and a
+/// few counters; tasks are spawned per `submit`. To bound it instead, set
+/// `executor.max-concurrent`.
 pub struct Executor;
 
 impl PreStatePlugin for Executor {
@@ -377,6 +392,19 @@ impl PreStatePlugin for Executor {
         config: Option<ExecutorConfig>,
         ctx: &mut PluginBuildContext,
     ) -> Result<(PoolExecutor,), PluginBuildError> {
+        if !ctx.enabled() {
+            // The pool bean is still built: it is a compile-time `Deps` of
+            // `#[async_exec]`, `BackgroundService` and `Scheduler`, so it cannot
+            // be withheld. Say so rather than let `enabled = false` read as an
+            // off-switch. The drain hook below is cleanup, not surface, and runs
+            // either way.
+            tracing::warn!(
+                "`executor.enabled = false` does not remove the pool — `PoolExecutor` is a \
+                 required dependency of `#[async_exec]`, `#[derive(BackgroundService)]` and the \
+                 Scheduler. The pool is built (inert until submitted to) and still drains on \
+                 shutdown; use `executor.max-concurrent` to bound it."
+            );
+        }
         let executor = PoolExecutor::new(config.unwrap_or_default());
         let shutdown_handle = executor.clone();
 

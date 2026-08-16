@@ -13,7 +13,7 @@ Execute background tasks periodically (fixed interval or cron expression), with 
 
 ### Scheduler plugin
 
-The scheduled task manager. Installed with `.plugin(Scheduler)` **before** `build_state()`, it collects every `#[scheduled]` method of the registered controllers and starts each as a background schedule loop. **The Scheduler requires the Executor plugin** — it declares `type Deps = (PoolExecutor,)`, so a build with `.plugin(Scheduler)` but no `PoolExecutor` in the graph fails at `build_state()` with the guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Because `Deps` are checked against the final provision list, the order between `.plugin(Executor)` and `.plugin(Scheduler)` does not matter. The `scheduler` feature pulls in `executor`.
+The scheduled task manager. Installed with `.plugin(Scheduler)` **before** `build_state()`, it collects every `#[scheduled]` method of the registered controllers and runs them all from a single driver task (a min-heap of next-fire times — no task per schedule). **The Scheduler requires the Executor plugin** — it declares `type Deps = (PoolExecutor,)`, so a build with `.plugin(Scheduler)` but no `PoolExecutor` in the graph fails at `build_state()` with the guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Because `Deps` are checked against the final provision list, the order between `.plugin(Executor)` and `.plugin(Scheduler)` does not matter. The `scheduler` feature pulls in `executor`.
 
 ### `#[scheduled]`
 
@@ -156,16 +156,23 @@ A scheduled method may return `()` or `Result<(), E>` — errors are logged, not
 
 ## Execution model
 
-All schedules share a **single driver task**: one `rt::spawn`ed loop owns a
-min-heap of next-fire deadlines for every task (there is no longer one Tokio task
-per schedule). When the earliest deadline is reached, the driver submits the due
+All schedules share a **single driver task**: one loop owns a min-heap of
+next-fire deadlines for every task (there is no longer one Tokio task per
+schedule). The plugin starts it through `ServeContext::track`, so it is a
+tracked task — cancelled and awaited by `run()` on shutdown *and* on an aborted
+boot, and holding the bean graph alive while it runs. When the earliest deadline is reached, the driver submits the due
 tick bodies to the shared `PoolExecutor` (the Quarkus model — `executor.submit(...)`)
-and tracks the resulting `JobHandle`s in a `FuturesUnordered`. A job is re-armed
-onto the heap only when its own tick completes. This means:
+and tracks the resulting `JobHandle`s in a `FuturesUnordered`. When a job is
+re-armed onto the heap is its overlap policy: `Skip` (the default) re-arms only
+when its own tick completes; `Concurrent` re-arms at fire time, before the tick
+is even built. This means:
 
-- **Non-overlap is preserved** — a job is either waiting in the heap or in flight,
-  never both, so a task never overlaps with its own next tick
+- **Non-overlap is preserved for `Skip`** — the job is either waiting in the heap
+  or in flight, never both, so a task never overlaps with its own next tick
   (`MissedTickBehavior::Skip` semantics, computed against the job's fixed cadence).
+  While it is in flight it holds no deadline, so `next_run` reads `None` until the
+  tick completes. `Concurrent` jobs opt out of exactly this: their next deadline
+  is already on the heap while the tick runs.
 - **Jobs still run concurrently with each other** — the driver never awaits a tick
   inline, so a slow tick on one schedule does not delay the ticks of any other.
 - **In-flight ticks drain on shutdown** — they are pool jobs covered by
@@ -258,8 +265,15 @@ beans (`CancellationToken`, `ScheduledJobRegistry`) in the graph.
 
 Extract a `SchedulerHandle` as a handler parameter (or build one paired with the
 driver via `SchedulerHandle::channel(token)` when driving `start_jobs` manually)
-to control jobs at runtime by name — each call returns `bool` (`false` for an
-unknown job, a handle with no driver, or a `skip` job already running):
+to control jobs at runtime by name. Each call returns `bool`, and `false` means
+one of: the **name is unknown**; **shutdown has started** (or this handle has no
+driver — every command refuses once the driver is cancelled or gone, see below);
+for `trigger_now`, a **`skip` job whose tick is already in flight**, a **closed
+executor pool** (the driver answers the caller, then stops — nothing can run
+again), or a **tick factory that panicked** (contained, and the job is disabled
+just as on a cadence fire); for `resume`, a **schedule that can never fire again**
+(spent cron, overflowed interval — see the contract below). `pause` adds no case
+of its own, so it succeeds on any known job while the driver is running:
 
 ```rust
 scheduler.pause("count_users").await;      // stop firing; cadence still advances
@@ -267,11 +281,51 @@ scheduler.resume("count_users").await;     // start firing again
 scheduler.trigger_now("count_users").await;// fire once, out of band (even if paused)
 ```
 
-A paused job never submits; a `trigger_now` tick fires out of band, never re-arms,
-and leaves the regular schedule untouched. `ScheduledJobRegistry` exposes live
+**The resume contract.** A paused job — by `pause`, or disabled by a tick-factory
+panic — never fires. `resume` replies `true` **iff the job can fire again, as far
+as the driver can tell when the command is handled**: it keeps its
+already-scheduled deadline when one is still armed; when one of its ticks is in
+flight and due to re-arm the job on completion, it reports whether the schedule
+still yields a next occurrence; otherwise it re-arms from now (interval: now +
+period; cron: the next matching slot) and reports the outcome. A schedule that
+can never fire again (spent or overflowed) stays unarmed and `resume` replies
+`false` — the paused flag is still cleared, there is just nothing left to fire.
+
+The in-flight answer is a snapshot: a cron's final slot can pass between the
+reply and the tick's completion, and the job then ends unarmed. The end state is
+always honest — `next_run` is `Some` exactly when a live driver holds a deadline
+for the job. It is about the deadline, not the fire: a **paused** job keeps
+publishing the instant it *would* fire were it resumed (the cadence advances,
+the fire is skipped). It reads `None` while a `skip` tick is in flight, for a
+spent or unrepresentable schedule, for a deadline consumed by a submission that
+never ran — and for every job once the driver has stopped, since nothing is left
+that could fire one.
+
+Once shutdown starts, every runtime command returns `false` — including one
+already queued when cancellation happened: the driver polls cancellation with
+priority, refuses whatever it still dequeues, and closes the command channel
+before draining its in-flight ticks. So `trigger_now` can never start a tick
+during shutdown, and calling any command from *inside* a tick body then is a
+no-op rather than a deadlock.
+
+A `trigger_now` tick fires out of band, never re-arms, and leaves the regular
+schedule untouched. `ScheduledJobRegistry` exposes live
 stats per job (`list_jobs()` / `job(name)` → `ScheduledJobInfo`): `last_run` and
 `next_run` (`chrono::DateTime<Utc>`), `last_duration`, `run_count`, `panic_count`,
 and `paused`.
+
+A panicking tick **body** is contained by the pool: `panic_count` goes up and the
+job keeps its schedule. A panic while *constructing* the tick (the closure body
+before its first `await`, or a `Clone` of the task state) is caught too, but the
+job is **disabled** — it is paused and `panic_count` incremented, because a
+construction failure repeats on every fire. `SchedulerHandle::resume` is the way
+back once the cause is fixed, under the contract above: a `Concurrent` (or
+`trigger_now`) panic leaves the cadence alone, so the job resumes onto whatever
+deadline it still holds — the one `Concurrent` pushed before building the tick,
+or none at all when the schedule was spent or unarmed (a `trigger_now` panic on
+such a job re-arms from the resume like any other unarmed job); a `Skip` panic
+consumes its deadline, so the job is re-armed one period from the resume and
+`next_run` reads `None` meanwhile. Other jobs are unaffected either way.
 
 ## Logs
 

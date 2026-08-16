@@ -235,3 +235,64 @@ fn deferred_context_on_shutdown() {
     ctx.on_shutdown(|| {});
     assert_eq!(shutdown_hooks.len(), 1);
 }
+
+// ── The `with_state` graph-bypass path ──────────────────────────────────────
+
+/// A plugin with both slots filled: a setup datum (a plain deferred action)
+/// and a build that provides a bean plus a route.
+struct BypassedPlugin;
+
+impl PreStatePlugin for BypassedPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type Config = ();
+
+    fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
+        ctx.store_data(crate::fixtures::SetupData(3));
+    }
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        ctx.store_data(crate::fixtures::StoredData(9));
+        ctx.add_layer(|router| {
+            router.route(
+                "/bypassed",
+                r2e_core::http::routing::get(|| async { "never-mounted" }),
+            )
+        });
+        Ok((Alpha(1),))
+    }
+}
+
+#[r2e_core::test]
+async fn with_state_bypasses_plugin_builds_without_panicking() {
+    // `with_state` throws the bean registry away and runs the deferred actions
+    // against an empty graph, so the plugin's group node never runs and its
+    // effects slot stays empty. That is a documented no-op — NOT an assertion
+    // failure (a `debug_assert!(false)` here panicked every debug build that
+    // combined `.plugin()` with `.with_state()`).
+    let app = AppBuilder::new().plugin(BypassedPlugin).with_state(());
+
+    // The setup datum is a plain deferred action: it runs on this path.
+    assert_eq!(
+        app.get_plugin_data::<crate::fixtures::SetupData>()
+            .map(|d| d.0),
+        Some(3),
+        "setup actions still run — they are not graph nodes"
+    );
+    // Everything `build` would have produced is absent: build never ran.
+    assert!(
+        app.get_plugin_data::<crate::fixtures::StoredData>().is_none(),
+        "build effects must not apply when build never ran"
+    );
+    let (status, _) = crate::support::send_get(app.build(), "/bypassed").await;
+    assert_eq!(
+        status,
+        r2e_core::http::StatusCode::NOT_FOUND,
+        "the plugin's route never materializes on the with_state path"
+    );
+}

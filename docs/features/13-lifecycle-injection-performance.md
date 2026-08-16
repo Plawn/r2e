@@ -470,10 +470,12 @@ ScheduledTaskDef {
 }
 ```
 
-The scheduler runtime submits each tick to the `PoolExecutor` and awaits its
-`JobHandle` before the next tick — so ticks are drained on shutdown, bounded by
-`executor.max-concurrent`, and a panicking tick is contained without killing its
-schedule loop.
+A single driver task (min-heap of next-fire times) submits each due tick to the
+`PoolExecutor` and tracks its `JobHandle` — so ticks are drained on shutdown,
+bounded by `executor.max-concurrent`, and a panicking tick is contained without
+killing the driver or any other job. Whether a job waits for its own tick before
+firing again is its overlap policy: `Skip` (the default) re-arms on completion,
+`Concurrent` re-arms at fire time.
 
 ### 4.3 The Mixed Controller Pattern
 

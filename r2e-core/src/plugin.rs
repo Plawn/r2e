@@ -88,11 +88,25 @@ pub trait Plugin: Send + 'static {
 /// `.plugin()` / `load_config` order does not matter). Read config in
 /// [`build`](crate::PreStatePlugin::build) instead, where the typed
 /// [`Config`](crate::PreStatePlugin::Config) section is guaranteed loaded.
+///
+/// # No effects here
+///
+/// This context **cannot** add router layers, wrap the router, or register
+/// serve/shutdown hooks. Those are *surface* effects and belong to
+/// [`build`](crate::PreStatePlugin::build), the only phase that knows whether
+/// the plugin is [`enabled`](PluginBuildContext::enabled): everything a plugin
+/// registers here runs unconditionally, so a disabled plugin whose `setup`
+/// mounted an admin route would still expose it. What remains is deliberately
+/// small — [`store_data`](Self::store_data) for a coordination datum other
+/// pre-state code must read (Scheduler's task-registry handle, which
+/// `#[scheduled]` collection needs even when `scheduler.enabled = false`),
+/// [`run_pre_destroy`](Self::run_pre_destroy), and the raw
+/// [`add_deferred`](Self::add_deferred) escape hatch.
 pub struct PluginSetupContext {
     deferred: Vec<DeferredAction>,
-    /// Buffered sugar calls ([`add_layer`](Self::add_layer),
-    /// [`on_serve`](Self::on_serve), etc.). Flushed as ONE [`DeferredAction`]
-    /// by the blanket `RawPreStatePlugin` impl — see [`flush`](Self::flush).
+    /// Buffered [`store_data`](Self::store_data) calls. Flushed as ONE
+    /// [`DeferredAction`] by the blanket `RawPreStatePlugin` impl — see
+    /// [`flush`](Self::flush).
     sugar: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
     /// Lifecycle-hook registrars applied to the bean registry at `.plugin()`
     /// time. Backs [`run_pre_destroy`](Self::run_pre_destroy).
@@ -126,112 +140,56 @@ impl PluginSetupContext {
         std::mem::take(&mut self.registry_ops)
     }
 
-    /// Register a deferred action to run after state resolution.
+    /// Register a deferred action to run after state resolution — the raw,
+    /// **unconditional** pre-graph escape hatch.
     ///
-    /// This is the low-level escape hatch. Most plugins should prefer the
-    /// direct sugar methods ([`add_layer`](Self::add_layer),
-    /// [`on_serve`](Self::on_serve), [`store_data`](Self::store_data), …),
-    /// which buffer their calls and are flushed as a **single** deferred
-    /// action.
+    /// Whatever you do inside the action runs whether or not the plugin ends up
+    /// enabled: `setup` runs before config exists, and this hook hands you the
+    /// full [`DeferredContext`], which the framework cannot gate for you. Use
+    /// it only for work that is correct unconditionally (buffering a datum,
+    /// wiring pre-state coordination). Anything that should disappear under
+    /// `<prefix>.enabled = false` — routes, layers, serve/shutdown hooks —
+    /// belongs in [`build`](crate::PreStatePlugin::build), whose effects are
+    /// gated for you.
     ///
     /// # Ordering
     ///
-    /// Every action added here runs **before** the sugar-buffered action, in
-    /// the order added. The sugar calls are then applied as one final action.
-    /// If you need sugar and explicit actions to interleave differently, put
-    /// all your logic inside explicit `add_deferred` actions.
+    /// Every action added here runs **before** the buffered
+    /// [`store_data`](Self::store_data) action, in the order added.
     ///
     /// Across plugins, deferred work runs **grouped per plugin, in install
-    /// order**: `[A.explicit…, A.sugar, A.build-effects, B.explicit…,
-    /// B.sugar, B.build-effects]`. Note that plugin **build** execution
+    /// order**: `[A.explicit…, A.setup-data, A.build-effects, B.explicit…,
+    /// B.setup-data, B.build-effects]`. Note that plugin **build** execution
     /// follows the graph's topological order instead — effects and builds
     /// are ordered independently.
     pub fn add_deferred(&mut self, action: DeferredAction) {
         self.deferred.push(action);
     }
 
-    // ── Sugar: direct post-state actions ────────────────────────────────────
-    //
-    // These mirror `DeferredContext`'s surface but take plain closures — the
-    // boxing happens inside. Calls are buffered and flushed as ONE deferred
-    // action (named after the plugin type), running after any explicit
-    // `add_deferred` actions. Within the flushed action, sugar calls run in
-    // the order you made them.
-
-    /// Add a layer to the router (post-state). Sugar for a
-    /// [`DeferredContext::add_layer`] call — pass a plain closure, no `Box`.
-    ///
-    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
-    pub fn add_layer<F>(&mut self, layer: F)
-    where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
-    {
-        self.sugar
-            .push(Box::new(move |dctx| dctx.add_layer(Box::new(layer))));
-    }
-
-    /// Add a transport-level router transform applied **outermost**. Sugar for
-    /// a [`DeferredContext::wrap_router`] call — pass a plain closure, no `Box`.
-    ///
-    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
-    pub fn wrap_router<F>(&mut self, wrap: F)
-    where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
-    {
-        self.sugar
-            .push(Box::new(move |dctx| dctx.wrap_router(Box::new(wrap))));
-    }
-
-    /// Store plugin-specific data for later retrieval. Sugar for a
+    /// Store a plugin datum other pre-state code must read regardless of
+    /// whether the plugin is enabled. Sugar for a
     /// [`DeferredContext::store_data`] call.
+    ///
+    /// **Unconditional** — like [`add_deferred`](Self::add_deferred), and for
+    /// the same reason. This is the ungated *coordination datum*, not an
+    /// effect: Scheduler deposits its task-registry handle here so
+    /// `#[scheduled]` collection keeps working with `scheduler.enabled =
+    /// false`. A datum whose presence should follow the enabled flag belongs in
+    /// [`build`](crate::PreStatePlugin::build) via
+    /// [`PluginBuildContext::store_data`].
     ///
     /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
     pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
         self.sugar.push(Box::new(move |dctx| dctx.store_data(data)));
     }
 
-    /// Add a serve hook that runs when the server starts. Sugar for a
-    /// [`DeferredContext::on_serve`] call.
-    ///
-    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
-    pub fn on_serve<F>(&mut self, hook: F)
-    where
-        F: FnOnce(crate::builder::ServeContext) + Send + 'static,
-    {
-        self.sugar.push(Box::new(move |dctx| dctx.on_serve(hook)));
-    }
-
-    /// Add a shutdown hook that runs when the server stops. Sugar for a
-    /// [`DeferredContext::on_shutdown`] call.
-    ///
-    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
-    pub fn on_shutdown<F>(&mut self, hook: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        self.sugar
-            .push(Box::new(move |dctx| dctx.on_shutdown(hook)));
-    }
-
-    /// Add an async shutdown hook awaited during shutdown. Sugar for a
-    /// [`DeferredContext::on_shutdown_async`] call.
-    ///
-    /// Buffered; see the ordering note on [`add_deferred`](Self::add_deferred).
-    pub fn on_shutdown_async<F, Fut>(&mut self, hook: F)
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
-    {
-        self.sugar
-            .push(Box::new(move |dctx| dctx.on_shutdown_async(hook)));
-    }
-
     /// Consume the context, returning the deferred actions to install.
     ///
     /// Actions added via [`add_deferred`](Self::add_deferred) come first, in
-    /// call order; the buffered sugar calls are appended as a **single**
-    /// [`DeferredAction`] named `name` (typically the plugin's short type name,
-    /// via [`plugin_action_name`]). Empty sugar contributes no action.
+    /// call order; the buffered [`store_data`](Self::store_data) calls are
+    /// appended as a **single** [`DeferredAction`] named `name` (typically the
+    /// plugin's short type name, via [`plugin_action_name`]). No buffered data
+    /// contributes no action.
     pub(crate) fn flush(self, name: &'static str) -> Vec<DeferredAction> {
         let PluginSetupContext {
             mut deferred,
@@ -313,8 +271,11 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// Router layers, serve/shutdown hooks, and plugin data are registered on the
 /// [`PluginBuildContext`] during `build` and applied after the graph is
 /// resolved. Effects are applied **in plugin install order** (while builds
-/// execute in topological order), and are dropped when the plugin is disabled
-/// via `<prefix>.enabled = false`.
+/// execute in topological order). Surface effects are dropped when the plugin
+/// is disabled via `<prefix>.enabled = false`; the cleanup hooks
+/// ([`on_shutdown`](PluginBuildContext::on_shutdown) /
+/// [`on_shutdown_async`](PluginBuildContext::on_shutdown_async)) survive,
+/// because `build` — and whatever it constructed — ran anyway.
 ///
 /// For plugins that need arbitrary builder access (calling `.register()`,
 /// `.provide()`, etc. by hand), implement [`RawPreStatePlugin`] instead — but
@@ -437,6 +398,33 @@ pub trait PreStatePlugin: Send + Sized + 'static {
     /// escape hatch should reuse semantics ever change.
     const BUILD_VERSION: u64 = 0;
 
+    /// Opt in to skipping [`build`](Self::build) entirely when a test pinned
+    /// **every** [`Provided`](Self::Provided) type before `.plugin()`.
+    ///
+    /// Default `false`: `build` always runs, and pinned projections still win
+    /// per type (the graph holds the override; the plugin's own value for that
+    /// slot is discarded). Leave it alone unless the following is true of your
+    /// plugin.
+    ///
+    /// Set it to `true` **only** when `build` is pure bean construction —
+    /// every observable output of the plugin is one of its `Provided` beans,
+    /// and it registers no effects (routes, layers, serve/shutdown hooks,
+    /// plugin data) — *and* that construction costs something a test wants to
+    /// avoid (opening a connection, booting a container, generating keys).
+    /// `OpenFga` is the in-tree example: pinning `OpenFgaRegistry`,
+    /// `FgaClient`, and `OpenFgaHandle` replaces the whole plugin, so skipping
+    /// its gRPC boot is exactly right.
+    ///
+    /// A plugin that carries **effects** must keep the default. Its routes and
+    /// hooks are not part of `Provided`, so "all beans pinned" says nothing
+    /// about whether the plugin is still needed: OIDC provides one
+    /// `Arc<JwtClaimsValidator>` and registers its `/oauth/token`, discovery,
+    /// JWKS, and user-info routes as build effects — under `TestApp`, which
+    /// pins the validators, `true` here would silently 404 every OIDC route.
+    /// To silence an effect-carrying plugin in a test, disable it
+    /// (`<prefix>.enabled = false`) instead.
+    const SKIP_BUILD_WHEN_ALL_PINNED: bool = false;
+
     /// Rare **pre-graph** escape hatch, run once at `.plugin()` time.
     /// Default: no-op.
     ///
@@ -472,16 +460,23 @@ pub trait PreStatePlugin: Send + Sized + 'static {
     /// `build` **always runs**, even when `<prefix>.enabled = false` — the
     /// `Provided` types are part of the compile-time provision list, so the
     /// beans must exist. Check [`ctx.enabled()`](PluginBuildContext::enabled)
-    /// and return a cheap disabled variant; effects registered on `ctx` are
-    /// dropped automatically when the plugin is disabled.
+    /// and return a cheap, inert disabled variant: nothing bound, spawned,
+    /// installed globally, or connected. Surface effects registered on `ctx`
+    /// are dropped automatically when disabled; the cleanup hooks
+    /// (`on_shutdown`/`on_shutdown_async`) are not, so whatever the disabled
+    /// path *did* construct is still disposed of.
     ///
     /// # Test pinning
     ///
-    /// When a test pins **every** `Provided` type before install
-    /// (`override_bean` for each), `build` is skipped entirely. Pinning only
-    /// *some* of them still runs `build` (the group node yields the whole
-    /// tuple) while the pinned types keep their overrides in the graph; to
-    /// also silence such a plugin's side effects, disable it via
+    /// Pinning a `Provided` type (`override_bean` before `.plugin()`) replaces
+    /// that type in the graph — its projection is not registered. `build`
+    /// still runs, whatever is pinned: it is the only thing that produces the
+    /// plugin's routes, layers and hooks, which are not beans and cannot be
+    /// pinned. A plugin whose `build` is *pure* bean construction can opt out
+    /// of that with
+    /// [`SKIP_BUILD_WHEN_ALL_PINNED`](Self::SKIP_BUILD_WHEN_ALL_PINNED) — then
+    /// pinning every `Provided` type skips `build` entirely. To silence an
+    /// effect-carrying plugin in a test, disable it via
     /// `<prefix>.enabled = false`.
     ///
     /// # Example
@@ -611,8 +606,18 @@ where
         };
         let mut builder = app;
         for action in deferred {
-            // Gate every buffered/explicit setup action on `<prefix>.enabled`.
-            builder = builder.add_deferred(gate_on_enabled(action, prefix));
+            // Setup actions are UNCONDITIONAL — never gated on
+            // `<prefix>.enabled`, and that is sound only because
+            // `PluginSetupContext` cannot register surface effects: no
+            // `add_layer`, no `wrap_router`, no serve/shutdown hooks. What is
+            // left is the pre-graph *coordination datum* (`store_data`) plus the
+            // documented raw `add_deferred` escape hatch — things other
+            // pre-state code must observe before (and independently of) the
+            // plugin doing any work: Scheduler's `TaskRegistryHandle` must exist
+            // for `#[scheduled]` collection even when `scheduler.enabled =
+            // false`, or the tasks are silently dropped. The enabled gate
+            // belongs to build effects, registered on the `PluginBuildContext`.
+            builder = builder.add_deferred(action);
         }
         // Apply lifecycle registrars (run_pre_destroy) the plugin opted its
         // `Provided` beans into. NOT gated by `enabled`: the beans still
@@ -620,17 +625,19 @@ where
         for op in registry_ops {
             op(builder.bean_registry_mut());
         }
-        // All-pinned skip: when a test pins EVERY provided type before
-        // `.plugin()` (whole-plugin mock), neither `build` nor its effects
-        // should run — register nothing. An empty `Provided` tuple must NOT
-        // take this path (`all()` on an empty iterator is vacuously true, but
-        // a `Provided = ()` plugin still runs `build` for its effects).
+        // All-pinned skip — OPT-IN (`SKIP_BUILD_WHEN_ALL_PINNED`), because
+        // "every provided bean is pinned" is not evidence that the plugin is
+        // unnecessary: effects (routes, layers, hooks) are not beans and cannot
+        // be pinned. Only a plugin whose whole output is its `Provided` tuple
+        // may declare that pinning it all replaces it. An empty `Provided`
+        // tuple never takes this path (`all()` on an empty iterator is
+        // vacuously true, but a `Provided = ()` plugin exists for its effects).
         let ids = <T::Provided as PluginProvisions>::element_ids();
-        let all_pinned = {
+        let skip_build = T::SKIP_BUILD_WHEN_ALL_PINNED && {
             let registry = builder.bean_registry_mut();
             !ids.is_empty() && ids.iter().all(|(tid, _)| registry.is_pinned(tid))
         };
-        if !all_pinned {
+        if !skip_build {
             // Group node (runs `build`) + per-element projections. Effects
             // registered on the PluginBuildContext land in this shared slot,
             // drained by the deferred action below.
@@ -642,16 +649,49 @@ where
             // in topological order — the two orders are independent). This
             // action is also the single place the "disabled" diagnostic is
             // emitted, since exactly one is scheduled per plugin.
+            //
+            // `enabled` is NOT recomputed here: the slot carries the decision
+            // the group factory made from the graph's `R2eConfig`. Re-reading
+            // the builder's own config could disagree with it (a pinned
+            // `R2eConfig` bean), and then a plugin could build enabled and have
+            // its effects dropped, or vice versa. One decision, one owner.
             builder = builder.add_deferred(DeferredAction::new(name, move |dctx| {
-                if !plugin_config_enabled(dctx.config(), prefix) {
+                let Some(built) = effects.take() else {
+                    // The graph-bypass path: `.plugin(P).with_state(S)` throws
+                    // the bean registry away and runs the deferred actions
+                    // against an empty graph, so the group node never ran and
+                    // there is nothing to apply — not a bug, a documented
+                    // no-op (see `AppBuilder::with_state`). On the normal path
+                    // the slot is always filled: the group node is non-lazy and
+                    // `volatile`, so it is constructed on every resolution path
+                    // (including a dev-reload cache hit), and a failing `build`
+                    // aborts boot before any deferred action runs.
+                    tracing::debug!(
+                        plugin = name,
+                        "plugin build never ran (`with_state` bypasses the bean graph); \
+                         effects skipped",
+                    );
+                    return;
+                };
+                // Cleanup is NOT a surface effect: `on_shutdown`/
+                // `on_shutdown_async` dispose of what `build` constructed, and
+                // `build` runs whether or not the plugin is enabled. Dropping
+                // them with the surface would leak exactly the resources a
+                // disabled plugin still built (a disabled Executor's pool would
+                // never drain). They run first so a disabled plugin's cleanup is
+                // registered even though nothing else of it is.
+                for op in built.shutdown {
+                    op(dctx);
+                }
+                if !built.enabled {
                     tracing::info!(
                         plugin = name,
-                        "plugin disabled via `{}.enabled = false`; effects skipped (its beans remain in the graph)",
+                        "plugin disabled via `{}.enabled = false`; effects skipped (its beans remain in the graph, its cleanup hooks still run)",
                         prefix.unwrap_or(name),
                     );
                     return;
                 }
-                for op in effects.drain() {
+                for op in built.effects {
                     op(dctx);
                 }
             }));
@@ -701,14 +741,73 @@ pub(crate) fn load_plugin_config_from<T: PreStatePlugin>(
 ///
 /// Handed to plugins via [`PluginBuildContext::graph`] while the graph is
 /// still being built; the framework fills it right after `build_state()`
-/// resolves, so [`get`](Self::get) returns `Some` from any code running after
-/// resolution (serve hooks, request handlers, background tasks). Reading it
-/// **during** a plugin's `build` returns `None` — take dependencies through
+/// resolves, so [`get`](Self::get) returns `Some` from code running after
+/// resolution — serve hooks, request handlers, tracked background tasks (see
+/// the ownership rules below for the exact extent). Reading it **during** a
+/// plugin's `build` returns `None` — take dependencies through
 /// [`Deps`](PreStatePlugin::Deps) instead; the handle exists for values that
 /// must resolve beans lazily *after* boot (per-tenant sources, resource
 /// factories).
+///
+/// # The reference is **weak**
+///
+/// The handle stores a [`Weak`](std::sync::Weak) reference. It has to: the
+/// beans it points at typically live *inside* the very graph it points to
+/// (`BeanContext → Tenanted<T> → GraphHandle`), and a strong reference there
+/// would be a cycle that keeps every bean, pool and connection alive forever —
+/// one leaked graph per `r2e dev` hot-patch cycle.
+///
+/// # Who keeps it alive
+///
+/// Strong ownership sits with the assembled app, in three independent places —
+/// no one of them is a link in a chain, each stands alone:
+///
+/// - **the router**, through its `GraphKeepAlive` layer: every request future
+///   and every response body carries the graph, so a handler that resolves
+///   after an `.await` — or a streaming body producing frames long after the
+///   handler returned — still sees it;
+/// - **every tracked task**: `ServeContext::track`, `spawn_service`, the
+///   scheduler driver and the QUIC drain move an `Arc` *into* the task.
+///   `run()` cancels the shutdown token and joins those handles on every exit
+///   it controls — normal shutdown *and* the aborts (a startup hook returning
+///   `Err`, a serve error) — but that join is still bounded by
+///   `shutdown_grace_period`, and a dropped `run()` future (an `r2e dev` hot
+///   patch) joins nothing at all, so ownership travels with the work;
+/// - **the serving scope**: `PreparedApp::run()` holds one for its whole
+///   duration, covering the shutdown phase itself (`on_stop` hooks,
+///   `#[pre_destroy]` disposers).
+///
+/// `get`/[`bean`](Self::bean) therefore return `Some` for the app's whole life
+/// and for any tracked task that outlives it. They read empty in four
+/// situations:
+///
+/// - **not filled yet** — during `build`, or after a `build_state()` that
+///   failed (see [`fill`](Self::fill));
+/// - **graph already dropped** — the app that owned it is gone (a handle kept
+///   by hand past the app is the usual way to hit this);
+/// - **a WebSocket session still running after `run()` returned** — upgraded
+///   connections are detached from graceful shutdown and are not tracked, so
+///   resolve what a session needs before entering its socket loop;
+/// - **an `r2e dev` hot patch, once the previous cycle has fully wound down** —
+///   dropping the old `run()` future cancels that cycle's shutdown token, so
+///   its tracked tasks stop; each keeps *its own* cycle's graph alive until it
+///   returns (nothing joins them), and that graph is released when the last one
+///   does. A handle carried into the new cycle points at the old, released
+///   graph.
+///
+/// That last point (and a panic unwinding out of the serve loop) relies on
+/// cancellation alone, since no shutdown hook runs on either path: the app
+/// shutdown token is created before serving (lazily, on the first
+/// `register_service` or in `run_inner`) and shared through `plugin_data`, and
+/// every framework-derived token — `spawn_service`'s per-service token in
+/// particular — is a `child_token()` of it, so the drop guard on the app token
+/// reaches them all. Tokens the framework does not own (the scheduler's, a
+/// plugin's) need the explicit relay the scheduler does.
+///
+/// Code that may outlive the graph should treat `None` as "the app is shutting
+/// down", not as a bug.
 #[derive(Clone, Default)]
-pub struct GraphHandle(crate::late::Late<std::sync::Arc<crate::beans::BeanContext>>);
+pub struct GraphHandle(crate::late::Late<std::sync::Weak<crate::beans::BeanContext>>);
 
 impl GraphHandle {
     /// Create an empty (unfilled) handle. Internal — the builder owns filling.
@@ -716,25 +815,31 @@ impl GraphHandle {
         Self::default()
     }
 
-    /// Fill the handle with the resolved graph. First write wins; later calls
-    /// are ignored (relevant across dev-reload cycles, where the registry —
-    /// and thus the handle — is fresh per cycle anyway).
+    /// Fill the handle with a weak reference to the resolved graph. First write
+    /// wins; later calls are ignored (relevant across dev-reload cycles, where
+    /// the registry — and thus the handle — is fresh per cycle anyway).
     ///
-    /// The builder does this for you after `build_state()`. It is public for
-    /// embedders that build a `BeanContext` by hand (tests, hand-wired
-    /// per-tenant maps) and need to satisfy an API that takes a `GraphHandle`:
-    /// start from [`GraphHandle::default`], hand out clones, fill once.
-    pub fn fill(&self, ctx: std::sync::Arc<crate::beans::BeanContext>) {
-        let _ = self.0.fill(ctx);
+    /// The builder does this for you on every **successful** exit of
+    /// `build_state()`. A boot that fails (bean error, plugin `build` error)
+    /// returns before the fill, so a handle held outside the builder stays
+    /// empty forever — there is no graph to point at.
+    ///
+    /// It is public for embedders that build a `BeanContext` by hand (tests,
+    /// hand-wired per-tenant maps) and need to satisfy an API that takes a
+    /// `GraphHandle`: start from [`GraphHandle::default`], hand out clones,
+    /// fill once. The caller keeps owning the `Arc` — the handle will not.
+    pub fn fill(&self, ctx: &std::sync::Arc<crate::beans::BeanContext>) {
+        let _ = self.0.fill(std::sync::Arc::downgrade(ctx));
     }
 
-    /// The resolved bean graph, or `None` before `build_state()` completes.
-    pub fn get(&self) -> Option<&std::sync::Arc<crate::beans::BeanContext>> {
-        self.0.get()
+    /// The resolved bean graph, or `None` before `build_state()` completes —
+    /// and `None` again once the app owning the graph has been dropped.
+    pub fn get(&self) -> Option<std::sync::Arc<crate::beans::BeanContext>> {
+        self.0.get().and_then(std::sync::Weak::upgrade)
     }
 
-    /// Resolve a bean from the graph, or `None` before resolution / when the
-    /// bean is absent.
+    /// Resolve a bean from the graph, or `None` before resolution / after the
+    /// graph is gone / when the bean is absent.
     pub fn bean<B: Clone + Send + Sync + 'static>(&self) -> Option<B> {
         self.get().and_then(|ctx| ctx.try_get::<B>())
     }
@@ -743,26 +848,50 @@ impl GraphHandle {
 impl std::fmt::Debug for GraphHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphHandle")
-            .field("filled", &self.get().is_some())
+            .field("filled", &self.0.get().is_some())
+            .field("alive", &self.get().is_some())
             .finish()
     }
 }
 
-/// Shared buffer between a plugin's group-node factory (which fills it during
-/// `build`) and the plugin's install-order deferred action (which drains and
-/// applies it — or drops it when the plugin is disabled).
+/// What one run of [`PreStatePlugin::build`] left for its install-order
+/// deferred action: the effects it registered, split by whether the `enabled`
+/// gate applies, **and** the `enabled` decision the group factory took from the
+/// graph's `R2eConfig`. The flag travels with the effects so the two are never
+/// computed twice from two config sources.
+pub(crate) struct BuiltEffects {
+    pub(crate) enabled: bool,
+    /// Surface effects — routes, layers, router wraps, serve hooks, plugin
+    /// data, `after_build`. Dropped when the plugin is disabled.
+    pub(crate) effects: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+    /// Cleanup effects (`on_shutdown`/`on_shutdown_async`). Applied
+    /// **regardless** of `enabled`: they dispose of what `build` constructed,
+    /// and `build` runs even when the plugin is disabled.
+    pub(crate) shutdown: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+}
+
+/// Shared slot between a plugin's group-node factory (which fills it at the end
+/// of `build`) and the plugin's install-order deferred action (which takes and
+/// applies it — dropping the surface effects when the carried flag says
+/// disabled).
+///
+/// `None` means `build` never ran for this plugin: on the normal path
+/// impossible, on the `with_state` graph-bypass path expected (see the take
+/// site).
 #[derive(Clone, Default)]
-pub(crate) struct EffectsSlot(
-    std::sync::Arc<std::sync::Mutex<Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>>>,
-);
+pub(crate) struct EffectsSlot(std::sync::Arc<std::sync::Mutex<Option<BuiltEffects>>>);
 
 impl EffectsSlot {
-    pub(crate) fn fill(&self, effects: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>) {
-        *self.0.lock().expect("EffectsSlot poisoned") = effects;
+    pub(crate) fn fill(&self, enabled: bool, effects: PluginEffects) {
+        *self.0.lock().expect("EffectsSlot poisoned") = Some(BuiltEffects {
+            enabled,
+            effects: effects.surface,
+            shutdown: effects.shutdown,
+        });
     }
 
-    pub(crate) fn drain(&self) -> Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>> {
-        std::mem::take(&mut *self.0.lock().expect("EffectsSlot poisoned"))
+    pub(crate) fn take(&self) -> Option<BuiltEffects> {
+        self.0.lock().expect("EffectsSlot poisoned").take()
     }
 }
 
@@ -777,7 +906,15 @@ pub struct PluginBuildContext {
     enabled: bool,
     graph: GraphHandle,
     config: Option<crate::config::R2eConfig>,
-    effects: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+    effects: PluginEffects,
+}
+
+/// The two effect buckets a [`PluginBuildContext`] fills: surface effects
+/// (dropped when the plugin is disabled) and cleanup effects (never dropped).
+#[derive(Default)]
+pub(crate) struct PluginEffects {
+    pub(crate) surface: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+    pub(crate) shutdown: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
 }
 
 impl PluginBuildContext {
@@ -790,29 +927,38 @@ impl PluginBuildContext {
             enabled,
             graph,
             config,
-            effects: Vec::new(),
+            effects: PluginEffects::default(),
         }
     }
 
-    pub(crate) fn into_effects(self) -> Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>> {
+    pub(crate) fn into_effects(self) -> PluginEffects {
         self.effects
     }
 
     /// Whether the plugin is enabled (`<prefix>.enabled != false`).
     ///
     /// [`build`](PreStatePlugin::build) always runs — check this and return a
-    /// cheap disabled variant of your beans when `false`. Effects registered
-    /// on this context are dropped automatically when disabled.
+    /// cheap, **inert** disabled variant of your beans when `false` (nothing
+    /// bound, spawned, or installed globally). Surface effects registered on
+    /// this context ([`add_layer`](Self::add_layer),
+    /// [`wrap_router`](Self::wrap_router), [`store_data`](Self::store_data),
+    /// [`on_serve`](Self::on_serve), [`after_build`](Self::after_build)) are
+    /// dropped automatically when disabled; the cleanup hooks
+    /// ([`on_shutdown`](Self::on_shutdown),
+    /// [`on_shutdown_async`](Self::on_shutdown_async)) are **not** — they
+    /// dispose of what this `build` just constructed, so they run either way.
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
-    /// A deferred-fill handle on the final resolved bean graph.
+    /// A deferred-fill, **weak** handle on the final resolved bean graph.
     ///
     /// Empty during `build` (the graph is still being built — take
     /// dependencies through [`Deps`](PreStatePlugin::Deps)); filled right
-    /// after `build_state()` resolves. Store it in beans that must resolve
-    /// other beans lazily after boot (per-tenant sources, resource factories).
+    /// after `build_state()` resolves successfully. Store it in beans that must
+    /// resolve other beans lazily after boot (per-tenant sources, resource
+    /// factories) — storing it does **not** keep the graph alive; see
+    /// [`GraphHandle`].
     pub fn graph(&self) -> GraphHandle {
         self.graph.clone()
     }
@@ -830,11 +976,17 @@ impl PluginBuildContext {
     /// (e.g. `take_data`).
     ///
     /// Dropped (never run) when the plugin is disabled.
+    ///
+    /// This is also the hook to reach for when an effect must act on the bean
+    /// the **graph** exposes rather than the one `build` just made: `dctx`
+    /// carries the resolved graph, so resolving here picks up a test's pinned
+    /// override, while a captured instance would not (see the partial-pin note
+    /// in `docs/claude/plugins.md`).
     pub fn after_build<F>(&mut self, f: F)
     where
         F: FnOnce(&mut DeferredContext) + Send + 'static,
     {
-        self.effects.push(Box::new(f));
+        self.effects.surface.push(Box::new(f));
     }
 
     // ── Effect sugar (mirrors `DeferredContext`) ────────────────────────────
@@ -846,6 +998,7 @@ impl PluginBuildContext {
         F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
     {
         self.effects
+            .surface
             .push(Box::new(move |dctx| dctx.add_layer(Box::new(layer))));
     }
 
@@ -857,13 +1010,19 @@ impl PluginBuildContext {
         F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
     {
         self.effects
+            .surface
             .push(Box::new(move |dctx| dctx.wrap_router(Box::new(wrap))));
     }
 
     /// Store plugin-specific data for later retrieval (keyed by type). See
     /// [`DeferredContext::store_data`].
+    ///
+    /// A surface effect: dropped when the plugin is disabled. For a datum that
+    /// must exist regardless, deposit it from `setup`
+    /// ([`PluginSetupContext::store_data`]).
     pub fn store_data<D: Any + Send + Sync + 'static>(&mut self, data: D) {
         self.effects
+            .surface
             .push(Box::new(move |dctx| dctx.store_data(data)));
     }
 
@@ -873,27 +1032,55 @@ impl PluginBuildContext {
     where
         F: FnOnce(crate::builder::ServeContext) + Send + 'static,
     {
-        self.effects.push(Box::new(move |dctx| dctx.on_serve(hook)));
+        self.effects
+            .surface
+            .push(Box::new(move |dctx| dctx.on_serve(hook)));
     }
 
     /// Add a shutdown hook that runs when the server stops. See
     /// [`DeferredContext::on_shutdown`].
+    ///
+    /// **Not** gated by [`enabled`](Self::enabled): cleanup follows the
+    /// resource `build` constructed, and `build` runs even when the plugin is
+    /// disabled. Keep the hook safe to run against a disabled/inert variant.
+    ///
+    /// # These hooks order shutdown; they do not guarantee it
+    ///
+    /// Hooks fire in registration order, one at a time, each inside a
+    /// `catch_unwind` — a panicking hook cannot discard the ones behind it. But
+    /// they only fire on the exits `run()` controls. A panic unwinding out of
+    /// the serve loop, or the `run()` future being dropped under an `r2e dev`
+    /// hot patch, runs **no** hook at all; there, only cancellation of the app
+    /// shutdown token propagates (its drop guard), reaching every token derived
+    /// from it — which is how `spawn_service` tasks stop.
+    //
+    // MUST (declared window, not covered by a test): a plugin that mints a
+    // standalone `CancellationToken::new()` and cancels it ONLY from this hook
+    // leaves its task running on those two hookless exits. Derive the token
+    // from one the framework cancels (the `ServeContext::shutdown_token()`
+    // handed to `on_serve`, or relay it like `r2e-scheduler` does) whenever the
+    // task must stop on every path.
     pub fn on_shutdown<F>(&mut self, hook: F)
     where
         F: FnOnce() + Send + 'static,
     {
         self.effects
+            .shutdown
             .push(Box::new(move |dctx| dctx.on_shutdown(hook)));
     }
 
     /// Add an async shutdown hook awaited during shutdown. See
     /// [`DeferredContext::on_shutdown_async`].
+    ///
+    /// **Not** gated by [`enabled`](Self::enabled) — see
+    /// [`on_shutdown`](Self::on_shutdown).
     pub fn on_shutdown_async<F, Fut>(&mut self, hook: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.effects
+            .shutdown
             .push(Box::new(move |dctx| dctx.on_shutdown_async(hook)));
     }
 }
@@ -929,19 +1116,6 @@ pub(crate) fn plugin_config_enabled(
     config
         .get::<bool>(&format!("{prefix}.enabled"))
         .unwrap_or(true)
-}
-
-/// Wrap a plugin-scheduled [`DeferredAction`] so it runs only when the plugin is
-/// enabled (`<prefix>.enabled != false`). A disabled plugin's sugar and explicit
-/// deferred actions become inert; the "disabled" diagnostic is emitted once from
-/// the build-effects action instead (see the blanket `install`).
-fn gate_on_enabled(action: DeferredAction, prefix: Option<&'static str>) -> DeferredAction {
-    let DeferredAction { name, action } = action;
-    DeferredAction::new(name, move |dctx| {
-        if plugin_config_enabled(dctx.config(), prefix) {
-            action(dctx);
-        }
-    })
 }
 
 // ── Deferred action system ─────────────────────────────────────────────────

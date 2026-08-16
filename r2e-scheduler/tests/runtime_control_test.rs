@@ -196,14 +196,29 @@ async fn stats_are_populated_and_paused_flag_toggles() {
     let (handle, token) = spawn(task, registry.clone());
 
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let info = registry.job("stats").expect("job registered");
+    // `next_run` is the deadline the job HOLDS, and a `Skip` job holds none
+    // between the pop that spends one and the completion that re-arms it. The
+    // body here is instant, so that window is tiny — but it is real (under load
+    // the driver can be descheduled inside it), and sampling at an arbitrary
+    // instant would flake. Poll for the published deadline; the rest of the
+    // stats below are monotonic and safe to read from the same snapshot.
+    let info = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let info = registry.job("stats").expect("job registered");
+            if info.next_run.is_some() {
+                return info;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("next_run recorded");
     assert!(
         info.run_count >= 3,
         "run_count should accrue, got {}",
         info.run_count
     );
     assert!(info.last_run.is_some(), "last_run recorded");
-    assert!(info.next_run.is_some(), "next_run recorded");
     assert!(info.last_duration.is_some(), "last_duration recorded");
     assert!(!info.paused, "not paused yet");
 

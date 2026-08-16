@@ -151,7 +151,7 @@ impl PreStatePlugin for GrpcServer {
                     let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
                     let cancel = serve_ctx.shutdown_token();
-                    let handle = r2e_core::rt::spawn(async move {
+                    serve_ctx.track(async move {
                         // Bind explicitly (instead of tonic's internal bind)
                         // so the resolved address — including an OS-assigned
                         // port for `:0` — is logged.
@@ -185,7 +185,6 @@ impl PreStatePlugin for GrpcServer {
                         }
                         tracing::debug!("gRPC server stopped");
                     });
-                    serve_ctx.track(handle);
                 });
             }
             GrpcTransport::Multiplexed => {

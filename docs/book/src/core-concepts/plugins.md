@@ -74,8 +74,10 @@ prometheus:
   enabled: false
 ```
 
-The default is `true`. A disabled plugin drops its wiring effects (routes,
-layers, serve/shutdown hooks), but **its provided beans still exist** —
+The default is `true`. A disabled plugin drops its *surface* effects (routes,
+layers, serve hooks, stored data) — but **not** its cleanup hooks
+(`on_shutdown`/`on_shutdown_async`): `build` ran, so whatever it constructed is
+still disposed of at shutdown. And **its provided beans still exist** —
 `build` runs with `ctx.enabled() == false` and returns a disabled variant, so
 anything injecting the beans keeps working. See
 [Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
@@ -243,7 +245,7 @@ async fn build(
 
 `PluginBuildContext` provides:
 - `enabled()` — the `<prefix>.enabled` config gate (default `true`)
-- `graph()` — a `GraphHandle` on the final resolved graph (fills at the end of `build_state()`)
+- `graph()` — a weak `GraphHandle` on the final resolved graph (fills at the end of a successful `build_state()`; stays readable for the app's whole life and for any tracked task that outlives it — the router, each tracked task and the serving scope own the graph independently, so reads only go `None` once the last owner is gone)
 - `config_raw()` — the loaded `R2eConfig`, if any
 - `add_layer()` / `wrap_router()` — router layers / outermost router transform
 - `store_data()` — type-keyed plugin data for post-state coordination
@@ -251,15 +253,18 @@ async fn build(
 - `after_build()` — boot-time escape hatch with full-graph access
 
 Effects are buffered and applied after the graph resolves, **in plugin install
-order** (builds themselves run in dependency order) — and dropped entirely
-when the plugin is disabled via `<prefix>.enabled: false` (while `build` still
-runs, so the beans exist; check `ctx.enabled()` and return a cheap disabled
-variant).
+order** (builds themselves run in dependency order). Disabling the plugin via
+`<prefix>.enabled: false` drops the *surface* effects (layers, routes,
+`on_serve`, plugin data) but keeps the *cleanup* ones (`on_shutdown`,
+`on_shutdown_async`) — `build` still runs, so the beans exist and whatever they
+hold still has to be released; check `ctx.enabled()` and return a cheap, inert
+disabled variant.
 
 There is also a rare pre-graph hook, `fn setup(&mut self, &mut
 PluginSetupContext)` (default no-op), for the few things that must happen at
 `.plugin()` time — e.g. `store_data` that other subsystems read even when the
-plugin is disabled.
+plugin is disabled. It cannot register layers, routes or hooks: setup actions
+are ungated, so allowing them would let a disabled plugin serve traffic.
 
 The lower-level `RawPreStatePlugin` trait (`#[doc(hidden)]`, HList-based) still
 backs `.plugin()` via a blanket impl, but you only need to implement it directly

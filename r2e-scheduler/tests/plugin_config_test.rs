@@ -78,3 +78,54 @@ async fn disabled_scheduler_boots_and_keeps_beans() {
         "disabled scheduler must not register/start jobs"
     );
 }
+
+#[r2e_core::test]
+async fn disabled_scheduler_still_collects_tasks() {
+    // The disabled scheduler's *promise*: tasks are collected but never
+    // started. That only holds while `setup()`'s `TaskRegistryHandle` survives
+    // the gate — gating setup actions on `<prefix>.enabled` removed the handle
+    // and turned every `#[scheduled]`/`schedule_task` registration into a boot
+    // panic ("Scheduler not installed").
+    use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
+    use r2e_scheduler::{
+        extract_tasks, AppBuilderSchedulerExt, ScheduleConfig, ScheduledTaskDef,
+    };
+
+    let config = R2eConfig::from_yaml_str("scheduler:\n  enabled: false\n").unwrap();
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .plugin(Scheduler)
+        .plugin(Executor)
+        .build_state()
+        .await;
+
+    // The registry handle exists even though the plugin is disabled…
+    assert!(
+        app.get_plugin_data::<TaskRegistryHandle>().is_some(),
+        "TaskRegistryHandle must survive `scheduler.enabled = false`"
+    );
+
+    // …so registration works instead of panicking…
+    let app = app.schedule_task(ScheduledTaskDef::from_fn(
+        "collected_while_disabled",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(60).unwrap()),
+        || async {},
+    ));
+
+    let registry = app
+        .get_plugin_data::<TaskRegistryHandle>()
+        .expect("registry should exist");
+    let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
+    assert_eq!(tasks.len(), 1, "the task was collected");
+    assert_eq!(tasks[0].name(), "collected_while_disabled");
+
+    // …and nothing was started: the serve hook is a build effect, dropped.
+    assert!(
+        app.state()
+            .get::<ScheduledJobRegistry>()
+            .list_jobs()
+            .is_empty(),
+        "collected, never started"
+    );
+}

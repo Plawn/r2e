@@ -139,3 +139,80 @@ async fn plugin_pre_destroy_runs_on_shutdown_after_plugin_hooks() {
         vec!["plugin-async-shutdown", "bean-dispose"]
     );
 }
+
+// ── One panicking sync shutdown hook must not silence the others ────────────
+//
+// Plugin sync shutdown hooks are pure signals: each one typically cancels the
+// token some background task is parked on. Running them as one batch that a
+// panic can abandon means every hook after the bad one never fires — its task
+// is stranded for the life of the process. The hooks are therefore taken from
+// the shared cell ONE AT A TIME and each runs inside `catch_unwind`.
+
+struct PanickingShutdownHookPlugin {
+    first: Arc<std::sync::atomic::AtomicBool>,
+    second: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PreStatePlugin for PanickingShutdownHookPlugin {
+    type Provided = (Alpha,);
+    type Deps = ();
+    type Config = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<(Alpha,), PluginBuildError> {
+        let first = self.first;
+        ctx.on_shutdown(move || {
+            first.store(true, std::sync::atomic::Ordering::SeqCst);
+            panic!("plugin shutdown hook exploded");
+        });
+        let second = self.second;
+        ctx.on_shutdown(move || {
+            second.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        Ok((Alpha(1),))
+    }
+}
+
+#[tokio::test]
+async fn a_panicking_shutdown_hook_does_not_swallow_the_next_one() {
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let second = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let app = AppBuilder::new()
+        .plugin(PanickingShutdownHookPlugin {
+            first: first.clone(),
+            second: second.clone(),
+        })
+        .build_state()
+        .await;
+    let prepared = app.prepare("127.0.0.1:0");
+    let stop = prepared.stop_handle();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = tokio::spawn(async move {
+        prepared
+            .run_with_listener(listener)
+            .await
+            .map_err(|e| e.to_string())
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.stop();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("shutdown must complete despite the panicking hook")
+        .expect("the server task must not be killed by a hook panic")
+        .expect("run() must return Ok");
+
+    assert!(
+        first.load(std::sync::atomic::Ordering::SeqCst),
+        "the first hook ran"
+    );
+    assert!(
+        second.load(std::sync::atomic::Ordering::SeqCst),
+        "the hook registered AFTER the panicking one must still be signalled"
+    );
+}

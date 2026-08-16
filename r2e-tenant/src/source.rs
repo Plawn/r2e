@@ -129,6 +129,33 @@ impl<'a> TenantContext<'a> {
     /// [`TenantError::NoSource`] when no `PerTenant<U, _>` plugin is installed,
     /// and with [`TenantError::Cycle`] when this would re-enter a type already
     /// being created for this tenant.
+    ///
+    /// The graph is reached through a weak [`GraphHandle`]; a graph already
+    /// dropped reads the same as a missing map (`NoSource`). In a served app
+    /// that window is not reachable from a handler: the router owns the graph
+    /// and hands a strong reference to every request future and response body
+    /// it starts, so a request cannot outlive it. Nor is it reachable from
+    /// tracked work — `ServeContext::track`, `spawn_service`, the scheduler
+    /// driver and the QUIC drain each move a strong reference INTO the task, so
+    /// a sweeper, a scheduled tick, a gRPC drain or a preload resolves even on
+    /// the paths where nothing joins it (an elapsed `shutdown_grace_period`, a
+    /// dropped `run()` future). Those tasks are still *asked* to stop on those
+    /// paths — every framework shutdown token is a child of the app token (or,
+    /// like the scheduler's, explicitly relayed from it), and that token's drop
+    /// guard fires even when no shutdown hook runs — so the window is bounded
+    /// by how promptly a task observes cancellation.
+    /// `PreparedApp` holds one more for the whole of `run()`, covering the
+    /// shutdown phase itself.
+    ///
+    /// It IS reachable in three situations — a source kept alive by hand after
+    /// the app was dropped; a WebSocket session still running after `run()`
+    /// returned (upgraded connections are detached from graceful drain, so
+    /// resolve what a session needs before its socket loop); and a `r2e dev`
+    /// hot patch, where the previous cycle's graph is released without shutdown
+    /// hooks once its cancelled tracked tasks have ended (a bean carried over
+    /// from that cycle would read `NoSource`; the
+    /// partial-rebuild pass avoids it by rebuilding every dependent of a plugin
+    /// bean, see `docs/claude/plugins.md`).
     pub async fn get<U: Clone + Send + Sync + 'static>(&self) -> Result<U, TenantError> {
         if self.chain.contains(TypeId::of::<U>()) {
             return Err(TenantError::Cycle(self.chain.describe_with::<U>()));
