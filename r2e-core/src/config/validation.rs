@@ -104,7 +104,7 @@ pub fn validate_keys(config: &R2eConfig, keys: &[(&str, &str, &str)]) -> Vec<Mis
 ///
 /// Used by the hosts whose declarations are *not* bean registrations and
 /// therefore never reach `BeanRegistry::validate_all_config`: decorator beans
-/// (through [`DecoratorSpec::config_keys`](crate::decorator::DecoratorSpec::config_keys),
+/// (through [`DecoratorSpec::config_keys`](crate::decorators::decorator::DecoratorSpec::config_keys),
 /// aggregated into `Controller::validate_config`) and background services
 /// (through [`ServiceComponent::config_keys`](crate::ServiceComponent::config_keys),
 /// aggregated at `spawn_service` / at graph resolution for `#[producer(start)]`).

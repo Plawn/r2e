@@ -304,7 +304,7 @@ impl BothController {
 async fn the_resolver_runs_once_per_request() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = calls.clone();
-    let router = r2e_tenant::FnTenantResolver::new(move |req: &r2e_core::request_head::RequestHead<'_>| {
+    let router = r2e_tenant::FnTenantResolver::new(move |req: &r2e_core::web::request_head::RequestHead<'_>| {
         counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(req
             .header("x-tenant-id")
@@ -347,7 +347,7 @@ async fn the_resolver_runs_once_per_request() {
 /// the competing impls listed.
 #[test]
 fn tenant_extraction_routes_are_unambiguous() {
-    use r2e_core::extract::assert_unambiguous_extractor;
+    use r2e_core::web::extract::assert_unambiguous_extractor;
     use r2e_core::type_list::{HCons, HNil};
 
     type S = HCons<TenantRouter, HCons<Tenanted<Resource>, HNil>>;

@@ -1,6 +1,6 @@
 use http_body_util::BodyExt;
 use r2e_core::http::IntoResponse;
-use r2e_core::request_id::RequestId;
+use r2e_core::builtins::request_id::RequestId;
 
 #[test]
 fn request_id_display() {
@@ -20,8 +20,8 @@ async fn request_id_into_response() {
 
 use r2e_core::builder::AppBuilder;
 use r2e_core::http::StatusCode;
-use r2e_core::plugins::Health;
-use r2e_core::request_id::RequestIdPlugin;
+use r2e_core::builtins::Health;
+use r2e_core::builtins::request_id::RequestIdPlugin;
 
 use crate::support::raw_get_with;
 

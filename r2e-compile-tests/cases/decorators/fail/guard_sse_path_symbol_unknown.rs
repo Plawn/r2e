@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use r2e::prelude::*;
-use r2e::sse::{SseBroadcaster, SseSubscription};
+use r2e::web::sse::{SseBroadcaster, SseSubscription};
 use r2e::{Guard, GuardContext, Identity, PathParam};
 
 #[derive(Clone)]

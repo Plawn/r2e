@@ -21,7 +21,7 @@ Annotate a method inside a `#[routes]` block with `#[sse("/path")]`. The method 
 use std::convert::Infallible;
 use r2e::prelude::*;
 use r2e::http::response::SseEvent;
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 #[controller(path = "/sse")]
 pub struct SseController {
@@ -77,7 +77,7 @@ async fn user_stream(
 ### Creating a broadcaster
 
 ```rust
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 // Create with a channel capacity of 128 messages
 let broadcaster = SseBroadcaster::new(128);
@@ -158,7 +158,7 @@ For per-user or per-topic streams, manage a map of broadcasters in a service:
 ```rust
 use std::sync::Arc;
 use dashmap::DashMap;
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 #[derive(Clone)]
 pub struct NotificationService {
@@ -233,7 +233,7 @@ A minimal app with a global SSE stream:
 use std::convert::Infallible;
 use r2e::prelude::*;
 use r2e::http::response::SseEvent;
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 // ── Controller ──
 

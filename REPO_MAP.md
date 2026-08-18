@@ -116,61 +116,66 @@ AppBuilder, controllers, guards, interceptors, plugins, configuration, DI, and H
 
 ```
 src/
-  lib.rs                    Entry point — re-exports all public types
-  builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
+  lib.rs                    Entry point — root type re-exports (module paths are the API: r2e_core::<group>::<module>)
   controller.rs             Controller<S, W>, ContextConstruct and EndpointDeps trait definitions
-  beans.rs                  DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry
   error.rs                  HttpError enum (BadRequest, NotFound, Unauthorized, Forbidden, Internal)
-  guards.rs                 Guard<S,I>, PreAuthGuard<S>, GuardContext, RolesGuard, PathParams
-  interceptors.rs           Interceptor<R> trait, InterceptorContext, Cacheable trait
-  plugin.rs                 Plugin, PreStatePlugin, DeferredAction, DeferredContext
-  plugins.rs                Built-in plugins: Health, AdvancedHealth, Cors, Tracing, ErrorHandling, ...
-  layers.rs                 Tower layer utilities: default_cors(), default_trace(), init_tracing()
-  lifecycle.rs              LifecycleController for on_start/on_stop hooks
-  managed.rs                ManagedResource<S> trait, ManagedErr<E> wrapper
-  meta.rs                   MetaRegistry for collecting route metadata (used by OpenAPI)
-  request_id.rs             RequestId extractor and RequestIdPlugin
-  secure_headers.rs         SecureHeaders plugin + builder (CSP, HSTS, X-Frame-Options, ...)
-  service.rs                ServiceComponent trait
-  health.rs                 HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
-  sse.rs                    SseBroadcaster, SseStream for Server-Sent Events
-  ws.rs                     WsStream, WsHandler, WsBroadcaster, WsRooms (feature = "ws")
+  rt.rs                     Task placement facade (rt::spawn, spawn_ctl, control plane vs workers)
   state.rs                  R2eState wrapper type
   type_list.rs              Heterogeneous type list (TNil, TCons, Contains, AllSatisfied) for compile-time DI
   types.rs                  Shared type definitions
   prelude.rs                Convenience re-exports
-  validation.rs             Automatic validation via garde (autoref specialization)
-  params.rs                 Params derive helpers (ParamError, parse_query_string)
-  multipart.rs              Multipart extraction (feature = "multipart")
 
+  beans/                    DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry, graph resolve
+  builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
+  builtins/
+    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, Tracing, ErrorHandling, DevReload, NormalizePath
+    health.rs               HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
+    request_id.rs           RequestId extractor and RequestIdPlugin
+    secure_headers.rs       SecureHeaders plugin + builder (CSP, HSTS, X-Frame-Options, ...)
   config/
     mod.rs                  R2eConfig, ConfigValue, FromConfigValue, ConfigError — public API
     loader.rs               YAML file loader (application.yaml + .env + env vars)
     registry.rs             Config section registry (register_section, validate_section)
+    runtime.rs              LiveConfig runtime registry
     secrets.rs              SecretResolver trait, DefaultSecretResolver (env var interpolation)
     typed.rs                Typed config value extraction
     validation.rs           Config key validation
     value.rs                ConfigValue enum (String, Int, Float, Bool, List, Map)
-
+  decorators/
+    decorator.rs            DecoratorSpec contract, DecoSlot, SelfBuilt
+    guards.rs               Guard<S,I>, PreAuthGuard<S>, GuardContext, RolesGuard, PathParams
+    interceptors.rs         Interceptor<R> trait, InterceptorContext, Cacheable trait
+  di/
+    event_subscriber.rs     EventSubscriber trait (beans with #[consumer] methods)
+    late.rs                 Late<T> deferred plugin provisions
+    lazy.rs                 Lazy<T> beans
+    meta.rs                 MetaRegistry for collecting route metadata (used by OpenAPI)
+    module.rs               FeatureModule (closed subgraph modules)
+    scheduled_source.rs     ScheduledSource trait (beans with #[scheduled] methods)
   http/
     mod.rs                  HTTP module — re-exports from r2e-http (Router, StatusCode, HeaderMap, ...)
     ws.rs                   WebSocket re-exports + IsWebSocket trait
+  plugin/                   Plugin machinery: Plugin, PreStatePlugin, DeferredAction, contexts, graph handle
+  runtime/
+    dev.rs                  Dev-reload statics + endpoints (feature = "dev-reload" consumers)
+    layers.rs               Tower layer utilities: default_cors(), default_trace(), init_tracing()
+    lifecycle.rs            LifecycleController for on_start/on_stop hooks
+    service.rs              ServiceComponent trait
+    sharded.rs              SO_REUSEPORT sharded serving (server.workers)
+    tracing_config.rs       TracingConfig, LogFormat, SpanEvents
+  web/
+    extract.rs              FromRequestPartsVia, ViaBean/ViaAxum, BeanExtract, PeerAddr
+    managed.rs              ManagedResource<S> trait, ManagedErr<E> wrapper
+    multipart.rs            Multipart extraction (feature = "multipart")
+    pagination.rs           Page/Pageable
+    params.rs               Params derive helpers (ParamError, parse_query_string)
+    request_head.rs         RequestHead
+    sse.rs                  SseBroadcaster, SseStream for Server-Sent Events
+    validation.rs           Automatic validation via garde (autoref specialization)
+    ws.rs                   WsStream, WsHandler, WsBroadcaster, WsRooms (feature = "ws")
 
-tests/
-  integration.rs            Full-stack integration tests (AppBuilder -> TestApp)
-  beans.rs                  Bean/AsyncBean/Producer DI tests
-  config.rs                 R2eConfig loading, get, get_or, env overlay tests
-  secrets.rs                SecretResolver tests
-  guards.rs                 Guard, RolesGuard, GuardContext tests
-  interceptors.rs           Interceptor trait tests
-  health.rs                 HealthIndicator, HealthBuilder, HealthState tests
-  error.rs                  HttpError -> HTTP response tests
-  plugin.rs                 DeferredAction, DeferredContext tests
-  managed.rs                ManagedResource lifecycle tests
-  request_id.rs             RequestId extraction tests
-  secure_headers.rs         SecureHeaders builder and default tests
-  ws.rs                     WsBroadcaster, WsRooms tests (feature = "ws")
-  sse.rs                    SseBroadcaster tests
+tests/                      One directory target per subsystem (support/ = shared helpers)
+  builder/  config/  controller/  decorators/  di/  http/  plugin/  runtime/
 ```
 
 ---

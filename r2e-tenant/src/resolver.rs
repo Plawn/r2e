@@ -18,7 +18,7 @@
 //! [`TenantResolver`] for free:
 //!
 //! ```
-//! use r2e_core::request_head::RequestHead;
+//! use r2e_core::web::request_head::RequestHead;
 //! use r2e_core::HttpError;
 //! use r2e_tenant::{SyncTenantResolver, TenantId};
 //!
@@ -63,7 +63,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use r2e_core::request_head::RequestHead;
+use r2e_core::web::request_head::RequestHead;
 use r2e_core::HttpError;
 
 use crate::TenantId;
@@ -321,7 +321,7 @@ where
 /// ```
 /// use r2e_tenant::{FnTenantResolver, TenantId};
 ///
-/// let resolver = FnTenantResolver::new(|req: &r2e_core::request_head::RequestHead<'_>| {
+/// let resolver = FnTenantResolver::new(|req: &r2e_core::web::request_head::RequestHead<'_>| {
 ///     Ok(req.header("x-org").and_then(|raw| TenantId::parse(raw).ok()))
 /// });
 /// ```

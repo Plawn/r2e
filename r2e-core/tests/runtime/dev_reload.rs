@@ -12,7 +12,7 @@
 //! process-global, so parallel test functions would clobber each other.
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
 use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
-use r2e_core::decorator::{BeanDecoFill, SharedDecoSlot};
+use r2e_core::decorators::decorator::{BeanDecoFill, SharedDecoSlot};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, TCons, TNil};
 use std::any::TypeId;
@@ -53,7 +53,7 @@ impl Bean for Stable {
 }
 
 impl PostConstruct for Stable {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move {
             STABLE_PCS.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -97,7 +97,7 @@ impl Bean for ConfDep {
 }
 
 impl PostConstruct for ConfDep {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move {
             CONF_PCS.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -305,7 +305,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     r2e_core::invalidate_state_cache();
     // The caches only engage inside the hot-patch loop (`r2e::launch!` marks
     // it); this test drives the loop's build cycles by hand, so opt in.
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     // ── Cycle 1: cold start — everything builds once ────────────────────
     let app1 = cycle!("a", "x", Store::default());
@@ -542,7 +542,7 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
     // the graph that was just dropped: every tenant lookup fails `NoSource`.
     let _serial = crate::dev_serial::dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
     PLUGIN_BUILDS.store(0, Ordering::SeqCst);
     USES_PLUGIN_BUILDS.store(0, Ordering::SeqCst);
 

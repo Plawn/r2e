@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry};
-use r2e_core::lazy::Lazy;
+use r2e_core::di::lazy::Lazy;
 use r2e_core::type_list::TNil;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -57,7 +57,7 @@ async fn lazy_clone_shares_cell() {
 async fn resolve_lazy_factory_on_multi_thread_runtime() {
     // Run on a real worker thread: `block_in_place` requires one.
     let value = r2e_core::rt::spawn(async {
-        r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 5u32 })))
+        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 5u32 })))
     })
     .await
     .unwrap();
@@ -73,7 +73,7 @@ fn resolve_lazy_factory_current_thread_runtime_panics() {
         .unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rt.block_on(async {
-            r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 1u32 })))
+            r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 1u32 })))
         })
     }));
     let msg = panic_message(result.unwrap_err());
@@ -87,7 +87,7 @@ fn resolve_lazy_factory_current_thread_runtime_panics() {
 #[test]
 fn resolve_lazy_factory_without_runtime_panics() {
     let result = std::panic::catch_unwind(|| {
-        r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 1u32 })))
+        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 1u32 })))
     });
     let msg = panic_message(result.unwrap_err());
     assert!(
@@ -102,7 +102,7 @@ fn resolve_lazy_factory_falls_back_without_runtime() {
     // No runtime, no control plane: the `lazy-fallback-runtime` feature
     // routes resolution onto the global fallback runtime instead of panicking.
     let value =
-        r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 3u32 })));
+        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 3u32 })));
     assert_eq!(value, 3);
 }
 
@@ -118,7 +118,7 @@ fn resolve_lazy_factory_falls_back_on_current_thread_runtime() {
         .build()
         .unwrap();
     let (value, factory_thread) = rt.block_on(async {
-        r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
+        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
             Box::pin(async { (4u32, std::thread::current().id()) })
         }))
     });
@@ -150,7 +150,7 @@ fn resolve_lazy_factory_uses_control_plane_when_registered() {
     let handle = rt.handle().clone();
     let (value, factory_thread) = std::thread::spawn(move || {
         r2e_core::rt::set_control_plane(handle);
-        r2e_core::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
+        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
             Box::pin(async { (11u32, std::thread::current().id()) })
         }))
     })
@@ -181,7 +181,7 @@ fn resolve_lazy_factory_control_plane_panic_resurfaces() {
     let result = std::thread::spawn(move || {
         r2e_core::rt::set_control_plane(handle);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            r2e_core::lazy::__resolve_lazy_factory_for_tests::<()>(Box::new(move || {
+            r2e_core::di::lazy::__resolve_lazy_factory_for_tests::<()>(Box::new(move || {
                 Box::pin(async move {
                     *seen_in_factory.lock().unwrap() = Some(std::thread::current().id());
                     panic!("factory boom")

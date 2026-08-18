@@ -38,7 +38,7 @@ use r2e_core::Plugin;
 /// Full-stack observability plugin — OpenTelemetry tracing, context
 /// propagation, and HTTP request logging.
 ///
-/// This plugin is a **superset** of [`Tracing`](r2e_core::plugins::Tracing).
+/// This plugin is a **superset** of [`Tracing`](r2e_core::builtins::Tracing).
 /// It replaces both `init_tracing()` and `.with(Tracing)` with a single call
 /// that additionally exports distributed traces via OTLP.
 ///
@@ -152,7 +152,7 @@ impl Plugin for Observability {
         let capture_headers = self.config.capture_headers.clone();
         let otlp_enabled = self.otlp_enabled;
         let app = app.with_layer_fn(move |router| {
-            let router = router.layer(r2e_core::layers::default_trace());
+            let router = router.layer(r2e_core::runtime::layers::default_trace());
             if otlp_enabled {
                 router.layer(middleware::OtelTraceLayer::new(capture_headers))
             } else {

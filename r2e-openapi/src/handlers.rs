@@ -1,7 +1,7 @@
 use r2e_core::http::response::{Html, IntoResponse};
 use r2e_core::http::routing::get;
 use r2e_core::http::Router;
-use r2e_core::meta::RouteInfo;
+use r2e_core::di::meta::RouteInfo;
 use std::sync::Arc;
 
 use crate::builder::{build_spec, OpenApiConfig};

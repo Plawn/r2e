@@ -1,4 +1,4 @@
-//! Tests for `r2e_core::decorator` — the `DecoratorSpec` construction
+//! Tests for `r2e_core::decorators::decorator` — the `DecoratorSpec` construction
 //! contract and the `SelfBuilt` blanket.
 
 use r2e_core::beans::{BeanContext, BeanRegistry};

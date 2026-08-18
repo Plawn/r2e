@@ -19,7 +19,7 @@ where
 {
     /// Evict idle resources, trim to `max-active`, purge the negative cache.
     ///
-    /// What the background [`ServiceComponent`](r2e_core::service::ServiceComponent)
+    /// What the background [`ServiceComponent`](r2e_core::runtime::service::ServiceComponent)
     /// runs on a timer; call it directly from an admin endpoint or a test to
     /// sweep deterministically.
     pub async fn sweep(&self) -> SweepReport {
@@ -177,7 +177,7 @@ where
 /// Wired by the [`PerTenant`](crate::PerTenant) plugin — the same shape as
 /// `DbPool`'s reaper: one task per map, driven by the app's shutdown token, and
 /// draining every tenant's resource when that token is cancelled.
-impl<T> r2e_core::service::ServiceComponent for Tenanted<T>
+impl<T> r2e_core::runtime::service::ServiceComponent for Tenanted<T>
 where
     T: Clone + Send + Sync + 'static,
 {

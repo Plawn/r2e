@@ -258,7 +258,7 @@ impl BeanRegistry {
 
             // Build lazy slots from the fully resolved context.
             // Use a shared, mutable map so snapshots can resolve lazy-to-lazy deps.
-            let lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>> =
+            let lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::di::lazy::LazyResolve>>>> =
                 Arc::new(RwLock::new(HashMap::new()));
             ctx = ctx.with_lazy_slots(Arc::clone(&lazy_slots));
             for lazy_reg in self.lazy_beans {

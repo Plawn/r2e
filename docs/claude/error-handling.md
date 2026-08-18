@@ -168,7 +168,7 @@ async fn error_enrichment(req: Request, next: Next) -> Response {
 The `GuardError` struct simplifies guard error construction:
 
 ```rust
-use r2e_core::guards::GuardError;
+use r2e_core::decorators::guards::GuardError;
 
 // Instead of manually building Response:
 Err(GuardError::forbidden("Insufficient permissions").into())

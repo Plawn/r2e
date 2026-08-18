@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use r2e_core::interceptors::{Interceptor, InterceptorContext};
+use r2e_core::decorators::interceptors::{Interceptor, InterceptorContext};
 
 /// Log level for `Logged` and `Timed` interceptors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

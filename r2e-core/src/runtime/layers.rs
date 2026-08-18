@@ -1,6 +1,6 @@
 use crate::http::response::IntoResponse;
 use crate::http::StatusCode;
-use crate::tracing_config::{LogFormat, TracingConfig};
+use crate::runtime::tracing_config::{LogFormat, TracingConfig};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -16,7 +16,7 @@ use tracing_subscriber::EnvFilter;
 /// plugin, so you only need to call it manually if you want logs *before* the
 /// plugin is installed (e.g. during state construction).
 ///
-/// [`Tracing`]: crate::plugins::Tracing
+/// [`Tracing`]: crate::builtins::Tracing
 pub fn init_tracing() {
     init_tracing_with_config(&TracingConfig::default());
 }

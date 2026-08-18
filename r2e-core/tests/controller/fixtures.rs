@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use http_body_util::BodyExt;
-use r2e_core::extract::OptionalFromRequestPartsVia;
+use r2e_core::web::extract::OptionalFromRequestPartsVia;
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::{Body, StatusCode};

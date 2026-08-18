@@ -1,5 +1,5 @@
 use r2e::prelude::*;
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 
 #[controller(path = "/ws")]
 pub struct WsEchoController;

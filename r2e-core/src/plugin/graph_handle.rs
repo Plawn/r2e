@@ -74,7 +74,7 @@ use super::{PluginBuildContext, PreStatePlugin};
 /// Code that may outlive the graph should treat `None` as "the app is shutting
 /// down", not as a bug.
 #[derive(Clone, Default)]
-pub struct GraphHandle(crate::late::Late<std::sync::Weak<crate::beans::BeanContext>>);
+pub struct GraphHandle(crate::di::late::Late<std::sync::Weak<crate::beans::BeanContext>>);
 
 impl GraphHandle {
     /// Create an empty (unfilled) handle. Internal — the builder owns filling.

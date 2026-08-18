@@ -1,5 +1,5 @@
 use r2e::prelude::*;
-use r2e::multipart::UploadedFile;
+use r2e::web::multipart::UploadedFile;
 
 #[derive(FromMultipart)]
 pub struct MultiFileUpload {

@@ -224,7 +224,7 @@ fn emit_deco_struct<'a, 'b>(
             #field: <#spec_ty as #krate::DecoratorSpec>::Product
         });
         field_inits.push(quote! {
-            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
+            #field: #krate::decorators::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
         });
     }
 
@@ -284,7 +284,7 @@ pub(super) fn generate_predeco_items(
             #field: <#spec_ty as #krate::DecoratorSpec>::Product
         });
         field_inits.push(quote! {
-            #field: #krate::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
+            #field: #krate::decorators::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
         });
     }
 

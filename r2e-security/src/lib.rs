@@ -30,7 +30,7 @@ pub use openid::RoleExtractor;
 pub mod __macro_support {
     pub use crate::guards::AllRolesGuard;
     pub use crate::guards::RolesGuard;
-    pub use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+    pub use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
     pub use r2e_core::http;
     pub use r2e_core::type_list::HasBean;
     pub use r2e_core::HttpError;

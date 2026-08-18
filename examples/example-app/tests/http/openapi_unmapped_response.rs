@@ -5,7 +5,7 @@
 use r2e::http::response::IntoResponse;
 use r2e::http::Json;
 use r2e::prelude::*;
-use r2e::r2e_core::meta::{MetaRegistry, RouteInfo};
+use r2e::r2e_core::di::meta::{MetaRegistry, RouteInfo};
 use r2e::r2e_core::HNil;
 use r2e::r2e_openapi::{spec_warnings, SchemaGap};
 use schemars::JsonSchema;

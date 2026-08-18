@@ -200,7 +200,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// # Example
     ///
     /// ```ignore
-    /// use r2e_core::plugins::{Cors, Tracing, Health, ErrorHandling, DevReload};
+    /// use r2e_core::builtins::{Cors, Tracing, Health, ErrorHandling, DevReload};
     ///
     /// AppBuilder::new()
     ///     .build_state()
@@ -527,7 +527,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Registration backend **without** the global dependency check.
     ///
     /// Used by the feature-module fold
-    /// ([`ModuleList`](crate::module::ModuleList)): module controllers are
+    /// ([`ModuleList`](crate::di::module::ModuleList)): module controllers are
     /// dependency-checked module-locally at `register_module` (their deps may
     /// include private module beans, absent from the state); their cores
     /// construct from the retained bean context, where those beans exist.
@@ -813,13 +813,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // instrumentation. See `layers::normalize_path_router` for the
         // wrap-and-re-embed mechanics and its caveats.
         if self.shared.normalize_path {
-            app = crate::layers::normalize_path_router(app);
+            app = crate::runtime::layers::normalize_path_router(app);
         }
 
         // Always install the CatchPanicLayer as the outermost HTTP layer so
         // that panics anywhere in the stack are caught and turned into JSON
         // 500 responses instead of crashing the process.
-        app = app.layer(crate::layers::catch_panic_layer());
+        app = app.layer(crate::runtime::layers::catch_panic_layer());
 
         // Transport-level wraps go outside EVERYTHING HTTP-shaped (custom
         // layers and catch-panic included): a multiplexer's non-HTTP branch
@@ -840,7 +840,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // `GraphHandle` inside a bean resolves for as long as anything derived
         // from this router is in flight, and the whole graph drops once nothing
         // is. Pure pass-through — see `layers::GraphKeepAlive`.
-        app = app.layer(crate::layers::graph_keep_alive(Arc::clone(
+        app = app.layer(crate::runtime::layers::graph_keep_alive(Arc::clone(
             &self.bean_context,
         )));
 
@@ -886,7 +886,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub fn prepare(self, addr: &str) -> PreparedApp<T> {
         #[cfg(feature = "dev-reload")]
         let this = if !self.shared.dev_reload_applied {
-            self.with(crate::plugins::DevReload)
+            self.with(crate::builtins::DevReload)
         } else {
             self
         };
@@ -940,7 +940,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // (like `tcp_nodelay`) but `prepare()` is infallible, so the result —
         // including parse errors for invalid values like 0 or unknown strings —
         // is carried on `PreparedApp` and surfaced at `run()` time.
-        let workers = crate::sharded::parse_workers(this.shared.config.as_ref());
+        let workers = crate::runtime::sharded::parse_workers(this.shared.config.as_ref());
 
         // Stop-handle resolution: explicit `with_stop_handle` wins, then a
         // `StopHandle` bean from the graph (so `.provide(stop.clone())` alone

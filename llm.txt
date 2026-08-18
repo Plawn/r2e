@@ -2033,7 +2033,7 @@ interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.
 ```rust
 use std::convert::Infallible;
 use r2e::http::response::SseEvent;
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 #[controller(path = "/sse")]
 pub struct SseController {
@@ -2059,7 +2059,7 @@ Provide the broadcaster: `.provide(SseBroadcaster::new(128))`.
 Requires feature: `ws`
 
 ```rust
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 
 #[controller(path = "/ws")]
 pub struct WsEchoController;

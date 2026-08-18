@@ -489,7 +489,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     b.override_bean_decorated(CleanupService::new(stub_pool))
     /// }).await
     /// ```
-    pub fn override_bean_decorated<B: crate::decorator::BeanDecoFill + Clone>(
+    pub fn override_bean_decorated<B: crate::decorators::decorator::BeanDecoFill + Clone>(
         mut self,
         value: B,
     ) -> Self {
@@ -843,12 +843,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // every build cold, so unrelated builds in one process never serve
         // each other's cached graphs.
         #[cfg(feature = "dev-reload")]
-        if crate::dev::hot_reload_loop_active() {
+        if crate::runtime::dev::hot_reload_loop_active() {
             type Cached<P> = (<P as BuildHList>::Output, Arc<crate::beans::BeanContext>);
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
-            let cached_fp = crate::dev::get_cached_graph_fingerprint();
+            let cached_fp = crate::runtime::dev::get_cached_graph_fingerprint();
             let requires_resolution = registry.requires_resolution_on_cache_hit();
 
             // If the fingerprint matches and the typed state cache holds →
@@ -857,7 +857,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // pass through `resolve_reusing` even when every bean is reusable.
             if cached_fp == Some(new_fp) && !requires_resolution {
                 if let Some((cached_state, cached_ctx)) =
-                    crate::dev::get_cached_state::<Cached<P>>()
+                    crate::runtime::dev::get_cached_state::<Cached<P>>()
                 {
                     tracing::debug!(
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
@@ -884,9 +884,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // in-memory state); changed beans and their transitive
             // dependents — whose fingerprints change by propagation — are
             // reconstructed against the fresh config.
-            let reuse_plan = match (cached_fp, crate::dev::get_cached_ctx()) {
+            let reuse_plan = match (cached_fp, crate::runtime::dev::get_cached_ctx()) {
                 (Some(old_fp), Some(old_ctx)) => {
-                    let old_per_bean = crate::dev::get_cached_per_bean_fingerprints();
+                    let old_per_bean = crate::runtime::dev::get_cached_per_bean_fingerprints();
                     if old_fp != new_fp {
                         tracing::info!(
                             "dev-reload: graph fingerprint changed ({:#018x} → {:#018x}), rebuilding changed beans",
@@ -923,9 +923,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             let ctx = Arc::new(ctx);
             graph_handle.fill(&ctx);
 
-            crate::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
-            crate::dev::cache_ctx(&ctx);
-            crate::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
+            crate::runtime::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
+            crate::runtime::dev::cache_ctx(&ctx);
+            crate::runtime::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
 
             return Ok(Mods::register_controllers(
                 AppBuilder::from_pre(self.shared, state, ctx)

@@ -22,7 +22,7 @@ pub struct BeanContext {
     /// Lazy bean slots: initialized on first `get::<T>()`.
     /// Shared via `Arc` so clones (used by lazy factory snapshots) see
     /// already-resolved values from the same `OnceLock` instances.
-    lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>>,
+    lazy_slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::di::lazy::LazyResolve>>>>,
     /// Pre-destroy disposal hooks, built during [`resolve`](BeanRegistry::resolve)
     /// from the fully resolved graph. Drained by the builder into the async
     /// shutdown phase. Not carried across [`Clone`] (lazy factory snapshots must
@@ -92,7 +92,7 @@ impl BeanContext {
     /// Attach lazy bean slots to this context.
     pub(super) fn with_lazy_slots(
         mut self,
-        slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::lazy::LazyResolve>>>>,
+        slots: Arc<RwLock<HashMap<TypeId, Arc<dyn crate::di::lazy::LazyResolve>>>>,
     ) -> Self {
         self.lazy_slots = slots;
         self
@@ -150,7 +150,7 @@ impl BeanContext {
     /// Look up a lazy slot by `TypeId`. Used by the dev-reload partial
     /// rebuild to carry an unchanged lazy bean's slot (and any
     /// already-resolved value inside it) into the next cycle's context.
-    pub(super) fn lazy_slot(&self, tid: TypeId) -> Option<Arc<dyn crate::lazy::LazyResolve>> {
+    pub(super) fn lazy_slot(&self, tid: TypeId) -> Option<Arc<dyn crate::di::lazy::LazyResolve>> {
         self.lazy_slots
             .read()
             .ok()

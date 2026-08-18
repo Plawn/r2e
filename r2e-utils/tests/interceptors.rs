@@ -1,4 +1,4 @@
-use r2e_core::interceptors::{Interceptor, InterceptorContext};
+use r2e_core::decorators::interceptors::{Interceptor, InterceptorContext};
 use r2e_core::DecoratorSpec;
 use r2e_utils::{Cache, CacheInvalidate, LogLevel, Logged, Timed};
 

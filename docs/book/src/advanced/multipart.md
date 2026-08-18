@@ -21,7 +21,7 @@ use r2e::prelude::*;
 Or import explicitly:
 
 ```rust
-use r2e::multipart::{TypedMultipart, UploadedFile, FromMultipart};
+use r2e::web::multipart::{TypedMultipart, UploadedFile, FromMultipart};
 ```
 
 ## Defining a multipart struct
@@ -156,7 +156,7 @@ Putting it all together -- a controller that accepts a profile with optional bio
 
 ```rust
 use r2e::prelude::*;
-use r2e::multipart::{TypedMultipart, UploadedFile};
+use r2e::web::multipart::{TypedMultipart, UploadedFile};
 use serde_json::Value;
 
 #[derive(FromMultipart)]
@@ -225,7 +225,7 @@ The error variants are:
 For advanced use cases where you need full control over field iteration, use the raw `Multipart` extractor directly:
 
 ```rust
-use r2e::multipart::Multipart;
+use r2e::web::multipart::Multipart;
 
 #[post("/raw")]
 async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
@@ -252,7 +252,7 @@ async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
 
 ## OpenAPI integration
 
-Multipart endpoints appear in the generated OpenAPI spec automatically. A `TypedMultipart<T>` parameter is documented as a `multipart/form-data` request body whose schema is derived from `T`'s fields (`#[derive(FromMultipart)]` also generates a `MultipartSchema` impl — no `JsonSchema` derive required): text fields map to their JSON type, file fields to `type: string, format: binary`, and `Option<...>` fields are not listed as required. A raw `Multipart` parameter is documented as a free-form `multipart/form-data` object. Manual `FromMultipart` impls can opt in by also implementing `r2e::multipart::MultipartSchema`.
+Multipart endpoints appear in the generated OpenAPI spec automatically. A `TypedMultipart<T>` parameter is documented as a `multipart/form-data` request body whose schema is derived from `T`'s fields (`#[derive(FromMultipart)]` also generates a `MultipartSchema` impl — no `JsonSchema` derive required): text fields map to their JSON type, file fields to `type: string, format: binary`, and `Option<...>` fields are not listed as required. A raw `Multipart` parameter is documented as a free-form `multipart/form-data` object. Manual `FromMultipart` impls can opt in by also implementing `r2e::web::multipart::MultipartSchema`.
 
 ## How it works
 

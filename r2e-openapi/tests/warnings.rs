@@ -1,4 +1,4 @@
-use r2e_core::meta::RouteInfo;
+use r2e_core::di::meta::RouteInfo;
 use r2e_openapi::{build_spec, spec_warnings, OpenApiConfig, SchemaGap, SpecWarning};
 use serde_json::json;
 

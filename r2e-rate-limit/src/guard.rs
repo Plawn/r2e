@@ -2,7 +2,7 @@ use std::sync::Once;
 
 use r2e_core::beans::BeanContext;
 use r2e_core::config::R2eConfig;
-use r2e_core::guards::{
+use r2e_core::decorators::guards::{
     ClientIp, Guard, GuardContext, Identity, PreAuthGuard, PreAuthGuardContext,
 };
 use r2e_core::http::response::IntoResponse;

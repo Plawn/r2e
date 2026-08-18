@@ -104,7 +104,7 @@ pub(super) struct LazyBeanRegistration {
     pub(super) build_version: u64,
     /// Creates a `LazySlot<T>` (type-erased as `Arc<dyn LazyResolve>`) given a
     /// `BeanContext` snapshot containing the lazy bean's dependencies.
-    pub(super) slot_factory: Box<dyn FnOnce(BeanContext) -> Arc<dyn crate::lazy::LazyResolve> + Send>,
+    pub(super) slot_factory: Box<dyn FnOnce(BeanContext) -> Arc<dyn crate::di::lazy::LazyResolve> + Send>,
     /// When `true`, this registration can be replaced by a later registration
     /// of the same `TypeId`.
     #[allow(dead_code)]

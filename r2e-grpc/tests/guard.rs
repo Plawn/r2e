@@ -1,4 +1,4 @@
-use r2e_core::guards::Identity;
+use r2e_core::decorators::guards::Identity;
 use r2e_grpc::guard::{GrpcGuard, GrpcGuardContext, GrpcRoleBasedIdentity, GrpcRolesGuard};
 use tonic::metadata::MetadataMap;
 

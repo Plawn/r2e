@@ -3,7 +3,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use r2e_core::sse::{SseBroadcaster, SseRooms};
+//! use r2e_core::web::sse::{SseBroadcaster, SseRooms};
 //!
 //! // App-scoped broadcaster (injectable via #[inject])
 //! let broadcaster = SseBroadcaster::new(128);
@@ -24,13 +24,13 @@
 //!
 //! # Per-key rooms
 //!
-//! [`SseRooms<K>`] is the SSE counterpart to [`crate::ws::WsRooms`]: an
+//! [`SseRooms<K>`] is the SSE counterpart to [`crate::web::ws::WsRooms`]: an
 //! injectable `DashMap<K, SseBroadcaster>` with lazy-insert
 //! `room(key)` / `subscribe(key)` / `remove(key)` helpers. Use it for
 //! per-entity streams (per-run logs, per-user notifications, etc.).
 //!
 //! ```ignore
-//! use r2e_core::sse::SseRooms;
+//! use r2e_core::web::sse::SseRooms;
 //!
 //! #[derive(Clone)] // wrap in BeanState in real code
 //! struct LogBus { rooms: SseRooms<String> }
@@ -424,7 +424,7 @@ impl<E> SseTopic<E> {
 
 /// Keyed manager for per-resource SSE broadcasters.
 ///
-/// `SseRooms<K>` is the SSE counterpart of [`crate::ws::WsRooms`]: a
+/// `SseRooms<K>` is the SSE counterpart of [`crate::web::ws::WsRooms`]: a
 /// `DashMap<K, SseBroadcaster>` with lazy-insert helpers. Use it when an
 /// application needs a separate stream per entity — e.g. per-run logs,
 /// per-user notifications, per-tenant event feeds.

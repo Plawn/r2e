@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
 use r2e_core::http::header::{Parts, AUTHORIZATION};
 use r2e_core::type_list::HasBean;
 use tracing::{debug, warn};

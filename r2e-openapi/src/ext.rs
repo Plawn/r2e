@@ -1,5 +1,5 @@
 use crate::{openapi_routes, OpenApiConfig};
-use r2e_core::meta::RouteInfo;
+use r2e_core::di::meta::RouteInfo;
 use r2e_core::Plugin;
 
 /// Plugin that adds OpenAPI spec generation and optional documentation UI.

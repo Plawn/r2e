@@ -10,7 +10,7 @@ use crate::http::{
     response::{IntoResponse, Response},
     StatusCode,
 };
-use crate::request_head::RequestHead;
+use crate::web::request_head::RequestHead;
 use crate::HttpError;
 use std::{future::Future, marker::PhantomData};
 

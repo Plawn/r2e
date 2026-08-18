@@ -42,7 +42,7 @@
 //!
 //! A lazy bean first touched from within a worker is resolved on the
 //! control-plane runtime: because the worker registered the control-plane
-//! handle, [`crate::lazy`]'s `resolve_lazy_factory` spawns the factory on the
+//! handle, [`crate::di::lazy`]'s `resolve_lazy_factory` spawns the factory on the
 //! control plane and blocks the worker on a channel for the result (it cannot
 //! use `block_in_place`, which panics on current-thread runtimes). No hidden
 //! `lazy-fallback-runtime` is spun up. In practice lazy beans are resolved once

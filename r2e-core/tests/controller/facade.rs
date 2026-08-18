@@ -759,7 +759,7 @@ struct WsIdentityController {
 #[routes]
 impl WsIdentityController {
     #[ws("/ws")]
-    async fn ws(&self, mut ws: r2e_core::ws::WsStream) {
+    async fn ws(&self, mut ws: r2e_core::web::ws::WsStream) {
         // Identity is owned by the façade for the whole socket lifetime.
         let sub = self.user.0.clone();
         ws.send_text(&sub).await.ok();

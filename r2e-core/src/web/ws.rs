@@ -325,7 +325,7 @@ impl WsBroadcastReceiver {
 ///
 /// Defaults `K = String` for the common "named chat room" case; parameterize
 /// over the key type for typed identifiers (`Uuid`, `UserId`, …). Mirrors
-/// [`crate::sse::SseRooms`].
+/// [`crate::web::sse::SseRooms`].
 ///
 /// Clone + Send + Sync (provided `K` is `Send + Sync`) — injectable via
 /// `#[inject]`.

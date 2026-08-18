@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use r2e_core::http::SseEvent;
-use r2e_core::sse::{LagPolicy, SseBroadcaster, SseRooms, SseSubscription};
+use r2e_core::web::sse::{LagPolicy, SseBroadcaster, SseRooms, SseSubscription};
 
 async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {
     tokio::time::timeout(std::time::Duration::from_millis(100), async {
@@ -262,25 +262,25 @@ struct SyncStatus {
 
 #[r2e_core::test]
 async fn sse_topic_default_event_name_is_short_type_name() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16);
     assert_eq!(topic.event_name(), "SyncStatus");
 }
 
 #[r2e_core::test]
 async fn sse_topic_generic_event_name_strips_generics() {
-    let topic = r2e_core::sse::SseTopic::<Vec<SyncStatus>>::new(16);
+    let topic = r2e_core::web::sse::SseTopic::<Vec<SyncStatus>>::new(16);
     assert_eq!(topic.event_name(), "Vec");
 }
 
 #[r2e_core::test]
 async fn sse_topic_with_event_name_overrides_default() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
     assert_eq!(topic.event_name(), "sync");
 }
 
 #[r2e_core::test]
 async fn sse_topic_publish_roundtrip() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16).with_event_name("sync");
     let mut sub = topic.subscribe();
     let received = topic
         .publish(&SyncStatus {
@@ -303,14 +303,14 @@ async fn sse_topic_publish_roundtrip() {
 
 #[r2e_core::test]
 async fn sse_topic_publish_without_subscribers_is_ok_zero() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16);
     let received = topic.publish(&SyncStatus { done: 0, total: 0 }).unwrap();
     assert_eq!(received, 0);
 }
 
 #[r2e_core::test]
 async fn sse_topic_clone_shares_channel() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16);
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16);
     let clone = topic.clone();
     let mut sub = clone.subscribe();
     topic.publish(&SyncStatus { done: 1, total: 2 }).unwrap();
@@ -322,7 +322,7 @@ async fn sse_topic_clone_shares_channel() {
 
 #[r2e_core::test]
 async fn sse_topic_custom_serializer() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16)
         .with_event_name("sync")
         .with_serializer(|s| Ok(format!("{}/{}", s.done, s.total)));
     let mut sub = topic.subscribe();
@@ -342,7 +342,7 @@ async fn sse_topic_custom_serializer() {
 
 #[r2e_core::test]
 async fn sse_topic_serializer_error_is_returned() {
-    let topic = r2e_core::sse::SseTopic::<SyncStatus>::new(16)
+    let topic = r2e_core::web::sse::SseTopic::<SyncStatus>::new(16)
         .with_serializer(|_| Err("encoding broke".into()));
     let mut sub = topic.subscribe();
     let err = topic

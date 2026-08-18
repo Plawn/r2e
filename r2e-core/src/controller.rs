@@ -63,7 +63,7 @@ pub trait ContextConstruct {
 
 /// State-independent carrier of an endpoint's **full** dependency list:
 /// [`ContextConstruct::Deps`] extended with every guard/interceptor site's
-/// [`DecoratorSpec::Deps`](crate::decorator::DecoratorSpec::Deps).
+/// [`DecoratorSpec::Deps`](crate::decorators::decorator::DecoratorSpec::Deps).
 ///
 /// This is the transport-neutral registration contract: anything that is
 /// built from the bean graph and carries decorator sites — an HTTP
@@ -95,7 +95,7 @@ pub trait EndpointDeps {
 ///
 /// `T` is the application state type. `W` is an opaque witness carrier for
 /// state-generic controllers: the generated impl parks the inferred extraction
-/// markers (see [`FromRequestPartsVia`](crate::extract::FromRequestPartsVia))
+/// markers (see [`FromRequestPartsVia`](crate::web::extract::FromRequestPartsVia))
 /// there. Named-state controllers use the default `W = ()`. User code never
 /// names `W` — registration infers it.
 pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 'static {
@@ -116,7 +116,7 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     /// Generated controllers receive the shared core built by
     /// `register_controller()` and install pre-authentication guards before
     /// state finalization. `ctx` is the resolved bean graph: route decorators
-    /// (guards/interceptors, see [`DecoratorSpec`](crate::decorator::DecoratorSpec))
+    /// (guards/interceptors, see [`DecoratorSpec`](crate::decorators::decorator::DecoratorSpec))
     /// are built from it here, once, and moved into the handler closures.
     fn routes(
         state: &T,
@@ -127,7 +127,7 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     /// Push metadata about this controller's routes into the registry.
     ///
     /// Called by `register_controller()`. The default implementation is a no-op.
-    fn register_meta(_registry: &mut crate::meta::MetaRegistry) {}
+    fn register_meta(_registry: &mut crate::di::meta::MetaRegistry) {}
 
     /// Register event consumers for this controller.
     ///
@@ -169,7 +169,7 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     /// before scheduled tasks are built and before any consumer or direct call
     /// can fire. The generated impl (for controllers whose `#[scheduled]` /
     /// `#[consumer]` methods carry `#[intercept(...)]`) delegates to the core's
-    /// [`BeanDecoFill`](crate::decorator::BeanDecoFill) impl; the slot's
+    /// [`BeanDecoFill`](crate::decorators::decorator::BeanDecoFill) impl; the slot's
     /// `OnceLock` makes the fill first-write-wins, so repeated calls are no-ops.
     /// The default implementation is a no-op (no intercepted transverse methods).
     fn fill_decos(_core: &std::sync::Arc<Self>, _ctx: &crate::beans::BeanContext) {}

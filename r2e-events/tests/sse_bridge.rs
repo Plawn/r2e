@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use r2e_core::http::SseEvent;
-use r2e_core::sse::{SseSubscription, SseTopic};
+use r2e_core::web::sse::{SseSubscription, SseTopic};
 use r2e_events::sse_bridge::bridge_event_to_sse;
 use r2e_events::{EventBus, LocalEventBus};
 use serde::{Deserialize, Serialize};

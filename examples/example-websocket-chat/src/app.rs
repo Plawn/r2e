@@ -5,7 +5,7 @@
 // real Subsecond hot-patching.
 
 use r2e::prelude::*;
-use r2e::ws::WsRooms;
+use r2e::web::ws::WsRooms;
 use sqlx::SqlitePool;
 
 pub mod controllers;

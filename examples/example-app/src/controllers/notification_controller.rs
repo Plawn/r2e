@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use r2e::http::response::SseEvent;
 use r2e::http::ws::Message;
 use r2e::prelude::*;
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

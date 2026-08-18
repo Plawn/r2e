@@ -40,7 +40,7 @@ r2e = { version = "0.3", features = ["ws"] }
 
 ```rust
 use r2e::prelude::*;
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 ```
 
 ### 2. Basic WebSocket Endpoint
@@ -151,7 +151,7 @@ let raw: WebSocket = ws.into_inner();
 For structured management with lifecycle callbacks, implement `WsHandler`:
 
 ```rust
-use r2e::ws::{WsHandler, WsStream};
+use r2e::web::ws::{WsHandler, WsStream};
 use axum::extract::ws::Message;
 
 struct ChatHandler {
@@ -208,7 +208,7 @@ impl ChatController {
 #### Creation
 
 ```rust
-use r2e::ws::WsBroadcaster;
+use r2e::web::ws::WsBroadcaster;
 
 let broadcaster = WsBroadcaster::new(128); // channel capacity
 ```
@@ -276,7 +276,7 @@ async fn notifications(&self, mut ws: WsStream) {
 #### Creation
 
 ```rust
-use r2e::ws::WsRooms;
+use r2e::web::ws::WsRooms;
 
 let rooms = WsRooms::new(128); // capacity per room
 ```
@@ -303,7 +303,7 @@ Complete controller using `WsRooms` with JSON messages:
 
 ```rust
 use r2e::prelude::*;
-use r2e::ws::{WsRooms, WsStream};
+use r2e::web::ws::{WsRooms, WsStream};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]

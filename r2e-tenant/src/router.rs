@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::{Extensions, Parts};
-use r2e_core::request_head::RequestHead;
+use r2e_core::web::request_head::RequestHead;
 use r2e_core::HttpError;
 
 use crate::config::{MissingTenantPolicy, TenancyConfig};

@@ -156,7 +156,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
             let __raw_path = <#krate::http::extract::RawPathParams as #krate::http::extract::FromRequestParts<__R2eParamsState>>::from_request_parts(parts, _state)
                 .await
                 .map_err(|e| {
-                    let err = #krate::params::ParamError {
+                    let err = #krate::web::params::ParamError {
                         message: format!("Failed to extract path parameters: {}", e),
                     };
                     #krate::http::response::IntoResponse::into_response(err)
@@ -169,7 +169,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
     // Generate extraction code for query params
     let query_extraction = if needs_query {
         quote! {
-            let __query_pairs = #krate::params::parse_query_string(parts.uri.query());
+            let __query_pairs = #krate::web::params::parse_query_string(parts.uri.query());
         }
     } else {
         quote! {}
@@ -206,7 +206,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
     let expanded = quote! {
         const _: () = {
             // Core impl: PrefixedExtract receives the prefix and threads it through
-            impl<__R2eParamsState: Send + Sync> #krate::params::PrefixedExtract<__R2eParamsState> for #name #ty_generics {
+            impl<__R2eParamsState: Send + Sync> #krate::web::params::PrefixedExtract<__R2eParamsState> for #name #ty_generics {
                 async fn extract_prefixed(
                     parts: &mut #krate::http::header::Parts,
                     _state: &__R2eParamsState,
@@ -234,12 +234,12 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
                     parts: &mut #krate::http::header::Parts,
                     _state: &__R2eParamsState,
                 ) -> Result<Self, Self::Rejection> {
-                    <Self as #krate::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, "").await
+                    <Self as #krate::web::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, "").await
                 }
             }
 
-            impl #impl_generics #krate::params::ParamsMetadata for #name #ty_generics #where_clause {
-                fn param_infos() -> Vec<#krate::meta::ParamInfo> {
+            impl #impl_generics #krate::web::params::ParamsMetadata for #name #ty_generics #where_clause {
+                fn param_infos() -> Vec<#krate::di::meta::ParamInfo> {
                     let mut __v = vec![#(#own_param_info_items),*];
                     #(#nested_metadata_items)*
                     __v
@@ -270,7 +270,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                 let msg = error_msg.to_string();
                 quote! {
                     return Err(#krate::http::response::IntoResponse::into_response(
-                        #krate::params::ParamError {
+                        #krate::web::params::ParamError {
                             message: #msg.to_string(),
                         }
                     ))
@@ -290,7 +290,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                             match v.parse() {
                                 Ok(val) => Some(val),
                                 Err(_) => return Err(#krate::http::response::IntoResponse::into_response(
-                                    #krate::params::ParamError {
+                                    #krate::web::params::ParamError {
                                         message: format!("Invalid path parameter '{}': parse error", #name_str),
                                     }
                                 )),
@@ -304,7 +304,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                 quote! {
                     let #ident = match __raw_path.iter().find(|(k, _)| k.as_str() == #name_str) {
                         Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                            #krate::params::ParamError {
+                            #krate::web::params::ParamError {
                                 message: format!("Invalid path parameter '{}': parse error", #name_str),
                             }
                         ))?,
@@ -319,10 +319,10 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                 let inner_ty = unwrap_option_type(&field.ty).unwrap();
                 quote! {
                     let #ident: Option<#inner_ty> = {
-                        let __key = #krate::params::prefixed_key(__prefix, #name_str);
+                        let __key = #krate::web::params::prefixed_key(__prefix, #name_str);
                         match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                             Some((_, v)) => Some(v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                #krate::params::ParamError {
+                                #krate::web::params::ParamError {
                                     message: format!("Invalid query parameter '{}': parse error", __key),
                                 }
                             ))?),
@@ -335,10 +335,10 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     Some(DefaultValue::Trait) => {
                         quote! {
                             let #ident = {
-                                let __key = #krate::params::prefixed_key(__prefix, #name_str);
+                                let __key = #krate::web::params::prefixed_key(__prefix, #name_str);
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                        #krate::params::ParamError {
+                                        #krate::web::params::ParamError {
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
@@ -350,10 +350,10 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     Some(DefaultValue::Expr(expr)) => {
                         quote! {
                             let #ident = {
-                                let __key = #krate::params::prefixed_key(__prefix, #name_str);
+                                let __key = #krate::web::params::prefixed_key(__prefix, #name_str);
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                        #krate::params::ParamError {
+                                        #krate::web::params::ParamError {
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
@@ -365,15 +365,15 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     None => {
                         quote! {
                             let #ident = {
-                                let __key = #krate::params::prefixed_key(__prefix, #name_str);
+                                let __key = #krate::web::params::prefixed_key(__prefix, #name_str);
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                        #krate::params::ParamError {
+                                        #krate::web::params::ParamError {
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
                                     None => return Err(#krate::http::response::IntoResponse::into_response(
-                                        #krate::params::ParamError {
+                                        #krate::web::params::ParamError {
                                             message: format!("Missing query parameter '{}'", __key),
                                         }
                                     )),
@@ -392,12 +392,12 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     let #ident: Option<#inner_ty> = match parts.headers.get(#name_str) {
                         Some(v) => {
                             let s = v.to_str().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                #krate::params::ParamError {
+                                #krate::web::params::ParamError {
                                     message: format!("Invalid header '{}': not valid UTF-8", #name_str),
                                 }
                             ))?;
                             Some(s.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                #krate::params::ParamError {
+                                #krate::web::params::ParamError {
                                     message: format!("Invalid header '{}': parse error", #name_str),
                                 }
                             ))?)
@@ -411,12 +411,12 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     let #ident = match parts.headers.get(#name_str) {
                         Some(v) => {
                             let s = v.to_str().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                #krate::params::ParamError {
+                                #krate::web::params::ParamError {
                                     message: format!("Invalid header '{}': not valid UTF-8", #name_str),
                                 }
                             ))?;
                             s.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
-                                #krate::params::ParamError {
+                                #krate::web::params::ParamError {
                                     message: format!("Invalid header '{}': parse error", #name_str),
                                 }
                             ))?
@@ -438,7 +438,7 @@ fn generate_nested_construction(field: &NestedParamsField, krate: &TokenStream) 
         NestedMode::Flatten => {
             // Flatten: pass through the parent prefix unchanged
             quote! {
-                let #ident = <#ty as #krate::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, __prefix).await?;
+                let #ident = <#ty as #krate::web::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, __prefix).await?;
             }
         }
         NestedMode::Prefix(prefix_str) => {
@@ -450,7 +450,7 @@ fn generate_nested_construction(field: &NestedParamsField, krate: &TokenStream) 
                     } else {
                         format!("{}.{}", __prefix, #prefix_str)
                     };
-                    <#ty as #krate::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, &__composed).await?
+                    <#ty as #krate::web::params::PrefixedExtract<__R2eParamsState>>::extract_prefixed(parts, _state, &__composed).await?
                 };
             }
         }
@@ -465,14 +465,14 @@ fn generate_nested_metadata(field: &NestedParamsField, krate: &TokenStream) -> T
         NestedMode::Flatten => {
             // Flatten: merge all nested param infos unchanged
             quote! {
-                __v.extend(<#ty as #krate::params::ParamsMetadata>::param_infos());
+                __v.extend(<#ty as #krate::web::params::ParamsMetadata>::param_infos());
             }
         }
         NestedMode::Prefix(prefix_str) => {
             // Prefix: prefix query param names at metadata level
             quote! {
-                __v.extend(<#ty as #krate::params::ParamsMetadata>::param_infos().into_iter().map(|mut p| {
-                    if matches!(p.location, #krate::meta::ParamLocation::Query) {
+                __v.extend(<#ty as #krate::web::params::ParamsMetadata>::param_infos().into_iter().map(|mut p| {
+                    if matches!(p.location, #krate::di::meta::ParamLocation::Query) {
                         p.name = format!("{}.{}", #prefix_str, p.name);
                     }
                     p
@@ -597,20 +597,20 @@ fn generate_param_infos(
         .map(|f| {
             let (param_name, location) = match &f.source {
                 ParamSource::Path { name } => {
-                    (name.clone(), quote! { #krate::meta::ParamLocation::Path })
+                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Path })
                 }
                 ParamSource::Query { name } => {
-                    (name.clone(), quote! { #krate::meta::ParamLocation::Query })
+                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Query })
                 }
                 ParamSource::Header { name } => {
-                    (name.clone(), quote! { #krate::meta::ParamLocation::Header })
+                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Header })
                 }
             };
             let param_type = rust_type_to_openapi_str(&f.ty);
             let required = !f.is_optional && f.default_value.is_none();
 
             quote! {
-                #krate::meta::ParamInfo {
+                #krate::di::meta::ParamInfo {
                     name: #param_name.to_string(),
                     location: #location,
                     param_type: #param_type.to_string(),

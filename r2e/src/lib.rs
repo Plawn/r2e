@@ -122,7 +122,7 @@ pub use r2e_observability;
 
 #[cfg(feature = "dev-reload")]
 pub mod devtools {
-    pub use r2e_core::dev::mark_hot_reload_loop;
+    pub use r2e_core::runtime::dev::mark_hot_reload_loop;
     pub use r2e_devtools::*;
 }
 

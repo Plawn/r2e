@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use r2e_core::http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
-use r2e_core::request_head::RequestHead;
+use r2e_core::web::request_head::RequestHead;
 use r2e_core::{HttpError, PathParams};
 use r2e_tenant::{
     ExtensionTenantResolver, FnTenantResolver, HeaderTenantResolver, MissingTenantPolicy,

@@ -1,4 +1,4 @@
-use r2e_core::meta::{ParamInfo, ParamLocation, RouteInfo};
+use r2e_core::di::meta::{ParamInfo, ParamLocation, RouteInfo};
 use r2e_openapi::{build_spec, OpenApiConfig};
 use serde_json::{json, Value};
 

@@ -658,5 +658,5 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-macros/src/derives/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
 - `r2e-macros/src/attrs/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/util/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
-- `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)
-- `r2e-core/src/scheduled_source.rs` — `ScheduledSource` trait (for beans with `#[scheduled]` methods; auto-collected at `build_state()` via `BeanRegistry::register_scheduled_source`)
+- `r2e-core/src/di/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)
+- `r2e-core/src/di/scheduled_source.rs` — `ScheduledSource` trait (for beans with `#[scheduled]` methods; auto-collected at `build_state()` via `BeanRegistry::register_scheduled_source`)

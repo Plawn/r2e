@@ -153,7 +153,7 @@ struct Hooked {
 }
 
 impl PostConstruct for Hooked {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move {
             self.flag.store(true, Ordering::SeqCst);
             Ok(())

@@ -44,7 +44,7 @@ use r2e::prelude::*;
 Or import explicitly:
 
 ```rust
-use r2e::multipart::{TypedMultipart, UploadedFile, FromMultipart};
+use r2e::web::multipart::{TypedMultipart, UploadedFile, FromMultipart};
 ```
 
 ### 2. Defining a Multipart Struct
@@ -173,7 +173,7 @@ Controller accepting a profile with optional bio, required avatar, and any numbe
 
 ```rust
 use r2e::prelude::*;
-use r2e::multipart::{TypedMultipart, UploadedFile};
+use r2e::web::multipart::{TypedMultipart, UploadedFile};
 use serde_json::Value;
 
 #[derive(FromMultipart)]
@@ -242,7 +242,7 @@ The error variants:
 For advanced cases where full control over field iteration is needed, use the raw `Multipart` extractor directly:
 
 ```rust
-use r2e::multipart::Multipart;
+use r2e::web::multipart::Multipart;
 
 #[post("/raw")]
 async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
@@ -274,7 +274,7 @@ Multipart endpoints are modeled automatically in the generated spec — no schem
 - A `TypedMultipart<T>` parameter produces a `multipart/form-data` request body referencing `#/components/schemas/T`. The schema comes from the `MultipartSchema` impl that `#[derive(FromMultipart)]` generates alongside `FromMultipart`.
 - Field mapping: `String` → `string`; `UploadedFile`/`Bytes` → `string` with `format: binary`; `Vec<UploadedFile>` → array of binary strings; integers → `integer`; `f32`/`f64` → `number`; `bool` → `boolean`; any other `FromStr`-parsed type → `string`. `Option<T>` keeps the inner schema and is omitted from `required`; `Vec<UploadedFile>` is also not required (an absent field yields an empty `Vec`).
 - A raw `Multipart` parameter is modeled as a free-form `multipart/form-data` object body.
-- If you implement `FromMultipart` manually, also implement `r2e::multipart::MultipartSchema` to document the form; without it the endpoint falls back to a schema-less multipart body.
+- If you implement `FromMultipart` manually, also implement `r2e::web::multipart::MultipartSchema` to document the form; without it the endpoint falls back to a schema-less multipart body.
 
 ```json
 "requestBody": {

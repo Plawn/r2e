@@ -141,9 +141,9 @@ impl BeanRegistry {
                 config_keys: T::config_keys(),
                 build_version: T::BUILD_VERSION,
                 slot_factory: Box::new(|ctx| {
-                    Arc::new(crate::lazy::LazySlot::new(move || {
+                    Arc::new(crate::di::lazy::LazySlot::new(move || {
                         Box::pin(async move { T::build(&ctx) })
-                    })) as Arc<dyn crate::lazy::LazyResolve>
+                    })) as Arc<dyn crate::di::lazy::LazyResolve>
                 }),
                 overridable,
             });
@@ -195,9 +195,9 @@ impl BeanRegistry {
                 config_keys: T::config_keys(),
                 build_version: T::BUILD_VERSION,
                 slot_factory: Box::new(|ctx| {
-                    Arc::new(crate::lazy::LazySlot::new(move || {
+                    Arc::new(crate::di::lazy::LazySlot::new(move || {
                         Box::pin(async move { T::build(&ctx).await })
-                    })) as Arc<dyn crate::lazy::LazyResolve>
+                    })) as Arc<dyn crate::di::lazy::LazyResolve>
                 }),
                 overridable,
             });
@@ -283,7 +283,7 @@ impl BeanRegistry {
     /// default/override pattern) keeps a single hook — resolve dedups the
     /// registrations to one instance, and its tasks must not be scheduled
     /// twice.
-    pub fn register_scheduled_source<T: crate::scheduled_source::ScheduledSource>(&mut self) {
+    pub fn register_scheduled_source<T: crate::di::scheduled_source::ScheduledSource>(&mut self) {
         let tid = TypeId::of::<T>();
         if self.scheduled_sources.iter().any(|(t, _, _)| *t == tid) {
             return;
@@ -368,7 +368,7 @@ impl BeanRegistry {
     /// Called from generated `after_register` when a `#[bean]` impl carries a
     /// `#[scheduled]`/`#[consumer]` method with `#[intercept]`. The hook reads
     /// the bean by type from the resolved graph and calls
-    /// [`BeanDecoFill::__r2e_fill_decos`](crate::decorator::BeanDecoFill::__r2e_fill_decos),
+    /// [`BeanDecoFill::__r2e_fill_decos`](crate::decorators::decorator::BeanDecoFill::__r2e_fill_decos),
     /// which builds every intercepted method's decorator set from the same
     /// graph and fills the bean's shared decorator slot. Because the slot's
     /// `Arc` is shared with every clone already handed out during resolution,
@@ -382,7 +382,7 @@ impl BeanRegistry {
     /// Idempotent per type (default/override registers twice, fills once);
     /// pinning the bean itself skips registration, so the slot stays empty and
     /// methods run undecorated — same as a skipped `#[post_construct]`.
-    pub fn register_deco_fill<T: crate::decorator::BeanDecoFill + Clone>(&mut self) {
+    pub fn register_deco_fill<T: crate::decorators::decorator::BeanDecoFill + Clone>(&mut self) {
         let tid = TypeId::of::<T>();
         if self.deco_fills.iter().any(|(t, _)| *t == tid) {
             return;

@@ -12,7 +12,7 @@ use std::pin::Pin;
 use example_app::models::UserCreatedEvent;
 use r2e::http::response::SseEvent;
 use r2e::prelude::*;
-use r2e::sse::SseSubscription;
+use r2e::web::sse::SseSubscription;
 use r2e_test::TestApp;
 
 async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {

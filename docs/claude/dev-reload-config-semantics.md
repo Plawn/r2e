@@ -243,7 +243,7 @@ Per patch, `launch!` re-runs `App::build` and `serve_auto`
   (`builder/typed.rs:104`), so the new action does register a new `on_serve`
   hook against the new registry.
 - But `PreparedApp::run_inner` computes
-  `let skip_lifecycle = crate::dev::is_lifecycle_initialized();`
+  `let skip_lifecycle = crate::runtime::dev::is_lifecycle_initialized();`
   (`builder/prepared.rs:219`) and only drains `self.serve_hooks` inside
   `if !skip_lifecycle` (`prepared.rs:240,268`), marking the flag at
   `prepared.rs:284`. From cycle 2 on, serve hooks never fire.
@@ -291,7 +291,7 @@ pointed at the doomed instance (B3).
 (`r2e-core/src/builder/mod.rs`):
 
 - **Under an active hot-reload loop** — get-or-create from a carrier in
-  `crate::dev` (`static LIVE_CONFIG_REGISTRY: OnceLock<Mutex<Option<…>>>`,
+  `crate::runtime::dev` (`static LIVE_CONFIG_REGISTRY: OnceLock<Mutex<Option<…>>>`,
   same single-slot shape as `CTX_CACHE`). If one is carried, **re-seed** it
   and return it; otherwise build a fresh one, carry it, and return it.
   `invalidate_state_cache()` drops it, so the documented cold-rebuild escape
@@ -398,9 +398,9 @@ documented contract — not a gap waiting to be closed.
 
 ---
 
-## Q7 — the `crate::dev` carrier
+## Q7 — the `crate::runtime::dev` carrier
 
-Shape (`r2e-core/src/dev.rs`): process-global `static`s, each a
+Shape (`r2e-core/src/runtime/dev.rs`): process-global `static`s, each a
 `OnceLock<Mutex<…>>` or an `AtomicBool`, all gated behind
 `hot_reload_loop_active()` so ordinary processes never engage them:
 
@@ -454,7 +454,7 @@ The constraints identified in Phase 0, all respected:
 
 | # | Sev | Behavior (as characterized in Phase 0) | Status |
 |---|---|---|---|
-| **B1** | high | `#[live_config]` values are frozen at cycle-1 boot for the whole dev session: the registry (and its boot snapshot) is pinned, so YAML edits to live keys never reach a slot. | **FIXED (Phase 1)** — the registry is carried in `crate::dev` with one stable identity and `load_config` re-seeds it per cycle (swap boot snapshot, push changed values into materialized unpinned slots). Test `live_config_registry_keeps_one_identity_and_reseeds_across_cycles`. |
+| **B1** | high | `#[live_config]` values are frozen at cycle-1 boot for the whole dev session: the registry (and its boot snapshot) is pinned, so YAML edits to live keys never reach a slot. | **FIXED (Phase 1)** — the registry is carried in `crate::runtime::dev` with one stable identity and `load_config` re-seeds it per cycle (swap boot snapshot, push changed values into materialized unpinned slots). Test `live_config_registry_keeps_one_identity_and_reseeds_across_cycles`. |
 | **B2** | high | Typed `ConfigProperties` / `#[config(section)]` beans are pinned from cycle 1 — a section edit is invisible under `r2e dev` even though the raw `R2eConfig` refreshes. | **FIXED (Phase 1)** — the pinning exemption generalized from "is `R2eConfig`" to "is in `config_derived`", and `LoadableConfig` provides typed sections inside `config_derived_scope`. Test `typed_config_bean_tracks_edits_across_cycles`. |
 | **B3** | medium | On cycles ≥ 2, a **late** `override_config_value` patches and pins the registry that is about to be discarded — silently lost for `#[live_config]` readers (it still reaches `R2eConfig`). | **FIXED (Phase 1)**, for free — `BuilderConfig.live_config` now references the stable instance, so there is no discarded registry to patch. Test `late_override_config_value_reaches_live_readers_and_stays_pinned`. |
 | **B4** | medium | `ConfigProvider::watch` is started exactly once per process; later cycles register a hook that is never drained, and a watch that terminates is never restarted. Its updates *do* stay visible, so this is a restart/robustness gap, not a data-loss one. | **HALF-FIXED (2026-08-13).** The *terminates and is never restarted* half is fixed everywhere, dev or prod: watch tasks run under `supervise_config_watch`, which restarts a **failed** watch with capped exponential backoff, treats `Ok(())` as a deliberate end, and cancels the **in-flight** watch future on shutdown (not just the retry sleep). The *one task per process under `r2e dev`* half is deferred by design — see "B4 — watch supervision" below. Still characterized by `characterize_provider_watch_runs_once_but_its_registry_is_the_live_one`. |
@@ -502,7 +502,7 @@ and folds in B2.
 
 | File | Change |
 |---|---|
-| `r2e-core/src/dev.rs` | `LIVE_CONFIG_REGISTRY` carrier + `carried_/carry_live_config_registry()`; cleared by `invalidate_state_cache()`; `unmark_hot_reload_loop()` (tests only) |
+| `r2e-core/src/runtime/dev.rs` | `LIVE_CONFIG_REGISTRY` carrier + `carried_/carry_live_config_registry()`; cleared by `invalidate_state_cache()`; `unmark_hot_reload_loop()` (tests only) |
 | `r2e-core/src/builder/mod.rs` | `live_config_registry_for_cycle(config, pinned_keys)` — the get-or-create/re-seed decision, with a non-dev-reload arm that always builds fresh |
 | `r2e-core/src/builder/nostate.rs` | `load_config` uses it and provides config-derived values inside `config_derived_scope` |
 | `r2e-core/src/config/runtime.rs` | `BootSnapshot` behind an `RwLock`; `reseed()` (dev-reload gated), publishing through the shared `publish(key, Option<ConfigValue>)` |
@@ -723,7 +723,7 @@ Why that is not worth fixing today:
   and would also, on every unrelated hot patch, tear down a healthy long-lived
   subscription (Vault lease, Consul blocking query) and re-establish it.
 - **The machinery is disproportionate.** A correct re-spawn needs: the serve
-  shutdown token captured into a `crate::dev` static on the first serve (it does
+  shutdown token captured into a `crate::runtime::dev` static on the first serve (it does
   not exist at `load_config` time), a per-cycle child token swapped and cancelled
   on each cycle, watchers spawned outside `serve_ctx.track()` (so they are
   no longer part of the drain accounting), and dedup so a cycle that did not

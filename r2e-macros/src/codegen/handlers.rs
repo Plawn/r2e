@@ -223,9 +223,9 @@ fn generate_validation_calls(
             };
             quote! {
                 {
-                    use #krate::validation::__DoValidate as _;
-                    use #krate::validation::__SkipValidate as _;
-                    if let Err(__validation_err) = (&#krate::validation::__AutoValidator(#validate_target)).__maybe_validate() {
+                    use #krate::web::validation::__DoValidate as _;
+                    use #krate::web::validation::__SkipValidate as _;
+                    if let Err(__validation_err) = (&#krate::web::validation::__AutoValidator(#validate_target)).__maybe_validate() {
                         return *__validation_err;
                     }
                 }
@@ -1303,7 +1303,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             .collect();
 
         let ws_setup = if ws_p.is_ws_stream {
-            quote! { let __ws_stream = #krate::ws::WsStream::new(__socket); }
+            quote! { let __ws_stream = #krate::web::ws::WsStream::new(__socket); }
         } else {
             quote! {}
         };
@@ -1336,7 +1336,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         quote! {
             #call
-            #krate::ws::run_ws_handler(#krate::ws::WsStream::new(__socket), __handler).await;
+            #krate::web::ws::run_ws_handler(#krate::web::ws::WsStream::new(__socket), __handler).await;
         }
     };
 
@@ -1681,7 +1681,7 @@ fn route_axum_params_and_args(
             // Param-level identity: extracted through `FromRequestPartsVia`
             // (bean-backed, witness in the marker) and unwrapped before the
             // invocation call, so the route method keeps the plain type.
-            extras.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            extras.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
             args.push(quote! { #arg.0 });
             last_is_identity = true;
         } else {
@@ -1843,7 +1843,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
         if Some(i) == identity_index {
-            extras.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            extras.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
             fwd_args.push(quote! { #arg.0 });
             last_is_identity = true;
         } else {
@@ -1973,7 +1973,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
         let arg = format_ident!("__arg_{}", i);
         let ty = &pt.ty;
         if Some(i) == identity_index {
-            closure_params.push(quote! { #arg: #krate::extract::Via<#ty, #identity_marker> });
+            closure_params.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
             fwd_args.push(quote! { #arg.0 });
         } else {
             closure_params.push(quote! { #arg: #ty });

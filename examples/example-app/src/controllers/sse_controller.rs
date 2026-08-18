@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use r2e::http::response::SseEvent;
 use r2e::prelude::*;
-use r2e::sse::SseBroadcaster;
+use r2e::web::sse::SseBroadcaster;
 
 use crate::models::UserCreatedEvent;
 

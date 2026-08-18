@@ -6,7 +6,7 @@ redesign (W15, 2026-08-15)**: `PreStatePlugin` is one async, fallible factory
 two-phase `install`/`configure` machine — and the `Late<T>` shell-then-fill
 dance it forced — is gone. Source of truth: `r2e-core/src/plugin.rs`,
 `r2e-core/src/type_list.rs` (`PluginDeps` / `PluginProvisions`),
-`r2e-core/src/config/mod.rs` (`PluginConfig`), `r2e-core/src/late.rs`
+`r2e-core/src/config/mod.rs` (`PluginConfig`), `r2e-core/src/di/late.rs`
 (`Late<T>`, now an escape hatch only).
 
 ## Two plugin kinds
@@ -445,7 +445,7 @@ module can declare `requires_plugins(Scheduler)` (macro) or
 `register_module` the compiler checks every provided bean of each required
 plugin is already in the provision list — i.e. the plugin was `.plugin(..)`-ed
 before the module — with a plugin-named diagnostic
-(`RequiredPluginInstalled` + `do_not_recommend`, `r2e-core/src/module.rs`).
+(`RequiredPluginInstalled` + `do_not_recommend`, `r2e-core/src/di/module.rs`).
 Covered by `compile-fail/module_required_plugin_not_installed.rs`.
 
 ## RawPreStatePlugin (hidden escape hatch)

@@ -52,8 +52,8 @@ where
 )]
 pub use FromValidatedJwtClaims as ClaimsIdentity;
 
-/// Generate [`FromRequestPartsVia`](r2e_core::extract::FromRequestPartsVia)
-/// and [`OptionalFromRequestPartsVia`](r2e_core::extract::OptionalFromRequestPartsVia)
+/// Generate [`FromRequestPartsVia`](r2e_core::web::extract::FromRequestPartsVia)
+/// and [`OptionalFromRequestPartsVia`](r2e_core::web::extract::OptionalFromRequestPartsVia)
 /// implementations for an identity type that implements
 /// [`FromValidatedJwtClaims`].
 ///

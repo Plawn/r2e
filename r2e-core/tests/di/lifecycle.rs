@@ -128,7 +128,7 @@ impl Bean for FactoryInit {
 }
 
 impl PostConstruct for FactoryInit {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move {
             self.log.lock().unwrap().push("factory");
             Ok(())
@@ -144,7 +144,7 @@ struct ProvidedInit {
 }
 
 impl PostConstruct for ProvidedInit {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move {
             self.log.lock().unwrap().push(self.id);
             Ok(())
@@ -175,7 +175,7 @@ async fn provided_post_construct_runs_after_factory_post_construct() {
 struct FailingProvided;
 
 impl PostConstruct for FailingProvided {
-    fn post_construct(&self) -> r2e_core::lifecycle::LifecycleFuture<'_> {
+    fn post_construct(&self) -> r2e_core::runtime::lifecycle::LifecycleFuture<'_> {
         Box::pin(async move { Err("provided init failed".into()) })
     }
 }

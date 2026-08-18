@@ -3,7 +3,7 @@
 use crate::error::OpenFgaError;
 use crate::registry::OpenFgaRegistry;
 use r2e_core::beans::BeanContext;
-use r2e_core::guards::{Guard, GuardContext, Identity};
+use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
 use r2e_core::http::response::IntoResponse;
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::{DecoratorSpec, PathParam};

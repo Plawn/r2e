@@ -2,7 +2,7 @@ use http::Request;
 use http_body_util::BodyExt;
 use r2e_core::http::body::Body;
 use r2e_core::http::Router;
-use r2e_core::meta::RouteInfo;
+use r2e_core::di::meta::RouteInfo;
 use r2e_openapi::{openapi_routes, OpenApiConfig};
 use serde_json::Value;
 use tower::ServiceExt;

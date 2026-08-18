@@ -1,4 +1,4 @@
-use r2e_core::meta::{ParamLocation, RouteInfo};
+use r2e_core::di::meta::{ParamLocation, RouteInfo};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 

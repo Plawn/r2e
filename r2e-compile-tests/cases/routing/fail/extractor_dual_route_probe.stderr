@@ -10,7 +10,7 @@ error[E0283]: type annotations needed
            - impl<S, T> FromRequestPartsVia<S, ViaAxum> for T
              where S: std::marker::Send, S: Sync, T: FromRequestParts<S>;
 note: required by a bound in `assert_unambiguous_extractor`
-  --> $WORKSPACE/r2e-core/src/extract.rs
+  --> $WORKSPACE/r2e-core/src/web/extract.rs
    |
    | pub fn assert_unambiguous_extractor<S, T, M>()
    |        ---------------------------- required by a bound in this function

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
-use r2e_core::extract::{
+use r2e_core::web::extract::{
     assert_unambiguous_extractor, FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean,
 };
 use r2e_core::http::extract::{MatchedPath, Query};

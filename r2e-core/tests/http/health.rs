@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use r2e_core::health::{
+use r2e_core::builtins::health::{
     HealthBuilder, HealthCheckStatus, HealthIndicator, HealthIndicatorErased, HealthState,
     HealthStatus,
 };
@@ -101,7 +101,7 @@ async fn health_uptime_increases() {
 
 use r2e_core::builder::AppBuilder;
 use r2e_core::http::StatusCode;
-use r2e_core::plugins::Health;
+use r2e_core::builtins::Health;
 
 use crate::support::send_get;
 

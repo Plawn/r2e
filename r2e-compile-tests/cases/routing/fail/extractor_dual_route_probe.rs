@@ -8,7 +8,7 @@
 //! `register_controller()` downstream (that form is pinned in
 //! `extractor_dual_route_ambiguous.rs`).
 
-use r2e::extract::{OptionalFromRequestPartsVia, ViaBean, assert_unambiguous_extractor};
+use r2e::web::extract::{OptionalFromRequestPartsVia, ViaBean, assert_unambiguous_extractor};
 use r2e::http::extract::OptionalFromRequestParts;
 use r2e::http::header::Parts;
 use r2e::type_list::{HCons, HNil, HasBean};

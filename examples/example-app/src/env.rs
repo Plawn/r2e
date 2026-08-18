@@ -41,7 +41,7 @@ pub struct AppEnv {
     pub(crate) event_bus: LocalEventBus,
     pub(crate) claims_validator: Arc<JwtClaimsValidator>,
     pub(crate) pool: sqlx::Pool<sqlx::Sqlite>,
-    pub(crate) sse_broadcaster: r2e::sse::SseBroadcaster,
+    pub(crate) sse_broadcaster: r2e::web::sse::SseBroadcaster,
     pub(crate) notification_service: NotificationService,
 }
 
@@ -82,7 +82,7 @@ pub(crate) async fn provision_env() -> AppEnv {
             .unwrap();
     }
 
-    let sse_broadcaster = r2e::sse::SseBroadcaster::new(128);
+    let sse_broadcaster = r2e::web::sse::SseBroadcaster::new(128);
     let notification_service = NotificationService::new(64);
 
     AppEnv {

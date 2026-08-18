@@ -23,7 +23,7 @@ For production systems that need to verify database connectivity, external servi
 
 ```rust
 use r2e::prelude::*;
-use r2e::health::{HealthBuilder, HealthIndicator, HealthStatus};
+use r2e::builtins::health::{HealthBuilder, HealthIndicator, HealthStatus};
 
 AppBuilder::new()
     .build_state()
@@ -80,7 +80,7 @@ The top-level `status` is `"UP"` only when every individual check is UP. If any 
 Implement `HealthIndicator` to define a custom health check:
 
 ```rust
-use r2e::health::{HealthIndicator, HealthStatus};
+use r2e::builtins::health::{HealthIndicator, HealthStatus};
 
 struct DbHealth {
     pool: sqlx::SqlitePool,
@@ -152,7 +152,7 @@ With this configuration:
 `HealthBuilder` assembles indicators into an `AdvancedHealth` plugin:
 
 ```rust
-use r2e::health::HealthBuilder;
+use r2e::builtins::health::HealthBuilder;
 use std::time::Duration;
 
 let health_plugin = HealthBuilder::new()
@@ -199,7 +199,7 @@ Both `/health` and `/health/ready` share the same cache. If no `cache_ttl` is se
 
 ```rust
 use r2e::prelude::*;
-use r2e::health::{HealthBuilder, HealthIndicator, HealthStatus};
+use r2e::builtins::health::{HealthBuilder, HealthIndicator, HealthStatus};
 use std::time::Duration;
 
 // -- Database health check --

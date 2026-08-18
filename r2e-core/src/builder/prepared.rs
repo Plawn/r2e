@@ -19,7 +19,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// A strong reference to the resolved bean graph, held for the WHOLE
     /// serving lifecycle — see [`run_inner`](Self::run_inner).
     ///
-    /// The router's [`GraphKeepAlive`](crate::layers::GraphKeepAlive) layer
+    /// The router's [`GraphKeepAlive`](crate::runtime::layers::GraphKeepAlive) layer
     /// only covers what is derived from the router (request futures, response
     /// bodies), and the router is dropped the moment the serve future
     /// completes — i.e. *before* tracked handles are awaited and before the
@@ -152,7 +152,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                          SO_REUSEPORT sharding is ignored (unsupported with hot-reload). \
                          Serving with a single listener."
                     );
-                    let listener = crate::dev::get_or_bind_listener(&self.addr)?;
+                    let listener = crate::runtime::dev::get_or_bind_listener(&self.addr)?;
                     self.run_inner(ServeStrategy::Single(listener)).await
                 }
                 #[cfg(not(feature = "dev-reload"))]
@@ -163,7 +163,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // Default: single listener on the caller's runtime — unchanged.
             None => {
                 #[cfg(feature = "dev-reload")]
-                let listener = crate::dev::get_or_bind_listener(&self.addr)?;
+                let listener = crate::runtime::dev::get_or_bind_listener(&self.addr)?;
                 #[cfg(not(feature = "dev-reload"))]
                 let listener = crate::rt::bind_tcp(&self.addr).await?;
                 self.run_inner(ServeStrategy::Single(listener)).await
@@ -193,7 +193,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         )))]
         {
             let _ = workers;
-            Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into())
+            Err(crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG.into())
         }
     }
 
@@ -275,7 +275,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         let serve_scope_graph = self.graph;
 
         #[cfg(feature = "dev-reload")]
-        let skip_lifecycle = crate::dev::is_lifecycle_initialized();
+        let skip_lifecycle = crate::runtime::dev::is_lifecycle_initialized();
         #[cfg(not(feature = "dev-reload"))]
         let skip_lifecycle = false;
 
@@ -379,7 +379,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             }
 
             #[cfg(feature = "dev-reload")]
-            crate::dev::mark_lifecycle_initialized();
+            crate::runtime::dev::mark_lifecycle_initialized();
         } else {
             tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
         }
@@ -420,7 +420,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
                     #[cfg(feature = "dev-reload")]
                     let endpoint_result =
-                        crate::dev::get_or_bind_quic_endpoint(addr, server_config);
+                        crate::runtime::dev::get_or_bind_quic_endpoint(addr, server_config);
                     #[cfg(not(feature = "dev-reload"))]
                     let endpoint_result =
                         crate::http::quic::quinn::Endpoint::server(server_config, addr).map_err(
@@ -552,7 +552,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 // threads, so run it on a blocking task to avoid stalling the
                 // main runtime (which must keep driving the shutdown future).
                 let join = crate::rt::spawn_blocking(move || {
-                    crate::sharded::serve_sharded(
+                    crate::runtime::sharded::serve_sharded(
                         router,
                         &addrs,
                         workers,
@@ -577,7 +577,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 unix,
                 not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
             )))]
-            ServeStrategy::Sharded { .. } => Err(crate::sharded::UNSUPPORTED_PLATFORM_MSG.into()),
+            ServeStrategy::Sharded { .. } => Err(crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG.into()),
         };
         // A serve error is the second abort path: the shutdown future was
         // dropped mid-`select!` (or aborted, in the sharded path), so the user

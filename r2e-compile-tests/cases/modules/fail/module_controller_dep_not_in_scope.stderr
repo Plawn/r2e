@@ -8,7 +8,7 @@ error[E0277]: `Pool` is not in this feature module's scope
    = note: a module's providers and controllers may depend only on the module's own provided types plus its declared `Imports`
    = note: add a provider for `Pool` to the module's `Providers`, or declare it in the module's `Imports`
 help: the following other types implement trait `InModuleScope<H, Idx>`
-  --> $WORKSPACE/r2e-core/src/module.rs
+  --> $WORKSPACE/r2e-core/src/di/module.rs
    |
    | impl<H, T> InModuleScope<H, Here> for TCons<H, T> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `InModuleScope<H, Here>`

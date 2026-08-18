@@ -1,4 +1,4 @@
-use r2e_core::guards::{Guard, GuardContext, Identity, PathParams};
+use r2e_core::decorators::guards::{Guard, GuardContext, Identity, PathParams};
 use r2e_core::http::{HeaderMap, Uri};
 use r2e_security::guards::{AllRolesGuard, RoleBasedIdentity, RolesGuard};
 

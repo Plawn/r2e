@@ -8,7 +8,7 @@ WebSocket support is included in `r2e-core` -- no extra feature flag is needed:
 
 ```rust
 use r2e::prelude::*;
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 ```
 
 ## Basic WebSocket endpoint
@@ -121,7 +121,7 @@ let raw: WebSocket = ws.into_inner();
 For structured WebSocket handling with lifecycle callbacks, implement `WsHandler`. The framework manages the message loop; you implement the hooks:
 
 ```rust
-use r2e::ws::{WsHandler, WsStream};
+use r2e::web::ws::{WsHandler, WsStream};
 use r2e::http::ws::Message;
 
 struct ChatHandler {
@@ -180,7 +180,7 @@ impl ChatController {
 ### Creating a broadcaster
 
 ```rust
-use r2e::ws::WsBroadcaster;
+use r2e::web::ws::WsBroadcaster;
 
 let broadcaster = WsBroadcaster::new(128); // channel capacity
 ```
@@ -251,7 +251,7 @@ async fn notifications(&self, mut ws: WsStream) {
 ### Creating a room manager
 
 ```rust
-use r2e::ws::WsRooms;
+use r2e::web::ws::WsRooms;
 
 let rooms = WsRooms::new(128); // per-room channel capacity
 ```
@@ -279,7 +279,7 @@ This is a complete chat controller using `WsRooms` with JSON messages and event-
 
 ```rust
 use r2e::prelude::*;
-use r2e::ws::{WsRooms, WsStream};
+use r2e::web::ws::{WsRooms, WsStream};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]

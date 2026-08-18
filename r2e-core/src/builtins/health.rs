@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use r2e_core::health::{HealthIndicator, HealthStatus};
+//! use r2e_core::builtins::health::{HealthIndicator, HealthStatus};
 //!
 //! struct DbHealth { pool: SqlitePool }
 //!
@@ -153,8 +153,8 @@ impl HealthBuilder {
     }
 
     /// Build the advanced health plugin.
-    pub fn build(self) -> crate::plugins::AdvancedHealth {
-        crate::plugins::AdvancedHealth::new(self.checks, self.cache_ttl)
+    pub fn build(self) -> crate::builtins::AdvancedHealth {
+        crate::builtins::AdvancedHealth::new(self.checks, self.cache_ttl)
     }
 }
 

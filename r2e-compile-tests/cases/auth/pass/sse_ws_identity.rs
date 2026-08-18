@@ -6,7 +6,7 @@ use futures_core::Stream;
 use r2e::prelude::*;
 use r2e::r2e_security::AuthenticatedUser;
 use r2e::r2e_security::JwtClaimsValidator;
-use r2e::ws::WsStream;
+use r2e::web::ws::WsStream;
 use r2e::Identity;
 use std::convert::Infallible;
 use std::sync::Arc;

@@ -49,7 +49,7 @@ async fn create(&self, body: Json<Request>) -> Result<Json<Response>, HttpError>
 `HttpError::Validation` carries a `ValidationErrorResponse` with per-field error details. This is the variant produced by automatic `garde` validation (see [Validation](./validation.md)), but you can also construct it manually:
 
 ```rust
-use r2e_core::validation::{ValidationErrorResponse, FieldError};
+use r2e_core::web::validation::{ValidationErrorResponse, FieldError};
 
 Err(HttpError::Validation(ValidationErrorResponse {
     errors: vec![

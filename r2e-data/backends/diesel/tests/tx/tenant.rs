@@ -20,7 +20,7 @@ use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::response::Response;
 use r2e_core::http::{Body, Method, Parts, Request, Router, StatusCode};
 use r2e_core::prelude::*;
-use r2e_core::request_head::RequestHead;
+use r2e_core::web::request_head::RequestHead;
 use r2e_core::{AppBuilder, GuardContext, Identity};
 use r2e_data_diesel::{PoolSource, TenantPools, TenantTx};
 use r2e_tenant::{

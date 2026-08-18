@@ -11,7 +11,7 @@ error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request a
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
    = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
 help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is implemented for `std::option::Option<T>`
-  --> $WORKSPACE/r2e-core/src/extract.rs
+  --> $WORKSPACE/r2e-core/src/web/extract.rs
    |
    | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
    | | where
@@ -44,7 +44,7 @@ error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request a
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
    = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
 help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is implemented for `std::option::Option<T>`
-  --> $WORKSPACE/r2e-core/src/extract.rs
+  --> $WORKSPACE/r2e-core/src/web/extract.rs
    |
    | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
    | | where

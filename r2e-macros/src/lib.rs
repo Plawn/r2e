@@ -906,7 +906,7 @@ pub fn managed(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```ignore
-/// use r2e::multipart::{FromMultipart, UploadedFile, TypedMultipart};
+/// use r2e::web::multipart::{FromMultipart, UploadedFile, TypedMultipart};
 ///
 /// #[derive(FromMultipart)]
 /// pub struct ProfileUpload {
@@ -1049,7 +1049,7 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Attribute macro on a struct — generates a
-/// [`FeatureModule`](r2e_core::module::FeatureModule) impl from a
+/// [`FeatureModule`](r2e_core::di::module::FeatureModule) impl from a
 /// declarative listing of providers, controllers, exports, and imports.
 ///
 /// Every key is optional and defaults to empty. Register the module with

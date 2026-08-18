@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
-use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
 use r2e_core::http::header::{HttpRequest, Parts, AUTHORIZATION};
 use r2e_core::type_list::{HCons, HNil, Here};
 use r2e_core::Identity;
@@ -169,7 +169,7 @@ async fn identity_construction_error_is_propagated() {
 /// `CustomUser`'s only extraction route (see `r2e-core/src/extract.rs`).
 #[test]
 fn macro_generated_extraction_route_is_unambiguous() {
-    use r2e_core::extract::assert_unambiguous_extractor;
+    use r2e_core::web::extract::assert_unambiguous_extractor;
 
     assert_unambiguous_extractor::<TestState, CustomUser, _>();
     assert_unambiguous_extractor::<TestState, Option<CustomUser>, _>();

@@ -12,7 +12,7 @@
 
 use std::net::SocketAddr;
 
-use crate::guards::PathParams;
+use crate::decorators::guards::PathParams;
 use crate::http::{Extensions, HeaderMap, Method, Uri};
 
 /// Read-only view of the request head available while acquiring a

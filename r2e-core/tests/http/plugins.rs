@@ -3,7 +3,7 @@
 
 use r2e_core::builder::AppBuilder;
 use r2e_core::http::{Body, Request, StatusCode};
-use r2e_core::plugins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
+use r2e_core::builtins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
 
 use crate::support::{raw, raw_get_with, send_get};
 

@@ -158,7 +158,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 .map(|pt| (*pt.ty).clone())
                 .expect("identity parameter index out of range");
             param_marker_bounds.push(quote! {
-                #declared_ty: #krate::extract::FromRequestPartsVia<#state_ident, #marker>
+                #declared_ty: #krate::web::extract::FromRequestPartsVia<#state_ident, #marker>
             });
             param_markers.push(marker);
         };
@@ -235,7 +235,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 (#application_router_body)(__core, __ctx)
             }
 
-            fn register_meta(__registry: &mut #krate::meta::MetaRegistry) {
+            fn register_meta(__registry: &mut #krate::di::meta::MetaRegistry) {
                 #(#register_meta_stmts)*
             }
 
@@ -338,8 +338,8 @@ fn generate_route_metadata(
                 .map(|ty| {
                     quote! {
                         {
-                            let __probe = #krate::params::__ParamMetaProbe::<#ty>(::core::marker::PhantomData);
-                            use #krate::params::__NoParamsMeta as _;
+                            let __probe = #krate::web::params::__ParamMetaProbe::<#ty>(::core::marker::PhantomData);
+                            use #krate::web::params::__NoParamsMeta as _;
                             __p.extend((&__probe).param_infos());
                         }
                     }
@@ -347,7 +347,7 @@ fn generate_route_metadata(
                 .collect();
 
             quote! {
-                #krate::meta::RouteInfo {
+                #krate::di::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
                         Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
                         None => #route_path_str.to_string(),
@@ -365,7 +365,7 @@ fn generate_route_metadata(
                     response_status: #status_code,
                     response_unmapped: #response_unmapped_token,
                     params: {
-                        let mut __p: Vec<#krate::meta::ParamInfo> = vec![#(#path_params),*];
+                        let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
                         #(#probe_blocks)*
                         // Deduplicate params by (name, location) — possible when
                         // a Params struct includes #[path] fields alongside Path<T>.
@@ -427,9 +427,9 @@ fn extract_path_params(rm: &crate::model::types::RouteMethod, krate: &TokenStrea
                             let param_name = quote!(#elem).to_string();
                             let param_type = infer_path_param_openapi_type(&pt.ty);
                             return Some(quote! {
-                                #krate::meta::ParamInfo {
+                                #krate::di::meta::ParamInfo {
                                     name: #param_name.to_string(),
-                                    location: #krate::meta::ParamLocation::Path,
+                                    location: #krate::di::meta::ParamLocation::Path,
                                     param_type: #param_type.to_string(),
                                     required: true,
                                 }
@@ -875,15 +875,15 @@ fn extract_body_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, Tok
 /// specialization: the derived `MultipartSchema` impl yields `Some(schema)`;
 /// a manual `FromMultipart` impl without it degrades to `None`.
 ///
-/// The `MultipartSchema` trait lives in `r2e_core::meta` (always compiled,
+/// The `MultipartSchema` trait lives in `r2e_core::di::meta` (always compiled,
 /// not the feature-gated `multipart` module) so this probe also compiles in
 /// apps that use a `TypedMultipart`-shaped extractor without the feature.
 fn multipart_schema_token(ty: &syn::Type) -> TokenStream {
     let krate = r2e_core_path();
     autoref_schema_probe(
         ty,
-        quote! { #krate::meta::MultipartSchema },
-        quote! { <T as #krate::meta::MultipartSchema>::multipart_schema() },
+        quote! { #krate::di::meta::MultipartSchema },
+        quote! { <T as #krate::di::meta::MultipartSchema>::multipart_schema() },
     )
 }
 
@@ -1280,7 +1280,7 @@ fn emit_streaming_route_info(
     );
 
     quote! {
-        #krate::meta::RouteInfo {
+        #krate::di::meta::RouteInfo {
             path: match #meta_mod::PATH_PREFIX {
                 Some(__prefix) => format!("{}{}", __prefix, #path),
                 None => #path.to_string(),

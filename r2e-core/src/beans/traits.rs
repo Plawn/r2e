@@ -244,7 +244,7 @@ pub type BeanFingerprints = Vec<(TypeId, &'static str, u64)>;
 /// while a controller core — which is not `Clone` — impls this trait too and is
 /// run from its own `Arc` at startup.
 pub trait PostConstruct: Send + Sync + 'static {
-    fn post_construct(&self) -> crate::lifecycle::LifecycleFuture<'_>;
+    fn post_construct(&self) -> crate::runtime::lifecycle::LifecycleFuture<'_>;
 }
 
 /// Disposal hook, the symmetric counterpart of [`PostConstruct`].

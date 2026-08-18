@@ -207,7 +207,7 @@ async fn a_resolver_bean_can_have_its_own_dependencies() {
     impl r2e_tenant::SyncTenantResolver for ConfiguredResolver {
         fn resolve_sync(
             &self,
-            req: &r2e_core::request_head::RequestHead<'_>,
+            req: &r2e_core::web::request_head::RequestHead<'_>,
         ) -> Result<Option<TenantId>, r2e_core::HttpError> {
             Ok(req
                 .header(&self.header.0)

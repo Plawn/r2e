@@ -6,7 +6,7 @@
 
 use r2e_core::builder::AppBuilder;
 use r2e_core::config::R2eConfig;
-use r2e_core::sharded::parse_workers;
+use r2e_core::runtime::sharded::parse_workers;
 
 // ── Unit: parse_workers ─────────────────────────────────────────────────────
 
@@ -239,7 +239,7 @@ mod integration {
             .unwrap();
         let cp_handle = cp_rt.handle().clone();
         let handle = std::thread::spawn(move || {
-            r2e_core::sharded::serve_sharded(
+            r2e_core::runtime::sharded::serve_sharded(
                 r2e_core::http::Router::new().with_state(()),
                 &["127.0.0.1:0".parse().unwrap()],
                 2,
@@ -298,7 +298,7 @@ mod integration {
                             tokio::runtime::Handle::current().runtime_flavor()
                         })
                     });
-                    let flavor = r2e_core::lazy::__resolve_lazy_factory_for_tests(factory);
+                    let flavor = r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
                     assert_eq!(
                         flavor,
                         RuntimeFlavor::MultiThread,
@@ -339,7 +339,7 @@ mod integration {
                         dyn FnOnce() -> Pin<Box<dyn Future<Output = u32> + Send>> + Send + Sync,
                     > = Box::new(|| Box::pin(async { panic!("boom-payload") }));
                     // Panics — the payload is asserted from join() below.
-                    r2e_core::lazy::__resolve_lazy_factory_for_tests(factory);
+                    r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
                 });
             })
             .unwrap();

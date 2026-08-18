@@ -6,7 +6,7 @@
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, Producer, Registrable};
 use r2e_core::builder::AppBuilder;
 use r2e_core::http::StatusCode;
-use r2e_core::plugins::Health;
+use r2e_core::builtins::Health;
 use r2e_core::type_list::{BeanAccess, TCons, TNil};
 use std::any::TypeId;
 

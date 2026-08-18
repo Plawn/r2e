@@ -51,7 +51,7 @@ fn add_deco_slot_field(mut item: syn::ItemStruct) -> syn::ItemStruct {
     let krate = r2e_core_path();
     let fields_named: syn::FieldsNamed = syn::parse_quote!({
         #[doc(hidden)]
-        __r2e_decos: #krate::decorator::DecoSlot
+        __r2e_decos: #krate::decorators::decorator::DecoSlot
     });
     match &mut item.fields {
         syn::Fields::Named(named) => {
@@ -282,7 +282,7 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
         .zip(marker_idents.iter())
         .map(|((field_name, field_ty), marker)| {
             quote! {
-                let #field_name = <#field_ty as #krate::extract::FromRequestPartsVia<__R2eS, #marker>>
+                let #field_name = <#field_ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
                     ::from_request_parts_via(__parts, __state)
                     .await
                     .map_err(#krate::http::response::IntoResponse::into_response)?;
@@ -294,7 +294,7 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
         .iter()
         .zip(marker_idents.iter())
         .map(|((_, field_ty), marker)| {
-            quote! { #field_ty: #krate::extract::FromRequestPartsVia<__R2eS, #marker> }
+            quote! { #field_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker> }
         })
         .collect();
 

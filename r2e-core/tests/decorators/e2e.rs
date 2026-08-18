@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use r2e_core::beans::{BeanContext, BeanRegistry};
-use r2e_core::guards::{GuardContext, GuardError, PathParams};
+use r2e_core::decorators::guards::{GuardContext, GuardError, PathParams};
 use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::{HeaderMap, Router, StatusCode, Uri};
 use r2e_core::prelude::*;

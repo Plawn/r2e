@@ -401,7 +401,7 @@ where
             dctx.on_serve(move |sctx| {
                 let token = sctx.shutdown_token();
                 sctx.track(async move {
-                    r2e_core::service::ServiceComponent::start(sweeper, token).await;
+                    r2e_core::runtime::service::ServiceComponent::start(sweeper, token).await;
                 });
             });
 

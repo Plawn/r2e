@@ -338,7 +338,7 @@ impl LiveConfigRegistry {
     /// Re-seed this registry for a new dev-reload cycle, keeping its identity.
     ///
     /// Under `r2e dev` the registry is carried across hot-patch cycles (see
-    /// `crate::dev`), because every `#[live_config]` handle ever created binds
+    /// `crate::runtime::dev`), because every `#[live_config]` handle ever created binds
     /// one slot of one registry *permanently* — a fresh registry per cycle
     /// would leave those handles reading a discarded instance. A cycle's
     /// `load_config` therefore re-seeds the surviving instance instead of

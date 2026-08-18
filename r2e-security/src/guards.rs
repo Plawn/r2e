@@ -1,4 +1,4 @@
-use r2e_core::guards::{Guard, GuardContext, Identity};
+use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
 use r2e_core::http::response::{IntoResponse, Response};
 
 /// Extension of [`Identity`] for role-based access control.

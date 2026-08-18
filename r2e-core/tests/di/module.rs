@@ -10,7 +10,7 @@
 
 use http_body_util::BodyExt;
 use r2e_core::beans::BeanRegistry;
-use r2e_core::module::{BeanList, FeatureModule};
+use r2e_core::di::module::{BeanList, FeatureModule};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TCons, TNil};
 use tower::ServiceExt;
@@ -146,7 +146,7 @@ struct StampSource(&'static str);
 
 struct Stamp(String);
 
-impl<S, I> r2e_core::extract::FromRequestPartsVia<S, r2e_core::extract::ViaBean<I>> for Stamp
+impl<S, I> r2e_core::web::extract::FromRequestPartsVia<S, r2e_core::web::extract::ViaBean<I>> for Stamp
 where
     S: r2e_core::type_list::HasBean<StampSource, I> + Send + Sync,
     I: Send + Sync,

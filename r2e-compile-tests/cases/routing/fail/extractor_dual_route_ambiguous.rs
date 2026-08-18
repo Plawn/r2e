@@ -6,7 +6,7 @@
 //! the invariant — the actionable diagnosis lives in the extractor author's
 //! probe (`extractor_dual_route_probe.rs`).
 
-use r2e::extract::{OptionalFromRequestPartsVia, ViaBean};
+use r2e::web::extract::{OptionalFromRequestPartsVia, ViaBean};
 use r2e::http::extract::OptionalFromRequestParts;
 use r2e::http::header::Parts;
 use r2e::prelude::*;

@@ -7,7 +7,7 @@ error[E0277]: `Pool` is exported but not provided by this feature module
    = help: the trait `ProvidedByModule<Pool, _>` is not implemented for `TNil`
    = note: `Exports` must be a subset of the providers' provided types — add a provider for `Pool` or remove it from the module's `Exports`
 help: the following other types implement trait `ProvidedByModule<H, Idx>`
-  --> $WORKSPACE/r2e-core/src/module.rs
+  --> $WORKSPACE/r2e-core/src/di/module.rs
    |
    | impl<H, T> ProvidedByModule<H, Here> for TCons<H, T> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `ProvidedByModule<H, Here>`

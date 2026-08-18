@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use r2e_core::beans::BeanContext;
-use r2e_core::guards::PreAuthGuardContext;
+use r2e_core::decorators::guards::PreAuthGuardContext;
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::response::{IntoResponse, Response};
 use r2e_core::http::{Body, StatusCode};

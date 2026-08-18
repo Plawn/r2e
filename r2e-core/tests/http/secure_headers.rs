@@ -1,4 +1,4 @@
-use r2e_core::secure_headers::SecureHeaders;
+use r2e_core::builtins::secure_headers::SecureHeaders;
 
 fn header_names(sh: &SecureHeaders) -> Vec<String> {
     sh.headers().iter().map(|(n, _)| n.to_string()).collect()
@@ -52,7 +52,7 @@ fn builder_custom_hsts_max_age() {
 
 use r2e_core::builder::AppBuilder;
 use r2e_core::http::StatusCode;
-use r2e_core::plugins::Health;
+use r2e_core::builtins::Health;
 
 use crate::support::raw_get_with;
 

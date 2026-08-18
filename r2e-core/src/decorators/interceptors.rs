@@ -5,7 +5,7 @@ use std::future::Future;
 ///
 /// Carries handler identification only. Interceptors that need services
 /// (a cache store, a database pool, …) hold them as fields, injected once at
-/// registration via [`DecoratorSpec`](crate::decorator::DecoratorSpec) —
+/// registration via [`DecoratorSpec`](crate::decorators::decorator::DecoratorSpec) —
 /// there is no state access at request time.
 #[derive(Clone, Copy)]
 pub struct InterceptorContext {
@@ -28,7 +28,7 @@ pub struct InterceptorContext {
 /// Interceptors are built **once, at controller registration** — a
 /// self-contained interceptor opts in with `impl SelfBuilt for Logged {}`;
 /// one that reads beans implements
-/// [`DecoratorSpec`](crate::decorator::DecoratorSpec) on its config type and
+/// [`DecoratorSpec`](crate::decorators::decorator::DecoratorSpec) on its config type and
 /// holds the beans as fields.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not implement `Interceptor<{R}>`",

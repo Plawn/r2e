@@ -9,7 +9,7 @@ are captured by the handler closure — one `Arc` per route. Per-request cost:
 one `Arc` clone + monomorphized calls. There is **no state access at request
 time** (no `BeanLookup`, no per-request construction).
 
-## The DecoratorSpec contract (`r2e-core/src/decorator.rs`)
+## The DecoratorSpec contract (`r2e-core/src/decorators/decorator.rs`)
 
 The attribute expression's **leading type path** names the spec, and the
 expression must evaluate to it:
@@ -27,7 +27,7 @@ expression must evaluate to it:
 `#[routes]` emits `build_decorator::<_, Spec>(expr, ctx)` per site inside
 `Controller::routes(state, core, ctx)`, and folds `<Spec as
 DecoratorSpec>::Deps` into `Controller::Deps`. `build_decorator`
-(`r2e-core/src/decorator.rs`) bounds the expression's own spec type to the
+(`r2e-core/src/decorators/decorator.rs`) bounds the expression's own spec type to the
 named one with `Product`/`Deps` equality — for hand-written specs the two
 coincide; `#[derive(DecoratorBean)]` splits them (see below) and the bounds
 keep the dep fold exact.
@@ -126,7 +126,7 @@ impl DecoratorSpec for DbAudit {
 
 Handler-level guards run before the handler body and can short-circuit with
 an error response. The `Guard<I: Identity>` trait
-(`r2e-core/src/guards.rs`) defines async
+(`r2e-core/src/decorators/guards.rs`) defines async
 `check(&self, ctx) -> Result<(), Response>` — **no state parameter**; a
 guard's beans are fields, injected at build time.
 
@@ -224,7 +224,7 @@ the middleware closure). SSE and WS endpoints support `#[pre_guard]` too.
 ## Interceptors
 
 Cross-cutting concerns (logging, timing, caching) implement `Interceptor<R>`
-with an `around` pattern (`r2e-core/src/interceptors.rs`). All calls are
+with an `around` pattern (`r2e-core/src/decorators/interceptors.rs`). All calls are
 monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
 `{ method_name, controller_name }` — no state field.
 

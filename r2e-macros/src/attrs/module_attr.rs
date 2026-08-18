@@ -182,7 +182,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     for module in &args.import_modules {
         imports = quote! {
             <#imports as #krate::type_list::TAppend<
-                <#module as #krate::module::FeatureModule>::Exports
+                <#module as #krate::di::module::FeatureModule>::Exports
             >>::Output
         };
     }
@@ -199,7 +199,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     quote! {
         #item
 
-        impl #krate::module::FeatureModule for #name {
+        impl #krate::di::module::FeatureModule for #name {
             type Providers = #providers;
             type Controllers = #controllers;
             type Exports = #exports;

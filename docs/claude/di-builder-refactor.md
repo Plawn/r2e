@@ -73,7 +73,7 @@ the state model.
   from `DecoratorSpec`, deps folded into `EndpointDeps` — see
   `guards-interceptors.md`.
 
-## Extraction (`r2e-core/src/extract.rs`)
+## Extraction (`r2e-core/src/web/extract.rs`)
 
 `FromRequestPartsVia<S, M>` / `OptionalFromRequestPartsVia<S, M>` — R2E-owned
 extraction traits with a marker slot `M` where bean-backed extractors park their
@@ -98,7 +98,7 @@ modes are pinned by trybuild (`extractor_dual_route_probe.rs`,
 `extractor_dual_route_ambiguous.rs`).
 **Do NOT re-add a blanket `OptionalFromRequestPartsVia<_, ViaAxum>` bridge.**
 
-## Feature modules (`r2e-core/src/module.rs`)
+## Feature modules (`r2e-core/src/di/module.rs`)
 
 Spring/NestJS-style module bundles with **compile-time encapsulation** those
 frameworks cannot offer.

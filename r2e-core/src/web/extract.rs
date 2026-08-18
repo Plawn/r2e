@@ -198,7 +198,7 @@ where
 /// `E0283` listing the competing impls if the type has two:
 ///
 /// ```ignore
-/// use r2e_core::extract::assert_unambiguous_extractor;
+/// use r2e_core::web::extract::assert_unambiguous_extractor;
 /// use r2e_core::type_list::{HCons, HNil};
 ///
 /// type S = HCons<Arc<JwtClaimsValidator>, HNil>;

@@ -1,5 +1,5 @@
 use r2e_core::beans::BeanRegistry;
-use r2e_core::guards::{Guard, GuardContext, Identity, PathParams};
+use r2e_core::decorators::guards::{Guard, GuardContext, Identity, PathParams};
 use r2e_core::http::{HeaderMap, StatusCode, Uri};
 use r2e_core::DecoratorSpec;
 use r2e_openfga::guard::{FgaCheck, FgaGuard, ObjectResolver};

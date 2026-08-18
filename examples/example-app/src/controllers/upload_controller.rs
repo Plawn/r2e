@@ -1,4 +1,4 @@
-use r2e::multipart::{Multipart, TypedMultipart, UploadedFile};
+use r2e::web::multipart::{Multipart, TypedMultipart, UploadedFile};
 use r2e::prelude::*;
 use serde_json::Value;
 

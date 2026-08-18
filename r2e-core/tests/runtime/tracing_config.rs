@@ -1,5 +1,5 @@
 use r2e_core::config::{ConfigProperties, R2eConfig};
-use r2e_core::tracing_config::{LogFormat, SpanEvents, TracingConfig};
+use r2e_core::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[test]

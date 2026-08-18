@@ -23,14 +23,14 @@ pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
-use crate::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
-use crate::meta::MetaRegistry;
-use crate::module::{
+use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
+use crate::di::meta::MetaRegistry;
+use crate::di::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
     ModuleScope, RequiredPluginsInstalled,
 };
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
-use crate::service::ServiceComponent;
+use crate::runtime::service::ServiceComponent;
 use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -269,12 +269,12 @@ fn live_config_registry_for_cycle(
 ) -> crate::config::LiveConfigRegistry {
     #[cfg(feature = "dev-reload")]
     {
-        if let Some(carried) = crate::dev::carried_live_config_registry() {
+        if let Some(carried) = crate::runtime::dev::carried_live_config_registry() {
             carried.reseed(config, pinned_keys);
             return carried;
         }
         let fresh = crate::config::LiveConfigRegistry::from_config(config, pinned_keys);
-        crate::dev::carry_live_config_registry(&fresh);
+        crate::runtime::dev::carry_live_config_registry(&fresh);
         return fresh;
     }
     #[cfg(not(feature = "dev-reload"))]

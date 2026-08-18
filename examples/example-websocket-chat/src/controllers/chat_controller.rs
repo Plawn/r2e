@@ -1,5 +1,5 @@
 use r2e::prelude::*;
-use r2e::ws::{WsRooms, WsStream};
+use r2e::web::ws::{WsRooms, WsStream};
 
 use crate::models::{MessageSentEvent, WsIncoming, WsOutgoing};
 

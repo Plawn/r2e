@@ -35,7 +35,7 @@
 //! }
 //! ```
 
-use r2e_core::sse::SseTopic;
+use r2e_core::web::sse::SseTopic;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{EventBus, EventBusError, HandlerResult, SubscriptionHandle};

@@ -37,7 +37,7 @@ pub enum HttpError {
     Forbidden(Cow<'static, str>),
     BadRequest(Cow<'static, str>),
     Internal(Cow<'static, str>),
-    Validation(crate::validation::ValidationErrorResponse),
+    Validation(crate::web::validation::ValidationErrorResponse),
     Custom {
         status: StatusCode,
         body: serde_json::Value,

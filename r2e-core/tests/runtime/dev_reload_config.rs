@@ -55,7 +55,7 @@ fn config_with(live: &str, unrelated: &str) -> R2eConfig {
 async fn live_config_registry_keeps_one_identity_and_reseeds_across_cycles() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     // ── Cycle 1 ─────────────────────────────────────────────────────────
     let app1 = AppBuilder::new()
@@ -108,7 +108,7 @@ async fn without_the_hot_reload_gate_each_load_config_builds_its_own_registry() 
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
     // Deliberately the *production* path: no `mark_hot_reload_loop()`.
-    r2e_core::dev::unmark_hot_reload_loop();
+    r2e_core::runtime::dev::unmark_hot_reload_loop();
 
     let app1 = AppBuilder::new()
         .override_config(config_with("one", "x"))
@@ -150,7 +150,7 @@ struct DevSettings {
 async fn typed_config_bean_tracks_edits_across_cycles() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     let mut config1 = R2eConfig::empty();
     config1.set("greeting", ConfigValue::String("hello".into()));
@@ -191,7 +191,7 @@ async fn typed_config_bean_tracks_edits_across_cycles() {
 async fn late_override_config_value_reaches_live_readers_and_stays_pinned() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     let mut config1 = R2eConfig::empty();
     config1.set("db.url", ConfigValue::String("postgres://boot1".into()));
@@ -267,7 +267,7 @@ struct CopiedOnly {
 async fn live_key_edit_pushes_without_rebuilding_copied_key_edit_rebuilds() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     macro_rules! cycle {
         ($live:expr, $copied:expr) => {{
@@ -358,7 +358,7 @@ struct SectionHolder {
 async fn section_key_edit_rebuilds_the_declaring_bean() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     macro_rules! cycle {
         ($pool:expr, $unrelated:expr) => {{
@@ -413,7 +413,7 @@ async fn section_key_edit_rebuilds_the_declaring_bean() {
 async fn runtime_push_survives_an_unrelated_cycle_but_a_real_edit_wins() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
 
     let app1 = AppBuilder::new()
         .override_config(config_with("one", "x"))
@@ -502,7 +502,7 @@ impl ConfigProvider for CountingProvider {
 async fn characterize_provider_watch_runs_once_but_its_registry_is_the_live_one() {
     let _serial = dev_serial();
     r2e_core::invalidate_state_cache();
-    r2e_core::dev::mark_hot_reload_loop();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
     PROVIDER_LOADS.store(0, Ordering::SeqCst);
     PROVIDER_WATCHES.store(0, Ordering::SeqCst);
 

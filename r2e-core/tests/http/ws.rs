@@ -1,5 +1,5 @@
 use r2e_core::http::ws::Message;
-use r2e_core::ws::{WsBroadcaster, WsRooms};
+use r2e_core::web::ws::{WsBroadcaster, WsRooms};
 
 #[r2e_core::test]
 async fn broadcaster_send_recv() {

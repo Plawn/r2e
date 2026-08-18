@@ -2,7 +2,7 @@
 //! end-to-end upload through the r2e-test multipart builders.
 
 use example_app::controllers::upload_controller::ProfileUpload;
-use r2e::multipart::MultipartSchema;
+use r2e::web::multipart::MultipartSchema;
 use r2e_test::TestApp;
 
 #[test]

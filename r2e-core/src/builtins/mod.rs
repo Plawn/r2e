@@ -3,6 +3,10 @@
 //! Each plugin implements [`Plugin`](crate::plugin::Plugin) and can be
 //! installed via [`AppBuilder::with()`](crate::builder::AppBuilder::with).
 
+pub mod health;
+pub mod request_id;
+pub mod secure_headers;
+
 use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
 use tower_http::cors::CorsLayer;
@@ -20,7 +24,7 @@ impl Cors {
     /// Create a permissive CORS plugin (any origin, method, header).
     pub fn permissive() -> Self {
         Self {
-            layer: crate::layers::default_cors(),
+            layer: crate::runtime::layers::default_cors(),
         }
     }
 
@@ -80,7 +84,7 @@ pub struct Tracing;
 
 impl Tracing {
     /// Create a tracing plugin configured from a [`TracingConfig`].
-    pub fn configured(config: crate::tracing_config::TracingConfig) -> ConfiguredTracing {
+    pub fn configured(config: crate::runtime::tracing_config::TracingConfig) -> ConfiguredTracing {
         ConfiguredTracing(config)
     }
 
@@ -88,7 +92,7 @@ impl Tracing {
     /// keys under the `tracing` prefix.
     pub fn from_config(r2e_config: &crate::config::R2eConfig) -> ConfiguredTracing {
         use crate::config::ConfigProperties;
-        let config = crate::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
+        let config = crate::runtime::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
             .unwrap_or_default();
         ConfiguredTracing(config)
     }
@@ -96,20 +100,20 @@ impl Tracing {
 
 impl Plugin for Tracing {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        crate::layers::init_tracing();
-        app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
+        crate::runtime::layers::init_tracing();
+        app.with_layer_fn(|router| router.layer(crate::runtime::layers::default_trace()))
     }
 }
 
 /// Tracing plugin with explicit configuration.
 ///
 /// Created via [`Tracing::configured()`] or [`Tracing::from_config()`].
-pub struct ConfiguredTracing(pub crate::tracing_config::TracingConfig);
+pub struct ConfiguredTracing(pub crate::runtime::tracing_config::TracingConfig);
 
 impl Plugin for ConfiguredTracing {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        crate::layers::init_tracing_with_config(&self.0);
-        app.with_layer_fn(|router| router.layer(crate::layers::default_trace()))
+        crate::runtime::layers::init_tracing_with_config(&self.0);
+        app.with_layer_fn(|router| router.layer(crate::runtime::layers::default_trace()))
     }
 }
 
@@ -138,8 +142,8 @@ pub struct Health;
 
 impl Health {
     /// Start building an advanced health check configuration.
-    pub fn builder() -> crate::health::HealthBuilder {
-        crate::health::HealthBuilder::new()
+    pub fn builder() -> crate::builtins::health::HealthBuilder {
+        crate::builtins::health::HealthBuilder::new()
     }
 }
 
@@ -160,13 +164,13 @@ async fn simple_health_handler() -> &'static str {
 ///
 /// Created via [`Health::builder()`].
 pub struct AdvancedHealth {
-    checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>,
+    checks: Vec<Box<dyn crate::builtins::health::HealthIndicatorErased>>,
     cache_ttl: Option<std::time::Duration>,
 }
 
 impl AdvancedHealth {
     pub(crate) fn new(
-        checks: Vec<Box<dyn crate::health::HealthIndicatorErased>>,
+        checks: Vec<Box<dyn crate::builtins::health::HealthIndicatorErased>>,
         cache_ttl: Option<std::time::Duration>,
     ) -> Self {
         Self { checks, cache_ttl }
@@ -176,21 +180,21 @@ impl AdvancedHealth {
 impl Plugin for AdvancedHealth {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         use std::sync::Arc;
-        let state = Arc::new(crate::health::HealthState::new(self.checks, self.cache_ttl));
+        let state = Arc::new(crate::builtins::health::HealthState::new(self.checks, self.cache_ttl));
         let s1 = state.clone();
         app.register_routes(
             crate::http::Router::new()
                 .route(
                     "/health",
-                    crate::http::routing::get(crate::health::health_handler).with_state(state),
+                    crate::http::routing::get(crate::builtins::health::health_handler).with_state(state),
                 )
                 .route(
                     "/health/live",
-                    crate::http::routing::get(crate::health::liveness_handler),
+                    crate::http::routing::get(crate::builtins::health::liveness_handler),
                 )
                 .route(
                     "/health/ready",
-                    crate::http::routing::get(crate::health::readiness_handler).with_state(s1),
+                    crate::http::routing::get(crate::builtins::health::readiness_handler).with_state(s1),
                 ),
         )
     }
@@ -203,7 +207,7 @@ pub struct ErrorHandling;
 
 impl Plugin for ErrorHandling {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        app.with_layer_fn(|router| router.layer(crate::layers::catch_panic_layer()))
+        app.with_layer_fn(|router| router.layer(crate::runtime::layers::catch_panic_layer()))
     }
 }
 
@@ -223,10 +227,10 @@ impl Plugin for DevReload {
             return app;
         }
         app.mark_dev_reload_applied();
-        app.register_routes(crate::dev::dev_routes())
+        app.register_routes(crate::runtime::dev::dev_routes())
             .with_layer_fn(|router| {
                 router.layer(crate::http::middleware::from_fn(
-                    crate::dev::dev_headers_middleware,
+                    crate::runtime::dev::dev_headers_middleware,
                 ))
             })
     }

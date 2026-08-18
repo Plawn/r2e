@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use r2e_core::guards::{
+use r2e_core::decorators::guards::{
     parse_forwarded_ip, ClientIp, GuardContext, GuardError, Identity, NoIdentity, PathParams,
     PreAuthGuardContext,
 };

@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use crate::http::response::Response;
 use crate::http::{Extensions, HeaderMap, Method, Uri};
-use crate::request_head::RequestHead;
+use crate::web::request_head::RequestHead;
 
 /// Typed descriptor for a route path parameter.
 ///
@@ -407,7 +407,7 @@ impl<'a, I: Identity> GuardContext<'a, I> {
 /// Users can implement custom guards and apply them with `#[guard(expr)]`.
 ///
 /// Guards are built **once, at controller registration**, from the resolved
-/// bean graph (see [`DecoratorSpec`](crate::decorator::DecoratorSpec)) — a
+/// bean graph (see [`DecoratorSpec`](crate::decorators::decorator::DecoratorSpec)) — a
 /// guard that reads beans holds them as fields; there is no state access at
 /// request time. Generic over the identity type `I`.
 #[diagnostic::on_unimplemented(
@@ -517,7 +517,7 @@ impl<'a> PreAuthGuardContext<'a> {
 ///
 /// # Example
 /// ```ignore
-/// use r2e_core::guards::GuardError;
+/// use r2e_core::decorators::guards::GuardError;
 ///
 /// async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
 ///     if ctx.identity.is_none() {

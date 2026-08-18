@@ -1,6 +1,6 @@
 use http_body_util::BodyExt;
 use r2e_core::http::{IntoResponse, StatusCode};
-use r2e_core::multipart::MultipartError;
+use r2e_core::web::multipart::MultipartError;
 
 async fn status_of(err: MultipartError) -> StatusCode {
     err.into_response().status()
@@ -46,7 +46,7 @@ async fn field_too_large_body_contains_limit() {
 
 #[r2e_core::test]
 async fn default_limits_are_sensible() {
-    let defaults = r2e_core::multipart::MultipartLimits::DEFAULT;
+    let defaults = r2e_core::web::multipart::MultipartLimits::DEFAULT;
     assert_eq!(defaults.per_field, 10 * 1024 * 1024);
     assert_eq!(defaults.total, 100 * 1024 * 1024);
     assert!(defaults.per_field <= defaults.total);

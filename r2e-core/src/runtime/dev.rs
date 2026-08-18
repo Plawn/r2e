@@ -373,7 +373,7 @@ fn boot_time() -> u64 {
 /// Create a router with dev-mode endpoints.
 ///
 /// Intended to be merged into the main application via the
-/// [`DevReload`](crate::plugins::DevReload) plugin.
+/// [`DevReload`](crate::builtins::DevReload) plugin.
 pub fn dev_routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
     Router::new()
         .route("/__r2e_dev/status", get(status_handler))

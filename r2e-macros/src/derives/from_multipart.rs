@@ -63,17 +63,17 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics #core::multipart::FromMultipart for #name #ty_generics #where_clause {
+        impl #impl_generics #core::web::multipart::FromMultipart for #name #ty_generics #where_clause {
             fn from_multipart(
-                mut fields: #core::multipart::MultipartFields,
-            ) -> ::std::result::Result<Self, #core::multipart::MultipartError> {
+                mut fields: #core::web::multipart::MultipartFields,
+            ) -> ::std::result::Result<Self, #core::web::multipart::MultipartError> {
                 ::std::result::Result::Ok(Self {
                     #(#field_extractions,)*
                 })
             }
         }
 
-        impl #impl_generics #core::meta::MultipartSchema for #name #ty_generics #where_clause {
+        impl #impl_generics #core::di::meta::MultipartSchema for #name #ty_generics #where_clause {
             fn multipart_schema() -> #core::serde_json::Value {
                 #core::serde_json::json!({
                     "type": "object",
@@ -148,7 +148,7 @@ fn extraction_tokens(class: &FieldClass, field_name: &str, core: &TokenStream) -
             {
                 let __val = fields.take_text(#field_name)?;
                 __val.parse().map_err(|e| {
-                    #core::multipart::MultipartError::ParseError {
+                    #core::web::multipart::MultipartError::ParseError {
                         field: #field_name.to_string(),
                         message: ::std::string::ToString::to_string(&e),
                     }
@@ -163,7 +163,7 @@ fn extraction_tokens(class: &FieldClass, field_name: &str, core: &TokenStream) -
                 match fields.take_text_opt(#field_name) {
                     ::std::option::Option::Some(__val) => ::std::option::Option::Some(
                         __val.parse().map_err(|e| {
-                            #core::multipart::MultipartError::ParseError {
+                            #core::web::multipart::MultipartError::ParseError {
                                 field: #field_name.to_string(),
                                 message: ::std::string::ToString::to_string(&e),
                             }

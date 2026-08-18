@@ -38,7 +38,7 @@ pub fn parse_query_string(query: Option<&str>) -> Vec<(String, String)> {
 
 // ── ParamsMetadata: OpenAPI parameter metadata for #[derive(Params)] ──
 
-use crate::meta::ParamInfo;
+use crate::di::meta::ParamInfo;
 
 /// Trait for types that expose parameter metadata for OpenAPI spec generation.
 /// Auto-implemented by `#[derive(Params)]`.

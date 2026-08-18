@@ -71,7 +71,7 @@ fn missing_authorization_header() {
 /// first, with the competing impls listed.
 #[test]
 fn authenticated_user_extraction_route_is_unambiguous() {
-    use r2e_core::extract::assert_unambiguous_extractor;
+    use r2e_core::web::extract::assert_unambiguous_extractor;
     use r2e_core::type_list::{HCons, HNil};
     use r2e_security::{AuthenticatedUser, JwtClaimsValidator};
     use std::sync::Arc;

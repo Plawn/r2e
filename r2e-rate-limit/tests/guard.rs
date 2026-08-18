@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use r2e_core::beans::BeanRegistry;
 use r2e_core::config::R2eConfig;
-use r2e_core::guards::{
+use r2e_core::decorators::guards::{
     Guard, GuardContext, Identity, PathParams, PreAuthGuard, PreAuthGuardContext,
 };
 use r2e_core::http::{HeaderMap, Uri};

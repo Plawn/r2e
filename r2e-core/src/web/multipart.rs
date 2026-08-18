@@ -285,9 +285,9 @@ pub trait FromMultipart: Sized {
 
 // ── MultipartSchema trait ────────────────────────────────────────────────────
 
-/// OpenAPI form schema for `FromMultipart` types. Defined in [`crate::meta`]
+/// OpenAPI form schema for `FromMultipart` types. Defined in [`crate::di::meta`]
 /// (always compiled); re-exported here as the user-facing path.
-pub use crate::meta::MultipartSchema;
+pub use crate::di::meta::MultipartSchema;
 
 // ── TypedMultipart extractor ─────────────────────────────────────────────────
 
@@ -301,7 +301,7 @@ pub use crate::meta::MultipartSchema;
 /// # Example
 ///
 /// ```ignore
-/// use r2e::multipart::{TypedMultipart, UploadedFile, FromMultipart};
+/// use r2e::web::multipart::{TypedMultipart, UploadedFile, FromMultipart};
 ///
 /// #[derive(FromMultipart)]
 /// pub struct ProfileUpload {

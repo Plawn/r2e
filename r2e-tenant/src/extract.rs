@@ -42,7 +42,7 @@
 //!   it has no `Tenanted<T>` and the same happens.
 //! - Neither type implements axum's `FromRequestParts` — a second route would
 //!   make the marker ambiguous. That invariant is pinned by
-//!   [`assert_unambiguous_extractor`](r2e_core::extract::assert_unambiguous_extractor)
+//!   [`assert_unambiguous_extractor`](r2e_core::web::extract::assert_unambiguous_extractor)
 //!   probes in `tests/tenant/extractor.rs`.
 //!
 //! # Optional forms
@@ -85,7 +85,7 @@
 
 use std::ops::Deref;
 
-use r2e_core::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
 use r2e_core::http::Parts;
 use r2e_core::type_list::HasBean;
 use r2e_core::HttpError;
