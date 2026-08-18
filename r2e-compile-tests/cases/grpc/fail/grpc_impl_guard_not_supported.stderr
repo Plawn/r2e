@@ -1,0 +1,5 @@
+error: #[guard] is not supported on a #[grpc_routes] impl block — gRPC controller-level decorators support #[intercept] only
+  --> cases/grpc/fail/grpc_impl_guard_not_supported.rs:16:1
+   |
+16 | #[guard(MyGuard)]
+   | ^^^^^^^^^^^^^^^^^
