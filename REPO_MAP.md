@@ -49,46 +49,63 @@ No runtime dependencies. Generates handlers, extractors, and DI wiring at compil
 ```
 src/
   lib.rs                    Entry point — all #[proc_macro_attribute] and #[proc_macro_derive] definitions
-  types.rs                  Shared IR types (InjectedField, IdentityField, RequestField, ConfigField, RouteMethod, ...)
-  crate_path.rs             Dynamic crate path resolution (r2e vs r2e-core facade detection)
-  route.rs                  HttpMethod enum and RoutePath parser
 
-  # Controller attribute pipeline
-  controller_attr.rs        Entry point for #[controller(...)] (transforming attribute)
-  controller_parsing.rs     Parse the struct -> ControllerStructDef
-  controller_codegen.rs     Generate the core, meta module, __R2eRequestData_ extractor, __R2eRequest_ façade (+ Deref), ContextConstruct impl
+  attrs/                    Transforming attribute macros
+    bean_attr.rs            #[bean] — auto-detects sync/async, generates Bean or AsyncBean impl
+    controller_attr.rs      Entry point for #[controller(...)] (transforming attribute)
+    main_attr.rs            #[r2e::main] / #[r2e::test] entry-point wrappers
+    module_attr.rs          #[module] — feature modules
+    producer_attr.rs        #[producer] — free-function factory, generates Producer impl
+    routes_attr.rs          Entry point for #[routes] on impl blocks
+    test_suite_attr.rs      #[test_suite] — shared-app test suites
 
-  # Routes attribute pipeline
-  routes_attr.rs            Entry point for #[routes] on impl blocks
-  routes_parsing.rs         Parse ItemImpl -> RoutesImplDef
+  derives/                  Derive macros
+    api_error_derive.rs     #[derive(ApiError)] — typed error responses
+    bean_derive.rs          #[derive(Bean)] — field-level #[inject] + #[config]
+    bg_service_derive.rs    #[derive(BackgroundService)] — generates ServiceComponent from #[inject]/#[config]
+    cacheable_derive.rs     #[derive(Cacheable)] — cache key generation
+    config_derive.rs        #[derive(Config)] — typed configuration sections
+    decorator_bean_derive.rs #[derive(DecoratorBean)] — guard/interceptor bean specs
+    from_config_value_derive.rs #[derive(FromConfigValue)]
+    from_multipart.rs       #[derive(FromMultipart)] — multipart form parsing
+    params_derive.rs        #[derive(Params)] — request-parameter structs
 
-  # Routes codegen (split by concern)
-  codegen/
-    mod.rs                  Codegen module re-exports
+  parsing/                  Attribute-input parsing -> definition structs
+    controller_parsing.rs   Parse the struct -> ControllerStructDef
+    routes_parsing.rs       Parse ItemImpl -> RoutesImplDef
+    grpc_routes_parsing.rs  Parse #[grpc_routes] impl blocks
+
+  codegen/                  Emission (split by concern)
+    controller_codegen.rs   Generate the core, meta module, __R2eRequestData_ extractor, __R2eRequest_ façade (+ Deref), ContextConstruct impl
     controller_impl.rs      Generate impl Controller<State> (route registration, scheduled_tasks)
     handlers.rs             Generate per-route Axum handler functions
     wrapping.rs             Generate interceptor/guard wrapping around method bodies
+    decorators.rs           Decorator-set construction (guards/interceptors)
+    scheduled.rs            Scheduled-task registration codegen
+    transverse.rs           Shared bean-level transverse codegen (#[consumer]/#[scheduled]/#[intercept]/#[post_construct])
 
-  # Attribute extraction helpers
-  extract/
-    mod.rs                  Extract module re-exports
+  model/                    Shared parsed-definition types
+    types.rs                Shared IR types (InjectedField, IdentityField, RequestField, ConfigField, RouteMethod, ...)
+    route.rs                HttpMethod enum and RoutePath parser
+    field_resolver.rs       Field resolution shared by bean/controller macros
+    type_list_gen.rs        Type-level list generation helpers
+
+  util/
+    crate_path.rs           Dynamic crate path resolution (r2e vs r2e-core facade detection)
+    type_utils.rs           Type helpers (unwrap_option_type, ...)
+    hash_tokens.rs          Token hashing (graph fingerprints)
+    runtime_args.rs         Runtime-arg parsing for entry-point macros
+
+  extract/                  Attribute extraction helpers
     async_exec.rs           Extract #[async_exec(executor = "...")] definitions
     consumer.rs             Extract #[consumer(bus = "...")] definitions
+    duration.rs             Duration literal parsing
     managed.rs              Extract #[managed] parameter annotations
+    plugins.rs              Plugin-related attribute extraction
     route.rs                Extract #[get], #[post], #[roles], #[guard], #[intercept], ...
     scheduled.rs            Extract #[scheduled(every = ..., cron = ...)] definitions
 
-  # Bean / Producer / Service macros
-  bean_attr.rs              #[bean] — auto-detects sync/async, generates Bean or AsyncBean impl
-  bean_derive.rs            #[derive(Bean)] — field-level #[inject] + #[config]
-  bean_state_derive.rs      #[derive(BeanState)] — generates FromRef impls for state structs
-  bg_service_derive.rs      #[derive(BackgroundService)] — generates ServiceComponent<S> from #[inject]/#[config]
-  producer_attr.rs          #[producer] — free-function factory, generates Producer impl
-
-  # Other derive macros
-  cacheable_derive.rs       #[derive(Cacheable)] — cache key generation
-  config_derive.rs          #[derive(Config)] — typed configuration sections
-  from_multipart.rs         #[derive(FromMultipart)] — multipart form parsing
+  grpc_codegen/             Tonic service wiring (trait_impl, service_impl)
 ```
 
 ---
@@ -210,10 +227,10 @@ src/
   types.rs                  ScheduleConfig, ScheduledTaskDef<T>, ScheduledTask trait, ScheduledResult
 
 tests/
-  scheduler.rs              Scheduler lifecycle tests
-  types.rs                  ScheduleConfig parsing and task definition tests
-  scheduler_test.rs         Additional scheduler tests
-  plugin_test.rs            Scheduler plugin integration tests
+  scheduler/                One target, one module per concern (core, handle, overlap,
+                            skip_if, runtime_control, dynamic, plugin, plugin_config,
+                            serve_lifecycle, sharded, duration, types)
+  driver_edge_test/         Driver edge cases (min-heap ordering, drift, drain races)
 ```
 
 ---
@@ -457,8 +474,12 @@ src/
     upload_controller.rs    File upload handling
     ws_controller.rs        WebSocket handler
 tests/
-  user_controller_test.rs   Integration tests for user endpoints
-  consumer_test.rs          Event consumer tests
+  app/                      End-to-end boots of the demo app (users, orders, proxy, upload, config, ordering)
+  security/                 Guards, OpenFGA, mixed public/protected controllers
+  http/                     Verbs, SSE, WS, rate limiting, OpenAPI mapping
+  events/                   EventBus consumers (controllers + beans)
+  scheduling/               Scheduled tasks (controllers + beans)
+  transverse/               Interceptors, lifecycle hooks
 ```
 
 ### example-postgres — Database integration

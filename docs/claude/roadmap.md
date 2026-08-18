@@ -62,7 +62,7 @@ promise.
 - ~~Demo module-to-module composition (`imports(module(…))`) in an example
   app~~ — SHIPPED 2026-07-23 (`example-app` `OrderModule` imports
   `module(UserModule)`; `OrderService` injects the exported `UserService`;
-  `tests/order_module_test.rs` proves the cross-module reach-across at runtime).
+  `tests/app/order_module.rs` proves the cross-module reach-across at runtime).
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
 - **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
@@ -316,7 +316,7 @@ Shipped:
   the "install after load_config" panic all deleted. Tenancy/PerTenant build
   directly wired (no `unwired()`/`wire()`). Executor now honors `executor.*`
   regardless of `.plugin()`/`load_config()` order (killed the example-app
-  latent bug; assertion test in example-app/tests/app_test.rs).
+  latent bug; assertion test in example-app/tests/app/app.rs).
 - `Late<T>` remains public as a de-emphasized escape hatch.
 
 Post-audit hardening (same branch): setup context lost every surface-effect

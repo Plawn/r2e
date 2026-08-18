@@ -6,7 +6,7 @@ use std::time::Duration;
 use r2e::prelude::*;
 use r2e::r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e::r2e_scheduler::{
-    extract_tasks, start_jobs, ScheduledJobRegistry, ScheduledTask, SchedulerCommands,
+    extract_tasks, start_jobs, ScheduledJobRegistry, SchedulerCommands,
 };
 use r2e::Controller as ControllerTrait;
 use tokio_util::sync::CancellationToken;

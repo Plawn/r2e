@@ -22,7 +22,7 @@ the three existing adapters — use them as references.
 
 1. **A parsing + codegen macro** (in `r2e-macros`), analogous to
    `grpc_codegen/` (the smallest adapter: ~680 lines across
-   `grpc_routes_parsing.rs` + `grpc_codegen/{mod,trait_impl,service_impl}.rs`).
+   `parsing/grpc_routes_parsing.rs` + `grpc_codegen/{mod,trait_impl,service_impl}.rs`).
    The struct keeps using `#[controller]` unchanged — that macro owns
    `#[inject]`/`#[config]` fields and emits `ContextConstruct`.
 

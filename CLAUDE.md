@@ -176,14 +176,16 @@ impl UserController {
 
 ### Macro Crate Internals (r2e-macros)
 
-**Controller path:** `lib.rs` → `controller_attr.rs` → `controller_parsing.rs` (`ControllerStructDef`) → `controller_codegen.rs`
+`src/` is grouped by role: `attrs/` (transforming attribute macros: `bean_attr`, `controller_attr`, `main_attr`, `module_attr`, `producer_attr`, `routes_attr`, `test_suite_attr`), `derives/` (derive macros: `api_error_derive`, `config_derive`, `params_derive`, …), `parsing/` (`controller_parsing`, `routes_parsing`, `grpc_routes_parsing`), `codegen/` (emission: `controller_codegen`, `controller_impl`, `handlers`, `decorators`, `scheduled`, `transverse`, `wrapping`), `model/` (shared parsed-definition types), `util/` (`crate_path`, `type_utils`, `hash_tokens`, `runtime_args`), plus `extract/` and `grpc_codegen/`.
 
-**Routes path:** `lib.rs` → `routes_attr.rs` → `routes_parsing.rs` (`RoutesImplDef`) → `routes_codegen.rs`
+**Controller path:** `lib.rs` → `attrs/controller_attr.rs` → `parsing/controller_parsing.rs` (`ControllerStructDef`) → `codegen/controller_codegen.rs`
+
+**Routes path:** `lib.rs` → `attrs/routes_attr.rs` → `parsing/routes_parsing.rs` (`RoutesImplDef`) → `codegen/` (handlers, controller_impl, …)
 
 **Shared modules:**
-- `types.rs` — `InjectedField`, `IdentityField`, `RequestField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
-- `attr_extract.rs` — `extract_route_attr`, `extract_roles`, `extract_intercept_fns`, etc.
-- `route.rs` — `HttpMethod` enum and `RoutePath` parser
+- `model/types.rs` — `InjectedField`, `IdentityField`, `RequestField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
+- `model/route.rs` — `HttpMethod` enum and `RoutePath` parser
+- `extract/` — attribute extraction (`route`, `consumer`, `scheduled`, `async_exec`, `managed`, `plugins`, `duration`)
 
 **Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
 

@@ -511,7 +511,7 @@ signature rules are identical; only the timing differs:
 On controllers, `#[post_construct]` on a route / `#[scheduled]` / `#[consumer]`
 method, with extra params, or carrying `#[intercept]`, is a compile error (a
 plain lifecycle hook has no dispatch wrapper). See
-`examples/example-app/tests/controller_transverse_test.rs`.
+`examples/example-app/tests/transverse/controller_transverse.rs`.
 
 ### Constraints
 
@@ -606,7 +606,7 @@ Semantics:
 - **Test boot without serve:** `build_with_consumers` / `TestApp::boot` never
   enter the shutdown phase, so `#[pre_destroy]` hooks do not fire there — drive
   them with a serve + `StopHandle::stop()` test (see
-  `examples/example-app/tests/pre_destroy_test.rs`).
+  `examples/example-app/tests/transverse/pre_destroy.rs`).
 
 ## Lifecycle for `.provide()`-d / plugin beans
 
@@ -653,10 +653,10 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
-- `r2e-macros/src/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`
+- `r2e-macros/src/attrs/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`
 - `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper`, `async_exec_method` (parameterized over impl-target type and decorator-slot access)
-- `r2e-macros/src/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
-- `r2e-macros/src/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
-- `r2e-macros/src/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
+- `r2e-macros/src/derives/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
+- `r2e-macros/src/attrs/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
+- `r2e-macros/src/util/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros
 - `r2e-core/src/event_subscriber.rs` — `EventSubscriber` trait (for beans with `#[consumer]` methods)
 - `r2e-core/src/scheduled_source.rs` — `ScheduledSource` trait (for beans with `#[scheduled]` methods; auto-collected at `build_state()` via `BeanRegistry::register_scheduled_source`)

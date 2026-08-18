@@ -373,7 +373,7 @@ at it.
 **No** — still true after Phase 3, and now **by decision** rather than by
 oversight: Phase 3 requalified it as introspection-only and its rustdoc says so
 (B6, closed). Declared with a default impl in `r2e-core/src/controller.rs`,
-emitted by `r2e-macros/src/controller_codegen.rs`, and read by exactly one place
+emitted by `r2e-macros/src/codegen/controller_codegen.rs`, and read by exactly one place
 in the workspace: the assertion in `r2e-core/tests/controller/live_config.rs`.
 Phase 2 gave it the same `ConfigKeyKind` shape as `Bean::config_keys`
 (consistency for whatever ends up consuming it) and dropped the false
@@ -529,7 +529,7 @@ exactly one list to keep consistent.
 Updated in lockstep: `Bean::config_keys`, `AsyncBean::config_keys`,
 `Producer::config_keys`, `ContextConstruct::config_keys`, both validation
 filters and `compute_reg_fingerprint` in `beans.rs`, and the macro emitters —
-which now share three helpers in `r2e-macros/src/field_resolver.rs`
+which now share three helpers in `r2e-macros/src/model/field_resolver.rs`
 (`config_keys_ret_ty`, `copied_config_key_entry`, `live_config_key_entry`)
 instead of four hand-rolled `quote!`s, so the kind decision is single-sourced
 across `bean_derive.rs`, `producer_attr.rs`, `bean_attr.rs` and
@@ -625,7 +625,7 @@ can enumerate the keys to hash. Phase 3 adds a prefix-aware kind instead:
 |---|---|
 | `r2e-core/src/config/mod.rs` | `ConfigKeyKind::Section` (key = prefix) + `is_prefix()`; `R2eConfig::prefix_fingerprint(prefix)` — prefix, then every key equal to it or under `"{prefix}."` with its value, keys sorted, same hasher shape as `full_fingerprint` |
 | `r2e-core/src/beans.rs` | `compute_reg_fingerprint` splits the fingerprinted entries into exact keys (unchanged `config_fingerprint`) and prefixes (sorted + deduped, each folded in via `prefix_fingerprint`) |
-| `r2e-macros/src/field_resolver.rs` | `section_config_key_entry(krate, prefix, ty)` — the single source of the `Section` entry |
+| `r2e-macros/src/model/field_resolver.rs` | `section_config_key_entry(krate, prefix, ty)` — the single source of the `Section` entry |
 | `r2e-macros/{bean_derive,bean_attr,producer_attr,controller_codegen}.rs` | emit it wherever `#[config_section]` is accepted |
 
 `is_required()` stays **false** for `Section` on purpose: a section validates

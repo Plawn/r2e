@@ -3,12 +3,8 @@
 //!
 //! Mirrors `r2e-core/tests/sharded.rs`'s integration test: a free concrete
 //! port, a readiness loop, graceful shutdown via SIGINT, and a 10s bounded
-//! join. Gated to the platforms that support `SO_REUSEPORT`.
-
-#![cfg(all(
-    unix,
-    not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
-))]
+//! join. Gated to the platforms that support `SO_REUSEPORT` (on the `mod`
+//! declaration in `main.rs`).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
