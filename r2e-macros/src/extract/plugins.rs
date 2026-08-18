@@ -272,6 +272,30 @@ pub fn validate_grpc_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     Ok(())
 }
 
+/// Reject disallowed attributes on the `#[grpc_routes]` **impl block** itself.
+///
+/// gRPC controller-level decorators support `#[intercept]` only; the HTTP
+/// guard family (`#[guard]`/`#[pre_guard]`/`#[roles]`/`#[all_roles]`) is not
+/// wired for gRPC. Left unrejected they would be silently dropped — the impl
+/// attrs are only mined for intercepts and never re-emitted.
+pub fn validate_grpc_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    for attr in attrs {
+        for name in GRPC_DISALLOWED_ATTRS {
+            if attr.path().is_ident(name) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!(
+                        "#[{}] is not supported on a #[grpc_routes] impl block — \
+                         gRPC controller-level decorators support #[intercept] only",
+                        name
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Collect all attribute names consumed by plugins.
 pub fn all_decorator_attr_names() -> Vec<&'static str> {
     HTTP_PLUGINS

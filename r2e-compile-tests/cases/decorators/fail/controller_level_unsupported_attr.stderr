@@ -1,0 +1,5 @@
+error: #[anonymous] is not supported on a #[routes] impl block — controller-level decorators are #[intercept], #[guard], #[pre_guard], #[roles], and #[all_roles]; place #[anonymous] on individual methods instead
+  --> cases/decorators/fail/controller_level_unsupported_attr.rs:10:1
+   |
+10 | #[anonymous]
+   | ^^^^^^^^^^^^

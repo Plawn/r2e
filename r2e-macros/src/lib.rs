@@ -33,6 +33,51 @@ pub(crate) mod type_list_gen;
 pub(crate) mod type_utils;
 pub(crate) mod types;
 
+/// Safety net for the controller-level decorator family (`#[guard]`,
+/// `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[intercept]`): these
+/// attributes are consumed by the transforming macro (`#[routes]` / `#[bean]` /
+/// `#[grpc_routes]`) and are no-ops on their own.
+///
+/// Attribute macros expand outside-in, so one placed ABOVE the transforming
+/// macro expands first, receives the still-unexpanded `impl` block as input,
+/// and the transformer below never sees it — a silent no-op. That is the only
+/// shape where one of these no-op macros actually expands with an `impl` block
+/// as input (below the transformer they are stripped before expansion), so
+/// detect it and reject it instead of dropping the decorator.
+///
+/// The original tokens are re-emitted alongside the error so the impl's items
+/// still exist — the transformer below still runs and the real diagnostic is
+/// not buried under "method not found" cascades.
+fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
+    let Ok(item) = syn::parse::<syn::ItemImpl>(input.clone()) else {
+        return input;
+    };
+    let has_transformer = item.attrs.iter().any(|a| {
+        a.path().segments.last().is_some_and(|s| {
+            s.ident == "routes" || s.ident == "bean" || s.ident == "grpc_routes"
+        })
+    });
+    let msg = if has_transformer {
+        format!(
+            "#[{name}] is placed above the transforming macro — attribute macros expand \
+             top-down, so the macro below never sees it and the decorator would be silently \
+             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]."
+        )
+    } else {
+        format!(
+            "#[{name}] on an impl block does nothing on its own — it is consumed by \
+             #[routes] (or #[bean]). Add the consuming macro above the impl block, with \
+             #[{name}] below it."
+        )
+    };
+    let err: TokenStream = syn::Error::new(proc_macro2::Span::call_site(), msg)
+        .to_compile_error()
+        .into();
+    let mut out = err;
+    out.extend(input);
+    out
+}
+
 /// Attribute macro for declaring a R2E controller struct.
 ///
 /// # Struct-level attribute
@@ -344,10 +389,13 @@ pub fn fallback(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// async fn reports(&self) -> Json<Vec<Report>> { ... }
 /// ```
 ///
+/// Also allowed on the `#[routes]` impl block (below it), where it applies to
+/// every non-`#[anonymous]` route.
+///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn roles(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    deny_decorator_above_impl("roles", input)
 }
 
 /// Opt a route out of the controller's struct-level identity (@PermitAll).
@@ -463,10 +511,13 @@ pub fn request_helper(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// For OR semantics (require **at least one** role), use [`roles`] instead.
 ///
+/// Also allowed on the `#[routes]` impl block (below it), where it applies to
+/// every non-`#[anonymous]` route.
+///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn all_roles(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    deny_decorator_above_impl("all_roles", input)
 }
 
 /// Apply an interceptor (cross-cutting concern) to a method or an entire
@@ -500,7 +551,7 @@ pub fn all_roles(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    deny_decorator_above_impl("intercept", input)
 }
 
 /// Apply a custom guard to a route method.
@@ -514,10 +565,15 @@ pub fn intercept(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// async fn protected(&self) -> Json<Data> { ... }
 /// ```
 ///
+/// Also allowed on the `#[routes]` impl block (below it), where it applies to
+/// every non-`#[anonymous]` route — controller guards run **before** method
+/// guards, sharing one guard instance across the whole controller
+/// (`method_name` is `"*"` in its `GuardContext`).
+///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn guard(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    deny_decorator_above_impl("guard", input)
 }
 
 /// Apply a custom pre-authentication guard to a route method.
@@ -534,10 +590,15 @@ pub fn guard(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// async fn data(&self) -> Json<Data> { ... }
 /// ```
 ///
+/// Also allowed on the `#[routes]` impl block (below it), where it applies to
+/// **every** route — including `#[anonymous]` ones (pre-auth checks don't
+/// depend on identity). Controller pre-guards run before method pre-guards,
+/// sharing one instance across the controller (`method_name` is `"*"`).
+///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn pre_guard(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+    deny_decorator_above_impl("pre_guard", input)
 }
 
 /// Mark a method as an **event consumer** — called when an event is emitted

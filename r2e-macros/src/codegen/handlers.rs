@@ -409,16 +409,23 @@ fn generate_path_param_module(
     }
 }
 
-/// Generate guard check statements. Guards are prebuilt fields of the
-/// method's decorator set (`__deco`), constructed once at wiring time.
-fn generate_guard_checks(guard_fields: &[syn::Ident], krate: &TokenStream) -> Vec<TokenStream> {
+/// Generate guard check statements against prebuilt guard fields (constructed
+/// once at wiring time). `recv` names the set binding (`__deco` for the
+/// method's own set, `__ctrl_deco` for the shared controller-level set) and
+/// `ctx_ident` the `GuardContext` binding the checks read.
+fn generate_guard_checks(
+    recv: &TokenStream,
+    ctx_ident: &syn::Ident,
+    guard_fields: &[syn::Ident],
+    krate: &TokenStream,
+) -> Vec<TokenStream> {
     guard_fields
         .iter()
         .map(|field| {
             quote! {
                 if let Err(__resp) = #krate::Guard::check(
-                    &__deco.#field,
-                    &__guard_ctx,
+                    &#recv.#field,
+                    &#ctx_ident,
                 ).await {
                     return __resp;
                 }
@@ -450,70 +457,50 @@ fn generate_request_head(krate: &TokenStream) -> TokenStream {
 ///
 /// Runs after [`generate_request_head`], so `__path_params` is already in
 /// scope (it is `Copy`) and the guard context borrows the same request parts as
-/// the `RequestHead`.
+/// the `RequestHead`. `ctx_ident` names the binding and `method_name` its
+/// `method_name` field — the method's own context gets the route's fn name,
+/// the shared controller-level context gets `"*"` (one stateful-guard bucket
+/// for the whole controller).
 fn generate_guard_context(
     ctx: &HandlerContext,
     rm: &RouteMethod,
     krate: &TokenStream,
+    ctx_ident: &syn::Ident,
+    method_name: &TokenStream,
 ) -> TokenStream {
-    let fn_name_str = &ctx.fn_name_str;
     let controller_name_str = &ctx.controller_name_q;
     let meta_mod = &ctx.meta_mod;
 
-    if let Some(ref id_param) = rm.identity_param {
+    let identity_expr = if let Some(ref id_param) = rm.identity_param {
         // Case A: param-level identity
         let arg_name = format_ident!("__arg_{}", id_param.index);
-        let identity_expr = if id_param.is_optional {
+        if id_param.is_optional {
             quote! { #arg_name.as_ref() }
         } else {
             quote! { Some(&#arg_name) }
-        };
-        quote! {
-            let __guard_ctx = #krate::GuardContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-                method: &__method,
-                headers: &__headers,
-                uri: &__uri,
-                extensions: &__extensions,
-                peer_addr: __peer_addr.0,
-                path_params: __path_params,
-                identity: #identity_expr,
-            };
         }
     } else if rm.decorators.anonymous {
         // Case C: #[anonymous] — no identity was extracted. Guards still run
         // (e.g. rate limiting) with `identity: None`, typed to the controller's
         // `IdentityType` so `GuardContext<I>` stays pinned as in case B.
-        quote! {
-            let __guard_ctx = #krate::GuardContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-                method: &__method,
-                headers: &__headers,
-                uri: &__uri,
-                extensions: &__extensions,
-                peer_addr: __peer_addr.0,
-                path_params: __path_params,
-                identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
-            };
-        }
+        quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
     } else {
         // Case B: struct-level identity or no identity. Both adapters have
         // already normalized their controller source to `&Controller`.
-        quote! {
-            let __guard_ctx = #krate::GuardContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-                method: &__method,
-                headers: &__headers,
-                uri: &__uri,
-                extensions: &__extensions,
-                peer_addr: __peer_addr.0,
-                path_params: __path_params,
-                identity: #meta_mod::guard_identity(__ctrl),
-            };
-        }
+        quote! { #meta_mod::guard_identity(__ctrl) }
+    };
+    quote! {
+        let #ctx_ident = #krate::GuardContext {
+            method_name: #method_name,
+            controller_name: #controller_name_str,
+            method: &__method,
+            headers: &__headers,
+            uri: &__uri,
+            extensions: &__extensions,
+            peer_addr: __peer_addr.0,
+            path_params: __path_params,
+            identity: #identity_expr,
+        };
     }
 }
 
@@ -716,21 +703,34 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     // deco/predeco items for method-level specs, and from
     // `generate_ctrl_deco_items` (once per controller) for controller-level
     // specs — degradation is never silent.
-    let specs_ok = super::decorators::all_specs_inferable(
+    let specs_ok = super::decorators::specs_ok_with_ctrl(
+        def,
         rm.decorators
             .guard_fns
             .iter()
-            .chain(def.controller_intercepts.iter())
             .chain(rm.decorators.intercept_fns.iter()),
     );
     let has_guards = !rm.decorators.guard_fns.is_empty() && deco_set.is_some();
     let has_ctrl = ctrl_set.is_some() && specs_ok;
+    // Controller-level post-auth guards apply to every route EXCEPT
+    // `#[anonymous]` ones: the marker opts the route out of the controller's
+    // auth surface, so identity-driven controller guards must not fire there
+    // (pre-guards and interceptors still do).
+    let ctrl_guard_fields: &[syn::Ident] = if has_ctrl && !rm.decorators.anonymous {
+        ctrl_set
+            .as_ref()
+            .map(|s| s.guard_fields.as_slice())
+            .unwrap_or(&[])
+    } else {
+        &[]
+    };
+    let has_ctrl_guards = !ctrl_guard_fields.is_empty();
     // Combined interceptor refs, impl-level (shared) outermost then method-level.
     let interceptor_refs = |set: &Option<super::decorators::DecoSet>| -> Vec<TokenStream> {
         let mut refs: Vec<TokenStream> = Vec::new();
         if has_ctrl {
             if let Some(cs) = ctrl_set.as_ref() {
-                for f in &cs.fields {
+                for f in &cs.intercept_fields {
                     refs.push(quote! { &__ctrl_deco.#f });
                 }
             }
@@ -740,9 +740,13 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         }
         refs
     };
+    let has_ctrl_intercepts = has_ctrl
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.intercept_fields.is_empty());
     let has_method_intercepts = !rm.decorators.intercept_fns.is_empty() && deco_set.is_some();
-    let has_intercepts = has_ctrl || has_method_intercepts;
-    let needs_response = has_guards || has_managed;
+    let has_intercepts = has_ctrl_intercepts || has_method_intercepts;
+    let needs_response = has_guards || has_ctrl_guards || has_managed;
     // The state is only threaded through for `#[managed]` params — guards
     // and interceptors are prebuilt decorator fields (no state access).
     let needs_state = has_managed;
@@ -750,7 +754,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     // address) are extracted for guards AND for `#[managed]` acquisition —
     // both read the request before the handler body runs. Extracted once and
     // shared: guard context and `RequestHead` borrow the same values.
-    let needs_head = has_guards || has_managed;
+    let needs_head = has_guards || has_ctrl_guards || has_managed;
 
     // Generate validation calls for all non-managed, non-identity parameters
     let identity_param_index = rm.identity_param.as_ref().map(|p| p.index);
@@ -839,14 +843,35 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
         // The method's `path` module lives in the decorator constructor now —
         // guard expressions are evaluated there, once, at wiring time.
-        let guard_checks = generate_guard_checks(deco_guard_fields(&deco_set), &krate);
+        // Controller-level guards run FIRST (before the route's own), against
+        // the shared set and a `"*"` context (one bucket per controller).
+        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
+        let guard_ctx_ident = format_ident!("__guard_ctx");
+        let ctrl_guard_checks = generate_guard_checks(
+            &quote! { __ctrl_deco },
+            &ctrl_ctx_ident,
+            ctrl_guard_fields,
+            &krate,
+        );
+        let guard_checks = generate_guard_checks(
+            &quote! { __deco },
+            &guard_ctx_ident,
+            deco_guard_fields(&deco_set),
+            &krate,
+        );
         let head_construction = if needs_head {
             generate_request_head(&krate)
         } else {
             quote! {}
         };
+        let ctrl_guard_context_construction = if has_ctrl_guards {
+            generate_guard_context(&ctx, rm, &krate, &ctrl_ctx_ident, &quote! { "*" })
+        } else {
+            quote! {}
+        };
         let guard_context_construction = if has_guards {
-            generate_guard_context(&ctx, rm, &krate)
+            let fn_name_str = &ctx.fn_name_str;
+            generate_guard_context(&ctx, rm, &krate, &guard_ctx_ident, &quote! { #fn_name_str })
         } else {
             quote! {}
         };
@@ -914,6 +939,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             quote! { -> #krate::http::response::Response },
             quote! {
                 #head_construction
+                #ctrl_guard_context_construction
+                #(#ctrl_guard_checks)*
                 #guard_context_construction
                 #(#guard_checks)*
                 #(#validation_calls)*
@@ -1042,11 +1069,24 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     );
     let (predeco_items, _) =
         super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
-    let has_guards = !sm.decorators.guard_fns.is_empty() && deco_set.is_some();
+    // Same degrade check as the closure (specs_ok implies the method deco set
+    // exists whenever the method has guards).
+    let specs_ok =
+        super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
+    let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
+    // Controller-level post-auth guards apply to SSE endpoints too — except
+    // `#[anonymous]` ones (the marker opts out of the controller auth surface).
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let has_ctrl_guards = ctrl_set.is_some()
+        && specs_ok
+        && !sm.decorators.anonymous
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.guard_fields.is_empty());
 
     let mut invocation_prefix_params = Vec::new();
 
-    let (invocation_return, invocation_body) = if !has_guards {
+    let (invocation_return, invocation_body) = if !has_guards && !has_ctrl_guards {
         (
             quote! { -> impl #krate::http::response::IntoResponse },
             quote! {
@@ -1062,22 +1102,33 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         invocation_prefix_params.push(quote! { __peer_addr: #krate::PeerAddr });
         invocation_prefix_params.push(quote! { __extensions: #krate::http::Extensions });
         invocation_prefix_params.push(quote! { __method: #krate::http::Method });
-        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
-        invocation_prefix_params.push(quote! { __deco: &#deco_ty });
+        if has_ctrl_guards {
+            let ctrl_ty = &ctrl_set.as_ref().expect("has_ctrl_guards implies a set").struct_ident;
+            invocation_prefix_params.push(quote! { __ctrl_deco: &#ctrl_ty });
+        }
+        if has_guards {
+            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+            invocation_prefix_params.push(quote! { __deco: &#deco_ty });
+        }
 
-        let guard_checks = generate_guard_checks(deco_guard_fields(&deco_set), &krate);
-
-        let guard_context = if let Some(ref id_param) = sm.identity_param {
+        // One identity expression shared by the controller-level ("*") and
+        // method-level guard contexts.
+        let identity_expr = if let Some(ref id_param) = sm.identity_param {
             let arg_name = format_ident!("__arg_{}", id_param.index);
-            let identity_expr = if id_param.is_optional {
+            if id_param.is_optional {
                 quote! { #arg_name.as_ref() }
             } else {
                 quote! { Some(&#arg_name) }
-            };
+            }
+        } else if sm.decorators.anonymous {
+            quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
+        } else {
+            quote! { #meta_mod::guard_identity(__ctrl) }
+        };
+        let guard_ctx = |ctx_ident: &syn::Ident, method_name: TokenStream| {
             quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                let __guard_ctx = #krate::GuardContext {
-                    method_name: #fn_name_str,
+                let #ctx_ident = #krate::GuardContext {
+                    method_name: #method_name,
                     controller_name: #controller_name_str,
                     method: &__method,
                     headers: &__headers,
@@ -1088,41 +1139,43 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                     identity: #identity_expr,
                 };
             }
-        } else if sm.decorators.anonymous {
-            quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                let __guard_ctx = #krate::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    method: &__method,
-                    headers: &__headers,
-                    uri: &__uri,
-                    extensions: &__extensions,
-                    peer_addr: __peer_addr.0,
-                    path_params: __path_params,
-                    identity: ::core::option::Option::<&#meta_mod::IdentityType>::None,
-                };
-            }
-        } else {
-            quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                let __guard_ctx = #krate::GuardContext {
-                    method_name: #fn_name_str,
-                    controller_name: #controller_name_str,
-                    method: &__method,
-                    headers: &__headers,
-                    uri: &__uri,
-                    extensions: &__extensions,
-                    peer_addr: __peer_addr.0,
-                    path_params: __path_params,
-                    identity: #meta_mod::guard_identity(__ctrl),
-                };
-            }
         };
+        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
+        let guard_ctx_ident = format_ident!("__guard_ctx");
+        // Controller-level guards run FIRST, against the shared set and a
+        // `"*"` context (one stateful-guard bucket per controller).
+        let ctrl_guard_context = has_ctrl_guards
+            .then(|| guard_ctx(&ctrl_ctx_ident, quote! { "*" }))
+            .unwrap_or_default();
+        let ctrl_guard_checks = generate_guard_checks(
+            &quote! { __ctrl_deco },
+            &ctrl_ctx_ident,
+            if has_ctrl_guards {
+                ctrl_set
+                    .as_ref()
+                    .map(|s| s.guard_fields.as_slice())
+                    .unwrap_or(&[])
+            } else {
+                &[]
+            },
+            &krate,
+        );
+        let guard_context = has_guards
+            .then(|| guard_ctx(&guard_ctx_ident, quote! { #fn_name_str }))
+            .unwrap_or_default();
+        let guard_checks = generate_guard_checks(
+            &quote! { __deco },
+            &guard_ctx_ident,
+            deco_guard_fields(&deco_set),
+            &krate,
+        );
 
         (
             quote! { -> #krate::http::response::Response },
             quote! {
+                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                #ctrl_guard_context
+                #(#ctrl_guard_checks)*
                 #guard_context
                 #(#guard_checks)*
                 let __stream = #call_expr;
@@ -1211,7 +1264,22 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     );
     let (predeco_items, _) =
         super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
-    let has_guards = !wm.decorators.guard_fns.is_empty() && deco_set.is_some();
+    // Same degrade check as the closure (specs_ok implies the method deco set
+    // exists whenever the method has guards).
+    let specs_ok =
+        super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
+    let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
+    // Controller-level post-auth guards run in the same preflight — except on
+    // `#[anonymous]` endpoints (the marker opts out of the controller auth
+    // surface).
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let has_ctrl_guards = ctrl_set.is_some()
+        && specs_ok
+        && !wm.decorators.anonymous
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.guard_fields.is_empty());
+    let needs_preflight = has_guards || has_ctrl_guards;
 
     // Build the shared post-upgrade invocation body. Controller ownership
     // remains in the thin adapter's `on_upgrade` closure; this function only
@@ -1272,21 +1340,49 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         }
     };
 
-    let (preflight, preflight_call) = if has_guards {
-        let guard_checks: Vec<TokenStream> = deco_guard_fields(&deco_set)
-            .iter()
-            .map(|field| {
-                quote! {
-                    if let Err(__resp) = #krate::Guard::check(
-                        &__deco.#field,
-                        &__guard_ctx,
-                    ).await {
-                        return Err(__resp);
+    let (preflight, preflight_call) = if needs_preflight {
+        let ws_guard_checks = |recv: TokenStream, ctx_ident: &syn::Ident, fields: &[syn::Ident]| {
+            fields
+                .iter()
+                .map(|field| {
+                    quote! {
+                        if let Err(__resp) = #krate::Guard::check(
+                            &#recv.#field,
+                            &#ctx_ident,
+                        ).await {
+                            return Err(__resp);
+                        }
                     }
-                }
-            })
-            .collect();
-        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+                })
+                .collect::<Vec<TokenStream>>()
+        };
+        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
+        let guard_ctx_ident = format_ident!("__guard_ctx");
+        let ctrl_guard_checks = ws_guard_checks(
+            quote! { __ctrl_deco },
+            &ctrl_ctx_ident,
+            if has_ctrl_guards {
+                ctrl_set
+                    .as_ref()
+                    .map(|s| s.guard_fields.as_slice())
+                    .unwrap_or(&[])
+            } else {
+                &[]
+            },
+        );
+        let guard_checks =
+            ws_guard_checks(quote! { __deco }, &guard_ctx_ident, deco_guard_fields(&deco_set));
+        let ctrl_deco_param = has_ctrl_guards.then(|| {
+            let ctrl_ty = &ctrl_set
+                .as_ref()
+                .expect("has_ctrl_guards implies a set")
+                .struct_ident;
+            quote! { __ctrl_deco: &#ctrl_ty, }
+        });
+        let deco_param = has_guards.then(|| {
+            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+            quote! { __deco: &#deco_ty, }
+        });
 
         let (identity_decl, identity_call, identity_expr) =
             if let Some(ref id_param) = wm.identity_param {
@@ -1320,10 +1416,10 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 )
             };
 
-        let guard_context = quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                let __guard_ctx = #krate::GuardContext {
-                    method_name: #fn_name_str,
+        let ws_guard_ctx = |ctx_ident: &syn::Ident, method_name: TokenStream| {
+            quote! {
+                let #ctx_ident = #krate::GuardContext {
+                    method_name: #method_name,
                     controller_name: #controller_name_str,
                     method: &__method,
                     headers: &__headers,
@@ -1333,14 +1429,26 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     path_params: __path_params,
                     identity: #identity_expr,
                 };
+            }
         };
+        // Controller-level guards run FIRST, against the shared set and a
+        // `"*"` context (one stateful-guard bucket per controller).
+        let ctrl_guard_context = has_ctrl_guards
+            .then(|| ws_guard_ctx(&ctrl_ctx_ident, quote! { "*" }))
+            .unwrap_or_default();
+        let guard_context = has_guards
+            .then(|| ws_guard_ctx(&guard_ctx_ident, quote! { #fn_name_str }))
+            .unwrap_or_default();
+        let ctrl_deco_call = has_ctrl_guards.then(|| quote! { &__ctrl_deco, });
+        let deco_call = has_guards.then(|| quote! { &__deco, });
 
         (
             quote! {
                 #[allow(non_snake_case)]
                 #[allow(clippy::too_many_arguments)]
                 async fn #preflight_name(
-                    __deco: &#deco_ty,
+                    #ctrl_deco_param
+                    #deco_param
                     __headers: #krate::http::HeaderMap,
                     __uri: #krate::http::Uri,
                     __peer_addr: #krate::PeerAddr,
@@ -1350,6 +1458,9 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     __ctrl: &#receiver_ty,
                     #identity_decl
                 ) -> Result<(), #krate::http::response::Response> {
+                    let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+                    #ctrl_guard_context
+                    #(#ctrl_guard_checks)*
                     #guard_context
                     #(#guard_checks)*
                     Ok(())
@@ -1357,7 +1468,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             },
             quote! {
                 if let Err(__response) = #preflight_name(
-                    &__deco,
+                    #ctrl_deco_call
+                    #deco_call
                     __headers,
                     __uri,
                     __peer_addr,
@@ -1376,12 +1488,24 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     };
 
     let handler_name = handler_ident_for(controller_name, fn_name);
-    // The decorator set arrives first (an `Arc` captured by the route
-    // closure), then the request-extracted guard-context values.
-    let guard_params = if has_guards {
-        let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+    // The decorator sets arrive first (`Arc`s captured by the route closure —
+    // shared controller-level set, then the method's own), then the
+    // request-extracted guard-context values.
+    let guard_params = if needs_preflight {
+        let ctrl_deco_param = has_ctrl_guards.then(|| {
+            let ctrl_ty = &ctrl_set
+                .as_ref()
+                .expect("has_ctrl_guards implies a set")
+                .struct_ident;
+            quote! { __ctrl_deco: ::std::sync::Arc<#ctrl_ty>, }
+        });
+        let deco_param = has_guards.then(|| {
+            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
+            quote! { __deco: ::std::sync::Arc<#deco_ty>, }
+        });
         quote! {
-            __deco: ::std::sync::Arc<#deco_ty>,
+            #ctrl_deco_param
+            #deco_param
             __headers: #krate::http::HeaderMap,
             __uri: #krate::http::Uri,
             __peer_addr: #krate::PeerAddr,
@@ -1392,7 +1516,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     } else {
         quote! {}
     };
-    let guard_controller_borrow = if has_guards {
+    let guard_controller_borrow = if needs_preflight {
         quote! { let __ctrl_for_guard = &__facade; }
     } else {
         quote! {}
@@ -1584,11 +1708,11 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     // inferable, the invoke fn degrades to the no-decorator shape, so the
     // closure must too (avoids an arity-mismatch cascade after the real
     // spec-type error).
-    let specs_ok = super::decorators::all_specs_inferable(
+    let specs_ok = super::decorators::specs_ok_with_ctrl(
+        def,
         rm.decorators
             .guard_fns
             .iter()
-            .chain(def.controller_intercepts.iter())
             .chain(rm.decorators.intercept_fns.iter()),
     );
     let has_guards = !rm.decorators.guard_fns.is_empty() && specs_ok;
@@ -1596,13 +1720,21 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
     // Per-method decorator struct exists iff there are guards or METHOD-level
     // interceptors; controller-level interceptors live in the separate shared
     // set captured from the router body (`__r2e_ctrl_deco`).
-    let has_ctrl = super::decorators::ctrl_deco_set(def).is_some() && specs_ok;
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let has_ctrl = ctrl_set.is_some() && specs_ok;
+    // Mirror `generate_single_handler`: controller-level post-auth guards skip
+    // `#[anonymous]` routes, but still force head extraction elsewhere.
+    let has_ctrl_guards = has_ctrl
+        && !rm.decorators.anonymous
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.guard_fields.is_empty());
     let has_method_set = has_guards || (!rm.decorators.intercept_fns.is_empty() && specs_ok);
 
     let needs_state = has_managed;
     // Mirror `generate_single_handler`: the request head is extracted for
-    // guards and for `#[managed]` acquisition alike.
-    let needs_head = has_guards || has_managed;
+    // guards (method- or controller-level) and for `#[managed]` acquisition.
+    let needs_head = has_guards || has_ctrl_guards || has_managed;
 
     let (closure_params, fwd_args) =
         route_axum_params_and_args(rm, needs_state, needs_head, &krate);
@@ -1682,11 +1814,22 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let data_name = request_data_ident_for(controller_name);
     let invocation = invocation_ident_for(controller_name, fn_name);
-    let has_guards = !sm.decorators.guard_fns.is_empty()
-        && super::decorators::all_specs_inferable(sm.decorators.guard_fns.iter());
+    // Mirror `generate_sse_handler` exactly — a drifted condition here changes
+    // the closure's arity but not the handler's.
+    let specs_ok =
+        super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
+    let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let has_ctrl_guards = ctrl_set.is_some()
+        && specs_ok
+        && !sm.decorators.anonymous
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.guard_fields.is_empty());
+    let needs_head = has_guards || has_ctrl_guards;
 
     let mut fwd_args: Vec<TokenStream> = Vec::new();
-    let (head_params, head_args) = if has_guards {
+    let (head_params, head_args) = if needs_head {
         head_params_and_args(&krate)
     } else {
         (Vec::new(), Vec::new())
@@ -1715,8 +1858,14 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let closure_params =
         assemble_closure_params(Vec::new(), extras, head_params, last_is_identity);
 
-    let prefix_len = if has_guards { 6 } else { 0 };
+    let prefix_len = if needs_head { 6 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    // Shared controller-level set (guards): captured as an `Arc` clone of the
+    // router-body instance, like the ordinary route closures.
+    let ctrl_setup = has_ctrl_guards.then(|| {
+        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
+    });
+    let ctrl_arg = has_ctrl_guards.then(|| quote! { &__ctrl_deco_capture, });
     let deco_setup = has_guards.then(|| {
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
@@ -1744,12 +1893,14 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #ctrl_setup
             #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
                     #invocation(
                         #(#prefix,)*
+                        #ctrl_arg
                         #deco_arg
                         &__facade,
                         #(#suffix),*
@@ -1770,16 +1921,32 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let data_name = request_data_ident_for(controller_name);
     let inner = handler_ident_for(controller_name, fn_name);
-    let has_guards = !wm.decorators.guard_fns.is_empty()
-        && super::decorators::all_specs_inferable(wm.decorators.guard_fns.iter());
+    // Mirror `generate_ws_handler` exactly — a drifted condition here changes
+    // the closure's arity but not the handler's.
+    let specs_ok =
+        super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
+    let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
+    let ctrl_set = super::decorators::ctrl_deco_set(def);
+    let has_ctrl_guards = ctrl_set.is_some()
+        && specs_ok
+        && !wm.decorators.anonymous
+        && ctrl_set
+            .as_ref()
+            .is_some_and(|s| !s.guard_fields.is_empty());
+    let needs_preflight = has_guards || has_ctrl_guards;
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
 
     let mut closure_params: Vec<TokenStream> = Vec::new();
     let mut fwd_args: Vec<TokenStream> = Vec::new();
     // WS keeps its own head order (peer_addr before raw_path_params) — the
     // inner handler's signature, not something to "fix" here.
-    let head_params: Vec<TokenStream> = if has_guards {
-        fwd_args.push(quote! { __deco_capture.clone() });
+    let head_params: Vec<TokenStream> = if needs_preflight {
+        if has_ctrl_guards {
+            fwd_args.push(quote! { __ctrl_deco_capture.clone() });
+        }
+        if has_guards {
+            fwd_args.push(quote! { __deco_capture.clone() });
+        }
         fwd_args.push(quote! { __headers });
         fwd_args.push(quote! { __uri });
         fwd_args.push(quote! { __peer_addr });
@@ -1821,8 +1988,15 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     fwd_args.push(quote! { __ws_upgrade });
 
     let md = data_marker();
-    let prefix_len = if has_guards { 7 } else { 0 };
+    let prefix_len = if needs_preflight {
+        6 + usize::from(has_ctrl_guards) + usize::from(has_guards)
+    } else {
+        0
+    };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
+    let ctrl_setup = has_ctrl_guards.then(|| {
+        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
+    });
     let deco_setup = has_guards.then(|| {
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
@@ -1849,6 +2023,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     quote! {
         {
             let __core_capture = __ctrl.clone();
+            #ctrl_setup
             #deco_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {

@@ -1,0 +1,5 @@
+error: controller-level #[guard]/#[roles]/#[all_roles] would apply to no route — it targets the non-#[anonymous] route/#[sse]/#[ws] methods of this impl block, and there are none
+  --> cases/decorators/fail/controller_level_guard_no_eligible_route.rs:31:6
+   |
+31 | impl Ctrl {
+   |      ^^^^

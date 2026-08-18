@@ -1420,13 +1420,41 @@ block. Interceptors see the handler's **raw return type** (`Json<T>`,
 return type to be `Cacheable` (`Json<T>`, `Result<T: Cacheable, E>`, or
 `#[derive(Cacheable)]`).
 
-### Block-level
+### Block-level (controller-level decorators)
+
+The whole decorator family is allowed on the `#[routes]` impl block —
+`#[intercept]`, `#[guard]`, `#[pre_guard]`, `#[roles]`, `#[all_roles]`:
 
 ```rust
 #[routes]
 #[intercept(Logged::info())]                  // applies to all routes below
+#[guard(RequireApiKey("x-api-key"))]          // every non-#[anonymous] route
+#[pre_guard(PreRateLimit::per_ip(100, 60))]   // every route, #[anonymous] included
+#[roles("member")]                            // every non-#[anonymous] route
 impl UserController { ... }
 ```
+
+Semantics:
+
+- **Cumulative, not replacing** — controller checks run **before** the
+  method-level ones (controller pre-guards → method pre-guards → identity →
+  controller guards/roles → method guards/roles).
+- **One shared instance** — a controller-level guard/pre-guard is built
+  **once** per controller and shared by all its routes; its context reports
+  `method_name: "*"`. A stateful spec (e.g. a rate limit) therefore uses a
+  single bucket for the whole controller, unlike the per-route bucket it gets
+  at method level.
+- **`#[anonymous]` opts out of the post-auth half** — anonymous routes skip
+  controller `#[guard]`/`#[roles]`/`#[all_roles]` (they run with no identity)
+  but keep controller `#[pre_guard]`s and interceptors.
+- Placement matters: decorators go **below** `#[routes]` (or `#[bean]`).
+  Placing one **above** the transforming macro is a compile error (it would
+  otherwise be silently dropped — attribute macros expand top-down). Any other
+  route-family attribute on the impl block (`#[anonymous]`, `#[middleware]`,
+  …) is also a targeted compile error, and a controller-level guard whose impl
+  block has no eligible route is rejected as dead configuration.
+- gRPC: `#[grpc_routes]` impl blocks accept `#[intercept]` only; the guard
+  family there is a compile error.
 
 ### Custom interceptor
 
@@ -1447,8 +1475,10 @@ impl<R: Send> Interceptor<R> for AuditLog {
 
 Bean deps → `#[derive(DecoratorBean)]`, same as guards.
 
-Execution order: pre-auth guards → guards (declaration order) → validation →
-controller-level interceptors → method-level interceptors → body.
+Execution order: controller-level pre-auth guards → method-level pre-auth
+guards → identity extraction → controller-level guards → method-level guards
+(declaration order within each level) → validation → controller-level
+interceptors → method-level interceptors → body.
 
 ---
 
@@ -3211,10 +3241,10 @@ Alongside `&self`:
 | `#[sse("/path")]` | method | SSE endpoint |
 | `#[ws("/path")]` | method | WebSocket endpoint |
 | `#[anonymous]` | method | Skip struct-level identity for this route |
-| `#[roles("r1", "r2")]` | method | Any-of role check (403) |
-| `#[all_roles("r1", "r2")]` | method | All-of role check (403) |
-| `#[guard(Expr)]` | method | Post-auth guard (DecoratorSpec) |
-| `#[pre_guard(Expr)]` | method | Pre-auth guard (before JWT) |
+| `#[roles("r1", "r2")]` | method or impl | Any-of role check (403); impl = every non-anonymous route |
+| `#[all_roles("r1", "r2")]` | method or impl | All-of role check (403); impl = every non-anonymous route |
+| `#[guard(Expr)]` | method or impl | Post-auth guard (DecoratorSpec); impl = shared instance, runs before method guards |
+| `#[pre_guard(Expr)]` | method or impl | Pre-auth guard (before JWT); impl = every route incl. `#[anonymous]` |
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
 | `#[layer(expr)]` | method | Per-route Tower layer |

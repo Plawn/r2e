@@ -243,11 +243,13 @@ monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
 ## Execution order (outermost → innermost)
 
 Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
-0. `pre_guard(PreRateLimit::global/per_ip(...))`, custom pre-auth guards
+0. Controller-level `#[pre_guard]`s, then method-level `#[pre_guard]`s
+   (`PreRateLimit::global/per_ip(...)`, custom pre-auth guards)
 
 Handler level (after extraction, before controller body):
-1. Guards in declaration order — `#[roles]`/`#[all_roles]` desugar to guard
-   sites that run first, then `#[guard(...)]` sites top-to-bottom
+1. Controller-level guards, then method-level guards — within each level,
+   declaration order: `#[roles]`/`#[all_roles]` desugar to guard sites that
+   run first, then `#[guard(...)]` sites top-to-bottom
 2. Validation (garde)
 
 Method body level (trait-based, via `Interceptor::around`):
@@ -280,6 +282,43 @@ one per intercepted `#[scheduled]`/`#[consumer]` method).
 type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The
 `IntoResponse::into_response()` conversion happens *after* the outermost
 interceptor. Guards short-circuit *before* interceptors.
+
+## Controller-level guard family (impl-block `#[guard]`/`#[pre_guard]`/`#[roles]`/`#[all_roles]`)
+
+The full decorator family is accepted on the `#[routes]` impl block (below the
+macro), not just `#[intercept]`. Semantics (locked in task #906):
+
+- **Cumulative, never replacing.** Controller checks run before method checks
+  at both stages (controller pre-guards → method pre-guards; controller
+  guards/roles → method guards/roles). A controller rejection short-circuits
+  before any method-level check runs.
+- **One shared instance, one bucket.** Controller-level guards/pre-guards live
+  in the same shared `__R2eCtrlDeco_<Name>` set as controller interceptors:
+  built once in `Controller::routes`, shared by every route. Their contexts
+  report `method_name: "*"` — a stateful spec (rate limit) gets a single
+  bucket for the whole controller, unlike the per-route bucket at method
+  level.
+- **`#[anonymous]` opts out of the post-auth half only** (Option Y): anonymous
+  routes skip controller `#[guard]`/`#[roles]`/`#[all_roles]` but keep
+  controller `#[pre_guard]`s and interceptors. Metadata follows suit:
+  controller roles/guards fold into `RouteInfo.roles`/`has_auth` for
+  non-anonymous endpoints only.
+- **`REQUIRES_IDENTITY` asserts** for controller guards use the OR over
+  applicable endpoints: the placement is rejected only when it is statically
+  always-`None` (no struct identity AND no non-anonymous route with an
+  identity param).
+- **No silent drops.** Any other route-family attribute on the impl block
+  (`#[anonymous]`, `#[middleware]`, …) is a targeted compile error; a
+  controller guard whose impl block has no eligible (non-anonymous) route is
+  rejected as dead configuration; a decorator placed ABOVE `#[routes]`/
+  `#[bean]`/`#[grpc_routes]` errors via `deny_decorator_above_impl` in
+  `r2e-macros/src/lib.rs` (attribute macros expand top-down, so the
+  transformer would never see it). `#[grpc_routes]` impl blocks accept
+  `#[intercept]` only (`validate_grpc_impl_attrs`).
+
+Tests: `r2e-core/tests/decorators/controller_level.rs` (runtime semantics) +
+`r2e-compile-tests/cases/decorators/{pass,fail}/controller_level_*` and
+`cases/grpc/fail/grpc_impl_guard_not_supported.rs` (compile surface).
 
 ## Cache interceptor type constraints
 
