@@ -143,7 +143,10 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
         }
     };
 
-    // Extract controller-level intercepts from impl attrs
+    // Extract controller-level intercepts from impl attrs. Everything else in
+    // the HTTP decorator family is rejected up front — impl attrs are never
+    // re-emitted, so an unrejected #[guard]/#[roles] would silently no-op.
+    validate_grpc_impl_attrs(&item.attrs)?;
     let controller_intercepts = extract_intercept_fns(&item.attrs)?;
 
     let mut methods = Vec::new();
