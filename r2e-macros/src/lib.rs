@@ -1,37 +1,24 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
-pub(crate) mod api_error_derive;
-pub(crate) mod bean_attr;
-pub(crate) mod bean_derive;
-pub(crate) mod bg_service_derive;
-pub(crate) mod cacheable_derive;
+pub(crate) mod attrs;
 pub(crate) mod codegen;
-pub(crate) mod config_derive;
-pub(crate) mod controller_attr;
-pub(crate) mod controller_codegen;
-pub(crate) mod controller_parsing;
-pub(crate) mod crate_path;
-pub(crate) mod decorator_bean_derive;
+pub(crate) mod derives;
 pub(crate) mod extract;
-pub(crate) mod field_resolver;
-pub(crate) mod from_config_value_derive;
-pub(crate) mod from_multipart;
 pub(crate) mod grpc_codegen;
-pub(crate) mod grpc_routes_parsing;
-pub(crate) mod hash_tokens;
-pub(crate) mod main_attr;
-pub(crate) mod module_attr;
-pub(crate) mod params_derive;
-pub(crate) mod producer_attr;
-pub(crate) mod route;
-pub(crate) mod routes_attr;
-pub(crate) mod routes_parsing;
-pub(crate) mod runtime_args;
-pub(crate) mod test_suite_attr;
-pub(crate) mod type_list_gen;
-pub(crate) mod type_utils;
-pub(crate) mod types;
+pub(crate) mod model;
+pub(crate) mod parsing;
+pub(crate) mod util;
+
+use attrs::{
+    bean_attr, controller_attr, main_attr, module_attr, producer_attr, routes_attr,
+    test_suite_attr,
+};
+use derives::{
+    api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
+    decorator_bean_derive, from_config_value_derive, from_multipart, params_derive,
+};
+use parsing::grpc_routes_parsing;
 
 /// Safety net for the controller-level decorator family (`#[guard]`,
 /// `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[intercept]`): these

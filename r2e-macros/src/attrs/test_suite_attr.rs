@@ -9,8 +9,8 @@ use syn::{
     ImplItemFn, ItemImpl, Meta, Pat, PathArguments, ReturnType, Type,
 };
 
-use crate::crate_path::{r2e_core_path, r2e_test_path};
-use crate::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
+use crate::util::crate_path::{r2e_core_path, r2e_test_path};
+use crate::util::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
 
 struct SuiteArgs {
     tracing: bool,

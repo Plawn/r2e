@@ -1,8 +1,8 @@
 //! Parsing for the `#[grpc_routes(TraitPath)]` attribute macro.
 
-use crate::controller_parsing::has_identity_qualifier;
+use crate::parsing::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
-use crate::types::{IdentityParam, MethodDecorators};
+use crate::model::types::{IdentityParam, MethodDecorators};
 
 /// Parsed arguments of the `#[grpc_routes(...)]` attribute:
 /// `TraitPath` optionally followed by `, descriptor = <expr>`.
@@ -77,7 +77,7 @@ pub struct GrpcMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
-use crate::type_utils::unwrap_option_type;
+use crate::util::type_utils::unwrap_option_type;
 
 /// Detect `#[inject(identity)]` on handler parameters.
 fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {

@@ -3,10 +3,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 
-use crate::crate_path::r2e_core_path;
-use crate::hash_tokens::hash_token_stream;
-use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{
+use crate::util::crate_path::r2e_core_path;
+use crate::util::hash_tokens::hash_token_stream;
+use crate::model::type_list_gen::build_tcons_type;
+use crate::util::type_utils::{
     parse_config_field, parse_config_section_prefix, parse_live_config_field, to_pascal_case,
     type_base_name,
 };
@@ -134,20 +134,20 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     .iter()
                     .find(|a| a.path().is_ident("live_config"));
 
-                crate::field_resolver::check_live_config_exclusive(&pat_type.attrs)?;
+                crate::model::field_resolver::check_live_config_exclusive(&pat_type.attrs)?;
 
                 if let Some(attr) = config_section_attr {
                     let prefix_str = parse_config_section_prefix(attr)?;
                     let krate = r2e_core_path();
                     // Declared as `Section`: the key is the PREFIX, so
                     // dev-reload fingerprints the whole subtree under it.
-                    config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::section_config_key_entry(
                         &krate,
                         &prefix_str,
                         ty,
                     ));
                     let owner = format!("producer `{struct_name}`");
-                    let expr = crate::field_resolver::config_section_resolve_expr(
+                    let expr = crate::model::field_resolver::config_section_resolve_expr(
                         &quote! { __r2e_config },
                         &prefix_str,
                         ty,
@@ -159,18 +159,18 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 } else if let Some(attr) = config_attr {
                     let (key_str, ty_name_str) = parse_config_field(attr, ty)?;
                     let krate = r2e_core_path();
-                    let is_option = crate::type_utils::is_option_type(ty);
+                    let is_option = crate::util::type_utils::is_option_type(ty);
                     // Emit a `config_keys()` entry for EVERY copied key
                     // (required and optional) so dev-reload fingerprints the
                     // value; the kind gates presence validation.
-                    config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::copied_config_key_entry(
                         &krate,
                         &key_str,
                         &ty_name_str,
                         is_option,
                     ));
                     let owner = format!("producer `{struct_name}`");
-                    let expr = crate::field_resolver::config_resolve_expr(
+                    let expr = crate::model::field_resolver::config_resolve_expr(
                         &quote! { __r2e_config },
                         &key_str,
                         Some(ty),
@@ -185,12 +185,12 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     // Declared as `Live`: never presence-validated and never
                     // fingerprinted — the value is pushed through the registry
                     // slot, so editing it must NOT rebuild the producer.
-                    config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::live_config_key_entry(
                         &r2e_core_path(),
                         &key_str,
                         &ty_name_str,
                     ));
-                    let expr = crate::field_resolver::live_config_resolve_expr(
+                    let expr = crate::model::field_resolver::live_config_resolve_expr(
                         &quote! { __r2e_live },
                         &key_str,
                         Some(ty),
@@ -231,7 +231,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     }
     if has_live_config {
         let krate = r2e_core_path();
-        let live_ty = crate::field_resolver::live_config_registry_ty(&krate);
+        let live_ty = crate::model::field_resolver::live_config_registry_ty(&krate);
         dep_type_ids.push(
             quote! { (std::any::TypeId::of::<#live_ty>(), std::any::type_name::<#live_ty>()) },
         );
@@ -267,7 +267,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         quote! {}
     };
     let live_config_prelude =
-        crate::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
+        crate::model::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
 
     // Generate the call to the original function
     let call = if is_async {
@@ -314,7 +314,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         (quote! { #output_ty }, quote! {}, quote! { #call })
     };
 
-    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
 
     // `#[producer(start)]` registers `Self::Output` as a background service, so
     // the graph must also satisfy what the *service* pulls in

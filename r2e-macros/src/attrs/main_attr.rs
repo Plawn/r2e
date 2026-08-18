@@ -21,8 +21,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn};
 
-use crate::crate_path::r2e_core_path;
-use crate::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
+use crate::util::crate_path::r2e_core_path;
+use crate::util::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
 
 // ── Argument parsing ─────────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ impl OrderedHooks {
         group_lit: &TokenStream2,
         attrs: &[syn::Attribute],
     ) -> Self {
-        let test_crate = crate::crate_path::r2e_test_path();
+        let test_crate = crate::util::crate_path::r2e_test_path();
         let submit = quote! {
             #test_crate::ordering::inventory::submit! {
                 #test_crate::ordering::OrderedTestEntry {
@@ -339,7 +339,7 @@ fn expand_boot_test(
     tracing_init: &TokenStream2,
     runtime_builder: &TokenStream2,
 ) -> TokenStream2 {
-    let test_crate = crate::crate_path::r2e_test_path();
+    let test_crate = crate::util::crate_path::r2e_test_path();
     let vis = &func.vis;
     let sig = &func.sig;
     let attrs = &func.attrs;

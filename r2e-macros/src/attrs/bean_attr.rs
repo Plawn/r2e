@@ -8,7 +8,7 @@ use crate::codegen::decorators::{deps_fold_from_base, generate_named_deco_items,
 use crate::codegen::transverse::{
     self, ConsumerMethodDef, DecoFieldDef, DispatchWrapperParams, ScheduledSourceMethod,
 };
-use crate::crate_path::r2e_core_path;
+use crate::util::crate_path::r2e_core_path;
 use crate::extract::async_exec::{
     extract_async_exec, strip_async_exec_attrs, validate_async_exec_method, AsyncExecHost,
     ASYNC_EXEC_INTERCEPT_MSG,
@@ -18,12 +18,12 @@ use crate::extract::consumer::{
 };
 use crate::extract::route::extract_intercept_fns;
 use crate::extract::scheduled::extract_scheduled;
-use crate::hash_tokens::hash_token_stream;
-use crate::type_list_gen::build_tcons_type;
-use crate::type_utils::{
+use crate::util::hash_tokens::hash_token_stream;
+use crate::model::type_list_gen::build_tcons_type;
+use crate::util::type_utils::{
     named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
 };
-use crate::types::ConsumerKind;
+use crate::model::types::ConsumerKind;
 
 /// Parsed `#[bean(...)]` arguments.
 struct BeanArgs {
@@ -68,7 +68,7 @@ struct BeanAsyncExecMethod {
 
 /// Parsed scheduled method data from a `#[bean]` impl block.
 struct BeanScheduledMethod {
-    config: crate::types::ScheduledConfig,
+    config: crate::model::types::ScheduledConfig,
     fn_name: syn::Ident,
     is_async: bool,
     /// Effective `#[intercept(...)]` sites (impl-level first, then method-level).
@@ -235,20 +235,20 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     .iter()
                     .find(|a| a.path().is_ident("live_config"));
 
-                crate::field_resolver::check_live_config_exclusive(&pat_type.attrs)?;
+                crate::model::field_resolver::check_live_config_exclusive(&pat_type.attrs)?;
 
                 if let Some(attr) = live_config_attr {
                     let (key_str, ty_name_str) =
-                        crate::type_utils::parse_live_config_field(attr, ty)?;
+                        crate::util::type_utils::parse_live_config_field(attr, ty)?;
                     // Declared as `Live`: never presence-validated (a live
                     // value may legitimately be absent at boot) and never
                     // fingerprinted (freshness arrives by push, not rebuild).
-                    config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::live_config_key_entry(
                         &r2e_core_path(),
                         &key_str,
                         &ty_name_str,
                     ));
-                    let expr = crate::field_resolver::live_config_resolve_expr(
+                    let expr = crate::model::field_resolver::live_config_resolve_expr(
                         &quote! { __r2e_live },
                         &key_str,
                         Some(ty),
@@ -265,13 +265,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     let krate = r2e_core_path();
                     // Declared as `Section`: the key is the PREFIX, so
                     // dev-reload fingerprints the whole subtree under it.
-                    config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::section_config_key_entry(
                         &krate,
                         &prefix_str,
                         ty,
                     ));
                     let owner = format!("bean `{type_name_str}`");
-                    let expr = crate::field_resolver::config_section_resolve_expr(
+                    let expr = crate::model::field_resolver::config_section_resolve_expr(
                         &quote! { __r2e_config },
                         &prefix_str,
                         ty,
@@ -283,18 +283,18 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 } else if let Some(attr) = config_attr {
                     let (key_str, ty_name_str) = parse_config_field(attr, ty)?;
                     let krate = r2e_core_path();
-                    let is_option = crate::type_utils::is_option_type(ty);
+                    let is_option = crate::util::type_utils::is_option_type(ty);
                     // Emit a `config_keys()` entry for EVERY copied key
                     // (required and optional) so dev-reload fingerprints the
                     // value; the kind gates presence validation.
-                    config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                    config_key_entries.push(crate::model::field_resolver::copied_config_key_entry(
                         &krate,
                         &key_str,
                         &ty_name_str,
                         is_option,
                     ));
                     let owner = format!("bean `{type_name_str}`");
-                    let expr = crate::field_resolver::config_resolve_expr(
+                    let expr = crate::model::field_resolver::config_resolve_expr(
                         &quote! { __r2e_config },
                         &key_str,
                         Some(ty),
@@ -324,7 +324,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     }
     if has_live_config {
         let krate = r2e_core_path();
-        let live_ty = crate::field_resolver::live_config_registry_ty(&krate);
+        let live_ty = crate::model::field_resolver::live_config_registry_ty(&krate);
         dep_type_ids.push(
             quote! { (std::any::TypeId::of::<#live_ty>(), std::any::type_name::<#live_ty>()) },
         );
@@ -349,9 +349,9 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         quote! {}
     };
     let live_config_prelude =
-        crate::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
+        crate::model::field_resolver::live_config_prelude(&quote! { ctx }, &krate, has_live_config);
 
-    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
 
     // Impl-level `#[intercept(...)]` — applies to every scheduled/consumer
     // method, running BEFORE method-level interceptors (same order as

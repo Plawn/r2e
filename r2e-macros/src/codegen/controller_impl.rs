@@ -5,9 +5,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
-use crate::crate_path::r2e_core_path;
-use crate::routes_parsing::RoutesImplDef;
-use crate::type_utils::type_last_segment_is;
+use crate::util::crate_path::r2e_core_path;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::util::type_utils::type_last_segment_is;
 
 /// Generate the `Controller<State>` trait implementation.
 pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
@@ -184,7 +184,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let mut managed_bounds: Vec<TokenStream> = Vec::new();
     for rm in &def.route_methods {
         for mp in &rm.managed_params {
-            let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+            let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
             if managed_seen.insert(quote!(#ty).to_string()) {
                 managed_bounds.push(quote! { #ty: #krate::ManagedResource<#state_ident> });
             }
@@ -269,7 +269,7 @@ fn generate_route_metadata(
         // method, and `{*wildcard}` paths are not valid OpenAPI path templates.
         .filter(|rm| {
             !rm.is_fallback
-                && rm.method != crate::route::HttpMethod::Any
+                && rm.method != crate::model::route::HttpMethod::Any
                 && !is_wildcard_path(&rm.path)
         })
         .map(|rm| {
@@ -413,7 +413,7 @@ fn has_auth_expr(
 }
 
 /// Extract path parameters from route method signature.
-fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> Vec<TokenStream> {
+fn extract_path_params(rm: &crate::model::types::RouteMethod, krate: &TokenStream) -> Vec<TokenStream> {
     rm.fn_item
         .sig
         .inputs
@@ -449,7 +449,7 @@ fn extract_path_params(rm: &crate::types::RouteMethod, krate: &TokenStream) -> V
 ///
 /// For wrapper types like `Query<T>`, `Path<T>`, we unwrap to probe the inner
 /// type `T` instead, since `T` is where `ParamsMetadata` would be implemented.
-fn extract_handler_param_types(rm: &crate::types::RouteMethod) -> Vec<syn::Type> {
+fn extract_handler_param_types(rm: &crate::model::types::RouteMethod) -> Vec<syn::Type> {
     rm.fn_item
         .sig
         .inputs
@@ -519,14 +519,14 @@ pub(crate) fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
 }
 
 /// Determine the default HTTP status code based on the HTTP method.
-fn default_status_for_method(method: &crate::route::HttpMethod) -> u16 {
+fn default_status_for_method(method: &crate::model::route::HttpMethod) -> u16 {
     match method {
-        crate::route::HttpMethod::Get => 200,
-        crate::route::HttpMethod::Post => 201,
-        crate::route::HttpMethod::Put => 200,
-        crate::route::HttpMethod::Delete => 204,
-        crate::route::HttpMethod::Patch => 200,
-        crate::route::HttpMethod::Any => 200,
+        crate::model::route::HttpMethod::Get => 200,
+        crate::model::route::HttpMethod::Post => 201,
+        crate::model::route::HttpMethod::Put => 200,
+        crate::model::route::HttpMethod::Delete => 204,
+        crate::model::route::HttpMethod::Patch => 200,
+        crate::model::route::HttpMethod::Any => 200,
     }
 }
 
@@ -537,7 +537,7 @@ fn is_wildcard_path(path: &str) -> bool {
 }
 
 /// Check if the body parameter is `Option<Json<T>>` → required: false, `Json<T>` → required: true.
-fn detect_body_required(rm: &crate::types::RouteMethod) -> bool {
+fn detect_body_required(rm: &crate::model::types::RouteMethod) -> bool {
     for arg in rm.fn_item.sig.inputs.iter() {
         if let syn::FnArg::Typed(pt) = arg {
             if has_json_type(&pt.ty) {
@@ -680,7 +680,7 @@ fn autoref_schema_probe(ty: &syn::Type, bound: TokenStream, some_body: TokenStre
 /// Generate a schema token for a response type, using autoref specialization
 /// so that types not implementing `JsonSchema` gracefully return `None`.
 fn response_schema_token(ty: &syn::Type) -> TokenStream {
-    if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
+    if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
         let krate = r2e_core_path();
         autoref_schema_probe(
             ty,
@@ -694,7 +694,7 @@ fn response_schema_token(ty: &syn::Type) -> TokenStream {
 
 /// Resolve the inner response type from the route method.
 /// Returns `Some(ty)` if a JSON response body type is detected, `None` otherwise.
-fn resolve_response_type(rm: &crate::types::RouteMethod) -> Option<syn::Type> {
+fn resolve_response_type(rm: &crate::model::types::RouteMethod) -> Option<syn::Type> {
     // #[returns(T)] override takes priority
     if let Some(ref returns_ty) = rm.decorators.returns_type {
         return Some(returns_ty.clone());
@@ -735,7 +735,7 @@ fn resolve_response_type(rm: &crate::types::RouteMethod) -> Option<syn::Type> {
 
 /// Extract response type information from a route method.
 /// Returns (response_type_name_token, response_schema_token).
-fn extract_response_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream) {
+fn extract_response_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, TokenStream) {
     match resolve_response_type(rm) {
         Some(inner_ty) => {
             let name = type_to_schema_name(&inner_ty);
@@ -768,14 +768,14 @@ fn readable_type(ty: &syn::Type) -> String {
 /// can warn about it. Emits `None` for mapped bodies (`Json<T>`, `#[returns]`)
 /// and intentional no-body returns (`()`, `StatusCode`, `StatusResult`,
 /// `String`, or no return type).
-fn response_unmapped_token(rm: &crate::types::RouteMethod) -> TokenStream {
+fn response_unmapped_token(rm: &crate::model::types::RouteMethod) -> TokenStream {
     match response_unmapped_name(rm) {
         Some(name) => quote! { Some(#name.to_string()) },
         None => quote! { None },
     }
 }
 
-fn response_unmapped_name(rm: &crate::types::RouteMethod) -> Option<String> {
+fn response_unmapped_name(rm: &crate::model::types::RouteMethod) -> Option<String> {
     // A resolvable response type (`Json<T>` or `#[returns(T)]`) is mappable.
     if resolve_response_type(rm).is_some() {
         return None;
@@ -828,7 +828,7 @@ const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
 
 /// Extract request body information.
 /// Returns (type_name_token, schema_token, content_type_token).
-fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStream, TokenStream) {
+fn extract_body_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, TokenStream, TokenStream) {
     let body_info: Option<BodyExtractor> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
@@ -840,7 +840,7 @@ fn extract_body_info(rm: &crate::types::RouteMethod) -> (TokenStream, TokenStrea
     let multipart_ct = MULTIPART_CONTENT_TYPE;
     match &body_info {
         Some(BodyExtractor::Json { name, ty }) => {
-            let schema_token = if let Some(schemars) = crate::crate_path::r2e_schemars_path() {
+            let schema_token = if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
                 let krate = r2e_core_path();
                 quote! {
                     Some({
@@ -1232,7 +1232,7 @@ fn generate_ws_route_metadata(
 /// the controller's post-auth checks).
 fn streaming_effective_auth(
     def: &RoutesImplDef,
-    decorators: &crate::types::MethodDecorators,
+    decorators: &crate::model::types::MethodDecorators,
 ) -> (Vec<String>, bool) {
     let ctrl = &def.controller_decorators;
     let mut roles: Vec<String> = decorators
@@ -1497,7 +1497,7 @@ fn pre_auth_registration(
     name: &syn::Ident,
     fn_ident: &syn::Ident,
     path: &str,
-    decorators: &crate::types::MethodDecorators,
+    decorators: &crate::model::types::MethodDecorators,
     method_fn: TokenStream,
     closure: TokenStream,
 ) -> TokenStream {

@@ -1,9 +1,9 @@
 use syn::parse::Parser;
 
-use crate::type_utils::{
+use crate::util::type_utils::{
     parse_config_field, parse_config_section_prefix, parse_live_config_field, unwrap_option_type,
 };
-use crate::types::*;
+use crate::model::types::*;
 
 /// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
@@ -162,7 +162,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
                 ));
             }
         }
-        crate::field_resolver::check_live_config_exclusive(&field.attrs)?;
+        crate::model::field_resolver::check_live_config_exclusive(&field.attrs)?;
 
         if let Some(attr) = live_config_attr {
             let (key, ty_name) = parse_live_config_field(attr, &field_type)?;
@@ -205,7 +205,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
             }
         } else if let Some(attr) = config_attr {
             let (key, ty_name) = parse_config_field(attr, &field_type)?;
-            let is_option = crate::type_utils::is_option_type(&field_type);
+            let is_option = crate::util::type_utils::is_option_type(&field_type);
             config_fields.push(ConfigField {
                 name: field_name,
                 key,

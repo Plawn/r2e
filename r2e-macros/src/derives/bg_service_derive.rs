@@ -11,8 +11,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use crate::crate_path::r2e_core_path;
-use crate::field_resolver::{
+use crate::util::crate_path::r2e_core_path;
+use crate::model::field_resolver::{
     classify_fields, config_init_panic, config_section_init_panic, ClassifyOpts, FieldKind,
 };
 
@@ -105,10 +105,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 field_inits.push(quote! { #field_name: __ctx.get::<#field_ty>() });
             }
             FieldKind::ConfigSection { prefix } => {
-                config_key_entries.push(crate::field_resolver::section_config_key_entry(
+                config_key_entries.push(crate::model::field_resolver::section_config_key_entry(
                     &krate, prefix, cf.ty,
                 ));
-                config_section_entries.push(crate::field_resolver::section_validator_entry(
+                config_section_entries.push(crate::model::field_resolver::section_validator_entry(
                     &krate, prefix, cf.ty,
                 ));
                 field_inits.push(config_section_init_panic(
@@ -117,8 +117,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 has_any_config = true;
             }
             FieldKind::Config { key, ty_name } => {
-                let is_option = crate::type_utils::is_option_type(cf.ty);
-                config_key_entries.push(crate::field_resolver::copied_config_key_entry(
+                let is_option = crate::util::type_utils::is_option_type(cf.ty);
+                config_key_entries.push(crate::model::field_resolver::copied_config_key_entry(
                     &krate, key, ty_name, is_option,
                 ));
                 field_inits.push(config_init_panic(
@@ -128,10 +128,10 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
             FieldKind::LiveConfig { key, ty_name } => {
                 let field_name = cf.name;
-                config_key_entries.push(crate::field_resolver::live_config_key_entry(
+                config_key_entries.push(crate::model::field_resolver::live_config_key_entry(
                     &krate, key, ty_name,
                 ));
-                let expr = crate::field_resolver::live_config_resolve_expr(
+                let expr = crate::model::field_resolver::live_config_resolve_expr(
                     &quote! { __r2e_live },
                     key,
                     Some(cf.ty),
@@ -147,11 +147,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         dep_types.push(quote! { #krate::config::R2eConfig });
     }
     if has_live_config {
-        dep_types.push(crate::field_resolver::live_config_registry_ty(&krate));
+        dep_types.push(crate::model::field_resolver::live_config_registry_ty(&krate));
     }
-    let deps_type = crate::type_list_gen::build_tcons_type(&dep_types, &krate);
+    let deps_type = crate::model::type_list_gen::build_tcons_type(&dep_types, &krate);
 
-    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
     let config_keys_fn = if config_key_entries.is_empty() {
         quote! {}
     } else {
@@ -162,7 +162,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
-    let config_sections_ret_ty = crate::field_resolver::config_sections_ret_ty(&krate);
+    let config_sections_ret_ty = crate::model::field_resolver::config_sections_ret_ty(&krate);
     let config_sections_fn = if config_section_entries.is_empty() {
         quote! {}
     } else {
@@ -181,7 +181,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     };
     let live_config_prelude =
-        crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
+        crate::model::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
 
     Ok(quote! {
         impl #krate::ServiceComponent for #name {

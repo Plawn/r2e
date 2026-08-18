@@ -9,8 +9,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::transverse;
-use crate::routes_parsing::RoutesImplDef;
-use crate::types::*;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::model::types::*;
 
 /// Emit an impl method verbatim (no wrapping). Shared by the route/SSE/WS
 /// façade sites and the anonymous-route core sites, which all just re-emit the

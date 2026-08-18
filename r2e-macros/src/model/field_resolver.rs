@@ -2,7 +2,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::type_utils::{
+use crate::util::type_utils::{
     config_hint_sentence, parse_config_field, parse_config_section_prefix, parse_inject_name,
     parse_live_config_field,
 };

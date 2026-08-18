@@ -3,7 +3,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields, PathSegment, Type};
 
 use crate::codegen::controller_impl::type_to_openapi_str;
-use crate::crate_path::r2e_core_path;
+use crate::util::crate_path::r2e_core_path;
 
 pub fn expand(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);

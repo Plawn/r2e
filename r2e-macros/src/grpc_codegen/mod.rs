@@ -14,7 +14,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::decorators::{generate_named_deco_items, DecoSet};
-use crate::grpc_routes_parsing::GrpcRoutesImplDef;
+use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
 
 /// Per-method prebuilt interceptor sets for a gRPC impl block.
 ///

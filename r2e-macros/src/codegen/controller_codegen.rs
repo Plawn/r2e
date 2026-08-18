@@ -1,9 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::controller_parsing::ControllerStructDef;
-use crate::crate_path::r2e_core_path;
-use crate::field_resolver::{config_init_panic, config_section_init_panic};
+use crate::parsing::controller_parsing::ControllerStructDef;
+use crate::util::crate_path::r2e_core_path;
+use crate::model::field_resolver::{config_init_panic, config_section_init_panic};
 
 /// Generate the physical controller core plus all supporting items.
 ///
@@ -412,7 +412,7 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         .iter()
         .map(|f| {
             let field_name = &f.name;
-            let expr = crate::field_resolver::live_config_resolve_expr(
+            let expr = crate::model::field_resolver::live_config_resolve_expr(
                 &quote! { __r2e_live },
                 &f.key,
                 Some(&f.ty),
@@ -431,7 +431,7 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         quote! {}
     };
     let live_config_prelude =
-        crate::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
+        crate::model::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
 
     let all_inits: Vec<&TokenStream> = inject_inits
         .iter()
@@ -466,9 +466,9 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         deps_types.push(quote! { #krate::R2eConfig });
     }
     if has_live_config {
-        deps_types.push(crate::field_resolver::live_config_registry_ty(&krate));
+        deps_types.push(crate::model::field_resolver::live_config_registry_ty(&krate));
     }
-    let deps_list = crate::type_list_gen::build_tcons_type(&deps_types, &krate);
+    let deps_list = crate::model::type_list_gen::build_tcons_type(&deps_types, &krate);
 
     // Config keys declared by the core, mirroring `Bean::config_keys()`:
     // `#[config]` keys are `Required` unless `Option<T>` (then `Optional`),
@@ -481,21 +481,21 @@ fn generate_context_construct(def: &ControllerStructDef) -> TokenStream {
         .config_fields
         .iter()
         .map(|f| {
-            crate::field_resolver::copied_config_key_entry(&krate, &f.key, &f.ty_name, f.is_option)
+            crate::model::field_resolver::copied_config_key_entry(&krate, &f.key, &f.ty_name, f.is_option)
         })
         .chain(
             def.config_section_fields
                 .iter()
-                .map(|f| crate::field_resolver::section_config_key_entry(&krate, &f.prefix, &f.ty)),
+                .map(|f| crate::model::field_resolver::section_config_key_entry(&krate, &f.prefix, &f.ty)),
         )
         .chain(
             def.live_config_fields
                 .iter()
-                .map(|f| crate::field_resolver::live_config_key_entry(&krate, &f.key, &f.ty_name)),
+                .map(|f| crate::model::field_resolver::live_config_key_entry(&krate, &f.key, &f.ty_name)),
         )
         .collect();
 
-    let config_keys_ret_ty = crate::field_resolver::config_keys_ret_ty(&krate);
+    let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
     let config_keys_fn = if config_key_entries.is_empty() {
         quote! {}
     } else {

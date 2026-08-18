@@ -1,7 +1,7 @@
 //! Scheduled task attribute extraction.
 
 use super::duration::parse_duration_ms;
-use crate::types::{OverlapMode, ScheduledConfig};
+use crate::model::types::{OverlapMode, ScheduledConfig};
 
 pub fn strip_scheduled_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs

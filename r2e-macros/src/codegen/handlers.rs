@@ -4,9 +4,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::crate_path::r2e_core_path;
-use crate::routes_parsing::RoutesImplDef;
-use crate::types::*;
+use crate::util::crate_path::r2e_core_path;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::model::types::*;
 
 /// Generate all handler functions for a controller.
 ///
@@ -63,7 +63,7 @@ pub(super) fn data_marker() -> syn::Ident {
 pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
     format_ident!(
         "__R2eMp{}",
-        crate::type_utils::to_pascal_case(&method.to_string())
+        crate::util::type_utils::to_pascal_case(&method.to_string())
     )
 }
 
@@ -956,7 +956,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             .managed_params
             .iter()
             .map(|mp| {
-                let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+                let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
                 quote! { #ty: #krate::ManagedResource<__R2eS> }
             })
             .collect();

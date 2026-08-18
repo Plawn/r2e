@@ -11,6 +11,7 @@
 //!   post-construct)
 //! - `controller_impl`: Controller trait implementation generation
 
+pub(crate) mod controller_codegen;
 pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 mod handlers;
@@ -22,9 +23,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::crate_path::r2e_core_path;
-use crate::routes_parsing::RoutesImplDef;
-use crate::types::MethodDecorators;
+use crate::util::crate_path::r2e_core_path;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::model::types::MethodDecorators;
 
 /// Main entry point: generate all code for a `#[routes]` impl block.
 pub fn generate(def: &RoutesImplDef) -> TokenStream {

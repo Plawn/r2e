@@ -5,7 +5,7 @@ use syn::{
     parse_macro_input, Attribute, Data, DeriveInput, Fields, Ident, Lit, Meta, Type, Variant,
 };
 
-use crate::crate_path::r2e_core_path;
+use crate::util::crate_path::r2e_core_path;
 
 // ── Parsed types ─────────────────────────────────────────────────────────
 

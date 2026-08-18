@@ -3,8 +3,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse_macro_input;
 
-use crate::controller_codegen;
-use crate::controller_parsing::{self, CONTROLLER_FIELD_ATTRS};
+use crate::codegen::controller_codegen;
+use crate::parsing::controller_parsing::{self, CONTROLLER_FIELD_ATTRS};
 
 pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as syn::ItemStruct);

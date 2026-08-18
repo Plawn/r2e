@@ -4,8 +4,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::decorators::wrap_with_deco_interceptors;
-use crate::crate_path::{r2e_core_path, r2e_grpc_path};
-use crate::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
+use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
+use crate::parsing::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 
 use super::GrpcDecoSets;
 

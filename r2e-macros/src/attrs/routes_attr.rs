@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
 use crate::codegen;
-use crate::routes_parsing;
+use crate::parsing::routes_parsing;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as syn::ItemImpl);

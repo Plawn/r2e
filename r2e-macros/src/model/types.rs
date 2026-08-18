@@ -1,4 +1,4 @@
-use crate::route::HttpMethod;
+use crate::model::route::HttpMethod;
 
 pub struct InjectedField {
     pub name: syn::Ident,

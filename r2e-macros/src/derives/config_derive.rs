@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields, Lit, Meta};
 
-use crate::crate_path::r2e_core_path;
+use crate::util::crate_path::r2e_core_path;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -42,8 +42,8 @@ struct FieldInfo {
     has_validate: bool,
 }
 
-use crate::type_utils::is_option_type;
-use crate::type_utils::unwrap_option_type as option_inner_type;
+use crate::util::type_utils::is_option_type;
+use crate::util::type_utils::unwrap_option_type as option_inner_type;
 
 /// Extract doc comments from a field's attributes.
 fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {

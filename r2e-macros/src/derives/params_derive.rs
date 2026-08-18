@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type};
 
-use crate::crate_path::r2e_core_path;
+use crate::util::crate_path::r2e_core_path;
 
 enum ParamSource {
     Path { name: String },
@@ -566,7 +566,7 @@ fn parse_name_attr(attr: &syn::Attribute) -> syn::Result<Option<String>> {
     }
 }
 
-use crate::type_utils::{is_option_type, unwrap_option_type};
+use crate::util::type_utils::{is_option_type, unwrap_option_type};
 
 /// Map a Rust type to an OpenAPI type string.
 fn rust_type_to_openapi_str(ty: &Type) -> &'static str {

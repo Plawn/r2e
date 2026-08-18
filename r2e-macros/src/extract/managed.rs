@@ -1,6 +1,6 @@
 //! Managed resource attribute extraction.
 
-use crate::types::ManagedParam;
+use crate::model::types::ManagedParam;
 use syn::spanned::Spanned;
 
 /// Extracts parameters marked with `#[managed]` and strips the attribute.

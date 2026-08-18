@@ -27,10 +27,10 @@ use syn::{FnArg, ImplItem, ItemImpl, ReturnType};
 
 use crate::codegen::decorators::{intercept_field_idents, wrap_with_interceptor_refs};
 use crate::codegen::scheduled::{overlap_policy_expr, schedule_config_expr, task_name, SkipCall};
-use crate::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
+use crate::util::crate_path::{r2e_core_path, r2e_events_path, r2e_executor_path, r2e_scheduler_path};
 use crate::extract::consumer::strip_consumer_attrs;
-use crate::type_utils::is_result_like;
-use crate::types::{ConsumerKind, ScheduledConfig};
+use crate::util::type_utils::is_result_like;
+use crate::model::types::{ConsumerKind, ScheduledConfig};
 
 /// Strip the transverse wiring attributes (`#[consumer]`, `#[post_construct]`,
 /// `#[scheduled]`, `#[intercept]`) from a method's attribute list, preserving

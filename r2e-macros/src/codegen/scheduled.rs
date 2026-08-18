@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::types::{OverlapMode, ScheduledConfig};
+use crate::model::types::{OverlapMode, ScheduledConfig};
 
 /// Generate the `ScheduleConfig` expression for a parsed `#[scheduled]` config.
 pub(crate) fn schedule_config_expr(

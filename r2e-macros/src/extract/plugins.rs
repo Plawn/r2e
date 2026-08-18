@@ -11,7 +11,7 @@ use crate::extract::route::{
     extract_roles, extract_status, is_fallback_attr, is_route_attr, is_sse_attr, is_ws_attr,
     roles_guard_expr,
 };
-use crate::types::MethodDecorators;
+use crate::model::types::MethodDecorators;
 
 /// A decorator plugin that can parse one or more attributes into `MethodDecorators`.
 pub trait RoutePlugin: Sync {

@@ -1,6 +1,6 @@
-use crate::controller_parsing::has_identity_qualifier;
+use crate::parsing::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
-use crate::types::*;
+use crate::model::types::*;
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
@@ -39,7 +39,7 @@ pub struct RoutesImplDef {
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
-use crate::type_utils::unwrap_option_type;
+use crate::util::type_utils::unwrap_option_type;
 
 /// Detect `#[inject(identity)]` on handler parameters.
 /// Returns the parameter index (among typed params, excluding `&self`) and the

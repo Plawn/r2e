@@ -26,9 +26,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::crate_path::r2e_core_path;
-use crate::routes_parsing::RoutesImplDef;
-use crate::types::MethodDecorators;
+use crate::util::crate_path::r2e_core_path;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::model::types::MethodDecorators;
 
 /// Resolve a decorator expression to `(spec type path, value expression)`.
 ///
@@ -674,7 +674,7 @@ pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
     let mut seen = std::collections::HashSet::new();
     for rm in &def.route_methods {
         for mp in &rm.managed_params {
-            let ty = crate::type_utils::staticize_lifetimes(&mp.ty);
+            let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
             if seen.insert(quote!(#ty).to_string()) {
                 deps = quote! {
                     <#deps as #krate::type_list::TAppend<

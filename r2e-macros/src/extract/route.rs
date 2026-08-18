@@ -2,8 +2,8 @@
 
 use quote::quote;
 
-use crate::crate_path::r2e_security_path;
-use crate::route::{HttpMethod, RoutePath};
+use crate::util::crate_path::r2e_security_path;
+use crate::model::route::{HttpMethod, RoutePath};
 
 pub fn is_route_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("get")
@@ -207,7 +207,7 @@ pub fn extract_pre_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::E
 /// Returns `(path, keep_alive)` if found.
 pub fn extract_sse_attr(
     attrs: &[syn::Attribute],
-) -> syn::Result<Option<(String, crate::types::SseKeepAlive)>> {
+) -> syn::Result<Option<(String, crate::model::types::SseKeepAlive)>> {
     for attr in attrs {
         if !attr.path().is_ident("sse") {
             continue;
@@ -230,7 +230,7 @@ pub fn extract_sse_attr(
             }
         };
 
-        let mut keep_alive = crate::types::SseKeepAlive::Default;
+        let mut keep_alive = crate::model::types::SseKeepAlive::Default;
 
         for expr in iter {
             // Parse keep_alive = <value>
@@ -243,7 +243,7 @@ pub fn extract_sse_attr(
                                 ..
                             }) => {
                                 if !b.value {
-                                    keep_alive = crate::types::SseKeepAlive::Disabled;
+                                    keep_alive = crate::model::types::SseKeepAlive::Disabled;
                                 }
                             }
                             syn::Expr::Lit(syn::ExprLit {
@@ -251,7 +251,7 @@ pub fn extract_sse_attr(
                                 ..
                             }) => {
                                 keep_alive =
-                                    crate::types::SseKeepAlive::Interval(i.base10_parse()?);
+                                    crate::model::types::SseKeepAlive::Interval(i.base10_parse()?);
                             }
                             _ => {
                                 return Err(syn::Error::new_spanned(
