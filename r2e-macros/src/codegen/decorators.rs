@@ -411,55 +411,103 @@ pub(crate) fn wrap_with_interceptor_refs(
     }
 }
 
-/// A generated per-controller **shared** interceptor set: hidden struct + build
-/// function holding the controller-level (impl-level) `#[intercept]` products,
-/// built **once per controller** (not once per route/method) so a stateful
-/// impl-level interceptor keeps a single instance shared across every route it
-/// wraps. See [`ctrl_deco_set`] / [`generate_ctrl_deco_items`].
+/// A generated per-controller **shared** decorator set: hidden struct + build
+/// function holding the controller-level (impl-level) `#[intercept]`,
+/// `#[guard]`/`#[roles]`/`#[all_roles]`, and `#[pre_guard]` products, built
+/// **once per controller** (not once per route/method) so a stateful
+/// impl-level decorator keeps a single instance shared across every route it
+/// wraps — for guards this is what gives e.g. `RateLimit` one bucket for the
+/// whole controller. See [`ctrl_deco_set`] / [`generate_ctrl_deco_items`].
 pub(crate) struct CtrlDecoSet {
     pub struct_ident: syn::Ident,
     pub ctor_ident: syn::Ident,
     /// Field idents for the controller-level interceptor sites (`__ci0..`),
     /// outermost-first in declaration order.
-    pub fields: Vec<syn::Ident>,
+    pub intercept_fields: Vec<syn::Ident>,
+    /// Field idents for the controller-level post-auth guard sites (`__cg0..`),
+    /// roles-derived guards first — checked before each route's own guards.
+    pub guard_fields: Vec<syn::Ident>,
+    /// Field idents for the controller-level pre-auth guard sites (`__cp0..`),
+    /// checked in the pre-auth middleware before each route's own pre-guards.
+    pub pre_guard_fields: Vec<syn::Ident>,
 }
 
-/// Whether a controller has (inferable) controller-level `#[intercept]` sites
-/// that apply to at least one interceptable method (HTTP route, `#[scheduled]`,
-/// or `#[consumer]`). Returns the shared-set identifiers when so.
+/// Controller-level decorator exprs that actually apply, per family
+/// (interceptors, post-auth guards, pre-auth guards).
 ///
-/// SSE/WS methods do not run interceptors, so they do not count as targets.
-/// Deterministic from `def` (name + controller-level intercepts), so every codegen
-/// site can recompute it without threading the set through call signatures; the
-/// struct/ctor items themselves are emitted once via [`generate_ctrl_deco_items`].
-pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
-    if def.controller_decorators.intercept_fns.is_empty() {
-        return None;
-    }
-    let has_target = !def.route_methods.is_empty()
+/// Interceptors need an interceptable method (HTTP route, `#[scheduled]`, or
+/// `#[consumer]`; SSE/WS do not run the interceptor chain) — without one the
+/// family is dropped so no unused product gets built (its deps are not folded
+/// either). Guards and pre-guards are parse-guaranteed to have an HTTP target
+/// (`routes_parsing` rejects them otherwise), so they pass through as-is.
+fn ctrl_family_exprs(def: &RoutesImplDef) -> (&[syn::Expr], &[syn::Expr], &[syn::Expr]) {
+    let cd = &def.controller_decorators;
+    let intercept_target = !def.route_methods.is_empty()
         || !def.scheduled_methods.is_empty()
         || !def.consumer_methods.is_empty();
-    if !has_target {
+    let intercepts: &[syn::Expr] = if intercept_target {
+        &cd.intercept_fns
+    } else {
+        &[]
+    };
+    (intercepts, &cd.guard_fns, &cd.pre_auth_guard_fns)
+}
+
+/// Degradation check shared by every per-method emission site (handler +
+/// closure, route/SSE/WS): true when the method-level exprs given AND every
+/// applicable controller-level decorator expr resolve to a spec type. Handler
+/// and closure MUST use the same check per method — a mismatch would change
+/// one side's parameter arity but not the other's after a spec-type error.
+pub(super) fn specs_ok_with_ctrl<'a>(
+    def: &'a RoutesImplDef,
+    method_exprs: impl IntoIterator<Item = &'a syn::Expr>,
+) -> bool {
+    let (intercepts, guards, pre_guards) = ctrl_family_exprs(def);
+    all_specs_inferable(
+        method_exprs
+            .into_iter()
+            .chain(intercepts)
+            .chain(guards)
+            .chain(pre_guards),
+    )
+}
+
+/// Whether a controller has (inferable) controller-level decorator sites that
+/// apply to at least one method. Returns the shared-set identifiers when so.
+///
+/// Deterministic from `def`, so every codegen site can recompute it without
+/// threading the set through call signatures; the struct/ctor items themselves
+/// are emitted once via [`generate_ctrl_deco_items`].
+pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
+    let (intercepts, guards, pre_guards) = ctrl_family_exprs(def);
+    if intercepts.is_empty() && guards.is_empty() && pre_guards.is_empty() {
         return None;
     }
-    if !all_specs_inferable(def.controller_decorators.intercept_fns.iter()) {
+    if !all_specs_inferable(intercepts.iter().chain(guards).chain(pre_guards)) {
         return None;
     }
     let controller_name = &def.controller_name;
     Some(CtrlDecoSet {
         struct_ident: format_ident!("__R2eCtrlDeco_{}", controller_name),
         ctor_ident: format_ident!("__r2e_ctrldeco_{}", controller_name),
-        fields: (0..def.controller_decorators.intercept_fns.len())
+        intercept_fields: (0..intercepts.len())
             .map(|i| format_ident!("__ci{}", i))
+            .collect(),
+        guard_fields: (0..guards.len())
+            .map(|i| format_ident!("__cg{}", i))
+            .collect(),
+        pre_guard_fields: (0..pre_guards.len())
+            .map(|i| format_ident!("__cp{}", i))
             .collect(),
     })
 }
 
-/// Emit the shared controller-level interceptor struct + its constructor
+/// Emit the shared controller-level decorator struct + its constructor
 /// (built from the resolved bean context). Emitted **once** per controller at
 /// module scope; the router body and the transverse fill each build a single
-/// instance from it. Empty when there are no controller-level interceptors.
+/// instance from it. Empty when there are no controller-level decorators.
 pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
+    let (intercepts, guards, pre_guards) = ctrl_family_exprs(def);
     let Some(set) = ctrl_deco_set(def) else {
         // No shared set — either there is nothing to emit, or a non-inferable
         // controller-level spec gated it away. The latter MUST error here:
@@ -467,14 +515,19 @@ pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
         // deco sets only receive method-level fns), so staying silent would
         // drop the whole controller-level chain — valid siblings included.
         let mut errors = TokenStream::new();
-        for expr in def.controller_decorators.intercept_fns.iter() {
+        for expr in intercepts.iter().chain(guards).chain(pre_guards) {
             if let Err(err) = spec_type_of(expr) {
                 errors.extend(err.to_compile_error());
             }
         }
         return errors;
     };
-    let sites = set.fields.iter().zip(def.controller_decorators.intercept_fns.iter());
+    let sites = set
+        .intercept_fields
+        .iter()
+        .zip(intercepts.iter())
+        .chain(set.guard_fields.iter().zip(guards.iter()))
+        .chain(set.pre_guard_fields.iter().zip(pre_guards.iter()));
     match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, quote! {}) {
         Ok(items) => items,
         // Unreachable: `ctrl_deco_set` returned `Some`, so every spec is
@@ -575,15 +628,13 @@ pub(crate) fn decorator_config_key_stmts<'a>(
 pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
 
-    // Controller-level interceptors are wired into HTTP route handlers,
-    // scheduled tasks, and consumers (SSE/WS do not run the interceptor
-    // chain), so their deps only matter when at least one such method exists.
-    if !def.route_methods.is_empty()
-        || !def.scheduled_methods.is_empty()
-        || !def.consumer_methods.is_empty()
-    {
-        exprs.extend(&def.controller_decorators.intercept_fns);
-    }
+    // Controller-level sites, gated per family on an applicable target
+    // (interceptors need an interceptable method; guards/pre-guards are
+    // parse-guaranteed one) — exactly the exprs the shared set builds.
+    let (ctrl_intercepts, ctrl_guards, ctrl_pre_guards) = ctrl_family_exprs(def);
+    exprs.extend(ctrl_intercepts);
+    exprs.extend(ctrl_guards);
+    exprs.extend(ctrl_pre_guards);
     for rm in &def.route_methods {
         exprs.extend(&rm.decorators.guard_fns);
         exprs.extend(&rm.decorators.pre_auth_guard_fns);

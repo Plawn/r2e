@@ -89,14 +89,22 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         stmts
     };
 
-    // Controller-level (impl-level) `#[intercept]` products, built ONCE per
-    // controller and shared (via `Arc` clones) across every HTTP route — so a
-    // stateful impl-level interceptor keeps a single instance, not one per route.
-    // Emitted only when there are controller-level interceptors AND at least one
-    // HTTP route to capture them (SSE/WS run no interceptor chain).
+    // Controller-level (impl-level) decorator products (`#[intercept]`,
+    // `#[guard]`/`#[roles]`/`#[all_roles]`, `#[pre_guard]`), built ONCE per
+    // controller and shared (via `Arc` clones) across every HTTP surface — so
+    // a stateful impl-level decorator keeps a single instance, not one per
+    // route. Emitted when some surface actually captures it: any route (they
+    // take the set whenever it exists — interceptors and/or guards), or an
+    // SSE/WS endpoint when the set carries guards, or any endpoint when it
+    // carries pre-guards (the pre-auth middleware clones it).
     let ctrl_deco_items = super::decorators::generate_ctrl_deco_items(def);
     let ctrl_router_setup = super::decorators::ctrl_deco_set(def)
-        .filter(|_| !def.route_methods.is_empty())
+        .filter(|set| {
+            let has_sse_ws = !def.sse_methods.is_empty() || !def.ws_methods.is_empty();
+            !def.route_methods.is_empty()
+                || (has_sse_ws
+                    && (!set.guard_fields.is_empty() || !set.pre_guard_fields.is_empty()))
+        })
         .map(|set| {
             let ctor = &set.ctor_ident;
             quote! { let __r2e_ctrl_deco = ::std::sync::Arc::new(#ctor(__ctx)); }
@@ -268,7 +276,21 @@ fn generate_route_metadata(
             let route_path_str = &rm.path;
             let method = rm.method.as_routing_fn().to_uppercase();
             let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
-            let roles: Vec<_> = rm.decorators.roles.iter().chain(rm.decorators.all_roles.iter()).map(|r| quote! { #r.to_string() }).collect();
+            // Controller-level #[roles]/#[all_roles]/#[guard] apply to every
+            // non-#[anonymous] route (anonymous opts out of the controller's
+            // post-auth checks), so their metadata folds in on the same rule.
+            let ctrl = &def.controller_decorators;
+            let ctrl_applies = !rm.decorators.anonymous;
+            let mut role_strs: Vec<&String> = rm
+                .decorators
+                .roles
+                .iter()
+                .chain(rm.decorators.all_roles.iter())
+                .collect();
+            if ctrl_applies {
+                role_strs.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()));
+            }
+            let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
             let tag = &tag_name;
 
             let path_params = extract_path_params(rm, &krate);
@@ -297,9 +319,10 @@ fn generate_route_metadata(
             let deprecated = rm.decorators.deprecated;
             let body_required = detect_body_required(rm);
 
-            let has_roles = !rm.decorators.roles.is_empty() || !rm.decorators.all_roles.is_empty();
+            let has_roles = !role_strs.is_empty();
             let has_identity_param = rm.identity_param.is_some();
-            let has_guards = !rm.decorators.guard_fns.is_empty();
+            let has_guards = !rm.decorators.guard_fns.is_empty()
+                || (ctrl_applies && !ctrl.guard_fns.is_empty());
             let has_auth = has_auth_expr(
                 rm.decorators.anonymous,
                 has_roles,
@@ -370,6 +393,11 @@ fn generate_route_metadata(
 /// (rejected at parse time), and an *optional* identity param never rejects —
 /// so only explicit guards (which may still reject, e.g. an API-key check)
 /// keep the flag on.
+///
+/// Call sites fold controller-level (impl-block) roles/guards into
+/// `has_roles`/`has_guards` for non-anonymous endpoints only — anonymous
+/// endpoints skip the controller's post-auth checks, so controller decorators
+/// never turn their flag back on.
 fn has_auth_expr(
     anonymous: bool,
     has_roles: bool,
@@ -920,7 +948,12 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
     // one scheduled/consumer method. Built ONCE at fill (stored in the
     // container's `__ctrl` field) so every transverse method shares one instance.
     let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let ctrl_for_transverse = ctrl_set.is_some()
+    // Only the interceptor fields matter off-request: controller-level guards
+    // are HTTP-only, so a set that exists for guards alone must not promote
+    // scheduled bodies or add the container's `__ctrl` field.
+    let ctrl_for_transverse = ctrl_set
+        .as_ref()
+        .is_some_and(|s| !s.intercept_fields.is_empty())
         && (!def.scheduled_methods.is_empty() || !def.consumer_methods.is_empty());
 
     // ── Scheduled decorator sets (method-level interceptors only) ──
@@ -1153,14 +1186,14 @@ fn generate_sse_route_metadata(
     def.sse_methods
         .iter()
         .map(|sm| {
+            let (roles, has_guards) = streaming_effective_auth(def, &sm.decorators);
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &sm.path,
                 &sm.fn_item.sig.ident,
-                &sm.decorators.roles,
-                &sm.decorators.all_roles,
-                !sm.decorators.guard_fns.is_empty(),
+                &roles,
+                has_guards,
                 sm.identity_param.is_some(),
                 sm.decorators.anonymous,
                 "SSE stream",
@@ -1177,20 +1210,43 @@ fn generate_ws_route_metadata(
     def.ws_methods
         .iter()
         .map(|wm| {
+            let (roles, has_guards) = streaming_effective_auth(def, &wm.decorators);
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &wm.path,
                 &wm.fn_item.sig.ident,
-                &wm.decorators.roles,
-                &wm.decorators.all_roles,
-                !wm.decorators.guard_fns.is_empty(),
+                &roles,
+                has_guards,
                 wm.identity_param.is_some(),
                 wm.decorators.anonymous,
                 "WebSocket endpoint",
             )
         })
         .collect()
+}
+
+/// Effective (method + controller) role strings and guard presence for a
+/// streaming route's metadata. Controller-level decorators apply on the same
+/// rule as routes: every non-`#[anonymous]` endpoint (anonymous opts out of
+/// the controller's post-auth checks).
+fn streaming_effective_auth(
+    def: &RoutesImplDef,
+    decorators: &crate::types::MethodDecorators,
+) -> (Vec<String>, bool) {
+    let ctrl = &def.controller_decorators;
+    let mut roles: Vec<String> = decorators
+        .roles
+        .iter()
+        .chain(decorators.all_roles.iter())
+        .cloned()
+        .collect();
+    let mut has_guards = !decorators.guard_fns.is_empty();
+    if !decorators.anonymous {
+        roles.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()).cloned());
+        has_guards |= !ctrl.guard_fns.is_empty();
+    }
+    (roles, has_guards)
 }
 
 /// Emit a `RouteInfo` literal for SSE / WS routes.
@@ -1205,7 +1261,6 @@ fn emit_streaming_route_info(
     path: &str,
     fn_ident: &syn::Ident,
     roles: &[String],
-    all_roles: &[String],
     has_guards: bool,
     has_identity_param: bool,
     anonymous: bool,
@@ -1214,12 +1269,8 @@ fn emit_streaming_route_info(
     let krate = r2e_core_path();
     let tag = controller_name.to_string();
     let op_id = format!("{}_{}", controller_name, fn_ident);
-    let roles_tokens: Vec<_> = roles
-        .iter()
-        .chain(all_roles.iter())
-        .map(|r| quote! { #r.to_string() })
-        .collect();
-    let has_roles = !roles.is_empty() || !all_roles.is_empty();
+    let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
+    let has_roles = !roles.is_empty();
     let has_auth = has_auth_expr(
         anonymous,
         has_roles,
@@ -1262,11 +1313,21 @@ fn emit_streaming_route_info(
 // captures the controller `Arc` once and forwards to the common handler
 // wrapper emitted by `handlers.rs`.
 
+/// Whether controller-level `#[pre_guard]`s apply (the shared set exists and
+/// carries pre-guard fields — a non-inferable controller spec degrades the set
+/// to `None`, with the compile_error emitted by `generate_ctrl_deco_items`).
+/// When true, EVERY route/SSE/WS endpoint — `#[anonymous]` included —
+/// registers through the pre-auth middleware, which runs the controller
+/// pre-guards before the method's own.
+fn ctrl_has_pre_guards(def: &RoutesImplDef) -> bool {
+    super::decorators::ctrl_deco_set(def).is_some_and(|s| !s.pre_guard_fields.is_empty())
+}
+
 fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.route_methods
         .iter()
-        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty())
+        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|rm| {
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
@@ -1308,7 +1369,7 @@ fn generate_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.sse_methods
         .iter()
-        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty())
+        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|sm| {
             let path = &sm.path;
             let closure = super::handlers::generate_sse_closure(def, sm);
@@ -1340,7 +1401,7 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.ws_methods
         .iter()
-        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty())
+        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|wm| {
             let path = &wm.path;
             let closure = super::handlers::generate_ws_closure(def, wm);
@@ -1382,9 +1443,10 @@ fn generate_pre_auth_registrations(
     _meta_mod: &syn::Ident,
 ) -> Vec<TokenStream> {
     let mut registrations: Vec<TokenStream> = Vec::new();
+    let ctrl_pre = ctrl_has_pre_guards(def);
 
     for rm in &def.route_methods {
-        if rm.decorators.pre_auth_guard_fns.is_empty() {
+        if rm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
             continue;
         }
         let method_fn = format_ident!("{}", rm.method.as_routing_fn());
@@ -1400,7 +1462,7 @@ fn generate_pre_auth_registrations(
     }
     // SSE/WS endpoints run their pre-auth guards through the same middleware.
     for sm in &def.sse_methods {
-        if sm.decorators.pre_auth_guard_fns.is_empty() {
+        if sm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
             continue;
         }
         registrations.push(pre_auth_registration(
@@ -1414,7 +1476,7 @@ fn generate_pre_auth_registrations(
         ));
     }
     for wm in &def.ws_methods {
-        if wm.decorators.pre_auth_guard_fns.is_empty() {
+        if wm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
             continue;
         }
         registrations.push(pre_auth_registration(
@@ -1441,51 +1503,20 @@ fn pre_auth_registration(
 ) -> TokenStream {
     let krate = r2e_core_path();
 
-    // Mirror the post-auth degrade: when a pre-guard spec type is not
+    // Controller-level pre-guards from the shared set (`None` when the set
+    // degraded on a non-inferable controller spec — the compile_error comes
+    // from `generate_ctrl_deco_items`).
+    let ctrl_pre_fields: Vec<syn::Ident> = super::decorators::ctrl_deco_set(def)
+        .map(|s| s.pre_guard_fields)
+        .unwrap_or_default();
+    // Mirror the post-auth degrade: when a method pre-guard spec type is not
     // inferable, `generate_predeco_items` emitted the compile_error and no
-    // ctor — register the route without the pre-auth layer so the only
-    // error the user sees is the spec-type one.
-    if !super::decorators::all_specs_inferable(decorators.pre_auth_guard_fns.iter()) {
-        let middleware_layers: Vec<_> = decorators
-            .middleware_fns
-            .iter()
-            .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-            .collect();
-        let direct_layers: Vec<_> = decorators
-            .layer_exprs
-            .iter()
-            .map(|expr| quote! { .layer(#expr) })
-            .collect();
-        return quote! {
-            __inner = __inner.route(
-                #path,
-                #krate::http::routing::#method_fn(#closure)
-                    #(#middleware_layers)*
-                    #(#direct_layers)*
-            );
-        };
-    }
-
-    // Pre-auth guard contexts get the module-qualified name, like the
-    // post-auth ones (rate-limit bucket keys must be route-unique).
-    let controller_name_str = super::handlers::qualified_controller_name(name);
-    let fn_name_str = fn_ident.to_string();
-    let controller_name = &def.controller_name;
-    let predeco_ctor = format_ident!("__r2e_predeco_{}_{}", controller_name, fn_ident);
-
-    let pre_auth_checks: Vec<_> = (0..decorators.pre_auth_guard_fns.len())
-        .map(|i| {
-            let field = format_ident!("__p{}", i);
-            quote! {
-                if let Err(__resp) = #krate::PreAuthGuard::check(
-                    &__pre_deco.#field,
-                    &__pre_ctx,
-                ).await {
-                    return __resp;
-                }
-            }
-        })
-        .collect();
+    // ctor — drop the method checks so the only error the user sees is the
+    // spec-type one. With no controller pre-guards left either, register the
+    // route without the pre-auth layer entirely.
+    let method_pre_ok =
+        super::decorators::all_specs_inferable(decorators.pre_auth_guard_fns.iter());
+    let has_method_pre = method_pre_ok && !decorators.pre_auth_guard_fns.is_empty();
 
     let middleware_layers: Vec<_> = decorators
         .middleware_fns
@@ -1498,25 +1529,110 @@ fn pre_auth_registration(
         .map(|expr| quote! { .layer(#expr) })
         .collect();
 
+    if !has_method_pre && ctrl_pre_fields.is_empty() {
+        return quote! {
+            __inner = __inner.route(
+                #path,
+                #krate::http::routing::#method_fn(#closure)
+                    #(#middleware_layers)*
+                    #(#direct_layers)*
+            );
+        };
+    }
+
+    // Pre-auth guard contexts get the module-qualified name, like the
+    // post-auth ones (rate-limit bucket keys must be route-unique). The
+    // controller-level checks run FIRST, against the shared set and a `"*"`
+    // context (one stateful-guard bucket per controller).
+    let controller_name_str = super::handlers::qualified_controller_name(name);
+    let fn_name_str = fn_ident.to_string();
+    let controller_name = &def.controller_name;
+    let predeco_ctor = format_ident!("__r2e_predeco_{}_{}", controller_name, fn_ident);
+
+    let ctrl_pre_setup = (!ctrl_pre_fields.is_empty()).then(|| {
+        quote! { let __ctrl_pre_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
+    });
+    let ctrl_pre_clone = (!ctrl_pre_fields.is_empty()).then(|| {
+        quote! { let __ctrl_pre = __ctrl_pre_capture.clone(); }
+    });
+    let ctrl_pre_ctx = (!ctrl_pre_fields.is_empty()).then(|| {
+        quote! {
+            let __ctrl_pre_ctx = #krate::PreAuthGuardContext {
+                method_name: "*",
+                controller_name: #controller_name_str,
+                headers: __req.headers(),
+                uri: __req.uri(),
+                peer_addr: __peer_addr,
+                path_params: #krate::PathParams::EMPTY,
+            };
+        }
+    });
+    let ctrl_pre_checks: Vec<_> = ctrl_pre_fields
+        .iter()
+        .map(|field| {
+            quote! {
+                if let Err(__resp) = #krate::PreAuthGuard::check(
+                    &__ctrl_pre.#field,
+                    &__ctrl_pre_ctx,
+                ).await {
+                    return __resp;
+                }
+            }
+        })
+        .collect();
+
+    let pre_deco_setup = has_method_pre.then(|| {
+        quote! { let __pre_deco_capture = ::std::sync::Arc::new(#predeco_ctor(__ctx)); }
+    });
+    let pre_deco_clone = has_method_pre.then(|| {
+        quote! { let __pre_deco = __pre_deco_capture.clone(); }
+    });
+    let pre_ctx = has_method_pre.then(|| {
+        quote! {
+            let __pre_ctx = #krate::PreAuthGuardContext {
+                method_name: #fn_name_str,
+                controller_name: #controller_name_str,
+                headers: __req.headers(),
+                uri: __req.uri(),
+                peer_addr: __peer_addr,
+                path_params: #krate::PathParams::EMPTY,
+            };
+        }
+    });
+    let pre_auth_checks: Vec<_> = if has_method_pre {
+        (0..decorators.pre_auth_guard_fns.len())
+            .map(|i| {
+                let field = format_ident!("__p{}", i);
+                quote! {
+                    if let Err(__resp) = #krate::PreAuthGuard::check(
+                        &__pre_deco.#field,
+                        &__pre_ctx,
+                    ).await {
+                        return __resp;
+                    }
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     quote! {
         {
-            let __pre_deco_capture = ::std::sync::Arc::new(#predeco_ctor(__ctx));
+            #ctrl_pre_setup
+            #pre_deco_setup
             let __pre_auth_mw = move |__req: #krate::http::extract::Request,
                                       __next: #krate::http::middleware::Next| {
-                let __pre_deco = __pre_deco_capture.clone();
+                #ctrl_pre_clone
+                #pre_deco_clone
                 async move {
                     let __peer_addr = __req
                         .extensions()
                         .get::<#krate::http::ConnectInfo<::std::net::SocketAddr>>()
                         .map(|__info| __info.0);
-                    let __pre_ctx = #krate::PreAuthGuardContext {
-                        method_name: #fn_name_str,
-                        controller_name: #controller_name_str,
-                        headers: __req.headers(),
-                        uri: __req.uri(),
-                        peer_addr: __peer_addr,
-                        path_params: #krate::PathParams::EMPTY,
-                    };
+                    #ctrl_pre_ctx
+                    #(#ctrl_pre_checks)*
+                    #pre_ctx
                     #(#pre_auth_checks)*
                     __next.run(__req).await
                 }

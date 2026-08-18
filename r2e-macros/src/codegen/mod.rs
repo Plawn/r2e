@@ -138,6 +138,31 @@ fn generate_identity_requirement_asserts(def: &RoutesImplDef) -> Vec<TokenStream
         );
     }
 
+    // Controller-level (impl-block) guards apply to every non-`#[anonymous]`
+    // route/SSE/WS (parsing guarantees at least one exists). They can see a
+    // `Some` identity iff any of those endpoints can supply one — an identity
+    // param somewhere, or the struct identity (`anonymous: false` folds in
+    // `HAS_STRUCT_IDENTITY`). Only an always-`None` placement is rejected.
+    let any_identity_param = def
+        .route_methods
+        .iter()
+        .filter(|m| !m.decorators.anonymous)
+        .map(|m| m.identity_param.is_some())
+        .chain(
+            def.sse_methods
+                .iter()
+                .filter(|m| !m.decorators.anonymous)
+                .map(|m| m.identity_param.is_some()),
+        )
+        .chain(
+            def.ws_methods
+                .iter()
+                .filter(|m| !m.decorators.anonymous)
+                .map(|m| m.identity_param.is_some()),
+        )
+        .any(|has| has);
+    emit(&def.controller_decorators.guard_fns, any_identity_param, false);
+
     asserts
 }
 

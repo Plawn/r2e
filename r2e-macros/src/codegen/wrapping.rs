@@ -228,7 +228,10 @@ fn generate_transverse_method(
     // from the container's `__ctrl` field so this method self-intercepts through
     // the same instance every other transverse method / route observes.
     let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let ctrl_field_count = ctrl_set.as_ref().map(|s| s.fields.len()).unwrap_or(0);
+    let ctrl_field_count = ctrl_set
+        .as_ref()
+        .map(|s| s.intercept_fields.len())
+        .unwrap_or(0);
 
     // Nothing to wrap: no method-level and no controller-level interceptors.
     if !method_ok && ctrl_field_count == 0 {
