@@ -720,7 +720,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         rm.decorators
             .guard_fns
             .iter()
-            .chain(def.controller_intercepts.iter())
+            .chain(def.controller_decorators.intercept_fns.iter())
             .chain(rm.decorators.intercept_fns.iter()),
     );
     let has_guards = !rm.decorators.guard_fns.is_empty() && deco_set.is_some();
@@ -1588,7 +1588,7 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
         rm.decorators
             .guard_fns
             .iter()
-            .chain(def.controller_intercepts.iter())
+            .chain(def.controller_decorators.intercept_fns.iter())
             .chain(rm.decorators.intercept_fns.iter()),
     );
     let has_guards = !rm.decorators.guard_fns.is_empty() && specs_ok;

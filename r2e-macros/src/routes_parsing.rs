@@ -5,7 +5,21 @@ use crate::types::*;
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
     pub controller_name: syn::Ident,
-    pub controller_intercepts: Vec<syn::Expr>,
+    /// Controller-level decorators from the impl-block attrs, parsed through
+    /// the same plugin registry as method attrs (so ordering — roles-derived
+    /// guards first in `guard_fns` — is shared by construction). Only the
+    /// families with a controller-level meaning can be non-empty
+    /// (`intercept_fns`, `guard_fns`, `pre_auth_guard_fns`, `roles`,
+    /// `all_roles`); everything else is rejected up front by
+    /// `reject_unsupported_impl_attrs`.
+    ///
+    /// Semantics: the sites are built ONCE per controller into a shared set
+    /// and applied before each route's own decorators. Guard checks run with
+    /// `method_name: "*"` in their context, so stateful guards (e.g.
+    /// `RateLimit`) share one bucket across the controller. `#[anonymous]`
+    /// routes skip the post-auth `guard_fns` (identity-dependent) but keep
+    /// `pre_auth_guard_fns` and `intercept_fns`.
+    pub controller_decorators: MethodDecorators,
     pub route_methods: Vec<RouteMethod>,
     pub sse_methods: Vec<SseMethod>,
     pub ws_methods: Vec<WsMethod>,
@@ -337,6 +351,52 @@ fn classify_lifecycle_hook(
     ))
 }
 
+/// Reject route-family attributes that have no controller-level meaning on a
+/// `#[routes]` impl block. Anything not in the supported set (`#[intercept]`,
+/// `#[guard]`, `#[pre_guard]`, `#[roles]`, `#[all_roles]`) must be a targeted
+/// compile error, never a silent no-op (same policy as the bean-side
+/// `reject_stray_intercepts`).
+fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    const UNSUPPORTED: &[&str] = &[
+        "anonymous",
+        "middleware",
+        "layer",
+        "status",
+        "returns",
+        "consumer",
+        "scheduled",
+        "async_exec",
+        "post_construct",
+        "pre_destroy",
+        "request_helper",
+    ];
+    for attr in attrs {
+        let name = if is_route_attr(attr)
+            || is_fallback_attr(attr)
+            || is_sse_attr(attr)
+            || is_ws_attr(attr)
+        {
+            attr.path().get_ident().map(|i| i.to_string())
+        } else {
+            UNSUPPORTED
+                .iter()
+                .find(|n| attr.path().is_ident(n))
+                .map(|n| n.to_string())
+        };
+        if let Some(name) = name {
+            return Err(syn::Error::new_spanned(
+                attr,
+                format!(
+                    "#[{name}] is not supported on a #[routes] impl block — controller-level \
+                     decorators are #[intercept], #[guard], #[pre_guard], #[roles], and \
+                     #[all_roles]; place #[{name}] on individual methods instead"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -355,8 +415,12 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         }
     };
 
-    // Extract controller-level intercepts from impl attrs
-    let controller_intercepts = extract_intercept_fns(&item.attrs)?;
+    // Controller-level decorators on the impl block. Only the guard family and
+    // #[intercept] are supported there — anything else from the route family is
+    // rejected up front so it can never silently no-op. The scan runs first, so
+    // the parsed struct's unsupported families are empty by construction.
+    reject_unsupported_impl_attrs(&item.attrs)?;
+    let controller_decorators = parse_decorators(&item.attrs)?;
 
     // Scan `#[post_construct]` methods up front (the shared bean-side scan
     // validates `&self` / no extra params). Their bodies still flow to the core
@@ -673,6 +737,45 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         ));
     }
 
+    // Controller-level #[pre_guard] attaches to every `.route(...)` registration;
+    // a #[fallback] route goes through `Router::fallback`, which takes no
+    // per-route layers. Reject the combination rather than silently exempt the
+    // fallback from a guard the impl block promises for ALL routes.
+    if !controller_decorators.pre_auth_guard_fns.is_empty() {
+        if let Some(rm) = route_methods.iter().find(|m| m.is_fallback) {
+            return Err(syn::Error::new(
+                rm.fn_item.sig.ident.span(),
+                "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
+                 the fallback is registered via `Router::fallback`, which takes no per-route \
+                 layers, so the pre-guard could not apply to it. Move the #[pre_guard] to the \
+                 individual routes, or guard the fallback's work with #[guard] / in its body.",
+            ));
+        }
+    }
+
+    // A controller-level guard with nothing to apply to is exactly the silent
+    // no-op this family of attributes is meant to eliminate — fail loud.
+    let has_http_methods =
+        !route_methods.is_empty() || !sse_methods.is_empty() || !ws_methods.is_empty();
+    let has_non_anonymous_http = route_methods.iter().any(|m| !m.decorators.anonymous)
+        || sse_methods.iter().any(|m| !m.decorators.anonymous)
+        || ws_methods.iter().any(|m| !m.decorators.anonymous);
+    if !controller_decorators.guard_fns.is_empty() && !has_non_anonymous_http {
+        return Err(syn::Error::new(
+            controller_name.span(),
+            "controller-level #[guard]/#[roles]/#[all_roles] would apply to no route — it \
+             targets the non-#[anonymous] route/#[sse]/#[ws] methods of this impl block, and \
+             there are none",
+        ));
+    }
+    if !controller_decorators.pre_auth_guard_fns.is_empty() && !has_http_methods {
+        return Err(syn::Error::new(
+            controller_name.span(),
+            "controller-level #[pre_guard] would apply to no route — this impl block declares \
+             no route/#[sse]/#[ws] methods",
+        ));
+    }
+
     // Route-scoped methods move to the request façade; `Self` in their public
     // signature would change meaning. Reject it with a targeted error.
     for rm in route_methods.iter().filter(|m| !m.decorators.anonymous) {
@@ -687,7 +790,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
     Ok(RoutesImplDef {
         controller_name,
-        controller_intercepts,
+        controller_decorators,
         route_methods,
         sse_methods,
         ws_methods,

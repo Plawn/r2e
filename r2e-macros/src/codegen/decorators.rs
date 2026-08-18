@@ -429,11 +429,11 @@ pub(crate) struct CtrlDecoSet {
 /// or `#[consumer]`). Returns the shared-set identifiers when so.
 ///
 /// SSE/WS methods do not run interceptors, so they do not count as targets.
-/// Deterministic from `def` (name + `controller_intercepts`), so every codegen
+/// Deterministic from `def` (name + controller-level intercepts), so every codegen
 /// site can recompute it without threading the set through call signatures; the
 /// struct/ctor items themselves are emitted once via [`generate_ctrl_deco_items`].
 pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
-    if def.controller_intercepts.is_empty() {
+    if def.controller_decorators.intercept_fns.is_empty() {
         return None;
     }
     let has_target = !def.route_methods.is_empty()
@@ -442,14 +442,14 @@ pub(crate) fn ctrl_deco_set(def: &RoutesImplDef) -> Option<CtrlDecoSet> {
     if !has_target {
         return None;
     }
-    if !all_specs_inferable(def.controller_intercepts.iter()) {
+    if !all_specs_inferable(def.controller_decorators.intercept_fns.iter()) {
         return None;
     }
     let controller_name = &def.controller_name;
     Some(CtrlDecoSet {
         struct_ident: format_ident!("__R2eCtrlDeco_{}", controller_name),
         ctor_ident: format_ident!("__r2e_ctrldeco_{}", controller_name),
-        fields: (0..def.controller_intercepts.len())
+        fields: (0..def.controller_decorators.intercept_fns.len())
             .map(|i| format_ident!("__ci{}", i))
             .collect(),
     })
@@ -467,14 +467,14 @@ pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
         // deco sets only receive method-level fns), so staying silent would
         // drop the whole controller-level chain — valid siblings included.
         let mut errors = TokenStream::new();
-        for expr in def.controller_intercepts.iter() {
+        for expr in def.controller_decorators.intercept_fns.iter() {
             if let Err(err) = spec_type_of(expr) {
                 errors.extend(err.to_compile_error());
             }
         }
         return errors;
     };
-    let sites = set.fields.iter().zip(def.controller_intercepts.iter());
+    let sites = set.fields.iter().zip(def.controller_decorators.intercept_fns.iter());
     match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, quote! {}) {
         Ok(items) => items,
         // Unreachable: `ctrl_deco_set` returned `Some`, so every spec is
@@ -582,7 +582,7 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
         || !def.scheduled_methods.is_empty()
         || !def.consumer_methods.is_empty()
     {
-        exprs.extend(&def.controller_intercepts);
+        exprs.extend(&def.controller_decorators.intercept_fns);
     }
     for rm in &def.route_methods {
         exprs.extend(&rm.decorators.guard_fns);
