@@ -163,8 +163,7 @@ pathless HTTP(S) endpoint receives `/v1/traces` automatically; requesting gRPC
 logs a warning and uses HTTP. Events emitted inside OTel spans include
 `trace_id` and `span_id` in pretty and JSON logs.
 
-To propagate the current trace through outgoing reqwest calls, wrap the client
-once:
+To instrument outgoing reqwest calls, wrap the client once:
 
 ```rust
 use r2e::r2e_observability::traced_reqwest_client;
@@ -172,9 +171,29 @@ use r2e::r2e_observability::traced_reqwest_client;
 let http = traced_reqwest_client(reqwest::Client::new());
 ```
 
+Every request then runs in an OpenTelemetry **client** span (`otel.kind =
+"client"`, named `HTTP {method}`) carrying the HTTP-client semantic
+conventions — `http.request.method`, `server.address`, `server.port`,
+`url.full` (credentials stripped), `http.response.status_code`, and
+`otel.status_code` / `error.message` on failure — and the injected
+`traceparent` carries that client span's id. Tracing backends build their
+service graph by pairing a CLIENT span with its direct SERVER child (Tempo's
+metrics-generator, Jaeger, Grafana), so this is what produces the
+`caller → callee` edge and `traces_service_graph_request_client_seconds`.
+
+Span names must stay low-cardinality, so the URL is never part of them. Opt
+into route templates per request with
+`.with_extension(OtelPathNames::known_paths(["/items/{id}"])?)` (names become
+`GET /items/{id}`), or force a name with `.with_extension(OtelName("…".into()))`.
+`DisableOtelPropagation` turns header injection off for one request. All three
+are re-exported from `r2e_observability`.
+
 Pass that `ClientWithMiddleware` to client SDKs. SDKs restricted to a plain
 reqwest client can instead call `inject_current_context(headers)` in their
-single request-construction chokepoint.
+single request-construction chokepoint — but note that this only injects the
+*current* span's context and opens no client span: the trace is still joined
+across services, yet the service graph shows no edge between them. Wrap the
+call in your own `otel.kind = "client"` span if you need one.
 
 ## RequestId plugin
 

@@ -107,9 +107,17 @@ alongside `Tracing`.
 - Honest OTLP defaults: HTTP/protobuf and
   `http://localhost:4318/v1/traces`; pathless HTTP(S) endpoints receive the
   standard traces path. A requested gRPC protocol warns and uses HTTP.
-- `traced_reqwest_client(client)` wraps a `reqwest::Client` with automatic
-  outgoing context injection. `inject_current_context(headers)` is the
-  lower-level SDK chokepoint helper.
+- `traced_reqwest_client(client)` wraps a `reqwest::Client` so every request
+  runs in an `otel.kind = "client"` span (semconv HTTP-client attrs, name
+  `HTTP {method}`) and the injected `traceparent` carries that client span's
+  id — what Tempo/Jaeger need to draw a service-graph edge. Built on
+  `reqwest-tracing` (feature `opentelemetry_0_32`: **must** track the
+  workspace `opentelemetry`/`tracing-opentelemetry` bump, otherwise the
+  global propagator is a different crate and injection becomes a silent
+  no-op). `R2eSpanBackend` is the span backend; `OtelName`/`OtelPathNames`/
+  `DisableOtelPropagation` are re-exported per-request extensions.
+  `inject_current_context(headers)` is the lower-level SDK chokepoint helper:
+  headers only, no client span, hence no service-graph edge.
 
 SQLx 0.9 already emits timed `sqlx::query` tracing events (including
 `elapsed_secs`, row counts, and slow-query fields) inside the current request

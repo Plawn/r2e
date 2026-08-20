@@ -27,7 +27,10 @@ pub mod middleware;
 pub mod propagation;
 pub mod tracing_setup;
 
-pub use client::{inject_current_context, traced_reqwest_client, TraceContextMiddleware};
+pub use client::{
+    inject_current_context, traced_reqwest_client, DisableOtelPropagation, OtelName,
+    OtelPathNames, R2eSpanBackend, TraceContextMiddleware,
+};
 pub use config::{ObservabilityConfig, OtlpProtocol, PropagationFormat};
 // LogFormat is re-exported from r2e_core for backward compatibility.
 pub use r2e_core::LogFormat;
