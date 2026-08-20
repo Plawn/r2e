@@ -2657,14 +2657,22 @@ default endpoint is `http://localhost:4318/v1/traces`; pathless HTTP(S)
 endpoints receive `/v1/traces` automatically. Requesting gRPC logs a warning
 and uses HTTP. Logs inside traced spans include `trace_id` and `span_id`.
 
-Outgoing reqwest propagation is opt-in once per client:
+Outgoing reqwest instrumentation is opt-in once per client:
 
 ```rust
 use r2e::r2e_observability::{inject_current_context, traced_reqwest_client};
 
 let http = traced_reqwest_client(reqwest::Client::new());
 // Pass `http` to SDKs accepting reqwest_middleware::ClientWithMiddleware.
-// For a plain reqwest chokepoint instead:
+// Each request runs in an `otel.kind = "client"` span ("HTTP GET", semconv
+// attrs: http.request.method, server.address/port, url.full,
+// http.response.status_code, error.message) and the injected `traceparent`
+// carries THAT span's id — required for service-graph edges (Tempo, Jaeger).
+// Low-cardinality route names per request:
+//   .with_extension(OtelPathNames::known_paths(["/items/{id}"])?)  // "GET /items/{id}"
+//   .with_extension(OtelName("fetch-item".into()))
+// For a plain reqwest chokepoint instead (headers only, NO client span, so no
+// service-graph edge unless you open your own client span):
 // inject_current_context(request.headers_mut());
 ```
 
