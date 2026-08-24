@@ -13,7 +13,6 @@ description = "Multi-tenant bean routing for R2E - per-tenant resource maps, res
 [dependencies]
 r2e-core = {workspace = true}
 dashmap = {workspace = true}
-tokio = {workspace = true, features = ["sync", "time", "rt"]}
 tokio-util = {workspace = true}
 tracing = {workspace = true}
 serde = {workspace = true}

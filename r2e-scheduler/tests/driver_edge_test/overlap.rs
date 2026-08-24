@@ -1,8 +1,8 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, SchedulerHandle};
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{await_next_run, await_starts, test_pool, tracing_task, TickTrace};
 
@@ -20,7 +20,7 @@ async fn skip_scheduled_ticks_yield_to_an_in_flight_oob_tick() {
     // provably fall while it runs however slow the machine is.
     let trace = TickTrace::gated();
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
 
     let task = tracing_task(

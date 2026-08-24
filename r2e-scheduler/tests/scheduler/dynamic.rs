@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::AppBuilder;
+use r2e_core::rt::CancelToken;
 use r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     extract_tasks, start_jobs, AppBuilderSchedulerExt, ScheduleConfig, ScheduledJobRegistry,
     ScheduledTaskDef, Scheduler, SchedulerCommands,
 };
-use tokio_util::sync::CancellationToken;
 
 #[r2e_core::test]
 async fn schedule_task_lands_under_scheduler_marker() {
@@ -101,7 +101,7 @@ async fn dynamic_task_runs_and_stops_on_cancel() {
     let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
     assert_eq!(tasks.len(), 1);
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(
@@ -156,7 +156,7 @@ async fn result_returning_closure_logs_instead_of_panicking() {
         .expect("registry should exist");
     let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(
@@ -204,7 +204,7 @@ async fn schedule_task_with_pulls_state_from_bean_context() {
     assert_eq!(tasks[0].name(), "bean_backed");
 
     // The captured state is the provided bean: ticks land on `counter`.
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(

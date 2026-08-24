@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike, Utc};
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{ScheduleConfig, ScheduledJobRegistry, ScheduledTask, SchedulerHandle};
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{await_completion_processed, counting_task, quiet_task, test_pool};
 
@@ -16,7 +16,7 @@ async fn cron_pinned_to_the_past_never_arms() {
     // `cron_next_instant` returns None at initial arming and the job is dormant.
     let counter = Arc::new(AtomicUsize::new(0));
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let task = counting_task(
         "past_cron",
@@ -78,7 +78,7 @@ async fn cron_exhausts_after_its_single_occurrence() {
 
     let counter = Arc::new(AtomicUsize::new(0));
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let task = counting_task("one_shot_cron", ScheduleConfig::Cron(expr), counter.clone());
     let jobs: Vec<_> = [
@@ -151,7 +151,7 @@ async fn an_unrepresentable_initial_delay_leaves_the_job_unarmed() {
     );
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let jobs: Vec<_> = [
         Box::new(task) as Box<dyn ScheduledTask>,

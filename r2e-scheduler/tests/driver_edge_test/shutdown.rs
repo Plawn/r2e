@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{
     OverlapPolicy, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerCommands, SchedulerHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{counting_task, start_one, test_pool};
 
@@ -22,7 +22,7 @@ async fn skip_job_stops_driver_when_executor_is_shut_down() {
     let pool = test_pool();
     pool.shutdown(); // submissions now rejected
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let task = counting_task(
         "skip_dead_pool",
         ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(20).unwrap()),
@@ -46,7 +46,7 @@ async fn concurrent_job_stops_driver_when_executor_is_shut_down() {
     let pool = test_pool();
     pool.shutdown();
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let task = counting_task(
         "concurrent_dead_pool",
         ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(20).unwrap()),
@@ -96,7 +96,7 @@ async fn executor_rejection_still_awaits_the_tick_already_in_flight() {
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
     let driver = r2e_core::rt::spawn(r2e_scheduler::jobs_driver(
         jobs,
-        CancellationToken::new(),
+        CancelToken::new(),
         pool.clone(),
         ScheduledJobRegistry::new(),
         SchedulerCommands::disconnected(),
@@ -133,7 +133,7 @@ async fn a_command_issued_from_a_tick_during_shutdown_does_not_deadlock() {
     let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let paused_ok = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
 
     let payload = (
@@ -208,7 +208,7 @@ async fn a_command_queued_before_cancellation_cannot_start_a_tick() {
     // random, so a single round would let the bug hide half the time.
     for round in 0..12 {
         let runs = Arc::new(AtomicUsize::new(0));
-        let cancel = CancellationToken::new();
+        let cancel = CancelToken::new();
         let (handle, commands) = SchedulerHandle::channel(cancel.clone());
 
         let task = counting_task(

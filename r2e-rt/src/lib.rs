@@ -15,9 +15,10 @@
 //!
 //! # What is in scope
 //!
-//! - Task spawning: [`spawn`], [`spawn_blocking`], [`spawn_ctl`] → [`JobHandle<T>`]
+//! - Task spawning: [`spawn`], [`spawn_blocking`], [`spawn_ctl`] → [`JobHandle<T>`],
+//!   [`yield_now`], [`in_runtime`]
 //! - Control-plane handle: [`set_control_plane`], [`current_handle`]
-//! - Time: [`sleep`], [`timeout`], [`interval`]
+//! - Time: [`sleep`], [`sleep_until`], [`timeout`], [`interval`], [`Instant`]
 //! - Network: [`bind_tcp`], [`lookup_host`]
 //! - Signals: [`shutdown_signal`]
 //! - Cancellation: [`CancelToken`], [`CancelDropGuard`]
@@ -38,8 +39,8 @@
 //!   API without adding `tokio-util` to its own `Cargo.toml`, and a runtime
 //!   swap must not force every app to change.
 //! - **Re-exported** (identity stays tokio's): the [`sync`] primitives, the
-//!   [`select!`](select)/[`pin!`](pin)/[`join!`](join) macros, [`Interval`],
-//!   [`MissedTickBehavior`], [`JoinSet`], [`stream`]. Their *shape* is
+//!   [`select!`](select)/[`pin!`](pin)/[`join!`](join) macros, [`Instant`],
+//!   [`Interval`], [`MissedTickBehavior`], [`JoinSet`], [`stream`]. Their *shape* is
 //!   runtime-neutral; re-exporting removes the `tokio::` name from dozens of
 //!   files at zero cost, and is what makes the boundary check mechanical.
 //!
@@ -72,14 +73,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-// Re-export Interval and MissedTickBehavior from tokio directly.
+// Re-export Instant, Interval and MissedTickBehavior from tokio directly.
 //
 // Wrapping `tokio::time::Interval` is disproportionate: it has many methods
 // (tick, reset, reset_at, set_missed_tick_behavior, …) and callers use
-// MissedTickBehavior variants by name.  Both types are runtime-flavour-neutral
-// structs.  Re-exporting them keeps migration straightforward if the runtime
-// ever changes.
-pub use tokio::time::{Interval, MissedTickBehavior};
+// MissedTickBehavior variants by name.  `Instant` is a monotonic timestamp on
+// the runtime's own clock — the currency of any deadline-driven timer wheel
+// (the scheduler's min-heap), and the only clock `sleep_until` accepts.  All
+// three are runtime-flavour-neutral; re-exporting them keeps migration
+// straightforward if the runtime ever changes.
+pub use tokio::time::{Instant, Interval, MissedTickBehavior};
 
 // ── JoinError ─────────────────────────────────────────────────────────────────
 
@@ -292,6 +295,32 @@ where
     tokio::time::timeout(duration, future)
         .await
         .map_err(Elapsed)
+}
+
+/// Wait until `deadline`.
+///
+/// The deadline form of [`sleep`], on the runtime's own [`Instant`] clock —
+/// what a timer wheel driven by absolute fire times needs (the scheduler's
+/// min-heap driver).
+pub fn sleep_until(deadline: Instant) -> tokio::time::Sleep {
+    tokio::time::sleep_until(deadline)
+}
+
+/// Yield back to the scheduler, letting other ready tasks run.
+///
+/// Equivalent to `tokio::task::yield_now`.
+pub async fn yield_now() {
+    tokio::task::yield_now().await;
+}
+
+/// Whether the calling thread is currently driven by a runtime.
+///
+/// The non-panicking probe behind [`current_handle`]: synchronous paths that
+/// may run outside a runtime (a `Drop` impl detaching cleanup work) check this
+/// before spawning.
+#[must_use]
+pub fn in_runtime() -> bool {
+    tokio::runtime::Handle::try_current().is_ok()
 }
 
 /// Create a ticker that fires at a fixed `period`.

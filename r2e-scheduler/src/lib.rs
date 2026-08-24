@@ -18,8 +18,6 @@ use std::any::Any;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use driver::Command;
 use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
@@ -28,6 +26,8 @@ use r2e_core::http::header::Parts;
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::ConfigProperties;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
+use r2e_core::rt::sync::mpsc;
+use r2e_core::rt::{self, CancelToken};
 use r2e_core::{AppBuilder, BeanContext, PreStatePlugin};
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 
@@ -46,7 +46,7 @@ use r2e_executor::{ExecutorConfig, PoolExecutor};
 /// ```
 #[derive(Clone)]
 pub struct SchedulerHandle {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     /// Command channel to the driver. `None` for handles built via
     /// [`new`](Self::new) without a driver (runtime control is then a no-op).
     commands: Option<mpsc::Sender<Command>>,
@@ -58,7 +58,7 @@ impl SchedulerHandle {
     /// This handle carries no command channel, so [`pause`](Self::pause),
     /// [`resume`](Self::resume), and [`trigger_now`](Self::trigger_now) all
     /// return `false`. The [`Scheduler`] plugin installs a fully-wired handle.
-    pub fn new(cancel: CancellationToken) -> Self {
+    pub fn new(cancel: CancelToken) -> Self {
         Self {
             cancel,
             commands: None,
@@ -66,10 +66,7 @@ impl SchedulerHandle {
     }
 
     /// Create a handle wired to the driver's command channel (plugin-internal).
-    pub(crate) fn with_commands(
-        cancel: CancellationToken,
-        commands: mpsc::Sender<Command>,
-    ) -> Self {
+    pub(crate) fn with_commands(cancel: CancelToken, commands: mpsc::Sender<Command>) -> Self {
         Self {
             cancel,
             commands: Some(commands),
@@ -83,7 +80,7 @@ impl SchedulerHandle {
     /// driving [`start_jobs`] manually and you want runtime control
     /// ([`pause`](Self::pause) / [`resume`](Self::resume) /
     /// [`trigger_now`](Self::trigger_now)) to work.
-    pub fn channel(cancel: CancellationToken) -> (SchedulerHandle, SchedulerCommands) {
+    pub fn channel(cancel: CancelToken) -> (SchedulerHandle, SchedulerCommands) {
         let (tx, rx) = mpsc::channel(64);
         (
             SchedulerHandle::with_commands(cancel, tx),
@@ -102,7 +99,7 @@ impl SchedulerHandle {
     }
 
     /// Get the underlying cancellation token.
-    pub fn token(&self) -> CancellationToken {
+    pub fn token(&self) -> CancelToken {
         self.cancel.clone()
     }
 
@@ -195,11 +192,11 @@ impl SchedulerHandle {
         .await
     }
 
-    async fn send(&self, make: impl FnOnce(tokio::sync::oneshot::Sender<bool>) -> Command) -> bool {
+    async fn send(&self, make: impl FnOnce(rt::sync::oneshot::Sender<bool>) -> Command) -> bool {
         let Some(tx) = &self.commands else {
             return false;
         };
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let (reply_tx, reply_rx) = rt::sync::oneshot::channel();
         if tx.send(make(reply_tx)).await.is_err() {
             return false;
         }
@@ -381,15 +378,15 @@ impl Default for ScheduledJobRegistry {
     }
 }
 
-/// Scheduler plugin — provides `CancellationToken` and `ScheduledJobRegistry`,
+/// Scheduler plugin — provides `CancelToken` and `ScheduledJobRegistry`,
 /// and installs the scheduler runtime.
 ///
 /// Install this plugin **before** `build_state()` to:
-/// - Provide a `CancellationToken` bean for injection via `#[inject]`
+/// - Provide a `CancelToken` bean for injection via `#[inject]`
 /// - Provide a [`ScheduledJobRegistry`] bean for querying registered jobs
 /// - Automatically set up the scheduler backend
 ///
-/// This plugin provides **two** beans (`CancellationToken` and
+/// This plugin provides **two** beans (`CancelToken` and
 /// `ScheduledJobRegistry`) via a tuple `Provided` type.
 ///
 /// # Requires the Executor plugin
@@ -424,7 +421,7 @@ impl Default for ScheduledJobRegistry {
 /// ```ignore
 /// #[controller(state = Services)]
 /// pub struct MyController {
-///     #[inject] cancel: CancellationToken,
+///     #[inject] cancel: CancelToken,
 ///     #[inject] jobs: ScheduledJobRegistry,
 /// }
 /// ```
@@ -480,7 +477,7 @@ pub struct SchedulerConfig {
 }
 
 impl PreStatePlugin for Scheduler {
-    type Provided = (CancellationToken, ScheduledJobRegistry);
+    type Provided = (CancelToken, ScheduledJobRegistry);
     // `PoolExecutor` stays a hard `Deps` requirement even when the config
     // selects a dedicated pool — a type-level requirement cannot be made
     // config-conditional. In dedicated mode the shared pool is simply not used
@@ -503,7 +500,7 @@ impl PreStatePlugin for Scheduler {
         config: Option<Self::Config>,
         ctx: &mut PluginBuildContext,
     ) -> Result<Self::Provided, PluginBuildError> {
-        let token = CancellationToken::new();
+        let token = CancelToken::new();
         let job_registry = ScheduledJobRegistry::new();
 
         // Resolve which pool ticks run on. Dedicated mode builds a private pool
@@ -515,14 +512,11 @@ impl PreStatePlugin for Scheduler {
         // Cleanup lane: cancelling the scheduler is disposal, not surface, so it
         // survives `scheduler.enabled = false`. It resolves the token through
         // the graph handle for the same reason the serve hook does (below) — a
-        // pinned `CancellationToken` is the one the app can observe.
+        // pinned `CancelToken` is the one the app can observe.
         let graph = ctx.graph();
         let built_token = token.clone();
         ctx.on_shutdown(move || {
-            graph
-                .bean::<CancellationToken>()
-                .unwrap_or(built_token)
-                .cancel();
+            graph.bean::<CancelToken>().unwrap_or(built_token).cancel();
         });
 
         // Surface lane: the handle extension and the driver start. Both are
@@ -539,7 +533,7 @@ impl PreStatePlugin for Scheduler {
         ctx.after_build(move |dctx| {
             let token = dctx
                 .bean_context()
-                .try_get::<CancellationToken>()
+                .try_get::<CancelToken>()
                 .unwrap_or(fallback_token);
             let registry = dctx
                 .bean_context()
@@ -566,7 +560,7 @@ impl PreStatePlugin for Scheduler {
                 if let Some(driver) = scheduled_tasks_driver(
                     tasks,
                     token,
-                    serve_ctx.shutdown_token().into(),
+                    serve_ctx.shutdown_token(),
                     registry,
                     executor,
                     commands,
@@ -817,8 +811,8 @@ pub(crate) fn format_schedule(config: &ScheduleConfig) -> String {
 /// alive until shutdown).
 fn scheduled_tasks_driver(
     boxed_tasks: Vec<Box<dyn Any + Send>>,
-    token: CancellationToken,
-    app_shutdown: CancellationToken,
+    token: CancelToken,
+    app_shutdown: CancelToken,
     job_registry: ScheduledJobRegistry,
     executor: PoolExecutor,
     commands: SchedulerCommands,
@@ -862,10 +856,10 @@ fn scheduled_tasks_driver(
     // drains its in-flight ticks.
     Some(async move {
         let driver = driver;
-        tokio::pin!(driver);
+        rt::pin!(driver);
         let mut relayed = false;
         loop {
-            tokio::select! {
+            rt::select! {
                 _ = &mut driver => break,
                 _ = app_shutdown.cancelled(), if !relayed => {
                     relayed = true;

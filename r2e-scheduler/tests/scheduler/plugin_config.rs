@@ -8,9 +8,9 @@
 use r2e_core::config::R2eConfig;
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
+use r2e_core::rt::CancelToken;
 use r2e_executor::Executor;
 use r2e_scheduler::{ScheduledJobRegistry, Scheduler};
-use tokio_util::sync::CancellationToken;
 
 #[r2e_core::test]
 async fn shared_executor_is_the_default() {
@@ -41,7 +41,7 @@ async fn dedicated_executor_config_builds_a_private_pool() {
 
     // Provided beans present regardless of executor mode.
     let _reg: ScheduledJobRegistry = app.state().get::<ScheduledJobRegistry>();
-    let _tok: CancellationToken = app.state().get::<CancellationToken>();
+    let _tok: CancelToken = app.state().get::<CancelToken>();
 }
 
 #[r2e_core::test]
@@ -71,7 +71,7 @@ async fn disabled_scheduler_boots_and_keeps_beans() {
         .await;
 
     let reg: ScheduledJobRegistry = app.state().get::<ScheduledJobRegistry>();
-    let _tok: CancellationToken = app.state().get::<CancellationToken>();
+    let _tok: CancelToken = app.state().get::<CancelToken>();
     // No tasks were started (serve hook skipped), so the registry is empty.
     assert!(
         reg.list_jobs().is_empty(),

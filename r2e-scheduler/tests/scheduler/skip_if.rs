@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerCommands, SchedulerHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 type SkipState = (Arc<AtomicUsize>, Arc<AtomicBool>);
 
@@ -40,7 +40,7 @@ async fn skip_if_suppresses_ticks_and_counts_skips() {
     let gate = Arc::new(AtomicBool::new(true)); // skipping
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     start_jobs(
         vec![boxed_job(gated_task(runs.clone(), gate.clone()))],
@@ -101,7 +101,7 @@ async fn skip_if_applies_to_trigger_now() {
     .with_skip_if(|(_, gate): SkipState| async move { gate.load(Ordering::SeqCst) });
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let pool = PoolExecutor::new(ExecutorConfig::default());
     start_jobs(

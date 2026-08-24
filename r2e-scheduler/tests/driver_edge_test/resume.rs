@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike, Utc};
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{
     OverlapPolicy, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{
     await_completion_processed, await_next_run, await_starts, counting_task, quiet_task, test_pool,
@@ -47,7 +47,7 @@ async fn resume_revives_a_factory_disabled_skip_job() {
     ); // default OverlapPolicy::Skip
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
@@ -133,7 +133,7 @@ async fn pause_then_resume_does_not_double_arm() {
     .with_overlap(OverlapPolicy::Concurrent);
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
@@ -210,7 +210,7 @@ async fn a_concurrent_factory_panic_keeps_the_deadline_it_already_armed() {
     .with_overlap(OverlapPolicy::Concurrent);
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
@@ -287,7 +287,7 @@ async fn a_concurrent_factory_panic_keeps_the_deadline_it_already_armed() {
 async fn resume_reports_false_when_the_schedule_can_never_fire_again() {
     let counter = Arc::new(AtomicUsize::new(0));
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     // Fully pinned to the year 2000: no upcoming occurrence, ever.
     let task = counting_task(
@@ -366,7 +366,7 @@ async fn resume_reports_false_when_the_in_flight_tick_is_the_last_occurrence() {
     let task = tracing_task("last_slot", ScheduleConfig::Cron(expr), trace.clone());
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let jobs: Vec<_> = [
         Box::new(task) as Box<dyn ScheduledTask>,
@@ -443,7 +443,7 @@ async fn resume_reports_true_while_a_healthy_skip_tick_is_in_flight() {
     ); // default OverlapPolicy::Skip
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();

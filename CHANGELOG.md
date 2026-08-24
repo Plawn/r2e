@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `Mutex`, `RwLock`, `Notify`, `Semaphore`, `OnceCell`.
   - `rt::{select!, pin!, join!}`, `rt::JoinSet`, `rt::stream`,
     `rt::{RuntimeBuilder, Runtime, block_on}`.
+  - `rt::Instant` + `rt::sleep_until(deadline)` — the deadline form of
+    `rt::sleep`, on the runtime's own monotonic clock; what a timer wheel driven
+    by absolute fire times needs (the scheduler's min-heap driver).
+  - `rt::yield_now()` and `rt::in_runtime()` — the latter is the non-panicking
+    probe behind `current_handle`, for synchronous paths that may run outside a
+    runtime (a `Drop` impl detaching cleanup work).
   - A non-default `test-util` feature (`tokio/test-util`), off by default
     because paused clocks must not reach the whole workspace through feature
     unification.
@@ -39,6 +45,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and `LiveConfigReceiver::drive`. Call sites that only `select!` on the token
   or pass it along are unaffected; a site that needs the raw tokio-util token
   (tonic's `cancelled_owned()`, say) converts with `.into()` / `.into_inner()`.
+
+- **BREAKING (`r2e-events`, `r2e-scheduler`)**: the same flip reaches the
+  event-bus and scheduler surfaces, which now speak `r2e::rt::CancelToken`:
+  `BackendState::{poller_cancels, register_poller_cancel}` and
+  `reconnect_loop(…, cancel: &CancelToken, …)` in `r2e-events`;
+  `SchedulerHandle::{new, channel, token}`, `jobs_driver`, `start_jobs` and the
+  `CancelToken` **bean** the `Scheduler` plugin provides (an app injecting the
+  scheduler token writes `#[inject] cancel: CancelToken` now) in
+  `r2e-scheduler`. `From` converts both ways with
+  `tokio_util::sync::CancellationToken`, so a call site that needs the raw token
+  adds `.into()`.
+
+- `r2e-events` (+ the `iggy` / `kafka` / `pulsar` / `rabbitmq` backends),
+  `r2e-scheduler`, `r2e-executor` and `r2e-tenant` now go through the `rt`
+  facade for spawning, timers, sync primitives and `select!`, and **dropped
+  their direct `tokio` / `tokio-util` / `tokio-stream` dependencies**
+  (`r2e-tenant` keeps `tokio-util` only for the `ServiceComponent::start`
+  signature, which is still typed on the raw token). No behaviour change; the
+  four distributed backends needed no client-API escape hatch.
 
 - **r2e-observability**: `traced_reqwest_client` / `TraceContextMiddleware`
   now open an OpenTelemetry **client** span per outgoing request

@@ -24,8 +24,6 @@ r2e-core
 r2e-data-diesel
 r2e-data-sqlx
 r2e-devservices
-r2e-executor
 r2e-rt
-r2e-scheduler
 r2e-tenant
 r2e-test

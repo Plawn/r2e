@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{ScheduleConfig, ScheduledJobRegistry, ScheduledTask, SchedulerHandle};
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{
     await_next_run, await_starts, counting_task, quiet_task, test_pool, tracing_task, TickTrace,
@@ -20,7 +20,7 @@ async fn next_run_is_none_while_a_skip_tick_holds_the_job_off_the_clock() {
     ); // default OverlapPolicy::Skip
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let jobs: Vec<_> = [
         Box::new(task) as Box<dyn ScheduledTask>,
@@ -97,7 +97,7 @@ async fn a_pool_closed_submission_leaves_no_deadline_published() {
     );
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = test_pool();
     pool.shutdown(); // closed before the driver ever pops
     let (_handle, commands) = SchedulerHandle::channel(cancel.clone());
@@ -141,7 +141,7 @@ async fn a_stopped_driver_publishes_no_deadline_for_any_job() {
     );
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (_handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();

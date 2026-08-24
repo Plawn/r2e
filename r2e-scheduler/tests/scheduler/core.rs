@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask,
     ScheduledTaskDef, SchedulerCommands,
 };
-use tokio_util::sync::CancellationToken;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ fn counting_task(
 /// production path ([`start_jobs`]) exercised directly from tests.
 fn start_jobs_helper(
     tasks: impl IntoIterator<Item = Box<dyn ScheduledTask>>,
-    token: CancellationToken,
+    token: CancelToken,
     pool: PoolExecutor,
 ) {
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
@@ -55,8 +55,8 @@ fn start_jobs_helper(
     );
 }
 
-fn start_task(task: ScheduledTaskDef<impl Clone + Send + Sync + 'static>) -> CancellationToken {
-    let token = CancellationToken::new();
+fn start_task(task: ScheduledTaskDef<impl Clone + Send + Sync + 'static>) -> CancelToken {
+    let token = CancelToken::new();
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     start_jobs_helper([boxed], token.clone(), test_pool());
     token
@@ -236,7 +236,7 @@ async fn interval_task_panic_isolation() {
         counter.clone(),
     );
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = test_pool();
     let boxed_panic: Box<dyn ScheduledTask> = Box::new(panic_task);
     let boxed_good: Box<dyn ScheduledTask> = Box::new(good_task);
@@ -365,7 +365,7 @@ async fn multiple_tasks_all_start() {
     let c2 = Arc::new(AtomicUsize::new(0));
     let c3 = Arc::new(AtomicUsize::new(0));
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = test_pool();
     let tasks: Vec<Box<dyn ScheduledTask>> =
         [("t1", c1.clone()), ("t2", c2.clone()), ("t3", c3.clone())]
@@ -443,7 +443,7 @@ async fn state_cloned_per_execution() {
 async fn concurrent_tasks_shared_state() {
     let shared = Arc::new(AtomicUsize::new(0));
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = test_pool();
     let tasks: Vec<Box<dyn ScheduledTask>> = ["a", "b"]
         .into_iter()
@@ -471,7 +471,7 @@ async fn concurrent_tasks_independent_state() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = Arc::new(AtomicUsize::new(0));
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let task1 = counting_task(
         "ind1",
         ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(100).unwrap()),
@@ -565,7 +565,7 @@ async fn jobs_run_concurrently_not_serialized() {
         fast_ticks.clone(),
     );
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let sb: Box<dyn ScheduledTask> = Box::new(slow);
     let fb: Box<dyn ScheduledTask> = Box::new(fast);
     start_jobs_helper([sb, fb], token.clone(), test_pool());
@@ -610,7 +610,7 @@ async fn per_job_ticks_never_overlap() {
         },
     );
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     start_jobs_helper([boxed], token.clone(), test_pool());
 

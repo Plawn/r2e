@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::{Extensions, Parts};
+use r2e_core::rt;
 use r2e_core::web::request_head::RequestHead;
 use r2e_core::HttpError;
 
@@ -50,7 +51,7 @@ pub struct TenantRouter {
 /// left empty (`get_or_try_init` semantics) because a failing request is about
 /// to end anyway.
 #[derive(Clone, Default)]
-struct TenantMemo(Arc<tokio::sync::OnceCell<Option<TenantId>>>);
+struct TenantMemo(Arc<rt::sync::OnceCell<Option<TenantId>>>);
 
 impl TenantMemo {
     /// The memoized answer, if resolution already happened in this request.

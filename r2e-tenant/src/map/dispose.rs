@@ -277,7 +277,7 @@ pub(super) fn spawn_detached<F>(future: F) -> bool
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    if tokio::runtime::Handle::try_current().is_err() {
+    if !r2e_core::rt::in_runtime() {
         return false;
     }
     // Dropping the handle detaches the task, which is the point: the caller is

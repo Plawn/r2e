@@ -2921,8 +2921,12 @@ h.await?;                                              // Result<T, rt::JoinErro
 rt::sleep(Duration::from_millis(50)).await;
 rt::timeout(Duration::from_secs(1), fut).await?;       // Err(rt::Elapsed)
 let mut tick = rt::interval(Duration::from_secs(30));  // rt::Interval
+rt::sleep_until(deadline).await;                       // deadline: rt::Instant
+rt::yield_now().await;
 let listener = rt::bind_tcp("0.0.0.0:3000").await?;
 rt::shutdown_signal().await;                           // SIGINT / SIGTERM
+
+if rt::in_runtime() { /* non-panicking probe, e.g. from a Drop impl */ }
 ```
 
 Cancellation is `rt::CancelToken` (a wrapper — an app never needs `tokio-util`

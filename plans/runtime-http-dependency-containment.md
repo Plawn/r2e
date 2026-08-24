@@ -262,7 +262,7 @@ before a phase is marked done.
 | 1 | Phase 0 — boundary scripts + baseline allowlists | done |
 | 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | done |
 | 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | done |
-| 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | pending |
+| 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | done |
 | 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | pending |
 | 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | pending |
 

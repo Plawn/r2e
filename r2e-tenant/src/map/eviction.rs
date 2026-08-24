@@ -3,9 +3,9 @@
 
 use std::sync::atomic::Ordering;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::BeanContext;
-use tokio_util::sync::CancellationToken;
 
 use crate::TenantId;
 
@@ -154,7 +154,7 @@ where
                 }
                 // Let whoever made those slots ready make progress before
                 // another round: a pass that evicts nothing never awaits.
-                tokio::task::yield_now().await;
+                rt::yield_now().await;
                 if this
                     .inner
                     .trimming
@@ -187,15 +187,22 @@ where
         ctx.get::<Self>()
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    // The one raw-token touchpoint left in this crate: `ServiceComponent::start`
+    // is still typed on `tokio_util::sync::CancellationToken`, because
+    // `#[derive(BackgroundService)]` emits that type into user code and flipping
+    // it is a user-visible break owned by phase 2e/2f of
+    // `plans/runtime-http-dependency-containment.md`. Convert at the boundary so
+    // the body stays on the facade.
+    async fn start(self, shutdown: tokio_util::sync::CancellationToken) {
+        let shutdown = CancelToken::from(shutdown);
         let interval = self.settings().sweep_interval();
         loop {
-            tokio::select! {
+            rt::select! {
                 _ = shutdown.cancelled() => {
                     self.drain().await;
                     break;
                 }
-                _ = tokio::time::sleep(interval) => {
+                _ = rt::sleep(interval) => {
                     let report = self.sweep().await;
                     if !report.is_empty() {
                         tracing::debug!(

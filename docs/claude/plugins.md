@@ -193,7 +193,7 @@ the provisions (`override_bean(X::new())` without `SKIP_BUILD_WHEN_ALL_PINNED`
 kicking in) still runs `build`: the plugin makes its own `X`, but the graph
 exposes the pinned one, so a captured instance leaves the effect talking to an
 object nobody can observe. Scheduler is the reference — its driver and handle
-resolve `CancellationToken` + `ScheduledJobRegistry` from `dctx` and fall back
+resolve `CancelToken` + `ScheduledJobRegistry` from `dctx` and fall back
 to the built values only if the projection is absent. The exception is a
 resource that is **not** a bean (the Scheduler's dedicated pool, the Executor's
 pool as seen by its own drain): nothing else owns it, so capturing is correct.

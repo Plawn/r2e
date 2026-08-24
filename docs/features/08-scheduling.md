@@ -26,9 +26,9 @@ An enum defining when the task executes:
 - `IntervalWithDelay { interval, initial_delay }` — interval with initial delay
 - `Cron(String)` — cron expression
 
-### CancellationToken
+### CancelToken
 
-A token from `tokio-util` that allows graceful shutdown of scheduled tasks (typically when the server stops). The scheduler manages it for you; `SchedulerHandle` exposes it if you need manual control.
+`r2e::rt::CancelToken` — the runtime facade wrapper that allows graceful shutdown of scheduled tasks (typically when the server stops). The scheduler manages it for you; `SchedulerHandle` exposes it if you need manual control.
 
 ## Usage
 
@@ -84,7 +84,7 @@ AppBuilder::new()
     .unwrap();
 ```
 
-Tasks run until the server shuts down; the scheduler then cancels its `CancellationToken` and every task stops gracefully.
+Tasks run until the server shuts down; the scheduler then cancels its `CancelToken` and every task stops gracefully.
 
 ### 4. Manual control (optional)
 
@@ -259,7 +259,7 @@ requirement even in dedicated mode (a type-level requirement cannot be
 config-conditional) — the shared pool is simply not used to run ticks. An
 unrecognized `executor` value panics at boot. Setting `scheduler.enabled = false`
 skips the plugin's post-state effects (starting tasks) while keeping its provided
-beans (`CancellationToken`, `ScheduledJobRegistry`) in the graph.
+beans (`CancelToken`, `ScheduledJobRegistry`) in the graph.
 
 ## Runtime control and stats
 
@@ -352,4 +352,4 @@ In the logs, every 30 seconds:
 INFO count=2 "Scheduled user count"
 ```
 
-On shutdown (Ctrl+C), the scheduler stops gracefully via the `CancellationToken`.
+On shutdown (Ctrl+C), the scheduler stops gracefully via the `CancelToken`.

@@ -6106,7 +6106,6 @@ dependencies = [
  "r2e-core",
  "r2e-executor",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
