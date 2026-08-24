@@ -292,7 +292,7 @@ impl BackendState {
         E: serde::de::DeserializeOwned + Send + Sync + 'static,
     {
         let json_deser: DeserializerFn = Arc::new(|bytes: &[u8]| {
-            serde_json::from_slice::<E>(bytes)
+            r2e_core::json::from_slice::<E>(bytes)
                 .map(|e| Arc::new(e) as Arc<dyn std::any::Any + Send + Sync>)
                 .map_err(|e| e.to_string())
         });
@@ -326,7 +326,7 @@ impl BackendState {
     {
         let deser = deserializer.unwrap_or_else(|| {
             Arc::new(|bytes: &[u8]| {
-                serde_json::from_slice::<E>(bytes)
+                r2e_core::json::from_slice::<E>(bytes)
                     .map(|e| Arc::new(e) as Arc<dyn std::any::Any + Send + Sync>)
                     .map_err(|e| e.to_string())
             })
@@ -422,27 +422,30 @@ impl BackendState {
         let type_id = TypeId::of::<Req>();
         let type_name = std::any::type_name::<Req>();
 
-        let responder: ResponderFn = Arc::new(
-            move |bytes, metadata| match serde_json::from_slice::<Req>(bytes) {
-                Ok(req) => {
-                    let envelope = EventEnvelope {
-                        event: Arc::new(req),
-                        metadata: Arc::new(metadata),
-                    };
-                    let fut = handler(envelope);
-                    Box::pin(async move {
-                        match fut.await {
-                            Ok(resp) => serde_json::to_vec(&resp).map_err(|e| e.to_string()),
-                            Err(e) => Err(e.to_string()),
-                        }
-                    })
-                }
-                Err(e) => {
-                    let msg = format!("failed to deserialize request: {e}");
-                    Box::pin(async move { Err(msg) })
-                }
-            },
-        );
+        let responder: ResponderFn =
+            Arc::new(
+                move |bytes, metadata| match r2e_core::json::from_slice::<Req>(bytes) {
+                    Ok(req) => {
+                        let envelope = EventEnvelope {
+                            event: Arc::new(req),
+                            metadata: Arc::new(metadata),
+                        };
+                        let fut = handler(envelope);
+                        Box::pin(async move {
+                            match fut.await {
+                                Ok(resp) => {
+                                    r2e_core::json::to_vec(&resp).map_err(|e| e.to_string())
+                                }
+                                Err(e) => Err(e.to_string()),
+                            }
+                        })
+                    }
+                    Err(e) => {
+                        let msg = format!("failed to deserialize request: {e}");
+                        Box::pin(async move { Err(msg) })
+                    }
+                },
+            );
 
         let mut map = self.responders.write().await;
         if map.contains_key(&type_id) {

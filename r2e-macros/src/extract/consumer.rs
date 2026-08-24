@@ -1,7 +1,7 @@
 //! Consumer-related attribute extraction.
 
-use crate::util::type_utils::{is_unit_type, result_ok_type};
 use crate::model::types::ConsumerKind;
+use crate::util::type_utils::{is_unit_type, result_ok_type};
 
 /// Classify a `#[consumer]` method by its return type.
 ///

@@ -11,8 +11,7 @@ pub(crate) mod parsing;
 pub(crate) mod util;
 
 use attrs::{
-    bean_attr, controller_attr, main_attr, module_attr, producer_attr, routes_attr,
-    test_suite_attr,
+    bean_attr, controller_attr, main_attr, module_attr, producer_attr, routes_attr, test_suite_attr,
 };
 use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
@@ -40,9 +39,10 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
         return input;
     };
     let has_transformer = item.attrs.iter().any(|a| {
-        a.path().segments.last().is_some_and(|s| {
-            s.ident == "routes" || s.ident == "bean" || s.ident == "grpc_routes"
-        })
+        a.path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "routes" || s.ident == "bean" || s.ident == "grpc_routes")
     });
     let msg = if has_transformer {
         format!(
@@ -1190,13 +1190,16 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 /// // Register in builder (`SpawnService` comes from the prelude):
 /// app.spawn_service::<EmailWorker>();
 /// ```
-#[proc_macro_derive(BackgroundService, attributes(service, inject, config, live_config, config_section))]
+#[proc_macro_derive(
+    BackgroundService,
+    attributes(service, inject, config, live_config, config_section)
+)]
 pub fn derive_background_service(input: TokenStream) -> TokenStream {
     bg_service_derive::expand(input)
 }
 
 /// Derive macro that generates a [`Cacheable`](r2e_core::Cacheable) impl
-/// using `serde_json` serialization.
+/// using the JSON codec facade ([`r2e_core::json`]).
 ///
 /// The type must implement `Serialize` and `DeserializeOwned`.
 ///

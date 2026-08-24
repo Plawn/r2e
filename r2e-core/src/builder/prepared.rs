@@ -411,49 +411,48 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // drain is awaited in the shutdown phase — bounded by
         // `shutdown_grace_period` — and the task owns the graph while it runs.
         #[cfg(feature = "quic")]
-        if let Some(quic_task) =
-            self.quic_server_config
-                .take()
-                .and_then(|(addr, server_config)| {
-                    let router = self.router.clone();
-                    let token = cancel_token.clone();
+        if let Some(quic_task) = self
+            .quic_server_config
+            .take()
+            .and_then(|(addr, server_config)| {
+                let router = self.router.clone();
+                let token = cancel_token.clone();
 
-                    #[cfg(feature = "dev-reload")]
-                    let endpoint_result =
-                        crate::runtime::dev::get_or_bind_quic_endpoint(addr, server_config);
-                    #[cfg(not(feature = "dev-reload"))]
-                    let endpoint_result =
-                        crate::http::quic::quinn::Endpoint::server(server_config, addr).map_err(
-                            |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) },
-                        );
+                #[cfg(feature = "dev-reload")]
+                let endpoint_result =
+                    crate::runtime::dev::get_or_bind_quic_endpoint(addr, server_config);
+                #[cfg(not(feature = "dev-reload"))]
+                let endpoint_result =
+                    crate::http::quic::quinn::Endpoint::server(server_config, addr)
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) });
 
-                    match endpoint_result {
-                        Ok(endpoint) => {
+                match endpoint_result {
+                    Ok(endpoint) => {
+                        #[cfg(not(feature = "dev-reload"))]
+                        let ep_for_close = endpoint.clone();
+                        Some(async move {
+                            if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
+                                router,
+                                endpoint,
+                                token.cancelled(),
+                            )
+                            .await
+                            {
+                                tracing::error!(error = %e, "QUIC/HTTP3 server error");
+                            }
                             #[cfg(not(feature = "dev-reload"))]
-                            let ep_for_close = endpoint.clone();
-                            Some(async move {
-                                if let Err(e) = crate::http::quic::serve_h3_with_endpoint(
-                                    router,
-                                    endpoint,
-                                    token.cancelled(),
-                                )
-                                .await
-                                {
-                                    tracing::error!(error = %e, "QUIC/HTTP3 server error");
-                                }
-                                #[cfg(not(feature = "dev-reload"))]
-                                {
-                                    ep_for_close.close(0u32.into(), b"shutdown");
-                                    ep_for_close.wait_idle().await;
-                                }
-                            })
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to bind QUIC endpoint");
-                            None
-                        }
+                            {
+                                ep_for_close.close(0u32.into(), b"shutdown");
+                                ep_for_close.wait_idle().await;
+                            }
+                        })
                     }
-                })
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to bind QUIC endpoint");
+                        None
+                    }
+                }
+            })
         {
             service_handles.spawn_owning(Arc::clone(&serve_scope_graph), quic_task);
         }
@@ -577,7 +576,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 unix,
                 not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
             )))]
-            ServeStrategy::Sharded { .. } => Err(crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG.into()),
+            ServeStrategy::Sharded { .. } => {
+                Err(crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG.into())
+            }
         };
         // A serve error is the second abort path: the shutdown future was
         // dropped mid-`select!` (or aborted, in the sharded path), so the user

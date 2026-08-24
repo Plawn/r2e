@@ -55,14 +55,13 @@ impl BeanRegistry {
                         crate::plugin::PluginBuildContext::new(enabled, graph_handle, config);
                     // Fully qualified so a plugin's own inherent `build` method
                     // (e.g. a builder-style `fn build(self)`) can't shadow it.
-                    let provided = crate::plugin::PreStatePlugin::build(plugin, deps, typed, &mut bctx)
-                        .await
-                        .map_err(
-                        |source| BeanError::PluginBuild {
-                            plugin: name,
-                            source,
-                        },
-                    )?;
+                    let provided =
+                        crate::plugin::PreStatePlugin::build(plugin, deps, typed, &mut bctx)
+                            .await
+                            .map_err(|source| BeanError::PluginBuild {
+                                plugin: name,
+                                source,
+                            })?;
                     // The `enabled` decision travels WITH the effects: it was
                     // taken here, from the graph's `R2eConfig`, and the
                     // install-order action must not recompute it from the
@@ -91,10 +90,7 @@ impl BeanRegistry {
             self.beans.push(BeanRegistration {
                 type_id: tid,
                 type_name: tname,
-                dependencies: vec![(
-                    TypeId::of::<PluginOut<Pl>>(),
-                    type_name::<PluginOut<Pl>>(),
-                )],
+                dependencies: vec![(TypeId::of::<PluginOut<Pl>>(), type_name::<PluginOut<Pl>>())],
                 config_keys: vec![],
                 build_version: base_version.wrapping_add(1 + i as u64),
                 factory: Box::new(move |ctx| {

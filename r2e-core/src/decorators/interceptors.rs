@@ -125,11 +125,11 @@ where
     T: serde::Serialize + serde::de::DeserializeOwned + Send,
 {
     fn to_cache(&self) -> Option<Bytes> {
-        serde_json::to_vec(&self.0).ok().map(Bytes::from)
+        crate::json::to_vec(&self.0).ok().map(Bytes::from)
     }
 
     fn from_cache(bytes: &[u8]) -> Option<Self> {
-        serde_json::from_slice(bytes).ok().map(crate::http::Json)
+        crate::json::from_slice(bytes).ok().map(crate::http::Json)
     }
 }
 

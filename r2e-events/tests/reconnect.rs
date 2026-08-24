@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use r2e_events::backend::reconnect_loop;
 use r2e_core::rt::CancelToken;
+use r2e_events::backend::reconnect_loop;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_reconnect_runs_inner_exactly_once() {

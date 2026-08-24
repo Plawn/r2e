@@ -6,8 +6,14 @@
 # Counts, per git-tracked file under a crate's src/ directory, how many times
 # the source NAMES the runtime / HTTP layer directly:
 #
-#   tokio : tokio::, tokio_util::, tokio_stream::   (#[tokio::main] included)
-#   axum  : axum::
+#   tokio      : tokio::, tokio_util::, tokio_stream::   (#[tokio::main] included)
+#   axum       : axum::
+#   serde_json : serde_json::{to_vec,to_string,to_string_pretty,to_writer,
+#                from_slice,from_str,from_reader} — the CODEC calls only.
+#                `serde_json::Value` / `json!` / `to_value` / `from_value` are
+#                the workspace's dynamic-tree type and are deliberately NOT
+#                counted (plans/json-codec-containment.md §1.3). Typed
+#                (de)serialization goes through `r2e_core::json`.
 #
 # Excluded: vendor/, examples/, docs/, any tests/ directory, .claude/ — those are
 # NOT part of the boundary (test harnesses and user-facing examples may name
@@ -28,6 +34,9 @@
 #   r2e-devservices/ same, for testcontainers: the Ryuk reaper and the
 #                   workspace-session container plumbing are dev-only and speak
 #                   testcontainers' own tokio-typed API.
+#
+#   r2e-http/src/json.rs  (serde_json group) it IS the codec facade — the
+#                   one place that may call the backend's to_vec/from_slice.
 #
 # These exclusions are *per group*: r2e-test still counts for the axum group,
 # where a harness naming axum::Router is ordinary debt like anywhere else.
@@ -68,6 +77,7 @@ git ls-files \
 # Per-group by-design exclusions (see the header). Empty = nothing excluded.
 TOKIO_EXCLUDE='^(r2e-rt|r2e-test|r2e-devservices)/'
 AXUM_EXCLUDE=''
+SERDE_JSON_EXCLUDE='^r2e-http/src/json\.rs$'
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────
 scan_group() {
@@ -104,12 +114,20 @@ write_baseline() {
         echo "# excluded)."
         echo "#"
         echo "# This baseline ONLY EVER SHRINKS: each migration PR of"
-        echo "# plans/runtime-http-dependency-containment.md deletes lines from it or"
+        echo "# plans/runtime-http-dependency-containment.md (tokio, axum) or"
+        echo "# plans/json-codec-containment.md (serde_json) deletes lines from it or"
         echo "# lowers counts. A count that grows, or a new file appearing here, fails"
         echo "# CI. A count that drops is reported as a note — shrink the line in the"
         echo "# same PR so the boundary stays honest."
         echo "#"
         echo "# Regenerate with: scripts/check-source-boundary.sh --update"
+        if [ "$group" = "serde_json" ]; then
+            echo "#"
+            echo "# Only CODEC calls are counted (to_vec/to_string/from_slice/…);"
+            echo "# serde_json::Value / json! are the dynamic-tree type and are not"
+            echo "# boundary debt (plan §1.3). What remains here is either a"
+            echo "# Value-bound path or a by-design exception noted in the plan."
+        fi
         if [ "$group" = "axum" ]; then
             echo "#"
             echo "# ONE reviewed exception to \"only ever shrinks\":"
@@ -202,9 +220,10 @@ check_group() {
 
 check_group "tokio" '\btokio(_util|_stream)?::' "$BOUNDARY_DIR/src-baseline-tokio.txt" "$TOKIO_EXCLUDE"
 check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt" "$AXUM_EXCLUDE"
+check_group "serde_json" '\bserde_json::(to_vec|to_string|to_string_pretty|to_writer|from_slice|from_str|from_reader)\b' "$BOUNDARY_DIR/src-baseline-serde_json.txt" "$SERDE_JSON_EXCLUDE"
 
 if [ "$FAILED" -ne 0 ]; then
-    echo "source boundary check FAILED — see plans/runtime-http-dependency-containment.md" >&2
+    echo "source boundary check FAILED — see plans/runtime-http-dependency-containment.md (tokio/axum) or plans/json-codec-containment.md (serde_json)" >&2
     exit 1
 fi
 

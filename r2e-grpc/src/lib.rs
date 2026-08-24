@@ -126,9 +126,7 @@ where
     /// [`ConfigValidationError`](r2e_core::config::ConfigValidationError) is
     /// returned and the builder is consumed (startup wiring cannot proceed with
     /// a misconfigured service).
-    fn try_register_grpc_service<S>(
-        self,
-    ) -> Result<Self, r2e_core::config::ConfigValidationError>
+    fn try_register_grpc_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
         S: GrpcService + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
@@ -152,9 +150,7 @@ where
         })
     }
 
-    fn try_register_grpc_service<S>(
-        self,
-    ) -> Result<Self, r2e_core::config::ConfigValidationError>
+    fn try_register_grpc_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
         S: GrpcService + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,

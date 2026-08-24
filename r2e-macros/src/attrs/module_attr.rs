@@ -28,8 +28,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{parenthesized, token, Ident, ItemStruct, Token, Type};
 
-use crate::util::crate_path::r2e_core_path;
 use crate::model::type_list_gen::build_tcons_type;
+use crate::util::crate_path::r2e_core_path;
 
 #[derive(Default)]
 struct ModuleArgs {

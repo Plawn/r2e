@@ -318,7 +318,7 @@ impl EventBus for RabbitMqEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -338,7 +338,7 @@ impl EventBus for RabbitMqEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
@@ -356,7 +356,7 @@ impl EventBus for RabbitMqEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -376,7 +376,7 @@ impl EventBus for RabbitMqEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish_nowait(&topic_name, payload, &metadata).await
@@ -410,7 +410,7 @@ impl EventBus for RabbitMqEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&req)
+            let payload = r2e_core::json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let request_topic = request_topic(&bus.resolve_topic::<Req>());
             let metadata = options.metadata.unwrap_or_default();

@@ -238,7 +238,10 @@ async fn a_registered_config_provider_silences_the_diagnostic() {
         .load_config::<()>()
         .build_state()
         .await;
-    assert!(without.state().get::<LiveConfigRegistry>().is_dead_key("db.url"));
+    assert!(without
+        .state()
+        .get::<LiveConfigRegistry>()
+        .is_dead_key("db.url"));
 
     let with = AppBuilder::new()
         .override_config(R2eConfig::empty())
@@ -247,7 +250,10 @@ async fn a_registered_config_provider_silences_the_diagnostic() {
         .build_state()
         .await;
     assert!(
-        !with.state().get::<LiveConfigRegistry>().is_dead_key("db.url"),
+        !with
+            .state()
+            .get::<LiveConfigRegistry>()
+            .is_dead_key("db.url"),
         "a provider may fill the key in at runtime, so absence is not evidence of a typo"
     );
 }

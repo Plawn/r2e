@@ -1,6 +1,8 @@
 pub mod config;
 pub mod error;
 pub mod extractor;
+#[cfg(feature = "grpc")]
+pub mod grpc;
 pub mod guards;
 pub mod identity;
 pub mod jwks;
@@ -19,6 +21,10 @@ pub use identity::{
 };
 pub use jwks::JwksCache;
 pub use jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
+// The claim set carried by `AuthenticatedUser` / `Identity::claims()`. Defined
+// in `r2e-core` (the `Identity` trait names it), re-exported here because every
+// `r2e-security` signature that mentions claims uses it.
+pub use r2e_core::{Audience, ClientAccess, RealmAccess, StandardClaims};
 
 // Re-export the base RoleExtractor trait at crate root for convenience.
 pub use openid::RoleExtractor;
@@ -30,11 +36,12 @@ pub use openid::RoleExtractor;
 pub mod __macro_support {
     pub use crate::guards::AllRolesGuard;
     pub use crate::guards::RolesGuard;
-    pub use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
     pub use r2e_core::http;
     pub use r2e_core::type_list::HasBean;
+    pub use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
+    pub use r2e_core::StandardClaims;
     pub use serde_json;
 }
 

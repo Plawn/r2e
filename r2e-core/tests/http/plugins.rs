@@ -2,8 +2,8 @@
 //! trailing-slash normalization, the dev-reload endpoints, and CORS.
 
 use r2e_core::builder::AppBuilder;
-use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::builtins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
+use r2e_core::http::{Body, Request, StatusCode};
 
 use crate::support::{raw, raw_get_with, send_get};
 

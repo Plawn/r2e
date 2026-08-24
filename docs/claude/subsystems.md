@@ -146,10 +146,11 @@ Config sections registered via `load_config` are available as bean dependencies 
 ## Security (r2e-security)
 
 - `AuthenticatedUser` implements `FromRequestParts` and `Identity` — extracts Bearer token, validates via `JwtValidator`, returns user with sub/email/roles/claims.
+- Claims are **typed**: `r2e_core::StandardClaims` (lives in `r2e-core` because `Identity::claims()` is declared there; re-exported by `r2e-security` and the prelude) — `sub`, `email`, `exp/iat/nbf`, `iss`, `aud: Option<Audience>`, `scope`, `roles`, Keycloak `realm_access`/`resource_access`, plus `#[serde(flatten)] extra` for everything else (`get(&str)` reads `extra` only). `Identity::claims()`, `GuardContext::identity_claims()`, `RoleExtractor::extract_roles`, `IdentityBuilder::build`, `JwtClaimsValidator::validate` and `extract_jwt_claims` all use it; `serde_json::Value` survives only as the `validate_as::<Value>` / `JwtClaimSet` escape hatch. `sub` defaults to `""` and `JwtClaimSet::subject()` maps that to `None`, so a missing subject is still the precise `Token has no 'sub'` rejection. gRPC uses the same type: `JwtClaimsValidatorLike::validate -> StandardClaims`, implemented by `JwtClaimsValidator` under `r2e-security`'s `grpc` feature (`r2e/grpc` enables it via `r2e-security?/grpc`).
 - `JwtValidator` supports both static keys (testing) and JWKS endpoint (production) via `JwksCache`.
 - `SecurityConfig` — configuration for JWT validation (issuer, audience, JWKS URL, static keys).
 - `#[roles("admin")]` attribute generates a guard that checks identity roles via the `Identity` trait and returns 403 if missing.
-- Role extraction is trait-based (`RoleExtractor`) to support multiple OIDC providers; default (`DefaultRoleExtractor`) checks top-level `roles` and Keycloak's `realm_access.roles`.
+- Role extraction is trait-based (`RoleExtractor`) to support multiple OIDC providers; default (`DefaultRoleExtractor`) checks top-level `roles` and Keycloak's `realm_access.roles`; extractors take `&StandardClaims` (field reads, no path walking).
 
 ## Embedded OIDC (r2e-oidc)
 

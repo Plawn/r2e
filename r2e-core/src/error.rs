@@ -15,7 +15,7 @@ struct ErrorBody<'a> {
 pub fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
     let message = message.into();
     let body = ErrorBody { error: &message };
-    let bytes = serde_json::to_vec(&body)
+    let bytes = crate::json::to_vec(&body)
         .unwrap_or_else(|_| br#"{"error":"internal serialization error"}"#.to_vec());
     (
         status,
@@ -296,7 +296,7 @@ impl<T, E: Into<HttpError>> HttpErrorExt<T> for Result<T, E> {
 /// ```ignore
 /// r2e_core::map_error! {
 ///     sqlx::Error => Internal,
-///     serde_json::Error => BadRequest,
+///     r2e_core::json::JsonError => BadRequest,
 /// }
 /// ```
 ///

@@ -286,7 +286,8 @@ async fn with_state_bypasses_plugin_builds_without_panicking() {
     );
     // Everything `build` would have produced is absent: build never ran.
     assert!(
-        app.get_plugin_data::<crate::fixtures::StoredData>().is_none(),
+        app.get_plugin_data::<crate::fixtures::StoredData>()
+            .is_none(),
         "build effects must not apply when build never ran"
     );
     let (status, _) = crate::support::send_get(app.build(), "/bypassed").await;

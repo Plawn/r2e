@@ -4,9 +4,7 @@
 
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{
-    PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin,
-};
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
@@ -64,7 +62,10 @@ async fn plugin_enabled_true_by_default_runs_all_effects() {
         .await;
 
     // Provided bean present, built with enabled() == true.
-    assert_eq!(app.state().get::<GatedService>(), GatedService { enabled: true });
+    assert_eq!(
+        app.state().get::<GatedService>(),
+        GatedService { enabled: true }
+    );
     // Effects landed.
     assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(1));
     let (status, body) = get_route(app.build(), "/gated").await;
@@ -321,6 +322,9 @@ async fn plugin_without_config_loaded_is_enabled() {
         .build_state()
         .await;
 
-    assert_eq!(app.state().get::<GatedService>(), GatedService { enabled: true });
+    assert_eq!(
+        app.state().get::<GatedService>(),
+        GatedService { enabled: true }
+    );
     assert_eq!(app.get_plugin_data::<StoredData>().map(|d| d.0), Some(1));
 }

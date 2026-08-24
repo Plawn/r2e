@@ -89,8 +89,8 @@ fn json_roundtrip() {
         name: "Alice".into(),
     };
 
-    let bytes = serde_json::to_vec(&event).unwrap();
-    let decoded: TestEvent = serde_json::from_slice(&bytes).unwrap();
+    let bytes = r2e_core::json::to_vec(&event).unwrap();
+    let decoded: TestEvent = r2e_core::json::from_slice(&bytes).unwrap();
     assert_eq!(event, decoded);
 }
 

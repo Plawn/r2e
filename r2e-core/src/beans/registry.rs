@@ -41,13 +41,15 @@ pub(super) type PostConstructFn = Box<
 /// A pre-destroy disposer builder: given the fully resolved [`BeanContext`],
 /// it reads the target bean (by type, override-aware) and produces the boxed
 /// async shutdown hook that will run `PreDestroy::pre_destroy` at shutdown.
-pub(super) type DisposerBuilder = Box<dyn FnOnce(&BeanContext) -> crate::plugin::AsyncShutdownHook + Send>;
+pub(super) type DisposerBuilder =
+    Box<dyn FnOnce(&BeanContext) -> crate::plugin::AsyncShutdownHook + Send>;
 
 /// A scheduled-source hook: reads its target bean by type from the resolved
 /// graph (override-aware, like post-construct hooks) and returns the bean's
 /// type-erased scheduled task definitions. Drained by `build_state()` into
 /// the scheduler's task registry.
-pub(super) type ScheduledSourceHook = Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>;
+pub(super) type ScheduledSourceHook =
+    Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>;
 
 /// An event-subscriber hook: reads its target bean by type from the resolved
 /// graph (override-aware, like post-construct hooks) and returns the bean's
@@ -60,10 +62,7 @@ pub(super) type EventSubscriberHook =
 /// A lifecycle service hook: reads from the resolved graph and runs until the
 /// shutdown token is cancelled.
 pub(crate) type ServiceSourceHook = Box<
-    dyn FnOnce(
-            &BeanContext,
-            crate::rt::CancelToken,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+    dyn FnOnce(&BeanContext, crate::rt::CancelToken) -> Pin<Box<dyn Future<Output = ()> + Send>>
         + Send,
 >;
 
@@ -104,13 +103,13 @@ pub(super) struct LazyBeanRegistration {
     pub(super) build_version: u64,
     /// Creates a `LazySlot<T>` (type-erased as `Arc<dyn LazyResolve>`) given a
     /// `BeanContext` snapshot containing the lazy bean's dependencies.
-    pub(super) slot_factory: Box<dyn FnOnce(BeanContext) -> Arc<dyn crate::di::lazy::LazyResolve> + Send>,
+    pub(super) slot_factory:
+        Box<dyn FnOnce(BeanContext) -> Arc<dyn crate::di::lazy::LazyResolve> + Send>,
     /// When `true`, this registration can be replaced by a later registration
     /// of the same `TypeId`.
     #[allow(dead_code)]
     pub(super) overridable: bool,
 }
-
 
 /// Builder that collects bean registrations and provided instances,
 /// resolves the dependency graph, and produces a [`BeanContext`].

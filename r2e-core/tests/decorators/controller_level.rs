@@ -42,7 +42,12 @@ impl CallLog {
         self.events.lock().unwrap().clear();
     }
     fn builds_of(&self, label: &str) -> usize {
-        self.builds.lock().unwrap().iter().filter(|l| **l == label).count()
+        self.builds
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| **l == label)
+            .count()
     }
 }
 
@@ -278,12 +283,7 @@ async fn controller_checks_run_before_method_checks() {
     assert_eq!(body, "a");
     assert_eq!(
         log.events(),
-        vec![
-            "pre-ctrlpre@*",
-            "pre-methodpre@a",
-            "ctrl@*#1",
-            "method@a#1",
-        ],
+        vec!["pre-ctrlpre@*", "pre-methodpre@a", "ctrl@*#1", "method@a#1",],
         "controller pre-guard, then method pre-guard, then controller guard, then method guard"
     );
 
@@ -312,7 +312,11 @@ async fn controller_set_is_built_once_and_shared() {
     let _ = get(&router, "/order/b", &[]).await;
     let _ = get(&router, "/order/a", &[]).await;
 
-    assert_eq!(log.builds_of("ctrl"), 1, "one build for the whole controller");
+    assert_eq!(
+        log.builds_of("ctrl"),
+        1,
+        "one build for the whole controller"
+    );
     assert_eq!(log.builds_of("ctrlpre"), 1);
     // The hit counter lives on the instance: 3 requests → #1, #2, #3 across
     // DIFFERENT routes proves they share it.

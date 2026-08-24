@@ -251,6 +251,7 @@ bridge and write the list down.
 
 | site | disposition | why |
 |---|---|---|
+| `r2e-http/src/json.rs` `Json<T>` (`FromRequest` + `OptionalFromRequest`) | **stays — named bridge point** (added 2026-08-24, `plans/json-codec-containment.md` §3.2) | R2E's own `Json<T>` replaced the `axum::Json` re-export so the codec is R2E's choice; its body-reading impl is the one place it speaks the backend's extraction contract. Response side goes through `IntoHttpResponse`. |
 | `r2e-core/src/web/extract.rs` `Via<T, M>` | **stays — the bridge** | *The* reverse adapter `FromRequestPartsVia` → backend. A swap rewrites this one impl. That is the 3b deliverable, not debt. |
 | `r2e-core/src/web/extract.rs` `PeerAddr` | **stays — named bridge point** | Emitted into the generated handler's argument tuple *and* usable as a route-method parameter. Both positions are extracted by the backend's `Handler`, not by R2E. |
 | `r2e-core/src/web/extract.rs` `BeanExtract<T, I>` | **stays — named bridge point** | Exists *for* hand-written backend handlers merged via `merge_router` (now `axum_compat` territory, §5.3d). Being a backend extractor is its entire purpose. |

@@ -8,7 +8,6 @@ use crate::codegen::decorators::{deps_fold_from_base, generate_named_deco_items,
 use crate::codegen::transverse::{
     self, ConsumerMethodDef, DecoFieldDef, DispatchWrapperParams, ScheduledSourceMethod,
 };
-use crate::util::crate_path::r2e_core_path;
 use crate::extract::async_exec::{
     extract_async_exec, strip_async_exec_attrs, validate_async_exec_method, AsyncExecHost,
     ASYNC_EXEC_INTERCEPT_MSG,
@@ -18,12 +17,13 @@ use crate::extract::consumer::{
 };
 use crate::extract::route::extract_intercept_fns;
 use crate::extract::scheduled::extract_scheduled;
-use crate::util::hash_tokens::hash_token_stream;
 use crate::model::type_list_gen::build_tcons_type;
+use crate::model::types::ConsumerKind;
+use crate::util::crate_path::r2e_core_path;
+use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::{
     named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
 };
-use crate::model::types::ConsumerKind;
 
 /// Parsed `#[bean(...)]` arguments.
 struct BeanArgs {
@@ -265,11 +265,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     let krate = r2e_core_path();
                     // Declared as `Section`: the key is the PREFIX, so
                     // dev-reload fingerprints the whole subtree under it.
-                    config_key_entries.push(crate::model::field_resolver::section_config_key_entry(
-                        &krate,
-                        &prefix_str,
-                        ty,
-                    ));
+                    config_key_entries.push(
+                        crate::model::field_resolver::section_config_key_entry(
+                            &krate,
+                            &prefix_str,
+                            ty,
+                        ),
+                    );
                     let owner = format!("bean `{type_name_str}`");
                     let expr = crate::model::field_resolver::config_section_resolve_expr(
                         &quote! { __r2e_config },

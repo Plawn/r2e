@@ -84,6 +84,12 @@ pub use crate::runtime::lifecycle::StopHandle;
 // a `get` method on every type, which would shadow inherent `get`s reached
 // through `Deref` (e.g. `Arc<DashMap>::get`). Import it explicitly where
 // needed: `use r2e_core::type_list::BeanAccess;`.
+pub use crate::builtins::request_id::{RequestId, RequestIdPlugin};
+pub use crate::builtins::secure_headers::SecureHeaders;
+pub use crate::builtins::{
+    AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, NormalizePath,
+    Tracing,
+};
 pub use crate::config::{
     ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
     ConfigValidationDetail, ConfigValue, ConfigWatchContext, FromConfigValue, LiveConfig,
@@ -92,35 +98,30 @@ pub use crate::config::{
 };
 pub use crate::controller::ContextConstruct;
 pub use crate::controller::Controller as ControllerTrait;
+pub use crate::decorators::claims::{Audience, ClientAccess, RealmAccess, StandardClaims};
 pub use crate::decorators::decorator::{DecoratorSpec, SelfBuilt};
-pub use crate::error::{HttpError, HttpErrorExt};
-pub use crate::di::event_subscriber::EventSubscriber;
-pub use crate::web::extract::{
-    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr, Via,
-};
 pub use crate::decorators::guards::{
     ClientIp, Guard, GuardContext, GuardError, Identity, NoIdentity, PathParam, PathParams,
     PreAuthGuard, PreAuthGuardContext,
 };
 pub use crate::decorators::interceptors::{Interceptor, InterceptorContext};
-pub use crate::web::managed::{
-    ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,
-};
+pub use crate::di::event_subscriber::EventSubscriber;
 pub use crate::di::module::FeatureModule;
-pub use crate::web::pagination::{Page, Pageable};
+pub use crate::di::scheduled_source::ScheduledSource;
+pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::plugin::{
     GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin,
 };
-pub use crate::builtins::{
-    AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, NormalizePath,
-    Tracing,
-};
-pub use crate::web::request_head::RequestHead;
-pub use crate::builtins::request_id::{RequestId, RequestIdPlugin};
-pub use crate::di::scheduled_source::ScheduledSource;
-pub use crate::builtins::secure_headers::SecureHeaders;
 pub use crate::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::type_list::BeanLookup;
+pub use crate::web::extract::{
+    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr, Via,
+};
+pub use crate::web::managed::{
+    ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,
+};
+pub use crate::web::pagination::{Page, Pageable};
+pub use crate::web::request_head::RequestHead;
 
 // ── Type aliases ──────────────────────────────────────────────────────────
 
@@ -171,7 +172,9 @@ pub use r2e_macros::FromMultipart;
 pub use crate::http::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 
 #[cfg(feature = "ws")]
-pub use crate::web::ws::{WsBroadcastReceiver, WsBroadcaster, WsError, WsHandler, WsRooms, WsStream};
+pub use crate::web::ws::{
+    WsBroadcastReceiver, WsBroadcaster, WsError, WsHandler, WsRooms, WsStream,
+};
 
 #[cfg(feature = "dev-reload")]
 pub use crate::runtime::dev::invalidate_state_cache;

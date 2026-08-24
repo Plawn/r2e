@@ -15,12 +15,12 @@
 use r2e::r2e_security::{
     impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims, RoleBasedIdentity,
 };
-use r2e::{BeanLookup, Identity};
+use r2e::{BeanLookup, Identity, StandardClaims};
 use serde::{Deserialize, Serialize};
 
 /// A database-backed user identity.
 ///
-/// Unlike [`AuthenticatedUser`] which only contains raw JWT claims,
+/// Unlike [`AuthenticatedUser`] which only contains the JWT claims,
 /// `DbUser` includes the full user profile fetched from the database.
 ///
 /// Use this when you need user data that isn't in the JWT (e.g., preferences,
@@ -50,7 +50,7 @@ impl Identity for DbUser {
     fn email(&self) -> Option<&str> {
         self.auth.email()
     }
-    fn claims(&self) -> Option<&serde_json::Value> {
+    fn claims(&self) -> Option<&StandardClaims> {
         self.auth.claims()
     }
 }
@@ -77,8 +77,8 @@ impl<S> FromValidatedJwtClaims<S> for DbUser
 where
     S: BeanLookup + Send + Sync,
 {
-    async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, r2e::HttpError> {
-        let sub = claims["sub"].as_str().unwrap_or_default().to_owned();
+    async fn from_jwt_claims(claims: StandardClaims, state: &S) -> Result<Self, r2e::HttpError> {
+        let sub = claims.sub.clone();
         let auth = AuthenticatedUser::from_claims(claims);
 
         let pool = state

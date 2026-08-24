@@ -10,6 +10,11 @@ keywords = ["security", "jwt", "oidc", "authentication"]
 categories = ["authentication", "web-programming"]
 description = "JWT/OIDC security module for R2E - token validation, JWKS cache, and AuthenticatedUser extractor"
 
+[features]
+# `impl JwtClaimsValidatorLike for JwtClaimsValidator` — lets the gRPC identity
+# extractor use the same validator bean as HTTP.
+grpc = ["dep:r2e-grpc"]
+
 [dependencies]
 jsonwebtoken = {workspace = true}
 reqwest = {workspace = true, features = ["json", "rustls"]}
@@ -17,7 +22,13 @@ serde = {workspace = true}
 serde_json = {workspace = true}
 tracing = {workspace = true}
 r2e-core = {workspace = true}
+r2e-grpc = {workspace = true, optional = true}
+
+[[test]]
+name = "grpc"
+required-features = ["grpc"]
 
 [dev-dependencies]
+tonic = {workspace = true}
 http-body-util = {workspace = true}
 tokio = {workspace = true, features = ["full"]}

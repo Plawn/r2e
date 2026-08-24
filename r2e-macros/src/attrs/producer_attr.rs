@@ -3,9 +3,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
 
+use crate::model::type_list_gen::build_tcons_type;
 use crate::util::crate_path::r2e_core_path;
 use crate::util::hash_tokens::hash_token_stream;
-use crate::model::type_list_gen::build_tcons_type;
 use crate::util::type_utils::{
     parse_config_field, parse_config_section_prefix, parse_live_config_field, to_pascal_case,
     type_base_name,
@@ -141,11 +141,13 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                     let krate = r2e_core_path();
                     // Declared as `Section`: the key is the PREFIX, so
                     // dev-reload fingerprints the whole subtree under it.
-                    config_key_entries.push(crate::model::field_resolver::section_config_key_entry(
-                        &krate,
-                        &prefix_str,
-                        ty,
-                    ));
+                    config_key_entries.push(
+                        crate::model::field_resolver::section_config_key_entry(
+                            &krate,
+                            &prefix_str,
+                            ty,
+                        ),
+                    );
                     let owner = format!("producer `{struct_name}`");
                     let expr = crate::model::field_resolver::config_section_resolve_expr(
                         &quote! { __r2e_config },

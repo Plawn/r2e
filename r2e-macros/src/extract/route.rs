@@ -2,8 +2,8 @@
 
 use quote::quote;
 
-use crate::util::crate_path::r2e_security_path;
 use crate::model::route::{HttpMethod, RoutePath};
+use crate::util::crate_path::r2e_security_path;
 
 pub fn is_route_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("get")

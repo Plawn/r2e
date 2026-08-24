@@ -110,8 +110,8 @@ fn json_roundtrip() {
         name: "Alice".into(),
     };
 
-    let bytes = serde_json::to_vec(&event).unwrap();
-    let decoded: TestEvent = serde_json::from_slice(&bytes).unwrap();
+    let bytes = r2e_core::json::to_vec(&event).unwrap();
+    let decoded: TestEvent = r2e_core::json::from_slice(&bytes).unwrap();
     assert_eq!(event, decoded);
 }
 
@@ -352,17 +352,17 @@ async fn invoke_responder_round_trips_bytes_and_absence() {
     let type_id = TypeId::of::<Req>();
 
     // Ok path: reply bytes deserialize to the doubled value.
-    let payload = serde_json::to_vec(&Req { v: 21 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Req { v: 21 }).unwrap();
     let out = state
         .invoke_responder(type_id, &payload, EventMetadata::new())
         .await
         .expect("responder registered");
     let bytes = out.expect("responder ok");
-    let resp: Resp = serde_json::from_slice(&bytes).unwrap();
+    let resp: Resp = r2e_core::json::from_slice(&bytes).unwrap();
     assert_eq!(resp.v, 42);
 
     // Err path surfaces the remote-error message.
-    let payload = serde_json::to_vec(&Req { v: -1 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Req { v: -1 }).unwrap();
     let out = state
         .invoke_responder(type_id, &payload, EventMetadata::new())
         .await

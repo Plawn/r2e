@@ -1,6 +1,6 @@
-use crate::parsing::controller_parsing::has_identity_qualifier;
 use crate::extract::*;
 use crate::model::types::*;
+use crate::parsing::controller_parsing::has_identity_qualifier;
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {

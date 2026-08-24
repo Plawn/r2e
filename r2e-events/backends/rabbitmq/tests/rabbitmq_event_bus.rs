@@ -86,8 +86,8 @@ fn json_roundtrip() {
         name: "Alice".into(),
     };
 
-    let bytes = serde_json::to_vec(&event).unwrap();
-    let decoded: TestEvent = serde_json::from_slice(&bytes).unwrap();
+    let bytes = r2e_core::json::to_vec(&event).unwrap();
+    let decoded: TestEvent = r2e_core::json::from_slice(&bytes).unwrap();
     assert_eq!(event, decoded);
 }
 
@@ -283,7 +283,7 @@ mod responder {
             .await
             .unwrap();
 
-        let req = serde_json::to_vec(&GetUser { id: 7 }).unwrap();
+        let req = r2e_core::json::to_vec(&GetUser { id: 7 }).unwrap();
         let reply = state
             .invoke_responder(
                 std::any::TypeId::of::<GetUser>(),
@@ -294,7 +294,7 @@ mod responder {
             .expect("responder is registered")
             .expect("handler succeeds");
 
-        let user: User = serde_json::from_slice(&reply).unwrap();
+        let user: User = r2e_core::json::from_slice(&reply).unwrap();
         assert_eq!(user.id, 7);
         assert_eq!(user.name, "user-7");
     }

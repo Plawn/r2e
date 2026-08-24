@@ -51,8 +51,8 @@ fn builder_custom_hsts_max_age() {
 // ── Plugin-level: headers land on a real response ─────────────────────────
 
 use r2e_core::builder::AppBuilder;
-use r2e_core::http::StatusCode;
 use r2e_core::builtins::Health;
+use r2e_core::http::StatusCode;
 
 use crate::support::raw_get_with;
 

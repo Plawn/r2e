@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
 use r2e_core::http::header::{Parts, AUTHORIZATION};
 use r2e_core::type_list::HasBean;
+use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+use r2e_core::StandardClaims;
 use tracing::{debug, warn};
 
 use crate::error::SecurityError;
@@ -69,7 +70,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///     ) -> Result<Self, Self::Rejection> {
 ///         // 1. Validate JWT and get claims
 ///         let claims = extract_jwt_claims(parts, state).await?;
-///         let sub = claims["sub"].as_str().unwrap_or_default();
+///         let sub = claims.sub.clone();
 ///
 ///         // 2. Build light identity from claims
 ///         let authenticated = AuthenticatedUser::from_claims(claims);
@@ -102,17 +103,17 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 pub async fn extract_jwt_claims<S, I>(
     parts: &Parts,
     state: &S,
-) -> Result<serde_json::Value, r2e_core::HttpError>
+) -> Result<StandardClaims, r2e_core::HttpError>
 where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
 {
-    extract_jwt_claims_as::<S, I, serde_json::Value>(parts, state).await
+    extract_jwt_claims_as::<S, I, StandardClaims>(parts, state).await
 }
 
 /// Extract, validate and deserialize JWT claims into an application claim set.
 ///
-/// This is the typed counterpart of [`extract_jwt_claims`]. It performs no
-/// intermediate `serde_json::Value` allocation.
+/// This is the generic counterpart of [`extract_jwt_claims`], for a claim set
+/// of your own (or a fully dynamic `serde_json::Value`).
 pub async fn extract_jwt_claims_as<S, I, C>(
     parts: &Parts,
     state: &S,

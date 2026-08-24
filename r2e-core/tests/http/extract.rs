@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
-use r2e_core::web::extract::{
-    assert_unambiguous_extractor, FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean,
-};
 use r2e_core::http::extract::{MatchedPath, Query};
 use r2e_core::http::header::{HeaderMap, Parts};
 use r2e_core::type_list::{HCons, HNil, HasBean};
+use r2e_core::web::extract::{
+    assert_unambiguous_extractor, FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean,
+};
 
 /// A bean backing the test extractor.
 #[derive(Clone)]

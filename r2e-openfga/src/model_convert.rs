@@ -49,7 +49,7 @@ pub struct CompiledModel {
 /// into an [`AuthorizationModel`](ast::AuthorizationModel) or references an
 /// unknown condition parameter type name.
 pub fn compile_model(model_json: &str) -> Result<CompiledModel, OpenFgaError> {
-    let model: ast::AuthorizationModel = serde_json::from_str(model_json).map_err(|e| {
+    let model: ast::AuthorizationModel = r2e_core::json::from_str(model_json).map_err(|e| {
         OpenFgaError::InvalidConfig(format!("authorization model JSON is invalid: {e}"))
     })?;
 

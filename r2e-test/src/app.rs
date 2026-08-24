@@ -189,7 +189,7 @@ macro_rules! impl_request_builders {
 
         /// Set the request body as JSON. Also sets Content-Type to `application/json`.
         pub fn json(mut self, body: &impl Serialize) -> Self {
-            self.parts.body = Some(serde_json::to_vec(body).unwrap());
+            self.parts.body = Some(r2e_core::json::to_vec(body).unwrap());
             self.parts
                 .headers
                 .insert(CONTENT_TYPE, "application/json".parse().unwrap());
@@ -720,6 +720,10 @@ impl TestResponse {
     }
 
     /// Get the cached JSON `Value`, parsing on first access.
+    ///
+    /// Stays on `serde_json`: the assertion helpers compare JSON *as data*, so
+    /// the dynamic tree is the point here — not typed (de)serialization, which
+    /// goes through `r2e_core::json` like everywhere else.
     fn json_value(&self) -> &Value {
         self.json_cache.get_or_init(|| {
             serde_json::from_slice(&self.body)
@@ -958,7 +962,7 @@ impl TestResponse {
 
     /// Deserialize the entire response body as JSON.
     pub fn json<T: DeserializeOwned>(&self) -> T {
-        serde_json::from_slice(&self.body)
+        r2e_core::json::from_slice(&self.body)
             .unwrap_or_else(|e| panic!("Failed to parse JSON: {e}\nBody: {}", self.text()))
     }
 
@@ -986,7 +990,7 @@ impl TestResponse {
 
     /// Deserialize the response body as JSON, returning `None` if parsing fails.
     pub fn json_optional<T: DeserializeOwned>(&self) -> Option<T> {
-        serde_json::from_slice(&self.body).ok()
+        r2e_core::json::from_slice(&self.body).ok()
     }
 
     /// Assert the Content-Type header matches the expected value.

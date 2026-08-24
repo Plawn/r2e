@@ -17,16 +17,17 @@ impl GreeterService {
     ) -> Result<tonic::Response<HelloReply>, tonic::Status> {
         let metadata = request.metadata();
         let claims = GrpcIdentityExtractor::extract_claims(metadata, &self.jwt_validator).await?;
-        let sub = claims["sub"].as_str().unwrap_or("unknown");
+        // `claims` is `r2e::StandardClaims` — the same typed claim set HTTP uses.
+        let tenant = claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("-");
 
         Ok(tonic::Response::new(HelloReply {
-            message: format!("Hello {}!", sub),
+            message: format!("Hello {} ({tenant})!", claims.sub),
         }))
     }
 }
 ```
 
-This requires the controller to have `#[inject] jwt_validator: Arc<JwtClaimsValidator>`.
+This requires the controller to have `#[inject] jwt_validator: Arc<JwtClaimsValidator>`, and `r2e-security`'s `grpc` feature — turned on automatically when `r2e` is built with both `grpc` and `security` — which implements `JwtClaimsValidatorLike` for `JwtClaimsValidator`.
 
 ## Runtime types (available now)
 
@@ -39,7 +40,7 @@ The following types are exported by `r2e-grpc` and ready for use:
 | `GrpcRolesGuard` | Built-in guard that checks required roles |
 | `GrpcRoleBasedIdentity` | Extension trait for identity types that carry roles |
 | `GrpcIdentityExtractor` | JWT extraction from gRPC metadata |
-| `JwtClaimsValidatorLike` | Trait abstracting JWT validation (blanket impl for `Arc<T>`) |
+| `JwtClaimsValidatorLike` | Trait abstracting JWT validation → `StandardClaims` (implemented by `JwtClaimsValidator` under `r2e-security/grpc`; blanket impl for `Arc<T>`) |
 
 ### Guard context
 
@@ -53,7 +54,7 @@ The following types are exported by `r2e-grpc` and ready for use:
 | `identity` | `Option<&I>` | Authenticated identity (if extracted) |
 | `identity_sub()` | `Option<&str>` | Subject from identity |
 | `identity_email()` | `Option<&str>` | Email from identity |
-| `identity_claims()` | `Option<&Value>` | Raw JWT claims |
+| `identity_claims()` | `Option<&StandardClaims>` | Typed JWT claims |
 
 ---
 
@@ -261,7 +262,7 @@ AppBuilder::new()
     .register_grpc_service::<GreeterService>();
 ```
 
-There is no hand-written state struct: the application state is the inferred HList of everything you `.provide()`/`.register()`, and beans are read back by type. The gRPC identity extractor uses `JwtClaimsValidatorLike`, a trait that `Arc<JwtClaimsValidator>` implements automatically via a blanket impl. No additional setup needed beyond what HTTP authentication already requires.
+There is no hand-written state struct: the application state is the inferred HList of everything you `.provide()`/`.register()`, and beans are read back by type. The gRPC identity extractor uses `JwtClaimsValidatorLike`; `JwtClaimsValidator` implements it under `r2e-security`'s `grpc` feature (on when `r2e` has `grpc` + `security`), and the `Arc<T>` blanket impl covers the bean. No additional setup needed beyond what HTTP authentication already requires.
 
 ### GrpcRoleBasedIdentity
 

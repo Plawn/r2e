@@ -5,11 +5,12 @@ use r2e_core::decorators::guards::{
     PreAuthGuardContext,
 };
 use r2e_core::http::{HeaderMap, StatusCode, Uri};
+use r2e_core::StandardClaims;
 
 struct TestIdentity {
     sub: String,
     email: Option<String>,
-    claims: Option<serde_json::Value>,
+    claims: Option<StandardClaims>,
 }
 
 impl TestIdentity {
@@ -34,7 +35,7 @@ impl Identity for TestIdentity {
     fn email(&self) -> Option<&str> {
         self.email.as_deref()
     }
-    fn claims(&self) -> Option<&serde_json::Value> {
+    fn claims(&self) -> Option<&StandardClaims> {
         self.claims.as_ref()
     }
 }
@@ -369,11 +370,22 @@ fn guard_context_resolves_the_client_ip_too() {
 
 #[test]
 fn guard_context_identity_claims() {
-    let claims = serde_json::json!({"aud": "test-app", "scope": "read"});
+    let claims: StandardClaims = serde_json::from_value(
+        serde_json::json!({"sub": "user-1", "aud": "test-app", "scope": "read", "tenant": "acme"}),
+    )
+    .unwrap();
     let mut id = TestIdentity::new("user-1");
     id.claims = Some(claims.clone());
     let uri = make_uri("/test");
     let headers = HeaderMap::new();
     let ctx = make_ctx(Some(&id), &uri, &headers, PathParams::EMPTY);
-    assert_eq!(ctx.identity_claims(), Some(&claims));
+    let seen = ctx.identity_claims().expect("claims present");
+    assert_eq!(seen, &claims);
+    assert_eq!(
+        seen.aud.as_ref().and_then(r2e_core::Audience::as_str),
+        Some("test-app")
+    );
+    assert_eq!(seen.scope.as_deref(), Some("read"));
+    // Non-standard claims stay in `extra` and are read through `get`.
+    assert_eq!(seen.get("tenant").and_then(|v| v.as_str()), Some("acme"));
 }

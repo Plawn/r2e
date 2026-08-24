@@ -598,15 +598,18 @@ fn generate_param_infos(
         .iter()
         .map(|f| {
             let (param_name, location) = match &f.source {
-                ParamSource::Path { name } => {
-                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Path })
-                }
-                ParamSource::Query { name } => {
-                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Query })
-                }
-                ParamSource::Header { name } => {
-                    (name.clone(), quote! { #krate::di::meta::ParamLocation::Header })
-                }
+                ParamSource::Path { name } => (
+                    name.clone(),
+                    quote! { #krate::di::meta::ParamLocation::Path },
+                ),
+                ParamSource::Query { name } => (
+                    name.clone(),
+                    quote! { #krate::di::meta::ParamLocation::Query },
+                ),
+                ParamSource::Header { name } => (
+                    name.clone(),
+                    quote! { #krate::di::meta::ParamLocation::Header },
+                ),
             };
             let param_type = rust_type_to_openapi_str(&f.ty);
             let required = !f.is_optional && f.default_value.is_none();

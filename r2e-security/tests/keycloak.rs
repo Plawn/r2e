@@ -1,9 +1,15 @@
+use r2e_core::StandardClaims;
 use r2e_security::keycloak::{ClientRoleExtractor, RealmRoleExtractor, RoleExtractor};
 use r2e_security::openid::RoleExtractor as RoleExtractorTrait;
 use serde_json::json;
 
-fn keycloak_claims() -> serde_json::Value {
-    json!({
+/// Deserialize a JWT payload into the typed claim set, as the validator does.
+fn claims(value: serde_json::Value) -> StandardClaims {
+    serde_json::from_value(value).expect("payload deserializes into StandardClaims")
+}
+
+fn keycloak_claims() -> StandardClaims {
+    claims(json!({
         "sub": "user-uuid",
         "realm_access": {
             "roles": ["realm-admin", "realm-user"]
@@ -16,7 +22,7 @@ fn keycloak_claims() -> serde_json::Value {
                 "roles": ["client-role"]
             }
         }
-    })
+    }))
 }
 
 #[test]
@@ -30,7 +36,7 @@ fn test_realm_role_extractor() {
 
 #[test]
 fn test_realm_role_extractor_missing() {
-    let claims = json!({"sub": "user"});
+    let claims = claims(json!({"sub": "user"}));
     let extractor = RealmRoleExtractor;
 
     let roles = extractor.extract_roles(&claims);
@@ -109,7 +115,7 @@ fn test_combined_with_clients_iterator() {
 
 #[test]
 fn test_combined_deduplication() {
-    let claims = json!({
+    let claims = claims(json!({
         "realm_access": {
             "roles": ["admin", "user"]
         },
@@ -118,7 +124,7 @@ fn test_combined_deduplication() {
                 "roles": ["user", "special"]  // "user" is duplicate
             }
         }
-    });
+    }));
 
     let extractor = RoleExtractor::new()
         .with_realm_roles()

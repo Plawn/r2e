@@ -22,9 +22,16 @@ pub mod types;
 pub mod web;
 
 // Used by macro-generated code (schema construction) so user crates don't
-// need a direct serde_json dependency.
+// need a direct serde_json dependency. `Value` / `json!` only — typed
+// (de)serialization goes through [`json`].
 #[doc(hidden)]
 pub use serde_json;
+
+/// The JSON codec façade (`to_vec` / `from_slice` / `JsonError`, …).
+///
+/// The one place that (de)serializes typed values; the backend is a Cargo
+/// feature (`json-sonic`). See `plans/json-codec-containment.md`.
+pub use r2e_http::json;
 
 pub use beans::{
     AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, PreDestroy, Producer,
@@ -46,6 +53,7 @@ pub use config::{
     SectionValidator,
 };
 pub use controller::{ContextConstruct, Controller, EndpointDeps};
+pub use decorators::claims::{Audience, ClientAccess, RealmAccess, StandardClaims};
 pub use decorators::decorator::{
     decorator_config_errors, BeanDecoFill, Decorate, DecoratorSpec, HasDecoSlot, SelfBuilt,
     SharedDecoSlot,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use r2e_core::StandardClaims;
 use serde::de::DeserializeOwned;
 use tracing::{debug, warn};
 
@@ -20,10 +21,21 @@ enum KeySource {
 ///
 /// Implement this trait on application-specific claim structs to deserialize
 /// directly into a typed representation with [`JwtClaimsValidator::validate_as`].
-/// [`serde_json::Value`] implements it for the dynamic/default path.
+///
+/// [`StandardClaims`] is the default claim set. [`serde_json::Value`] also
+/// implements the trait, as the escape hatch for fully dynamic claim handling
+/// (`validator.validate_as::<serde_json::Value>(token)`).
 pub trait JwtClaimSet: DeserializeOwned + Send {
     /// Return the JWT subject (`sub`) when present.
     fn subject(&self) -> Option<&str>;
+}
+
+impl JwtClaimSet for StandardClaims {
+    fn subject(&self) -> Option<&str> {
+        // `sub` is `#[serde(default)]`, so an absent subject deserializes to
+        // the empty string; report it as absent so validation rejects it.
+        Some(self.sub.as_str()).filter(|s| !s.is_empty())
+    }
 }
 
 impl JwtClaimSet for serde_json::Value {
@@ -44,13 +56,13 @@ impl JwtClaimSet for serde_json::Value {
 /// # Example
 ///
 /// ```ignore
-/// // Validate and get raw claims
+/// // Validate and get the typed claims
 /// let claims = claims_validator.validate(token).await?;
-/// let sub = claims["sub"].as_str().unwrap();
+/// let sub = claims.sub.clone();
 ///
 /// // Build different identity types from the same claims
 /// let light_user = AuthenticatedUser::from_claims(claims.clone());
-/// let full_user = db_lookup(sub, &pool).await?;
+/// let full_user = db_lookup(&sub, &pool).await?;
 /// ```
 pub struct JwtClaimsValidator {
     key_source: KeySource,
@@ -112,17 +124,18 @@ impl JwtClaimsValidator {
     /// 4. Standard claims validation (iss, aud, exp, nbf)
     /// 5. Subject presence: the token is rejected if it has no non-empty `sub` claim
     ///
-    /// Returns the validated claims as a JSON value.
-    pub async fn validate(&self, token: &str) -> Result<serde_json::Value, SecurityError> {
+    /// Returns the validated claims as a typed [`StandardClaims`]. For a claim
+    /// set of your own (or a fully dynamic `serde_json::Value`), use
+    /// [`validate_as`](Self::validate_as).
+    pub async fn validate(&self, token: &str) -> Result<StandardClaims, SecurityError> {
         self.validate_as(token).await
     }
 
     /// Validate a JWT token and deserialize it into an application claim set.
     ///
     /// Signature, algorithm, issuer, audience, expiry and subject validation
-    /// are identical to [`validate`](Self::validate). Deserializing directly
-    /// into `C` avoids constructing a `serde_json::Value` when callers use
-    /// typed claims.
+    /// are identical to [`validate`](Self::validate). The token payload is
+    /// deserialized straight into `C`, with no intermediate JSON tree.
     pub async fn validate_as<C: JwtClaimSet>(&self, token: &str) -> Result<C, SecurityError> {
         // Step 1: Decode header to get kid and algorithm
         let header = decode_header(token)
@@ -297,7 +310,7 @@ impl<B: IdentityBuilder> JwtValidator<B> {
     ///
     /// This is useful when you need the claims for custom processing
     /// in addition to or instead of the built identity.
-    pub async fn validate_claims(&self, token: &str) -> Result<serde_json::Value, SecurityError> {
+    pub async fn validate_claims(&self, token: &str) -> Result<StandardClaims, SecurityError> {
         self.claims_validator.validate(token).await
     }
 }
