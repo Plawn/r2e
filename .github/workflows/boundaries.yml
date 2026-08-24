@@ -1,0 +1,22 @@
+name: Dependency boundaries
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  boundaries:
+    name: tokio / axum containment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo metadata --no-deps` only reads workspace manifests: no registry
+      # fetch, no build, so the stock runner toolchain is enough.
+      - name: Dependency boundary (Cargo.toml)
+        run: ./scripts/check-dep-boundary.sh
+
+      - name: Source boundary (src/ occurrences)
+        run: ./scripts/check-source-boundary.sh

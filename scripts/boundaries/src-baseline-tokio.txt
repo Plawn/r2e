@@ -1,0 +1,71 @@
+# tokio — source-occurrence baseline (path:count)
+#
+# Enforced by scripts/check-source-boundary.sh over git-tracked files
+# under a crate src/ directory — .rs only (vendor/, examples/, docs/, tests/,
+# excluded).
+#
+# This baseline ONLY EVER SHRINKS: each migration PR of
+# plans/runtime-http-dependency-containment.md deletes lines from it or
+# lowers counts. A count that grows, or a new file appearing here, fails
+# CI. A count that drops is reported as a note — shrink the line in the
+# same PR so the boundary stays honest.
+#
+# Regenerate with: scripts/check-source-boundary.sh --update
+
+r2e-cli/src/commands/templates/project.rs:1
+r2e-core/src/beans/registry.rs:1
+r2e-core/src/builder/mod.rs:1
+r2e-core/src/builder/prepared.rs:7
+r2e-core/src/builder/typed.rs:1
+r2e-core/src/builtins/health.rs:2
+r2e-core/src/config/runtime.rs:6
+r2e-core/src/di/lazy.rs:8
+r2e-core/src/rt.rs:42
+r2e-core/src/runtime/dev.rs:4
+r2e-core/src/runtime/lifecycle.rs:2
+r2e-core/src/runtime/service.rs:3
+r2e-core/src/runtime/sharded.rs:7
+r2e-core/src/web/managed.rs:2
+r2e-core/src/web/sse.rs:5
+r2e-core/src/web/ws.rs:3
+r2e-data/backends/diesel/src/pool.rs:1
+r2e-data/backends/sqlx/src/pool.rs:1
+r2e-devservices/src/common.rs:3
+r2e-devservices/src/lib.rs:1
+r2e-devservices/src/ryuk.rs:3
+r2e-devservices/src/service.rs:1
+r2e-events/backends/iggy/src/builder.rs:1
+r2e-events/backends/iggy/src/bus.rs:8
+r2e-events/backends/iggy/src/inner.rs:1
+r2e-events/backends/kafka/src/builder.rs:2
+r2e-events/backends/kafka/src/bus.rs:3
+r2e-events/backends/kafka/src/inner.rs:2
+r2e-events/backends/kafka/src/request.rs:4
+r2e-events/backends/pulsar/src/builder.rs:1
+r2e-events/backends/pulsar/src/bus.rs:8
+r2e-events/backends/pulsar/src/inner.rs:2
+r2e-events/backends/rabbitmq/src/bus.rs:3
+r2e-events/backends/rabbitmq/src/inner.rs:2
+r2e-events/src/backend/pending.rs:2
+r2e-events/src/backend/reconnect.rs:2
+r2e-events/src/backend/state.rs:5
+r2e-events/src/local.rs:1
+r2e-executor/src/lib.rs:7
+r2e-http/src/quic.rs:9
+r2e-macros/src/derives/bg_service_derive.rs:2
+r2e-macros/src/lib.rs:1
+r2e-macros/src/util/runtime_args.rs:3
+r2e-oidc/src/state.rs:1
+r2e-scheduler/src/driver.rs:5
+r2e-scheduler/src/lib.rs:6
+r2e-security/src/jwks.rs:1
+r2e-tenant/src/map/api.rs:1
+r2e-tenant/src/map/dispose.rs:1
+r2e-tenant/src/map/drain.rs:2
+r2e-tenant/src/map/eviction.rs:4
+r2e-tenant/src/map/mod.rs:1
+r2e-tenant/src/map/resolve.rs:2
+r2e-tenant/src/map/state.rs:1
+r2e-tenant/src/router.rs:1
+r2e-test/src/server.rs:3
+r2e-test/src/ws.rs:4

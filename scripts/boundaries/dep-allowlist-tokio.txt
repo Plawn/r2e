@@ -1,0 +1,41 @@
+# tokio — direct (non-dev) dependency allowlist
+#
+# One workspace crate per line. Enforced by scripts/check-dep-boundary.sh.
+# This list ONLY EVER SHRINKS: each migration PR of
+# plans/runtime-http-dependency-containment.md deletes lines from it.
+# Adding a line is a deliberate, reviewed exception — the check fails
+# both when an un-listed crate gains the dependency and when a listed
+# crate no longer has it (stale entry).
+#
+# Regenerate with: scripts/check-dep-boundary.sh --update
+
+example-app
+example-executor
+example-grpc
+example-microservice
+example-multi-tenant
+example-multi-tenant-db
+example-oidc
+example-openfga
+example-postgres
+example-sharded-bench
+example-websocket-chat
+r2e-core
+r2e-data-diesel
+r2e-data-sqlx
+r2e-devservices
+r2e-events
+r2e-events-iggy
+r2e-events-kafka
+r2e-events-pulsar
+r2e-events-rabbitmq
+r2e-executor
+r2e-grpc
+r2e-http
+r2e-oidc
+r2e-openfga
+r2e-scheduler
+r2e-security
+r2e-tenant
+r2e-test
+r2e-utils

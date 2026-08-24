@@ -237,7 +237,7 @@ before a phase is marked done.
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Phase 0 — boundary scripts + baseline allowlists | pending |
+| 1 | Phase 0 — boundary scripts + baseline allowlists | done |
 | 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | pending |
 | 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | pending |
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | pending |
